@@ -7,30 +7,25 @@ import {
   saveRuntimeSettings,
 } from '../services/api.js';
 
-const THINKING_PRESETS = [
-  {
-    label: 'Off',
-    budget: 0,
-    description: 'Disable explicit reasoning budget.',
-  },
+const THINKING_LEVEL_PRESETS = [
   {
     label: 'Minimal',
-    budget: 256,
+    level: 'minimal',
     description: 'Fastest responses with light reasoning.',
   },
   {
     label: 'Low',
-    budget: 512,
+    level: 'low',
     description: 'Balanced speed and depth.',
   },
   {
     label: 'Medium',
-    budget: 1024,
+    level: 'medium',
     description: 'Stronger reasoning for harder prompts.',
   },
   {
     label: 'High',
-    budget: 2048,
+    level: 'high',
     description: 'Deepest reasoning, slowest option.',
   },
 ];
@@ -296,29 +291,26 @@ function formatUsd(value) {
   }).format(numeric);
 }
 
-function normalizeThinkingBudget(rawBudget, fallback = 0) {
-  const parsed = Number(rawBudget);
-  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
-
-  if (parsed <= 0) return 0;
-  if (parsed <= 384) return 256;
-  if (parsed <= 768) return 512;
-  if (parsed <= 1536) return 1024;
-  return 2048;
+function normalizeThinkingLevel(rawLevel, fallback = 'minimal') {
+  const normalized = String(rawLevel || '').trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    return normalized;
+  }
+  return fallback;
 }
 
-function getThinkingPreset(budget) {
-  const normalizedBudget = normalizeThinkingBudget(budget, 0);
-  return THINKING_PRESETS.find((preset) => preset.budget === normalizedBudget) || THINKING_PRESETS[1];
+function getThinkingLevelPreset(level) {
+  const normalizedLevel = normalizeThinkingLevel(level, 'minimal');
+  return THINKING_LEVEL_PRESETS.find((preset) => preset.level === normalizedLevel) || THINKING_LEVEL_PRESETS[0];
 }
 
 function emptyDraft() {
   return {
     orchestratorModel: '',
-    orchestratorThinkingBudget: THINKING_PRESETS[1].budget,
+    orchestratorThinkingLevel: THINKING_LEVEL_PRESETS[0].level,
     codingModel: '',
     browserModel: '',
-    browserThinkingBudget: THINKING_PRESETS[0].budget,
+    browserThinkingLevel: THINKING_LEVEL_PRESETS[0].level,
     imageModel: '',
     ttsModel: '',
   };
@@ -394,10 +386,10 @@ export function createSettingsPanel() {
   function currentDraftKey() {
     return JSON.stringify({
       orchestratorModel: normalizeModelId(state.draft.orchestratorModel),
-      orchestratorThinkingBudget: Number(state.draft.orchestratorThinkingBudget) || 0,
+      orchestratorThinkingLevel: normalizeThinkingLevel(state.draft.orchestratorThinkingLevel, THINKING_LEVEL_PRESETS[0].level),
       codingModel: normalizeModelId(state.draft.codingModel),
       browserModel: normalizeModelId(state.draft.browserModel),
-      browserThinkingBudget: Number(state.draft.browserThinkingBudget) || 0,
+      browserThinkingLevel: normalizeThinkingLevel(state.draft.browserThinkingLevel, THINKING_LEVEL_PRESETS[0].level),
       imageModel: normalizeModelId(state.draft.imageModel),
       ttsModel: normalizeModelId(state.draft.ttsModel),
     });
@@ -419,15 +411,15 @@ export function createSettingsPanel() {
   function applySettingsToDraft(settings) {
     const draft = emptyDraft();
     draft.orchestratorModel = normalizeModelId(settings?.orchestrator?.model || '');
-    draft.orchestratorThinkingBudget = normalizeThinkingBudget(
-      settings?.orchestrator?.thinkingBudget,
-      THINKING_PRESETS[1].budget
+    draft.orchestratorThinkingLevel = normalizeThinkingLevel(
+      settings?.orchestrator?.thinkingLevel,
+      THINKING_LEVEL_PRESETS[0].level
     );
     draft.codingModel = normalizeModelId(settings?.codingAgent?.model || '');
     draft.browserModel = normalizeModelId(settings?.agents?.browser?.model || '');
-    draft.browserThinkingBudget = normalizeThinkingBudget(
-      settings?.agents?.browser?.thinkingBudget,
-      THINKING_PRESETS[0].budget
+    draft.browserThinkingLevel = normalizeThinkingLevel(
+      settings?.agents?.browser?.thinkingLevel,
+      THINKING_LEVEL_PRESETS[0].level
     );
     draft.imageModel = normalizeModelId(settings?.agents?.image?.model || '');
     draft.ttsModel = normalizeModelId(settings?.agents?.tts?.model || '');
@@ -655,9 +647,7 @@ export function createSettingsPanel() {
     const patch = {
       orchestrator: {
         model: normalizeModelId(state.draft.orchestratorModel),
-        thinkingBudget: Number(state.draft.orchestratorThinkingBudget) || 0,
-        temperature: 0.2,
-        webResearch: false,
+        thinkingLevel: normalizeThinkingLevel(state.draft.orchestratorThinkingLevel, THINKING_LEVEL_PRESETS[0].level),
       },
       codingAgent: {
         model: normalizeModelId(state.draft.codingModel),
@@ -665,7 +655,7 @@ export function createSettingsPanel() {
       agents: {
         browser: {
           model: normalizeModelId(state.draft.browserModel),
-          thinkingBudget: Number(state.draft.browserThinkingBudget) || 0,
+          thinkingLevel: normalizeThinkingLevel(state.draft.browserThinkingLevel, THINKING_LEVEL_PRESETS[0].level),
         },
         image: {
           model: normalizeModelId(state.draft.imageModel),
@@ -1081,16 +1071,16 @@ export function createSettingsPanel() {
       `;
   }
 
-  function renderThinkingChips(field, thinkingBudget) {
-    const selectedBudget = getThinkingPreset(thinkingBudget).budget;
+  function renderThinkingChips(field, thinkingLevel) {
+    const selectedLevel = getThinkingLevelPreset(thinkingLevel).level;
     return `
       <div class="settings-thinking-row">
-        ${THINKING_PRESETS.map((preset) => `
+        ${THINKING_LEVEL_PRESETS.map((preset) => `
           <button
             type="button"
-            class="settings-thinking-chip ${preset.budget === selectedBudget ? 'active' : ''}"
+            class="settings-thinking-chip ${preset.level === selectedLevel ? 'active' : ''}"
             data-thinking-field="${field}"
-            data-thinking-value="${preset.budget}"
+            data-thinking-value="${preset.level}"
           >
             ${preset.label}
           </button>
@@ -1105,14 +1095,14 @@ export function createSettingsPanel() {
     title,
     description,
     selectedModel,
-    thinkingBudget,
+    thinkingLevel,
     lookup,
     officialPricing,
     modelMeta,
     showThinking = true,
     helperText = '',
   }) {
-    const thinkingPreset = getThinkingPreset(thinkingBudget);
+    const thinkingPreset = getThinkingLevelPreset(thinkingLevel);
 
     return `
       <section class="settings-model-card">
@@ -1129,7 +1119,7 @@ export function createSettingsPanel() {
         ${showThinking ? `
           <label>
             <span>Thinking</span>
-            ${renderThinkingChips(field, thinkingBudget)}
+            ${renderThinkingChips(field, thinkingLevel)}
           </label>
 
           <div class="settings-model-helper">
@@ -1191,7 +1181,7 @@ export function createSettingsPanel() {
       title: 'Orchestrator Model',
       description: 'Used for routing, planning, and final responses.',
       selectedModel: state.draft.orchestratorModel,
-      thinkingBudget: state.draft.orchestratorThinkingBudget,
+      thinkingLevel: state.draft.orchestratorThinkingLevel,
       lookup: orchestratorLookup,
       officialPricing: orchestratorOfficialPricing,
       modelMeta: orchestratorModelMeta,
@@ -1202,7 +1192,7 @@ export function createSettingsPanel() {
       title: 'Coding Agent Model',
       description: 'Used for executing autonomous code refactoring and creation.',
       selectedModel: state.draft.codingModel,
-      thinkingBudget: THINKING_PRESETS[0].budget,
+      thinkingLevel: THINKING_LEVEL_PRESETS[0].level,
       lookup: codingLookup,
       officialPricing: codingOfficialPricing,
       modelMeta: codingModelMeta,
@@ -1214,7 +1204,7 @@ export function createSettingsPanel() {
       title: 'Browser Agent Model',
       description: 'Used by browser automation tasks.',
       selectedModel: state.draft.browserModel,
-      thinkingBudget: state.draft.browserThinkingBudget,
+      thinkingLevel: state.draft.browserThinkingLevel,
       lookup: browserLookup,
       officialPricing: browserOfficialPricing,
       modelMeta: browserModelMeta,
@@ -1225,7 +1215,7 @@ export function createSettingsPanel() {
       title: 'Image Agent Model',
       description: 'Used for image generation (Nano Banana family compatible).',
       selectedModel: state.draft.imageModel,
-      thinkingBudget: THINKING_PRESETS[0].budget,
+      thinkingLevel: THINKING_LEVEL_PRESETS[0].level,
       lookup: imageLookup,
       officialPricing: imageOfficialPricing,
       modelMeta: imageModelMeta,
@@ -1238,7 +1228,7 @@ export function createSettingsPanel() {
       title: 'TTS Agent Model',
       description: 'Used for Gemini text-to-speech audio generation.',
       selectedModel: state.draft.ttsModel,
-      thinkingBudget: THINKING_PRESETS[0].budget,
+      thinkingLevel: THINKING_LEVEL_PRESETS[0].level,
       lookup: ttsLookup,
       officialPricing: ttsOfficialPricing,
       modelMeta: ttsModelMeta,
@@ -1490,11 +1480,11 @@ export function createSettingsPanel() {
     container.querySelectorAll('[data-thinking-field]').forEach((btn) => {
       btn.addEventListener('click', () => {
         const field = btn.getAttribute('data-thinking-field');
-        const budget = normalizeThinkingBudget(btn.getAttribute('data-thinking-value'), THINKING_PRESETS[0].budget);
+        const level = normalizeThinkingLevel(btn.getAttribute('data-thinking-value'), THINKING_LEVEL_PRESETS[0].level);
         if (field === 'orchestrator') {
-          state.draft.orchestratorThinkingBudget = budget;
+          state.draft.orchestratorThinkingLevel = level;
         } else if (field === 'browser') {
-          state.draft.browserThinkingBudget = budget;
+          state.draft.browserThinkingLevel = level;
         }
         scheduleAutoSave();
         render();

@@ -54,6 +54,14 @@ function asString(value: unknown): string {
     return typeof value === 'string' ? value : '';
 }
 
+function asThinkingLevel(value: unknown): 'minimal' | 'low' | 'medium' | 'high' | undefined {
+    const normalized = asString(value).trim().toLowerCase();
+    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized;
+    }
+    return undefined;
+}
+
 function parseControlAction(body: JsonObject): RuntimeControlAction {
     const type = asString(body.type).trim();
 
@@ -324,7 +332,7 @@ export function createControlServer(
                     cleanContext: typeof body.cleanContext === 'boolean' ? body.cleanContext : undefined,
                     preserveContext: typeof body.preserveContext === 'boolean' ? body.preserveContext : undefined,
                     model: typeof body.model === 'string' ? body.model : undefined,
-                    thinkingBudget: typeof body.thinkingBudget === 'number' ? body.thinkingBudget : undefined,
+                    thinkingLevel: asThinkingLevel(body.thinkingLevel),
                 });
 
                 const status = await runtime.getStatus();

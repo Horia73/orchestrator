@@ -1,5 +1,6 @@
 import process from 'process';
 import path from 'path';
+import { fileURLToPath } from 'url';
 
 function parsePositiveInt(raw, fallback) {
   const value = Number.parseInt(String(raw ?? ''), 10);
@@ -55,18 +56,23 @@ function parseOriginList(raw, fallback = []) {
     .filter(Boolean);
 }
 
-function mapThinkingLevelToBudget(level) {
-  const normalized = String(level || '').trim().toLowerCase();
-  if (normalized === 'none' || normalized === 'off') return 0;
-  if (normalized === 'minimal') return 256;
-  if (normalized === 'low') return 512;
-  if (normalized === 'medium') return 1024;
-  if (normalized === 'high') return 2048;
-  if (normalized === 'max') return 4096;
-  return 256;
+function sanitizeThinkingLevel(raw, fallback = 'minimal') {
+  const normalized = String(raw || '').trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    return normalized;
+  }
+  return fallback;
+}
+
+function resolveFrom(baseDir, value, fallback) {
+  const candidate = value ?? fallback;
+  if (!candidate) return baseDir;
+  return path.resolve(baseDir, candidate);
 }
 
 export function loadConfig() {
+  const orchestratorSrcDir = path.dirname(fileURLToPath(import.meta.url));
+  const projectRootDir = path.resolve(orchestratorSrcDir, '..', '..');
   const defaultAllowedOrigins = [
     'http://127.0.0.1:5173',
     'http://localhost:5173',
@@ -75,29 +81,18 @@ export function loadConfig() {
   ];
   const allowedOrigins = parseOriginList(process.env.ORCHESTRATOR_ALLOWED_ORIGINS, defaultAllowedOrigins);
 
-  const mediaStorageDir = process.env.MEDIA_STORAGE_DIR
-    ? path.resolve(process.cwd(), process.env.MEDIA_STORAGE_DIR)
-    : path.resolve(process.cwd(), 'uploads');
-  const llmThinkingBudget = parseNonNegativeInt(
-    process.env.ORCHESTRATOR_THINKING_BUDGET,
-    mapThinkingLevelToBudget(process.env.ORCHESTRATOR_THINKING_LEVEL || 'minimal')
-  );
-  const browserThinkingBudget = parseNonNegativeInt(process.env.BROWSER_AGENT_THINKING_BUDGET, 0);
+  const mediaStorageDir = resolveFrom(projectRootDir, process.env.MEDIA_STORAGE_DIR, 'uploads');
+  const llmThinkingLevel = sanitizeThinkingLevel(process.env.ORCHESTRATOR_THINKING_LEVEL, 'minimal');
+  const browserThinkingLevel = sanitizeThinkingLevel(process.env.BROWSER_AGENT_THINKING_LEVEL, 'minimal');
   const ttsAgentApiKey = process.env.TTS_AGENT_API_KEY || process.env.GEMINI_API_KEY || '';
   const ttsAgentModel = process.env.TTS_AGENT_MODEL || 'gemini-2.5-flash-preview-tts';
   const ttsAgentVoice = process.env.TTS_AGENT_VOICE || 'Kore';
   const imageDefaultCount = parsePositiveInt(process.env.IMAGE_AGENT_DEFAULT_IMAGE_COUNT, 1);
-  const logDir = process.env.ORCHESTRATOR_LOG_DIR
-    ? path.resolve(process.cwd(), process.env.ORCHESTRATOR_LOG_DIR)
-    : path.resolve(process.cwd(), 'logs');
-  const settingsFile = process.env.ORCHESTRATOR_SETTINGS_FILE
-    ? path.resolve(process.cwd(), process.env.ORCHESTRATOR_SETTINGS_FILE)
-    : path.resolve(process.cwd(), 'runtime-settings.json');
+  const logDir = resolveFrom(projectRootDir, process.env.ORCHESTRATOR_LOG_DIR, 'logs');
+  const settingsFile = resolveFrom(projectRootDir, process.env.ORCHESTRATOR_SETTINGS_FILE, 'runtime-settings.json');
   const pricingOverrides = parseJsonObject(process.env.ORCHESTRATOR_MODEL_PRICING_JSON, {});
   const terminalToolCwdRaw = process.env.TERMINAL_TOOL_CWD || process.env.TERMINAL_AGENT_CWD;
-  const terminalToolCwd = terminalToolCwdRaw
-    ? path.resolve(process.cwd(), terminalToolCwdRaw)
-    : process.cwd();
+  const terminalToolCwd = resolveFrom(projectRootDir, terminalToolCwdRaw, '.');
 
   return {
     server: {
@@ -108,10 +103,9 @@ export function loadConfig() {
     },
     llm: {
       apiKey: process.env.GEMINI_API_KEY || '',
-      model: process.env.ORCHESTRATOR_MODEL || 'gemini-3-flash-preview-02-05',
-      thinkingBudget: llmThinkingBudget,
-      temperature: Number.parseFloat(process.env.ORCHESTRATOR_TEMPERATURE || '0.2'),
-      webResearch: parseBoolean(process.env.ORCHESTRATOR_WEB_RESEARCH, false),
+      model: process.env.ORCHESTRATOR_MODEL || 'gemini-3-flash-preview',
+      thinkingLevel: llmThinkingLevel,
+      webResearch: parseBoolean(process.env.ORCHESTRATOR_WEB_RESEARCH, true),
     },
     conversations: {
       maxMessagesPerConversation: parseNonNegativeInt(process.env.ORCHESTRATOR_MAX_MESSAGES, 0),
@@ -122,12 +116,13 @@ export function loadConfig() {
       apiKey: process.env.BROWSER_AGENT_API_KEY || '',
       pollIntervalMs: parsePositiveInt(process.env.BROWSER_AGENT_POLL_INTERVAL_MS, 1400),
       timeoutMs: parsePositiveInt(process.env.BROWSER_AGENT_TIMEOUT_MS, 90000),
-      model: process.env.BROWSER_AGENT_MODEL || 'gemini-2.0-flash',
-      thinkingBudget: browserThinkingBudget,
+      model: process.env.BROWSER_AGENT_MODEL || 'gemini-3-flash-preview',
+      thinkingLevel: browserThinkingLevel,
     },
     codingAgent: {
       enabled: parseBoolean(process.env.CODING_AGENT_ENABLED, true),
-      model: process.env.CODING_AGENT_MODEL || 'gemini-2.5-pro',
+      model: process.env.CODING_AGENT_MODEL || 'gemini-3.1-pro-preview',
+      thinkingLevel: sanitizeThinkingLevel(process.env.CODING_AGENT_THINKING_LEVEL, 'high'),
     },
     imageAgent: {
       enabled: parseBoolean(process.env.IMAGE_AGENT_ENABLED, true),

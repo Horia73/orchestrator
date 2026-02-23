@@ -6,7 +6,6 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 import http from 'http';
-import path from 'path';
 import { loadConfig } from './config.js';
 import { DailyLogger } from './daily-logger.js';
 import { MediaStore } from './media-store.js';
@@ -40,14 +39,13 @@ const settingsStore = new RuntimeSettingsStore({
   defaults: {
     orchestrator: {
       model: config.llm.model,
-      thinkingBudget: config.llm.thinkingBudget,
+      thinkingLevel: config.llm.thinkingLevel,
       webResearch: config.llm.webResearch,
-      temperature: config.llm.temperature,
     },
     agents: {
       browser: {
         model: config.browserAgent.model,
-        thinkingBudget: config.browserAgent.thinkingBudget,
+        thinkingLevel: config.browserAgent.thinkingLevel,
       },
       image: {
         model: config.imageAgent.model,
@@ -99,11 +97,10 @@ function fireAndForget(promise) {
 
 const currentSettings = settingsStore.get();
 config.llm.model = currentSettings.orchestrator.model;
-config.llm.thinkingBudget = currentSettings.orchestrator.thinkingBudget;
+config.llm.thinkingLevel = currentSettings.orchestrator.thinkingLevel;
 config.llm.webResearch = currentSettings.orchestrator.webResearch;
-config.llm.temperature = currentSettings.orchestrator.temperature;
 config.browserAgent.model = currentSettings.agents.browser.model;
-config.browserAgent.thinkingBudget = currentSettings.agents.browser.thinkingBudget;
+config.browserAgent.thinkingLevel = currentSettings.agents.browser.thinkingLevel;
 config.imageAgent.model = currentSettings.agents?.image?.model || config.imageAgent.model;
 config.ttsAgent.model = currentSettings.agents?.tts?.model || config.ttsAgent.model;
 config.ttsAgent.voice = currentSettings.agents?.tts?.voice || config.ttsAgent.voice;
@@ -141,7 +138,7 @@ await logger.log({
   message: 'Orchestrator booted.',
   data: {
     model: config.llm.model,
-    thinkingBudget: config.llm.thinkingBudget,
+    thinkingLevel: config.llm.thinkingLevel,
     browserModel: config.browserAgent.model,
     imageModel: config.imageAgent.model,
     ttsModel: config.ttsAgent.model,
@@ -533,7 +530,7 @@ const server = http.createServer(async (req, res) => {
       service: 'orchestrator',
       orchestrator: {
         model: runtime.orchestrator.model,
-        thinkingBudget: runtime.orchestrator.thinkingBudget,
+        thinkingLevel: runtime.orchestrator.thinkingLevel,
         webResearch: runtime.orchestrator.webResearch,
       },
       agents: runtime.agents,
@@ -808,9 +805,7 @@ const server = http.createServer(async (req, res) => {
         cleanContext: typeof body?.cleanContext === 'boolean' ? body.cleanContext : undefined,
         preserveContext: typeof body?.preserveContext === 'boolean' ? body.preserveContext : undefined,
         model: typeof body?.model === 'string' ? body.model : undefined,
-        thinkingBudget: Number.isFinite(Number(body?.thinkingBudget))
-          ? Number(body.thinkingBudget)
-          : undefined,
+        thinkingLevel: typeof body?.thinkingLevel === 'string' ? body.thinkingLevel : undefined,
       };
 
       const payload = await proxyBrowserAgentRequest('/task', {
@@ -1187,8 +1182,8 @@ server.listen(config.server.port, config.server.host, () => {
   console.log(`${c.bold}${c.blue}🔌 Listening on:${c.reset}  http://${config.server.host}:${config.server.port}`);
 
   console.log(`\n${c.bold}${c.cyan}🤖 AI Models & Agents${c.reset}`);
-  console.log(`  ${c.magenta}Orchestrator:${c.reset}  ${runtime.orchestrator.model} ${c.dim}(think: ${runtime.orchestrator.thinkingBudget}, web: ${runtime.orchestrator.webResearch})${c.reset}`);
-  console.log(`  ${c.magenta}Browser:${c.reset}       ${runtime.agents.browser.model} ${c.dim}(think: ${runtime.agents.browser.thinkingBudget})${c.reset}`);
+  console.log(`  ${c.magenta}Orchestrator:${c.reset}  ${runtime.orchestrator.model} ${c.dim}(think: ${runtime.orchestrator.thinkingLevel}, web: ${runtime.orchestrator.webResearch})${c.reset}`);
+  console.log(`  ${c.magenta}Browser:${c.reset}       ${runtime.agents.browser.model} ${c.dim}(think: ${runtime.agents.browser.thinkingLevel})${c.reset}`);
   console.log(`  ${c.magenta}Image:${c.reset}         ${runtime.agents.image.model}`);
   console.log(`  ${c.magenta}TTS:${c.reset}           ${runtime.agents.tts.model} ${c.dim}(voice: ${runtime.agents.tts.voice})${c.reset}`);
 

@@ -30,8 +30,7 @@ export interface ControlApiConfig {
 
 export interface LlmConfig {
     model: string;
-    thinkingBudget: number;
-    temperature: number;
+    thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
 }
 
 export interface AgentConfig {
@@ -82,9 +81,8 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
         apiKey: '',
     },
     llm: {
-        model: 'gemini-2.0-flash',
-        thinkingBudget: 0,
-        temperature: 0,
+        model: 'gemini-3-flash-preview',
+        thinkingLevel: 'minimal',
     },
 };
 
@@ -115,6 +113,19 @@ function parseNumber(value: string | undefined): number | undefined {
     }
 
     return parsed;
+}
+
+function parseThinkingLevel(value: string | undefined): LlmConfig['thinkingLevel'] | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized;
+    }
+
+    return undefined;
 }
 
 function applyEnvOverrides(config: AgentConfig): AgentConfig {
@@ -170,14 +181,11 @@ function applyEnvOverrides(config: AgentConfig): AgentConfig {
         overridden.llm.model = process.env.AGENT_MODEL;
     }
 
-    const thinkingBudgetFromEnv = parseNumber(process.env.AGENT_THINKING_BUDGET);
-    if (thinkingBudgetFromEnv !== undefined && thinkingBudgetFromEnv >= 0) {
-        overridden.llm.thinkingBudget = Math.floor(thinkingBudgetFromEnv);
-    }
-
-    const temperatureFromEnv = parseNumber(process.env.AGENT_TEMPERATURE);
-    if (temperatureFromEnv !== undefined) {
-        overridden.llm.temperature = Math.max(0, Math.min(2, temperatureFromEnv));
+    const thinkingLevelFromEnv = parseThinkingLevel(
+        process.env.BROWSER_AGENT_THINKING_LEVEL || process.env.ORCHESTRATOR_THINKING_LEVEL
+    );
+    if (thinkingLevelFromEnv) {
+        overridden.llm.thinkingLevel = thinkingLevelFromEnv;
     }
 
     return overridden;
@@ -236,10 +244,7 @@ function sanitizeConfig(config: AgentConfig): AgentConfig {
         },
         llm: {
             model: config.llm.model || DEFAULT_AGENT_CONFIG.llm.model,
-            thinkingBudget: config.llm.thinkingBudget >= 0 ? Math.floor(config.llm.thinkingBudget) : DEFAULT_AGENT_CONFIG.llm.thinkingBudget,
-            temperature: Number.isFinite(config.llm.temperature)
-                ? Math.max(0, Math.min(2, config.llm.temperature))
-                : DEFAULT_AGENT_CONFIG.llm.temperature,
+            thinkingLevel: parseThinkingLevel(config.llm.thinkingLevel) || DEFAULT_AGENT_CONFIG.llm.thinkingLevel,
         },
     };
 }

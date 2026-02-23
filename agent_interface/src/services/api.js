@@ -127,9 +127,7 @@ export async function sendBrowserTask(goal, options = {}, signal) {
       cleanContext: typeof options?.cleanContext === 'boolean' ? options.cleanContext : undefined,
       preserveContext: typeof options?.preserveContext === 'boolean' ? options.preserveContext : undefined,
       model: typeof options?.model === 'string' ? options.model : undefined,
-      thinkingBudget: Number.isFinite(Number(options?.thinkingBudget))
-        ? Number(options.thinkingBudget)
-        : undefined,
+      thinkingLevel: typeof options?.thinkingLevel === 'string' ? options.thinkingLevel : undefined,
     }),
     signal,
   });

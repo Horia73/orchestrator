@@ -164,14 +164,13 @@ export class Orchestrator {
 
     this.llm.updateConfig({
       model: orchestratorSettings.model,
-      thinkingBudget: orchestratorSettings.thinkingBudget,
-      temperature: orchestratorSettings.temperature,
+      thinkingLevel: orchestratorSettings.thinkingLevel,
       webResearch: orchestratorSettings.webResearch,
     });
 
     this.browserAgent.updateConfig({
       model: browserSettings.model,
-      thinkingBudget: browserSettings.thinkingBudget,
+      thinkingLevel: browserSettings.thinkingLevel,
     });
 
     this.imageAgent.updateConfig({

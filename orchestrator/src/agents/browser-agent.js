@@ -49,6 +49,14 @@ function normalizeModel(model) {
   return raw.startsWith('models/') ? raw.slice('models/'.length) : raw;
 }
 
+function sanitizeThinkingLevel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    return normalized;
+  }
+  return '';
+}
+
 export class BrowserAgentClient {
   constructor(config, { onUsage, onLog } = {}) {
     this.config = config;
@@ -63,15 +71,15 @@ export class BrowserAgentClient {
       this.config.model = patch.model.trim();
     }
 
-    if (Number.isFinite(Number(patch.thinkingBudget)) && Number(patch.thinkingBudget) >= 0) {
-      this.config.thinkingBudget = Math.floor(Number(patch.thinkingBudget));
+    if (typeof patch.thinkingLevel === 'string' && patch.thinkingLevel.trim()) {
+      this.config.thinkingLevel = patch.thinkingLevel.trim().toLowerCase();
     }
   }
 
   getConfig() {
     return {
       model: this.config.model,
-      thinkingBudget: this.config.thinkingBudget,
+      thinkingLevel: sanitizeThinkingLevel(this.config.thinkingLevel) || 'minimal',
     };
   }
 
@@ -142,7 +150,7 @@ export class BrowserAgentClient {
       data: {
         goal: trimmedGoal,
         model: this.config.model,
-        thinkingBudget: this.config.thinkingBudget,
+        thinkingLevel: sanitizeThinkingLevel(this.config.thinkingLevel) || 'minimal',
       },
     });
 
@@ -153,7 +161,7 @@ export class BrowserAgentClient {
           goal: trimmedGoal,
           preserveContext: true,
           model: this.config.model,
-          thinkingBudget: this.config.thinkingBudget,
+          thinkingLevel: sanitizeThinkingLevel(this.config.thinkingLevel) || 'minimal',
         },
         signal,
       });

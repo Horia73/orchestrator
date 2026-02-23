@@ -23,8 +23,7 @@ export interface AgentAction {
 
 export interface VisionConfig {
     model: string;
-    thinkingBudget: number;
-    temperature: number;
+    thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
 }
 
 export interface VisionUsage {
@@ -45,6 +44,21 @@ export interface VisionService {
     ): Promise<AgentAction>;
     updateConfig(patch: Partial<VisionConfig>): void;
     getConfig(): VisionConfig;
+}
+
+function sanitizeThinkingLevel(value: unknown): VisionConfig['thinkingLevel'] | '' {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized;
+    }
+    return '';
+}
+
+function buildThinkingConfig(explicitLevel?: unknown): { thinkingLevel: VisionConfig['thinkingLevel'] } {
+    const thinkingLevel = sanitizeThinkingLevel(explicitLevel);
+    return {
+        thinkingLevel: thinkingLevel || 'minimal',
+    };
 }
 
 function isThinkingCompatError(error: unknown): boolean {
@@ -80,13 +94,8 @@ export function createVisionService(
 
     const ai = new GoogleGenAI({ apiKey });
     const state: VisionConfig = {
-        model: initialConfig.model || 'gemini-2.0-flash',
-        thinkingBudget: Number.isFinite(initialConfig.thinkingBudget as number)
-            ? Math.max(0, Math.floor(initialConfig.thinkingBudget as number))
-            : 0,
-        temperature: Number.isFinite(initialConfig.temperature as number)
-            ? Math.max(0, Math.min(2, Number(initialConfig.temperature)))
-            : 0,
+        model: initialConfig.model || 'gemini-3-flash-preview',
+        thinkingLevel: sanitizeThinkingLevel(initialConfig.thinkingLevel) || 'minimal',
     };
 
     const service: VisionService = {
@@ -96,19 +105,15 @@ export function createVisionService(
             if (typeof patch.model === 'string' && patch.model.trim()) {
                 state.model = patch.model.trim();
             }
-            if (Number.isFinite(patch.thinkingBudget as number) && Number(patch.thinkingBudget) >= 0) {
-                state.thinkingBudget = Math.floor(Number(patch.thinkingBudget));
-            }
-            if (Number.isFinite(patch.temperature as number)) {
-                state.temperature = Math.max(0, Math.min(2, Number(patch.temperature)));
+            if (typeof patch.thinkingLevel === 'string' && patch.thinkingLevel.trim()) {
+                state.thinkingLevel = sanitizeThinkingLevel(patch.thinkingLevel) || state.thinkingLevel;
             }
         },
 
         getConfig(): VisionConfig {
             return {
                 model: state.model,
-                thinkingBudget: state.thinkingBudget,
-                temperature: state.temperature,
+                thinkingLevel: state.thinkingLevel,
             };
         },
 
@@ -133,12 +138,7 @@ export function createVisionService(
                     ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
                     : '';
 
-                const requestConfig: any = {
-                    temperature: state.temperature,
-                    thinkingConfig: {
-                        thinkingBudget: state.thinkingBudget,
-                    },
-                };
+                const requestConfig: any = { thinkingConfig: buildThinkingConfig(state.thinkingLevel) };
 
                 let response;
                 try {
@@ -166,9 +166,7 @@ export function createVisionService(
                         throw error;
                     }
 
-                    const fallbackConfig: any = {
-                        temperature: requestConfig.temperature,
-                    };
+                    const fallbackConfig: any = {};
 
                     response = await ai.models.generateContent({
                         model: state.model,

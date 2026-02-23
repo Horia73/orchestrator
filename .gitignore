@@ -16,3 +16,4 @@ orchestrator/logs/
 orchestrator/uploads/
 user-data-*
 
+agent.config.json

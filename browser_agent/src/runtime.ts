@@ -12,7 +12,7 @@ export interface SubmitTaskOptions {
     cleanContext?: boolean;
     preserveContext?: boolean;
     model?: string;
-    thinkingBudget?: number;
+    thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
 }
 
 export interface RuntimeResetOptions extends ResetContextOptions {
@@ -36,7 +36,7 @@ export interface TaskUsageSummary {
     finishedAt: string | null;
     status: 'running' | 'completed' | 'interrupted' | 'stopped' | 'error';
     model: string;
-    thinkingBudget: number;
+    thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
     totals: UsageTotals;
     byModel: Record<string, UsageTotals>;
 }
@@ -53,8 +53,7 @@ export interface AgentRuntimeStatus {
     lastStatusMessage: string | null;
     llm: {
         model: string;
-        thinkingBudget: number;
-        temperature: number;
+        thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
     };
     usage: {
         session: UsageTotals;
@@ -149,7 +148,7 @@ function cloneTaskUsage(source: TaskUsageSummary | null): TaskUsageSummary | nul
         finishedAt: source.finishedAt,
         status: source.status,
         model: source.model,
-        thinkingBudget: source.thinkingBudget,
+        thinkingLevel: source.thinkingLevel,
         totals: cloneTotals(source.totals),
         byModel,
     };
@@ -242,8 +241,7 @@ export function createAgentRuntime(
 
             vision = createVisionService({
                 model: config.llm.model,
-                thinkingBudget: config.llm.thinkingBudget,
-                temperature: config.llm.temperature,
+                thinkingLevel: config.llm.thinkingLevel,
             }, recordVisionUsage);
 
             agent = createAgentController(browser, vision, statusHandler, {
@@ -304,8 +302,8 @@ export function createAgentRuntime(
             if (typeof options.model === 'string' && options.model.trim()) {
                 vision.updateConfig({ model: options.model.trim() });
             }
-            if (Number.isFinite(options.thinkingBudget as number) && Number(options.thinkingBudget) >= 0) {
-                vision.updateConfig({ thinkingBudget: Math.floor(Number(options.thinkingBudget)) });
+            if (typeof options.thinkingLevel === 'string' && options.thinkingLevel.trim()) {
+                vision.updateConfig({ thinkingLevel: options.thinkingLevel });
             }
 
             const llmConfig = vision.getConfig();
@@ -315,7 +313,7 @@ export function createAgentRuntime(
                 finishedAt: null,
                 status: 'running',
                 model: llmConfig.model,
-                thinkingBudget: llmConfig.thinkingBudget,
+                thinkingLevel: llmConfig.thinkingLevel,
                 totals: createEmptyTotals(),
                 byModel: {},
             };
@@ -420,8 +418,7 @@ export function createAgentRuntime(
                     lastStatusMessage,
                     llm: {
                         model: config.llm.model,
-                        thinkingBudget: config.llm.thinkingBudget,
-                        temperature: config.llm.temperature,
+                        thinkingLevel: config.llm.thinkingLevel,
                     },
                     usage: {
                         session: cloneTotals(sessionUsage),
@@ -456,8 +453,7 @@ export function createAgentRuntime(
                 lastStatusMessage,
                 llm: {
                     model: llmConfig.model,
-                    thinkingBudget: llmConfig.thinkingBudget,
-                    temperature: llmConfig.temperature,
+                    thinkingLevel: llmConfig.thinkingLevel,
                 },
                 usage: {
                     session: cloneTotals(sessionUsage),

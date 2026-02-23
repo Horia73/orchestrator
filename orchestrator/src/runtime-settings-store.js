@@ -10,22 +10,18 @@ function sanitizeModel(value, fallback) {
   return next || fallback;
 }
 
-function sanitizeThinkingBudget(value, fallback) {
-  const parsed = Number.parseInt(String(value ?? ''), 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return fallback;
-  return parsed;
+function sanitizeThinkingLevel(value, fallback) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    return normalized;
+  }
+  return fallback;
 }
 
 function sanitizePositiveInt(value, fallback) {
   const parsed = Number.parseInt(String(value ?? ''), 10);
   if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
   return parsed;
-}
-
-function sanitizeTemperature(value, fallback) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) return fallback;
-  return Math.max(0, Math.min(2, parsed));
 }
 
 function sanitizePricingMap(raw, fallback = {}) {
@@ -169,16 +165,15 @@ function normalizeState(raw, defaults) {
   return {
     orchestrator: {
       model: sanitizeModel(orchestratorPatch.model, defaults.orchestrator.model),
-      thinkingBudget: sanitizeThinkingBudget(orchestratorPatch.thinkingBudget, defaults.orchestrator.thinkingBudget),
+      thinkingLevel: sanitizeThinkingLevel(orchestratorPatch.thinkingLevel, defaults.orchestrator.thinkingLevel),
       webResearch: typeof orchestratorPatch.webResearch === 'boolean'
         ? orchestratorPatch.webResearch
-        : defaults.orchestrator.webResearch,
-      temperature: sanitizeTemperature(orchestratorPatch.temperature, defaults.orchestrator.temperature),
+        : Boolean(defaults.orchestrator.webResearch),
     },
     agents: {
       browser: {
         model: sanitizeModel(browserPatch.model, defaults.agents.browser.model),
-        thinkingBudget: sanitizeThinkingBudget(browserPatch.thinkingBudget, defaults.agents.browser.thinkingBudget),
+        thinkingLevel: sanitizeThinkingLevel(browserPatch.thinkingLevel, defaults.agents.browser.thinkingLevel),
       },
       image: {
         model: sanitizeModel(imagePatch.model, imageDefaults.model),
@@ -308,24 +303,23 @@ export class RuntimeSettingsStore {
           model: 'model' in orchestratorPatch
             ? sanitizeModel(orchestratorPatch.model, current.orchestrator.model)
             : current.orchestrator.model,
-          thinkingBudget: 'thinkingBudget' in orchestratorPatch
-            ? sanitizeThinkingBudget(orchestratorPatch.thinkingBudget, current.orchestrator.thinkingBudget)
-            : current.orchestrator.thinkingBudget,
-          webResearch: typeof orchestratorPatch.webResearch === 'boolean'
-            ? orchestratorPatch.webResearch
+          thinkingLevel: 'thinkingLevel' in orchestratorPatch
+            ? sanitizeThinkingLevel(orchestratorPatch.thinkingLevel, current.orchestrator.thinkingLevel)
+            : current.orchestrator.thinkingLevel,
+          webResearch: 'webResearch' in orchestratorPatch
+            ? typeof orchestratorPatch.webResearch === 'boolean'
+              ? orchestratorPatch.webResearch
+              : current.orchestrator.webResearch
             : current.orchestrator.webResearch,
-          temperature: 'temperature' in orchestratorPatch
-            ? sanitizeTemperature(orchestratorPatch.temperature, current.orchestrator.temperature)
-            : current.orchestrator.temperature,
         },
         agents: {
           browser: {
             model: 'model' in browserPatch
               ? sanitizeModel(browserPatch.model, current.agents.browser.model)
               : current.agents.browser.model,
-            thinkingBudget: 'thinkingBudget' in browserPatch
-              ? sanitizeThinkingBudget(browserPatch.thinkingBudget, current.agents.browser.thinkingBudget)
-              : current.agents.browser.thinkingBudget,
+            thinkingLevel: 'thinkingLevel' in browserPatch
+              ? sanitizeThinkingLevel(browserPatch.thinkingLevel, current.agents.browser.thinkingLevel)
+              : current.agents.browser.thinkingLevel,
           },
           image: {
             model: 'model' in imagePatch

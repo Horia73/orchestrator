@@ -53,8 +53,50 @@ if [ -z "$API_KEY" ]; then
 fi
 
 # Set up .env
-echo "GEMINI_API_KEY=$API_KEY" > .env
-echo "✅ Saved API Key to .env"
+cat > .env <<EOF
+GEMINI_API_KEY="$API_KEY"
+
+# Orchestrator HTTP server
+ORCHESTRATOR_HOST=127.0.0.1
+ORCHESTRATOR_PORT=3030
+
+# Default models (aligned across agents)
+ORCHESTRATOR_MODEL=gemini-3-flash-preview
+BROWSER_AGENT_MODEL=gemini-3-flash-preview
+CODING_AGENT_MODEL=gemini-3.1-pro-preview
+CODING_AGENT_THINKING_LEVEL=high
+IMAGE_AGENT_MODEL=gemini-3-pro-image-preview
+TTS_AGENT_MODEL=gemini-2.5-flash-preview-tts
+
+# Thinking levels
+ORCHESTRATOR_THINKING_LEVEL=minimal
+BROWSER_AGENT_THINKING_LEVEL=minimal
+ORCHESTRATOR_WEB_RESEARCH=true
+
+# Browser agent control API (orchestrator -> browser agent)
+BROWSER_AGENT_ENABLED=true
+BROWSER_AGENT_URL=http://127.0.0.1:3020
+BROWSER_AGENT_API_KEY=
+BROWSER_AGENT_TIMEOUT_MS=90000
+BROWSER_AGENT_POLL_INTERVAL_MS=1400
+
+# Browser agent runtime
+AGENT_HEADLESS=true
+AGENT_CONTROL_ENABLED=true
+AGENT_CONTROL_HOST=127.0.0.1
+AGENT_CONTROL_PORT=3020
+AGENT_CONTROL_API_KEY=
+
+# Runtime files
+ORCHESTRATOR_SETTINGS_FILE=runtime-settings.json
+ORCHESTRATOR_LOG_DIR=logs
+
+# Media
+MEDIA_ENABLED=true
+MEDIA_STORAGE_DIR=uploads
+MEDIA_MAX_FILE_BYTES=26214400
+EOF
+echo "✅ Saved full configuration to .env"
 
 echo ""
 echo "📦 Installing npm dependencies..."

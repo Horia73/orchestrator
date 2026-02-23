@@ -102,6 +102,8 @@ export class CodingAgentClient {
                 message: goal,
                 attachments: [],
                 defaultTimeouts: { pty_terminal: 120_000, fs: 30_000 },
+                customModel: this.config.model,
+                customThinkingLevel: this.config.thinkingLevel || 'high',
                 customSystemInstruction: CODING_AGENT_SYSTEM_INSTRUCTION,
                 customTools: [{
                     functionDeclarations: [
@@ -160,4 +162,3 @@ export class CodingAgentClient {
         }
     }
 }
-

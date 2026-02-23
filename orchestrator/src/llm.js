@@ -6,6 +6,21 @@ const GEMINI_FILE_STATE_PROCESSING = 'PROCESSING';
 const GEMINI_FILE_POLL_INTERVAL_MS = 2000;
 const GEMINI_FILE_WAIT_TIMEOUT_MS = 10 * 60 * 1000;
 
+function sanitizeThinkingLevel(value) {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    return normalized;
+  }
+  return '';
+}
+
+function buildThinkingConfig(explicitLevel) {
+  const thinkingLevel = sanitizeThinkingLevel(explicitLevel);
+  return {
+    thinkingLevel: thinkingLevel || 'minimal',
+  };
+}
+
 const ORCHESTRATOR_SYSTEM_INSTRUCTION = `
 <identity>
 You are an AI orchestrator that routes tasks to specialized agents and tools,
@@ -213,12 +228,8 @@ export class LlmClient {
       this.config.model = patch.model.trim();
     }
 
-    if (Number.isFinite(Number(patch.thinkingBudget)) && Number(patch.thinkingBudget) >= 0) {
-      this.config.thinkingBudget = Math.floor(Number(patch.thinkingBudget));
-    }
-
-    if (Number.isFinite(Number(patch.temperature))) {
-      this.config.temperature = Math.max(0, Math.min(2, Number(patch.temperature)));
+    if (typeof patch.thinkingLevel === 'string' && patch.thinkingLevel.trim()) {
+      this.config.thinkingLevel = patch.thinkingLevel.trim().toLowerCase();
     }
 
     if (typeof patch.webResearch === 'boolean') {
@@ -229,9 +240,8 @@ export class LlmClient {
   getConfig() {
     return {
       model: this.config.model,
-      thinkingBudget: this.config.thinkingBudget,
-      temperature: this.config.temperature,
-      webResearch: this.config.webResearch,
+      thinkingLevel: sanitizeThinkingLevel(this.config.thinkingLevel) || 'minimal',
+      webResearch: this.config.webResearch !== false,
     };
   }
 
@@ -419,7 +429,7 @@ export class LlmClient {
           message: `Retrying ${this.config.model} without thinkingConfig due to incompatibility.`,
           data: {
             model: this.config.model,
-            thinkingBudget: this.config.thinkingBudget,
+            thinkingLevel: sanitizeThinkingLevel(this.config.thinkingLevel) || 'minimal',
           },
         });
         return runFn(fallbackConfig);
@@ -457,20 +467,22 @@ export class LlmClient {
     });
   }
 
-  _commonConfig(overrides = {}, includeTools = true) {
-    const shouldUseTools = includeTools && this.config.webResearch;
-    const tools = shouldUseTools ? [{ googleSearch: {} }] : undefined;
+  _commonConfig(overrides = {}, includeTools = true, options = {}) {
+    const overrideTools = Array.isArray(overrides?.tools) ? overrides.tools : [];
+    const allowWebResearch = this.config.webResearch !== false;
+    const defaultTools = includeTools && allowWebResearch ? [{ googleSearch: {} }] : [];
+    const tools = [...overrideTools, ...defaultTools];
+    const thinkingConfig = buildThinkingConfig(
+      sanitizeThinkingLevel(options?.thinkingLevel) || this.config.thinkingLevel
+    );
 
-    const thinkingBudget = Number(this.config.thinkingBudget);
-    const thinkingConfig = Number.isFinite(thinkingBudget) && thinkingBudget >= 0
-      ? { thinkingBudget: Math.floor(thinkingBudget) }
-      : undefined;
+    const mergedOverrides = { ...overrides };
+    delete mergedOverrides.tools;
 
     return {
-      temperature: Number.isFinite(this.config.temperature) ? this.config.temperature : 0.2,
       ...(thinkingConfig ? { thinkingConfig } : {}),
-      ...(tools ? { tools } : {}),
-      ...overrides,
+      ...(tools.length > 0 ? { tools } : {}),
+      ...mergedOverrides,
     };
   }
 
@@ -605,8 +617,28 @@ export class LlmClient {
     };
   }
 
-  async executeAgenticLoop({ history, message, attachments = [], defaultTimeouts, onChunk, onAgentStart, onAgentResult, executeAgentCall, signal, customSystemInstruction, customTools }) {
+  async executeAgenticLoop({
+    history,
+    message,
+    attachments = [],
+    defaultTimeouts,
+    onChunk,
+    onAgentStart,
+    onAgentResult,
+    executeAgentCall,
+    signal,
+    customSystemInstruction,
+    customTools,
+    customModel,
+    customThinkingLevel,
+  }) {
     const maxIterations = 25;
+    const effectiveModel = typeof customModel === 'string' && customModel.trim()
+      ? customModel.trim()
+      : this.config.model;
+    const effectiveThinkingLevel = sanitizeThinkingLevel(customThinkingLevel)
+      || sanitizeThinkingLevel(this.config.thinkingLevel)
+      || 'minimal';
 
     let contents = [];
 
@@ -672,14 +704,14 @@ export class LlmClient {
 
       const stream = await this._generateWithThinkingFallback(
         (config) => this.ai.models.generateContentStream({
-          model: this.config.model,
+          model: effectiveModel,
           contents,
           config,
         }),
         this._commonConfig({
           systemInstruction: customSystemInstruction || ORCHESTRATOR_SYSTEM_INSTRUCTION,
           tools,
-        })
+        }, true, { thinkingLevel: effectiveThinkingLevel })
       );
 
       let parsedFunctionCalls = [];
