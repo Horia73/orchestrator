@@ -1,4 +1,10 @@
-import 'dotenv/config';
+import * as dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '../../.env') });
 import http from 'http';
 import path from 'path';
 import { loadConfig } from './config.js';

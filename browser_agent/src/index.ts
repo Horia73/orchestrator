@@ -2,7 +2,13 @@
  * AI Browser Agent - Manual CLI entrypoint
  */
 
-import 'dotenv/config';
+import * as dotenv from 'dotenv';
+import { fileURLToPath } from 'url';
+import path from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
+dotenv.config({ path: path.join(__dirname, '../../.env') });
 import * as readline from 'readline';
 import { loadAgentConfig } from './config.js';
 import { createAgentRuntime } from './runtime.js';
