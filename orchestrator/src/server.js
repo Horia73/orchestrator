@@ -42,6 +42,10 @@ const settingsStore = new RuntimeSettingsStore({
       thinkingLevel: config.llm.thinkingLevel,
       webResearch: config.llm.webResearch,
     },
+    codingAgent: {
+      model: config.codingAgent.model,
+      thinkingLevel: config.codingAgent.thinkingLevel,
+    },
     agents: {
       browser: {
         model: config.browserAgent.model,
@@ -99,6 +103,8 @@ const currentSettings = settingsStore.get();
 config.llm.model = currentSettings.orchestrator.model;
 config.llm.thinkingLevel = currentSettings.orchestrator.thinkingLevel;
 config.llm.webResearch = currentSettings.orchestrator.webResearch;
+config.codingAgent.model = currentSettings.codingAgent?.model || config.codingAgent.model;
+config.codingAgent.thinkingLevel = currentSettings.codingAgent?.thinkingLevel || config.codingAgent.thinkingLevel;
 config.browserAgent.model = currentSettings.agents.browser.model;
 config.browserAgent.thinkingLevel = currentSettings.agents.browser.thinkingLevel;
 config.imageAgent.model = currentSettings.agents?.image?.model || config.imageAgent.model;
@@ -139,6 +145,8 @@ await logger.log({
   data: {
     model: config.llm.model,
     thinkingLevel: config.llm.thinkingLevel,
+    codingModel: config.codingAgent.model,
+    codingThinkingLevel: config.codingAgent.thinkingLevel,
     browserModel: config.browserAgent.model,
     imageModel: config.imageAgent.model,
     ttsModel: config.ttsAgent.model,
@@ -1183,6 +1191,7 @@ server.listen(config.server.port, config.server.host, () => {
 
   console.log(`\n${c.bold}${c.cyan}🤖 AI Models & Agents${c.reset}`);
   console.log(`  ${c.magenta}Orchestrator:${c.reset}  ${runtime.orchestrator.model} ${c.dim}(think: ${runtime.orchestrator.thinkingLevel}, web: ${runtime.orchestrator.webResearch})${c.reset}`);
+  console.log(`  ${c.magenta}Coding:${c.reset}        ${runtime.codingAgent?.model || 'none'} ${c.dim}(think: ${runtime.codingAgent?.thinkingLevel || 'none'})${c.reset}`);
   console.log(`  ${c.magenta}Browser:${c.reset}       ${runtime.agents.browser.model} ${c.dim}(think: ${runtime.agents.browser.thinkingLevel})${c.reset}`);
   console.log(`  ${c.magenta}Image:${c.reset}         ${runtime.agents.image.model}`);
   console.log(`  ${c.magenta}TTS:${c.reset}           ${runtime.agents.tts.model} ${c.dim}(voice: ${runtime.agents.tts.voice})${c.reset}`);

@@ -63,6 +63,7 @@ GEMINI_API_KEY="$API_KEY"
 # Orchestrator HTTP server
 ORCHESTRATOR_HOST=127.0.0.1
 ORCHESTRATOR_PORT=3030
+ORCHESTRATOR_ALLOWED_ORIGINS=*
 
 # Default models (aligned across agents)
 ORCHESTRATOR_MODEL=gemini-3-flash-preview
@@ -105,6 +106,14 @@ echo "✅ Saved full configuration to .env"
 echo ""
 echo "📦 Installing npm dependencies..."
 npm install
+
+echo ""
+echo "🧩 Installing browser binaries for Patchright..."
+npx patchright install
+
+echo ""
+echo "🛠️  Installing system dependencies for the browser (may require sudo password)..."
+npx patchright install-deps
 
 echo ""
 echo "⚙️  Building the project for production..."

@@ -309,6 +309,7 @@ function emptyDraft() {
     orchestratorModel: '',
     orchestratorThinkingLevel: THINKING_LEVEL_PRESETS[0].level,
     codingModel: '',
+    codingThinkingLevel: THINKING_LEVEL_PRESETS[3].level,
     browserModel: '',
     browserThinkingLevel: THINKING_LEVEL_PRESETS[0].level,
     imageModel: '',
@@ -388,6 +389,7 @@ export function createSettingsPanel() {
       orchestratorModel: normalizeModelId(state.draft.orchestratorModel),
       orchestratorThinkingLevel: normalizeThinkingLevel(state.draft.orchestratorThinkingLevel, THINKING_LEVEL_PRESETS[0].level),
       codingModel: normalizeModelId(state.draft.codingModel),
+      codingThinkingLevel: normalizeThinkingLevel(state.draft.codingThinkingLevel, THINKING_LEVEL_PRESETS[3].level),
       browserModel: normalizeModelId(state.draft.browserModel),
       browserThinkingLevel: normalizeThinkingLevel(state.draft.browserThinkingLevel, THINKING_LEVEL_PRESETS[0].level),
       imageModel: normalizeModelId(state.draft.imageModel),
@@ -416,6 +418,10 @@ export function createSettingsPanel() {
       THINKING_LEVEL_PRESETS[0].level
     );
     draft.codingModel = normalizeModelId(settings?.codingAgent?.model || '');
+    draft.codingThinkingLevel = normalizeThinkingLevel(
+      settings?.codingAgent?.thinkingLevel,
+      THINKING_LEVEL_PRESETS[3].level
+    );
     draft.browserModel = normalizeModelId(settings?.agents?.browser?.model || '');
     draft.browserThinkingLevel = normalizeThinkingLevel(
       settings?.agents?.browser?.thinkingLevel,
@@ -651,6 +657,7 @@ export function createSettingsPanel() {
       },
       codingAgent: {
         model: normalizeModelId(state.draft.codingModel),
+        thinkingLevel: normalizeThinkingLevel(state.draft.codingThinkingLevel, THINKING_LEVEL_PRESETS[3].level),
       },
       agents: {
         browser: {
@@ -1192,11 +1199,10 @@ export function createSettingsPanel() {
       title: 'Coding Agent Model',
       description: 'Used for executing autonomous code refactoring and creation.',
       selectedModel: state.draft.codingModel,
-      thinkingLevel: THINKING_LEVEL_PRESETS[0].level,
+      thinkingLevel: state.draft.codingThinkingLevel,
       lookup: codingLookup,
       officialPricing: codingOfficialPricing,
       modelMeta: codingModelMeta,
-      showThinking: false,
     })}
 
         ${renderModelCard({
@@ -1483,6 +1489,8 @@ export function createSettingsPanel() {
         const level = normalizeThinkingLevel(btn.getAttribute('data-thinking-value'), THINKING_LEVEL_PRESETS[0].level);
         if (field === 'orchestrator') {
           state.draft.orchestratorThinkingLevel = level;
+        } else if (field === 'coding') {
+          state.draft.codingThinkingLevel = level;
         } else if (field === 'browser') {
           state.draft.browserThinkingLevel = level;
         }
