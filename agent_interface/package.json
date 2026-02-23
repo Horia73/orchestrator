@@ -1,0 +1,22 @@
+{
+  "name": "agent_interface",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "vite": "^7.3.1"
+  },
+  "dependencies": {
+    "dompurify": "^3.3.1",
+    "highlight.js": "^11.11.1",
+    "katex": "^0.16.28",
+    "marked": "^17.0.2",
+    "mermaid": "^11.12.3",
+    "pdfjs-dist": "^5.4.624"
+  }
+}

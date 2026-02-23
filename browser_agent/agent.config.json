@@ -1,0 +1,28 @@
+{
+  "browser": {
+    "startupUrl": "https://www.google.com",
+    "userDataDir": "user-data-patchright",
+    "headless": true,
+    "launchArgs": [
+      "--start-maximized",
+      "--disable-blink-features=AutomationControlled",
+      "--no-first-run",
+      "--no-default-browser-check",
+      "--disable-infobars"
+    ]
+  },
+  "runtime": {
+    "maxIterations": 50,
+    "maxConversationHistory": 40,
+    "stepDelayMs": 500,
+    "actionSettleDelayMs": 300,
+    "waitActionDelayMs": 3000,
+    "cleanContextBeforeTask": false
+  },
+  "controlApi": {
+    "enabled": true,
+    "host": "127.0.0.1",
+    "port": 3020,
+    "apiKey": ""
+  }
+}

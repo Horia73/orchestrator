@@ -1,0 +1,32 @@
+{
+    "name": "ai-browser-agent",
+    "version": "1.0.0",
+    "description": "AI-powered browser automation using Gemini vision and Puppeteer stealth",
+    "type": "module",
+    "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "start:control": "node ../scripts/free-dev-ports.mjs 3020 && node dist/server.js",
+    "dev:control": "npm run build && node ../scripts/free-dev-ports.mjs 3020 && node dist/server.js",
+    "dev": "tsc && node dist/index.js"
+  },
+    "keywords": [
+        "ai",
+        "browser",
+        "automation",
+        "gemini",
+        "puppeteer"
+    ],
+    "license": "MIT",
+    "dependencies": {
+        "@google/genai": "^1.30.0",
+        "dotenv": "^16.6.1",
+        "patchright": "^1.57.0"
+    },
+    "devDependencies": {
+        "@types/node": "^22.0.0",
+        "ts-node": "^10.9.2",
+        "typescript": "^5.7.0"
+    }
+}

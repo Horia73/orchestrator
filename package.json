@@ -1,0 +1,28 @@
+{
+  "name": "agent_stack",
+  "private": true,
+  "version": "0.1.0",
+  "workspaces": [
+    "agent_interface",
+    "browser_agent",
+    "orchestrator"
+  ],
+  "scripts": {
+    "setup": "npm install",
+    "sync:knowledge": "node scripts/sync-knowledge.mjs",
+    "check:knowledge-sync": "node scripts/sync-knowledge.mjs --check",
+    "dev": "concurrently -k -n browser,orchestrator,ui \"npm run dev:browser\" \"npm run dev:orchestrator\" \"npm run dev:ui\"",
+    "dev:ports:free": "node scripts/free-dev-ports.mjs 3020 3030 5173",
+    "dev:browser": "node scripts/free-dev-ports.mjs 3020 && npm run -w browser_agent dev:control",
+    "dev:orchestrator": "npm run sync:knowledge && node scripts/free-dev-ports.mjs 3030 && npm run -w orchestrator dev",
+    "dev:ui": "node scripts/free-dev-ports.mjs 5173 && npm run -w agent_interface dev -- --host 0.0.0.0 --port 5173",
+    "build:ui": "npm run -w agent_interface build",
+    "prepare:prod": "npm run -w browser_agent build && npm run -w agent_interface build",
+    "start": "concurrently -k -n browser,orchestrator,ui \"npm run start:browser\" \"npm run start:orchestrator\" \"npm run -w agent_interface preview -- --host 0.0.0.0 --port 4173\"",
+    "start:browser": "npm run -w browser_agent start:control",
+    "start:orchestrator": "npm run sync:knowledge && npm run -w orchestrator start"
+  },
+  "devDependencies": {
+    "concurrently": "^9.2.1"
+  }
+}
