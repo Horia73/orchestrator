@@ -44,13 +44,17 @@ fi
 
 # Ask for Google API Key
 echo ""
-echo "🔑 Please enter your Google Gemini API Key:"
-read -r API_KEY
+while true; do
+    echo "🔑 Please enter your Google Gemini API Key:"
+    read -r API_KEY < /dev/tty
 
-if [ -z "$API_KEY" ]; then
-    echo "⚠️  API Key is required. Installation aborted."
-    exit 1
-fi
+    if [ -n "$API_KEY" ]; then
+        break
+    else
+        echo "⚠️  API Key cannot be empty. Please provide a valid key (or press Ctrl+C to abort)."
+        echo ""
+    fi
+done
 
 # Set up .env
 cat > .env <<EOF
