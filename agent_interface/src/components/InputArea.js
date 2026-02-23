@@ -46,7 +46,7 @@ export function createInputArea() {
               rows="1"
               aria-label="Message input"
             ></textarea>
-            <div class="input-status-indicator" id="status-indicator">Thinking...</div>
+            <div class="input-status-indicator" id="status-indicator" aria-live="polite" role="status">Thinking...</div>
         </div>
 
         <div class="input-actions-right">
@@ -88,6 +88,7 @@ export function createInputArea() {
       </div>
       <input type="file" id="file-input" multiple hidden accept="*/*" />
       <input type="file" id="camera-input" hidden accept="image/*,video/*" capture="environment" />
+      <input type="file" id="audio-capture-input" hidden accept="audio/*" capture />
     </div>
   `;
 
@@ -108,6 +109,7 @@ export function createInputArea() {
   const contextMeterNote = el.querySelector('#context-meter-note');
   const fileInput = el.querySelector('#file-input');
   const cameraInput = el.querySelector('#camera-input');
+  const audioCaptureInput = el.querySelector('#audio-capture-input');
   const attachmentsPreview = el.querySelector('#attachments-preview');
 
   const queuePreview = el.querySelector('#queue-preview');
@@ -136,6 +138,38 @@ export function createInputArea() {
   let timerInterval = null;
   let mediaStream = null;
   let contextPopoverPinned = false;
+
+  let micErrorTimeout = null;
+  function showMicError(message) {
+    const text = String(message || '').trim();
+    if (!text) return;
+    statusIndicator.textContent = text;
+    statusIndicator.style.display = 'block';
+    clearTimeout(micErrorTimeout);
+    micErrorTimeout = setTimeout(() => {
+      if (!isBusy) statusIndicator.style.display = 'none';
+    }, 5000);
+  }
+
+  function getBestAudioMimeType() {
+    if (typeof window.MediaRecorder === 'undefined' || typeof MediaRecorder.isTypeSupported !== 'function') {
+      return '';
+    }
+    const candidates = [
+      'audio/webm;codecs=opus',
+      'audio/webm',
+      'audio/mp4',
+      'audio/ogg;codecs=opus',
+    ];
+    return candidates.find((type) => MediaRecorder.isTypeSupported(type)) || '';
+  }
+
+  function getAudioFileInfo() {
+    const mimeType = getBestAudioMimeType();
+    if (mimeType.includes('mp4')) return { mimeType, extension: 'm4a' };
+    if (mimeType.includes('ogg')) return { mimeType, extension: 'ogg' };
+    return { mimeType: mimeType || 'audio/webm', extension: 'webm' };
+  }
 
   const contextState = {
     model: '',
@@ -450,6 +484,16 @@ export function createInputArea() {
     setTimeout(() => textarea.focus(), 100);
   });
 
+  audioCaptureInput.addEventListener('change', () => {
+    const file = audioCaptureInput.files?.[0];
+    if (!file) return;
+    addPendingFile(file);
+    audioCaptureInput.value = '';
+    updateSendBtn();
+    emitDraftChanged();
+    triggerSend();
+  });
+
   // ═══════════════════════════════════════════════
   //  VOICE RECORDING
   // ═══════════════════════════════════════════════
@@ -468,8 +512,24 @@ export function createInputArea() {
   async function startRecording() {
     if (isRecording) return;
     try {
+      if (!window.isSecureContext) {
+        showMicError('Voice recording requires HTTPS. Open the app on a secure connection and try again.');
+        return;
+      }
+      if (!navigator.mediaDevices || typeof navigator.mediaDevices.getUserMedia !== 'function') {
+        showMicError('Microphone access is not available in this browser.');
+        return;
+      }
+      if (typeof window.MediaRecorder === 'undefined') {
+        audioCaptureInput.click();
+        return;
+      }
+
       mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      mediaRecorder = new MediaRecorder(mediaStream);
+      const { mimeType } = getAudioFileInfo();
+      mediaRecorder = mimeType
+        ? new MediaRecorder(mediaStream, { mimeType })
+        : new MediaRecorder(mediaStream);
       audioChunks = [];
       mediaRecorder.ondataavailable = (e) => {
         if (e.data.size > 0) audioChunks.push(e.data);
@@ -494,7 +554,17 @@ export function createInputArea() {
       drawWaveform();
 
     } catch (err) {
+      const errorName = String(err?.name || '').toLowerCase();
+      let message = 'Could not start voice recording.';
+      if (errorName === 'notallowederror' || errorName === 'securityerror') {
+        message = 'Microphone access is blocked. In Safari, tap aA → Website Settings → Microphone → Allow, then reload the page.';
+      } else if (errorName === 'notfounderror') {
+        message = 'No microphone was found on this device.';
+      } else if (errorName === 'notreadableerror') {
+        message = 'Microphone is busy in another app. Close other recording apps and try again.';
+      }
       console.error('Mic access denied:', err);
+      showMicError(message);
     }
   }
 
@@ -546,8 +616,9 @@ export function createInputArea() {
       if (e.data.size > 0) audioChunks.push(e.data);
     };
     const onStop = () => {
-      const blob = new Blob(audioChunks, { type: 'audio/webm' });
-      const file = new File([blob], `voice_${Date.now()}.webm`, { type: 'audio/webm' });
+      const { mimeType, extension } = getAudioFileInfo();
+      const blob = new Blob(audioChunks, { type: mimeType || 'audio/webm' });
+      const file = new File([blob], `voice_${Date.now()}.${extension}`, { type: blob.type });
       addPendingFile(file);
       updateSendBtn();
       triggerSend();
