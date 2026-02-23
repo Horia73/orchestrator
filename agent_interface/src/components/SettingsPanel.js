@@ -1,4 +1,6 @@
 import {
+  applyAppUpdate,
+  loadAppUpdateStatus,
   loadAvailableModels,
   loadLogs,
   loadRuntimeSettings,
@@ -366,6 +368,10 @@ export function createSettingsPanel() {
     autoSaveTimerId: null,
     lastSavedDraftKey: '',
     lastSavedAt: '',
+    appUpdateStatus: null,
+    appUpdateLoading: false,
+    appUpdateApplying: false,
+    appUpdateError: '',
   };
 
   function clearModelLookupTimers() {
@@ -544,6 +550,47 @@ export function createSettingsPanel() {
     }
   }
 
+  async function refreshAppUpdateStatus({ force = false, silent = false } = {}) {
+    if (state.appUpdateLoading) return;
+
+    state.appUpdateLoading = true;
+    if (!silent) {
+      state.appUpdateError = '';
+      render();
+    }
+
+    try {
+      state.appUpdateStatus = await loadAppUpdateStatus({ force });
+      state.appUpdateError = '';
+    } catch (error) {
+      state.appUpdateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      state.appUpdateLoading = false;
+      render();
+    }
+  }
+
+  async function runAppUpdate() {
+    if (state.appUpdateApplying) return;
+
+    state.appUpdateApplying = true;
+    state.appUpdateError = '';
+    render();
+
+    try {
+      const result = await applyAppUpdate({ restart: true });
+      state.appUpdateStatus = result?.status || state.appUpdateStatus;
+      if (!result?.restarted) {
+        state.appUpdateError = 'Update completed, but restart was not requested.';
+      }
+    } catch (error) {
+      state.appUpdateError = error instanceof Error ? error.message : String(error);
+    } finally {
+      state.appUpdateApplying = false;
+      render();
+    }
+  }
+
   async function refreshLookupOptions(field, query = '') {
     const lookup = state.modelLookups[field];
     if (!lookup) return;
@@ -603,7 +650,12 @@ export function createSettingsPanel() {
     if (!state.initialized) {
       await refreshSettingsAndModels();
     }
-    await Promise.all([refreshUsage(), refreshLogs(), refreshUsageEvents()]);
+    await Promise.all([
+      refreshUsage(),
+      refreshLogs(),
+      refreshUsageEvents(),
+      refreshAppUpdateStatus({ force: false, silent: true }),
+    ]);
   }
 
   function openPanel() {
@@ -1179,9 +1231,42 @@ export function createSettingsPanel() {
     const browserOfficialPricing = resolveGemini3Pricing(state.draft.browserModel);
     const imageOfficialPricing = resolveGemini3Pricing(state.draft.imageModel);
     const ttsOfficialPricing = resolveGemini3Pricing(state.draft.ttsModel);
+    const updateStatus = state.appUpdateStatus;
+    const updateBehind = Number(updateStatus?.behind || 0);
+    const updateAhead = Number(updateStatus?.ahead || 0);
+    const canApplyUpdate = Boolean(updateStatus?.canUpdate) && updateBehind > 0 && updateAhead === 0;
+    const updateSummary = updateStatus
+      ? (updateStatus.hasUpdate
+        ? `Update available: ${escapeHtml(updateStatus.upstreamCommitShort || 'new commit')}`
+        : 'You are up to date.')
+      : 'No update check yet.';
+    const updateMeta = updateStatus
+      ? `${escapeHtml(updateStatus.branch || 'unknown branch')} · local ${escapeHtml(updateStatus.currentCommitShort || 'n/a')}`
+      : 'Branch/commit info unavailable.';
 
     return `
       <div class="settings-meta">${escapeHtml(state.statusText || 'Auto-save enabled.')}</div>
+      <section class="settings-model-card">
+        <div class="settings-model-head">
+          <h4>App Updates</h4>
+          <div class="settings-meta">${updateMeta}</div>
+        </div>
+        <div class="settings-model-helper">${updateSummary}</div>
+        <div class="settings-model-meta-grid">
+          <div class="settings-meta">Behind: ${formatNumber(updateBehind)}</div>
+          <div class="settings-meta">Ahead: ${formatNumber(updateAhead)}</div>
+          <div class="settings-meta">Can update: ${updateStatus?.canUpdate ? 'yes' : 'no'}</div>
+        </div>
+        ${state.appUpdateError ? `<div class="settings-alert error">${escapeHtml(state.appUpdateError)}</div>` : ''}
+        <div class="settings-actions-row">
+          <button class="settings-secondary-btn" id="settings-check-updates" ${state.appUpdateLoading ? 'disabled' : ''}>
+            ${state.appUpdateLoading ? 'Checking…' : 'Check updates'}
+          </button>
+          <button class="settings-secondary-btn" id="settings-apply-updates" ${(canApplyUpdate && !state.appUpdateApplying) ? '' : 'disabled'}>
+            ${state.appUpdateApplying ? 'Updating…' : 'Update & Restart'}
+          </button>
+        </div>
+      </section>
       <div class="settings-models-layout">
         ${renderModelCard({
       field: 'orchestrator',
@@ -1501,6 +1586,14 @@ export function createSettingsPanel() {
 
     container.querySelector('#settings-refresh-usage')?.addEventListener('click', () => {
       void refreshUsage();
+    });
+
+    container.querySelector('#settings-check-updates')?.addEventListener('click', () => {
+      void refreshAppUpdateStatus({ force: true });
+    });
+
+    container.querySelector('#settings-apply-updates')?.addEventListener('click', () => {
+      void runAppUpdate();
     });
 
     container.querySelectorAll('[data-usage-component]').forEach((btn) => {

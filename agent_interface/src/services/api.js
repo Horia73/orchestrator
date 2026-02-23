@@ -617,6 +617,29 @@ export async function loadRuntimeSettings() {
   return payload.settings || null;
 }
 
+export async function loadAppUpdateStatus({ force = false } = {}) {
+  const response = await fetch(buildApiUrl('app/update-status', {
+    force: force ? '1' : '',
+  }), {
+    headers: withApiHeaders(),
+  });
+  const payload = await parseJsonResponse(response);
+  return payload.status || null;
+}
+
+export async function applyAppUpdate({ restart = true } = {}) {
+  const response = await fetch(buildApiUrl('app/update-apply'), {
+    method: 'POST',
+    headers: withApiHeaders({ 'Content-Type': 'application/json' }),
+    body: JSON.stringify({ restart: Boolean(restart) }),
+  });
+  const payload = await parseJsonResponse(response);
+  return {
+    status: payload.status || null,
+    restarted: Boolean(payload.restarted),
+  };
+}
+
 export async function loadContextStatus(message = '', conversationId = '', attachments = [], signal) {
   const response = await fetch(buildApiUrl('context/status'), {
     method: 'POST',

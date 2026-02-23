@@ -142,6 +142,7 @@ export class Orchestrator {
   getRuntimeSettings() {
     return {
       orchestrator: this.llm.getConfig(),
+      codingAgent: this.codingAgent.getConfig(),
       agents: {
         browser: this.browserAgent.getConfig(),
         image: this.imageAgent.getConfig(),
@@ -156,6 +157,7 @@ export class Orchestrator {
 
   updateRuntimeSettings(nextSettings = {}) {
     const orchestratorSettings = nextSettings.orchestrator || {};
+    const codingAgentSettings = nextSettings.codingAgent || {};
     const browserSettings = nextSettings.agents?.browser || {};
     const imageSettings = nextSettings.agents?.image || {};
     const ttsSettings = nextSettings.agents?.tts || {};
@@ -166,6 +168,11 @@ export class Orchestrator {
       model: orchestratorSettings.model,
       thinkingLevel: orchestratorSettings.thinkingLevel,
       webResearch: orchestratorSettings.webResearch,
+    });
+
+    this.codingAgent.updateConfig({
+      model: codingAgentSettings.model,
+      thinkingLevel: codingAgentSettings.thinkingLevel,
     });
 
     this.browserAgent.updateConfig({

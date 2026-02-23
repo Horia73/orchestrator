@@ -6,6 +6,8 @@ const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 dotenv.config({ path: path.join(__dirname, '../../.env') });
 import http from 'http';
+import { execFile } from 'child_process';
+import { promisify } from 'util';
 import { loadConfig } from './config.js';
 import { DailyLogger } from './daily-logger.js';
 import { MediaStore } from './media-store.js';
@@ -14,6 +16,8 @@ import { RuntimeSettingsStore } from './runtime-settings-store.js';
 import { UsageTracker } from './usage-tracker.js';
 
 const config = loadConfig();
+const runExecFile = promisify(execFile);
+const repoRootDir = path.resolve(__dirname, '../..');
 
 let orchestrator;
 
@@ -296,6 +300,14 @@ function isSettingsPath(pathname) {
 function isModelsPath(pathname) {
   return pathname === '/models' || pathname === '/api/models';
 }
+function isAppUpdateStatusPath(pathname) {
+  return pathname === '/app/update-status' || pathname === '/api/app/update-status';
+}
+
+function isAppUpdateApplyPath(pathname) {
+  return pathname === '/app/update-apply' || pathname === '/api/app/update-apply';
+}
+
 
 function isUsagePath(pathname) {
   return pathname === '/usage' || pathname === '/api/usage';
@@ -353,6 +365,69 @@ function mediaFileKeyFromPath(pathname) {
     }
   }
   return '';
+}
+
+async function runGit(args) {
+  const { stdout } = await runExecFile('git', args, { cwd: repoRootDir });
+  return String(stdout || '').trim();
+}
+
+function shortCommit(hash) {
+  return String(hash || '').trim().slice(0, 7);
+}
+
+async function resolveUpdateStatus({ forceFetch = false } = {}) {
+  const branch = await runGit(['rev-parse', '--abbrev-ref', 'HEAD']);
+  const currentCommit = await runGit(['rev-parse', 'HEAD']);
+
+  let upstream = '';
+  try {
+    upstream = await runGit(['rev-parse', '--abbrev-ref', '--symbolic-full-name', '@{u}']);
+  } catch {
+    upstream = '';
+  }
+
+  if (!upstream) {
+    return {
+      branch,
+      currentCommit,
+      currentCommitShort: shortCommit(currentCommit),
+      upstream: '',
+      upstreamCommit: '',
+      upstreamCommitShort: '',
+      ahead: 0,
+      behind: 0,
+      hasUpdate: false,
+      canUpdate: false,
+      checkedAt: new Date().toISOString(),
+      message: 'No upstream branch configured.',
+    };
+  }
+
+  if (forceFetch) {
+    await runGit(['fetch', '--quiet']);
+  }
+
+  const upstreamCommit = await runGit(['rev-parse', upstream]);
+  const counts = await runGit(['rev-list', '--left-right', '--count', `HEAD...${upstream}`]);
+  const parts = counts.split(/\s+/).filter(Boolean);
+  const ahead = Number(parts[0] || 0);
+  const behind = Number(parts[1] || 0);
+
+  return {
+    branch,
+    currentCommit,
+    currentCommitShort: shortCommit(currentCommit),
+    upstream,
+    upstreamCommit,
+    upstreamCommitShort: shortCommit(upstreamCommit),
+    ahead,
+    behind,
+    hasUpdate: behind > 0,
+    canUpdate: ahead === 0,
+    checkedAt: new Date().toISOString(),
+    message: behind > 0 ? 'Update available.' : 'Already up to date.',
+  };
 }
 
 function writeSse(res, payload) {
@@ -585,6 +660,51 @@ const server = http.createServer(async (req, res) => {
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       sendJson(res, 400, { ok: false, error: message });
+    }
+    return;
+  }
+
+  if (req.method === 'GET' && isAppUpdateStatusPath(pathname)) {
+    try {
+      const force = requestUrl.searchParams.get('force') === '1';
+      const status = await resolveUpdateStatus({ forceFetch: force });
+      sendJson(res, 200, { ok: true, status });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sendJson(res, 500, { ok: false, error: message });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && isAppUpdateApplyPath(pathname)) {
+    try {
+      const body = await readJsonBody(req, 64 * 1024);
+      const restart = body?.restart !== false;
+      const before = await resolveUpdateStatus({ forceFetch: true });
+
+      if (!before.canUpdate && before.ahead > 0 && before.behind > 0) {
+        throw new Error('Local branch diverged from upstream. Resolve manually before updating.');
+      }
+
+      if (before.behind > 0) {
+        await runGit(['pull', '--ff-only']);
+      }
+
+      const status = await resolveUpdateStatus({ forceFetch: false });
+      sendJson(res, 200, {
+        ok: true,
+        status,
+        restarted: restart,
+      });
+
+      if (restart) {
+        setTimeout(() => {
+          process.exit(0);
+        }, 350);
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      sendJson(res, 500, { ok: false, error: message });
     }
     return;
   }

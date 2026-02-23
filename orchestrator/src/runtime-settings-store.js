@@ -121,6 +121,7 @@ function mergePricingMap(current, patch) {
 function normalizeState(raw, defaults) {
   const source = raw && typeof raw === 'object' && !Array.isArray(raw) ? raw : {};
   const orchestratorPatch = source.orchestrator && typeof source.orchestrator === 'object' ? source.orchestrator : {};
+  const codingAgentPatch = source.codingAgent && typeof source.codingAgent === 'object' ? source.codingAgent : {};
   const agentsPatch = source.agents && typeof source.agents === 'object' ? source.agents : {};
   const toolsPatch = source.tools && typeof source.tools === 'object' ? source.tools : {};
   const browserPatch = agentsPatch.browser && typeof agentsPatch.browser === 'object' ? agentsPatch.browser : {};
@@ -132,6 +133,12 @@ function normalizeState(raw, defaults) {
   const fsPatch = toolsPatch.fs && typeof toolsPatch.fs === 'object'
     ? toolsPatch.fs
     : (agentsPatch.fs && typeof agentsPatch.fs === 'object' ? agentsPatch.fs : {});
+  const codingAgentDefaults = defaults?.codingAgent && typeof defaults.codingAgent === 'object'
+    ? defaults.codingAgent
+    : {
+      model: 'gemini-3.1-pro-preview',
+      thinkingLevel: 'high',
+    };
   const imageDefaults = defaults?.agents?.image && typeof defaults.agents.image === 'object'
     ? defaults.agents.image
     : {
@@ -169,6 +176,10 @@ function normalizeState(raw, defaults) {
       webResearch: typeof orchestratorPatch.webResearch === 'boolean'
         ? orchestratorPatch.webResearch
         : Boolean(defaults.orchestrator.webResearch),
+    },
+    codingAgent: {
+      model: sanitizeModel(codingAgentPatch.model, codingAgentDefaults.model),
+      thinkingLevel: sanitizeThinkingLevel(codingAgentPatch.thinkingLevel, codingAgentDefaults.thinkingLevel),
     },
     agents: {
       browser: {
@@ -282,6 +293,7 @@ export class RuntimeSettingsStore {
       const current = this.state;
       const source = patch && typeof patch === 'object' && !Array.isArray(patch) ? patch : {};
       const orchestratorPatch = source.orchestrator && typeof source.orchestrator === 'object' ? source.orchestrator : {};
+      const codingAgentPatch = source.codingAgent && typeof source.codingAgent === 'object' ? source.codingAgent : {};
       const agentsPatch = source.agents && typeof source.agents === 'object' ? source.agents : {};
       const toolsPatch = source.tools && typeof source.tools === 'object' ? source.tools : {};
       const browserPatch = agentsPatch.browser && typeof agentsPatch.browser === 'object' ? agentsPatch.browser : {};
@@ -311,6 +323,14 @@ export class RuntimeSettingsStore {
               ? orchestratorPatch.webResearch
               : current.orchestrator.webResearch
             : current.orchestrator.webResearch,
+        },
+        codingAgent: {
+          model: 'model' in codingAgentPatch
+            ? sanitizeModel(codingAgentPatch.model, current.codingAgent.model)
+            : current.codingAgent.model,
+          thinkingLevel: 'thinkingLevel' in codingAgentPatch
+            ? sanitizeThinkingLevel(codingAgentPatch.thinkingLevel, current.codingAgent.thinkingLevel)
+            : current.codingAgent.thinkingLevel,
         },
         agents: {
           browser: {
