@@ -1,6 +1,14 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import './Sidebar.css';
-import { IconClose, IconPanel, IconPlus, IconSearch, IconSettings, IconTrash } from '../shared/icons.jsx';
+import {
+    IconChevronDown,
+    IconChevronRight,
+    IconClose,
+    IconPlus,
+    IconSearch,
+    IconSettings,
+    IconTrash,
+} from '../shared/icons.jsx';
 
 function normalizeSearchQuery(value) {
     return String(value ?? '').trim().toLowerCase();
@@ -61,7 +69,7 @@ export function Sidebar({
                 title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                 onClick={onToggle}
             >
-                <IconPanel />
+                {collapsed ? <IconChevronRight /> : <IconChevronDown />}
             </button>
 
             <div className="sidebar-inner">
