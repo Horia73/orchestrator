@@ -4,7 +4,7 @@ export function TypingIndicator() {
     return (
         <div className="message-ai">
             <div className="typing-indicator">
-                <ThoughtBlock thought="" isThinking defaultOpen />
+                <ThoughtBlock thought="" isThinking />
             </div>
         </div>
     );

@@ -444,6 +444,14 @@
     color: var(--text-secondary);
 }
 
+.thought-toggle-static {
+    cursor: default;
+}
+
+.thought-toggle-static:hover {
+    color: var(--text-tertiary);
+}
+
 .thought-block.is-thinking .thought-toggle {
     color: var(--text-secondary);
 }
@@ -485,12 +493,6 @@
 
 .thought-content .message-markdown>*:last-child {
     margin-bottom: 0;
-}
-
-.thought-placeholder {
-    margin: 0;
-    font-size: 13px;
-    color: var(--text-tertiary);
 }
 
 /* ---- Thinking placeholder ---- */

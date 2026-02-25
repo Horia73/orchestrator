@@ -7,7 +7,7 @@ import { Sidebar } from './components/layout/Sidebar.jsx';
 import { ChatArea } from './components/chat/ChatArea.jsx';
 import { ChatInput } from './components/chat/ChatInput.jsx';
 import { Settings } from './components/settings/Settings.jsx';
-import { IconChevronRight } from './components/shared/icons.jsx';
+import { IconPanel } from './components/shared/icons.jsx';
 import { fetchSettings, saveSettings } from './api/settingsApi.js';
 
 function isSettingsViewFromUrl() {
@@ -100,7 +100,7 @@ export default function App() {
         title="Open sidebar"
         aria-label="Open sidebar"
       >
-        <IconChevronRight />
+        <IconPanel />
       </button>
 
       {/* Mobile: dim overlay behind open sidebar */}

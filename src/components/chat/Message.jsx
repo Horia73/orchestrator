@@ -26,7 +26,7 @@ export const Message = forwardRef(function Message({
         <div className="message-ai" ref={ref}>
             <div className="message-ai-content">
                 {(isThinking || thought !== undefined) && (
-                    <ThoughtBlock thought={thought} isThinking={isThinking} defaultOpen={isThinking} />
+                    <ThoughtBlock thought={thought} isThinking={isThinking} />
                 )}
                 {String(text ?? '').trim().length > 0 && (
                     <MarkdownContent text={text} variant="ai" />

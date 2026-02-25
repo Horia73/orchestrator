@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import './Sidebar.css';
 import {
-    IconChevronDown,
-    IconChevronRight,
     IconClose,
+    IconPanel,
     IconPlus,
     IconSearch,
     IconSettings,
@@ -69,7 +68,7 @@ export function Sidebar({
                 title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
                 onClick={onToggle}
             >
-                {collapsed ? <IconChevronRight /> : <IconChevronDown />}
+                <IconPanel />
             </button>
 
             <div className="sidebar-inner">
