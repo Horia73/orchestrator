@@ -1,0 +1,147 @@
+/* =============================================
+   Chat Input
+   ============================================= */
+
+/*
+  Landing: compact width, original taller proportions.
+  Pinned (chat mode): expands to full width, slightly flatter.
+  Only max-width transitions — avoids compounding with the spacer animation.
+*/
+.chat-input-container {
+    width: 100%;
+    max-width: var(--input-landing-width);
+    padding: 0 24px;
+    transition: max-width 380ms cubic-bezier(0.4, 0, 0.2, 1);
+}
+
+/* Chat mode: wider, pinned at bottom */
+.chat-input-container.pinned {
+    max-width: var(--input-max-width);
+    padding: 12px 24px 20px;
+    flex-shrink: 0;
+    background: var(--bg-main);
+    z-index: 2;
+}
+
+.chat-input-box {
+    background: var(--bg-input);
+    border: 1px solid var(--border-input);
+    border-radius: 16px;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02);
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.chat-input-box:focus-within {
+    border-color: #C8C4BB;
+    box-shadow: 0 1px 3px rgba(0, 0, 0, 0.06), 0 6px 16px rgba(0, 0, 0, 0.04);
+}
+
+/* Landing: taller proportions */
+.input-area {
+    padding: 24px 20px 14px;
+}
+
+/* Pinned: same height (don't shrink it further) */
+.chat-input-container.pinned .input-area {
+    padding: 16px 18px 8px;
+}
+
+.input-area textarea {
+    width: 100%;
+    font-size: 15px;
+    line-height: 1.5;
+    color: var(--text-primary);
+    min-height: 24px;
+    max-height: 180px;
+}
+
+.input-area textarea::placeholder {
+    color: var(--text-tertiary);
+}
+
+.input-area textarea:disabled {
+    opacity: 0.75;
+    cursor: not-allowed;
+}
+
+.input-footer {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 4px 12px 10px;
+}
+
+/* ---- Toolbar buttons ---- */
+.attach-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--text-tertiary);
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.attach-btn:hover {
+    background: var(--bg-pill-hover);
+    color: var(--text-secondary);
+}
+
+/* ---- Send / Mic button ---- */
+.send-btn,
+.voice-btn {
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--text-tertiary);
+    transition:
+        background 200ms ease,
+        color 200ms ease,
+        transform 200ms ease;
+}
+
+.voice-btn:hover {
+    background: var(--bg-pill-hover);
+    color: var(--text-secondary);
+}
+
+/* Send button — orange circle, appears when textarea has content */
+.send-btn {
+    border-radius: 50%;
+    background: var(--accent-orange);
+    color: #fff;
+    animation: pop-in 200ms cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+.send-btn:hover {
+    background: #c26540;
+    color: #fff;
+}
+
+.send-btn:disabled,
+.voice-btn:disabled {
+    opacity: 0.55;
+    cursor: not-allowed;
+}
+
+@keyframes pop-in {
+    from {
+        transform: scale(0.6);
+        opacity: 0;
+    }
+
+    to {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.input-right {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}

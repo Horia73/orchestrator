@@ -1,0 +1,402 @@
+/* =============================================
+   Sidebar — single-panel, clip-on-collapse
+   ============================================= */
+
+.sidebar {
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    background: var(--bg-sidebar);
+    border-right: 1px solid var(--border-light);
+    overflow: hidden;
+    flex-shrink: 0;
+    position: relative;
+    transition:
+        width var(--transition-sidebar),
+        min-width var(--transition-sidebar);
+}
+
+.sidebar.collapsed {
+    width: var(--sidebar-mini-width);
+    min-width: var(--sidebar-mini-width);
+}
+
+/* ---- Toggle — absolutely positioned, rides the right edge ---- */
+.sidebar-toggle-btn {
+    position: absolute;
+    top: 12px;
+    right: 6px;
+    z-index: 5;
+    width: 34px;
+    height: 34px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.sidebar-toggle-btn svg {
+    transition: transform var(--transition-fast);
+}
+
+.sidebar-toggle-btn:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.sidebar.collapsed .sidebar-toggle-btn:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.sidebar-toggle-btn:hover svg {
+    transform: scale(1.04);
+}
+
+/* ---- Inner panel — always full width, clipped by sidebar ---- */
+.sidebar-inner {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    width: var(--sidebar-width);
+    min-width: var(--sidebar-width);
+    padding: 10px 8px 10px 0;
+}
+
+/* ---- Header ---- */
+.sidebar-header {
+    display: flex;
+    align-items: center;
+    padding: 8px 6px 14px 19px;
+    min-height: 44px;
+}
+
+.logo-text {
+    font-size: 17px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+    color: var(--text-primary);
+    white-space: nowrap;
+    opacity: 1;
+    transition: opacity 180ms ease 60ms;
+}
+
+.sidebar.collapsed .logo-text {
+    opacity: 0;
+    transition: opacity 100ms ease;
+}
+
+/* ---- Nav ---- */
+.sidebar-nav {
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+    padding: 0 0 8px 8px;
+}
+
+/*
+  Icon centre = 24px (midpoint of 48px collapsed width).
+  SVG is 18px → left edge = 24 - 9 = 15px.
+*/
+.nav-item {
+    display: flex;
+    align-items: center;
+    justify-content: flex-start;
+    gap: 14px;
+    width: 100%;
+    padding: 9px 10px 9px 7px;
+    border-radius: 10px;
+    font-size: 14.5px;
+    text-align: left;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    transition: background var(--transition-fast), color var(--transition-fast), opacity var(--transition-fast);
+}
+
+.nav-item:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.nav-item:disabled {
+    opacity: 0.45;
+    cursor: default;
+}
+
+.nav-item:disabled:hover {
+    background: none;
+    color: var(--text-secondary);
+}
+
+.nav-item.active {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.nav-item svg {
+    flex-shrink: 0;
+}
+
+/* Text labels — fade out on collapse, fade in on expand */
+.nav-label {
+    opacity: 1;
+    transition: opacity 180ms ease 60ms;
+    overflow: hidden;
+}
+
+.sidebar.collapsed .nav-label {
+    opacity: 0;
+    transition: opacity 100ms ease;
+}
+
+/* ---- Search ---- */
+.sidebar-search {
+    padding: 4px 8px 10px 15px;
+    display: flex;
+    max-height: 68px;
+    opacity: 1;
+    transform: translateY(0);
+    transition: opacity 160ms ease, transform 160ms ease, max-height 160ms ease, padding 160ms ease;
+    animation: search-reveal 180ms ease;
+}
+
+.search-shell {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    width: 100%;
+    min-height: 36px;
+    border: 1px solid var(--border-input);
+    border-radius: 10px;
+    padding: 0 6px 0 10px;
+    background: var(--bg-input);
+    transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.search-shell:hover {
+    border-color: #cec9bf;
+}
+
+.search-shell:focus-within {
+    border-color: #c7c2b8;
+    box-shadow: none;
+}
+
+.search-leading {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+}
+
+.search-leading svg {
+    width: 15px;
+    height: 15px;
+    stroke-width: 2.35;
+}
+
+.search-input {
+    flex: 1;
+    border: none;
+    background: transparent;
+    color: var(--text-primary);
+    padding: 8px 0;
+    font-size: 13.5px;
+    line-height: 1.2;
+    min-width: 0;
+    outline: none;
+}
+
+.search-input:focus {
+    outline: none;
+    box-shadow: none;
+}
+
+.search-input::placeholder {
+    color: var(--text-tertiary);
+}
+
+.search-clear-btn {
+    width: 24px;
+    height: 24px;
+    border-radius: 8px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+    transition: background var(--transition-fast), color var(--transition-fast), transform var(--transition-fast);
+}
+
+.search-clear-btn svg {
+    width: 13px;
+    height: 13px;
+}
+
+.search-clear-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-secondary);
+}
+
+.search-clear-btn:active {
+    transform: scale(0.94);
+}
+
+.sidebar.collapsed .sidebar-search {
+    opacity: 0;
+    pointer-events: none;
+    max-height: 0;
+    transform: translateY(-8px);
+    padding-top: 0;
+    padding-bottom: 0;
+}
+
+@keyframes search-reveal {
+    from {
+        opacity: 0;
+        transform: translateY(-6px);
+    }
+
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+/* ---- Recents ---- */
+.sidebar-recents {
+    flex: 1;
+    padding-top: 8px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    opacity: 1;
+    transition: opacity 200ms ease 80ms;
+}
+
+.sidebar.collapsed .sidebar-recents {
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 140ms ease 40ms;
+}
+
+.recents-label {
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    padding: 0 8px 8px 19px;
+    white-space: nowrap;
+}
+
+.recents-empty {
+    font-size: 13px;
+    color: var(--text-tertiary);
+    padding: 4px 14px 0 19px;
+}
+
+.recent-row {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin: 0 6px 2px 10px;
+    border-radius: 10px;
+    color: var(--text-secondary);
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.recent-row:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.recent-row.active {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.recent-item {
+    flex: 1;
+    min-width: 0;
+    padding: 8px 8px 8px 9px;
+    border-radius: 10px;
+    font-size: 14.5px;
+    text-align: left;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    overflow: hidden;
+}
+
+.recent-row.active .recent-item {
+    font-weight: 500;
+}
+
+.recent-delete-btn {
+    width: 28px;
+    height: 28px;
+    flex-shrink: 0;
+    margin-right: 4px;
+    border-radius: 8px;
+    color: var(--text-tertiary);
+    opacity: 0;
+    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.recent-row:hover .recent-delete-btn,
+.recent-row.active .recent-delete-btn {
+    opacity: 1;
+}
+
+.recent-delete-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-primary);
+}
+
+/* ---- Footer ---- */
+.sidebar-footer {
+    margin-top: auto;
+    padding: 14px 0 0 8px;
+    border-top: 1px solid var(--border-light);
+}
+
+/* =============================================
+   Mobile (≤ 768px)
+   ============================================= */
+@media (max-width: 768px) {
+
+    .sidebar {
+        position: fixed;
+        top: 0;
+        left: 0;
+        height: 100%;
+        z-index: 100;
+        width: 85vw !important;
+        min-width: 85vw !important;
+        transform: translateX(0);
+        transition: transform var(--transition-sidebar);
+        box-shadow: 6px 0 24px rgba(0, 0, 0, 0.14);
+    }
+
+    .sidebar.collapsed {
+        transform: translateX(-100%);
+        width: 85vw !important;
+        min-width: 85vw !important;
+    }
+
+    .sidebar-inner {
+        width: 100%;
+        min-width: unset;
+    }
+
+    .sidebar.collapsed .sidebar-recents {
+        opacity: 1;
+        pointer-events: auto;
+    }
+
+    .sidebar.collapsed .nav-label,
+    .sidebar.collapsed .logo-text {
+        opacity: 1;
+    }
+}

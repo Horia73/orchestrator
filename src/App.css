@@ -1,0 +1,98 @@
+/* =============================================
+   App shell
+   ============================================= */
+.app {
+  display: flex;
+  height: 100vh;
+  width: 100vw;
+  overflow: hidden;
+}
+
+/* ---- Mobile: sidebar open button ---- */
+.mobile-menu-btn {
+  display: none;
+  /* hidden on desktop */
+}
+
+/* ---- Mobile: sidebar overlay / dim ---- */
+.sidebar-overlay {
+  display: none;
+  /* hidden on desktop */
+}
+
+/* =============================================
+   Mobile layout  (≤ 768px)
+   ============================================= */
+@media (max-width: 768px) {
+
+  /* Sidebar opener — icon only */
+  .mobile-menu-btn {
+    display: flex;
+    position: fixed;
+    top: calc(14px + env(safe-area-inset-top, 0px));
+    left: 14px;
+    z-index: 200;
+    width: auto;
+    height: auto;
+    padding: 8px;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--text-secondary);
+    opacity: 0;
+    pointer-events: none;
+    transition:
+      opacity 180ms ease,
+      background var(--transition-fast),
+      color var(--transition-fast),
+      transform var(--transition-fast);
+  }
+
+  .mobile-menu-btn svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+    padding: 0;
+    border: 0;
+    border-radius: 0;
+    background: transparent;
+    box-shadow: none;
+  }
+
+  .mobile-menu-btn.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+
+  .mobile-menu-btn:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+    transform: scale(1.04);
+  }
+
+  .mobile-menu-btn:active {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+    transform: scale(0.98);
+  }
+
+  /* Dim overlay — covers visible chat strip behind open sidebar */
+  .sidebar-overlay {
+    display: block;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.28);
+    backdrop-filter: blur(1px);
+    -webkit-backdrop-filter: blur(1px);
+    z-index: 99;
+    opacity: 0;
+    pointer-events: none;
+    transition: opacity 280ms ease;
+  }
+
+  .sidebar-overlay.visible {
+    opacity: 1;
+    pointer-events: auto;
+  }
+}
