@@ -1,4 +1,4 @@
-# Gemini UI
+# Orchestrator
 
 Chat UI React + Vite cu backend Node pentru persistenta server-side si sync live intre device-uri.
 
