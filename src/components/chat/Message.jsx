@@ -3,8 +3,18 @@ import { MarkdownContent } from './MarkdownContent.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
 import { ToolBlock } from './ToolBlock.jsx';
 import { FileManagementBlock } from './FileManagementBlock.jsx';
+import { EditManagementBlock } from './EditManagementBlock.jsx';
 
-const FILE_MANAGEMENT_TOOLS = new Set(['view_file', 'list_dir']);
+const FILE_MANAGEMENT_TOOLS = new Set([
+    'view_file',
+    'list_dir',
+    'find_by_name',
+    'grep_search',
+    'view_file_outline',
+    'view_code_item',
+    'view_content_chunk',
+]);
+const EDIT_TOOLS = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
 
 function isFileManagementTool(part) {
     const name = typeof part?.functionCall?.name === 'string'
@@ -12,6 +22,14 @@ function isFileManagementTool(part) {
         : '';
 
     return FILE_MANAGEMENT_TOOLS.has(name);
+}
+
+function isEditTool(part) {
+    const name = typeof part?.functionCall?.name === 'string'
+        ? part.functionCall.name
+        : '';
+
+    return EDIT_TOOLS.has(name);
 }
 
 function buildToolBlocks(parts) {
@@ -80,7 +98,10 @@ function buildToolBlocks(parts) {
     const renderedBlocks = [];
     for (let index = 0; index < toolParts.length; index += 1) {
         const current = toolParts[index];
-        if (!isFileManagementTool(current)) {
+        const isFileGroup = isFileManagementTool(current);
+        const isEditGroup = isEditTool(current);
+
+        if (!isFileGroup && !isEditGroup) {
             renderedBlocks.push({
                 type: 'single_tool',
                 key: `tool-${index}`,
@@ -89,17 +110,31 @@ function buildToolBlocks(parts) {
             continue;
         }
 
+        if (isEditGroup) {
+            // Keep edit operations ungrouped so each file/change appears as its own card.
+            renderedBlocks.push({
+                type: 'edit_management',
+                key: `edit-management-${index}`,
+                entries: [current],
+            });
+            continue;
+        }
+
         const groupedEntries = [current];
         const startIndex = index;
 
-        while (index + 1 < toolParts.length && isFileManagementTool(toolParts[index + 1])) {
+        while (
+            index + 1 < toolParts.length
+            && isFileGroup
+            && isFileManagementTool(toolParts[index + 1])
+        ) {
             index += 1;
             groupedEntries.push(toolParts[index]);
         }
 
         renderedBlocks.push({
-            type: 'file_management',
-            key: `file-management-${startIndex}`,
+            type: isFileGroup ? 'file_management' : 'edit_management',
+            key: `${isFileGroup ? 'file-management' : 'edit-management'}-${startIndex}`,
             entries: groupedEntries,
         });
     }
@@ -161,6 +196,15 @@ export const Message = forwardRef(function Message({
                     if (block.type === 'file_management') {
                         return (
                             <FileManagementBlock
+                                key={block.key}
+                                entries={block.entries}
+                            />
+                        );
+                    }
+
+                    if (block.type === 'edit_management') {
+                        return (
+                            <EditManagementBlock
                                 key={block.key}
                                 entries={block.entries}
                             />

@@ -125,6 +125,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
+
     .chat-messages-enter .chat-message-row,
     .chat-messages-exit {
         animation: none;
@@ -208,7 +209,7 @@
     background: transparent;
 }
 
-.message-ai-step + .message-ai-step {
+.message-ai-step+.message-ai-step {
     margin-top: 12px;
 }
 
@@ -602,6 +603,30 @@
 
 .thought-content .message-markdown>*:last-child {
     margin-bottom: 0;
+}
+
+@keyframes status-text-pulse {
+
+    0%,
+    100% {
+        opacity: 1;
+        text-shadow: 0 0 0 rgba(255, 255, 255, 0);
+    }
+
+    50% {
+        opacity: 0.78;
+        text-shadow: 0 0 7px rgba(255, 255, 255, 0.45);
+    }
+}
+
+.status-running-text {
+    animation: status-text-pulse 1.75s ease-in-out infinite;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .status-running-text {
+        animation: none;
+    }
 }
 
 /* ---- Thinking placeholder ---- */

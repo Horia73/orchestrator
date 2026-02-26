@@ -59,6 +59,15 @@ export async function deleteChat(chatId, clientId) {
     return parseApiResponse(response);
 }
 
+export async function fetchCommandStatus({ commandId, waitSeconds = 0, chars = 12000 }) {
+    const query = new URLSearchParams({
+        wait: String(waitSeconds),
+        chars: String(chars),
+    });
+    const response = await fetch(`/api/commands/${encodeURIComponent(commandId)}/status?${query.toString()}`);
+    return parseApiResponse(response);
+}
+
 export function openChatEvents(onEvent) {
     const source = new EventSource('/api/events');
 

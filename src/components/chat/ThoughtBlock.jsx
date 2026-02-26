@@ -12,6 +12,7 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
             : showWorkedWhenIdle
                 ? 'Worked'
                 : '';
+    const isRunningTitle = isThinking;
 
     if (!title) {
         return null;
@@ -26,12 +27,12 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
                     aria-expanded={open}
                     onClick={() => setOpen((current) => !current)}
                 >
-                    <span className="thought-title">{title}</span>
+                    <span className={`thought-title${isRunningTitle ? ' status-running-text' : ''}`}>{title}</span>
                     <span className="thought-arrow">{open ? 'v' : '>'}</span>
                 </button>
             ) : (
                 <div className="thought-toggle thought-toggle-static">
-                    <span className="thought-title">{title}</span>
+                    <span className={`thought-title${isRunningTitle ? ' status-running-text' : ''}`}>{title}</span>
                 </div>
             )}
 

@@ -106,7 +106,7 @@ export const ChatInput = forwardRef(function ChatInput({
                     <div className="input-right">
                         {isSending ? (
                             <button
-                                className="voice-btn"
+                                className="voice-btn stop-btn"
                                 title="Stop response"
                                 onClick={() => onStop?.()}
                             >

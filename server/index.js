@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto';
 import { API_PORT, GEMINI_CONTEXT_MESSAGES } from './config.js';
 import { generateAssistantReplyStream, listAvailableModels } from './geminiService.js';
 import { openEventsStream, broadcastEvent } from './events.js';
+import { getCommandStatusSnapshot } from './tools.js';
 import {
     initStorage,
     listChats,
@@ -204,6 +205,26 @@ app.post('/api/chat/stop', (req, res) => {
     });
 });
 
+app.get('/api/commands/:commandId/status', async (req, res) => {
+    const commandId = String(req.params?.commandId ?? '').trim();
+    const waitDurationSeconds = Number(req.query?.wait ?? 0);
+    const outputCharacterCount = Number(req.query?.chars ?? 12_000);
+
+    const snapshot = await getCommandStatusSnapshot({
+        commandId,
+        waitDurationSeconds,
+        outputCharacterCount,
+    });
+
+    if (snapshot?.error) {
+        const statusCode = snapshot.error.startsWith('Unknown command id') ? 404 : 400;
+        res.status(statusCode).json(snapshot);
+        return;
+    }
+
+    res.json(snapshot);
+});
+
 app.post('/api/chat/send', async (req, res, next) => {
     try {
         const inputText = normalizeMessageText(req.body?.message);
@@ -302,10 +323,14 @@ app.post('/api/chat/send', async (req, res, next) => {
                     shouldStop: () => activeGeneration.stopRequested,
                 });
                 assistantText = String(streamResult.text ?? '').trim();
-                if (!assistantText) {
-                    assistantText = streamResult.stopped
-                        ? 'Stopped.'
-                        : 'No text response was returned by Gemini.';
+                if (streamResult.stopped) {
+                    if (!assistantText) {
+                        assistantText = 'Stopped.';
+                    } else if (!assistantText.endsWith('Stopped.')) {
+                        assistantText = `${assistantText}\n\nStopped.`;
+                    }
+                } else if (!assistantText) {
+                    assistantText = 'No text response was returned by Gemini.';
                 }
                 streamedAssistantThought = streamResult.thought;
                 streamedAssistantParts = Array.isArray(streamResult.parts)

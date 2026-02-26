@@ -110,6 +110,21 @@
     color: var(--text-secondary);
 }
 
+.stop-btn {
+    background: #d43c3c;
+    border: 1px solid #bf2f2f;
+    color: #fff;
+}
+
+.stop-btn:hover {
+    background: #b92f2f;
+    color: #fff;
+}
+
+.stop-btn:active {
+    transform: scale(0.96);
+}
+
 /* Send button — orange circle, appears when textarea has content */
 .send-btn {
     border-radius: 50%;

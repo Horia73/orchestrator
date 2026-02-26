@@ -1,4 +1,4 @@
-import { useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './ChatArea.css';
 import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
@@ -10,6 +10,7 @@ const AUTO_SCROLL_SNAP_DISTANCE = 24;
 const INPUT_FLIP_DURATION_MS = 260;
 const EXIT_FADE_DURATION_MS = INPUT_FLIP_DURATION_MS;
 const ENTER_FADE_DURATION_MS = 340;
+const SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.scroll_positions.v1';
 
 function getElementOffsets(container, element) {
     const containerRect = container.getBoundingClientRect();
@@ -17,6 +18,46 @@ function getElementOffsets(container, element) {
     const top = elementRect.top - containerRect.top + container.scrollTop;
     const bottom = elementRect.bottom - containerRect.top + container.scrollTop;
     return { top, bottom };
+}
+
+function normalizeConversationKey(value) {
+    if (value === null || value === undefined) return null;
+    const normalized = String(value).trim();
+    return normalized.length > 0 ? normalized : null;
+}
+
+function loadScrollPositions() {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const raw = window.localStorage.getItem(SCROLL_POSITIONS_STORAGE_KEY);
+        if (!raw) return {};
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return {};
+
+        const sanitized = {};
+        for (const [key, value] of Object.entries(parsed)) {
+            const numericValue = Number(value);
+            if (Number.isFinite(numericValue) && numericValue >= 0) {
+                sanitized[key] = Math.trunc(numericValue);
+            }
+        }
+        return sanitized;
+    } catch {
+        return {};
+    }
+}
+
+function persistScrollPositions(scrollPositions) {
+    if (typeof window === 'undefined') return;
+    try {
+        window.localStorage.setItem(
+            SCROLL_POSITIONS_STORAGE_KEY,
+            JSON.stringify(scrollPositions),
+        );
+    } catch {
+        // Ignore localStorage quota/permission issues.
+    }
 }
 
 export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, children }) {
@@ -36,8 +77,9 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const previousRenderChatModeRef = useRef(isChatMode);
     const previousChatModeRef = useRef(isChatMode);
     const previousConversationKeyRef = useRef(conversationKey);
-    const pendingBottomRestoreConversationRef = useRef(null);
+    const pendingScrollRestoreConversationRef = useRef(null);
     const pendingConversationEnterAnimationRef = useRef(null);
+    const scrollPositionsRef = useRef(loadScrollPositions());
     const exitSnapshotScrollTopRef = useRef(0);
     const latestChatMessagesRef = useRef(messages);
     const enterFadeTimeoutRef = useRef(null);
@@ -52,6 +94,27 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         ),
         [messages],
     );
+
+    const saveConversationScrollPosition = useCallback((rawKey, scrollTop) => {
+        const key = normalizeConversationKey(rawKey);
+        if (!key || !Number.isFinite(scrollTop)) return;
+
+        const normalizedTop = Math.max(0, Math.trunc(scrollTop));
+        if (scrollPositionsRef.current[key] === normalizedTop) {
+            return;
+        }
+
+        scrollPositionsRef.current = {
+            ...scrollPositionsRef.current,
+            [key]: normalizedTop,
+        };
+        persistScrollPositions(scrollPositionsRef.current);
+    }, []);
+
+    const saveActiveConversationScrollPosition = useCallback((container = scrollRef.current) => {
+        if (!container) return;
+        saveConversationScrollPosition(conversationKey, container.scrollTop);
+    }, [conversationKey, saveConversationScrollPosition]);
 
     function refreshScrollButton(container) {
         const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -123,51 +186,65 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 && userMessageCount > 0
             );
 
+            const previousKey = normalizeConversationKey(previousConversationKey);
+            if (previousKey && scrollRef.current) {
+                saveConversationScrollPosition(previousKey, scrollRef.current.scrollTop);
+            }
+
             previousConversationKeyRef.current = conversationKey;
             isJumpingToBottomRef.current = false;
             if (spacerRef.current) {
                 spacerRef.current.style.height = '0px';
             }
-            pendingBottomRestoreConversationRef.current = (hasConcreteConversation && !isTransitioningDraftToSaved)
-                ? conversationKey
+            pendingScrollRestoreConversationRef.current = (hasConcreteConversation && !isTransitioningDraftToSaved)
+                ? normalizeConversationKey(conversationKey)
                 : null;
             pendingConversationEnterAnimationRef.current = (hasConcreteConversation && !isTransitioningDraftToSaved)
                 ? conversationKey
                 : null;
-            shouldAutoFollowRef.current = hasConcreteConversation && !isTransitioningDraftToSaved;
-        }
+            shouldAutoFollowRef.current = false;
 
-        const pendingConversationKey = pendingBottomRestoreConversationRef.current;
-        if (pendingConversationKey === null || pendingConversationKey === undefined) return;
-        if (!isChatMode || messages.length === 0 || isTyping) return;
-        if (conversationKey !== pendingConversationKey) return;
+            if (pendingConversationEnterAnimationRef.current === conversationKey) {
+                if (enterFadeTimeoutRef.current) clearTimeout(enterFadeTimeoutRef.current);
+                setIsConversationEnterVisible(true);
+                enterFadeTimeoutRef.current = setTimeout(() => {
+                    setIsConversationEnterVisible(false);
+                    enterFadeTimeoutRef.current = null;
+                }, ENTER_FADE_DURATION_MS + 80);
+                pendingConversationEnterAnimationRef.current = null;
+            }
+        }
+    }, [conversationKey, userMessageCount, saveConversationScrollPosition]);
+
+    useLayoutEffect(() => {
+        const pendingConversationKey = pendingScrollRestoreConversationRef.current;
+        if (!pendingConversationKey) return;
+        if (!isChatMode || isTyping) return;
+
+        const activeConversationKey = normalizeConversationKey(conversationKey);
+        if (!activeConversationKey || activeConversationKey !== pendingConversationKey) return;
 
         const container = scrollRef.current;
         if (!container) return;
 
-        // Reset spacer before measuring or scrolling to avoid carryover from previous chat
+        const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        const savedScrollTop = scrollPositionsRef.current[pendingConversationKey];
+        const targetScrollTop = Number.isFinite(savedScrollTop)
+            ? Math.min(Math.max(0, savedScrollTop), maxScrollTop)
+            : maxScrollTop;
+
         if (spacerRef.current) {
             spacerRef.current.style.height = '0px';
         }
 
         isProgrammaticScrollRef.current = true;
-        container.scrollTop = container.scrollHeight;
+        container.scrollTop = targetScrollTop;
         refreshScrollButton(container);
-        pendingBottomRestoreConversationRef.current = null;
-        if (pendingConversationEnterAnimationRef.current === conversationKey) {
-            if (enterFadeTimeoutRef.current) clearTimeout(enterFadeTimeoutRef.current);
-            setIsConversationEnterVisible(true);
-            enterFadeTimeoutRef.current = setTimeout(() => {
-                setIsConversationEnterVisible(false);
-                enterFadeTimeoutRef.current = null;
-            }, ENTER_FADE_DURATION_MS + 80);
-            pendingConversationEnterAnimationRef.current = null;
-        }
-
+        pendingScrollRestoreConversationRef.current = null;
         requestAnimationFrame(() => {
             isProgrammaticScrollRef.current = false;
         });
-    }, [conversationKey, isChatMode, isTyping, messages.length, userMessageCount]);
+    }, [conversationKey, isChatMode, isTyping, messages.length]);
 
     useLayoutEffect(() => {
         if (previousChatModeRef.current && !isChatMode) {
@@ -205,6 +282,18 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         if (exitFadeTimeoutRef.current) clearTimeout(exitFadeTimeoutRef.current);
         inputFlipAnimationRef.current?.cancel();
     }, []);
+
+    useEffect(() => () => {
+        const container = scrollRef.current;
+        if (!container) return;
+        saveConversationScrollPosition(conversationKey, container.scrollTop);
+    }, [conversationKey, saveConversationScrollPosition]);
+
+    // Sync baseline for "new user message" detection when loading/switching chats.
+    // This prevents auto-anchoring old conversations as if Enter was just pressed.
+    useEffect(() => {
+        previousUserMessageCountRef.current = userMessageCount;
+    }, [conversationKey, userMessageCount]);
 
     // Scroll automat doar la Enter: ancoram ultimul mesaj user aproape de top.
     // Trigger-ul este cresterea numarului de mesaje user (nu "ultimul mesaj e user"),
@@ -264,10 +353,11 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                     isProgrammaticScrollRef.current = false;
                     isAnimatingEnterRef.current = false;
                     refreshScrollButton(container);
+                    saveActiveConversationScrollPosition(container);
                 }, 600);
             });
         });
-    }, [messages, userMessageCount, isChatMode]);
+    }, [messages, userMessageCount, isChatMode, saveActiveConversationScrollPosition]);
 
     function handleScrollToBottom() {
         const container = scrollRef.current;
@@ -301,6 +391,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                     isJumpingToBottomRef.current = false;
                 }
                 refreshScrollButton(activeContainer);
+                saveActiveConversationScrollPosition(activeContainer);
                 return;
             }
 
@@ -317,7 +408,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         const userEl = lastUserMsgRef.current;
         const aiEl = lastAiMsgRef.current;
         const spacer = spacerRef.current;
-        const shouldUseScrollRunway = isTyping || userMessageCount > 0;
+        const shouldUseScrollRunway = isTyping || isAnimatingEnterRef.current || shouldAutoFollowRef.current;
 
         if (!container || !userEl || !spacer) return;
 
@@ -367,13 +458,16 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             if (isProgrammaticScrollRef.current) return;
 
             const distanceToBottom = refreshScrollButton(container);
-            shouldAutoFollowRef.current = distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+            if (distanceToBottom > AUTO_SCROLL_SNAP_DISTANCE) {
+                shouldAutoFollowRef.current = false;
+            }
+            saveActiveConversationScrollPosition(container);
         };
 
         handleManualScroll();
         container.addEventListener('scroll', handleManualScroll, { passive: true });
         return () => container.removeEventListener('scroll', handleManualScroll);
-    }, [isChatMode, conversationKey]);
+    }, [isChatMode, conversationKey, saveActiveConversationScrollPosition]);
 
     const lastUserMsgId = [...messages].reverse().find((m) => m.role === 'user')?.id;
     const lastAiMsgId = [...messages].reverse().find((m) => m.role === 'ai')?.id;

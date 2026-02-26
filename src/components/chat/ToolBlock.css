@@ -1,13 +1,13 @@
 .tool-block {
-    background-color: var(--surface-color, #1E1E1E);
-    border: 1px solid var(--border-color, #333);
-    border-radius: 8px;
+    border: 1px solid var(--border-light, #e8e6e1);
+    border-radius: 12px;
+    background: #f7f5f1;
     width: clamp(560px, 74vw, 980px);
     max-width: 100%;
     margin: 8px 0;
     overflow: hidden;
     font-family: inherit;
-    font-size: 0.9em;
+    font-size: 0.98rem;
 }
 
 .tool-block-header {
@@ -17,12 +17,12 @@
     padding: 10px 14px;
     cursor: pointer;
     user-select: none;
-    background-color: var(--surface-hover-color, #252525);
+    background: #f1eee8;
     transition: background-color 0.2s ease;
 }
 
 .tool-block-header:hover {
-    background-color: var(--surface-active-color, #2A2A2A);
+    background: #ece8e1;
 }
 
 .tool-block-title {
@@ -30,20 +30,45 @@
     align-items: center;
     gap: 8px;
     font-weight: 500;
-    color: var(--text-color, #E0E0E0);
-}
-
-.tool-icon {
-    font-size: 1.1em;
+    color: var(--text-secondary, #4a4740);
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
 }
 
 .tool-name {
-    color: var(--primary-color, #60A5FA);
+    color: #6d695f;
+    flex-shrink: 0;
+}
+
+.tool-command-preview {
+    display: block;
+    color: #4d6f8f;
+    flex: 1;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+}
+
+.tool-block-right {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-left: 10px;
+    flex-shrink: 0;
+}
+
+.tool-command-elapsed {
+    color: #7a766d;
+    font-size: 0.86rem;
+    font-variant-numeric: tabular-nums;
 }
 
 .tool-chevron {
-    font-size: 0.8em;
-    color: #888;
+    font-size: 0.74rem;
+    color: #8b867c;
     transition: transform 0.2s ease;
 }
 
@@ -54,8 +79,8 @@
 .tool-spinner {
     width: 14px;
     height: 14px;
-    border: 2px solid #555;
-    border-top-color: var(--primary-color, #60A5FA);
+    border: 2px solid rgba(122, 118, 109, 0.35);
+    border-top-color: #6d695f;
     border-radius: 50%;
     animation: tool-spin 1s linear infinite;
     margin-left: -4px;
@@ -67,13 +92,98 @@
 }
 
 .tool-block-content {
-    padding: 12px 14px;
-    border-top: 1px solid var(--border-color, #333);
-    background-color: var(--background-color, #121212);
+    padding: 10px 14px 12px;
+    border-top: 1px solid rgba(122, 118, 109, 0.16);
+    background: #efebe4;
+}
+
+.tool-terminal {
+    border: 1px solid rgba(122, 118, 109, 0.25);
+    border-radius: 10px;
+    background: #101317;
+    color: #dce6f2;
+    overflow: hidden;
+}
+
+.tool-terminal-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 8px 10px;
+    border-bottom: 1px solid rgba(191, 209, 230, 0.14);
+    background: #1a212b;
+    font-size: 0.76rem;
+    text-transform: lowercase;
+    letter-spacing: 0.02em;
+}
+
+.tool-terminal-status {
+    color: #9ec7ff;
+}
+
+.tool-terminal-id {
+    color: #93a0b3;
+    font-variant-numeric: tabular-nums;
+}
+
+.tool-terminal-line {
+    display: flex;
+    align-items: baseline;
+    gap: 8px;
+    padding: 8px 10px 0;
+    font-size: 0.83rem;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.tool-terminal-prompt {
+    color: #87db8f;
+    flex-shrink: 0;
+}
+
+.tool-terminal-command {
+    color: #dce6f2;
+    overflow-wrap: anywhere;
+}
+
+.tool-terminal-output-wrap {
+    position: relative;
+    padding: 8px 10px 12px;
+}
+
+.tool-terminal-output {
+    margin: 0;
+    min-height: 28px;
+    max-height: 300px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 0.8rem;
+    line-height: 1.42;
+    color: #dce6f2;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+}
+
+.tool-terminal-cursor {
+    position: absolute;
+    right: 12px;
+    bottom: 14px;
+    color: #8de093;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    animation: terminal-cursor-blink 1s step-end infinite;
+}
+
+@keyframes terminal-cursor-blink {
+    0%, 49% {
+        opacity: 1;
+    }
+    50%, 100% {
+        opacity: 0;
+    }
 }
 
 .tool-section {
-    margin-bottom: 12px;
+    margin-bottom: 10px;
 }
 
 .tool-section:last-child {
@@ -81,25 +191,27 @@
 }
 
 .tool-section-title {
-    font-size: 0.85em;
+    font-size: 0.75rem;
     font-weight: 600;
-    color: #888;
-    margin-bottom: 6px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    color: #716c60;
+    margin-bottom: 5px;
+    text-transform: none;
+    letter-spacing: 0.02em;
 }
 
 .tool-block-content pre {
-    background-color: #0d0d0d;
-    padding: 10px;
-    border-radius: 6px;
-    overflow-x: auto;
     margin: 0;
-    color: #d4d4d4;
-    font-family: 'Consolas', 'Monaco', 'Courier New', monospace;
-    font-size: 0.85em;
+    padding: 9px;
+    border-radius: 8px;
+    border: 1px solid rgba(122, 118, 109, 0.2);
+    background: #fbfaf7;
+    color: #3f3b33;
+    font-size: 0.84rem;
+    line-height: 1.4;
+    overflow-x: auto;
     white-space: pre-wrap;
     word-wrap: break-word;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
 }
 
 @media (max-width: 768px) {
@@ -235,5 +347,148 @@
 @media (max-width: 768px) {
     .file-tools-block {
         width: 100%;
+    }
+}
+
+.edit-tools-block {
+    width: clamp(560px, 74vw, 980px);
+    max-width: 100%;
+    margin: 8px 0;
+    border: 1px solid var(--border-light, #e8e6e1);
+    border-radius: 12px;
+    background: #f7f5f1;
+    overflow: hidden;
+}
+
+.edit-tools-header {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 12px 14px;
+    background: #f1eee8;
+    color: var(--text-secondary, #4a4740);
+    font-size: 1.01rem;
+    line-height: 1.35;
+    text-align: left;
+}
+
+.edit-tools-header:hover {
+    background: #ece8e1;
+}
+
+.edit-tools-prefix {
+    color: #6d695f;
+}
+
+.edit-tools-target {
+    color: #1f7ae0;
+    font-weight: 500;
+}
+
+.edit-tools-delta {
+    font-weight: 500;
+}
+
+.edit-tools-delta-add {
+    color: #0a9b43;
+}
+
+.edit-tools-delta-remove {
+    color: #c63e3e;
+}
+
+.edit-tools-chevron {
+    margin-left: auto;
+    color: #8b867c;
+    font-size: 0.74rem;
+    transition: transform 0.2s ease;
+}
+
+.edit-tools-chevron.open {
+    transform: rotate(180deg);
+}
+
+.edit-tools-list {
+    padding: 10px 12px 12px;
+    background: #efebe4;
+    border-top: 1px solid rgba(122, 118, 109, 0.16);
+}
+
+.edit-file-card {
+    border: 1px solid rgba(122, 118, 109, 0.2);
+    border-radius: 10px;
+    background: #fbfaf7;
+    overflow: hidden;
+}
+
+.edit-file-card + .edit-file-card {
+    margin-top: 10px;
+}
+
+.edit-file-error {
+    color: #9b2c2c;
+    padding: 10px 12px;
+    font-size: 0.95rem;
+}
+
+.edit-diff-preview {
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
+    font-size: 0.84rem;
+    line-height: 1.45;
+}
+
+.edit-diff-row {
+    display: grid;
+    grid-template-columns: 64px 1fr;
+    align-items: stretch;
+}
+
+.edit-diff-row + .edit-diff-row {
+    border-top: 1px solid rgba(122, 118, 109, 0.08);
+}
+
+.edit-diff-row-context {
+    background: transparent;
+}
+
+.edit-diff-row-removed {
+    background: rgba(198, 62, 62, 0.12);
+}
+
+.edit-diff-row-added {
+    background: rgba(10, 155, 67, 0.12);
+}
+
+.edit-diff-line-no {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    padding: 0 10px 0 6px;
+    color: #7d786e;
+    border-right: 1px solid rgba(122, 118, 109, 0.15);
+}
+
+.edit-diff-line-text {
+    margin: 0;
+    padding: 7px 10px;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #3f3b33;
+}
+
+.edit-file-empty {
+    padding: 9px 12px 11px;
+    color: #7a766d;
+    font-size: 0.9rem;
+}
+
+@media (max-width: 768px) {
+    .edit-tools-block {
+        width: 100%;
+    }
+
+    .edit-diff-row {
+        grid-template-columns: 52px 1fr;
     }
 }

@@ -52,3 +52,7 @@ Promptul de sistem este in:
 - `server/events.js` stream de evenimente SSE
 - `server/geminiService.js` apel Gemini prin `@google/genai`
 - `server/config.js` model + thinking + port
+
+## Test Edit Tool
+Acest test confirmă că tool-ul de editare funcționează corect.
+- Status: ✅ Succes
