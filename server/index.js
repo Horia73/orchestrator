@@ -5,6 +5,9 @@ import { API_PORT, GEMINI_CONTEXT_MESSAGES } from './config.js';
 import { generateAssistantReplyStream, listAvailableModels } from './geminiService.js';
 import { openEventsStream, broadcastEvent } from './events.js';
 import { getCommandStatusSnapshot } from './tools.js';
+import { estimateUsageCost } from './usagePricing.js';
+import { appendSystemLog, getLogsSnapshot, initLogStorage } from './logStorage.js';
+import { appendUsageRecord, getUsageSnapshotByRange, initUsageStorage } from './usageStorage.js';
 import {
     initStorage,
     listChats,
@@ -15,7 +18,7 @@ import {
     getRecentMessages,
     removeChat,
 } from './storage.js';
-import { readSettings, writeSettings } from './settings.js';
+import { getAgentConfig, readSettings, writeSettings } from './settings.js';
 
 const app = express();
 app.use(express.json({ limit: '2mb' }));
@@ -105,6 +108,19 @@ function requestStopForClient(clientId, chatId) {
     return stoppedCount;
 }
 
+async function writeSystemLog({ level = 'info', source = 'system', eventType, message, data } = {}) {
+    const log = await appendSystemLog({
+        level,
+        source,
+        eventType,
+        message,
+        data,
+    });
+
+    broadcastEvent('system.log', { log });
+    return log;
+}
+
 app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
 });
@@ -128,12 +144,30 @@ app.put('/api/settings', (req, res) => {
         const settings = req.body?.settings;
         if (!settings || typeof settings !== 'object') {
             res.status(400).json({ error: 'Invalid settings payload.' });
+            void writeSystemLog({
+                level: 'warn',
+                source: 'settings',
+                eventType: 'settings.invalid_payload',
+                message: 'Rejected invalid settings payload.',
+            }).catch(() => undefined);
             return;
         }
         writeSettings(settings);
         res.json({ ok: true, settings });
+        void writeSystemLog({
+            source: 'settings',
+            eventType: 'settings.updated',
+            message: 'Settings updated.',
+            data: { agents: Object.keys(settings) },
+        }).catch(() => undefined);
     } catch {
         res.status(500).json({ error: 'Failed to save settings.' });
+        void writeSystemLog({
+            level: 'error',
+            source: 'settings',
+            eventType: 'settings.update_failed',
+            message: 'Failed to save settings.',
+        }).catch(() => undefined);
     }
 });
 
@@ -143,6 +177,48 @@ app.get('/api/models', async (_req, res) => {
         res.json({ models });
     } catch {
         res.status(500).json({ error: 'Failed to fetch models.' });
+    }
+});
+
+app.get('/api/usage', async (req, res, next) => {
+    try {
+        const date = String(req.query?.date ?? '').trim();
+        const requestedStartDate = String(req.query?.startDate ?? '').trim();
+        const requestedEndDate = String(req.query?.endDate ?? '').trim();
+        const startDate = requestedStartDate || date;
+        const endDate = requestedEndDate || requestedStartDate || date;
+        const snapshot = await getUsageSnapshotByRange({
+            startDate,
+            endDate,
+            date,
+        });
+        res.json(snapshot);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/logs', async (req, res, next) => {
+    try {
+        const date = String(req.query?.date ?? '').trim();
+        const requestedStartDate = String(req.query?.startDate ?? '').trim();
+        const requestedEndDate = String(req.query?.endDate ?? '').trim();
+        const startDate = requestedStartDate || date;
+        const endDate = requestedEndDate || requestedStartDate || date;
+        const limit = Number(req.query?.limit ?? 400);
+        const level = String(req.query?.level ?? '').trim();
+
+        const snapshot = await getLogsSnapshot({
+            startDate,
+            endDate,
+            date,
+            limit,
+            level,
+        });
+
+        res.json(snapshot);
+    } catch (error) {
+        next(error);
     }
 });
 
@@ -179,6 +255,13 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
         const removed = await removeChat(chatId);
         if (!removed) {
             res.status(404).json({ error: 'Chat not found.' });
+            void writeSystemLog({
+                level: 'warn',
+                source: 'chat',
+                eventType: 'chat.delete_not_found',
+                message: 'Delete requested for missing chat.',
+                data: { chatId, clientId },
+            }).catch(() => undefined);
             return;
         }
 
@@ -188,6 +271,12 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
         });
 
         res.json({ ok: true });
+        void writeSystemLog({
+            source: 'chat',
+            eventType: 'chat.deleted',
+            message: 'Chat deleted.',
+            data: { chatId, clientId },
+        }).catch(() => undefined);
     } catch (error) {
         next(error);
     }
@@ -203,6 +292,12 @@ app.post('/api/chat/stop', (req, res) => {
         ok: true,
         stoppedCount,
     });
+    void writeSystemLog({
+        source: 'chat',
+        eventType: 'chat.stop_requested',
+        message: `Stop requested for ${stoppedCount} generation(s).`,
+        data: { clientId, chatId, stoppedCount },
+    }).catch(() => undefined);
 });
 
 app.get('/api/commands/:commandId/status', async (req, res) => {
@@ -243,6 +338,13 @@ app.post('/api/chat/send', async (req, res, next) => {
         if (!chat) {
             if (requestedChatId) {
                 res.status(404).json({ error: 'Chat not found.' });
+                void writeSystemLog({
+                    level: 'warn',
+                    source: 'chat',
+                    eventType: 'chat.send_not_found',
+                    message: 'Message send requested for missing chat.',
+                    data: { requestedChatId, clientId },
+                }).catch(() => undefined);
                 return;
             }
 
@@ -252,6 +354,12 @@ app.post('/api/chat/send', async (req, res, next) => {
                 chat,
                 originClientId: clientId,
             });
+            void writeSystemLog({
+                source: 'chat',
+                eventType: 'chat.created',
+                message: 'Chat created from first message.',
+                data: { chatId: chat.id, clientId },
+            }).catch(() => undefined);
         }
 
         const result = await enqueueChatWork(chat.id, async () => {
@@ -281,6 +389,9 @@ app.post('/api/chat/send', async (req, res, next) => {
             let streamedAssistantParts = [];
             let streamedAssistantSteps = [];
             let assistantText;
+            let usageMetadata = null;
+            let modelForUsage = getAgentConfig('orchestrator').model;
+            let requestStatus = 'completed';
 
             broadcastEvent('message.streaming', {
                 chatId: chat.id,
@@ -322,8 +433,11 @@ app.post('/api/chat/send', async (req, res, next) => {
                     },
                     shouldStop: () => activeGeneration.stopRequested,
                 });
+                usageMetadata = streamResult.usageMetadata ?? null;
+                modelForUsage = String(streamResult.model ?? modelForUsage).trim() || modelForUsage;
                 assistantText = String(streamResult.text ?? '').trim();
                 if (streamResult.stopped) {
+                    requestStatus = 'stopped';
                     if (!assistantText) {
                         assistantText = 'Stopped.';
                     } else if (!assistantText.endsWith('Stopped.')) {
@@ -356,10 +470,21 @@ app.post('/api/chat/send', async (req, res, next) => {
                     originClientId: clientId,
                 });
             } catch (error) {
+                requestStatus = 'error';
                 const formattedError = formatGeminiError(error);
                 assistantText = streamedAssistantText
                     ? `${streamedAssistantText}\n\n${formattedError}`
                     : formattedError;
+                void writeSystemLog({
+                    level: 'error',
+                    source: 'gemini',
+                    eventType: 'generation.failed',
+                    message: formattedError,
+                    data: {
+                        chatId: chat.id,
+                        clientId,
+                    },
+                }).catch(() => undefined);
 
                 broadcastEvent('message.streaming', {
                     chatId: chat.id,
@@ -400,6 +525,51 @@ app.post('/api/chat/send', async (req, res, next) => {
                 originClientId: clientId,
             });
 
+            const usageEstimate = estimateUsageCost({
+                model: modelForUsage,
+                usageMetadata,
+            });
+
+            const usageRecord = await appendUsageRecord({
+                chatId: chat.id,
+                clientId,
+                model: usageEstimate.modelId,
+                status: requestStatus,
+                inputText,
+                outputText: assistantText,
+                createdAt: aiMessageCreatedAt,
+                inputTokens: usageEstimate.inputTokens,
+                outputTokens: usageEstimate.outputTokens,
+                thoughtsTokens: usageEstimate.thoughtsTokens,
+                toolUsePromptTokens: usageEstimate.toolUsePromptTokens,
+                totalTokens: usageEstimate.totalTokens,
+                priced: usageEstimate.priced,
+                inputCostUsd: usageEstimate.inputCostUsd,
+                outputCostUsd: usageEstimate.outputCostUsd,
+                totalCostUsd: usageEstimate.totalCostUsd,
+                usageMetadata,
+            });
+
+            broadcastEvent('usage.logged', {
+                request: usageRecord,
+                originClientId: clientId,
+            });
+            void writeSystemLog({
+                level: requestStatus === 'error' ? 'error' : (requestStatus === 'stopped' ? 'warn' : 'info'),
+                source: 'usage',
+                eventType: 'usage.request_logged',
+                message: `Tracked request (${requestStatus}) for ${usageRecord.model}.`,
+                data: {
+                    requestId: usageRecord.id,
+                    chatId: chat.id,
+                    model: usageRecord.model,
+                    status: requestStatus,
+                    inputTokens: usageRecord.inputTokens,
+                    outputTokens: usageRecord.outputTokens,
+                    costUsd: usageRecord.totalCostUsd,
+                },
+            }).catch(() => undefined);
+
             return {
                 chat: appendedAi.chat,
                 userMessage: appendedUser.message,
@@ -419,11 +589,19 @@ app.post('/api/chat/send', async (req, res, next) => {
 app.use((error, _req, res, next) => {
     void next;
     const message = error instanceof Error ? error.message : 'Unknown server error.';
+    void writeSystemLog({
+        level: 'error',
+        source: 'api',
+        eventType: 'api.unhandled_error',
+        message,
+    }).catch(() => undefined);
     res.status(500).json({ error: message });
 });
 
 async function start() {
     await initStorage();
+    await initUsageStorage();
+    await initLogStorage();
 
     const server = http.createServer(app);
 
@@ -431,6 +609,11 @@ async function start() {
         server.once('error', reject);
         server.listen(API_PORT, () => {
             console.log(`API listening on http://localhost:${API_PORT}`);
+            void writeSystemLog({
+                source: 'system',
+                eventType: 'server.started',
+                message: `API started on port ${API_PORT}.`,
+            }).catch(() => undefined);
             resolve();
         });
     });

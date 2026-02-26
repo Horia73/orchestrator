@@ -7,6 +7,8 @@ import {
 } from '../../config/agentModels.js';
 import { IconClose, IconSearch, IconSettings } from '../shared/icons.jsx';
 import { fetchRemoteModels } from '../../api/settingsApi.js';
+import { UsageDashboard } from './UsageDashboard.jsx';
+import { SystemLogsDashboard } from './SystemLogsDashboard.jsx';
 import './Settings.css';
 
 /* ─── Model Dropdown ─────────────────────────────────────────────────── */
@@ -317,6 +319,22 @@ const TABS = [
     { id: 'usage', label: 'Usage' },
     { id: 'logs', label: 'Logs' },
 ];
+const SETTINGS_ACTIVE_TAB_STORAGE_KEY = 'orchestrator.settings.active_tab';
+
+function getInitialActiveTab() {
+    const fallbackTab = TABS[0]?.id ?? 'models';
+
+    try {
+        const stored = String(localStorage.getItem(SETTINGS_ACTIVE_TAB_STORAGE_KEY) ?? '').trim();
+        if (stored && TABS.some((tab) => tab.id === stored)) {
+            return stored;
+        }
+    } catch {
+        // noop
+    }
+
+    return fallbackTab;
+}
 
 export function Settings({ onClose, savedSettings, onSave }) {
     const [agentStates, setAgentStates] = useState(() => {
@@ -331,7 +349,7 @@ export function Settings({ onClose, savedSettings, onSave }) {
         return state;
     });
 
-    const [activeTab, setActiveTab] = useState('models');
+    const [activeTab, setActiveTab] = useState(() => getInitialActiveTab());
     const [modelsList, setModelsList] = useState(() => buildMergedModels([]));
 
     useEffect(() => {
@@ -343,6 +361,14 @@ export function Settings({ onClose, savedSettings, onSave }) {
                 console.error("Failed to load generic models", err);
             });
     }, []);
+
+    useEffect(() => {
+        try {
+            localStorage.setItem(SETTINGS_ACTIVE_TAB_STORAGE_KEY, activeTab);
+        } catch {
+            // noop
+        }
+    }, [activeTab]);
 
     // Auto-save logic
     const handleAgentChange = useCallback((agentId, state) => {
@@ -401,17 +427,11 @@ export function Settings({ onClose, savedSettings, onSave }) {
                     )}
 
                     {activeTab === 'usage' && (
-                        <div className="settings-placeholder">
-                            <h2>Usage Dashboard</h2>
-                            <p>Coming soon: Track token usage and costs over time.</p>
-                        </div>
+                        <UsageDashboard modelsList={modelsList} />
                     )}
 
                     {activeTab === 'logs' && (
-                        <div className="settings-placeholder">
-                            <h2>System Logs</h2>
-                            <p>Coming soon: View orchestrator and agent decision traces.</p>
-                        </div>
+                        <SystemLogsDashboard />
                     )}
                 </div>
             </div>

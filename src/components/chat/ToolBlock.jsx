@@ -202,10 +202,28 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
         }
         titleDetail = commandText || commandId || '';
     } else if (name === 'command_status') {
-        titleMain = 'Command status';
+        if (commandStatusLabel === 'stopped') {
+            titleMain = 'Stopped';
+        } else if (commandStatusLabel === 'failed' || commandStatusLabel === 'error') {
+            titleMain = 'Command status failed';
+        } else if (commandStatusLabel === 'completed') {
+            titleMain = 'Command completed';
+        } else if (isExecuting && !hasResponse) {
+            titleMain = 'Checking command status';
+        } else {
+            titleMain = 'Command status';
+        }
         titleDetail = commandId || commandText || '';
     } else if (name === 'send_command_input') {
-        titleMain = isExecuting && !hasResponse ? 'Sending command input' : 'Sent command input';
+        if (commandStatusLabel === 'stopped') {
+            titleMain = 'Stopped';
+        } else if (commandStatusLabel === 'failed' || commandStatusLabel === 'error') {
+            titleMain = 'Command input failed';
+        } else if (isExecuting && !hasResponse) {
+            titleMain = 'Sending command input';
+        } else {
+            titleMain = 'Sent command input';
+        }
         titleDetail = commandId || commandText || '';
     } else if (name === 'read_terminal') {
         titleMain = isExecuting && !hasResponse ? 'Reading terminal' : 'Read terminal';

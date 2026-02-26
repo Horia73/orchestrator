@@ -3,7 +3,7 @@ import {
     GEMINI_API_KEY,
     GEMINI_CONTEXT_MESSAGES,
 } from './config.js';
-import { SYSTEM_PROMPT } from './prompt.js';
+import { getSystemPrompt } from './prompt.js';
 import { getAgentConfig } from './settings.js';
 import { toolRegistry } from './tools.js';
 
@@ -754,7 +754,7 @@ function createChatSession(historyWithLatestUserTurn) {
         model: agentConfig.model,
         history: normalizeHistory(previousTurns),
         config: {
-            systemInstruction: SYSTEM_PROMPT,
+            systemInstruction: getSystemPrompt(),
             thinkingConfig: {
                 thinkingLevel: mapThinkingLevel(agentConfig.thinkingLevel),
                 includeThoughts: true,
@@ -766,6 +766,7 @@ function createChatSession(historyWithLatestUserTurn) {
     return {
         chat,
         latestText: String(latest.text ?? ''),
+        model: agentConfig.model,
     };
 }
 
@@ -865,6 +866,46 @@ function finalizeText(value) {
 
 function finalizeThought(value) {
     return String(value ?? '').trim();
+}
+
+function toTokenCount(value) {
+    const parsed = Number(value);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+        return 0;
+    }
+
+    return Math.trunc(parsed);
+}
+
+function normalizeUsageMetadata(usageMetadata) {
+    if (!usageMetadata || typeof usageMetadata !== 'object') {
+        return null;
+    }
+
+    const promptTokenCount = toTokenCount(usageMetadata.promptTokenCount);
+    const candidatesTokenCount = toTokenCount(
+        usageMetadata.candidatesTokenCount ?? usageMetadata.responseTokenCount,
+    );
+    const thoughtsTokenCount = toTokenCount(usageMetadata.thoughtsTokenCount);
+    const toolUsePromptTokenCount = toTokenCount(usageMetadata.toolUsePromptTokenCount);
+
+    let totalTokenCount = toTokenCount(usageMetadata.totalTokenCount);
+    if (!totalTokenCount) {
+        totalTokenCount = (
+            promptTokenCount
+            + candidatesTokenCount
+            + thoughtsTokenCount
+            + toolUsePromptTokenCount
+        );
+    }
+
+    return {
+        promptTokenCount,
+        candidatesTokenCount,
+        thoughtsTokenCount,
+        toolUsePromptTokenCount,
+        totalTokenCount,
+    };
 }
 
 function extractChunkThoughtText(chunk) {
@@ -1011,7 +1052,7 @@ export async function generateAssistantReply(historyWithLatestUserTurn) {
 }
 
 export async function generateAssistantReplyStream(historyWithLatestUserTurn, { onUpdate, shouldStop } = {}) {
-    const { chat, latestText } = createChatSession(historyWithLatestUserTurn);
+    const { chat, latestText, model } = createChatSession(historyWithLatestUserTurn);
     const isStopRequested = typeof shouldStop === 'function'
         ? () => shouldStop() === true
         : () => false;
@@ -1035,6 +1076,14 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
     let stepEventSequence = 0;
     let currentStepFirstTextEvent = null;
     let currentStepFirstToolEvent = null;
+    let apiCallCount = 0;
+    const usageAccumulator = {
+        promptTokenCount: 0,
+        candidatesTokenCount: 0,
+        thoughtsTokenCount: 0,
+        toolUsePromptTokenCount: 0,
+        totalTokenCount: 0,
+    };
 
     function markCurrentStepTextEvent() {
         if (currentStepFirstTextEvent !== null) {
@@ -1054,6 +1103,20 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         }
         stepEventSequence += 1;
         currentStepFirstToolEvent = stepEventSequence;
+    }
+
+    function accumulateUsage(usageMetadata) {
+        const normalized = normalizeUsageMetadata(usageMetadata);
+        if (!normalized) {
+            return;
+        }
+
+        apiCallCount += 1;
+        usageAccumulator.promptTokenCount += normalized.promptTokenCount;
+        usageAccumulator.candidatesTokenCount += normalized.candidatesTokenCount;
+        usageAccumulator.thoughtsTokenCount += normalized.thoughtsTokenCount;
+        usageAccumulator.toolUsePromptTokenCount += normalized.toolUsePromptTokenCount;
+        usageAccumulator.totalTokenCount += normalized.totalTokenCount;
     }
 
     function buildCurrentStep({ isThinking = false } = {}) {
@@ -1172,8 +1235,14 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
 
     async function processStream(currentStream) {
         const functionCallsByKey = new Map();
+        let latestUsageMetadata = null;
 
         for await (const chunk of currentStream) {
+            const normalizedChunkUsage = normalizeUsageMetadata(chunk?.usageMetadata);
+            if (normalizedChunkUsage) {
+                latestUsageMetadata = normalizedChunkUsage;
+            }
+
             if (isStopRequested()) {
                 stopped = true;
                 break;
@@ -1246,7 +1315,10 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         // API request finished; keep the active step visible without thinking state.
         await emitUpdate({ stepIsThinking: false });
 
-        return [...functionCallsByKey.values()];
+        return {
+            functionCalls: [...functionCallsByKey.values()],
+            usageMetadata: latestUsageMetadata,
+        };
     }
 
     if (isStopRequested()) {
@@ -1256,6 +1328,15 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
             parts: [],
             steps: [],
             stopped: true,
+            model,
+            apiCallCount: 0,
+            usageMetadata: {
+                promptTokenCount: 0,
+                candidatesTokenCount: 0,
+                thoughtsTokenCount: 0,
+                toolUsePromptTokenCount: 0,
+                totalTokenCount: 0,
+            },
         };
     }
 
@@ -1265,7 +1346,9 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
     const initialStream = await chat.sendMessageStream({
         message: latestText,
     });
-    let pendingFunctionCalls = await processStream(initialStream);
+    const initialStreamResult = await processStream(initialStream);
+    accumulateUsage(initialStreamResult.usageMetadata);
+    let pendingFunctionCalls = initialStreamResult.functionCalls;
 
     // Handle tool calls if any (potentially multiple rounds)
     while (pendingFunctionCalls.length > 0 && !stopped) {
@@ -1344,7 +1427,9 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         const nextStream = await chat.sendMessageStream({
             message: functionResponses,
         });
-        pendingFunctionCalls = await processStream(nextStream);
+        const nextStreamResult = await processStream(nextStream);
+        accumulateUsage(nextStreamResult.usageMetadata);
+        pendingFunctionCalls = nextStreamResult.functionCalls;
     }
 
     // Capture any trailing text/thought from the final model turn (no further tools).
@@ -1391,6 +1476,9 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         parts: finalParts,
         steps: finalSteps,
         stopped,
+        model,
+        apiCallCount,
+        usageMetadata: usageAccumulator,
     };
 }
 
