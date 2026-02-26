@@ -3,6 +3,7 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
+import { GEMINI_API_KEY, GEMINI_MODEL } from './config.js';
 
 const execFileAsync = promisify(execFile);
 const FIND_RESULTS_LIMIT = 50;
@@ -11,6 +12,8 @@ const URL_CONTENT_MAX_CHARS = 120_000;
 const URL_CONTENT_CHUNK_SIZE = 4000;
 const URL_CONTENT_CHUNK_CACHE_LIMIT = 80;
 const urlContentChunkCache = new Map();
+const WEB_SEARCH_RESULT_LIMIT = 8;
+const WEB_SEARCH_TEXT_MAX_CHARS = 12_000;
 const COMMAND_SESSIONS_MAX = 80;
 const COMMAND_OUTPUT_MAX_CHARS = 240_000;
 const COMMAND_OUTPUT_DEFAULT_CHARS = 12_000;
@@ -1698,6 +1701,104 @@ export async function view_content_chunk({ document_id, position }) {
 }
 
 /**
+ * Implementation of search_web tool.
+ * Uses Gemini grounding with Google Search and returns concise text plus citations.
+ */
+export async function search_web({ query, domain }) {
+    const queryText = String(query ?? '').trim();
+    if (!queryText) {
+        return { error: 'query is required.' };
+    }
+
+    if (!GEMINI_API_KEY) {
+        return { error: 'Missing GEMINI_API_KEY in environment.' };
+    }
+
+    const domainHint = String(domain ?? '').trim();
+    const model = String(GEMINI_MODEL ?? '').trim() || 'gemini-3-flash-preview';
+    const prompt = domainHint
+        ? `${queryText}\n\nPrioritize sources from this domain when relevant: ${domainHint}`
+        : queryText;
+    const endpoint = `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(GEMINI_API_KEY)}`;
+
+    let payload;
+    try {
+        const response = await fetch(endpoint, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+            },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        role: 'user',
+                        parts: [{ text: prompt }],
+                    },
+                ],
+                tools: [{ google_search: {} }],
+            }),
+        });
+
+        payload = await response.json().catch(() => ({}));
+        if (!response.ok) {
+            const errorMessage = String(
+                payload?.error?.message
+                ?? payload?.error
+                ?? `Google search request failed with status ${response.status}.`,
+            );
+            return { error: errorMessage };
+        }
+    } catch (error) {
+        return { error: `Failed to call grounded search: ${error.message}` };
+    }
+
+    const candidate = payload?.candidates?.[0] ?? {};
+    const responseParts = Array.isArray(candidate?.content?.parts) ? candidate.content.parts : [];
+    const answerText = responseParts
+        .filter((part) => typeof part?.text === 'string' && part.thought !== true)
+        .map((part) => part.text)
+        .join('')
+        .trim();
+    const groundingMetadata = candidate?.groundingMetadata ?? candidate?.grounding_metadata ?? {};
+    const webSearchQueries = Array.isArray(
+        groundingMetadata?.webSearchQueries ?? groundingMetadata?.web_search_queries,
+    )
+        ? (groundingMetadata.webSearchQueries ?? groundingMetadata.web_search_queries)
+        : [];
+    const rawChunks = Array.isArray(
+        groundingMetadata?.groundingChunks ?? groundingMetadata?.grounding_chunks,
+    )
+        ? (groundingMetadata.groundingChunks ?? groundingMetadata.grounding_chunks)
+        : [];
+
+    const citations = [];
+    const seenUris = new Set();
+    for (const chunk of rawChunks) {
+        const web = chunk?.web ?? {};
+        const uri = String(web?.uri ?? '').trim();
+        if (!uri || seenUris.has(uri)) continue;
+        seenUris.add(uri);
+        citations.push({
+            title: String(web?.title ?? '').trim() || uri,
+            uri,
+        });
+        if (citations.length >= WEB_SEARCH_RESULT_LIMIT) break;
+    }
+
+    const displayText = answerText || 'No grounded answer text returned.';
+    return {
+        query: queryText,
+        domain: domainHint || null,
+        model,
+        answer: truncateText(displayText, WEB_SEARCH_TEXT_MAX_CHARS),
+        truncated: displayText.length > WEB_SEARCH_TEXT_MAX_CHARS,
+        web_search_queries: webSearchQueries,
+        citations,
+        citation_count: citations.length,
+    };
+}
+
+/**
  * Implementation of run_command tool.
  * Starts a shell command and returns a live session snapshot.
  */
@@ -1867,6 +1968,7 @@ export const toolRegistry = {
     grep_search,
     read_url_content,
     view_content_chunk,
+    search_web,
     run_command,
     command_status,
     send_command_input,

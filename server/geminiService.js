@@ -223,6 +223,28 @@ const TOOLS = [
                 },
             },
             {
+                name: 'search_web',
+                description: 'Perform a grounded web search and return concise findings with citations.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        query: {
+                            type: 'STRING',
+                            description: 'Search query to run on the web.',
+                        },
+                        domain: {
+                            type: 'STRING',
+                            description: 'Optional domain hint to prioritize (e.g. docs.example.com).',
+                        },
+                        waitForPreviousTools: {
+                            type: 'BOOLEAN',
+                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
+                        },
+                    },
+                    required: ['query'],
+                },
+            },
+            {
                 name: 'run_command',
                 description: 'Run a shell command in the workspace and return a live command session snapshot.',
                 parameters: {

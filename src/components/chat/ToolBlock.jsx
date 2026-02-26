@@ -216,6 +216,14 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
         } else if (hasResponse) {
             titleMain = hasError ? 'Failed to fetch URL' : 'Fetched URL';
         }
+        titleDetail = String(args?.Url ?? '').trim();
+    } else if (name === 'search_web') {
+        if (isExecuting && !hasResponse) {
+            titleMain = 'Searching web...';
+        } else if (hasResponse) {
+            titleMain = hasError ? 'Web search failed' : 'Searched web';
+        }
+        titleDetail = String(args?.query ?? '').trim();
     }
 
     const terminalOutput = String(runtimeSnapshot?.output ?? responseObject?.output ?? '');
