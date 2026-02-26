@@ -4,10 +4,13 @@ import {
     fetchChatMessages,
     fetchChats,
     openChatEvents,
+    stopChatGeneration,
     sendChatMessage,
 } from '../api/chatApi.js';
 
 const CLIENT_ID_STORAGE_KEY = 'gemini-ui-client-id';
+const ACTIVE_CHAT_STORAGE_KEY = 'gemini-ui-active-chat-id';
+const DRAFT_CHAT_KEY = '__draft__';
 
 function getGreeting() {
     const hour = new Date().getHours();
@@ -37,8 +40,23 @@ function getOrCreateClientId() {
     }
 }
 
+function getStoredActiveChatId() {
+    try {
+        const stored = localStorage.getItem(ACTIVE_CHAT_STORAGE_KEY);
+        if (!stored) return null;
+        const normalized = String(stored).trim();
+        return normalized || null;
+    } catch {
+        return null;
+    }
+}
+
 function sortChatsByRecent(chats) {
     return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+}
+
+function getDraftKey(chatId) {
+    return (chatId === null || chatId === undefined) ? DRAFT_CHAT_KEY : String(chatId);
 }
 
 function mergeMessages(existing, incoming) {
@@ -88,6 +106,7 @@ export function useChat() {
     const [messagesByChat, setMessagesByChat] = useState({});
     const [activeChatId, setActiveChatId] = useState(undefined);
     const [draftMessages, setDraftMessages] = useState([]);
+    const [inputDraftByKey, setInputDraftByKey] = useState({});
     const [pendingKey, setPendingKey] = useState(null);
     const [isHydrating, setIsHydrating] = useState(true);
 
@@ -95,6 +114,7 @@ export function useChat() {
     const chatSummariesRef = useRef(chatSummaries);
     const activeChatIdRef = useRef(activeChatId);
     const loadedChatIdsRef = useRef(new Set());
+    const preferredActiveChatIdRef = useRef(getStoredActiveChatId());
 
     useEffect(() => {
         chatSummariesRef.current = chatSummaries;
@@ -102,6 +122,23 @@ export function useChat() {
 
     useEffect(() => {
         activeChatIdRef.current = activeChatId;
+    }, [activeChatId]);
+
+    useEffect(() => {
+        if (activeChatId === undefined) return;
+
+        try {
+            if (typeof activeChatId === 'string' && activeChatId.length > 0) {
+                localStorage.setItem(ACTIVE_CHAT_STORAGE_KEY, activeChatId);
+                preferredActiveChatIdRef.current = activeChatId;
+                return;
+            }
+
+            localStorage.removeItem(ACTIVE_CHAT_STORAGE_KEY);
+            preferredActiveChatIdRef.current = null;
+        } catch {
+            // noop
+        }
     }, [activeChatId]);
 
     const refreshChats = useCallback(async () => {
@@ -112,6 +149,12 @@ export function useChat() {
 
             setActiveChatId((current) => {
                 if (current === undefined) {
+                    const preferred = preferredActiveChatIdRef.current;
+                    if (preferred) {
+                        const preferredExists = nextChats.some((chat) => chat.id === preferred);
+                        if (preferredExists) return preferred;
+                    }
+
                     return nextChats[0]?.id ?? null;
                 }
 
@@ -151,6 +194,13 @@ export function useChat() {
         const source = openChatEvents((event) => {
             const isOwnEvent = event.originClientId === clientIdRef.current;
 
+            if (event.type === 'chat.upsert' && event.chat) {
+                // Include own upserts so a brand-new chat appears in Recents
+                // immediately after pressing Enter on the first message.
+                setChatSummaries((prev) => upsertChatSummary(prev, event.chat));
+                return;
+            }
+
             if (event.type === 'message.streaming' && event.chatId && event.message) {
                 if (isOwnEvent && (activeChatIdRef.current === null || activeChatIdRef.current === undefined)) {
                     setDraftMessages((prev) => mergeMessages(prev, [event.message]));
@@ -175,11 +225,6 @@ export function useChat() {
             }
 
             if (isOwnEvent) {
-                return;
-            }
-
-            if (event.type === 'chat.upsert' && event.chat) {
-                setChatSummaries((prev) => upsertChatSummary(prev, event.chat));
                 return;
             }
 
@@ -257,7 +302,36 @@ export function useChat() {
             if (current !== chatId) return current;
             return remaining[0]?.id ?? null;
         });
+
+        setInputDraftByKey((prev) => {
+            if (!(chatId in prev)) return prev;
+            const next = { ...prev };
+            delete next[chatId];
+            return next;
+        });
     }, []);
+
+    const setInputDraft = useCallback((value) => {
+        const key = getDraftKey(activeChatId);
+        const nextValue = String(value ?? '');
+
+        setInputDraftByKey((prev) => {
+            const currentValue = prev[key] ?? '';
+            if (currentValue === nextValue) return prev;
+
+            if (!nextValue) {
+                if (!(key in prev)) return prev;
+                const next = { ...prev };
+                delete next[key];
+                return next;
+            }
+
+            return {
+                ...prev,
+                [key]: nextValue,
+            };
+        });
+    }, [activeChatId]);
 
     const appendAiErrorToChat = useCallback((chatId, text) => {
         const errorMessage = createLocalMessage(createId('msg'), 'ai', text);
@@ -280,6 +354,13 @@ export function useChat() {
         if (!trimmed) return;
 
         const clientMessageId = createId('msg');
+        const draftKey = getDraftKey(activeChatIdRef.current);
+        setInputDraftByKey((prev) => {
+            if (!(draftKey in prev)) return prev;
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
+        });
 
         if (activeChatIdRef.current === null || activeChatIdRef.current === undefined) {
             const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed);
@@ -344,6 +425,18 @@ export function useChat() {
         }
     }, [appendAiErrorToChat, isHydrating]);
 
+    const stopGeneration = useCallback(async () => {
+        const chatId = activeChatIdRef.current;
+        try {
+            await stopChatGeneration({
+                chatId: chatId === null || chatId === undefined ? undefined : chatId,
+                clientId: clientIdRef.current,
+            });
+        } catch {
+            // Ignore stop errors and let the current run finish naturally.
+        }
+    }, []);
+
     const activeMessages = useMemo(() => {
         if (activeChatId === null || activeChatId === undefined) {
             return draftMessages;
@@ -360,6 +453,10 @@ export function useChat() {
         })),
         [chatSummaries, activeChatId],
     );
+    const inputDraft = useMemo(
+        () => inputDraftByKey[getDraftKey(activeChatId)] ?? '',
+        [inputDraftByKey, activeChatId],
+    );
 
     const isDraftChat = activeChatId === null || activeChatId === undefined;
     const isTyping = isHydrating || (
@@ -371,9 +468,13 @@ export function useChat() {
     return {
         greeting,
         messages: activeMessages,
+        activeChatId,
         isTyping,
         isChatMode: activeMessages.length > 0,
         sendMessage,
+        stopGeneration,
+        inputDraft,
+        setInputDraft,
         recents,
         createNewChat,
         selectChat,

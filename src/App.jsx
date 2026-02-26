@@ -57,6 +57,11 @@ export default function App() {
     focusInput();
   }, [chat, focusInput]);
 
+  const handleDeleteChat = useCallback(async (chatId) => {
+    await chat.deleteChat(chatId);
+    focusInput();
+  }, [chat, focusInput]);
+
   const handleOpenSettings = useCallback(() => {
     setSettingsViewInUrl(true);
     // Reload settings fresh when opening
@@ -116,19 +121,23 @@ export default function App() {
         onNewChat={handleNewChat}
         recentChats={chat.recents}
         onSelectChat={handleSelectChat}
-        onDeleteChat={chat.deleteChat}
+        onDeleteChat={handleDeleteChat}
         onOpenSettings={handleOpenSettings}
       />
 
-      <ChatArea
-        greeting={chat.greeting}
-        messages={chat.messages}
-        isTyping={chat.isTyping}
+        <ChatArea
+            greeting={chat.greeting}
+            messages={chat.messages}
+            conversationKey={chat.activeChatId}
+            isTyping={chat.isTyping}
         isChatMode={chat.isChatMode}
       >
         <ChatInput
           ref={chatInputRef}
           onSend={chat.sendMessage}
+          onStop={chat.stopGeneration}
+          draftValue={chat.inputDraft}
+          onDraftChange={chat.setInputDraft}
           isChatMode={chat.isChatMode}
           isSending={chat.isTyping}
         />

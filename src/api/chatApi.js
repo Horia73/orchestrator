@@ -36,6 +36,21 @@ export async function sendChatMessage({ chatId, message, clientId, clientMessage
     return parseApiResponse(response);
 }
 
+export async function stopChatGeneration({ chatId, clientId }) {
+    const response = await fetch('/api/chat/stop', {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            chatId,
+            clientId,
+        }),
+    });
+
+    return parseApiResponse(response);
+}
+
 export async function deleteChat(chatId, clientId) {
     const response = await fetch(`/api/chats/${chatId}?clientId=${encodeURIComponent(clientId)}`, {
         method: 'DELETE',

@@ -4,10 +4,9 @@ import {
     useEffect,
     useImperativeHandle,
     useRef,
-    useState,
 } from 'react';
 import './ChatInput.css';
-import { IconPlus, IconMic, IconArrowUp } from '../shared/icons.jsx';
+import { IconPlus, IconMic, IconStop, IconArrowUp } from '../shared/icons.jsx';
 
 /**
  * Chat input box.
@@ -15,10 +14,18 @@ import { IconPlus, IconMic, IconArrowUp } from '../shared/icons.jsx';
  * - Enter = send, Shift+Enter = newline.
  * - Mic icon → orange Send button (animated) when textarea has content.
  */
-export const ChatInput = forwardRef(function ChatInput({ onSend, isChatMode, isSending }, ref) {
+export const ChatInput = forwardRef(function ChatInput({
+    onSend,
+    onStop,
+    draftValue = '',
+    onDraftChange,
+    isChatMode,
+    isSending,
+}, ref) {
     const textareaRef = useRef(null);
-    const [hasContent, setHasContent] = useState(false);
     const wasSendingRef = useRef(false);
+    const value = String(draftValue ?? '');
+    const hasContent = value.trim().length > 0;
 
     const focusTextarea = useCallback(() => {
         const el = textareaRef.current;
@@ -46,6 +53,14 @@ export const ChatInput = forwardRef(function ChatInput({ onSend, isChatMode, isS
         }
     }, [focusTextarea, isSending]);
 
+    useEffect(() => {
+        const el = textareaRef.current;
+        if (!el) return;
+
+        el.style.height = 'auto';
+        el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
+    }, [value, isChatMode]);
+
     function handleKeyDown(e) {
         if (isSending) return;
 
@@ -55,25 +70,18 @@ export const ChatInput = forwardRef(function ChatInput({ onSend, isChatMode, isS
         }
     }
 
-    function handleInput() {
-        const el = textareaRef.current;
-        if (!el) return;
-        el.style.height = 'auto';
-        el.style.height = Math.min(el.scrollHeight, 180) + 'px';
-        setHasContent(el.value.trim().length > 0);
+    function handleInput(e) {
+        onDraftChange?.(e.target.value);
     }
 
     function submit() {
         if (isSending) return;
 
-        const el = textareaRef.current;
-        if (!el) return;
-        const text = el.value.trim();
+        const text = value.trim();
         if (!text) return;
         onSend(text);
-        el.value = '';
-        el.style.height = 'auto';
-        setHasContent(false);
+        onDraftChange?.('');
+        focusTextarea();
     }
 
     return (
@@ -83,11 +91,11 @@ export const ChatInput = forwardRef(function ChatInput({ onSend, isChatMode, isS
                     <textarea
                         ref={textareaRef}
                         id="chatInput"
+                        value={value}
                         placeholder={isSending ? 'Gemini is thinking…' : isChatMode ? 'Reply…' : 'How can I help you today?'}
                         rows={1}
                         autoFocus={!isSending}
-                        disabled={isSending}
-                        onInput={handleInput}
+                        onChange={handleInput}
                         onKeyDown={handleKeyDown}
                     />
                 </div>
@@ -96,7 +104,15 @@ export const ChatInput = forwardRef(function ChatInput({ onSend, isChatMode, isS
                         <IconPlus />
                     </button>
                     <div className="input-right">
-                        {hasContent ? (
+                        {isSending ? (
+                            <button
+                                className="voice-btn"
+                                title="Stop response"
+                                onClick={() => onStop?.()}
+                            >
+                                <IconStop />
+                            </button>
+                        ) : hasContent ? (
                             <button
                                 className="send-btn"
                                 title="Send message"

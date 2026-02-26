@@ -4,7 +4,8 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
-    "dev": "concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
+    "kill-ports": "sh -c 'for p in 8787 5173; do pids=$(lsof -ti tcp:$p); if [ -n \"$pids\" ]; then echo \"[kill-ports] Releasing port $p (pid: $pids)\"; kill $pids 2>/dev/null || true; sleep 0.2; kill -9 $pids 2>/dev/null || true; fi; done'",
+    "dev": "npm run kill-ports && concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite",
     "dev:api": "node server/index.js",
     "build": "vite build",

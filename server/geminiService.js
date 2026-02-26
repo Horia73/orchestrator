@@ -5,6 +5,58 @@ import {
 } from './config.js';
 import { SYSTEM_PROMPT } from './prompt.js';
 import { getAgentConfig } from './settings.js';
+import { toolRegistry } from './tools.js';
+
+const TOOLS = [
+    {
+        functionDeclarations: [
+            {
+                name: 'list_dir',
+                description: 'List the contents of a directory, i.e. all files and subdirectories that are children of the directory.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        DirectoryPath: {
+                            type: 'STRING',
+                            description: 'Path to list contents of, should be absolute path to a directory',
+                        },
+                        waitForPreviousTools: {
+                            type: 'BOOLEAN',
+                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
+                        },
+                    },
+                    required: ['DirectoryPath'],
+                },
+            },
+            {
+                name: 'view_file',
+                description: 'View the contents of a file from the local filesystem.',
+                parameters: {
+                    type: 'OBJECT',
+                    properties: {
+                        AbsolutePath: {
+                            type: 'STRING',
+                            description: 'Path to file to view. Must be an absolute path.',
+                        },
+                        StartLine: {
+                            type: 'INTEGER',
+                            description: 'Optional start line to view (1-indexed, inclusive).',
+                        },
+                        EndLine: {
+                            type: 'INTEGER',
+                            description: 'Optional end line to view (1-indexed, inclusive).',
+                        },
+                        waitForPreviousTools: {
+                            type: 'BOOLEAN',
+                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
+                        },
+                    },
+                    required: ['AbsolutePath'],
+                },
+            },
+        ],
+    },
+];
 
 const THINKING_LEVEL_MAP = {
     MINIMAL: ThinkingLevel.MINIMAL,
@@ -16,7 +68,8 @@ const THINKING_LEVEL_MAP = {
 let cachedClient = null;
 
 function mapThinkingLevel(level) {
-    return THINKING_LEVEL_MAP[level] ?? ThinkingLevel.MINIMAL;
+    const normalized = String(level ?? '').trim().toUpperCase();
+    return THINKING_LEVEL_MAP[normalized] ?? ThinkingLevel.MINIMAL;
 }
 
 function normalizePart(part) {
@@ -26,10 +79,6 @@ function normalizePart(part) {
 
     const normalized = {};
 
-    if (typeof part.text === 'string') {
-        normalized.text = part.text;
-    }
-
     if (typeof part.thought === 'boolean') {
         normalized.thought = part.thought;
     }
@@ -38,19 +87,24 @@ function normalizePart(part) {
         normalized.thoughtSignature = part.thoughtSignature;
     }
 
-    if (part.functionCall && typeof part.functionCall === 'object') {
+    // Gemini Part uses oneof for its main data field.
+    // Defensive normalization: if old persisted data has multiple data fields,
+    // keep a single representative field to avoid 400 INVALID_ARGUMENT.
+    const hasText = typeof part.text === 'string';
+    const hasFunctionCall = !!(part.functionCall && typeof part.functionCall === 'object');
+    const hasFunctionResponse = !!(part.functionResponse && typeof part.functionResponse === 'object');
+    const hasInlineData = !!(part.inlineData && typeof part.inlineData === 'object');
+    const hasFileData = !!(part.fileData && typeof part.fileData === 'object');
+
+    if (hasFunctionCall) {
         normalized.functionCall = part.functionCall;
-    }
-
-    if (part.functionResponse && typeof part.functionResponse === 'object') {
+    } else if (hasFunctionResponse) {
         normalized.functionResponse = part.functionResponse;
-    }
-
-    if (part.inlineData && typeof part.inlineData === 'object') {
+    } else if (hasText) {
+        normalized.text = part.text;
+    } else if (hasInlineData) {
         normalized.inlineData = part.inlineData;
-    }
-
-    if (part.fileData && typeof part.fileData === 'object') {
+    } else if (hasFileData) {
         normalized.fileData = part.fileData;
     }
 
@@ -78,13 +132,156 @@ function normalizeMessageParts(message) {
     return [{ text: String(message?.text ?? '') }];
 }
 
+const TOOL_TRACE_MAX_ARGS_CHARS = 1200;
+const TOOL_TRACE_MAX_RESPONSE_CHARS = 6000;
+const TOOL_TRACE_MAX_TOTAL_CHARS = 20000;
+
+function safeJsonStringify(value) {
+    try {
+        return JSON.stringify(value ?? null);
+    } catch {
+        return '"[unserializable]"';
+    }
+}
+
+function truncateForToolTrace(text, maxChars) {
+    const raw = String(text ?? '');
+    if (raw.length <= maxChars) {
+        return raw;
+    }
+
+    const remaining = raw.length - maxChars;
+    return `${raw.slice(0, maxChars)}... [truncated ${remaining} chars]`;
+}
+
+function buildToolTraceText(parts) {
+    if (!Array.isArray(parts) || parts.length === 0) {
+        return '';
+    }
+
+    const callParts = parts.filter((part) => part?.functionCall && !part?.thoughtSignature);
+    const responseParts = parts
+        .filter((part) => part?.functionResponse)
+        .map((part) => part.functionResponse);
+
+    if (callParts.length === 0 && responseParts.length === 0) {
+        return '';
+    }
+
+    const entries = callParts.map((part) => {
+        const call = part.functionCall ?? {};
+        return {
+            id: typeof call.id === 'string' ? call.id.trim() : '',
+            name: typeof call.name === 'string' ? call.name : 'unknown_tool',
+            args: call.args ?? {},
+            response: undefined,
+        };
+    });
+
+    const callIndexById = new Map();
+    const pendingIndexesByName = new Map();
+    for (let index = 0; index < entries.length; index += 1) {
+        const entry = entries[index];
+        if (entry.id) {
+            callIndexById.set(entry.id, index);
+        }
+
+        const queue = pendingIndexesByName.get(entry.name) ?? [];
+        queue.push(index);
+        pendingIndexesByName.set(entry.name, queue);
+    }
+
+    for (const functionResponse of responseParts) {
+        const responseId = typeof functionResponse?.id === 'string' ? functionResponse.id.trim() : '';
+        const responseName = typeof functionResponse?.name === 'string'
+            ? functionResponse.name
+            : 'unknown_tool';
+        let targetIndex;
+
+        if (responseId && callIndexById.has(responseId)) {
+            targetIndex = callIndexById.get(responseId);
+        } else {
+            const queue = pendingIndexesByName.get(responseName) ?? [];
+            while (queue.length > 0) {
+                const candidate = queue.shift();
+                if (candidate !== undefined && entries[candidate]?.response === undefined) {
+                    targetIndex = candidate;
+                    break;
+                }
+            }
+            pendingIndexesByName.set(responseName, queue);
+        }
+
+        if (targetIndex === undefined) {
+            entries.push({
+                id: responseId,
+                name: responseName,
+                args: {},
+                response: functionResponse?.response ?? null,
+            });
+            continue;
+        }
+
+        entries[targetIndex].response = functionResponse?.response ?? null;
+    }
+
+    const lines = [
+        '[tool_trace]',
+        `tool_count=${entries.length}`,
+    ];
+
+    for (let index = 0; index < entries.length; index += 1) {
+        const item = entries[index];
+        const itemNo = index + 1;
+        lines.push(`tool_${itemNo}_name=${item.name}`);
+        lines.push(`tool_${itemNo}_args=${truncateForToolTrace(safeJsonStringify(item.args), TOOL_TRACE_MAX_ARGS_CHARS)}`);
+        if (item.response !== undefined) {
+            lines.push(`tool_${itemNo}_response=${truncateForToolTrace(safeJsonStringify(item.response), TOOL_TRACE_MAX_RESPONSE_CHARS)}`);
+        } else {
+            lines.push(`tool_${itemNo}_response="[pending]"`);
+        }
+    }
+    lines.push('[/tool_trace]');
+
+    return truncateForToolTrace(lines.join('\n'), TOOL_TRACE_MAX_TOTAL_CHARS);
+}
+
+function buildModelHistoryText(message) {
+    const baseText = String(message?.text ?? '').trim();
+    const toolTrace = buildToolTraceText(message?.parts);
+
+    if (baseText && toolTrace) {
+        return `${baseText}\n\n${toolTrace}`;
+    }
+
+    if (baseText) {
+        return baseText;
+    }
+
+    if (toolTrace) {
+        return toolTrace;
+    }
+
+    return '';
+}
+
 function normalizeHistory(messages) {
     return messages
         .filter((message) => message && (message.role === 'user' || message.role === 'ai'))
-        .map((message) => ({
-            role: message.role === 'ai' ? 'model' : 'user',
-            parts: normalizeMessageParts(message),
-        }));
+        .map((message) => {
+            if (message.role === 'ai') {
+                // Keep prior model turns oneof-safe while preserving tool context.
+                return {
+                    role: 'model',
+                    parts: [{ text: buildModelHistoryText(message) }],
+                };
+            }
+
+            return {
+                role: 'user',
+                parts: normalizeMessageParts(message),
+            };
+        });
 }
 
 function getClient() {
@@ -125,6 +322,7 @@ function createChatSession(historyWithLatestUserTurn) {
                 thinkingLevel: mapThinkingLevel(agentConfig.thinkingLevel),
                 includeThoughts: true,
             },
+            tools: TOOLS,
         },
     });
 
@@ -147,6 +345,76 @@ function mergeChunkIntoText(previousText, chunkText) {
     }
 
     return `${previousText}${nextChunk}`;
+}
+
+function extractDelta(previousValue, currentValue) {
+    const previous = String(previousValue ?? '');
+    const current = String(currentValue ?? '');
+
+    if (!current) return '';
+    if (!previous) return current;
+
+    if (current.startsWith(previous)) {
+        return current.slice(previous.length);
+    }
+
+    // Defensive fallback for occasional non-prefix stream chunks.
+    if (previous.startsWith(current)) {
+        return '';
+    }
+
+    return current;
+}
+
+function normalizeStep(step) {
+    if (!step || typeof step !== 'object') {
+        return null;
+    }
+
+    const text = String(step.text ?? '');
+    const thought = String(step.thought ?? '');
+    const parts = normalizeParts(step.parts);
+    const isThinking = step.isThinking === true;
+    const isWorked = step.isWorked === true;
+    const textFirst = step.textFirst === true;
+
+    if (!text.trim() && !thought.trim() && !parts && !isThinking && !isWorked) {
+        return null;
+    }
+
+    const normalized = {
+        index: Number(step.index) || 0,
+        text,
+        thought,
+    };
+
+    if (parts) {
+        normalized.parts = parts;
+    }
+
+    if (isThinking) {
+        normalized.isThinking = true;
+    }
+
+    if (isWorked) {
+        normalized.isWorked = true;
+    }
+
+    if (textFirst) {
+        normalized.textFirst = true;
+    }
+
+    return normalized;
+}
+
+function normalizeSteps(steps) {
+    if (!Array.isArray(steps)) {
+        return [];
+    }
+
+    return steps
+        .map(normalizeStep)
+        .filter(Boolean);
 }
 
 function finalizeText(value) {
@@ -216,12 +484,11 @@ function extractChunkSignatureParts(chunk) {
 }
 
 function extractChunkResponseText(chunk) {
-    if (typeof chunk?.text === 'string' && chunk.text) {
-        return chunk.text;
-    }
-
     const parts = chunk?.candidates?.[0]?.content?.parts;
     if (!Array.isArray(parts) || parts.length === 0) {
+        if (typeof chunk?.text === 'string') {
+            return chunk.text;
+        }
         return '';
     }
 
@@ -239,13 +506,50 @@ function extractChunkResponseText(chunk) {
     return text;
 }
 
-function buildFinalModelParts({ text, thought, signatureParts }) {
+function extractChunkFunctionCalls(chunk) {
+    const parts = chunk?.candidates?.[0]?.content?.parts;
+    if (!Array.isArray(parts) || parts.length === 0) {
+        return [];
+    }
+
+    const functionCalls = [];
+    for (const part of parts) {
+        if (part?.functionCall && typeof part.functionCall === 'object') {
+            functionCalls.push(part.functionCall);
+        }
+    }
+
+    return functionCalls;
+}
+
+function getFunctionCallKey(functionCall) {
+    const id = typeof functionCall?.id === 'string' ? functionCall.id.trim() : '';
+    if (id) {
+        return `id:${id}`;
+    }
+
+    const name = typeof functionCall?.name === 'string' ? functionCall.name : 'unknown_tool';
+    let argsKey = '{}';
+    try {
+        argsKey = JSON.stringify(functionCall?.args ?? {});
+    } catch {
+        argsKey = '[unserializable-args]';
+    }
+
+    return `${name}:${argsKey}`;
+}
+
+function buildFinalModelParts({ text, thought, signatureParts, toolParts = [] }) {
     const parts = [];
     if (thought) {
         parts.push({
             text: thought,
             thought: true,
         });
+    }
+
+    for (const toolPart of toolParts) {
+        parts.push(toolPart);
     }
 
     if (text) {
@@ -269,69 +573,359 @@ export async function generateAssistantReply(historyWithLatestUserTurn) {
     return finalizeText(response?.text);
 }
 
-export async function generateAssistantReplyStream(historyWithLatestUserTurn, { onUpdate } = {}) {
+export async function generateAssistantReplyStream(historyWithLatestUserTurn, { onUpdate, shouldStop } = {}) {
     const { chat, latestText } = createChatSession(historyWithLatestUserTurn);
-    const stream = await chat.sendMessageStream({
-        message: latestText,
-    });
+    const isStopRequested = typeof shouldStop === 'function'
+        ? () => shouldStop() === true
+        : () => false;
+    let stopped = false;
 
     let fullText = '';
     let fullThought = '';
     let emittedText = '';
     let emittedThought = '';
     let emittedSignatureKey = '';
+    let emittedPartsKey = '';
+    let emittedStepsKey = '';
     const thoughtSignatureSet = new Set();
     const signaturePartsByKey = new Map();
+    const toolPartsAccumulator = [];
+    const stepSnapshots = [];
+    let lastStepTextCheckpoint = '';
+    let lastStepThoughtCheckpoint = '';
+    let lastStepToolPartIndex = 0;
+    let currentStepSawThinking = false;
+    let stepEventSequence = 0;
+    let currentStepFirstTextEvent = null;
+    let currentStepFirstToolEvent = null;
 
-    for await (const chunk of stream) {
-        fullText = mergeChunkIntoText(fullText, extractChunkResponseText(chunk));
-        fullThought = mergeChunkIntoText(fullThought, extractChunkThoughtText(chunk));
-        for (const signature of extractChunkThoughtSignatures(chunk)) {
-            thoughtSignatureSet.add(signature);
+    function markCurrentStepTextEvent() {
+        if (currentStepFirstTextEvent !== null) {
+            return;
         }
-        for (const signaturePart of extractChunkSignatureParts(chunk)) {
-            if (typeof signaturePart.thoughtSignature !== 'string') {
-                continue;
-            }
-            if (!signaturePartsByKey.has(signaturePart.thoughtSignature)) {
-                signaturePartsByKey.set(signaturePart.thoughtSignature, signaturePart);
-            }
+        const textDelta = extractDelta(lastStepTextCheckpoint, fullText);
+        if (!textDelta) {
+            return;
         }
-
-        const currentThoughtSignatures = [...thoughtSignatureSet];
-        const currentSignatureKey = currentThoughtSignatures.join('|');
-        const currentParts = buildFinalModelParts({
-            text: fullText,
-            thought: fullThought,
-            signatureParts: [...signaturePartsByKey.values()],
-        });
-
-        const changed = (
-            fullText !== emittedText
-            || fullThought !== emittedThought
-            || currentSignatureKey !== emittedSignatureKey
-        );
-        if (onUpdate && changed && (fullText || fullThought)) {
-            emittedText = fullText;
-            emittedThought = fullThought;
-            emittedSignatureKey = currentSignatureKey;
-            await onUpdate({
-                text: fullText,
-                thought: fullThought,
-                parts: currentParts,
-            });
-        }
+        stepEventSequence += 1;
+        currentStepFirstTextEvent = stepEventSequence;
     }
 
-    const finalText = finalizeText(fullText);
+    function markCurrentStepToolEvent() {
+        if (currentStepFirstToolEvent !== null) {
+            return;
+        }
+        stepEventSequence += 1;
+        currentStepFirstToolEvent = stepEventSequence;
+    }
+
+    function buildCurrentStep({ isThinking = false } = {}) {
+        const textDelta = extractDelta(lastStepTextCheckpoint, fullText);
+        const thoughtDelta = extractDelta(lastStepThoughtCheckpoint, fullThought);
+        const toolPartsDelta = toolPartsAccumulator
+            .slice(lastStepToolPartIndex)
+            .map((part) => normalizePart(part))
+            .filter(Boolean);
+        const hasStepPayload = textDelta.trim() || thoughtDelta.trim() || toolPartsDelta.length > 0;
+
+        if (!hasStepPayload && !isThinking && !currentStepSawThinking) {
+            return null;
+        }
+
+        const candidate = {
+            index: stepSnapshots.length + 1,
+            text: textDelta,
+            thought: thoughtDelta,
+            parts: toolPartsDelta,
+        };
+
+        const textAppearsBeforeTools = (
+            currentStepFirstTextEvent !== null
+            && (
+                currentStepFirstToolEvent === null
+                || currentStepFirstTextEvent <= currentStepFirstToolEvent
+            )
+        );
+        if (textAppearsBeforeTools) {
+            candidate.textFirst = true;
+        }
+
+        if (isThinking) {
+            candidate.isThinking = true;
+        } else {
+            candidate.isWorked = true;
+        }
+
+        return normalizeStep(candidate);
+    }
+
+    function pushStepSnapshot() {
+        const step = buildCurrentStep({ isThinking: false });
+        if (!step) {
+            return;
+        }
+
+        stepSnapshots.push(step);
+
+        lastStepTextCheckpoint = fullText;
+        lastStepThoughtCheckpoint = fullThought;
+        lastStepToolPartIndex = toolPartsAccumulator.length;
+        currentStepSawThinking = false;
+        currentStepFirstTextEvent = null;
+        currentStepFirstToolEvent = null;
+    }
+
+    function buildStreamingSteps({ stepIsThinking = false } = {}) {
+        const normalizedCompletedSteps = normalizeSteps(stepSnapshots);
+        const activeStep = buildCurrentStep({ isThinking: stepIsThinking });
+        if (activeStep) {
+            normalizedCompletedSteps.push(activeStep);
+        }
+
+        return normalizedCompletedSteps;
+    }
+
+    async function emitUpdate({ force = false, stepIsThinking = false, textOverride, thoughtOverride, partsOverride, stepsOverride } = {}) {
+        if (!onUpdate) {
+            return;
+        }
+
+        const updateText = textOverride ?? fullText;
+        const updateThought = thoughtOverride ?? fullThought;
+        const currentThoughtSignatures = [...thoughtSignatureSet];
+        const currentSignatureKey = currentThoughtSignatures.join('|');
+        const currentParts = partsOverride ?? buildFinalModelParts({
+            text: updateText,
+            thought: updateThought,
+            signatureParts: [...signaturePartsByKey.values()],
+            toolParts: toolPartsAccumulator,
+        });
+        const currentSteps = stepsOverride ?? buildStreamingSteps({ stepIsThinking });
+        const currentPartsKey = safeJsonStringify(currentParts);
+        const currentStepsKey = safeJsonStringify(currentSteps);
+
+        const changed = (
+            force
+            || updateText !== emittedText
+            || updateThought !== emittedThought
+            || currentSignatureKey !== emittedSignatureKey
+            || currentPartsKey !== emittedPartsKey
+            || currentStepsKey !== emittedStepsKey
+        );
+
+        if (!changed) {
+            return;
+        }
+
+        emittedText = updateText;
+        emittedThought = updateThought;
+        emittedSignatureKey = currentSignatureKey;
+        emittedPartsKey = currentPartsKey;
+        emittedStepsKey = currentStepsKey;
+
+        await onUpdate({
+            text: updateText,
+            thought: updateThought,
+            parts: currentParts,
+            steps: currentSteps,
+        });
+    }
+
+    async function processStream(currentStream) {
+        const functionCallsByKey = new Map();
+
+        for await (const chunk of currentStream) {
+            if (isStopRequested()) {
+                stopped = true;
+                break;
+            }
+
+            const chunkParts = chunk?.candidates?.[0]?.content?.parts;
+            if (Array.isArray(chunkParts) && chunkParts.length > 0) {
+                for (const part of chunkParts) {
+                    if (typeof part?.thoughtSignature === 'string' && part.thoughtSignature.trim().length > 0) {
+                        thoughtSignatureSet.add(part.thoughtSignature);
+                        const normalizedSignaturePart = normalizePart(part);
+                        if (
+                            normalizedSignaturePart
+                            && typeof normalizedSignaturePart.thoughtSignature === 'string'
+                            && !signaturePartsByKey.has(normalizedSignaturePart.thoughtSignature)
+                        ) {
+                            signaturePartsByKey.set(
+                                normalizedSignaturePart.thoughtSignature,
+                                normalizedSignaturePart,
+                            );
+                        }
+                    }
+
+                    if (part?.functionCall && typeof part.functionCall === 'object') {
+                        const callKey = getFunctionCallKey(part.functionCall);
+                        if (!functionCallsByKey.has(callKey)) {
+                            functionCallsByKey.set(callKey, part.functionCall);
+                            markCurrentStepToolEvent();
+                        }
+                        continue;
+                    }
+
+                    if (part?.thought === true && typeof part.text === 'string') {
+                        fullThought = mergeChunkIntoText(fullThought, part.text);
+                        continue;
+                    }
+
+                    if (typeof part?.text === 'string') {
+                        fullText = mergeChunkIntoText(fullText, part.text);
+                        markCurrentStepTextEvent();
+                    }
+                }
+            } else {
+                fullText = mergeChunkIntoText(fullText, extractChunkResponseText(chunk));
+                markCurrentStepTextEvent();
+                fullThought = mergeChunkIntoText(fullThought, extractChunkThoughtText(chunk));
+                for (const signature of extractChunkThoughtSignatures(chunk)) {
+                    thoughtSignatureSet.add(signature);
+                }
+                for (const signaturePart of extractChunkSignatureParts(chunk)) {
+                    if (typeof signaturePart.thoughtSignature !== 'string') {
+                        continue;
+                    }
+                    if (!signaturePartsByKey.has(signaturePart.thoughtSignature)) {
+                        signaturePartsByKey.set(signaturePart.thoughtSignature, signaturePart);
+                    }
+                }
+                for (const functionCall of extractChunkFunctionCalls(chunk)) {
+                    const callKey = getFunctionCallKey(functionCall);
+                    if (!functionCallsByKey.has(callKey)) {
+                        functionCallsByKey.set(callKey, functionCall);
+                        markCurrentStepToolEvent();
+                    }
+                }
+            }
+
+            await emitUpdate({ stepIsThinking: true });
+        }
+
+        // API request finished; keep the active step visible without thinking state.
+        await emitUpdate({ stepIsThinking: false });
+
+        return [...functionCallsByKey.values()];
+    }
+
+    if (isStopRequested()) {
+        return {
+            text: '',
+            thought: '',
+            parts: [],
+            steps: [],
+            stopped: true,
+        };
+    }
+
+    // Show "thinking" immediately when API call starts, before first chunk arrives.
+    currentStepSawThinking = true;
+    await emitUpdate({ force: true, stepIsThinking: true });
+    const initialStream = await chat.sendMessageStream({
+        message: latestText,
+    });
+    let pendingFunctionCalls = await processStream(initialStream);
+
+    // Handle tool calls if any (potentially multiple rounds)
+    while (pendingFunctionCalls.length > 0 && !stopped) {
+        const functionResponses = [];
+        for (const functionCall of pendingFunctionCalls) {
+            if (isStopRequested()) {
+                stopped = true;
+                break;
+            }
+
+            const name = typeof functionCall?.name === 'string' && functionCall.name
+                ? functionCall.name
+                : 'unknown_tool';
+            const args = functionCall?.args && typeof functionCall.args === 'object'
+                ? functionCall.args
+                : {};
+
+            const toolCallPartState = {
+                functionCall,
+                isExecuting: true,
+            };
+            markCurrentStepToolEvent();
+            toolPartsAccumulator.push(toolCallPartState);
+
+            await emitUpdate({ stepIsThinking: false });
+
+            const toolFn = toolRegistry[name];
+            let result;
+            if (toolFn) {
+                result = await toolFn(args);
+            } else {
+                result = { error: `Tool ${name} not found` };
+            }
+
+            toolCallPartState.isExecuting = false;
+
+            const functionResponse = {
+                name,
+                response: result,
+            };
+            if (typeof functionCall?.id === 'string' && functionCall.id.trim().length > 0) {
+                functionResponse.id = functionCall.id;
+            }
+
+            toolPartsAccumulator.push({
+                functionResponse,
+            });
+
+            functionResponses.push({
+                functionResponse,
+            });
+
+            await emitUpdate({ stepIsThinking: false });
+        }
+
+        if (stopped) {
+            break;
+        }
+
+        if (functionResponses.length === 0) {
+            break;
+        }
+
+        // One API step is complete once tool outputs are ready for the next model call.
+        pushStepSnapshot();
+
+        if (isStopRequested()) {
+            stopped = true;
+            break;
+        }
+
+        // Return tool outputs to the model and continue the stream.
+        // Surface "thinking" immediately when the next API call is initiated.
+        currentStepSawThinking = true;
+        await emitUpdate({ force: true, stepIsThinking: true });
+        const nextStream = await chat.sendMessageStream({
+            message: functionResponses,
+        });
+        pendingFunctionCalls = await processStream(nextStream);
+    }
+
+    // Capture any trailing text/thought from the final model turn (no further tools).
+    pushStepSnapshot();
+
+    const finalText = stopped
+        ? String(fullText ?? '').trim()
+        : finalizeText(fullText);
     const finalThought = finalizeThought(fullThought);
     const finalThoughtSignatures = [...thoughtSignatureSet];
     const finalSignatureKey = finalThoughtSignatures.join('|');
+    const finalSteps = normalizeSteps(stepSnapshots);
     const finalParts = buildFinalModelParts({
         text: finalText,
         thought: finalThought,
         signatureParts: [...signaturePartsByKey.values()],
+        toolParts: toolPartsAccumulator,
     });
+    const finalPartsKey = safeJsonStringify(finalParts);
+    const finalStepsKey = safeJsonStringify(finalSteps);
 
     if (
         onUpdate
@@ -339,12 +933,15 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
             finalText !== emittedText
             || finalThought !== emittedThought
             || finalSignatureKey !== emittedSignatureKey
+            || finalPartsKey !== emittedPartsKey
+            || finalStepsKey !== emittedStepsKey
         )
     ) {
         await onUpdate({
             text: finalText,
             thought: finalThought,
             parts: finalParts,
+            steps: finalSteps,
         });
     }
 
@@ -352,6 +949,8 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         text: finalText,
         thought: finalThought,
         parts: finalParts,
+        steps: finalSteps,
+        stopped,
     };
 }
 

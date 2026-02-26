@@ -120,6 +120,21 @@ export const IconMic = () => (
     </svg>
 );
 
+export const IconStop = () => (
+    <svg
+        width="20"
+        height="20"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="1.8"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+    >
+        <rect x="6" y="6" width="12" height="12" rx="2" />
+    </svg>
+);
+
 export const IconArrowUp = () => (
     <svg
         width="16"
@@ -133,6 +148,22 @@ export const IconArrowUp = () => (
     >
         <line x1="12" y1="19" x2="12" y2="5" />
         <polyline points="5 12 12 5 19 12" />
+    </svg>
+);
+
+export const IconArrowDown = () => (
+    <svg
+        width="16"
+        height="16"
+        viewBox="0 0 24 24"
+        fill="none"
+        stroke="currentColor"
+        strokeWidth="2.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+    >
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <polyline points="5 12 12 19 19 12" />
     </svg>
 );
 

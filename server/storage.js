@@ -55,10 +55,6 @@ function normalizeMessagePart(part) {
 
     const normalized = {};
 
-    if (typeof part.text === 'string') {
-        normalized.text = part.text;
-    }
-
     if (typeof part.thought === 'boolean') {
         normalized.thought = part.thought;
     }
@@ -67,19 +63,21 @@ function normalizeMessagePart(part) {
         normalized.thoughtSignature = part.thoughtSignature;
     }
 
-    if (part.functionCall && typeof part.functionCall === 'object') {
+    const hasText = typeof part.text === 'string';
+    const hasFunctionCall = !!(part.functionCall && typeof part.functionCall === 'object');
+    const hasFunctionResponse = !!(part.functionResponse && typeof part.functionResponse === 'object');
+    const hasInlineData = !!(part.inlineData && typeof part.inlineData === 'object');
+    const hasFileData = !!(part.fileData && typeof part.fileData === 'object');
+
+    if (hasFunctionCall) {
         normalized.functionCall = part.functionCall;
-    }
-
-    if (part.functionResponse && typeof part.functionResponse === 'object') {
+    } else if (hasFunctionResponse) {
         normalized.functionResponse = part.functionResponse;
-    }
-
-    if (part.inlineData && typeof part.inlineData === 'object') {
+    } else if (hasText) {
+        normalized.text = part.text;
+    } else if (hasInlineData) {
         normalized.inlineData = part.inlineData;
-    }
-
-    if (part.fileData && typeof part.fileData === 'object') {
+    } else if (hasFileData) {
         normalized.fileData = part.fileData;
     }
 
@@ -93,6 +91,58 @@ function normalizeMessageParts(parts) {
 
     const normalized = parts
         .map(normalizeMessagePart)
+        .filter(Boolean);
+
+    return normalized.length > 0 ? normalized : null;
+}
+
+function normalizeMessageStep(step, index) {
+    if (!step || typeof step !== 'object') {
+        return null;
+    }
+
+    const normalizedParts = normalizeMessageParts(step.parts);
+    const text = String(step.text ?? '');
+    const thought = String(step.thought ?? '');
+    const isThinking = step.isThinking === true;
+    const isWorked = step.isWorked === true;
+    const textFirst = step.textFirst === true;
+    const normalized = {
+        index: Number(step.index) || (index + 1),
+        text,
+        thought,
+    };
+
+    if (normalizedParts) {
+        normalized.parts = normalizedParts;
+    }
+
+    if (isThinking) {
+        normalized.isThinking = true;
+    }
+
+    if (isWorked) {
+        normalized.isWorked = true;
+    }
+
+    if (textFirst) {
+        normalized.textFirst = true;
+    }
+
+    if (!text.trim() && !thought.trim() && !normalizedParts && !isThinking && !isWorked) {
+        return null;
+    }
+
+    return normalized;
+}
+
+function normalizeMessageSteps(steps) {
+    if (!Array.isArray(steps)) {
+        return null;
+    }
+
+    const normalized = steps
+        .map((step, index) => normalizeMessageStep(step, index))
         .filter(Boolean);
 
     return normalized.length > 0 ? normalized : null;
@@ -197,6 +247,7 @@ export async function appendMessage(chatId, payload) {
     }
 
     const normalizedParts = normalizeMessageParts(payload.parts);
+    const normalizedSteps = normalizeMessageSteps(payload.steps);
     const message = {
         id: payload.id ?? createMessageId(),
         chatId,
@@ -208,6 +259,10 @@ export async function appendMessage(chatId, payload) {
 
     if (normalizedParts) {
         message.parts = normalizedParts;
+    }
+
+    if (normalizedSteps) {
+        message.steps = normalizedSteps;
     }
 
     await appendLine(getChatFilePath(chatId), message);

@@ -20,6 +20,7 @@ const app = express();
 app.use(express.json({ limit: '2mb' }));
 
 const chatQueues = new Map();
+const activeGenerationsByClient = new Map();
 
 function createMessageId() {
     return `msg-${randomUUID()}`;
@@ -55,6 +56,52 @@ function enqueueChatWork(chatId, task) {
 
     chatQueues.set(chatId, run);
     return run;
+}
+
+function registerActiveGeneration(clientId, chatId) {
+    const generation = {
+        clientId,
+        chatId,
+        stopRequested: false,
+    };
+
+    const existing = activeGenerationsByClient.get(clientId) ?? new Set();
+    existing.add(generation);
+    activeGenerationsByClient.set(clientId, existing);
+    return generation;
+}
+
+function unregisterActiveGeneration(generation) {
+    if (!generation) return;
+
+    const existing = activeGenerationsByClient.get(generation.clientId);
+    if (!existing) return;
+
+    existing.delete(generation);
+    if (existing.size === 0) {
+        activeGenerationsByClient.delete(generation.clientId);
+    }
+}
+
+function requestStopForClient(clientId, chatId) {
+    const existing = activeGenerationsByClient.get(clientId);
+    if (!existing || existing.size === 0) {
+        return 0;
+    }
+
+    let stoppedCount = 0;
+    for (const generation of existing) {
+        if (chatId && generation.chatId !== chatId) {
+            continue;
+        }
+
+        if (!generation.stopRequested) {
+            generation.stopRequested = true;
+            stoppedCount += 1;
+        }
+    }
+
+    return stoppedCount;
 }
 
 app.get('/api/health', (_req, res) => {
@@ -145,6 +192,18 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
     }
 });
 
+app.post('/api/chat/stop', (req, res) => {
+    const clientId = normalizeClientId(req.body?.clientId);
+    const requestedChatId = String(req.body?.chatId ?? '').trim();
+    const chatId = requestedChatId || null;
+    const stoppedCount = requestStopForClient(clientId, chatId);
+
+    res.json({
+        ok: true,
+        stoppedCount,
+    });
+});
+
 app.post('/api/chat/send', async (req, res, next) => {
     try {
         const inputText = normalizeMessageText(req.body?.message);
@@ -199,6 +258,7 @@ app.post('/api/chat/send', async (req, res, next) => {
             let streamedAssistantText = '';
             let streamedAssistantThought = '';
             let streamedAssistantParts = [];
+            let streamedAssistantSteps = [];
             let assistantText;
 
             broadcastEvent('message.streaming', {
@@ -209,17 +269,21 @@ app.post('/api/chat/send', async (req, res, next) => {
                     role: 'ai',
                     text: '',
                     thought: '',
+                    parts: [],
+                    steps: [],
                     createdAt: aiMessageCreatedAt,
                 },
                 originClientId: clientId,
             });
 
+            const activeGeneration = registerActiveGeneration(clientId, chat.id);
             try {
                 const streamResult = await generateAssistantReplyStream(history, {
-                    onUpdate: async ({ text, thought, parts }) => {
+                    onUpdate: async ({ text, thought, parts, steps }) => {
                         streamedAssistantText = text;
                         streamedAssistantThought = thought;
                         streamedAssistantParts = Array.isArray(parts) ? parts : streamedAssistantParts;
+                        streamedAssistantSteps = Array.isArray(steps) ? steps : streamedAssistantSteps;
                         broadcastEvent('message.streaming', {
                             chatId: chat.id,
                             message: {
@@ -228,17 +292,44 @@ app.post('/api/chat/send', async (req, res, next) => {
                                 role: 'ai',
                                 text,
                                 thought,
+                                parts: streamedAssistantParts,
+                                steps: streamedAssistantSteps,
                                 createdAt: aiMessageCreatedAt,
                             },
                             originClientId: clientId,
                         });
                     },
+                    shouldStop: () => activeGeneration.stopRequested,
                 });
-                assistantText = streamResult.text;
+                assistantText = String(streamResult.text ?? '').trim();
+                if (!assistantText) {
+                    assistantText = streamResult.stopped
+                        ? 'Stopped.'
+                        : 'No text response was returned by Gemini.';
+                }
                 streamedAssistantThought = streamResult.thought;
                 streamedAssistantParts = Array.isArray(streamResult.parts)
                     ? streamResult.parts
                     : streamedAssistantParts;
+                streamedAssistantSteps = Array.isArray(streamResult.steps)
+                    ? streamResult.steps
+                    : streamedAssistantSteps;
+
+                // Ensure the final streaming frame contains per-step snapshots.
+                broadcastEvent('message.streaming', {
+                    chatId: chat.id,
+                    message: {
+                        id: aiMessageId,
+                        chatId: chat.id,
+                        role: 'ai',
+                        text: assistantText,
+                        thought: streamedAssistantThought,
+                        parts: streamedAssistantParts,
+                        steps: streamedAssistantSteps,
+                        createdAt: aiMessageCreatedAt,
+                    },
+                    originClientId: clientId,
+                });
             } catch (error) {
                 const formattedError = formatGeminiError(error);
                 assistantText = streamedAssistantText
@@ -253,10 +344,14 @@ app.post('/api/chat/send', async (req, res, next) => {
                         role: 'ai',
                         text: assistantText,
                         thought: streamedAssistantThought,
+                        parts: streamedAssistantParts,
+                        steps: streamedAssistantSteps,
                         createdAt: aiMessageCreatedAt,
                     },
                     originClientId: clientId,
                 });
+            } finally {
+                unregisterActiveGeneration(activeGeneration);
             }
 
             const appendedAi = await appendMessage(chat.id, {
@@ -265,6 +360,7 @@ app.post('/api/chat/send', async (req, res, next) => {
                 text: assistantText,
                 thought: streamedAssistantThought,
                 parts: streamedAssistantParts,
+                steps: streamedAssistantSteps,
                 createdAt: aiMessageCreatedAt,
             });
 
