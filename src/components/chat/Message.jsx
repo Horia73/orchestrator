@@ -554,6 +554,54 @@ function hasInlineImageMarkdown(value) {
     return INLINE_IMAGE_MARKDOWN_TEST_REGEX.test(String(value ?? ''));
 }
 
+// Detect when the model outputs a structured JSON response like
+// {"content": "...", "attachments": [...]} and extract just the text content.
+function unwrapStructuredText(text) {
+    const trimmed = String(text ?? '').trim();
+    if (trimmed.length < 3 || trimmed[0] !== '{') return text;
+    try {
+        const parsed = JSON.parse(trimmed);
+        if (parsed && typeof parsed === 'object' && typeof parsed.content === 'string') {
+            return parsed.content;
+        }
+    } catch {
+        // not JSON
+    }
+    return text;
+}
+
+function doesImagePrecedeText(parts) {
+    if (!Array.isArray(parts)) return false;
+    let firstImageIndex = -1;
+    let firstTextIndex = -1;
+
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        if (firstImageIndex === -1) {
+            const mimeInline = String(part?.inlineData?.mimeType ?? '').trim().toLowerCase();
+            const mimeFile = String(part?.fileData?.mimeType ?? '').trim().toLowerCase();
+            if (
+                (mimeInline.startsWith('image/') && String(part.inlineData?.data ?? '').trim())
+                || (mimeFile.startsWith('image/') && String(part.fileData?.fileUri ?? part.fileData?.file_uri ?? '').trim())
+            ) {
+                firstImageIndex = i;
+            }
+        }
+        if (
+            firstTextIndex === -1
+            && typeof part?.text === 'string'
+            && part?.thought !== true
+            && part.text.trim()
+        ) {
+            firstTextIndex = i;
+        }
+    }
+
+    if (firstImageIndex === -1) return false;
+    if (firstTextIndex === -1) return true;
+    return firstImageIndex < firstTextIndex;
+}
+
 function hasRenderedAttachments(parts) {
     if (!Array.isArray(parts)) {
         return false;
@@ -625,6 +673,7 @@ export const Message = forwardRef(function Message({
         const attachmentSourceParts = hasRenderedAttachments(normalizedBodyParts)
             ? normalizedBodyParts
             : normalizedFallbackParts;
+        const imageBeforeText = doesImagePrecedeText(attachmentSourceParts);
         const renderedBlocks = buildToolBlocks(toolRenderParts);
         const attachments = getMessageAttachments(attachmentSourceParts);
         const inlineRenderPlan = buildInlineImageRenderPlan(bodyText, attachments);
@@ -632,7 +681,7 @@ export const Message = forwardRef(function Message({
         const remainingAttachments = attachments.filter(
             (attachment) => !consumedAttachmentIds.has(attachment.id),
         );
-        const normalizedBodyText = String(bodyText ?? '');
+        const normalizedBodyText = unwrapStructuredText(String(bodyText ?? ''));
         const hasText = normalizedBodyText.trim().length > 0;
         const hasThought = String(bodyThought ?? '').trim().length > 0;
         const shouldRenderThoughtBlock = bodyIsThinking || hasThought || showWorkedWhenNoThought;
@@ -736,8 +785,13 @@ export const Message = forwardRef(function Message({
                     );
                 })}
 
+                {!textFirst && imageBeforeText && (
+                    <AttachmentGalleryFromList attachments={remainingAttachments} />
+                )}
                 {!textFirst && textNode}
-                <AttachmentGalleryFromList attachments={remainingAttachments} />
+                {(!imageBeforeText || textFirst) && (
+                    <AttachmentGalleryFromList attachments={remainingAttachments} />
+                )}
             </>
         );
     };
@@ -755,11 +809,18 @@ export const Message = forwardRef(function Message({
     const shouldRenderSteps = normalizedSteps.length > 1;
     const messageHasAttachments = hasRenderedAttachments(parts);
     const stepUsesMessageAttachmentFallback = shouldRenderSteps
-        ? normalizedSteps.map((step) => (
-            hasInlineImageMarkdown(step?.text)
-            && !hasRenderedAttachments(step?.parts)
-            && messageHasAttachments
-        ))
+        ? normalizedSteps.map((step) => {
+            const stepParts = Array.isArray(step?.parts) ? step.parts : [];
+            const hasToolCall = stepParts.some((p) => p?.functionCall || p?.functionResponse);
+            const hasStepText = String(step?.text ?? '').trim().length > 0;
+            // A pure text step (no tool calls) with text content should inherit message
+            // attachments so that doesImagePrecedeText can position them correctly.
+            if (!hasToolCall && hasStepText && !hasRenderedAttachments(stepParts) && messageHasAttachments) {
+                return true;
+            }
+            // Legacy: step text references inline images via markdown.
+            return hasInlineImageMarkdown(step?.text) && !hasRenderedAttachments(stepParts) && messageHasAttachments;
+        })
         : [];
     const hasStepUsingMessageAttachmentFallback = stepUsesMessageAttachmentFallback.some(Boolean);
     const shouldRenderMessageAttachmentsAfterSteps = shouldRenderSteps

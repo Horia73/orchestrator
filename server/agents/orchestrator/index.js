@@ -1,4 +1,4 @@
-import { ALL_SHARED_TOOL_NAMES } from '../../tools/catalog.js';
+import { ALL_SHARED_TOOL_NAMES } from '../../tools/index.js';
 import { buildOrchestratorChatConfig } from './api.js';
 
 export const ORCHESTRATOR_AGENT_ID = 'orchestrator';
@@ -23,12 +23,13 @@ export const ORCHESTRATOR_DEFAULT_THINKING_LEVEL = normalizeDefaultThinkingLevel
 
 export const orchestratorAgent = {
     id: ORCHESTRATOR_AGENT_ID,
+    isDefault: true,
     name: 'Orchestrator',
     description: 'General-purpose assistant with tools; routes specialized coding/image requests when needed.',
     icon: '🧠',
     supportsThinking: true,
     supportsGrounding: false,
-    toolAccess: ALL_SHARED_TOOL_NAMES,
+    get toolAccess() { return ALL_SHARED_TOOL_NAMES; },
 
     createDefaultConfig() {
         return {
@@ -71,3 +72,5 @@ export const orchestratorAgent = {
         });
     },
 };
+
+export const agent = orchestratorAgent;

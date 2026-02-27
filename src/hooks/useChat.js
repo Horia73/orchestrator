@@ -54,6 +54,13 @@ function getStoredActiveChatId() {
 }
 
 function getStoredDraftAgentId() {
+    try {
+        const stored = localStorage.getItem(DRAFT_AGENT_STORAGE_KEY);
+        if (stored) return String(stored).trim() || DEFAULT_AGENT_ID;
+    } catch {
+        // ignore
+    }
+
     return DEFAULT_AGENT_ID;
 }
 
@@ -206,6 +213,7 @@ export function useChat() {
     const [pendingKey, setPendingKey] = useState(null);
     const [draftAgentId, setDraftAgentIdState] = useState(() => getStoredDraftAgentId());
     const [isHydrating, setIsHydrating] = useState(true);
+    const [agentStreaming, setAgentStreaming] = useState({});
 
     const clientIdRef = useRef(getOrCreateClientId());
     const chatSummariesRef = useRef(chatSummaries);
@@ -340,29 +348,55 @@ export function useChat() {
                     const existingMessage = existingMessages.find(m => m.id === incomingMessage.id);
 
                     if (existingMessage && Array.isArray(existingMessage.parts) && Array.isArray(incomingMessage.parts)) {
-                        // Preserve sub-agent streaming progress if incoming message hasn't caught up yet
-                        const updatedParts = [...incomingMessage.parts];
-                        existingMessage.parts.forEach(existingPart => {
-                            if (existingPart.functionResponse) {
-                                const toolId = existingPart.functionResponse.id;
-                                const toolName = existingPart.functionResponse.name;
+                        // Preserve sub-agent streaming progress if incoming message hasn't caught up yet.
+                        // Collect all synthetic agent responses from existing message (parts + steps).
+                        const syntheticResponses = [];
+                        const collectSynthetic = (parts) => {
+                            if (!Array.isArray(parts)) return;
+                            for (const p of parts) {
+                                if (p.functionResponse) {
+                                    syntheticResponses.push(p);
+                                }
+                            }
+                        };
+                        collectSynthetic(existingMessage.parts);
+                        if (Array.isArray(existingMessage.steps)) {
+                            for (const step of existingMessage.steps) {
+                                collectSynthetic(step?.parts);
+                            }
+                        }
 
-                                const hasInIncoming = updatedParts.some(p =>
+                        // Re-inject missing responses into incoming parts.
+                        const preserveInParts = (targetParts) => {
+                            if (!Array.isArray(targetParts)) return targetParts;
+                            const result = [...targetParts];
+                            for (const existing of syntheticResponses) {
+                                const toolId = existing.functionResponse.id;
+                                const toolName = existing.functionResponse.name;
+                                const alreadyPresent = result.some(p =>
                                     p.functionResponse && (p.functionResponse.id === toolId || p.functionResponse.name === toolName)
                                 );
-
-                                if (!hasInIncoming) {
-                                    // Find where the call is and insert the response after it
-                                    const callIndex = updatedParts.findIndex(p =>
+                                if (!alreadyPresent) {
+                                    const callIndex = result.findIndex(p =>
                                         p.functionCall && (p.functionCall.id === toolId || p.functionCall.name === toolName)
                                     );
                                     if (callIndex !== -1) {
-                                        updatedParts.splice(callIndex + 1, 0, existingPart);
+                                        result.splice(callIndex + 1, 0, existing);
                                     }
                                 }
                             }
-                        });
-                        incomingMessage.parts = updatedParts;
+                            return result;
+                        };
+
+                        incomingMessage.parts = preserveInParts(incomingMessage.parts);
+
+                        if (Array.isArray(incomingMessage.steps) && syntheticResponses.length > 0) {
+                            incomingMessage.steps = incomingMessage.steps.map(step => {
+                                if (!Array.isArray(step?.parts) || step.parts.length === 0) return step;
+                                const preserved = preserveInParts(step.parts);
+                                return preserved !== step.parts ? { ...step, parts: preserved } : step;
+                            });
+                        }
                     }
 
                     return {
@@ -374,6 +408,14 @@ export function useChat() {
             }
 
             if (event.type === 'agent.streaming' && event.chatId && event.messageId && event.payload) {
+                // Store agent streaming payload keyed by toolName — this is
+                // reliable and matches the panel's activeAgentCallSelection.toolName.
+                // IMPORTANT: must be outside setMessagesByChat updater (React anti-pattern).
+                const toolName = String(event.toolName ?? '').trim();
+                if (toolName) {
+                    setAgentStreaming((curr) => ({ ...curr, [toolName]: event.payload }));
+                }
+
                 setMessagesByChat((prev) => {
                     const messages = prev[event.chatId] ?? [];
                     const messageIndex = messages.findIndex((m) => m.id === event.messageId);
@@ -381,14 +423,10 @@ export function useChat() {
 
                     const message = messages[messageIndex];
                     const toolCallId = event.toolCallId;
-                    const nextParts = [...(message.parts || [])];
 
-                    // Find where to inject or update the response
-                    const callIndex = nextParts.findIndex((p) => (
+                    const matchesCall = (p) => (
                         p.functionCall && (p.functionCall.id === toolCallId || p.functionCall.name === event.toolName)
-                    ));
-
-                    if (callIndex === -1 && !toolCallId) return prev;
+                    );
 
                     const syntheticResponse = {
                         functionResponse: {
@@ -398,15 +436,39 @@ export function useChat() {
                         },
                     };
 
-                    const responseIndex = nextParts.findIndex((p, i) => i > callIndex && p.functionResponse && (p.functionResponse.id === toolCallId || p.functionResponse.name === event.toolName));
+                    const matchesResponse = (p) => (
+                        p.functionResponse && (p.functionResponse.id === toolCallId || p.functionResponse.name === event.toolName)
+                    );
 
-                    if (responseIndex !== -1) {
-                        nextParts[responseIndex] = syntheticResponse;
-                    } else {
-                        nextParts.splice(callIndex + 1, 0, syntheticResponse);
+                    const injectInto = (parts) => {
+                        const next = [...parts];
+                        const callIdx = next.findIndex(matchesCall);
+                        if (callIdx === -1) return null;
+
+                        const respIdx = next.findIndex((p, i) => i > callIdx && matchesResponse(p));
+                        if (respIdx !== -1) {
+                            next[respIdx] = syntheticResponse;
+                        } else {
+                            next.splice(callIdx + 1, 0, syntheticResponse);
+                        }
+                        return next;
+                    };
+
+                    const nextParts = injectInto(message.parts || []);
+                    if (!nextParts && !toolCallId) return prev;
+
+                    let nextSteps = message.steps;
+                    if (Array.isArray(message.steps) && message.steps.length > 0) {
+                        nextSteps = message.steps.map((step) => {
+                            if (!Array.isArray(step?.parts) || step.parts.length === 0) return step;
+                            const hasCall = step.parts.some(matchesCall);
+                            if (!hasCall) return step;
+                            const updatedParts = injectInto(step.parts);
+                            return updatedParts ? { ...step, parts: updatedParts } : step;
+                        });
                     }
 
-                    const nextMessage = { ...message, parts: nextParts };
+                    const nextMessage = { ...message, parts: nextParts || message.parts, steps: nextSteps };
                     const nextMessages = [...messages];
                     nextMessages[messageIndex] = nextMessage;
 
@@ -443,6 +505,7 @@ export function useChat() {
             }
 
             if (event.type === 'message.added' && event.chatId && event.message) {
+                setAgentStreaming({});
                 setMessagesByChat((prev) => {
                     if (!(event.chatId in prev)) {
                         return prev;
@@ -720,10 +783,7 @@ export function useChat() {
     const selectedAgentId = isDraftChat
         ? draftAgentId
         : (activeChatAgentId ?? DEFAULT_AGENT_ID);
-    const isTyping = isHydrating || (
-        pendingKey !== null
-        && (pendingKey === 'draft' || pendingKey === activeChatId)
-    );
+    const isTyping = pendingKey !== null && (pendingKey === 'draft' || pendingKey === activeChatId);
     const greeting = `${getGreeting()}, Greeny`;
 
     return {
@@ -731,7 +791,7 @@ export function useChat() {
         messages: activeMessages,
         activeChatId,
         isTyping,
-        isChatMode: activeMessages.length > 0,
+        isChatMode: activeMessages.length > 0 || !isDraftChat,
         sendMessage,
         stopGeneration,
         inputDraft,
@@ -747,5 +807,6 @@ export function useChat() {
         draftAgentId,
         setDraftAgentId,
         activeChatAgentId,
+        agentStreaming,
     };
 }

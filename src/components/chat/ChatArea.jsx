@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import './ChatArea.css';
 import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
-import { IconArrowDown } from '../shared/icons.jsx';
+import { IconArrowDown, IconClose } from '../shared/icons.jsx';
 import {
     buildAgentPanelMessage,
     findAgentToolCallInMessages,
@@ -65,7 +65,7 @@ function persistScrollPositions(scrollPositions) {
     }
 }
 
-export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, children }) {
+export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, agentStreaming, children }) {
     const scrollRef = useRef(null);
     const exitSnapshotRef = useRef(null);
     const lastUserMsgRef = useRef(null);
@@ -83,10 +83,12 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const previousChatModeRef = useRef(isChatMode);
     const previousConversationKeyRef = useRef(conversationKey);
     const baselineConversationKeyRef = useRef(conversationKey);
-    const pendingScrollRestoreConversationRef = useRef(null);
+    const enterAnchorConversationKeyRef = useRef(conversationKey);
+    const pendingScrollRestoreConversationRef = useRef(normalizeConversationKey(conversationKey));
     const pendingConversationEnterAnimationRef = useRef(null);
     const scrollPositionsRef = useRef(loadScrollPositions());
     const exitSnapshotScrollTopRef = useRef(0);
+    const lastKnownScrollTopRef = useRef(0);
     const latestChatMessagesRef = useRef(messages);
     const enterFadeTimeoutRef = useRef(null);
     const exitFadeTimeoutRef = useRef(null);
@@ -94,6 +96,8 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const [exitSnapshotMessages, setExitSnapshotMessages] = useState([]);
     const [isConversationEnterVisible, setIsConversationEnterVisible] = useState(false);
     const [activeAgentCallSelection, setActiveAgentCallSelection] = useState(null);
+    const [noSpacerAnim, setNoSpacerAnim] = useState(false);
+    const [isConversationHidden, setIsConversationHidden] = useState(false);
     const userMessageCount = useMemo(
         () => messages.reduce(
             (count, message) => (message.role === 'user' ? count + 1 : count),
@@ -146,7 +150,8 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     }, []);
 
     function refreshScrollButton(container) {
-        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+        const spacerHeight = spacerRef.current ? spacerRef.current.offsetHeight : 0;
+        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight - spacerHeight;
 
         if (isJumpingToBottomRef.current) {
             if (distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE) {
@@ -217,8 +222,12 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
 
             const previousKey = normalizeConversationKey(previousConversationKey);
             if (previousKey && scrollRef.current) {
-                saveConversationScrollPosition(previousKey, scrollRef.current.scrollTop);
+                // Use lastKnownScrollTopRef instead of scrollRef.current.scrollTop.
+                // When React clears the div content (switching to uncached conversation),
+                // the browser clamps scrollTop to 0 — the cached ref keeps the real value.
+                saveConversationScrollPosition(previousKey, lastKnownScrollTopRef.current);
             }
+            lastKnownScrollTopRef.current = 0;
 
             previousConversationKeyRef.current = conversationKey;
             isJumpingToBottomRef.current = false;
@@ -236,22 +245,40 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 setActiveAgentCallSelection(null);
             }
 
-            if (pendingConversationEnterAnimationRef.current === conversationKey) {
-                if (enterFadeTimeoutRef.current) clearTimeout(enterFadeTimeoutRef.current);
-                setIsConversationEnterVisible(true);
-                enterFadeTimeoutRef.current = setTimeout(() => {
-                    setIsConversationEnterVisible(false);
-                    enterFadeTimeoutRef.current = null;
-                }, ENTER_FADE_DURATION_MS + 80);
-                pendingConversationEnterAnimationRef.current = null;
+            // Suprima animatia spacerului (28vh→0) cand nu suntem pe new chat.
+            // Pe new chat (null), lasam animatia sa se declanseze normal la primul mesaj.
+            setNoSpacerAnim(conversationKey !== null && conversationKey !== undefined);
+
+            // Ascunde div-ul de mesaje cand incarcam o conversatie existenta fara mesaje cached.
+            // Se dezactiveaza cand animatia de enter porneste (dupa ce mesajele sosesc).
+            if (hasConcreteConversation && !isTransitioningDraftToSaved) {
+                setIsConversationHidden(messages.length === 0);
             }
         }
-    }, [conversationKey, userMessageCount, saveConversationScrollPosition]);
+    }, [conversationKey, userMessageCount, saveConversationScrollPosition, messages.length]);
+
+    // Declanseaza animatia de enter abia cand mesajele sunt disponibile.
+    // Astfel evitam flash-ul cu greeting-ul si lipsa fade-ului dupa refresh.
+    useLayoutEffect(() => {
+        if (!isChatMode) return;
+        if (!conversationKey) return;
+        if (messages.length === 0) return;
+        if (pendingConversationEnterAnimationRef.current !== conversationKey) return;
+
+        setIsConversationHidden(false);
+        if (enterFadeTimeoutRef.current) clearTimeout(enterFadeTimeoutRef.current);
+        setIsConversationEnterVisible(true);
+        enterFadeTimeoutRef.current = setTimeout(() => {
+            setIsConversationEnterVisible(false);
+            enterFadeTimeoutRef.current = null;
+        }, ENTER_FADE_DURATION_MS + 80);
+        pendingConversationEnterAnimationRef.current = null;
+    }, [conversationKey, isChatMode, messages.length]);
 
     useLayoutEffect(() => {
         const pendingConversationKey = pendingScrollRestoreConversationRef.current;
         if (!pendingConversationKey) return;
-        if (!isChatMode || isTyping) return;
+        if (!isChatMode || isTyping || messages.length === 0) return;
 
         const activeConversationKey = normalizeConversationKey(conversationKey);
         if (!activeConversationKey || activeConversationKey !== pendingConversationKey) return;
@@ -271,6 +298,9 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
 
         isProgrammaticScrollRef.current = true;
         container.scrollTop = targetScrollTop;
+        lastKnownScrollTopRef.current = targetScrollTop;
+        // Persist so that default-to-bottom (maxScrollTop) is also remembered.
+        saveConversationScrollPosition(conversationKey, targetScrollTop);
         refreshScrollButton(container);
         pendingScrollRestoreConversationRef.current = null;
         requestAnimationFrame(() => {
@@ -315,11 +345,17 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         inputFlipAnimationRef.current?.cancel();
     }, []);
 
+    // Save scroll position on component unmount only.
+    // Conversation switches are handled by the conv-key-change useLayoutEffect above.
+    // We must NOT use [conversationKey] deps here because the cleanup fires AFTER
+    // the layoutEffect has already reset lastKnownScrollTopRef, causing it to
+    // overwrite the correctly saved position with 0.
     useEffect(() => () => {
         const container = scrollRef.current;
         if (!container) return;
-        saveConversationScrollPosition(conversationKey, container.scrollTop);
-    }, [conversationKey, saveConversationScrollPosition]);
+        const key = normalizeConversationKey(previousConversationKeyRef.current);
+        if (key) saveConversationScrollPosition(key, container.scrollTop);
+    }, [saveConversationScrollPosition]);
 
     // Sync baseline only when switching conversations.
     // If we sync on every count change, we suppress the Enter anchor trigger.
@@ -333,9 +369,17 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     }, [conversationKey, userMessageCount]);
 
     // Scroll automat la Enter: ancoram ultimul mesaj user la top.
-    // Trigger-ul este cresterea numarului de mesaje user. 
+    // Trigger-ul este cresterea numarului de mesaje user.
     // Daca AI-ul inca nu a inceput sa scrie, asteptam pana cand isTyping devine true.
     useEffect(() => {
+        // Conversatia s-a schimbat — sincronizam baseline fara animatie.
+        if (enterAnchorConversationKeyRef.current !== conversationKey) {
+            enterAnchorConversationKeyRef.current = conversationKey;
+            previousUserMessageCountRef.current = userMessageCount;
+            shouldAutoFollowRef.current = false;
+            return;
+        }
+
         if (!isChatMode || userMessageCount === 0) {
             previousUserMessageCountRef.current = userMessageCount;
             shouldAutoFollowRef.current = false;
@@ -399,12 +443,13 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 setTimeout(() => {
                     isProgrammaticScrollRef.current = false;
                     isAnimatingEnterRef.current = false;
+                    lastKnownScrollTopRef.current = container.scrollTop;
                     refreshScrollButton(container);
                     saveActiveConversationScrollPosition(container);
                 }, 500);
             });
         });
-    }, [messages, userMessageCount, isChatMode, isTyping, saveActiveConversationScrollPosition]);
+    }, [conversationKey, messages, userMessageCount, isChatMode, isTyping, saveActiveConversationScrollPosition]);
 
     function handleScrollToBottom() {
         const container = scrollRef.current;
@@ -437,6 +482,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 if (timedOut) {
                     isJumpingToBottomRef.current = false;
                 }
+                lastKnownScrollTopRef.current = activeContainer.scrollTop;
                 refreshScrollButton(activeContainer);
                 saveActiveConversationScrollPosition(activeContainer);
                 return;
@@ -486,6 +532,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             if (isTyping && shouldAutoFollowRef.current && !isAnimatingEnterRef.current) {
                 isProgrammaticScrollRef.current = true;
                 container.scrollTop = container.scrollHeight;
+                lastKnownScrollTopRef.current = container.scrollTop;
 
                 requestAnimationFrame(() => {
                     isProgrammaticScrollRef.current = false;
@@ -513,6 +560,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         const handleManualScroll = () => {
             if (isProgrammaticScrollRef.current) return;
 
+            lastKnownScrollTopRef.current = container.scrollTop;
             const distanceToBottom = refreshScrollButton(container);
             // Daca userul a urcat manual mai mult de 24px de bottom, oprim auto-follow-ul.
             if (distanceToBottom > AUTO_SCROLL_SNAP_DISTANCE) {
@@ -570,35 +618,50 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             },
         };
     }, [messages, activeAgentCallSelection]);
-    const activeAgentPanelMessage = useMemo(
-        () => buildAgentPanelMessage(activeAgentCallDetails),
-        [activeAgentCallDetails],
-    );
+    const activeAgentPanelMessage = useMemo(() => {
+        const toolName = String(activeAgentCallSelection?.toolName ?? '').trim();
+
+        // Use live agent streaming data keyed by toolName.
+        if (toolName && agentStreaming) {
+            const streamData = agentStreaming[toolName];
+            if (streamData) {
+                return {
+                    role: 'ai',
+                    text: String(streamData.text ?? '').trim(),
+                    thought: String(streamData.thought ?? '').trim(),
+                    parts: Array.isArray(streamData.parts) ? streamData.parts : [],
+                    steps: Array.isArray(streamData.steps) ? streamData.steps : [],
+                    isThinking: streamData.isThinking === true,
+                };
+            }
+        }
+
+        // Fall back to completed message data.
+        return buildAgentPanelMessage(activeAgentCallDetails);
+    }, [activeAgentCallDetails, agentStreaming, activeAgentCallSelection]);
     const isAgentPanelOpen = isChatMode && !!activeAgentPanelMessage && !!activeAgentCallSelection;
 
     return (
         <main
-            className={`main-content${isChatMode ? ' chat-active' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}`}
+            className={`main-content${isChatMode ? ' chat-active' : ''}${noSpacerAnim ? ' no-spacer-anim' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}`}
             id="mainContent"
         >
             <div className="chat-main-pane">
                 <div className={`landing-spacer${isChatMode ? ' collapsed' : ''}`} />
 
-                {!isChatMode && (
+                {!isChatMode && conversationKey === null && (
                     <div className="greeting-section">
                         <h1 className="greeting-text">{greeting}</h1>
                     </div>
                 )}
 
                 {isChatMode && (
-                    <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}`} id="chatMessages" ref={scrollRef}>
-                        {messages.map((msg, index) => {
-                            const enterMotionIndex = Math.min(messages.length - index - 1, 6);
+                    <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}${isConversationHidden ? ' chat-messages-hidden' : ''}`} id="chatMessages" ref={scrollRef}>
+                        {messages.map((msg) => {
                             return (
                                 <div
                                     key={msg.id}
                                     className="chat-message-row"
-                                    style={isConversationEnterVisible ? { '--enter-index': enterMotionIndex } : undefined}
                                 >
                                     <Message
                                         role={msg.role}
@@ -666,28 +729,48 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 </div>
             </div>
 
-            {isAgentPanelOpen && activeAgentPanelMessage && (
-                <aside className="agent-side-panel" aria-label="Agent activity panel">
-                    <header className="agent-side-header">
-                        <div className="agent-side-header-text">
-                            <h2 className="agent-side-title">{activeAgentCallDetails?.agentName || 'Agent'}</h2>
-                            <p className="agent-side-subtitle">
-                                {String(activeAgentCallDetails?.toolName ?? '').trim() || 'Agent call'}
-                            </p>
+            {isAgentPanelOpen && activeAgentPanelMessage && (() => {
+                const callArgs = activeAgentCallDetails?.toolPart?.functionCall?.args;
+                const callSummary = callArgs
+                    ? String(callArgs.task ?? callArgs.prompt ?? '').trim()
+                    : '';
+                return (
+                    <aside className="agent-side-panel" aria-label="Agent activity panel">
+                        <header className="agent-side-header">
+                            <div className="agent-side-header-text">
+                                <h2 className="agent-side-title">{activeAgentCallDetails?.agentName || 'Agent'}</h2>
+                                <p className="agent-side-subtitle">
+                                    {String(activeAgentCallDetails?.toolName ?? '').trim() || 'Agent call'}
+                                </p>
+                            </div>
+                            <button
+                                className="agent-side-close"
+                                onClick={() => setActiveAgentCallSelection(null)}
+                                title="Close panel"
+                                aria-label="Close agent panel"
+                                type="button"
+                            >
+                                <IconClose />
+                            </button>
+                        </header>
+                        {callSummary && (
+                            <div className="agent-side-call-summary">
+                                <p className="agent-side-call-text">{callSummary}</p>
+                            </div>
+                        )}
+                        <div className="agent-side-body">
+                            <Message
+                                role="ai"
+                                text={activeAgentPanelMessage.text}
+                                thought={activeAgentPanelMessage.thought}
+                                parts={activeAgentPanelMessage.parts}
+                                steps={activeAgentPanelMessage.steps}
+                                isThinking={activeAgentPanelMessage.isThinking}
+                            />
                         </div>
-                    </header>
-                    <div className="agent-side-body">
-                        <Message
-                            role="ai"
-                            text={activeAgentPanelMessage.text}
-                            thought={activeAgentPanelMessage.thought}
-                            parts={activeAgentPanelMessage.parts}
-                            steps={activeAgentPanelMessage.steps}
-                            isThinking={activeAgentPanelMessage.isThinking}
-                        />
-                    </div>
-                </aside>
-            )}
+                    </aside>
+                );
+            })()}
         </main>
     );
 }

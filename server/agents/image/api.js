@@ -38,10 +38,9 @@ function supportsWebSearchGrounding(modelId) {
     return false;
 }
 
-function buildImageGroundingTools(modelId) {
-    // Grounding is always enabled for image agent when model supports it.
-    const webSearchEnabled = true;
-    const imageSearchEnabled = true;
+function buildImageGroundingTools(modelId, grounding) {
+    const webSearchEnabled = grounding?.webSearch !== false;
+    const imageSearchEnabled = grounding?.imageSearch !== false;
 
     if (!webSearchEnabled && !imageSearchEnabled) {
         return undefined;
@@ -67,7 +66,7 @@ function buildImageGroundingTools(modelId) {
     return undefined;
 }
 
-export function buildImageChatConfig({ agentConfig }) {
+export function buildImageChatConfig({ agentConfig, mapThinkingLevel }) {
     const modelId = normalizeModelId(agentConfig?.model);
     const config = {
         systemInstruction: getImageAgentPrompt(),
@@ -77,7 +76,14 @@ export function buildImageChatConfig({ agentConfig }) {
         config.responseModalities = ['TEXT', 'IMAGE'];
     }
 
-    const imageGroundingTools = buildImageGroundingTools(modelId);
+    if (typeof mapThinkingLevel === 'function') {
+        config.thinkingConfig = {
+            thinkingLevel: mapThinkingLevel(agentConfig?.thinkingLevel),
+            includeThoughts: true,
+        };
+    }
+
+    const imageGroundingTools = buildImageGroundingTools(modelId, agentConfig?.grounding);
     if (imageGroundingTools && imageGroundingTools.length > 0) {
         config.tools = imageGroundingTools;
     }

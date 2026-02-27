@@ -26,11 +26,11 @@ export const IMAGE_AGENT_DEFAULT_THINKING_LEVEL = normalizeDefaultThinkingLevel(
 
 export const imageAgent = {
     id: IMAGE_AGENT_ID,
-    name: 'Image Generator',
-    description: 'Generates and edits images with Gemini image models (Nano Banana by default).',
+    name: 'Image Agent',
+    description: 'Generates and edits images with Gemini image models.',
     icon: '🖼️',
-    supportsThinking: false,
-    supportsGrounding: false,
+    supportsThinking: true,
+    supportsGrounding: true,
     toolAccess: [],
 
     createDefaultConfig() {
@@ -68,10 +68,16 @@ export const imageAgent = {
             supportsGrounding: imageAgent.supportsGrounding,
             defaultModel: IMAGE_AGENT_DEFAULT_MODEL,
             defaultThinkingLevel: IMAGE_AGENT_DEFAULT_THINKING_LEVEL,
+            defaultGrounding: {
+                webSearch: true,
+                imageSearch: true,
+            },
         };
     },
 
-    buildChatConfig({ agentConfig }) {
-        return buildImageChatConfig({ agentConfig });
+    buildChatConfig({ agentConfig, mapThinkingLevel }) {
+        return buildImageChatConfig({ agentConfig, mapThinkingLevel });
     },
 };
+
+export const agent = imageAgent;

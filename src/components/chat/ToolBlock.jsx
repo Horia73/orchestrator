@@ -381,7 +381,7 @@ export function ToolBlock({
                     )}
                     {canToggleAgentPanel && (
                         <div className={`tool-chevron ${isAgentCallOpen ? 'open' : ''}`}>
-                            {isAgentCallOpen ? '>' : '▼'}
+                            {isAgentCallOpen ? '▼' : '▶'}
                         </div>
                     )}
                     {shouldShowCommandMeta && (

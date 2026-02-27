@@ -207,9 +207,14 @@ function GroundingSelector({ grounding, onChange }) {
 
 /* ─── Price Indicator ────────────────────────────────────────────────── */
 
-function PriceIndicator({ modelId, modelsList }) {
+function PriceIndicator({ modelId, modelsList, modelsLoading }) {
     const model = modelsList.find((m) => m.id === modelId);
-    if (!model) return null;
+    if (!model) {
+        // Reserve space while models are still loading to prevent card resize.
+        return modelsLoading
+            ? <div className="price-indicator price-indicator--loading" />
+            : null;
+    }
 
     const hasInputPricing = Number.isFinite(model.inputPrice200k);
     const hasOutputPricing = (
@@ -329,9 +334,8 @@ function isCodingAgent(agentId) {
 
 /* ─── Agent Card ─────────────────────────────────────────────────────── */
 
-function AgentCard({ agent, agentState, onChange, modelsList }) {
+function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
     const supportsThinking = agent.supportsThinking !== false;
-    const codingAgent = isCodingAgent(agent?.id);
 
     const handleModelChange = useCallback(
         (modelId) => onChange({ ...agentState, model: modelId }),
@@ -343,20 +347,14 @@ function AgentCard({ agent, agentState, onChange, modelsList }) {
         [agentState, onChange],
     );
 
-    const handleGroundingChange = useCallback(
-        (grounding) => onChange({ ...agentState, grounding }),
-        [agentState, onChange],
-    );
-
     return (
-        <div className={`agent-card${codingAgent ? ' agent-card-coding' : ''}`}>
+        <div className="agent-card">
             <div className="agent-card-header">
                 <span className="agent-icon">{agent.icon}</span>
                 <div className="agent-header-text">
                     <h2 className="agent-name">{agent.name}</h2>
                     <p className="agent-desc">{agent.description}</p>
                 </div>
-                {codingAgent && <span className="agent-special-badge">Coding</span>}
             </div>
 
             <div className="agent-section">
@@ -379,20 +377,11 @@ function AgentCard({ agent, agentState, onChange, modelsList }) {
                 </div>
             )}
 
-            {agent.supportsGrounding && (
-                <div className="agent-section">
-                    <label className="agent-section-label">Grounding</label>
-                    <GroundingSelector
-                        grounding={agentState.grounding}
-                        onChange={handleGroundingChange}
-                    />
-                </div>
-            )}
-
             <div className="agent-section">
                 <PriceIndicator
                     modelId={agentState.model}
                     modelsList={modelsList}
+                    modelsLoading={modelsLoading}
                 />
             </div>
         </div>
@@ -428,6 +417,7 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
 
     const [activeTab, setActiveTab] = useState(() => getInitialActiveTab());
     const [modelsList, setModelsList] = useState(() => buildMergedModels([]));
+    const [modelsLoading, setModelsLoading] = useState(true);
 
     useEffect(() => {
         fetchRemoteModels()
@@ -436,7 +426,8 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
             })
             .catch((err) => {
                 console.error("Failed to load generic models", err);
-            });
+            })
+            .finally(() => setModelsLoading(false));
     }, []);
 
     useEffect(() => {
@@ -503,6 +494,7 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
                                         agent={agent}
                                         agentState={agentStates[agent.id] ?? buildAgentStates([agent], savedSettings)[agent.id]}
                                         modelsList={modelsList}
+                                        modelsLoading={modelsLoading}
                                         onChange={(state) => handleAgentChange(agent.id, state)}
                                     />
                                 ))

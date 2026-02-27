@@ -1,8 +1,22 @@
-import { GoogleGenAI } from '@google/genai';
+import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import { GEMINI_API_KEY } from '../../core/config.js';
+import { getExecutionContext } from '../../core/context.js';
+import { broadcastEvent } from '../../core/events.js';
 import { getAgentConfig } from '../../storage/settings.js';
 import { buildImageChatConfig } from './api.js';
 import { IMAGE_AGENT_ID } from './index.js';
+
+const THINKING_LEVEL_MAP = {
+    MINIMAL: ThinkingLevel.MINIMAL,
+    LOW: ThinkingLevel.LOW,
+    MEDIUM: ThinkingLevel.MEDIUM,
+    HIGH: ThinkingLevel.HIGH,
+};
+
+function mapThinkingLevel(level) {
+    const normalized = String(level ?? '').trim().toUpperCase();
+    return THINKING_LEVEL_MAP[normalized] ?? ThinkingLevel.MINIMAL;
+}
 
 const VALID_ASPECT_RATIOS = new Set([
     '1:1',
@@ -179,7 +193,7 @@ export async function generateImageWithAgent({
         ...defaultAgentConfig,
         model: resolvedModel,
     };
-    const baseConfig = buildImageChatConfig({ agentConfig });
+    const baseConfig = buildImageChatConfig({ agentConfig, mapThinkingLevel });
     const requestConfig = {
         ...(baseConfig ?? {}),
     };
@@ -202,38 +216,118 @@ export async function generateImageWithAgent({
         requestPayload.config = requestConfig;
     }
 
-    const response = await getClient().models.generateContent(requestPayload);
-    const responseParts = getResponseParts(response);
+    const contextData = getExecutionContext();
 
-    const textParts = [];
-    const thoughtParts = [];
-    const mediaParts = [];
-    for (let index = 0; index < responseParts.length; index += 1) {
-        const part = responseParts[index];
-        if (part?.thought === true) {
-            if (typeof part?.text === 'string' && part.text.trim()) {
-                thoughtParts.push(part.text);
+    if (contextData?.chatId && contextData?.messageId) {
+        broadcastEvent('agent.streaming', {
+            chatId: contextData.chatId,
+            messageId: contextData.messageId,
+            toolCallId: contextData.toolCallId,
+            toolName: contextData.toolName,
+            agentId: IMAGE_AGENT_ID,
+            payload: {
+                text: '',
+                thought: '',
+                parts: [],
+                steps: [],
+                isThinking: true,
+                clientId: contextData?.clientId,
+            },
+        });
+    }
+
+    let accumulatedThought = '';
+    let accumulatedText = '';
+    const accumulatedMediaParts = [];
+    let lastChunk = null;
+
+    try {
+        const stream = await getClient().models.generateContentStream(requestPayload);
+
+        for await (const chunk of stream) {
+            lastChunk = chunk;
+            const chunkParts = chunk?.candidates?.[0]?.content?.parts ?? [];
+
+            for (let index = 0; index < chunkParts.length; index += 1) {
+                const part = chunkParts[index];
+                if (part?.thought === true && typeof part?.text === 'string' && part.text) {
+                    accumulatedThought += part.text;
+                } else if (typeof part?.text === 'string' && part.text) {
+                    accumulatedText += part.text;
+                } else {
+                    const mediaPart = normalizeInlineDataPart(part, accumulatedMediaParts.length);
+                    if (mediaPart) {
+                        accumulatedMediaParts.push(mediaPart);
+                    }
+                }
             }
-            continue;
-        }
 
-        if (typeof part?.text === 'string' && part.text.trim()) {
-            textParts.push(part.text);
+            if (contextData?.chatId && contextData?.messageId && accumulatedThought) {
+                broadcastEvent('agent.streaming', {
+                    chatId: contextData.chatId,
+                    messageId: contextData.messageId,
+                    toolCallId: contextData.toolCallId,
+                    toolName: contextData.toolName,
+                    agentId: IMAGE_AGENT_ID,
+                    payload: {
+                        text: accumulatedText,
+                        thought: accumulatedThought,
+                        parts: [],
+                        steps: [],
+                        isThinking: true,
+                        clientId: contextData?.clientId,
+                    },
+                });
+            }
         }
+    } catch {
+        // Fall back to non-streaming for models that don't support it.
+        const response = await getClient().models.generateContent(requestPayload);
+        lastChunk = response;
+        const responseParts = getResponseParts(response);
 
-        const mediaPart = normalizeInlineDataPart(part, index);
-        if (mediaPart) {
-            mediaParts.push(mediaPart);
+        for (let index = 0; index < responseParts.length; index += 1) {
+            const part = responseParts[index];
+            if (part?.thought === true && typeof part?.text === 'string' && part.text.trim()) {
+                accumulatedThought += part.text;
+            } else if (typeof part?.text === 'string' && part.text.trim()) {
+                accumulatedText += part.text;
+            } else {
+                const mediaPart = normalizeInlineDataPart(part, accumulatedMediaParts.length);
+                if (mediaPart) {
+                    accumulatedMediaParts.push(mediaPart);
+                }
+            }
         }
     }
 
-    return {
+    const result = {
         model: resolvedModel,
-        text: textParts.join('').trim(),
-        thought: thoughtParts.join('').trim(),
-        mediaParts,
-        imageCount: mediaParts.length,
-        grounding: extractGroundingSummary(response),
-        usageMetadata: extractUsageMetadata(response),
+        text: accumulatedText.trim(),
+        thought: accumulatedThought.trim(),
+        mediaParts: accumulatedMediaParts,
+        imageCount: accumulatedMediaParts.length,
+        grounding: extractGroundingSummary(lastChunk),
+        usageMetadata: extractUsageMetadata(lastChunk),
     };
+
+    if (contextData?.chatId && contextData?.messageId) {
+        broadcastEvent('agent.streaming', {
+            chatId: contextData.chatId,
+            messageId: contextData.messageId,
+            toolCallId: contextData.toolCallId,
+            toolName: contextData.toolName,
+            agentId: IMAGE_AGENT_ID,
+            payload: {
+                text: result.text,
+                thought: result.thought,
+                parts: [],
+                steps: [],
+                isThinking: false,
+                clientId: contextData?.clientId,
+            },
+        });
+    }
+
+    return result;
 }

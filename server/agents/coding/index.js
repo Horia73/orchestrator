@@ -1,4 +1,4 @@
-import { ALL_SHARED_TOOL_NAMES } from '../../tools/catalog.js';
+import { ALL_SHARED_TOOL_NAMES } from '../../tools/index.js';
 import { buildCodingChatConfig } from './api.js';
 
 export const CODING_AGENT_ID = 'coding';
@@ -32,7 +32,7 @@ export const codingAgent = {
     icon: '💻',
     supportsThinking: true,
     supportsGrounding: false,
-    toolAccess: ALL_SHARED_TOOL_NAMES.filter((name) => name !== 'call_coding_agent'),
+    get toolAccess() { return ALL_SHARED_TOOL_NAMES.filter((name) => name !== 'call_coding_agent'); },
 
     createDefaultConfig() {
         return {
@@ -75,3 +75,5 @@ export const codingAgent = {
         });
     },
 };
+
+export const agent = codingAgent;

@@ -2,13 +2,13 @@ import express from 'express';
 import http from 'node:http';
 import { randomUUID } from 'node:crypto';
 import { API_PORT, GEMINI_CONTEXT_MESSAGES } from './core/config.js';
-import { listClientAgentDefinitions } from './agents/index.js';
+import { listClientAgentDefinitions, DEFAULT_AGENT_ID } from './agents/index.js';
 import { CODING_AGENT_ID } from './agents/coding/index.js';
 import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
 import { generateAssistantReplyStream, listAvailableModels } from './services/geminiService.js';
 import { openEventsStream, broadcastEvent } from './core/events.js';
-import { getCommandStatusSnapshot } from './tools/runtime.js';
+import { getCommandStatusSnapshot } from './tools/index.js';
 import { estimateUsageCost } from './pricing/usage.js';
 import { appendSystemLog, clearLogs, getLogsSnapshot, initLogStorage } from './storage/logs.js';
 import { appendUsageRecord, clearUsageRecords, getUsageSnapshotByRange, initUsageStorage } from './storage/usage.js';
@@ -457,7 +457,7 @@ app.get('/api/events', (req, res) => {
 app.get('/api/agents', (_req, res) => {
     try {
         const agents = listClientAgentDefinitions();
-        res.json({ agents });
+        res.json({ agents, defaultAgentId: DEFAULT_AGENT_ID });
     } catch {
         res.status(500).json({ error: 'Failed to list agents.' });
     }

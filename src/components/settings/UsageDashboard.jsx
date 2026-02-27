@@ -127,7 +127,7 @@ function requestMatchesAgentFilter(request, agentFilter) {
     return requestAgentId === agentFilter;
 }
 
-function buildAgentFilterOptions(agentDefinitions) {
+function buildAgentFilterOptions(agentDefinitions, hasUnassigned) {
     const optionsById = new Map();
     for (const agent of agentDefinitions ?? []) {
         const agentId = normalizeAgentId(agent?.id);
@@ -141,12 +141,18 @@ function buildAgentFilterOptions(agentDefinitions) {
         });
     }
 
-    const sortedAgents = [...optionsById.values()].sort((a, b) => a.label.localeCompare(b.label));
-    return [
-        { id: 'all', label: 'All agents', isCoding: false },
-        ...sortedAgents,
-        { id: 'system', label: 'Unassigned', isCoding: false },
-    ];
+    // Orchestrator first, then other agents alphabetically
+    const orchestrator = optionsById.get('orchestrator');
+    const others = [...optionsById.values()]
+        .filter((o) => o.id !== 'orchestrator')
+        .sort((a, b) => a.label.localeCompare(b.label));
+    const agentOptions = orchestrator ? [orchestrator, ...others] : others;
+
+    const result = [...agentOptions, { id: 'all', label: 'All agents', isCoding: false }];
+    if (hasUnassigned) {
+        result.push({ id: 'system', label: 'Unassigned', isCoding: false });
+    }
+    return result;
 }
 
 function buildSummary(requests) {
@@ -302,9 +308,13 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
     }, [requests]);
 
     const summary = useMemo(() => buildSummary(requests), [requests]);
+    const hasUnassigned = useMemo(
+        () => requests.some((r) => !normalizeAgentId(r?.agentId)),
+        [requests],
+    );
     const agentFilterOptions = useMemo(
-        () => buildAgentFilterOptions(agentDefinitions),
-        [agentDefinitions],
+        () => buildAgentFilterOptions(agentDefinitions, hasUnassigned),
+        [agentDefinitions, hasUnassigned],
     );
 
     useEffect(() => {

@@ -1,7 +1,7 @@
 const AGENT_TOOL_METADATA = Object.freeze({
     generate_image: Object.freeze({
         agentId: 'image',
-        agentName: 'Image Agent',
+        agentName: 'Image Agent',  // matches imageAgent.name
     }),
     call_coding_agent: Object.freeze({
         agentId: 'coding',
@@ -307,10 +307,7 @@ export function buildAgentPanelMessage(agentCallDetails) {
     const respParts = Array.isArray(resp?.parts) ? resp.parts : [];
     const respSteps = Array.isArray(resp?.steps) ? resp.steps : [];
 
-    const mediaParts = collectImageMediaParts(contextParts);
-    const panelParts = respParts.length > 0
-        ? mergePartsWithImageMedia(respParts, mediaParts)
-        : [...mediaParts];
+    const panelParts = [...respParts];
 
     return {
         role: 'ai',

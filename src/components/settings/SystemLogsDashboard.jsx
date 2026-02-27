@@ -113,11 +113,17 @@ function buildAgentFilterOptions(agentDefinitions) {
         });
     }
 
-    const sortedAgents = [...optionsById.values()].sort((a, b) => a.label.localeCompare(b.label));
+    // Orchestrator first, then other agents alphabetically, all at the end
+    const orchestrator = optionsById.get('orchestrator');
+    const others = [...optionsById.values()]
+        .filter((o) => o.id !== 'orchestrator')
+        .sort((a, b) => a.label.localeCompare(b.label));
+    const agentOptions = orchestrator ? [orchestrator, ...others] : others;
+
     return [
-        { id: 'all', label: 'All agents + system', isCoding: false },
-        { id: 'system', label: 'System only', isCoding: false },
-        ...sortedAgents,
+        { id: 'system', label: 'System', isCoding: false },
+        ...agentOptions,
+        { id: 'all', label: 'All', isCoding: false },
     ];
 }
 
@@ -291,13 +297,13 @@ export function SystemLogsDashboard({ agentDefinitions = [] }) {
 
     const selectedAgentLabel = useMemo(() => {
         if (agentFilter === 'all') {
-            return 'all agents + system';
+            return 'all';
         }
         if (agentFilter === 'system') {
-            return 'system only';
+            return 'system';
         }
 
-        return `agent ${agentNameMap.get(agentFilter) ?? agentFilter}`;
+        return agentNameMap.get(agentFilter) ?? agentFilter;
     }, [agentFilter, agentNameMap]);
 
     const formatLogAgent = useCallback((log) => {

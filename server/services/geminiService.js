@@ -9,13 +9,13 @@ import {
     getAgentToolAccess,
     normalizeAgentId,
 } from '../agents/index.js';
-import { buildFunctionTools } from '../tools/catalog.js';
 import { getAgentConfig } from '../storage/settings.js';
 import {
+    buildFunctionTools,
     extractToolMediaParts,
     sanitizeToolResultForModel,
     toolRegistry,
-} from '../tools/runtime.js';
+} from '../tools/index.js';
 import { executionContext } from '../core/context.js';
 
 const THINKING_LEVEL_MAP = {

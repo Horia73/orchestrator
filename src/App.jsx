@@ -171,7 +171,8 @@ export default function App() {
             messages={chat.messages}
             conversationKey={chat.activeChatId}
             isTyping={chat.isTyping}
-        isChatMode={chat.isChatMode}
+            isChatMode={chat.isChatMode}
+            agentStreaming={chat.agentStreaming}
       >
         <ChatInput
           ref={chatInputRef}

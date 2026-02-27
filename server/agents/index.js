@@ -1,20 +1,24 @@
-import { imageAgent } from './image/index.js';
-import { codingAgent } from './coding/index.js';
-import { ORCHESTRATOR_AGENT_ID, orchestratorAgent } from './orchestrator/index.js';
+import { agent as orchestratorAgent } from './orchestrator/index.js';
+import { agent as codingAgent } from './coding/index.js';
+import { agent as imageAgent } from './image/index.js';
 
 const VALID_THINKING_LEVELS = new Set(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
 
-const AGENT_DEFINITIONS = [
-    orchestratorAgent,
-    codingAgent,
-    imageAgent,
-];
+const loadedAgents = [orchestratorAgent, codingAgent, imageAgent].filter(Boolean);
+
+// Default agent first, then alphabetically by ID
+const AGENT_DEFINITIONS = loadedAgents.sort((a, b) => {
+    if (a.isDefault && !b.isDefault) return -1;
+    if (!a.isDefault && b.isDefault) return 1;
+    return a.id.localeCompare(b.id);
+});
 
 const AGENT_DEFINITION_BY_ID = new Map(
-    AGENT_DEFINITIONS.map((agent) => [agent.id, agent]),
+    AGENT_DEFINITIONS.map((agentDef) => [agentDef.id, agentDef]),
 );
 
-export const DEFAULT_AGENT_ID = ORCHESTRATOR_AGENT_ID;
+const DEFAULT_AGENT = AGENT_DEFINITIONS.find((a) => a.isDefault) ?? AGENT_DEFINITIONS[0];
+export const DEFAULT_AGENT_ID = DEFAULT_AGENT?.id ?? 'orchestrator';
 
 function normalizeModel(value, fallback) {
     const normalized = String(value ?? '').trim();
@@ -73,8 +77,8 @@ export function createDefaultSettings() {
     const helpers = getNormalizeHelpers();
     const defaults = {};
 
-    for (const agent of AGENT_DEFINITIONS) {
-        defaults[agent.id] = agent.createDefaultConfig(helpers);
+    for (const agentDef of AGENT_DEFINITIONS) {
+        defaults[agentDef.id] = agentDef.createDefaultConfig(helpers);
     }
 
     return defaults;
@@ -85,18 +89,18 @@ export function sanitizeAgentSettings(rawSettings) {
     const helpers = getNormalizeHelpers();
     const normalized = {};
 
-    for (const agent of AGENT_DEFINITIONS) {
-        normalized[agent.id] = agent.normalizeConfig(source[agent.id], helpers);
+    for (const agentDef of AGENT_DEFINITIONS) {
+        normalized[agentDef.id] = agentDef.normalizeConfig(source[agentDef.id], helpers);
     }
 
     return normalized;
 }
 
 export function listClientAgentDefinitions() {
-    return AGENT_DEFINITIONS.map((agent) => agent.toClientDefinition());
+    return AGENT_DEFINITIONS.map((agentDef) => agentDef.toClientDefinition());
 }
 
 export function getAgentToolAccess(agentId = DEFAULT_AGENT_ID) {
-    const agent = getAgentDefinition(agentId);
-    return Array.isArray(agent?.toolAccess) ? [...agent.toolAccess] : [];
+    const agentDef = getAgentDefinition(agentId);
+    return Array.isArray(agentDef?.toolAccess) ? [...agentDef.toolAccess] : [];
 }
