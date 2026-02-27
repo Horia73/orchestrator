@@ -3,6 +3,11 @@ import './ChatArea.css';
 import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
 import { IconArrowDown } from '../shared/icons.jsx';
+import {
+    buildAgentPanelMessage,
+    findAgentToolCallInMessages,
+    findLatestAgentToolCallInMessages,
+} from './agentCallUtils.js';
 
 const USER_TOP_OFFSET = 24;
 const AI_BOTTOM_GAP = 36;
@@ -77,6 +82,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const previousRenderChatModeRef = useRef(isChatMode);
     const previousChatModeRef = useRef(isChatMode);
     const previousConversationKeyRef = useRef(conversationKey);
+    const baselineConversationKeyRef = useRef(conversationKey);
     const pendingScrollRestoreConversationRef = useRef(null);
     const pendingConversationEnterAnimationRef = useRef(null);
     const scrollPositionsRef = useRef(loadScrollPositions());
@@ -87,6 +93,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
     const [exitSnapshotMessages, setExitSnapshotMessages] = useState([]);
     const [isConversationEnterVisible, setIsConversationEnterVisible] = useState(false);
+    const [activeAgentCallSelection, setActiveAgentCallSelection] = useState(null);
     const userMessageCount = useMemo(
         () => messages.reduce(
             (count, message) => (message.role === 'user' ? count + 1 : count),
@@ -115,6 +122,28 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         if (!container) return;
         saveConversationScrollPosition(conversationKey, container.scrollTop);
     }, [conversationKey, saveConversationScrollPosition]);
+
+    const handleAgentCallToggle = useCallback((payload) => {
+        const callId = String(payload?.callId ?? '').trim();
+        if (!callId) {
+            return;
+        }
+
+        setActiveAgentCallSelection((previous) => {
+            if (previous?.callId === callId) {
+                return null;
+            }
+
+            return {
+                callId,
+                agentId: String(payload?.agentId ?? '').trim(),
+                agentName: String(payload?.agentName ?? '').trim() || 'Agent',
+                toolName: String(payload?.toolName ?? '').trim(),
+                sourceContext: payload?.sourceContext ?? null,
+                toolPart: payload?.toolPart ?? null,
+            };
+        });
+    }, []);
 
     function refreshScrollButton(container) {
         const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -203,6 +232,9 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 ? conversationKey
                 : null;
             shouldAutoFollowRef.current = false;
+            if (!isTransitioningDraftToSaved) {
+                setActiveAgentCallSelection(null);
+            }
 
             if (pendingConversationEnterAnimationRef.current === conversationKey) {
                 if (enterFadeTimeoutRef.current) clearTimeout(enterFadeTimeoutRef.current);
@@ -289,35 +321,47 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         saveConversationScrollPosition(conversationKey, container.scrollTop);
     }, [conversationKey, saveConversationScrollPosition]);
 
-    // Sync baseline for "new user message" detection when loading/switching chats.
-    // This prevents auto-anchoring old conversations as if Enter was just pressed.
+    // Sync baseline only when switching conversations.
+    // If we sync on every count change, we suppress the Enter anchor trigger.
     useEffect(() => {
+        if (baselineConversationKeyRef.current === conversationKey) {
+            return;
+        }
+
+        baselineConversationKeyRef.current = conversationKey;
         previousUserMessageCountRef.current = userMessageCount;
     }, [conversationKey, userMessageCount]);
 
-    // Scroll automat doar la Enter: ancoram ultimul mesaj user aproape de top.
-    // Trigger-ul este cresterea numarului de mesaje user (nu "ultimul mesaj e user"),
-    // pentru a evita race-ul in care placeholder-ul AI apare imediat.
+    // Scroll automat la Enter: ancoram ultimul mesaj user la top.
+    // Trigger-ul este cresterea numarului de mesaje user. 
+    // Daca AI-ul inca nu a inceput sa scrie, asteptam pana cand isTyping devine true.
     useEffect(() => {
-        if (!isChatMode) {
-            previousUserMessageCountRef.current = 0;
-            shouldAutoFollowRef.current = false;
-            return;
-        }
-
-        if (userMessageCount === 0) {
-            previousUserMessageCountRef.current = 0;
-            shouldAutoFollowRef.current = false;
-            return;
-        }
-
-        if (userMessageCount < previousUserMessageCountRef.current) {
+        if (!isChatMode || userMessageCount === 0) {
             previousUserMessageCountRef.current = userMessageCount;
+            shouldAutoFollowRef.current = false;
+            return;
         }
 
         const hasNewUserMessage = userMessageCount > previousUserMessageCountRef.current;
+
+        // Daca avem mesaj nou dar AI inca nu raspunde, asteptam urmatorul render/update.
+        if (hasNewUserMessage && !isTyping) {
+            return;
+        }
+
+        // Daca numarul de mesaje a scazut (ex: stergere), actualizam fara sa ancoram.
+        if (userMessageCount < previousUserMessageCountRef.current) {
+            previousUserMessageCountRef.current = userMessageCount;
+            return;
+        }
+
+        // Daca nu e un mesaj nou care sa necesite ancora, iesim.
+        if (!hasNewUserMessage) {
+            return;
+        }
+
+        // Inregistram faptul ca am procesat acest mesaj.
         previousUserMessageCountRef.current = userMessageCount;
-        if (!hasNewUserMessage) return;
 
         shouldAutoFollowRef.current = false;
         isProgrammaticScrollRef.current = true;
@@ -341,23 +385,26 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 const contentBottom = Math.max(userBottom, aiBottom);
                 const containerHeight = container.clientHeight;
                 const contentBlockHeight = Math.max(0, contentBottom - userTop);
-                const requiredSpacer = containerHeight - USER_TOP_OFFSET - contentBlockHeight - AI_BOTTOM_GAP;
-                spacer.style.height = `${Math.max(0, requiredSpacer)}px`;
+
+                // Setam spacer-ul initial pentru a permite scroll-ul pana la pozitia dorita.
+                const requiredSpacer = Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - AI_BOTTOM_GAP);
+                spacer.style.height = `${requiredSpacer}px`;
 
                 container.scrollTo({
                     top: Math.max(0, userTop - USER_TOP_OFFSET),
                     behavior: 'smooth',
                 });
 
+                // Eliberam starea dupa terminarea animatiei.
                 setTimeout(() => {
                     isProgrammaticScrollRef.current = false;
                     isAnimatingEnterRef.current = false;
                     refreshScrollButton(container);
                     saveActiveConversationScrollPosition(container);
-                }, 600);
+                }, 500);
             });
         });
-    }, [messages, userMessageCount, isChatMode, saveActiveConversationScrollPosition]);
+    }, [messages, userMessageCount, isChatMode, isTyping, saveActiveConversationScrollPosition]);
 
     function handleScrollToBottom() {
         const container = scrollRef.current;
@@ -401,14 +448,13 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         requestAnimationFrame(releaseProgrammaticMode);
     }
 
-    // Spacer dinamic + follow in timpul stream-ului doar daca user a mers explicit la bottom.
+    // Spacer dinamic + follow in timpul stream-ului.
     useEffect(() => {
         if (!isChatMode) return;
         const container = scrollRef.current;
         const userEl = lastUserMsgRef.current;
         const aiEl = lastAiMsgRef.current;
         const spacer = spacerRef.current;
-        const shouldUseScrollRunway = isTyping || isAnimatingEnterRef.current || shouldAutoFollowRef.current;
 
         if (!container || !userEl || !spacer) return;
 
@@ -419,14 +465,24 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             const containerHeight = container.clientHeight;
             const contentBlockHeight = Math.max(0, contentBottom - userTop);
 
-            const requiredSpacer = shouldUseScrollRunway
+            // Pastram runway-ul daca:
+            // 1. AI-ul scrie (isTyping).
+            // 2. Suntem in curs de ancorare (isAnimatingEnter).
+            // 3. Suntem in modul "Anchor at Top" (nu facem auto-follow la bottom) 
+            //    si ne uitam la ultimul mesaj (mesajul e scurt, avem nevoie de spacer).
+            const isAnchoredMode = !shouldAutoFollowRef.current;
+            const isViewingLastTurn = container.scrollTop > 0 || contentBlockHeight < containerHeight;
+
+            const shouldUseRunway = isTyping || isAnimatingEnterRef.current || shouldAutoFollowRef.current || (isAnchoredMode && isViewingLastTurn);
+
+            const requiredSpacer = shouldUseRunway
                 ? Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - AI_BOTTOM_GAP)
                 : 0;
+
+            // Evitam flickers: daca noul spacer e mult mai mic dar nu suntem la bottom, 
+            // incercam sa nu il eliminam brutal daca suntem inca ancorati.
             spacer.style.height = `${requiredSpacer}px`;
 
-            // Keep bottom-follow only while the assistant is actively streaming.
-            // During user interactions (e.g. expanding tool details), avoid forcing
-            // scroll-to-bottom, otherwise expanded blocks appear to grow upward.
             if (isTyping && shouldAutoFollowRef.current && !isAnimatingEnterRef.current) {
                 isProgrammaticScrollRef.current = true;
                 container.scrollTop = container.scrollHeight;
@@ -449,7 +505,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         return () => observer.disconnect();
     }, [conversationKey, isChatMode, isTyping, messages.length, userMessageCount]);
 
-    // Cand user da scroll manual, actualizam follow-ul si vizibilitatea butonului.
+    // Cand user da scroll manual, actualizam follow-ul.
     useEffect(() => {
         const container = scrollRef.current;
         if (!isChatMode || !container) return;
@@ -458,13 +514,13 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             if (isProgrammaticScrollRef.current) return;
 
             const distanceToBottom = refreshScrollButton(container);
+            // Daca userul a urcat manual mai mult de 24px de bottom, oprim auto-follow-ul.
             if (distanceToBottom > AUTO_SCROLL_SNAP_DISTANCE) {
                 shouldAutoFollowRef.current = false;
             }
             saveActiveConversationScrollPosition(container);
         };
 
-        handleManualScroll();
         container.addEventListener('scroll', handleManualScroll, { passive: true });
         return () => container.removeEventListener('scroll', handleManualScroll);
     }, [isChatMode, conversationKey, saveActiveConversationScrollPosition]);
@@ -473,89 +529,165 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const lastAiMsgId = [...messages].reverse().find((m) => m.role === 'ai')?.id;
     const lastMessage = messages[messages.length - 1];
     const shouldRenderTypingIndicator = isTyping && (!lastMessage || lastMessage.role !== 'ai');
+    const activeAgentCallDetails = useMemo(() => {
+        const callId = String(activeAgentCallSelection?.callId ?? '').trim();
+        if (!callId) {
+            return null;
+        }
+
+        const resolvedFromMessages = findAgentToolCallInMessages(messages, callId);
+        if (resolvedFromMessages) {
+            return resolvedFromMessages;
+        }
+
+        const resolvedFromToolName = findLatestAgentToolCallInMessages(
+            messages,
+            activeAgentCallSelection?.toolName,
+        );
+        if (resolvedFromToolName) {
+            return resolvedFromToolName;
+        }
+
+        if (!activeAgentCallSelection) {
+            return null;
+        }
+
+        return {
+            callId,
+            agentId: activeAgentCallSelection.agentId,
+            agentName: activeAgentCallSelection.agentName,
+            toolName: activeAgentCallSelection.toolName,
+            sourceMessageId: '',
+            context: activeAgentCallSelection.sourceContext ?? {
+                text: '',
+                thought: '',
+                parts: [],
+            },
+            toolPart: activeAgentCallSelection.toolPart ?? {
+                functionCall: null,
+                functionResponse: null,
+                isExecuting: false,
+            },
+        };
+    }, [messages, activeAgentCallSelection]);
+    const activeAgentPanelMessage = useMemo(
+        () => buildAgentPanelMessage(activeAgentCallDetails),
+        [activeAgentCallDetails],
+    );
+    const isAgentPanelOpen = isChatMode && !!activeAgentPanelMessage && !!activeAgentCallSelection;
 
     return (
-        <main className={`main-content${isChatMode ? ' chat-active' : ''}`} id="mainContent">
-            <div className={`landing-spacer${isChatMode ? ' collapsed' : ''}`} />
+        <main
+            className={`main-content${isChatMode ? ' chat-active' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}`}
+            id="mainContent"
+        >
+            <div className="chat-main-pane">
+                <div className={`landing-spacer${isChatMode ? ' collapsed' : ''}`} />
 
-            {!isChatMode && (
-                <div className="greeting-section">
-                    <h1 className="greeting-text">{greeting}</h1>
+                {!isChatMode && (
+                    <div className="greeting-section">
+                        <h1 className="greeting-text">{greeting}</h1>
+                    </div>
+                )}
+
+                {isChatMode && (
+                    <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}`} id="chatMessages" ref={scrollRef}>
+                        {messages.map((msg, index) => {
+                            const enterMotionIndex = Math.min(messages.length - index - 1, 6);
+                            return (
+                                <div
+                                    key={msg.id}
+                                    className="chat-message-row"
+                                    style={isConversationEnterVisible ? { '--enter-index': enterMotionIndex } : undefined}
+                                >
+                                    <Message
+                                        role={msg.role}
+                                        text={msg.text}
+                                        thought={msg.thought}
+                                        parts={msg.parts}
+                                        steps={msg.steps}
+                                        isThinking={
+                                            isTyping
+                                            && msg.id === lastAiMsgId
+                                            && msg.role === 'ai'
+                                            && String(msg.text ?? '').trim().length === 0
+                                        }
+                                        onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
+                                        activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
+                                        ref={
+                                            msg.id === lastUserMsgId
+                                                ? lastUserMsgRef
+                                                : msg.id === lastAiMsgId
+                                                    ? lastAiMsgRef
+                                                    : null
+                                        }
+                                    />
+                                </div>
+                            );
+                        })}
+                        {shouldRenderTypingIndicator && <TypingIndicator />}
+                        <div ref={spacerRef} style={{ flexShrink: 0, width: '100%' }} />
+                    </div>
+                )}
+
+                {!isChatMode && exitSnapshotMessages.length > 0 && (
+                    <div
+                        className="chat-messages chat-messages-exit"
+                        ref={exitSnapshotRef}
+                        aria-hidden="true"
+                    >
+                        {exitSnapshotMessages.map((msg) => (
+                            <Message
+                                key={`exit-${msg.id}`}
+                                role={msg.role}
+                                text={msg.text}
+                                thought={msg.thought}
+                                parts={msg.parts}
+                                steps={msg.steps}
+                            />
+                        ))}
+                    </div>
+                )}
+
+                {isChatMode && showScrollToBottom && (
+                    <button
+                        className="scroll-to-bottom-btn"
+                        type="button"
+                        onClick={handleScrollToBottom}
+                        title="Scroll to bottom"
+                        aria-label="Scroll to bottom"
+                    >
+                        <IconArrowDown />
+                    </button>
+                )}
+
+                <div className="chat-input-slot" ref={inputSlotRef}>
+                    {children}
                 </div>
-            )}
-
-            {isChatMode && (
-                <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}`} id="chatMessages" ref={scrollRef}>
-                    {messages.map((msg, index) => {
-                        const enterMotionIndex = Math.min(messages.length - index - 1, 6);
-                        return (
-                            <div
-                                key={msg.id}
-                                className="chat-message-row"
-                                style={isConversationEnterVisible ? { '--enter-index': enterMotionIndex } : undefined}
-                            >
-                                <Message
-                                    role={msg.role}
-                                    text={msg.text}
-                                    thought={msg.thought}
-                                    parts={msg.parts}
-                                    steps={msg.steps}
-                                    isThinking={
-                                        isTyping
-                                        && msg.id === lastAiMsgId
-                                        && msg.role === 'ai'
-                                        && String(msg.text ?? '').trim().length === 0
-                                    }
-                                    ref={
-                                        msg.id === lastUserMsgId
-                                            ? lastUserMsgRef
-                                            : msg.id === lastAiMsgId
-                                                ? lastAiMsgRef
-                                                : null
-                                    }
-                                />
-                            </div>
-                        );
-                    })}
-                    {shouldRenderTypingIndicator && <TypingIndicator />}
-                    <div ref={spacerRef} style={{ flexShrink: 0, width: '100%' }} />
-                </div>
-            )}
-
-            {!isChatMode && exitSnapshotMessages.length > 0 && (
-                <div
-                    className="chat-messages chat-messages-exit"
-                    ref={exitSnapshotRef}
-                    aria-hidden="true"
-                >
-                    {exitSnapshotMessages.map((msg) => (
-                        <Message
-                            key={`exit-${msg.id}`}
-                            role={msg.role}
-                            text={msg.text}
-                            thought={msg.thought}
-                            parts={msg.parts}
-                            steps={msg.steps}
-                        />
-                    ))}
-                </div>
-            )}
-
-            {isChatMode && showScrollToBottom && (
-                <button
-                    className="scroll-to-bottom-btn"
-                    type="button"
-                    onClick={handleScrollToBottom}
-                    title="Scroll to bottom"
-                    aria-label="Scroll to bottom"
-                >
-                    <IconArrowDown />
-                </button>
-            )}
-
-            <div className="chat-input-slot" ref={inputSlotRef}>
-                {children}
             </div>
+
+            {isAgentPanelOpen && activeAgentPanelMessage && (
+                <aside className="agent-side-panel" aria-label="Agent activity panel">
+                    <header className="agent-side-header">
+                        <div className="agent-side-header-text">
+                            <h2 className="agent-side-title">{activeAgentCallDetails?.agentName || 'Agent'}</h2>
+                            <p className="agent-side-subtitle">
+                                {String(activeAgentCallDetails?.toolName ?? '').trim() || 'Agent call'}
+                            </p>
+                        </div>
+                    </header>
+                    <div className="agent-side-body">
+                        <Message
+                            role="ai"
+                            text={activeAgentPanelMessage.text}
+                            thought={activeAgentPanelMessage.thought}
+                            parts={activeAgentPanelMessage.parts}
+                            steps={activeAgentPanelMessage.steps}
+                            isThinking={activeAgentPanelMessage.isThinking}
+                        />
+                    </div>
+                </aside>
+            )}
         </main>
     );
 }

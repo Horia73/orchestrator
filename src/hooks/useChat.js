@@ -10,6 +10,8 @@ import {
 
 const CLIENT_ID_STORAGE_KEY = 'gemini-ui-client-id';
 const ACTIVE_CHAT_STORAGE_KEY = 'gemini-ui-active-chat-id';
+const DRAFT_AGENT_STORAGE_KEY = 'gemini-ui-draft-agent-id';
+const DEFAULT_AGENT_ID = 'orchestrator';
 const DRAFT_CHAT_KEY = '__draft__';
 
 function getGreeting() {
@@ -51,6 +53,10 @@ function getStoredActiveChatId() {
     }
 }
 
+function getStoredDraftAgentId() {
+    return DEFAULT_AGENT_ID;
+}
+
 function sortChatsByRecent(chats) {
     return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
 }
@@ -81,13 +87,102 @@ function toErrorMessage(error) {
     return 'Gemini error: Request failed.';
 }
 
-function createLocalMessage(id, role, text) {
+function normalizeAttachmentMimeType(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || !normalized.includes('/')) {
+        return 'application/octet-stream';
+    }
+
+    return normalized;
+}
+
+function normalizeOutgoingAttachments(attachments) {
+    if (!Array.isArray(attachments)) {
+        return [];
+    }
+
+    return attachments
+        .map((attachment, index) => {
+            if (!attachment || typeof attachment !== 'object') {
+                return null;
+            }
+
+            const id = String(attachment.id ?? `att-${index + 1}`).trim() || `att-${index + 1}`;
+            const name = String(attachment.name ?? `attachment-${index + 1}`).trim() || `attachment-${index + 1}`;
+            const mimeType = normalizeAttachmentMimeType(attachment.mimeType ?? attachment.type);
+            const data = String(attachment.data ?? '').trim();
+            const size = Number(attachment.size ?? 0);
+
+            if (!data) {
+                return null;
+            }
+
+            return {
+                id,
+                name,
+                mimeType,
+                data,
+                size: Number.isFinite(size) && size > 0 ? Math.trunc(size) : 0,
+            };
+        })
+        .filter(Boolean);
+}
+
+function buildUserMessageParts(text, attachments) {
+    const normalizedText = String(text ?? '').trim();
+    const normalizedAttachments = normalizeOutgoingAttachments(attachments);
+    const parts = normalizedAttachments.map((attachment) => ({
+        inlineData: {
+            mimeType: attachment.mimeType,
+            data: attachment.data,
+            displayName: attachment.name,
+        },
+    }));
+
+    if (normalizedText) {
+        parts.push({ text: normalizedText });
+    }
+
+    return parts.length > 0 ? parts : null;
+}
+
+function normalizeSendPayload(payload) {
+    if (typeof payload === 'string') {
+        return {
+            text: payload,
+            attachments: [],
+        };
+    }
+
+    if (!payload || typeof payload !== 'object') {
+        return {
+            text: '',
+            attachments: [],
+        };
+    }
+
     return {
+        text: String(payload.text ?? ''),
+        attachments: normalizeOutgoingAttachments(payload.attachments),
+    };
+}
+
+function createLocalMessage(id, role, text, options = {}) {
+    const message = {
         id,
         role,
         text,
         createdAt: Date.now(),
     };
+
+    const normalizedParts = Array.isArray(options.parts) && options.parts.length > 0
+        ? options.parts
+        : null;
+    if (normalizedParts) {
+        message.parts = normalizedParts;
+    }
+
+    return message;
 }
 
 function upsertChatSummary(chats, summary) {
@@ -107,7 +202,9 @@ export function useChat() {
     const [activeChatId, setActiveChatId] = useState(undefined);
     const [draftMessages, setDraftMessages] = useState([]);
     const [inputDraftByKey, setInputDraftByKey] = useState({});
+    const [inputAttachmentsByKey, setInputAttachmentsByKey] = useState({});
     const [pendingKey, setPendingKey] = useState(null);
+    const [draftAgentId, setDraftAgentIdState] = useState(() => getStoredDraftAgentId());
     const [isHydrating, setIsHydrating] = useState(true);
 
     const clientIdRef = useRef(getOrCreateClientId());
@@ -115,6 +212,8 @@ export function useChat() {
     const activeChatIdRef = useRef(activeChatId);
     const loadedChatIdsRef = useRef(new Set());
     const preferredActiveChatIdRef = useRef(getStoredActiveChatId());
+    const draftAgentIdRef = useRef(draftAgentId);
+    const chatAgentByIdRef = useRef(new Map());
 
     useEffect(() => {
         chatSummariesRef.current = chatSummaries;
@@ -123,6 +222,26 @@ export function useChat() {
     useEffect(() => {
         activeChatIdRef.current = activeChatId;
     }, [activeChatId]);
+
+    useEffect(() => {
+        draftAgentIdRef.current = draftAgentId;
+        try {
+            localStorage.setItem(DRAFT_AGENT_STORAGE_KEY, draftAgentId);
+        } catch {
+            // noop
+        }
+    }, [draftAgentId]);
+
+    useEffect(() => {
+        const nextMap = new Map();
+        for (const chat of chatSummaries) {
+            const chatId = String(chat?.id ?? '').trim();
+            if (!chatId) continue;
+            const agentId = String(chat?.agentId ?? '').trim() || DEFAULT_AGENT_ID;
+            nextMap.set(chatId, agentId);
+        }
+        chatAgentByIdRef.current = nextMap;
+    }, [chatSummaries]);
 
     useEffect(() => {
         if (activeChatId === undefined) return;
@@ -216,9 +335,84 @@ export function useChat() {
                         return prev;
                     }
 
+                    const existingMessages = prev[event.chatId] ?? [];
+                    const incomingMessage = event.message;
+                    const existingMessage = existingMessages.find(m => m.id === incomingMessage.id);
+
+                    if (existingMessage && Array.isArray(existingMessage.parts) && Array.isArray(incomingMessage.parts)) {
+                        // Preserve sub-agent streaming progress if incoming message hasn't caught up yet
+                        const updatedParts = [...incomingMessage.parts];
+                        existingMessage.parts.forEach(existingPart => {
+                            if (existingPart.functionResponse) {
+                                const toolId = existingPart.functionResponse.id;
+                                const toolName = existingPart.functionResponse.name;
+
+                                const hasInIncoming = updatedParts.some(p =>
+                                    p.functionResponse && (p.functionResponse.id === toolId || p.functionResponse.name === toolName)
+                                );
+
+                                if (!hasInIncoming) {
+                                    // Find where the call is and insert the response after it
+                                    const callIndex = updatedParts.findIndex(p =>
+                                        p.functionCall && (p.functionCall.id === toolId || p.functionCall.name === toolName)
+                                    );
+                                    if (callIndex !== -1) {
+                                        updatedParts.splice(callIndex + 1, 0, existingPart);
+                                    }
+                                }
+                            }
+                        });
+                        incomingMessage.parts = updatedParts;
+                    }
+
                     return {
                         ...prev,
-                        [event.chatId]: mergeMessages(prev[event.chatId] ?? [], [event.message]),
+                        [event.chatId]: mergeMessages(existingMessages, [incomingMessage]),
+                    };
+                });
+                return;
+            }
+
+            if (event.type === 'agent.streaming' && event.chatId && event.messageId && event.payload) {
+                setMessagesByChat((prev) => {
+                    const messages = prev[event.chatId] ?? [];
+                    const messageIndex = messages.findIndex((m) => m.id === event.messageId);
+                    if (messageIndex === -1) return prev;
+
+                    const message = messages[messageIndex];
+                    const toolCallId = event.toolCallId;
+                    const nextParts = [...(message.parts || [])];
+
+                    // Find where to inject or update the response
+                    const callIndex = nextParts.findIndex((p) => (
+                        p.functionCall && (p.functionCall.id === toolCallId || p.functionCall.name === event.toolName)
+                    ));
+
+                    if (callIndex === -1 && !toolCallId) return prev;
+
+                    const syntheticResponse = {
+                        functionResponse: {
+                            name: event.toolName || 'call_coding_agent',
+                            id: toolCallId,
+                            response: event.payload,
+                        },
+                    };
+
+                    const responseIndex = nextParts.findIndex((p, i) => i > callIndex && p.functionResponse && (p.functionResponse.id === toolCallId || p.functionResponse.name === event.toolName));
+
+                    if (responseIndex !== -1) {
+                        nextParts[responseIndex] = syntheticResponse;
+                    } else {
+                        nextParts.splice(callIndex + 1, 0, syntheticResponse);
+                    }
+
+                    const nextMessage = { ...message, parts: nextParts };
+                    const nextMessages = [...messages];
+                    nextMessages[messageIndex] = nextMessage;
+
+                    return {
+                        ...prev,
+                        [event.chatId]: nextMessages,
                     };
                 });
                 return;
@@ -309,6 +503,13 @@ export function useChat() {
             delete next[chatId];
             return next;
         });
+
+        setInputAttachmentsByKey((prev) => {
+            if (!(chatId in prev)) return prev;
+            const next = { ...prev };
+            delete next[chatId];
+            return next;
+        });
     }, []);
 
     const setInputDraft = useCallback((value) => {
@@ -333,6 +534,25 @@ export function useChat() {
         });
     }, [activeChatId]);
 
+    const setInputAttachments = useCallback((attachments) => {
+        const key = getDraftKey(activeChatId);
+        const normalized = normalizeOutgoingAttachments(attachments);
+
+        setInputAttachmentsByKey((prev) => {
+            if (normalized.length === 0) {
+                if (!(key in prev)) return prev;
+                const next = { ...prev };
+                delete next[key];
+                return next;
+            }
+
+            return {
+                ...prev,
+                [key]: normalized,
+            };
+        });
+    }, [activeChatId]);
+
     const appendAiErrorToChat = useCallback((chatId, text) => {
         const errorMessage = createLocalMessage(createId('msg'), 'ai', text);
 
@@ -347,11 +567,13 @@ export function useChat() {
         }));
     }, []);
 
-    const sendMessage = useCallback(async (text) => {
+    const sendMessage = useCallback(async (payload) => {
         if (isHydrating) return;
 
-        const trimmed = text.trim();
-        if (!trimmed) return;
+        const normalizedPayload = normalizeSendPayload(payload);
+        const trimmed = normalizedPayload.text.trim();
+        const attachments = normalizeOutgoingAttachments(normalizedPayload.attachments);
+        if (!trimmed && attachments.length === 0) return;
 
         const clientMessageId = createId('msg');
         const draftKey = getDraftKey(activeChatIdRef.current);
@@ -361,22 +583,34 @@ export function useChat() {
             delete next[draftKey];
             return next;
         });
+        setInputAttachmentsByKey((prev) => {
+            if (!(draftKey in prev)) return prev;
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
+        });
+
+        const optimisticParts = buildUserMessageParts(trimmed, attachments);
 
         if (activeChatIdRef.current === null || activeChatIdRef.current === undefined) {
-            const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed);
+            const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed, {
+                parts: optimisticParts,
+            });
             setDraftMessages([optimisticUser]);
             setPendingKey('draft');
 
             try {
-                const payload = await sendChatMessage({
+                const responsePayload = await sendChatMessage({
                     message: trimmed,
+                    attachments,
                     clientId: clientIdRef.current,
                     clientMessageId,
+                    agentId: draftAgentIdRef.current,
                 });
 
-                const chat = payload.chat;
-                const userMessage = payload.userMessage;
-                const aiMessage = payload.aiMessage;
+                const chat = responsePayload.chat;
+                const userMessage = responsePayload.userMessage;
+                const aiMessage = responsePayload.aiMessage;
 
                 setChatSummaries((prev) => upsertChatSummary(prev, chat));
                 loadedChatIdsRef.current.add(chat.id);
@@ -397,7 +631,10 @@ export function useChat() {
         }
 
         const chatId = activeChatIdRef.current;
-        const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed);
+        const resolvedAgentId = chatAgentByIdRef.current.get(chatId) ?? draftAgentIdRef.current;
+        const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed, {
+            parts: optimisticParts,
+        });
         setPendingKey(chatId);
 
         setMessagesByChat((prev) => ({
@@ -406,17 +643,19 @@ export function useChat() {
         }));
 
         try {
-            const payload = await sendChatMessage({
+            const responsePayload = await sendChatMessage({
                 chatId,
                 message: trimmed,
+                attachments,
                 clientId: clientIdRef.current,
                 clientMessageId,
+                agentId: resolvedAgentId,
             });
 
-            setChatSummaries((prev) => upsertChatSummary(prev, payload.chat));
+            setChatSummaries((prev) => upsertChatSummary(prev, responsePayload.chat));
             setMessagesByChat((prev) => ({
                 ...prev,
-                [chatId]: mergeMessages(prev[chatId] ?? [], [payload.userMessage, payload.aiMessage]),
+                [chatId]: mergeMessages(prev[chatId] ?? [], [responsePayload.userMessage, responsePayload.aiMessage]),
             }));
         } catch (error) {
             appendAiErrorToChat(chatId, toErrorMessage(error));
@@ -424,6 +663,11 @@ export function useChat() {
             setPendingKey((current) => (current === chatId ? null : current));
         }
     }, [appendAiErrorToChat, isHydrating]);
+
+    const setDraftAgentId = useCallback((agentId) => {
+        const normalized = String(agentId ?? '').trim() || DEFAULT_AGENT_ID;
+        setDraftAgentIdState(normalized);
+    }, []);
 
     const stopGeneration = useCallback(async () => {
         const chatId = activeChatIdRef.current;
@@ -457,8 +701,25 @@ export function useChat() {
         () => inputDraftByKey[getDraftKey(activeChatId)] ?? '',
         [inputDraftByKey, activeChatId],
     );
+    const inputAttachments = useMemo(
+        () => inputAttachmentsByKey[getDraftKey(activeChatId)] ?? [],
+        [inputAttachmentsByKey, activeChatId],
+    );
+    const activeChatSummary = useMemo(() => {
+        if (activeChatId === null || activeChatId === undefined) {
+            return null;
+        }
+
+        return chatSummaries.find((chat) => chat.id === activeChatId) ?? null;
+    }, [chatSummaries, activeChatId]);
 
     const isDraftChat = activeChatId === null || activeChatId === undefined;
+    const activeChatAgentId = isDraftChat
+        ? null
+        : (String(activeChatSummary?.agentId ?? '').trim() || DEFAULT_AGENT_ID);
+    const selectedAgentId = isDraftChat
+        ? draftAgentId
+        : (activeChatAgentId ?? DEFAULT_AGENT_ID);
     const isTyping = isHydrating || (
         pendingKey !== null
         && (pendingKey === 'draft' || pendingKey === activeChatId)
@@ -475,10 +736,16 @@ export function useChat() {
         stopGeneration,
         inputDraft,
         setInputDraft,
+        inputAttachments,
+        setInputAttachments,
         recents,
         createNewChat,
         selectChat,
         deleteChat,
         isDraftChat,
+        selectedAgentId,
+        draftAgentId,
+        setDraftAgentId,
+        activeChatAgentId,
     };
 }

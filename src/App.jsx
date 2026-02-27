@@ -8,7 +8,7 @@ import { ChatArea } from './components/chat/ChatArea.jsx';
 import { ChatInput } from './components/chat/ChatInput.jsx';
 import { Settings } from './components/settings/Settings.jsx';
 import { IconPanel } from './components/shared/icons.jsx';
-import { fetchSettings, saveSettings } from './api/settingsApi.js';
+import { fetchAgents, fetchSettings, saveSettings } from './api/settingsApi.js';
 
 function isSettingsViewFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -33,12 +33,30 @@ export default function App() {
   // Settings page state
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsViewFromUrl());
   const [savedSettings, setSavedSettings] = useState(null);
+  const [agentDefinitions, setAgentDefinitions] = useState([]);
+  const [agentsLoaded, setAgentsLoaded] = useState(false);
+  const [settingsLoaded, setSettingsLoaded] = useState(false);
 
   // Load settings on mount
   useEffect(() => {
     fetchSettings()
-      .then(setSavedSettings)
-      .catch(() => setSavedSettings(null));
+      .then((settings) => {
+        setSavedSettings(settings);
+        setSettingsLoaded(true);
+      })
+      .catch(() => {
+        setSavedSettings(null);
+        setSettingsLoaded(true);
+      });
+    fetchAgents()
+      .then((agents) => {
+        setAgentDefinitions(agents);
+        setAgentsLoaded(true);
+      })
+      .catch(() => {
+        setAgentDefinitions([]);
+        setAgentsLoaded(true);
+      });
   }, []);
 
   const focusInput = useCallback(() => {
@@ -64,18 +82,30 @@ export default function App() {
 
   const handleOpenSettings = useCallback(() => {
     setSettingsViewInUrl(true);
-    // Reload settings fresh when opening
-    fetchSettings()
-      .then((s) => {
-        setSavedSettings(s);
-        setSettingsOpen(true);
+    setSettingsLoaded(false);
+    setAgentsLoaded(false);
+    Promise.all([
+      fetchSettings().catch(() => null),
+      fetchAgents().catch(() => []),
+    ])
+      .then(([settings, agents]) => {
+        if (settings) {
+          setSavedSettings(settings);
+        }
+        setAgentDefinitions(Array.isArray(agents) ? agents : []);
+        setAgentsLoaded(true);
+        setSettingsLoaded(true);
       })
-      .catch(() => setSettingsOpen(true));
+      .catch(() => {
+        setSettingsLoaded(true);
+        setAgentsLoaded(true);
+      })
+      .finally(() => setSettingsOpen(true));
   }, []);
 
   const handleSaveSettings = useCallback(async (newSettings) => {
-    await saveSettings(newSettings);
-    setSavedSettings(newSettings);
+    const payload = await saveSettings(newSettings);
+    setSavedSettings(payload?.settings ?? newSettings);
   }, []);
 
   const handleCloseSettings = useCallback(() => {
@@ -84,11 +114,22 @@ export default function App() {
   }, []);
 
   if (settingsOpen) {
+    if (!agentsLoaded || !settingsLoaded) {
+      return (
+        <div className="app">
+          <div className="settings-page">
+            <div className="settings-loading">Loading settings…</div>
+          </div>
+        </div>
+      );
+    }
+
     return (
       <div className="app">
         <Settings
           onClose={handleCloseSettings}
           savedSettings={savedSettings}
+          agentDefinitions={agentDefinitions}
           onSave={handleSaveSettings}
         />
       </div>
@@ -138,6 +179,8 @@ export default function App() {
           onStop={chat.stopGeneration}
           draftValue={chat.inputDraft}
           onDraftChange={chat.setInputDraft}
+          attachments={chat.inputAttachments}
+          onAttachmentsChange={chat.setInputAttachments}
           isChatMode={chat.isChatMode}
           isSending={chat.isTyping}
         />

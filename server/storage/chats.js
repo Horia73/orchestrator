@@ -1,13 +1,19 @@
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-
-const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
-const CHATS_DIR = path.join(DATA_DIR, 'chats');
-const INDEX_PATH = path.join(DATA_DIR, 'index.json');
+import { normalizeAgentId } from './settings.js';
+import {
+    CHAT_DATA_DIR,
+    CHAT_INDEX_PATH,
+    CHAT_MESSAGES_DIR,
+    LEGACY_CHAT_FILES_DIR,
+    LEGACY_CHAT_INDEX_PATH,
+} from '../core/dataPaths.js';
+const CHATS_DIR = CHAT_MESSAGES_DIR;
+const INDEX_PATH = CHAT_INDEX_PATH;
 
 const DEFAULT_INDEX = {
-    version: 1,
+    version: 2,
     chats: [],
 };
 
@@ -161,18 +167,94 @@ async function persistIndex() {
     });
 }
 
+async function migrateLegacyChatLayout() {
+    await fs.mkdir(CHAT_DATA_DIR, { recursive: true });
+    await fs.mkdir(CHATS_DIR, { recursive: true });
+
+    try {
+        await fs.access(INDEX_PATH);
+    } catch {
+        try {
+            await fs.access(LEGACY_CHAT_INDEX_PATH);
+            await fs.rename(LEGACY_CHAT_INDEX_PATH, INDEX_PATH);
+        } catch {
+            // Legacy index does not exist.
+        }
+    }
+
+    try {
+        const entries = await fs.readdir(LEGACY_CHAT_FILES_DIR, { withFileTypes: true });
+        for (const entry of entries) {
+            if (!entry.isFile() || !/^chat-.*\.jsonl$/i.test(entry.name)) {
+                continue;
+            }
+
+            const fromPath = path.join(LEGACY_CHAT_FILES_DIR, entry.name);
+            const toPath = path.join(CHATS_DIR, entry.name);
+            try {
+                await fs.access(toPath);
+            } catch {
+                await fs.rename(fromPath, toPath);
+            }
+        }
+    } catch {
+        // Legacy chat files dir does not exist.
+    }
+}
+
 async function ensureInitialized() {
     if (initialized) return;
 
-    await fs.mkdir(CHATS_DIR, { recursive: true });
+    await migrateLegacyChatLayout();
 
     try {
         const raw = await fs.readFile(INDEX_PATH, 'utf8');
         const parsed = JSON.parse(raw);
+        const parsedChats = Array.isArray(parsed?.chats) ? parsed.chats : [];
+        const normalizedChats = [];
+        let shouldPersist = Number(parsed?.version) !== DEFAULT_INDEX.version;
+
+        for (const rawChat of parsedChats) {
+            if (!rawChat || typeof rawChat !== 'object') {
+                shouldPersist = true;
+                continue;
+            }
+
+            const id = String(rawChat.id ?? '').trim();
+            if (!id) {
+                shouldPersist = true;
+                continue;
+            }
+
+            const createdAt = Number(rawChat.createdAt);
+            const updatedAt = Number(rawChat.updatedAt);
+            const messageCount = Number(rawChat.messageCount);
+            const normalizedChat = {
+                id,
+                title: String(rawChat.title ?? 'Untitled'),
+                createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+                updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+                messageCount: Number.isFinite(messageCount) && messageCount >= 0
+                    ? Math.trunc(messageCount)
+                    : 0,
+                lastMessagePreview: String(rawChat.lastMessagePreview ?? ''),
+                agentId: normalizeAgentId(rawChat.agentId),
+            };
+
+            if (String(rawChat.agentId ?? '').trim().toLowerCase() !== normalizedChat.agentId) {
+                shouldPersist = true;
+            }
+
+            normalizedChats.push(normalizedChat);
+        }
+
         state = {
-            version: 1,
-            chats: Array.isArray(parsed?.chats) ? parsed.chats : [],
+            version: DEFAULT_INDEX.version,
+            chats: normalizedChats,
         };
+        if (shouldPersist) {
+            await persistIndex();
+        }
     } catch {
         state = { ...DEFAULT_INDEX };
         await persistIndex();
@@ -218,7 +300,7 @@ export async function getChat(chatId) {
     return state.chats.find((chat) => chat.id === chatId) ?? null;
 }
 
-export async function createChatFromFirstMessage(firstMessageText) {
+export async function createChatFromFirstMessage(firstMessageText, options = {}) {
     await ensureInitialized();
     const now = Date.now();
 
@@ -229,6 +311,7 @@ export async function createChatFromFirstMessage(firstMessageText) {
         updatedAt: now,
         messageCount: 0,
         lastMessagePreview: '',
+        agentId: normalizeAgentId(options?.agentId),
     };
 
     state.chats = [chat, ...state.chats];

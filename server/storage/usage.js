@@ -1,9 +1,6 @@
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-
-const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
-const USAGE_LOG_PATH = path.join(DATA_DIR, 'usage.jsonl');
+import { LEGACY_USAGE_LOG_PATH, USAGE_DATA_DIR, USAGE_LOG_PATH } from '../core/dataPaths.js';
 
 let initialized = false;
 
@@ -41,6 +38,37 @@ function toSafeString(value) {
     return String(value ?? '');
 }
 
+function normalizeAgentId(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all' || normalized === 'system') {
+        return '';
+    }
+
+    return normalized;
+}
+
+function normalizeAgentFilter(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') {
+        return null;
+    }
+
+    if (normalized === 'system') {
+        return 'system';
+    }
+
+    return normalizeAgentId(normalized) || null;
+}
+
+function normalizeUsageSource(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return 'chat';
+    }
+
+    return normalized;
+}
+
 function toSafeTokenCount(value) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed <= 0) {
@@ -64,7 +92,18 @@ async function ensureInitialized() {
         return;
     }
 
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.mkdir(USAGE_DATA_DIR, { recursive: true });
+
+    try {
+        await fs.access(USAGE_LOG_PATH);
+    } catch {
+        try {
+            await fs.access(LEGACY_USAGE_LOG_PATH);
+            await fs.rename(LEGACY_USAGE_LOG_PATH, USAGE_LOG_PATH);
+        } catch {
+            // Legacy file does not exist. Create a new one.
+        }
+    }
 
     try {
         await fs.access(USAGE_LOG_PATH);
@@ -117,6 +156,8 @@ function summarizeUsageRecords(records) {
         requestCount: 0,
         inputTokens: 0,
         outputTokens: 0,
+        outputImageTokens: 0,
+        outputImageCount: 0,
         thoughtsTokens: 0,
         toolUsePromptTokens: 0,
         totalTokens: 0,
@@ -131,6 +172,8 @@ function summarizeUsageRecords(records) {
         totals.requestCount += 1;
         totals.inputTokens += toSafeTokenCount(record.inputTokens);
         totals.outputTokens += toSafeTokenCount(record.outputTokens);
+        totals.outputImageTokens += toSafeTokenCount(record.outputImageTokens);
+        totals.outputImageCount += toSafeTokenCount(record.outputImageCount);
         totals.thoughtsTokens += toSafeTokenCount(record.thoughtsTokens);
         totals.toolUsePromptTokens += toSafeTokenCount(record.toolUsePromptTokens);
         totals.totalTokens += toSafeTokenCount(record.totalTokens);
@@ -149,6 +192,8 @@ function summarizeUsageRecords(records) {
             requestCount: 0,
             inputTokens: 0,
             outputTokens: 0,
+            outputImageTokens: 0,
+            outputImageCount: 0,
             thoughtsTokens: 0,
             toolUsePromptTokens: 0,
             totalTokens: 0,
@@ -160,6 +205,8 @@ function summarizeUsageRecords(records) {
         current.requestCount += 1;
         current.inputTokens += toSafeTokenCount(record.inputTokens);
         current.outputTokens += toSafeTokenCount(record.outputTokens);
+        current.outputImageTokens += toSafeTokenCount(record.outputImageTokens);
+        current.outputImageCount += toSafeTokenCount(record.outputImageCount);
         current.thoughtsTokens += toSafeTokenCount(record.thoughtsTokens);
         current.toolUsePromptTokens += toSafeTokenCount(record.toolUsePromptTokens);
         current.totalTokens += toSafeTokenCount(record.totalTokens);
@@ -194,6 +241,11 @@ export async function initUsageStorage() {
     await ensureInitialized();
 }
 
+export async function clearUsageRecords() {
+    await ensureInitialized();
+    await fs.writeFile(USAGE_LOG_PATH, '', 'utf8');
+}
+
 export async function appendUsageRecord(payload = {}) {
     await ensureInitialized();
 
@@ -203,6 +255,7 @@ export async function appendUsageRecord(payload = {}) {
         : Date.now();
 
     const dateKey = normalizeDateKey(payload.dateKey ?? toDateKeyFromTimestamp(createdAt));
+    const agentId = normalizeAgentId(payload.agentId);
 
     const record = {
         id: toSafeString(payload.id || `request-${randomUUID()}`),
@@ -210,12 +263,15 @@ export async function appendUsageRecord(payload = {}) {
         clientId: toSafeString(payload.clientId),
         model: toSafeString(payload.model || 'unknown-model'),
         status: toSafeString(payload.status || 'completed'),
+        source: normalizeUsageSource(payload.source),
         inputText: toSafeString(payload.inputText),
         outputText: toSafeString(payload.outputText),
         createdAt,
         dateKey,
         inputTokens: toSafeTokenCount(payload.inputTokens),
         outputTokens: toSafeTokenCount(payload.outputTokens),
+        outputImageTokens: toSafeTokenCount(payload.outputImageTokens),
+        outputImageCount: toSafeTokenCount(payload.outputImageCount),
         thoughtsTokens: toSafeTokenCount(payload.thoughtsTokens),
         toolUsePromptTokens: toSafeTokenCount(payload.toolUsePromptTokens),
         totalTokens: toSafeTokenCount(payload.totalTokens),
@@ -224,6 +280,25 @@ export async function appendUsageRecord(payload = {}) {
         outputCostUsd: toSafeUsd(payload.outputCostUsd),
         totalCostUsd: toSafeUsd(payload.totalCostUsd),
     };
+
+    if (agentId) {
+        record.agentId = agentId;
+    }
+
+    const parentRequestId = toSafeString(payload.parentRequestId).trim();
+    if (parentRequestId) {
+        record.parentRequestId = parentRequestId;
+    }
+
+    const toolName = toSafeString(payload.toolName).trim();
+    if (toolName) {
+        record.toolName = toolName;
+    }
+
+    const toolCallId = toSafeString(payload.toolCallId).trim();
+    if (toolCallId) {
+        record.toolCallId = toolCallId;
+    }
 
     if (payload.usageMetadata && typeof payload.usageMetadata === 'object') {
         record.usageMetadata = payload.usageMetadata;
@@ -246,12 +321,26 @@ export async function getUsageSnapshotByRange(input = {}) {
     const endCandidate = normalizeDateKey(input.endDate ?? input.date ?? startCandidate);
     const startDate = startCandidate <= endCandidate ? startCandidate : endCandidate;
     const endDate = startCandidate <= endCandidate ? endCandidate : startCandidate;
+    const agentFilter = normalizeAgentFilter(input.agentId);
 
     const records = await readUsageRecords();
     const requests = records
         .filter((record) => {
             const dateKey = String(record?.dateKey ?? '');
-            return dateKey >= startDate && dateKey <= endDate;
+            if (dateKey < startDate || dateKey > endDate) {
+                return false;
+            }
+
+            if (!agentFilter) {
+                return true;
+            }
+
+            const recordAgentId = normalizeAgentId(record?.agentId);
+            if (agentFilter === 'system') {
+                return !recordAgentId;
+            }
+
+            return recordAgentId === agentFilter;
         })
         .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
 
@@ -261,6 +350,7 @@ export async function getUsageSnapshotByRange(input = {}) {
         date: startDate === endDate ? startDate : null,
         startDate,
         endDate,
+        agentId: agentFilter,
         requests,
         ...summary,
     };

@@ -1,6 +1,5 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
-    AGENT_DEFINITIONS,
     THINKING_LEVELS,
     buildMergedModels,
     tierColor,
@@ -164,13 +163,63 @@ function ThinkingSelector({ selected, onSelect, selectorRef }) {
     );
 }
 
+function GroundingSelector({ grounding, onChange }) {
+    const webSearchEnabled = grounding?.webSearch === true;
+    const imageSearchEnabled = grounding?.imageSearch === true;
+
+    const handleWebSearchChange = (event) => {
+        const checked = event.target.checked;
+        onChange({
+            webSearch: checked,
+            imageSearch: checked ? imageSearchEnabled : false,
+        });
+    };
+
+    const handleImageSearchChange = (event) => {
+        const checked = event.target.checked;
+        onChange({
+            webSearch: checked ? true : webSearchEnabled,
+            imageSearch: checked,
+        });
+    };
+
+    return (
+        <div className="grounding-selector">
+            <label className="grounding-option">
+                <input
+                    type="checkbox"
+                    checked={webSearchEnabled}
+                    onChange={handleWebSearchChange}
+                />
+                <span>Google Web Search</span>
+            </label>
+            <label className="grounding-option">
+                <input
+                    type="checkbox"
+                    checked={imageSearchEnabled}
+                    onChange={handleImageSearchChange}
+                />
+                <span>Google Image Search (3.1 Flash Image only)</span>
+            </label>
+        </div>
+    );
+}
+
 /* ─── Price Indicator ────────────────────────────────────────────────── */
 
 function PriceIndicator({ modelId, modelsList }) {
     const model = modelsList.find((m) => m.id === modelId);
     if (!model) return null;
 
-    if (model.outputPrice200k === undefined) {
+    const hasInputPricing = Number.isFinite(model.inputPrice200k);
+    const hasOutputPricing = (
+        Number.isFinite(model.outputPrice200k)
+        || Number.isFinite(model.outputTextPrice200k)
+        || Number.isFinite(model.outputImagePrice200k)
+        || Number.isFinite(model.outputImagePricePerImage)
+    );
+
+    if (!hasInputPricing || !hasOutputPricing) {
         return (
             <div className="price-indicator">
                 <div className="price-header">
@@ -190,7 +239,7 @@ function PriceIndicator({ modelId, modelsList }) {
                 <span className="price-label">Model Pricing Details</span>
             </div>
             <div className="price-details">
-                {model.inputPriceOver200k !== undefined ? (
+                {model.inputPriceOver200k !== undefined && model.outputPriceOver200k !== undefined ? (
                     <>
                         <div className="price-row">
                             <span className="price-row-heading">Input (≤200k tokens):</span>
@@ -215,10 +264,30 @@ function PriceIndicator({ modelId, modelsList }) {
                             <span className="price-row-heading">Input:</span>
                             <span>${model.inputPrice200k.toFixed(2)} / 1M tokens</span>
                         </div>
-                        <div className="price-row">
-                            <span className="price-row-heading">Output:</span>
-                            <span>${model.outputPrice200k.toFixed(2)} / 1M tokens</span>
-                        </div>
+                        {Number.isFinite(model.outputPrice200k) && (
+                            <div className="price-row">
+                                <span className="price-row-heading">Output:</span>
+                                <span>${model.outputPrice200k.toFixed(2)} / 1M tokens</span>
+                            </div>
+                        )}
+                        {Number.isFinite(model.outputTextPrice200k) && (
+                            <div className="price-row">
+                                <span className="price-row-heading">Output text/thinking:</span>
+                                <span>${model.outputTextPrice200k.toFixed(2)} / 1M tokens</span>
+                            </div>
+                        )}
+                        {Number.isFinite(model.outputImagePrice200k) && (
+                            <div className="price-row">
+                                <span className="price-row-heading">Output images:</span>
+                                <span>${model.outputImagePrice200k.toFixed(2)} / 1M tokens</span>
+                            </div>
+                        )}
+                        {Number.isFinite(model.outputImagePricePerImage) && (
+                            <div className="price-row">
+                                <span className="price-row-heading">Output images:</span>
+                                <span>${model.outputImagePricePerImage.toFixed(3)} / image</span>
+                            </div>
+                        )}
                     </>
                 )}
             </div>
@@ -226,12 +295,43 @@ function PriceIndicator({ modelId, modelsList }) {
     );
 }
 
+function buildAgentStates(agentDefinitions, savedSettings, previousStates = {}) {
+    const next = {};
+
+    for (const agent of agentDefinitions) {
+        const previous = previousStates?.[agent.id];
+        const saved = savedSettings?.[agent.id];
+
+        next[agent.id] = {
+            model: previous?.model ?? saved?.model ?? agent.defaultModel,
+            thinkingLevel: previous?.thinkingLevel ?? saved?.thinkingLevel ?? agent.defaultThinkingLevel,
+            grounding: agent.supportsGrounding
+                ? {
+                    webSearch: previous?.grounding?.webSearch
+                        ?? saved?.grounding?.webSearch
+                        ?? agent.defaultGrounding?.webSearch
+                        ?? false,
+                    imageSearch: previous?.grounding?.imageSearch
+                        ?? saved?.grounding?.imageSearch
+                        ?? agent.defaultGrounding?.imageSearch
+                        ?? false,
+                }
+                : undefined,
+        };
+    }
+
+    return next;
+}
+
+function isCodingAgent(agentId) {
+    return String(agentId ?? '').trim().toLowerCase() === 'coding';
+}
+
 /* ─── Agent Card ─────────────────────────────────────────────────────── */
 
 function AgentCard({ agent, agentState, onChange, modelsList }) {
-    const isOrchestrator = agent.id === 'orchestrator';
-    const thinkingSelectorRef = useRef(null);
-    const [orchestratorContentWidth, setOrchestratorContentWidth] = useState(null);
+    const supportsThinking = agent.supportsThinking !== false;
+    const codingAgent = isCodingAgent(agent?.id);
 
     const handleModelChange = useCallback(
         (modelId) => onChange({ ...agentState, model: modelId }),
@@ -243,45 +343,20 @@ function AgentCard({ agent, agentState, onChange, modelsList }) {
         [agentState, onChange],
     );
 
-    useEffect(() => {
-        if (!isOrchestrator) return undefined;
-
-        const updateWidth = () => {
-            const node = thinkingSelectorRef.current;
-            if (!node) return;
-            const width = Math.ceil(node.scrollWidth);
-            setOrchestratorContentWidth((prev) => (prev === width ? prev : width));
-        };
-
-        updateWidth();
-
-        const node = thinkingSelectorRef.current;
-        let resizeObserver;
-        if (node && typeof ResizeObserver !== 'undefined') {
-            resizeObserver = new ResizeObserver(updateWidth);
-            resizeObserver.observe(node);
-        }
-
-        window.addEventListener('resize', updateWidth);
-
-        return () => {
-            resizeObserver?.disconnect();
-            window.removeEventListener('resize', updateWidth);
-        };
-    }, [isOrchestrator]);
-
-    const orchestratorStyle = isOrchestrator && orchestratorContentWidth
-        ? { '--orchestrator-content-width': `${orchestratorContentWidth}px` }
-        : undefined;
+    const handleGroundingChange = useCallback(
+        (grounding) => onChange({ ...agentState, grounding }),
+        [agentState, onChange],
+    );
 
     return (
-        <div className={`agent-card${isOrchestrator ? ' agent-card--orchestrator' : ''}`} style={orchestratorStyle}>
+        <div className={`agent-card${codingAgent ? ' agent-card-coding' : ''}`}>
             <div className="agent-card-header">
                 <span className="agent-icon">{agent.icon}</span>
                 <div className="agent-header-text">
                     <h2 className="agent-name">{agent.name}</h2>
                     <p className="agent-desc">{agent.description}</p>
                 </div>
+                {codingAgent && <span className="agent-special-badge">Coding</span>}
             </div>
 
             <div className="agent-section">
@@ -293,14 +368,26 @@ function AgentCard({ agent, agentState, onChange, modelsList }) {
                 />
             </div>
 
-            <div className="agent-section">
-                <label className="agent-section-label">Thinking Level</label>
-                <ThinkingSelector
-                    selected={agentState.thinkingLevel}
-                    onSelect={handleThinkingChange}
-                    selectorRef={isOrchestrator ? thinkingSelectorRef : null}
-                />
-            </div>
+            {supportsThinking && (
+                <div className="agent-section">
+                    <label className="agent-section-label">Thinking Level</label>
+                    <ThinkingSelector
+                        selected={agentState.thinkingLevel}
+                        onSelect={handleThinkingChange}
+                        selectorRef={null}
+                    />
+                </div>
+            )}
+
+            {agent.supportsGrounding && (
+                <div className="agent-section">
+                    <label className="agent-section-label">Grounding</label>
+                    <GroundingSelector
+                        grounding={agentState.grounding}
+                        onChange={handleGroundingChange}
+                    />
+                </div>
+            )}
 
             <div className="agent-section">
                 <PriceIndicator
@@ -336,18 +423,8 @@ function getInitialActiveTab() {
     return fallbackTab;
 }
 
-export function Settings({ onClose, savedSettings, onSave }) {
-    const [agentStates, setAgentStates] = useState(() => {
-        const state = {};
-        for (const agent of AGENT_DEFINITIONS) {
-            const saved = savedSettings?.[agent.id];
-            state[agent.id] = {
-                model: saved?.model ?? agent.defaultModel,
-                thinkingLevel: saved?.thinkingLevel ?? agent.defaultThinkingLevel,
-            };
-        }
-        return state;
-    });
+export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave }) {
+    const [agentStates, setAgentStates] = useState(() => buildAgentStates(agentDefinitions, savedSettings));
 
     const [activeTab, setActiveTab] = useState(() => getInitialActiveTab());
     const [modelsList, setModelsList] = useState(() => buildMergedModels([]));
@@ -414,24 +491,31 @@ export function Settings({ onClose, savedSettings, onSave }) {
                 <div className="settings-content">
                     {activeTab === 'models' && (
                         <div className="settings-agents-grid">
-                            {AGENT_DEFINITIONS.map((agent) => (
-                                <AgentCard
-                                    key={agent.id}
-                                    agent={agent}
-                                    agentState={agentStates[agent.id]}
-                                    modelsList={modelsList}
-                                    onChange={(state) => handleAgentChange(agent.id, state)}
-                                />
-                            ))}
+                            {agentDefinitions.length === 0 ? (
+                                <div className="settings-placeholder">
+                                    <h2>Agents unavailable</h2>
+                                    <p>Could not load agent definitions from API.</p>
+                                </div>
+                            ) : (
+                                agentDefinitions.map((agent) => (
+                                    <AgentCard
+                                        key={agent.id}
+                                        agent={agent}
+                                        agentState={agentStates[agent.id] ?? buildAgentStates([agent], savedSettings)[agent.id]}
+                                        modelsList={modelsList}
+                                        onChange={(state) => handleAgentChange(agent.id, state)}
+                                    />
+                                ))
+                            )}
                         </div>
                     )}
 
                     {activeTab === 'usage' && (
-                        <UsageDashboard modelsList={modelsList} />
+                        <UsageDashboard modelsList={modelsList} agentDefinitions={agentDefinitions} />
                     )}
 
                     {activeTab === 'logs' && (
-                        <SystemLogsDashboard />
+                        <SystemLogsDashboard agentDefinitions={agentDefinitions} />
                     )}
                 </div>
             </div>

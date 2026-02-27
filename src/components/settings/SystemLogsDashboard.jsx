@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { fetchSystemLogs } from '../../api/settingsApi.js';
+import { clearSystemLogs, fetchSystemLogs } from '../../api/settingsApi.js';
 import { DateRangePicker } from './DateRangePicker.jsx';
 import { getPresetRange, isDateWithinRange, parseDateKey } from './dateRangeUtils.js';
 
@@ -59,6 +59,68 @@ function mergeLogs(existing, incoming) {
         .slice(0, 500);
 }
 
+function normalizeAgentId(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') {
+        return '';
+    }
+
+    return normalized;
+}
+
+function normalizeAgentFilter(value) {
+    const normalized = normalizeAgentId(value);
+    if (!normalized) {
+        return 'all';
+    }
+
+    return normalized;
+}
+
+function getLogAgentId(log) {
+    const direct = normalizeAgentId(log?.agentId);
+    if (direct) {
+        return direct;
+    }
+
+    return normalizeAgentId(log?.data?.agentId);
+}
+
+function logMatchesAgentFilter(log, agentFilter) {
+    if (agentFilter === 'all') {
+        return true;
+    }
+
+    const logAgentId = getLogAgentId(log);
+    if (agentFilter === 'system') {
+        return !logAgentId;
+    }
+
+    return logAgentId === agentFilter;
+}
+
+function buildAgentFilterOptions(agentDefinitions) {
+    const optionsById = new Map();
+    for (const agent of agentDefinitions ?? []) {
+        const agentId = normalizeAgentId(agent?.id);
+        if (!agentId) continue;
+
+        const agentName = String(agent?.name ?? '').trim() || agentId;
+        optionsById.set(agentId, {
+            id: agentId,
+            label: agentName,
+            isCoding: agentId === 'coding',
+        });
+    }
+
+    const sortedAgents = [...optionsById.values()].sort((a, b) => a.label.localeCompare(b.label));
+    return [
+        { id: 'all', label: 'All agents + system', isCoding: false },
+        { id: 'system', label: 'System only', isCoding: false },
+        ...sortedAgents,
+    ];
+}
+
 function normalizeLevel(value) {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (normalized === 'warn' || normalized === 'error') {
@@ -105,11 +167,13 @@ function buildStats(logs) {
     return stats;
 }
 
-export function SystemLogsDashboard() {
+export function SystemLogsDashboard({ agentDefinitions = [] }) {
     const [range, setRange] = useState(() => getPresetRange('today'));
     const [level, setLevel] = useState('all');
+    const [agentFilter, setAgentFilter] = useState('all');
     const [logs, setLogs] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [isClearingLogs, setIsClearingLogs] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [expandedLogId, setExpandedLogId] = useState(null);
 
@@ -125,6 +189,7 @@ export function SystemLogsDashboard() {
                     startDate: range.startDate,
                     endDate: range.endDate,
                     level: level === 'all' ? undefined : level,
+                    agentId: agentFilter === 'all' ? undefined : agentFilter,
                     limit: 500,
                 });
 
@@ -147,7 +212,7 @@ export function SystemLogsDashboard() {
         return () => {
             cancelled = true;
         };
-    }, [range.startDate, range.endDate, level]);
+    }, [range.startDate, range.endDate, level, agentFilter]);
 
     useEffect(() => {
         const source = new EventSource('/api/events');
@@ -155,6 +220,11 @@ export function SystemLogsDashboard() {
         source.onmessage = (event) => {
             try {
                 const payload = JSON.parse(event.data);
+                if (payload?.type === 'logs.cleared') {
+                    setLogs([]);
+                    setExpandedLogId(null);
+                    return;
+                }
                 if (payload?.type !== 'system.log' || !payload?.log) {
                     return;
                 }
@@ -167,6 +237,9 @@ export function SystemLogsDashboard() {
                 if (level !== 'all' && normalizeLevel(log.level) !== level) {
                     return;
                 }
+                if (!logMatchesAgentFilter(log, agentFilter)) {
+                    return;
+                }
 
                 setLogs((prev) => mergeLogs(prev, [log]));
             } catch {
@@ -177,7 +250,7 @@ export function SystemLogsDashboard() {
         return () => {
             source.close();
         };
-    }, [range.startDate, range.endDate, level]);
+    }, [range.startDate, range.endDate, level, agentFilter]);
 
     useEffect(() => {
         setExpandedLogId((current) => {
@@ -189,10 +262,82 @@ export function SystemLogsDashboard() {
         });
     }, [logs]);
 
+    const agentFilterOptions = useMemo(
+        () => buildAgentFilterOptions(agentDefinitions),
+        [agentDefinitions],
+    );
+
+    useEffect(() => {
+        if (agentFilter === 'all' || agentFilter === 'system') {
+            return;
+        }
+
+        const stillExists = agentFilterOptions.some((option) => option.id === agentFilter);
+        if (!stillExists) {
+            setAgentFilter('all');
+        }
+    }, [agentFilter, agentFilterOptions]);
+
+    const agentNameMap = useMemo(() => {
+        const map = new Map();
+        for (const option of agentFilterOptions) {
+            if (option.id === 'all' || option.id === 'system') {
+                continue;
+            }
+            map.set(option.id, option.label);
+        }
+        return map;
+    }, [agentFilterOptions]);
+
+    const selectedAgentLabel = useMemo(() => {
+        if (agentFilter === 'all') {
+            return 'all agents + system';
+        }
+        if (agentFilter === 'system') {
+            return 'system only';
+        }
+
+        return `agent ${agentNameMap.get(agentFilter) ?? agentFilter}`;
+    }, [agentFilter, agentNameMap]);
+
+    const formatLogAgent = useCallback((log) => {
+        const agentId = getLogAgentId(log);
+        if (!agentId) {
+            return 'System';
+        }
+
+        return agentNameMap.get(agentId) ?? agentId;
+    }, [agentNameMap]);
+
     const stats = useMemo(() => buildStats(logs), [logs]);
 
     const toggleLog = useCallback((logId) => {
         setExpandedLogId((current) => (current === logId ? null : logId));
+    }, []);
+
+    const handleAgentFilterSelect = useCallback((value) => {
+        setAgentFilter(normalizeAgentFilter(value));
+    }, []);
+
+    const handleClearLogs = useCallback(async () => {
+        const confirmed = window.confirm('Delete all system logs? This cannot be undone.');
+        if (!confirmed) {
+            return;
+        }
+
+        setIsClearingLogs(true);
+        setErrorMessage('');
+
+        try {
+            await clearSystemLogs();
+            setLogs([]);
+            setExpandedLogId(null);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to clear logs.';
+            setErrorMessage(message);
+        } finally {
+            setIsClearingLogs(false);
+        }
     }, []);
 
     return (
@@ -201,7 +346,7 @@ export function SystemLogsDashboard() {
                 <div>
                     <h2 className="usage-title">System Logs</h2>
                     <p className="usage-subtitle">
-                        {`API/server events for ${formatRangeLabel(range.startDate, range.endDate)}.`}
+                        {`API/server events for ${formatRangeLabel(range.startDate, range.endDate)} (${selectedAgentLabel}).`}
                     </p>
                 </div>
             </div>
@@ -227,12 +372,34 @@ export function SystemLogsDashboard() {
                     ))}
                 </div>
 
+                <div className="usage-agent-filters logs-agent-filters" role="tablist" aria-label="Filter logs by agent">
+                    {agentFilterOptions.map((option) => (
+                        <button
+                            key={option.id}
+                            type="button"
+                            className={`usage-filter-btn${agentFilter === option.id ? ' active' : ''}${option.isCoding ? ' coding-frame' : ''}`}
+                            onClick={() => handleAgentFilterSelect(option.id)}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+
                 <div className="logs-counts">
                     <span>Total: <strong>{stats.total}</strong></span>
                     <span>Info: <strong>{stats.info}</strong></span>
                     <span>Warn: <strong>{stats.warn}</strong></span>
                     <span>Error: <strong>{stats.error}</strong></span>
                 </div>
+
+                <button
+                    type="button"
+                    className="dashboard-danger-btn"
+                    onClick={() => void handleClearLogs()}
+                    disabled={isClearingLogs}
+                >
+                    {isClearingLogs ? 'Clearing logs…' : 'Clear all logs'}
+                </button>
             </div>
 
             <section className="usage-list-panel">
@@ -312,6 +479,7 @@ export function SystemLogsDashboard() {
                                                         <div className="usage-details-meta">
                                                             <span>Level: <strong>{levelBadgeLabel(log.level)}</strong></span>
                                                             <span>Source: <strong>{sourceLabel(log.source)}</strong></span>
+                                                            <span>Agent: <strong>{formatLogAgent(log)}</strong></span>
                                                             <span>Event: <strong>{log.eventType || '-'}</strong></span>
                                                             <span>Created: <strong>{formatCreatedAt(log.createdAt)}</strong></span>
                                                         </div>

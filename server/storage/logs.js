@@ -1,9 +1,6 @@
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
-
-const DATA_DIR = path.resolve(process.cwd(), 'server', 'data');
-const LOGS_PATH = path.join(DATA_DIR, 'logs.jsonl');
+import { LEGACY_LOGS_PATH, LOGS_PATH, LOG_DATA_DIR } from '../core/dataPaths.js';
 const MAX_STRING_LENGTH = 4000;
 
 let initialized = false;
@@ -41,6 +38,42 @@ function toSafeString(value, fallback = '') {
     }
 
     return `${raw.slice(0, MAX_STRING_LENGTH)}...[truncated]`;
+}
+
+function normalizeAgentId(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all' || normalized === 'system') {
+        return '';
+    }
+
+    return normalized;
+}
+
+function normalizeAgentFilter(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') {
+        return null;
+    }
+
+    if (normalized === 'system') {
+        return 'system';
+    }
+
+    return normalizeAgentId(normalized) || null;
+}
+
+function extractRecordAgentId(record) {
+    const direct = normalizeAgentId(record?.agentId);
+    if (direct) {
+        return direct;
+    }
+
+    const data = record?.data;
+    if (!data || typeof data !== 'object') {
+        return '';
+    }
+
+    return normalizeAgentId(data.agentId);
 }
 
 function sanitizeData(value, depth = 0) {
@@ -81,7 +114,18 @@ async function ensureInitialized() {
         return;
     }
 
-    await fs.mkdir(DATA_DIR, { recursive: true });
+    await fs.mkdir(LOG_DATA_DIR, { recursive: true });
+
+    try {
+        await fs.access(LOGS_PATH);
+    } catch {
+        try {
+            await fs.access(LEGACY_LOGS_PATH);
+            await fs.rename(LEGACY_LOGS_PATH, LOGS_PATH);
+        } catch {
+            // Legacy file does not exist.
+        }
+    }
 
     try {
         await fs.access(LOGS_PATH);
@@ -132,6 +176,11 @@ export async function initLogStorage() {
     await ensureInitialized();
 }
 
+export async function clearLogs() {
+    await ensureInitialized();
+    await fs.writeFile(LOGS_PATH, '', 'utf8');
+}
+
 export async function appendSystemLog(payload = {}) {
     await ensureInitialized();
 
@@ -145,6 +194,7 @@ export async function appendSystemLog(payload = {}) {
     const source = toSafeString(payload.source || 'system', 'system');
     const eventType = toSafeString(payload.eventType || 'event', 'event');
     const message = toSafeString(payload.message || eventType, eventType);
+    const agentId = normalizeAgentId(payload.agentId ?? payload?.data?.agentId);
 
     const record = {
         id: toSafeString(payload.id || `log-${randomUUID()}`),
@@ -155,6 +205,10 @@ export async function appendSystemLog(payload = {}) {
         createdAt,
         dateKey,
     };
+
+    if (agentId) {
+        record.agentId = agentId;
+    }
 
     if (payload.data !== undefined) {
         record.data = sanitizeData(payload.data);
@@ -179,6 +233,7 @@ export async function getLogsSnapshot(input = {}) {
     const levelFilter = levelFilterRaw === 'info' || levelFilterRaw === 'warn' || levelFilterRaw === 'error'
         ? levelFilterRaw
         : null;
+    const agentFilter = normalizeAgentFilter(input.agentId);
 
     const records = await readLogRecords();
     const logs = records
@@ -189,6 +244,18 @@ export async function getLogsSnapshot(input = {}) {
             }
 
             if (levelFilter && String(record?.level ?? '') !== levelFilter) {
+                return false;
+            }
+
+            if (!agentFilter) {
+                return true;
+            }
+
+            const recordAgentId = extractRecordAgentId(record);
+            if (agentFilter === 'system') {
+                return !recordAgentId;
+            }
+            if (recordAgentId !== agentFilter) {
                 return false;
             }
 
@@ -221,6 +288,7 @@ export async function getLogsSnapshot(input = {}) {
         endDate,
         limit,
         level: levelFilter,
+        agentId: agentFilter,
         totals,
         logs,
     };

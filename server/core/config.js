@@ -3,11 +3,7 @@ import path from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
 
 const DEFAULT_API_PORT = 8787;
-const DEFAULT_MODEL = 'gemini-3-flash-preview';
-const DEFAULT_THINKING_LEVEL = 'MINIMAL';
 const DEFAULT_CONTEXT_MESSAGES = 120;
-
-const VALID_THINKING_LEVELS = new Set(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
 
 function loadEnvFiles() {
     const cwd = process.cwd();
@@ -37,15 +33,6 @@ function loadEnvFiles() {
     }
 }
 
-function normalizeThinkingLevel(value) {
-    const normalized = String(value ?? '').trim().toUpperCase();
-    if (VALID_THINKING_LEVELS.has(normalized)) {
-        return normalized;
-    }
-
-    return DEFAULT_THINKING_LEVEL;
-}
-
 function normalizeContextMessages(value) {
     const parsed = Number(value);
     if (Number.isFinite(parsed) && parsed > 0) {
@@ -61,6 +48,7 @@ export const API_PORT = Number(process.env.API_PORT ?? DEFAULT_API_PORT);
 export const GEMINI_API_KEY = String(
     process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? '',
 ).trim();
-export const GEMINI_MODEL = String(process.env.GEMINI_MODEL ?? DEFAULT_MODEL).trim() || DEFAULT_MODEL;
-export const GEMINI_THINKING_LEVEL = normalizeThinkingLevel(process.env.GEMINI_THINKING_LEVEL);
 export const GEMINI_CONTEXT_MESSAGES = normalizeContextMessages(process.env.GEMINI_CONTEXT_MESSAGES);
+export const TOOLS_MODEL = String(
+    process.env.TOOLS_MODEL ?? process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview',
+).trim() || 'gemini-3-flash-preview';

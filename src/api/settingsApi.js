@@ -15,6 +15,12 @@ export async function fetchSettings() {
     return data.settings;
 }
 
+export async function fetchAgents() {
+    const response = await fetch('/api/agents');
+    const data = await parseApiResponse(response);
+    return Array.isArray(data.agents) ? data.agents : [];
+}
+
 export async function saveSettings(settings) {
     const response = await fetch('/api/settings', {
         method: 'PUT',
@@ -30,11 +36,12 @@ export async function fetchRemoteModels() {
     return data.models;
 }
 
-export async function fetchUsage({ startDate, endDate, date } = {}) {
+export async function fetchUsage({ startDate, endDate, date, agentId } = {}) {
     const query = new URLSearchParams();
     const normalizedDate = String(date ?? '').trim();
     const normalizedStartDate = String(startDate ?? '').trim();
     const normalizedEndDate = String(endDate ?? '').trim();
+    const normalizedAgentId = String(agentId ?? '').trim().toLowerCase();
 
     if (normalizedStartDate) {
         query.set('startDate', normalizedStartDate);
@@ -45,19 +52,30 @@ export async function fetchUsage({ startDate, endDate, date } = {}) {
     if (normalizedDate && !normalizedStartDate && !normalizedEndDate) {
         query.set('date', normalizedDate);
     }
+    if (normalizedAgentId) {
+        query.set('agentId', normalizedAgentId);
+    }
 
     const queryString = query.toString();
     const response = await fetch(queryString ? `/api/usage?${queryString}` : '/api/usage');
     return parseApiResponse(response);
 }
 
-export async function fetchSystemLogs({ startDate, endDate, date, level, limit } = {}) {
+export async function clearUsage() {
+    const response = await fetch('/api/usage', {
+        method: 'DELETE',
+    });
+    return parseApiResponse(response);
+}
+
+export async function fetchSystemLogs({ startDate, endDate, date, level, limit, agentId } = {}) {
     const query = new URLSearchParams();
     const normalizedDate = String(date ?? '').trim();
     const normalizedStartDate = String(startDate ?? '').trim();
     const normalizedEndDate = String(endDate ?? '').trim();
     const normalizedLevel = String(level ?? '').trim().toLowerCase();
     const normalizedLimit = Number(limit);
+    const normalizedAgentId = String(agentId ?? '').trim().toLowerCase();
 
     if (normalizedStartDate) {
         query.set('startDate', normalizedStartDate);
@@ -71,11 +89,21 @@ export async function fetchSystemLogs({ startDate, endDate, date, level, limit }
     if (normalizedLevel === 'info' || normalizedLevel === 'warn' || normalizedLevel === 'error') {
         query.set('level', normalizedLevel);
     }
+    if (normalizedAgentId) {
+        query.set('agentId', normalizedAgentId);
+    }
     if (Number.isFinite(normalizedLimit) && normalizedLimit > 0) {
         query.set('limit', String(Math.trunc(normalizedLimit)));
     }
 
     const queryString = query.toString();
     const response = await fetch(queryString ? `/api/logs?${queryString}` : '/api/logs');
+    return parseApiResponse(response);
+}
+
+export async function clearSystemLogs() {
+    const response = await fetch('/api/logs', {
+        method: 'DELETE',
+    });
     return parseApiResponse(response);
 }

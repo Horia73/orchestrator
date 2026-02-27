@@ -2,467 +2,21 @@ import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
     GEMINI_API_KEY,
     GEMINI_CONTEXT_MESSAGES,
-} from './config.js';
-import { getSystemPrompt } from './prompt.js';
-import { getAgentConfig } from './settings.js';
-import { toolRegistry } from './tools.js';
-
-const TOOLS = [
-    {
-        functionDeclarations: [
-            {
-                name: 'list_dir',
-                description: 'List the contents of a directory, i.e. all files and subdirectories that are children of the directory.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        DirectoryPath: {
-                            type: 'STRING',
-                            description: 'Path to list contents of, should be absolute path to a directory',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['DirectoryPath'],
-                },
-            },
-            {
-                name: 'view_file',
-                description: 'View the contents of a file from the local filesystem.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        AbsolutePath: {
-                            type: 'STRING',
-                            description: 'Path to file to view. Must be an absolute path.',
-                        },
-                        StartLine: {
-                            type: 'INTEGER',
-                            description: 'Optional start line to view (1-indexed, inclusive).',
-                        },
-                        EndLine: {
-                            type: 'INTEGER',
-                            description: 'Optional end line to view (1-indexed, inclusive).',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['AbsolutePath'],
-                },
-            },
-            {
-                name: 'view_file_outline',
-                description: 'View a lightweight outline of classes/functions in a file.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        AbsolutePath: {
-                            type: 'STRING',
-                            description: 'Path to file to inspect. Must be an absolute path.',
-                        },
-                        ItemOffset: {
-                            type: 'INTEGER',
-                            description: 'Optional pagination offset for outline items.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['AbsolutePath'],
-                },
-            },
-            {
-                name: 'view_code_item',
-                description: 'View code items (functions/classes) from a file by node path.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        File: {
-                            type: 'STRING',
-                            description: 'Absolute path to file.',
-                        },
-                        NodePaths: {
-                            type: 'ARRAY',
-                            items: { type: 'STRING' },
-                            description: 'List of node paths to inspect (max 5).',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['File', 'NodePaths'],
-                },
-            },
-            {
-                name: 'find_by_name',
-                description: 'Search for files and subdirectories within a specified directory using a glob pattern.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        SearchDirectory: {
-                            type: 'STRING',
-                            description: 'The absolute directory path to search within.',
-                        },
-                        Pattern: {
-                            type: 'STRING',
-                            description: 'Glob pattern to match against file or directory names.',
-                        },
-                        Type: {
-                            type: 'STRING',
-                            description: 'Optional type filter: file, directory, or any.',
-                        },
-                        Extensions: {
-                            type: 'ARRAY',
-                            items: { type: 'STRING' },
-                            description: 'Optional list of file extensions to include (without leading dot).',
-                        },
-                        Excludes: {
-                            type: 'ARRAY',
-                            items: { type: 'STRING' },
-                            description: 'Optional list of glob patterns to exclude.',
-                        },
-                        FullPath: {
-                            type: 'BOOLEAN',
-                            description: 'If true, match Pattern against full absolute path instead of only filename.',
-                        },
-                        MaxDepth: {
-                            type: 'INTEGER',
-                            description: 'Optional maximum recursion depth.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['SearchDirectory', 'Pattern'],
-                },
-            },
-            {
-                name: 'grep_search',
-                description: 'Search text inside files using ripgrep.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        Query: {
-                            type: 'STRING',
-                            description: 'The search text or regex pattern.',
-                        },
-                        SearchPath: {
-                            type: 'STRING',
-                            description: 'Absolute path to a file or directory to search.',
-                        },
-                        Includes: {
-                            type: 'ARRAY',
-                            items: { type: 'STRING' },
-                            description: 'Optional glob filters for file paths.',
-                        },
-                        IsRegex: {
-                            type: 'BOOLEAN',
-                            description: 'If true, treat Query as regex. If false, literal search.',
-                        },
-                        MatchPerLine: {
-                            type: 'BOOLEAN',
-                            description: 'If true, return line-level matches. If false, return only file names.',
-                        },
-                        CaseInsensitive: {
-                            type: 'BOOLEAN',
-                            description: 'If true, search is case-insensitive.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['Query', 'SearchPath'],
-                },
-            },
-            {
-                name: 'read_url_content',
-                description: 'Fetch the content of a URL via HTTP request.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        Url: {
-                            type: 'STRING',
-                            description: 'HTTP or HTTPS URL to fetch.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['Url'],
-                },
-            },
-            {
-                name: 'view_content_chunk',
-                description: 'View a specific chunk from a previously fetched URL document.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        document_id: {
-                            type: 'STRING',
-                            description: 'Document ID returned by read_url_content.',
-                        },
-                        position: {
-                            type: 'INTEGER',
-                            description: '0-indexed chunk position to view.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['document_id', 'position'],
-                },
-            },
-            {
-                name: 'search_web',
-                description: 'Perform a grounded web search and return concise findings with citations.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        query: {
-                            type: 'STRING',
-                            description: 'Search query to run on the web.',
-                        },
-                        domain: {
-                            type: 'STRING',
-                            description: 'Optional domain hint to prioritize (e.g. docs.example.com).',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['query'],
-                },
-            },
-            {
-                name: 'run_command',
-                description: 'Run a shell command in the workspace and return a live command session snapshot.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        CommandLine: {
-                            type: 'STRING',
-                            description: 'Command to execute in a shell.',
-                        },
-                        Cwd: {
-                            type: 'STRING',
-                            description: 'Optional working directory (absolute or relative to workspace).',
-                        },
-                        WaitMsBeforeAsync: {
-                            type: 'INTEGER',
-                            description: 'Optional milliseconds to wait before returning while command may continue in background.',
-                        },
-                        SafeToAutoRun: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['CommandLine'],
-                },
-            },
-            {
-                name: 'command_status',
-                description: 'Poll the status/output of a previously started command session.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        CommandId: {
-                            type: 'STRING',
-                            description: 'Command session id returned by run_command.',
-                        },
-                        WaitDurationSeconds: {
-                            type: 'NUMBER',
-                            description: 'Optional long-poll duration in seconds.',
-                        },
-                        OutputCharacterCount: {
-                            type: 'INTEGER',
-                            description: 'Optional number of output characters to return from the tail.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['CommandId'],
-                },
-            },
-            {
-                name: 'send_command_input',
-                description: 'Send stdin input to a running command session or request termination.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        CommandId: {
-                            type: 'STRING',
-                            description: 'Command session id returned by run_command.',
-                        },
-                        Input: {
-                            type: 'STRING',
-                            description: 'Optional input text to write to stdin.',
-                        },
-                        Terminate: {
-                            type: 'BOOLEAN',
-                            description: 'If true, send SIGINT to the command process.',
-                        },
-                        WaitMs: {
-                            type: 'INTEGER',
-                            description: 'Optional wait in milliseconds before returning updated status.',
-                        },
-                        SafeToAutoRun: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['CommandId'],
-                },
-            },
-            {
-                name: 'read_terminal',
-                description: 'Read terminal state by command name or process id.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        Name: {
-                            type: 'STRING',
-                            description: 'Optional command name hint (e.g. npm, node, pytest).',
-                        },
-                        ProcessID: {
-                            type: 'INTEGER',
-                            description: 'Optional process id to lookup.',
-                        },
-                        OutputCharacterCount: {
-                            type: 'INTEGER',
-                            description: 'Optional number of output characters to return from the tail.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                },
-            },
-            {
-                name: 'write_to_file',
-                description: 'Create or overwrite a file on disk.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        TargetFile: {
-                            type: 'STRING',
-                            description: 'Absolute path to target file.',
-                        },
-                        CodeContent: {
-                            type: 'STRING',
-                            description: 'Content to write to file.',
-                        },
-                        Overwrite: {
-                            type: 'BOOLEAN',
-                            description: 'Whether to overwrite existing file content.',
-                        },
-                        EmptyFile: {
-                            type: 'BOOLEAN',
-                            description: 'If true, create an empty file.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['TargetFile', 'Overwrite'],
-                },
-            },
-            {
-                name: 'replace_file_content',
-                description: 'Replace a target snippet within a specific line range of a file.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        TargetFile: {
-                            type: 'STRING',
-                            description: 'Absolute path to target file.',
-                        },
-                        StartLine: {
-                            type: 'INTEGER',
-                            description: '1-indexed start line of search range (inclusive).',
-                        },
-                        EndLine: {
-                            type: 'INTEGER',
-                            description: '1-indexed end line of search range (inclusive).',
-                        },
-                        TargetContent: {
-                            type: 'STRING',
-                            description: 'Exact text to find inside the provided line range.',
-                        },
-                        ReplacementContent: {
-                            type: 'STRING',
-                            description: 'Replacement text.',
-                        },
-                        AllowMultiple: {
-                            type: 'BOOLEAN',
-                            description: 'If true, replaces all occurrences in range.',
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['TargetFile', 'StartLine', 'EndLine', 'TargetContent', 'ReplacementContent', 'AllowMultiple'],
-                },
-            },
-            {
-                name: 'multi_replace_file_content',
-                description: 'Apply multiple replacement chunks in one pass on the same file.',
-                parameters: {
-                    type: 'OBJECT',
-                    properties: {
-                        TargetFile: {
-                            type: 'STRING',
-                            description: 'Absolute path to target file.',
-                        },
-                        ReplacementChunks: {
-                            type: 'ARRAY',
-                            description: 'Array of replacement chunks.',
-                            items: {
-                                type: 'OBJECT',
-                                properties: {
-                                    StartLine: { type: 'INTEGER' },
-                                    EndLine: { type: 'INTEGER' },
-                                    TargetContent: { type: 'STRING' },
-                                    ReplacementContent: { type: 'STRING' },
-                                    AllowMultiple: { type: 'BOOLEAN' },
-                                },
-                                required: ['StartLine', 'EndLine', 'TargetContent', 'ReplacementContent', 'AllowMultiple'],
-                            },
-                        },
-                        waitForPreviousTools: {
-                            type: 'BOOLEAN',
-                            description: 'Optional scheduling hint. Ignored by local tool implementation.',
-                        },
-                    },
-                    required: ['TargetFile', 'ReplacementChunks'],
-                },
-            },
-        ],
-    },
-];
+} from '../core/config.js';
+import {
+    DEFAULT_AGENT_ID,
+    getAgentDefinition,
+    getAgentToolAccess,
+    normalizeAgentId,
+} from '../agents/index.js';
+import { buildFunctionTools } from '../tools/catalog.js';
+import { getAgentConfig } from '../storage/settings.js';
+import {
+    extractToolMediaParts,
+    sanitizeToolResultForModel,
+    toolRegistry,
+} from '../tools/runtime.js';
+import { executionContext } from '../core/context.js';
 
 const THINKING_LEVEL_MAP = {
     MINIMAL: ThinkingLevel.MINIMAL,
@@ -476,6 +30,49 @@ let cachedClient = null;
 function mapThinkingLevel(level) {
     const normalized = String(level ?? '').trim().toUpperCase();
     return THINKING_LEVEL_MAP[normalized] ?? ThinkingLevel.MINIMAL;
+}
+
+function buildChatConfigForAgent({ agentId, agentConfig, sharedTools }) {
+    const agentDefinition = getAgentDefinition(agentId);
+    return agentDefinition.buildChatConfig({
+        agentConfig,
+        mapThinkingLevel,
+        sharedTools,
+    });
+}
+
+function sanitizeInlineDataForGemini(inlineData) {
+    if (!inlineData || typeof inlineData !== 'object') {
+        return null;
+    }
+
+    const mimeType = String(inlineData.mimeType ?? inlineData.mime_type ?? '').trim();
+    const data = String(inlineData.data ?? '').trim();
+    if (!mimeType || !data) {
+        return null;
+    }
+
+    return {
+        mimeType,
+        data,
+    };
+}
+
+function sanitizeFileDataForGemini(fileData) {
+    if (!fileData || typeof fileData !== 'object') {
+        return null;
+    }
+
+    const fileUri = String(fileData.fileUri ?? fileData.file_uri ?? '').trim();
+    if (!fileUri) {
+        return null;
+    }
+
+    const mimeType = String(fileData.mimeType ?? fileData.mime_type ?? '').trim();
+    return {
+        fileUri,
+        ...(mimeType ? { mimeType } : {}),
+    };
 }
 
 function normalizePart(part) {
@@ -509,9 +106,15 @@ function normalizePart(part) {
     } else if (hasText) {
         normalized.text = part.text;
     } else if (hasInlineData) {
-        normalized.inlineData = part.inlineData;
+        const sanitizedInlineData = sanitizeInlineDataForGemini(part.inlineData);
+        if (sanitizedInlineData) {
+            normalized.inlineData = sanitizedInlineData;
+        }
     } else if (hasFileData) {
-        normalized.fileData = part.fileData;
+        const sanitizedFileData = sanitizeFileDataForGemini(part.fileData);
+        if (sanitizedFileData) {
+            normalized.fileData = sanitizedFileData;
+        }
     }
 
     return Object.keys(normalized).length > 0 ? normalized : null;
@@ -541,6 +144,7 @@ function normalizeMessageParts(message) {
 const TOOL_TRACE_MAX_ARGS_CHARS = 1200;
 const TOOL_TRACE_MAX_RESPONSE_CHARS = 6000;
 const TOOL_TRACE_MAX_TOTAL_CHARS = 20000;
+const TOOL_USAGE_MAX_TEXT_CHARS = 4000;
 
 function safeJsonStringify(value) {
     try {
@@ -552,6 +156,20 @@ function safeJsonStringify(value) {
 
 function truncateForToolTrace(text, maxChars) {
     const raw = String(text ?? '');
+    if (raw.length <= maxChars) {
+        return raw;
+    }
+
+    const remaining = raw.length - maxChars;
+    return `${raw.slice(0, maxChars)}... [truncated ${remaining} chars]`;
+}
+
+function truncateForToolUsage(value, maxChars = TOOL_USAGE_MAX_TEXT_CHARS) {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+
     if (raw.length <= maxChars) {
         return raw;
     }
@@ -702,15 +320,32 @@ function buildModelHistoryText(message) {
     return '';
 }
 
+function buildModelHistoryMediaParts(message) {
+    const normalizedParts = normalizeParts(message?.parts);
+    if (!normalizedParts) {
+        return [];
+    }
+
+    return normalizedParts.filter((part) => {
+        if (!part || typeof part !== 'object') return false;
+        if (part.thought === true) return false;
+        return !!(part.inlineData && typeof part.inlineData === 'object');
+    });
+}
+
 function normalizeHistory(messages) {
     return messages
         .filter((message) => message && (message.role === 'user' || message.role === 'ai'))
         .map((message) => {
             if (message.role === 'ai') {
                 // Keep prior model turns oneof-safe while preserving tool context.
+                const mediaParts = buildModelHistoryMediaParts(message);
+                const baseTextPart = { text: buildModelHistoryText(message) };
                 return {
                     role: 'model',
-                    parts: [{ text: buildModelHistoryText(message) }],
+                    parts: mediaParts.length > 0
+                        ? [baseTextPart, ...mediaParts]
+                        : [baseTextPart],
                 };
             }
 
@@ -733,7 +368,7 @@ function getClient() {
     return cachedClient;
 }
 
-function createChatSession(historyWithLatestUserTurn) {
+function createChatSession(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_ID } = {}) {
     if (!Array.isArray(historyWithLatestUserTurn) || historyWithLatestUserTurn.length === 0) {
         throw new Error('Cannot generate reply without a user message.');
     }
@@ -747,26 +382,28 @@ function createChatSession(historyWithLatestUserTurn) {
         .slice(0, -1)
         .slice(-GEMINI_CONTEXT_MESSAGES);
 
-    // Read model + thinking level dynamically from saved settings
-    const agentConfig = getAgentConfig('orchestrator');
+    const normalizedAgentId = normalizeAgentId(agentId);
+
+    // Read model + generation options dynamically from saved settings
+    const agentConfig = getAgentConfig(normalizedAgentId);
+    const toolAccess = getAgentToolAccess(normalizedAgentId);
+    const sharedTools = buildFunctionTools(toolAccess);
 
     const chat = getClient().chats.create({
         model: agentConfig.model,
         history: normalizeHistory(previousTurns),
-        config: {
-            systemInstruction: getSystemPrompt(),
-            thinkingConfig: {
-                thinkingLevel: mapThinkingLevel(agentConfig.thinkingLevel),
-                includeThoughts: true,
-            },
-            tools: TOOLS,
-        },
+        config: buildChatConfigForAgent({
+            agentId: normalizedAgentId,
+            agentConfig,
+            sharedTools,
+        }),
     });
 
     return {
         chat,
-        latestText: String(latest.text ?? ''),
+        latestMessage: normalizeMessageParts(latest),
         model: agentConfig.model,
+        allowedToolNames: new Set(toolAccess),
     };
 }
 
@@ -908,6 +545,100 @@ function normalizeUsageMetadata(usageMetadata) {
     };
 }
 
+function normalizeToolUsageStatus(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (normalized === 'error') {
+        return 'error';
+    }
+
+    if (normalized === 'stopped') {
+        return 'stopped';
+    }
+
+    return 'completed';
+}
+
+function normalizeToolUsageRecord(
+    rawRecord,
+    {
+        toolName,
+        functionCall,
+        args,
+        toolResult,
+    } = {},
+) {
+    if (!rawRecord || typeof rawRecord !== 'object') {
+        return null;
+    }
+
+    const usageMetadata = rawRecord.usageMetadata && typeof rawRecord.usageMetadata === 'object'
+        ? rawRecord.usageMetadata
+        : null;
+    const model = String(rawRecord.model ?? '').trim();
+    if (!model && !usageMetadata) {
+        return null;
+    }
+
+    const resolvedToolName = String(rawRecord.toolName ?? toolName ?? '').trim() || 'unknown_tool';
+    const toolCallId = typeof functionCall?.id === 'string' && functionCall.id.trim()
+        ? functionCall.id.trim()
+        : '';
+    const fallbackInputText = `[tool:${resolvedToolName}] ${safeJsonStringify(args ?? {})}`;
+    const fallbackOutputText = typeof toolResult?.error === 'string' && toolResult.error.trim()
+        ? `Tool error: ${toolResult.error.trim()}`
+        : '';
+
+    const createdAtValue = Number(rawRecord.createdAt);
+    const createdAt = Number.isFinite(createdAtValue) && createdAtValue > 0
+        ? Math.trunc(createdAtValue)
+        : Date.now();
+
+    return {
+        source: String(rawRecord.source ?? '').trim().toLowerCase() || 'tool',
+        toolName: resolvedToolName,
+        toolCallId,
+        status: normalizeToolUsageStatus(rawRecord.status),
+        agentId: String(rawRecord.agentId ?? '').trim().toLowerCase(),
+        model,
+        inputText: truncateForToolUsage(rawRecord.inputText || fallbackInputText),
+        outputText: truncateForToolUsage(rawRecord.outputText || fallbackOutputText),
+        createdAt,
+        usageMetadata,
+    };
+}
+
+function extractToolUsageRecords(
+    toolResult,
+    {
+        toolName,
+        functionCall,
+        args,
+    } = {},
+) {
+    if (!toolResult || typeof toolResult !== 'object') {
+        return [];
+    }
+
+    const rawUsageRecords = [];
+    if (Array.isArray(toolResult._usageRecords)) {
+        rawUsageRecords.push(...toolResult._usageRecords);
+    }
+    if (toolResult._usage && typeof toolResult._usage === 'object') {
+        rawUsageRecords.push(toolResult._usage);
+    }
+
+    const normalized = rawUsageRecords
+        .map((rawRecord) => normalizeToolUsageRecord(rawRecord, {
+            toolName,
+            functionCall,
+            args,
+            toolResult,
+        }))
+        .filter(Boolean);
+
+    return normalized;
+}
+
 function extractChunkThoughtText(chunk) {
     const parts = chunk?.candidates?.[0]?.content?.parts;
     if (!Array.isArray(parts) || parts.length === 0) {
@@ -1017,7 +748,7 @@ function getFunctionCallKey(functionCall) {
     return `${name}:${argsKey}`;
 }
 
-function buildFinalModelParts({ text, thought, signatureParts, toolParts = [] }) {
+function buildFinalModelParts({ text, thought, mediaParts = [], signatureParts, toolParts = [] }) {
     const parts = [];
     if (thought) {
         parts.push({
@@ -1028,6 +759,10 @@ function buildFinalModelParts({ text, thought, signatureParts, toolParts = [] })
 
     for (const toolPart of toolParts) {
         parts.push(toolPart);
+    }
+
+    for (const mediaPart of mediaParts) {
+        parts.push(mediaPart);
     }
 
     if (text) {
@@ -1041,18 +776,26 @@ function buildFinalModelParts({ text, thought, signatureParts, toolParts = [] })
     return parts;
 }
 
-export async function generateAssistantReply(historyWithLatestUserTurn) {
-    const { chat, latestText } = createChatSession(historyWithLatestUserTurn);
+export async function generateAssistantReply(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_ID } = {}) {
+    const { chat, latestMessage } = createChatSession(historyWithLatestUserTurn, { agentId });
 
     const response = await chat.sendMessage({
-        message: latestText,
+        message: latestMessage,
     });
 
     return finalizeText(sanitizeVisibleText(response?.text));
 }
 
-export async function generateAssistantReplyStream(historyWithLatestUserTurn, { onUpdate, shouldStop } = {}) {
-    const { chat, latestText, model } = createChatSession(historyWithLatestUserTurn);
+export async function generateAssistantReplyStream(
+    historyWithLatestUserTurn,
+    { onUpdate, shouldStop, agentId = DEFAULT_AGENT_ID, chatId = '', messageId = '', clientId = '' } = {},
+) {
+    const {
+        chat,
+        latestMessage,
+        model,
+        allowedToolNames,
+    } = createChatSession(historyWithLatestUserTurn, { agentId });
     const isStopRequested = typeof shouldStop === 'function'
         ? () => shouldStop() === true
         : () => false;
@@ -1067,6 +810,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
     let emittedStepsKey = '';
     const thoughtSignatureSet = new Set();
     const signaturePartsByKey = new Map();
+    const mediaPartsByKey = new Map();
     const toolPartsAccumulator = [];
     const stepSnapshots = [];
     let lastStepTextCheckpoint = '';
@@ -1084,6 +828,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         toolUsePromptTokenCount: 0,
         totalTokenCount: 0,
     };
+    const toolUsageRecordsAccumulator = [];
 
     function markCurrentStepTextEvent() {
         if (currentStepFirstTextEvent !== null) {
@@ -1117,6 +862,46 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         usageAccumulator.thoughtsTokenCount += normalized.thoughtsTokenCount;
         usageAccumulator.toolUsePromptTokenCount += normalized.toolUsePromptTokenCount;
         usageAccumulator.totalTokenCount += normalized.totalTokenCount;
+    }
+
+    function collectInlineMediaPart(rawPart) {
+        if (!rawPart || typeof rawPart !== 'object') {
+            return;
+        }
+
+        const inlineData = rawPart.inlineData;
+        if (!inlineData || typeof inlineData !== 'object') {
+            return;
+        }
+
+        // Ignore thought-only intermediate images emitted during model reasoning.
+        if (rawPart.thought === true) {
+            return;
+        }
+
+        const mimeType = String(inlineData.mimeType ?? inlineData.mime_type ?? '').trim().toLowerCase();
+        const data = String(inlineData.data ?? '').trim();
+        if (!mimeType.startsWith('image/') || !data) {
+            return;
+        }
+
+        if (typeof rawPart.thoughtSignature === 'string' && rawPart.thoughtSignature.trim()) {
+            return;
+        }
+
+        const normalizedMediaPart = normalizePart(rawPart);
+        if (!normalizedMediaPart) {
+            return;
+        }
+
+        const signatureKey = typeof rawPart.thoughtSignature === 'string' && rawPart.thoughtSignature.trim()
+            ? rawPart.thoughtSignature.trim()
+            : '';
+        const fallbackKey = `${mimeType}:${data.length}:${data.slice(0, 48)}`;
+        const key = signatureKey || fallbackKey;
+        if (!mediaPartsByKey.has(key)) {
+            mediaPartsByKey.set(key, normalizedMediaPart);
+        }
     }
 
     function buildCurrentStep({ isThinking = false } = {}) {
@@ -1197,6 +982,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         const currentParts = partsOverride ?? buildFinalModelParts({
             text: updateText,
             thought: updateThought,
+            mediaParts: [...mediaPartsByKey.values()],
             signatureParts: [...signaturePartsByKey.values()],
             toolParts: toolPartsAccumulator,
         });
@@ -1280,6 +1066,11 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
                         continue;
                     }
 
+                    if (part?.inlineData && typeof part.inlineData === 'object') {
+                        collectInlineMediaPart(part);
+                        continue;
+                    }
+
                     if (typeof part?.text === 'string') {
                         fullText = mergeChunkIntoText(fullText, part.text);
                         markCurrentStepTextEvent();
@@ -1330,6 +1121,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
             stopped: true,
             model,
             apiCallCount: 0,
+            toolUsageRecords: [],
             usageMetadata: {
                 promptTokenCount: 0,
                 candidatesTokenCount: 0,
@@ -1344,7 +1136,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
     currentStepSawThinking = true;
     await emitUpdate({ force: true, stepIsThinking: true });
     const initialStream = await chat.sendMessageStream({
-        message: latestText,
+        message: latestMessage,
     });
     const initialStreamResult = await processStream(initialStream);
     accumulateUsage(initialStreamResult.usageMetadata);
@@ -1377,17 +1169,41 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
 
             const toolFn = toolRegistry[name];
             let result;
-            if (toolFn) {
-                result = await toolFn(args);
+            if (!allowedToolNames.has(name)) {
+                result = { error: `Tool ${name} is not allowed for this agent.` };
+            } else if (toolFn) {
+                result = await executionContext.run({
+                    chatId,
+                    messageId,
+                    clientId,
+                    toolCallId: (typeof functionCall?.id === 'string' ? functionCall.id : ''),
+                    toolName: name,
+                }, () => toolFn(args));
             } else {
                 result = { error: `Tool ${name} not found` };
             }
+
+            const toolUsageRecords = extractToolUsageRecords(result, {
+                toolName: name,
+                functionCall,
+                args,
+            });
+            for (const usageRecord of toolUsageRecords) {
+                toolUsageRecordsAccumulator.push(usageRecord);
+            }
+
+            const toolMediaParts = extractToolMediaParts(result);
+            for (const toolMediaPart of toolMediaParts) {
+                collectInlineMediaPart(toolMediaPart);
+            }
+
+            const modelVisibleResult = sanitizeToolResultForModel(result);
 
             toolCallPartState.isExecuting = false;
 
             const functionResponse = {
                 name,
-                response: result,
+                response: modelVisibleResult,
             };
             if (typeof functionCall?.id === 'string' && functionCall.id.trim().length > 0) {
                 functionResponse.id = functionCall.id;
@@ -1446,6 +1262,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
     const finalParts = buildFinalModelParts({
         text: finalText,
         thought: finalThought,
+        mediaParts: [...mediaPartsByKey.values()],
         signatureParts: [...signaturePartsByKey.values()],
         toolParts: toolPartsAccumulator,
     });
@@ -1478,6 +1295,7 @@ export async function generateAssistantReplyStream(historyWithLatestUserTurn, { 
         stopped,
         model,
         apiCallCount,
+        toolUsageRecords: toolUsageRecordsAccumulator,
         usageMetadata: usageAccumulator,
     };
 }

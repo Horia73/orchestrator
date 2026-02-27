@@ -10,6 +10,16 @@
     font-size: 0.98rem;
 }
 
+.tool-block.agent-call {
+    border-color: #d8d3c5;
+    background: #f6f2e7;
+}
+
+.tool-block.agent-call.is-active {
+    border-color: #9bbeb2;
+    box-shadow: 0 0 0 1px rgba(91, 147, 126, 0.28) inset;
+}
+
 .tool-block-header {
     display: flex;
     align-items: center;
@@ -23,6 +33,14 @@
 
 .tool-block-header:hover {
     background: #ece8e1;
+}
+
+.tool-block.agent-call .tool-block-header {
+    background: #eeeadf;
+}
+
+.tool-block.agent-call .tool-block-header:hover {
+    background: #e8e3d6;
 }
 
 .tool-block-title {
@@ -60,6 +78,44 @@
     flex-shrink: 0;
 }
 
+.tool-agent-status {
+    border-radius: 999px;
+    border: 1px solid currentColor;
+    padding: 2px 8px;
+    font-size: 0.66rem;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    line-height: 1.2;
+}
+
+.tool-agent-status.status-thinking {
+    color: #7d5a12;
+    background: rgba(245, 186, 61, 0.14);
+}
+
+.tool-agent-status.status-working {
+    color: #1f6e4d;
+    background: rgba(56, 183, 125, 0.12);
+}
+
+.tool-agent-status.status-done {
+    color: #2a6f57;
+    background: rgba(56, 183, 125, 0.2);
+}
+
+.tool-agent-status.status-stopped,
+.tool-agent-status.status-error {
+    color: #8f2d2d;
+    background: rgba(205, 83, 83, 0.12);
+}
+
+.tool-agent-toggle {
+    font-size: 0.78rem;
+    color: #2f6b54;
+    font-weight: 600;
+}
+
 .tool-command-elapsed {
     color: #7a766d;
     font-size: 0.86rem;
@@ -73,7 +129,8 @@
 }
 
 .tool-chevron.open {
-    transform: rotate(180deg);
+    /* No rotation, handle icon via character logic in JSX or use 90deg if needed */
+    color: var(--text-primary, #3f3b33);
 }
 
 .tool-spinner {
@@ -88,7 +145,9 @@
 }
 
 @keyframes tool-spin {
-    to { transform: rotate(360deg); }
+    to {
+        transform: rotate(360deg);
+    }
 }
 
 .tool-block-content {
@@ -174,10 +233,14 @@
 }
 
 @keyframes terminal-cursor-blink {
-    0%, 49% {
+
+    0%,
+    49% {
         opacity: 1;
     }
-    50%, 100% {
+
+    50%,
+    100% {
         opacity: 0;
     }
 }
@@ -422,7 +485,7 @@
     overflow: hidden;
 }
 
-.edit-file-card + .edit-file-card {
+.edit-file-card+.edit-file-card {
     margin-top: 10px;
 }
 
@@ -444,7 +507,7 @@
     align-items: stretch;
 }
 
-.edit-diff-row + .edit-diff-row {
+.edit-diff-row+.edit-diff-row {
     border-top: 1px solid rgba(122, 118, 109, 0.08);
 }
 

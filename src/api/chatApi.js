@@ -19,7 +19,14 @@ export async function fetchChatMessages(chatId) {
     return parseApiResponse(response);
 }
 
-export async function sendChatMessage({ chatId, message, clientId, clientMessageId }) {
+export async function sendChatMessage({
+    chatId,
+    message,
+    clientId,
+    clientMessageId,
+    agentId,
+    attachments,
+}) {
     const response = await fetch('/api/chat/send', {
         method: 'POST',
         headers: {
@@ -30,6 +37,8 @@ export async function sendChatMessage({ chatId, message, clientId, clientMessage
             message,
             clientId,
             clientMessageId,
+            agentId,
+            attachments,
         }),
     });
 

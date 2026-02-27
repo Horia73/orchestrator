@@ -3,7 +3,11 @@ import { execFile, spawn } from 'node:child_process';
 import { promisify } from 'node:util';
 import { dirname, isAbsolute, join, relative, resolve } from 'node:path';
 import { createHash, randomUUID } from 'node:crypto';
-import { GEMINI_API_KEY, GEMINI_MODEL } from './config.js';
+import { GEMINI_API_KEY, TOOLS_MODEL } from '../core/config.js';
+import { IMAGE_AGENT_ID } from '../agents/image/index.js';
+import { generateImageWithAgent } from '../agents/image/service.js';
+import { CODING_AGENT_ID } from '../agents/coding/index.js';
+import { generateCodingExpertAdvice } from '../agents/coding/service.js';
 
 const execFileAsync = promisify(execFile);
 const FIND_RESULTS_LIMIT = 50;
@@ -93,6 +97,55 @@ function truncateText(text, maxChars) {
     if (raw.length <= maxChars) return raw;
     const remaining = raw.length - maxChars;
     return `${raw.slice(0, maxChars)}... [truncated ${remaining} chars]`;
+}
+
+function extractToolMediaParts(result) {
+    if (!result || typeof result !== 'object') {
+        return [];
+    }
+
+    const rawMediaParts = Array.isArray(result._mediaParts) ? result._mediaParts : [];
+    const normalizedMediaParts = [];
+
+    for (const rawPart of rawMediaParts) {
+        const inlineData = rawPart?.inlineData;
+        if (!inlineData || typeof inlineData !== 'object') {
+            continue;
+        }
+
+        const mimeType = String(inlineData.mimeType ?? '').trim().toLowerCase();
+        const data = String(inlineData.data ?? '').trim();
+        if (!mimeType.startsWith('image/') || !data) {
+            continue;
+        }
+
+        const displayName = String(inlineData.displayName ?? '').trim();
+        normalizedMediaParts.push({
+            inlineData: {
+                mimeType,
+                data,
+                ...(displayName ? { displayName } : {}),
+            },
+        });
+    }
+
+    return normalizedMediaParts;
+}
+
+function sanitizeToolResultForModel(result) {
+    if (!result || typeof result !== 'object') {
+        return result;
+    }
+
+    const sanitized = {};
+    for (const [key, value] of Object.entries(result)) {
+        if (key.startsWith('_')) {
+            continue;
+        }
+        sanitized[key] = value;
+    }
+
+    return sanitized;
 }
 
 function splitTextIntoChunks(text, maxChars = URL_CONTENT_CHUNK_SIZE) {
@@ -1715,7 +1768,7 @@ export async function search_web({ query, domain }) {
     }
 
     const domainHint = String(domain ?? '').trim();
-    const model = String(GEMINI_MODEL ?? '').trim() || 'gemini-3-flash-preview';
+    const model = String(TOOLS_MODEL ?? '').trim() || 'gemini-3-flash-preview';
     const prompt = domainHint
         ? `${queryText}\n\nPrioritize sources from this domain when relevant: ${domainHint}`
         : queryText;
@@ -1796,6 +1849,131 @@ export async function search_web({ query, domain }) {
         citations,
         citation_count: citations.length,
     };
+}
+
+/**
+ * Implementation of generate_image tool.
+ * Delegates image generation/editing to the Image agent.
+ */
+export async function generate_image({
+    prompt,
+    model,
+    aspectRatio,
+    imageSize,
+}) {
+    const promptText = String(prompt ?? '').trim();
+    if (!promptText) {
+        return { error: 'prompt is required.' };
+    }
+
+    try {
+        const result = await generateImageWithAgent({
+            prompt: promptText,
+            model,
+            aspectRatio,
+            imageSize,
+        });
+        const usageMetadata = result.usageMetadata && typeof result.usageMetadata === 'object'
+            ? result.usageMetadata
+            : null;
+        const outputSummary = result.text
+            ? String(result.text).trim()
+            : (result.imageCount > 0 ? `${result.imageCount} image(s) generated.` : '');
+
+        return {
+            ok: true,
+            status: 'completed',
+            model: result.model,
+            prompt: promptText,
+            text: result.text || '',
+            agentThought: result.thought || '',
+            imageCount: result.imageCount,
+            generatedImages: result.mediaParts.map((part, index) => ({
+                index: index + 1,
+                mimeType: String(part?.inlineData?.mimeType ?? '').trim() || 'image/png',
+                displayName: String(part?.inlineData?.displayName ?? '').trim() || `image-${index + 1}.png`,
+            })),
+            grounding: result.grounding,
+            _mediaParts: result.mediaParts,
+            _usageRecords: [
+                {
+                    source: 'tool',
+                    toolName: 'generate_image',
+                    status: 'completed',
+                    agentId: IMAGE_AGENT_ID,
+                    model: result.model,
+                    inputText: promptText,
+                    outputText: outputSummary,
+                    usageMetadata,
+                },
+            ],
+        };
+    } catch (error) {
+        const errorMessage = error instanceof Error ? error.message : String(error ?? 'Unknown image generation error.');
+        return {
+            status: 'error',
+            error: `Failed to generate image: ${errorMessage}`,
+        };
+    }
+}
+
+/**
+ * Implementation of call_coding_agent tool.
+ * Delegates a coding task to the specialized Coding Agent.
+ */
+export async function call_coding_agent({ task, context, file_paths, attachments }) {
+    const taskText = String(task ?? '').trim();
+    if (!taskText) {
+        return { error: 'task is required.' };
+    }
+
+    try {
+        const filesData = [];
+        if (Array.isArray(file_paths) && file_paths.length > 0) {
+            for (const path of file_paths) {
+                const absolutePath = isAbsolute(path) ? path : resolve(process.cwd(), path);
+                try {
+                    const content = await readFile(absolutePath, 'utf8');
+                    filesData.push({ path: absolutePath, content });
+                } catch (err) {
+                    filesData.push({ path: absolutePath, content: `Error reading file: ${err.message}` });
+                }
+            }
+        }
+
+        const result = await generateCodingExpertAdvice({
+            task: taskText,
+            context,
+            files: filesData,
+            attachments: Array.isArray(attachments) ? attachments : [],
+        });
+
+        const usageMetadata = result.usageMetadata && typeof result.usageMetadata === 'object'
+            ? result.usageMetadata
+            : null;
+
+        return {
+            ok: result.ok !== false,
+            status: result.ok !== false ? 'completed' : 'error',
+            model: result.model,
+            agentThought: result.thought || '',
+            text: result.text || '',
+            parts: result.parts || [],
+            steps: result.steps || [],
+            fileCount: filesData.length,
+            attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+            _usage: {
+                model: result.model,
+                status: result.ok !== false ? 'completed' : 'error',
+                agentId: CODING_AGENT_ID,
+                inputText: taskText,
+                outputText: result.text || '',
+                usageMetadata,
+            },
+        };
+    } catch (error) {
+        return { error: `Coding agent call failed: ${error.message}` };
+    }
 }
 
 /**
@@ -1969,6 +2147,7 @@ export const toolRegistry = {
     read_url_content,
     view_content_chunk,
     search_web,
+    generate_image,
     run_command,
     command_status,
     send_command_input,
@@ -1976,4 +2155,10 @@ export const toolRegistry = {
     write_to_file,
     replace_file_content,
     multi_replace_file_content,
+    call_coding_agent,
+};
+
+export {
+    extractToolMediaParts,
+    sanitizeToolResultForModel,
 };

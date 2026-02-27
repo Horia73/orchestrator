@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchCommandStatus } from '../../api/chatApi.js';
+import { getAgentToolMetadata } from './agentCallUtils.js';
 import './ToolBlock.css';
 
 const COMMAND_TOOL_NAMES = new Set([
@@ -59,7 +60,77 @@ function getCommandStatusLabel(isRunning, status, hasError) {
     return 'done';
 }
 
-export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
+function getAgentThoughtText(responseObject) {
+    if (!responseObject || typeof responseObject !== 'object') {
+        return '';
+    }
+
+    return String(responseObject.agentThought ?? responseObject.thought ?? '').trim();
+}
+
+function normalizeAgentStatus({ isExecuting, hasResponse, responseObject, hasError }) {
+    const rawStatus = String(responseObject?.status ?? '').trim().toLowerCase();
+    const responseError = String(responseObject?.error ?? '').trim().toLowerCase();
+    const hasAgentThought = getAgentThoughtText(responseObject).length > 0;
+
+    if (isExecuting && !hasResponse) {
+        return hasAgentThought ? 'thinking' : 'working';
+    }
+
+    if (rawStatus === 'stopped') {
+        return 'stopped';
+    }
+
+    if (responseError.includes('stopped')) {
+        return 'stopped';
+    }
+
+    if (rawStatus === 'thinking') {
+        return 'thinking';
+    }
+
+    if (rawStatus === 'working') {
+        return 'working';
+    }
+
+    if (
+        hasError
+        || rawStatus === 'error'
+        || responseError.includes('failed')
+        || responseError.includes('error')
+    ) {
+        return 'error';
+    }
+
+    if (
+        hasResponse
+        || rawStatus === 'completed'
+        || rawStatus === 'done'
+        || rawStatus === 'success'
+        || rawStatus === 'ok'
+    ) {
+        return 'done';
+    }
+
+    return 'working';
+}
+
+function formatAgentStatusLabel(status) {
+    if (status === 'thinking') return 'Thinking...';
+    if (status === 'working') return 'Working...';
+    if (status === 'done') return 'Done';
+    if (status === 'stopped') return 'Stopped';
+    if (status === 'error') return 'Failed';
+    return 'Working...';
+}
+
+export function ToolBlock({
+    functionCall,
+    functionResponse,
+    isExecuting,
+    onAgentCallToggle,
+    isAgentCallOpen = false,
+}) {
     const [isOpen, setIsOpen] = useState(false);
     const [polledSnapshot, setPolledSnapshot] = useState(null);
     const [nowMs, setNowMs] = useState(0);
@@ -68,6 +139,8 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
 
     const hasResponse = !!functionResponse;
     const name = call.name || 'unknown_tool';
+    const agentMeta = getAgentToolMetadata(name);
+    const isAgentTool = !!agentMeta;
     const args = call.args && typeof call.args === 'object'
         ? call.args
         : EMPTY_ARGS;
@@ -79,6 +152,12 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
         ? responseObject
         : null;
     const runtimeSnapshot = polledSnapshot ?? responseSnapshot;
+    const agentStatus = normalizeAgentStatus({
+        isExecuting,
+        hasResponse,
+        responseObject,
+        hasError,
+    });
 
     const commandId = useMemo(
         () => getCommandId(args, runtimeSnapshot, responseObject),
@@ -192,7 +271,18 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
     let titleMain = `Used ${name}`;
     let titleDetail = '';
 
-    if (name === 'run_command') {
+    if (isAgentTool) {
+        if (agentStatus === 'thinking' || agentStatus === 'working') {
+            titleMain = `Calling ${agentMeta.agentName}`;
+        } else if (agentStatus === 'stopped') {
+            titleMain = `${agentMeta.agentName} stopped`;
+        } else if (agentStatus === 'error') {
+            titleMain = `${agentMeta.agentName} failed`;
+        } else {
+            titleMain = `Called ${agentMeta.agentName}`;
+        }
+        titleDetail = String(args?.prompt ?? '').trim();
+    } else if (name === 'run_command') {
         if (isCommandRunning) {
             titleMain = 'Running command';
         } else if (commandStatusLabel === 'stopped') {
@@ -258,12 +348,20 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
     const summaryData = hasResponse
         ? (typeof responseObject === 'object' ? formatJson(responseObject) : String(responseObject))
         : null;
+    const canToggleAgentPanel = isAgentTool && typeof onAgentCallToggle === 'function';
+    const handleHeaderClick = () => {
+        if (canToggleAgentPanel) {
+            onAgentCallToggle();
+            return;
+        }
+        setIsOpen((current) => !current);
+    };
 
     if (!hasFunctionCall) return null;
 
     return (
-        <div className="tool-block">
-            <div className="tool-block-header" onClick={() => setIsOpen((current) => !current)}>
+        <div className={`tool-block${isAgentTool ? ' agent-call' : ''}${isAgentCallOpen ? ' is-active' : ''}`}>
+            <div className="tool-block-header" onClick={handleHeaderClick}>
                 <div className="tool-block-title">
                     <span className={`tool-name${isRunning ? ' status-running-text' : ''}`}>
                         {titleMain}
@@ -276,13 +374,27 @@ export function ToolBlock({ functionCall, functionResponse, isExecuting }) {
                 </div>
 
                 <div className="tool-block-right">
+                    {isAgentTool && (
+                        <span className={`tool-agent-status status-${agentStatus}`}>
+                            {formatAgentStatusLabel(agentStatus)}
+                        </span>
+                    )}
+                    {canToggleAgentPanel && (
+                        <div className={`tool-chevron ${isAgentCallOpen ? 'open' : ''}`}>
+                            {isAgentCallOpen ? '>' : '▼'}
+                        </div>
+                    )}
                     {shouldShowCommandMeta && (
                         <span className="tool-command-elapsed">
                             {formatDuration(elapsedSeconds)}
                         </span>
                     )}
                     {isRunning && <div className="tool-spinner" title="Tool is running..."></div>}
-                    <div className={`tool-chevron ${isOpen ? 'open' : ''}`}>▼</div>
+                    {!canToggleAgentPanel && (
+                        <div className={`tool-chevron ${isOpen ? 'open' : ''}`}>
+                            {isOpen ? '▲' : '▼'}
+                        </div>
+                    )}
                 </div>
             </div>
 

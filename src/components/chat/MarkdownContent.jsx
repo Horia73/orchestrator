@@ -382,6 +382,9 @@ export function MarkdownContent({ text, variant = 'ai' }) {
                     </a>
                 );
             },
+            img() {
+                return null;
+            },
             blockquote({ children }) {
                 const parsed = parseCallout(children);
                 if (!parsed) return <blockquote>{children}</blockquote>;

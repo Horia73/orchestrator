@@ -1,9 +1,6 @@
 /**
- * Centralized agent & model configuration.
- *
- * To add a new agent (e.g. "Coding Agent"), just push another entry
- * into AGENT_DEFINITIONS with a unique `id`, display `name`, `icon`,
- * and its own `defaultModel` + `defaultThinkingLevel`.
+ * Client-side model metadata used for labels and pricing display in Settings.
+ * Agent definitions are served by `GET /api/agents` from the backend registry.
  */
 
 // ─── Thinking Levels ───────────────────────────────────────────────────────
@@ -38,27 +35,48 @@ export const THINKING_LEVELS = [
 // This is used to enrich the dynamic models fetched from the API with known
 // tier details and pricing data.
 const KNOWN_MODELS_DATA = {
+    'models/gemini-3.1-flash-image-preview': {
+        tier: 'flash',
+        description: 'Nano Banana 2 preview optimized for fast native image generation',
+        inputPrice200k: 0.30,
+        outputTextPrice200k: 1.50,
+        outputImagePrice200k: 60.00,
+    },
+    'models/gemini-3-pro-image-preview': {
+        tier: 'pro',
+        description: 'Nano Banana Pro preview for high-fidelity image generation and editing',
+        inputPrice200k: 0.30,
+        outputTextPrice200k: 12.00,
+        outputImagePrice200k: 120.00,
+    },
+    'models/gemini-2.5-flash-image': {
+        tier: 'flash',
+        description: 'Nano Banana model for fast and efficient image workflows',
+        inputPrice200k: 0.30,
+        outputTextPrice200k: 2.50,
+        outputImagePricePerImage: 0.039,
+    },
     'models/gemini-3.1-pro-preview': {
         tier: 'pro',
         description: 'Latest performance, intelligence, and usability improvements',
         inputPrice200k: 2.00,
         inputPriceOver200k: 4.00,
-        outputPrice200k: 12.00,
-        outputPriceOver200k: 18.00,
+        outputPrice200k: 8.00,
+        outputPriceOver200k: 24.00,
     },
     'models/gemini-3-pro-preview': {
         tier: 'pro',
         description: 'Best model for multimodal understanding & agentic capabilities',
         inputPrice200k: 2.00,
         inputPriceOver200k: 4.00,
-        outputPrice200k: 12.00,
-        outputPriceOver200k: 18.00,
+        outputPrice200k: 8.00,
+        outputPriceOver200k: 24.00,
     },
     'models/gemini-3-flash-preview': {
         tier: 'flash',
         description: 'Frontier intelligence with superior search and grounding',
-        inputPrice200k: 0.50,
-        outputPrice200k: 3.00,
+        inputPrice200k: 0.15,
+        outputPrice200k: 0.60,
     },
     'models/gemini-2.5-pro': {
         tier: 'pro',
@@ -123,6 +141,9 @@ export function buildMergedModels(apiModels = []) {
             inputPriceOver200k: meta.inputPriceOver200k,
             outputPrice200k: meta.outputPrice200k,
             outputPriceOver200k: meta.outputPriceOver200k,
+            outputTextPrice200k: meta.outputTextPrice200k,
+            outputImagePrice200k: meta.outputImagePrice200k,
+            outputImagePricePerImage: meta.outputImagePricePerImage,
         };
     });
 
@@ -152,15 +173,3 @@ export function tierColor(tier) {
         default: return '#7A766D';
     }
 }
-
-// ─── Agent Definitions ─────────────────────────────────────────────────────
-export const AGENT_DEFINITIONS = [
-    {
-        id: 'orchestrator',
-        name: 'Orchestrator',
-        description: 'The primary agent that plans, delegates, and synthesizes answers.',
-        icon: '🧠',
-        defaultModel: GEMINI_DEFAULT_MODEL,
-        defaultThinkingLevel: 'MINIMAL',
-    },
-];

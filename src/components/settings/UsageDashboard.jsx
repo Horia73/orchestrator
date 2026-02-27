@@ -1,5 +1,5 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
-import { fetchUsage } from '../../api/settingsApi.js';
+import { clearUsage, fetchUsage } from '../../api/settingsApi.js';
 import { DateRangePicker } from './DateRangePicker.jsx';
 import { getPresetRange, isDateWithinRange, parseDateKey } from './dateRangeUtils.js';
 
@@ -92,6 +92,63 @@ function mergeRequests(existing, incoming) {
     return sortRequestsByNewest([...byId.values()]);
 }
 
+function normalizeAgentId(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') {
+        return '';
+    }
+
+    return normalized;
+}
+
+function normalizeAgentFilter(value) {
+    const normalized = normalizeAgentId(value);
+    if (!normalized) {
+        return 'all';
+    }
+
+    return normalized;
+}
+
+function getRequestAgentId(request) {
+    return normalizeAgentId(request?.agentId);
+}
+
+function requestMatchesAgentFilter(request, agentFilter) {
+    if (agentFilter === 'all') {
+        return true;
+    }
+
+    const requestAgentId = getRequestAgentId(request);
+    if (agentFilter === 'system') {
+        return !requestAgentId;
+    }
+
+    return requestAgentId === agentFilter;
+}
+
+function buildAgentFilterOptions(agentDefinitions) {
+    const optionsById = new Map();
+    for (const agent of agentDefinitions ?? []) {
+        const agentId = normalizeAgentId(agent?.id);
+        if (!agentId) continue;
+
+        const agentName = String(agent?.name ?? '').trim() || agentId;
+        optionsById.set(agentId, {
+            id: agentId,
+            label: agentName,
+            isCoding: agentId === 'coding',
+        });
+    }
+
+    const sortedAgents = [...optionsById.values()].sort((a, b) => a.label.localeCompare(b.label));
+    return [
+        { id: 'all', label: 'All agents', isCoding: false },
+        ...sortedAgents,
+        { id: 'system', label: 'Unassigned', isCoding: false },
+    ];
+}
+
 function buildSummary(requests) {
     const totals = {
         requestCount: 0,
@@ -157,10 +214,12 @@ function statusClassName(value) {
     return 'completed';
 }
 
-export function UsageDashboard({ modelsList }) {
+export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
     const [range, setRange] = useState(() => getPresetRange('today'));
+    const [agentFilter, setAgentFilter] = useState('all');
     const [requests, setRequests] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
+    const [isClearingUsage, setIsClearingUsage] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [expandedRequestId, setExpandedRequestId] = useState(null);
 
@@ -175,6 +234,7 @@ export function UsageDashboard({ modelsList }) {
                 const payload = await fetchUsage({
                     startDate: range.startDate,
                     endDate: range.endDate,
+                    agentId: agentFilter === 'all' ? undefined : agentFilter,
                 });
                 if (cancelled) return;
                 setRequests(sortRequestsByNewest(payload.requests ?? []));
@@ -195,7 +255,7 @@ export function UsageDashboard({ modelsList }) {
         return () => {
             cancelled = true;
         };
-    }, [range.startDate, range.endDate]);
+    }, [range.startDate, range.endDate, agentFilter]);
 
     useEffect(() => {
         const source = new EventSource('/api/events');
@@ -203,12 +263,20 @@ export function UsageDashboard({ modelsList }) {
         source.onmessage = (event) => {
             try {
                 const payload = JSON.parse(event.data);
+                if (payload?.type === 'usage.cleared') {
+                    setRequests([]);
+                    setExpandedRequestId(null);
+                    return;
+                }
                 if (payload?.type !== 'usage.logged' || !payload?.request) {
                     return;
                 }
 
                 const request = payload.request;
                 if (!isDateWithinRange(request.dateKey, range.startDate, range.endDate)) {
+                    return;
+                }
+                if (!requestMatchesAgentFilter(request, agentFilter)) {
                     return;
                 }
 
@@ -221,7 +289,7 @@ export function UsageDashboard({ modelsList }) {
         return () => {
             source.close();
         };
-    }, [range.startDate, range.endDate]);
+    }, [range.startDate, range.endDate, agentFilter]);
 
     useEffect(() => {
         setExpandedRequestId((current) => {
@@ -234,6 +302,43 @@ export function UsageDashboard({ modelsList }) {
     }, [requests]);
 
     const summary = useMemo(() => buildSummary(requests), [requests]);
+    const agentFilterOptions = useMemo(
+        () => buildAgentFilterOptions(agentDefinitions),
+        [agentDefinitions],
+    );
+
+    useEffect(() => {
+        if (agentFilter === 'all' || agentFilter === 'system') {
+            return;
+        }
+
+        const stillExists = agentFilterOptions.some((option) => option.id === agentFilter);
+        if (!stillExists) {
+            setAgentFilter('all');
+        }
+    }, [agentFilter, agentFilterOptions]);
+
+    const agentNameMap = useMemo(() => {
+        const map = new Map();
+        for (const option of agentFilterOptions) {
+            if (option.id === 'all' || option.id === 'system') {
+                continue;
+            }
+            map.set(option.id, option.label);
+        }
+        return map;
+    }, [agentFilterOptions]);
+
+    const selectedAgentLabel = useMemo(() => {
+        if (agentFilter === 'all') {
+            return 'all agents';
+        }
+        if (agentFilter === 'system') {
+            return 'unassigned requests';
+        }
+
+        return `agent ${agentNameMap.get(agentFilter) ?? agentFilter}`;
+    }, [agentFilter, agentNameMap]);
 
     const modelNameMap = useMemo(() => {
         const map = new Map();
@@ -249,8 +354,46 @@ export function UsageDashboard({ modelsList }) {
         return modelNameMap.get(normalized) ?? normalized;
     }, [modelNameMap]);
 
+    const formatAgentName = useCallback((agentId) => {
+        const normalized = normalizeAgentId(agentId);
+        if (!normalized) {
+            return 'Unassigned';
+        }
+
+        return agentNameMap.get(normalized) ?? normalized;
+    }, [agentNameMap]);
+
+    const formatRequestAgent = useCallback((request) => {
+        return formatAgentName(getRequestAgentId(request));
+    }, [formatAgentName]);
+
     const handleToggleRequest = useCallback((requestId) => {
         setExpandedRequestId((current) => (current === requestId ? null : requestId));
+    }, []);
+
+    const handleAgentFilterSelect = useCallback((value) => {
+        setAgentFilter(normalizeAgentFilter(value));
+    }, []);
+
+    const handleClearUsage = useCallback(async () => {
+        const confirmed = window.confirm('Delete all usage records? This cannot be undone.');
+        if (!confirmed) {
+            return;
+        }
+
+        setIsClearingUsage(true);
+        setErrorMessage('');
+
+        try {
+            await clearUsage();
+            setRequests([]);
+            setExpandedRequestId(null);
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Failed to clear usage.';
+            setErrorMessage(message);
+        } finally {
+            setIsClearingUsage(false);
+        }
     }, []);
 
     return (
@@ -259,12 +402,35 @@ export function UsageDashboard({ modelsList }) {
                 <div>
                     <h2 className="usage-title">Usage</h2>
                     <p className="usage-subtitle">
-                        {`Live API request tracking for ${formatRangeLabel(range.startDate, range.endDate)}.`}
+                        {`Live API request tracking for ${formatRangeLabel(range.startDate, range.endDate)} (${selectedAgentLabel}).`}
                     </p>
                 </div>
             </div>
 
             <DateRangePicker value={range} onChange={setRange} />
+
+            <div className="usage-filter-row">
+                <div className="usage-agent-filters" role="tablist" aria-label="Filter usage by agent">
+                    {agentFilterOptions.map((option) => (
+                        <button
+                            key={option.id}
+                            type="button"
+                            className={`usage-filter-btn${agentFilter === option.id ? ' active' : ''}${option.isCoding ? ' coding-frame' : ''}`}
+                            onClick={() => handleAgentFilterSelect(option.id)}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+                <button
+                    type="button"
+                    className="dashboard-danger-btn"
+                    onClick={() => void handleClearUsage()}
+                    disabled={isClearingUsage}
+                >
+                    {isClearingUsage ? 'Clearing usage…' : 'Clear all usage'}
+                </button>
+            </div>
 
             <div className="usage-stats-grid">
                 <div className="usage-stat-card">
@@ -396,6 +562,7 @@ export function UsageDashboard({ modelsList }) {
                                                         <div className="usage-details-meta">
                                                             <span>Status: <strong>{statusLabel(request.status)}</strong></span>
                                                             <span>Model: <strong>{formatModelName(request.model)}</strong></span>
+                                                            <span>Agent: <strong>{formatRequestAgent(request)}</strong></span>
                                                             <span>Created: <strong>{formatCreatedAt(request.createdAt)}</strong></span>
                                                             <span>Input tokens: <strong>{formatNumber(request.inputTokens)}</strong></span>
                                                             <span>Output tokens: <strong>{formatNumber(request.outputTokens)}</strong></span>
