@@ -183,6 +183,19 @@ export const IconCopy = () => (
     </svg>
 );
 
+export const IconPlay = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <polygon points="6,3 20,12 6,21" />
+    </svg>
+);
+
+export const IconPause = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" stroke="none">
+        <rect x="5" y="3" width="5" height="18" rx="1" />
+        <rect x="14" y="3" width="5" height="18" rx="1" />
+    </svg>
+);
+
 export const IconCheck = () => (
     <svg
         width="14"

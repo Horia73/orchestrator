@@ -1,17 +1,16 @@
 /**
- * Server-side settings persistence.
+ * Server-side agent settings persistence.
  *
- * Stored as JSON in `server/data/settings/settings.json`.
+ * Settings are stored in the unified `~/.orchestrator/config.json` under the `agents` key.
+ * Falls back to reading from the legacy `settings.json` if the unified config doesn't have agents yet.
  */
-import fs from 'node:fs';
-import path from 'node:path';
 import {
     DEFAULT_AGENT_ID,
     createDefaultSettings,
     normalizeAgentId as normalizeRegistryAgentId,
     sanitizeAgentSettings,
 } from '../agents/index.js';
-import { SETTINGS_PATH } from '../core/dataPaths.js';
+import { AGENTS_CONFIG, reloadConfigJson, updateConfigSection } from '../core/config.js';
 
 function defaultSettings() {
     return createDefaultSettings();
@@ -21,36 +20,28 @@ function sanitizeSettings(rawSettings) {
     return sanitizeAgentSettings(rawSettings);
 }
 
-function ensureSettingsDir() {
-    const dir = path.dirname(SETTINGS_PATH);
-    if (!fs.existsSync(dir)) {
-        fs.mkdirSync(dir, { recursive: true });
-    }
-}
-
 export function normalizeAgentId(value) {
     return normalizeRegistryAgentId(value);
 }
 
 export function readSettings() {
     try {
-        if (fs.existsSync(SETTINGS_PATH)) {
-            const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
-            const parsed = JSON.parse(raw);
-            return sanitizeSettings(parsed);
+        // Read from unified config.json `agents` section
+        const config = reloadConfigJson();
+        const agentsSection = config?.agents;
+        if (agentsSection && typeof agentsSection === 'object') {
+            return sanitizeSettings(agentsSection);
         }
     } catch {
-        // Corrupt or missing — return defaults.
+        // Corrupt — return defaults.
     }
 
     return defaultSettings();
 }
 
 export function writeSettings(settings) {
-    ensureSettingsDir();
-
     const sanitized = sanitizeSettings(settings);
-    fs.writeFileSync(SETTINGS_PATH, JSON.stringify(sanitized, null, 2), 'utf8');
+    updateConfigSection('agents', sanitized);
     return sanitized;
 }
 

@@ -7,7 +7,14 @@ import {
     useState,
 } from 'react';
 import './ChatInput.css';
-import { IconPlus, IconMic, IconStop, IconArrowUp, IconClose } from '../shared/icons.jsx';
+import { IconPlus, IconMic, IconStop, IconArrowUp, IconClose, IconTrash, IconPause } from '../shared/icons.jsx';
+import { useVoiceRecorder } from '../../hooks/useVoiceRecorder.js';
+
+/* ---- constants ---- */
+const MAX_BARS = 120;
+const SAMPLE_MS = 100;
+
+/* ---- helpers ---- */
 
 function createAttachmentId(file) {
     const base = `${String(file?.name ?? '').trim()}-${Number(file?.size ?? 0)}-${Number(file?.lastModified ?? 0)}`;
@@ -16,14 +23,8 @@ function createAttachmentId(file) {
 
 function formatFileSize(size) {
     const bytes = Number(size);
-    if (!Number.isFinite(bytes) || bytes <= 0) {
-        return '0 B';
-    }
-
-    if (bytes < 1024) {
-        return `${bytes} B`;
-    }
-
+    if (!Number.isFinite(bytes) || bytes <= 0) return '0 B';
+    if (bytes < 1024) return `${bytes} B`;
     const units = ['KB', 'MB', 'GB'];
     let value = bytes / 1024;
     let unitIndex = 0;
@@ -31,7 +32,6 @@ function formatFileSize(size) {
         value /= 1024;
         unitIndex += 1;
     }
-
     const rounded = value >= 10 ? Math.round(value) : Math.round(value * 10) / 10;
     return `${rounded} ${units[unitIndex]}`;
 }
@@ -46,7 +46,6 @@ function fileToBase64(file) {
                 reject(new Error(`Failed to encode ${file?.name || 'file'}.`));
                 return;
             }
-
             resolve(result.slice(separator + 1));
         };
         reader.onerror = () => {
@@ -56,11 +55,37 @@ function fileToBase64(file) {
     });
 }
 
+function blobToBase64(blob) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => {
+            const result = String(reader.result ?? '');
+            const separator = result.indexOf(',');
+            if (separator < 0 || separator === result.length - 1) {
+                reject(new Error('Failed to encode voice message.'));
+                return;
+            }
+            resolve(result.slice(separator + 1));
+        };
+        reader.onerror = () => {
+            reject(new Error('Failed to encode voice message.'));
+        };
+        reader.readAsDataURL(blob);
+    });
+}
+
+function formatDuration(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+}
+
 /**
  * Chat input box.
  * - Auto-resizes the textarea.
  * - Enter = send, Shift+Enter = newline.
- * - Mic icon → orange Send button (animated) when textarea has content.
+ * - Mic icon → recording overlay with waveform.
  */
 export const ChatInput = forwardRef(function ChatInput({
     onSend,
@@ -76,16 +101,74 @@ export const ChatInput = forwardRef(function ChatInput({
     const fileInputRef = useRef(null);
     const wasSendingRef = useRef(false);
     const [attachmentError, setAttachmentError] = useState('');
+
     const value = String(draftValue ?? '');
     const hasContent = value.trim().length > 0;
     const attachmentList = Array.isArray(attachments) ? attachments : [];
     const hasAttachments = attachmentList.length > 0;
     const canSubmit = hasContent || hasAttachments;
 
+    /* ---- Voice recording ---- */
+    const {
+        state: recorderState,
+        error: recorderError,
+        getAmplitude,
+        getDuration,
+        startRecording,
+        stopRecording,
+        cancelRecording,
+        pauseRecording,
+        resumeRecording,
+    } = useVoiceRecorder();
+
+    const [isRecording, setIsRecording] = useState(false);
+    const [waveformBars, setWaveformBars] = useState([]);
+    const [recordingDuration, setRecordingDuration] = useState(0);
+    const waveformHistoryRef = useRef([]);
+    const getAmplitudeRef = useRef(getAmplitude);
+    const getDurationRef = useRef(getDuration);
+
+    useEffect(() => { getAmplitudeRef.current = getAmplitude; }, [getAmplitude]);
+    useEffect(() => { getDurationRef.current = getDuration; }, [getDuration]);
+
+    // Waveform sampling + duration tick — only while recording
+    useEffect(() => {
+        if (recorderState !== 'recording') return;
+
+        const id = setInterval(() => {
+            const amp = getAmplitudeRef.current();
+            const height = Math.min(100, Math.max(8, amp * 500));
+            const history = waveformHistoryRef.current;
+            history.push(height);
+            if (history.length > MAX_BARS) history.shift();
+            setWaveformBars([...history]);
+            setRecordingDuration(getDurationRef.current());
+        }, SAMPLE_MS);
+
+        return () => clearInterval(id);
+    }, [recorderState]);
+
+    // Keep duration ticking while paused (frozen value)
+    useEffect(() => {
+        if (recorderState === 'paused') {
+            setRecordingDuration(getDurationRef.current());
+        }
+    }, [recorderState]);
+
+    // Auto-cancel on error
+    useEffect(() => {
+        if (isRecording && recorderState === 'error') {
+            const timer = setTimeout(() => {
+                setIsRecording(false);
+            }, 2000);
+            return () => clearTimeout(timer);
+        }
+    }, [isRecording, recorderState]);
+
+    /* ---- Focus helpers ---- */
     const focusTextarea = useCallback(() => {
         const el = textareaRef.current;
         if (!el || el.disabled) return;
-
         el.focus();
         const cursor = el.value.length;
         el.setSelectionRange(cursor, cursor);
@@ -100,7 +183,6 @@ export const ChatInput = forwardRef(function ChatInput({
             wasSendingRef.current = true;
             return;
         }
-
         if (wasSendingRef.current && !isSending) {
             wasSendingRef.current = false;
             const timer = setTimeout(focusTextarea, 0);
@@ -111,14 +193,13 @@ export const ChatInput = forwardRef(function ChatInput({
     useEffect(() => {
         const el = textareaRef.current;
         if (!el) return;
-
         el.style.height = 'auto';
         el.style.height = `${Math.min(el.scrollHeight, 180)}px`;
     }, [value, isChatMode]);
 
+    /* ---- Text input handlers ---- */
     function handleKeyDown(e) {
         if (isSending) return;
-
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             submit();
@@ -132,9 +213,7 @@ export const ChatInput = forwardRef(function ChatInput({
     async function handleFileSelection(event) {
         const selectedFiles = Array.from(event.target.files ?? []);
         event.target.value = '';
-        if (selectedFiles.length === 0) {
-            return;
-        }
+        if (selectedFiles.length === 0) return;
 
         setAttachmentError('');
         try {
@@ -157,7 +236,6 @@ export const ChatInput = forwardRef(function ChatInput({
             for (const attachment of converted) {
                 merged.set(String(attachment.id), attachment);
             }
-
             onAttachmentsChange?.([...merged.values()]);
         } catch (error) {
             const message = error instanceof Error && error.message
@@ -173,30 +251,77 @@ export const ChatInput = forwardRef(function ChatInput({
     }
 
     function removeAttachment(attachmentId) {
-        const next = attachmentList.filter((attachment) => String(attachment?.id) !== String(attachmentId));
+        const next = attachmentList.filter((a) => String(a?.id) !== String(attachmentId));
         onAttachmentsChange?.(next);
         setAttachmentError('');
     }
 
     function submit() {
-        if (isSending) return;
-
-        if (!canSubmit) return;
-
-        onSend({
-            text: value,
-            attachments: attachmentList,
-        });
+        if (isSending || !canSubmit) return;
+        onSend({ text: value, attachments: attachmentList });
         onDraftChange?.('');
         onAttachmentsChange?.([]);
         setAttachmentError('');
         focusTextarea();
     }
 
+    /* ---- Voice handlers ---- */
+    function handleMicClick() {
+        if (isSending) return;
+        waveformHistoryRef.current = [];
+        setWaveformBars([]);
+        setRecordingDuration(0);
+        setIsRecording(true);
+        startRecording();
+    }
+
+    async function handleVoiceSend() {
+        const result = await stopRecording();
+        setIsRecording(false);
+        if (result) {
+            try {
+                const base64 = await blobToBase64(result.blob);
+                const extension = result.mimeType.includes('mp4') ? 'm4a' : 'webm';
+                onSend({
+                    text: '',
+                    attachments: [{
+                        id: `voice-${Date.now()}`,
+                        name: `voice-message.${extension}`,
+                        mimeType: result.mimeType,
+                        size: result.blob.size,
+                        data: base64,
+                    }],
+                });
+            } catch {
+                // encoding failed
+            }
+        }
+        focusTextarea();
+    }
+
+    function handleVoiceCancel() {
+        cancelRecording();
+        setIsRecording(false);
+        focusTextarea();
+    }
+
+    function handleTogglePause() {
+        if (recorderState === 'recording') {
+            pauseRecording();
+        } else if (recorderState === 'paused') {
+            resumeRecording();
+        }
+    }
+
+    /* ---- Render ---- */
+    const showRecordingUI = isRecording && (recorderState === 'recording' || recorderState === 'paused');
+    const showRecordingStatus = isRecording && (recorderState === 'requesting' || recorderState === 'error');
+
     return (
         <div className={`chat-input-container${isChatMode ? ' pinned' : ''}`}>
             <div className="chat-input-box">
-                <div className="input-area">
+                {/* ---- Input area: stacked to preserve exact height during voice recording ---- */}
+                <div className="input-area" style={{ display: 'grid' }}>
                     <textarea
                         ref={textareaRef}
                         id="chatInput"
@@ -206,8 +331,44 @@ export const ChatInput = forwardRef(function ChatInput({
                         autoFocus={!isSending}
                         onChange={handleInput}
                         onKeyDown={handleKeyDown}
+                        style={{
+                            gridArea: '1 / 1',
+                            opacity: (showRecordingUI || showRecordingStatus) ? 0 : 1,
+                            pointerEvents: (showRecordingUI || showRecordingStatus) ? 'none' : 'auto',
+                            resize: 'none',
+                            background: 'transparent'
+                        }}
                     />
+
+                    {showRecordingUI && (
+                        <div className="voice-waveform-row" style={{ gridArea: '1 / 1', zIndex: 1 }}>
+                            <div className={`voice-rec-dot${recorderState === 'paused' ? ' paused' : ''}`} />
+                            <div className="voice-waveform">
+                                {waveformBars.map((height, i) => (
+                                    <div
+                                        key={i}
+                                        className="voice-bar"
+                                        style={{
+                                            height: `${height > 0 ? Math.max(8, height) : 0}%`,
+                                            opacity: height > 0 ? 1 : 0,
+                                        }}
+                                    />
+                                ))}
+                            </div>
+                            <span className="voice-timer">{formatDuration(recordingDuration)}</span>
+                        </div>
+                    )}
+
+                    {showRecordingStatus && (
+                        <div className={`voice-status-text${recorderState === 'error' ? ' voice-error-text' : ''}`} style={{ gridArea: '1 / 1', zIndex: 1 }}>
+                            {recorderState === 'error'
+                                ? (recorderError || 'Could not access microphone.')
+                                : 'Requesting microphone access…'}
+                        </div>
+                    )}
                 </div>
+
+                {/* ---- Hidden file input ---- */}
                 <input
                     ref={fileInputRef}
                     className="attach-input"
@@ -215,7 +376,9 @@ export const ChatInput = forwardRef(function ChatInput({
                     multiple
                     onChange={handleFileSelection}
                 />
-                {attachmentList.length > 0 && (
+
+                {/* ---- Attachment chips (hidden when recording) ---- */}
+                {!isRecording && attachmentList.length > 0 && (
                     <div className="input-attachments">
                         {attachmentList.map((attachment, index) => {
                             const attachmentId = String(attachment?.id ?? `att-${index}`);
@@ -239,25 +402,57 @@ export const ChatInput = forwardRef(function ChatInput({
                         })}
                     </div>
                 )}
-                {attachmentError && (
-                    <div className="input-attachments-error">
-                        {attachmentError}
-                    </div>
+                {!isRecording && attachmentError && (
+                    <div className="input-attachments-error">{attachmentError}</div>
                 )}
+
+                {/* ---- Footer: always present, buttons swap ---- */}
                 <div className="input-footer">
                     <div className="input-left">
-                        <button
-                            type="button"
-                            className={`attach-btn${hasAttachments ? ' has-attachments' : ''}`}
-                            title="Attach file"
-                            onClick={openAttachmentDialog}
-                            disabled={isSending}
-                        >
-                            <IconPlus />
-                        </button>
+                        {isRecording ? (
+                            <button
+                                type="button"
+                                className="attach-btn voice-cancel"
+                                title="Cancel recording"
+                                onClick={handleVoiceCancel}
+                            >
+                                <IconTrash />
+                            </button>
+                        ) : (
+                            <button
+                                type="button"
+                                className={`attach-btn${hasAttachments ? ' has-attachments' : ''}`}
+                                title="Attach file"
+                                onClick={openAttachmentDialog}
+                                disabled={isSending}
+                            >
+                                <IconPlus />
+                            </button>
+                        )}
                     </div>
                     <div className="input-right">
-                        {isSending ? (
+                        {isRecording ? (
+                            <>
+                                {(recorderState === 'recording' || recorderState === 'paused') && (
+                                    <button
+                                        type="button"
+                                        className="voice-btn"
+                                        title={recorderState === 'paused' ? 'Resume' : 'Pause'}
+                                        onClick={handleTogglePause}
+                                    >
+                                        {recorderState === 'paused' ? <IconMic /> : <IconPause />}
+                                    </button>
+                                )}
+                                <button
+                                    type="button"
+                                    className="send-btn"
+                                    title="Send voice message"
+                                    onClick={handleVoiceSend}
+                                >
+                                    <IconArrowUp />
+                                </button>
+                            </>
+                        ) : isSending ? (
                             <button
                                 type="button"
                                 className="voice-btn stop-btn"
@@ -277,7 +472,13 @@ export const ChatInput = forwardRef(function ChatInput({
                                 <IconArrowUp />
                             </button>
                         ) : (
-                            <button type="button" className="voice-btn" title="Voice input" disabled={isSending}>
+                            <button
+                                type="button"
+                                className="voice-btn"
+                                title="Voice input"
+                                onClick={handleMicClick}
+                                disabled={isSending}
+                            >
                                 <IconMic />
                             </button>
                         )}

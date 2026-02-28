@@ -19,6 +19,7 @@ import * as sendCommandInput from './shell/sendCommandInput.js';
 import * as readTerminal from './shell/readTerminal.js';
 import * as generateImage from './agents/generateImage.js';
 import * as callCodingAgent from './agents/callCodingAgent.js';
+import * as manageSchedule from './cron.js';
 
 const ALL_TOOLS = [
     listDir,
@@ -39,6 +40,7 @@ const ALL_TOOLS = [
     readTerminal,
     generateImage,
     callCodingAgent,
+    manageSchedule,
 ];
 
 const declarationByName = new Map(ALL_TOOLS.map((tool) => [tool.declaration.name, tool.declaration]));

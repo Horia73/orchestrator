@@ -68,12 +68,16 @@ async function main() {
         ensureDataDirectories();
         console.log(c.green('OK'));
 
-        // 5. Write config
+        // 5. Write config (unified schema)
         const config = {
             geminiApiKey: apiKey,
             port,
-            contextMessages: existing?.contextMessages ?? 120,
-            toolsModel: existing?.toolsModel ?? 'gemini-3-flash-preview',
+            context: {
+                messages: existing?.context?.messages ?? existing?.contextMessages ?? 120,
+            },
+            agents: existing?.agents ?? {},
+            memory: existing?.memory ?? { enabled: true, consolidationModel: 'gemini-3-flash-preview', window: 100 },
+            cron: existing?.cron ?? { enabled: true },
         };
 
         writeConfig(config);

@@ -273,3 +273,74 @@
     align-items: center;
     gap: 8px;
 }
+
+/* ---- Voice cancel button ---- */
+.attach-btn.voice-cancel:hover {
+    color: #b73333;
+}
+
+/* ---- Voice recording waveform row ---- */
+.voice-waveform-row {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-height: 24px;
+}
+
+.voice-rec-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background: #d43c3c;
+    flex-shrink: 0;
+    animation: rec-pulse 1.2s ease-in-out infinite;
+}
+
+.voice-rec-dot.paused {
+    animation: none;
+    opacity: 0.35;
+}
+
+@keyframes rec-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.3; }
+}
+
+.voice-waveform {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    height: 24px;
+    overflow: hidden;
+}
+
+.voice-bar {
+    width: 3px;
+    flex-shrink: 0;
+    border-radius: 1.5px;
+    background: var(--accent-orange);
+    transition: height 80ms ease-out, opacity 80ms ease-out;
+}
+
+.voice-timer {
+    font-size: 14px;
+    font-variant-numeric: tabular-nums;
+    color: var(--text-secondary);
+    min-width: 36px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.voice-status-text {
+    min-height: 24px;
+    display: flex;
+    align-items: center;
+    font-size: 14px;
+    color: var(--text-tertiary);
+}
+
+.voice-error-text {
+    color: #b73333;
+}

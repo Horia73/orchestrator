@@ -270,7 +270,7 @@ export async function createChatFromFirstMessage(firstMessageText, options = {})
 
     const chat = {
         id: createChatId(),
-        title: truncateForTitle(firstMessageText),
+        title: 'Untitled',
         createdAt: now,
         updatedAt: now,
         messageCount: 0,
@@ -316,9 +316,7 @@ export async function appendMessage(chatId, payload) {
 
     const current = state.chats[chatIdx];
     const nextCount = current.messageCount + 1;
-    const nextTitle = current.messageCount === 0 && message.role === 'user'
-        ? truncateForTitle(message.text)
-        : current.title;
+    const nextTitle = current.title;
     const nextPreview = message.role === 'ai'
         ? truncatePreview(message.text)
         : current.lastMessagePreview;
@@ -369,4 +367,34 @@ export async function removeChat(chatId) {
     const chatPath = getChatFilePath(chatId);
     await fs.rm(chatPath, { force: true });
     return true;
+}
+
+export async function updateChatTitle(chatId, newTitle) {
+    await ensureInitialized();
+
+    const chatIdx = findChatIndex(chatId);
+    if (chatIdx === -1) {
+        return null;
+    }
+
+    const current = state.chats[chatIdx];
+    let cleanTitle = String(newTitle ?? '').trim();
+    if (!cleanTitle) cleanTitle = 'Untitled';
+    if (cleanTitle.startsWith('"') && cleanTitle.endsWith('"')) {
+        cleanTitle = cleanTitle.slice(1, -1);
+    }
+
+    cleanTitle = cleanTitle.split('\n')[0].replace(/\*\*/g, '').trim();
+
+    const updated = {
+        ...current,
+        title: cleanTitle,
+        updatedAt: Date.now(),
+    };
+
+    state.chats[chatIdx] = updated;
+    state.chats = sortChats(state.chats);
+    await persistIndex();
+
+    return updated;
 }

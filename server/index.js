@@ -6,7 +6,7 @@ import { listClientAgentDefinitions, DEFAULT_AGENT_ID } from './agents/index.js'
 import { CODING_AGENT_ID } from './agents/coding/index.js';
 import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
-import { generateAssistantReplyStream, listAvailableModels, getUnsupportedLevels } from './services/geminiService.js';
+import { generateAssistantReplyStream, listAvailableModels, getUnsupportedLevels, generateChatTitle } from './services/geminiService.js';
 import { buildMergedModels } from '../src/config/agentModels.js';
 import { openEventsStream, broadcastEvent } from './core/events.js';
 import { getCommandStatusSnapshot } from './tools/index.js';
@@ -22,8 +22,13 @@ import {
     getChatMessages,
     getRecentMessages,
     removeChat,
+    updateChatTitle,
 } from './storage/chats.js';
 import { getAgentConfig, normalizeAgentId, readSettings, writeSettings } from './storage/settings.js';
+import { memoryStore } from './services/memory.js';
+import { skillsLoader } from './services/skills.js';
+import { MEMORY_CONFIG, CRON_CONFIG } from './core/config.js';
+import { cronService } from './services/cron.js';
 
 const app = express();
 app.use(express.json({ limit: '80mb' }));
@@ -506,6 +511,173 @@ app.put('/api/settings', (req, res) => {
     }
 });
 
+/* ---- Memory endpoints ---- */
+app.get('/api/memory', (_req, res) => {
+    try {
+        res.json({
+            enabled: MEMORY_CONFIG.enabled,
+            memory: memoryStore.readLongTerm(),
+            history: memoryStore.readHistory(),
+        });
+    } catch {
+        res.status(500).json({ error: 'Failed to read memory.' });
+    }
+});
+
+app.put('/api/memory', (req, res) => {
+    try {
+        const content = String(req.body?.memory ?? '');
+        memoryStore.writeLongTerm(content);
+        broadcastEvent('memory.updated', {});
+        res.json({ ok: true });
+    } catch {
+        res.status(500).json({ error: 'Failed to update memory.' });
+    }
+});
+
+app.delete('/api/memory', (_req, res) => {
+    try {
+        memoryStore.clearAll();
+        broadcastEvent('memory.cleared', {});
+        res.json({ ok: true });
+    } catch {
+        res.status(500).json({ error: 'Failed to clear memory.' });
+    }
+});
+
+/* ---- Skills endpoints ---- */
+app.get('/api/skills', (_req, res) => {
+    try {
+        const skills = skillsLoader.listSkills(false).map((s) => {
+            const meta = skillsLoader.getSkillMetadata(s.name) ?? {};
+            return {
+                name: s.name,
+                source: s.source,
+                description: meta.description ?? s.name,
+                always: meta.always === true,
+                available: true, // listSkills(false) includes unavailable
+            };
+        });
+        res.json({ skills });
+    } catch {
+        res.status(500).json({ error: 'Failed to list skills.' });
+    }
+});
+
+app.get('/api/skills/:name', (req, res) => {
+    const name = String(req.params.name).trim();
+    const content = skillsLoader.loadSkill(name);
+    if (!content) {
+        res.status(404).json({ error: 'Skill not found.' });
+        return;
+    }
+    const meta = skillsLoader.getSkillMetadata(name) ?? {};
+    res.json({ name, content, metadata: meta });
+});
+
+app.post('/api/skills/:name', (req, res) => {
+    try {
+        const name = String(req.params.name).trim();
+        const content = String(req.body?.content ?? '');
+        if (!content) {
+            res.status(400).json({ error: 'Skill content is required.' });
+            return;
+        }
+        skillsLoader.saveWorkspaceSkill(name, content);
+        res.json({ ok: true });
+        void writeSystemLog({
+            source: 'skills',
+            eventType: 'skill.saved',
+            message: `Workspace skill "${name}" saved.`,
+        }).catch(() => undefined);
+    } catch {
+        res.status(500).json({ error: 'Failed to save skill.' });
+    }
+});
+
+app.delete('/api/skills/:name', (req, res) => {
+    const name = String(req.params.name).trim();
+    const removed = skillsLoader.removeWorkspaceSkill(name);
+    if (!removed) {
+        res.status(404).json({ error: 'Workspace skill not found.' });
+        return;
+    }
+    res.json({ ok: true });
+    void writeSystemLog({
+        source: 'skills',
+        eventType: 'skill.removed',
+        message: `Workspace skill "${name}" removed.`,
+    }).catch(() => undefined);
+});
+
+/* ---- Cron / Scheduling endpoints ---- */
+app.get('/api/cron', (_req, res) => {
+    try {
+        const jobs = cronService.listJobs();
+        const status = cronService.status();
+        res.json({ ...status, jobs });
+    } catch {
+        res.status(500).json({ error: 'Failed to list cron jobs.' });
+    }
+});
+
+app.post('/api/cron', (req, res) => {
+    try {
+        const { name, schedule, prompt, chatId } = req.body ?? {};
+        const job = cronService.addJob({ name, schedule, prompt, chatId });
+        broadcastEvent('cron.added', { job });
+        void writeSystemLog({
+            source: 'cron',
+            eventType: 'cron.added',
+            message: `Scheduled job "${job.name}" added.`,
+            data: { jobId: job.id, name: job.name },
+        }).catch(() => undefined);
+        res.json({ ok: true, job });
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Failed to add job.';
+        res.status(400).json({ error: message });
+    }
+});
+
+app.delete('/api/cron/:jobId', (req, res) => {
+    const jobId = String(req.params.jobId).trim();
+    const removed = cronService.removeJob(jobId);
+    if (!removed) {
+        res.status(404).json({ error: 'Job not found.' });
+        return;
+    }
+    broadcastEvent('cron.removed', { jobId });
+    void writeSystemLog({
+        source: 'cron',
+        eventType: 'cron.removed',
+        message: `Scheduled job ${jobId} removed.`,
+        data: { jobId },
+    }).catch(() => undefined);
+    res.json({ ok: true });
+});
+
+app.put('/api/cron/:jobId', (req, res) => {
+    const jobId = String(req.params.jobId).trim();
+    const enabled = req.body?.enabled !== false;
+    const job = cronService.enableJob(jobId, enabled);
+    if (!job) {
+        res.status(404).json({ error: 'Job not found.' });
+        return;
+    }
+    broadcastEvent('cron.updated', { job });
+    res.json({ ok: true, job });
+});
+
+app.post('/api/cron/:jobId/run', async (req, res) => {
+    const jobId = String(req.params.jobId).trim();
+    const job = await cronService.runJob(jobId);
+    if (!job) {
+        res.status(404).json({ error: 'Job not found.' });
+        return;
+    }
+    res.json({ ok: true, job });
+});
+
 app.get('/api/models', async (_req, res) => {
     try {
         const rawModels = await listAvailableModels();
@@ -758,6 +930,22 @@ app.post('/api/chat/send', async (req, res, next) => {
             }).catch(() => undefined);
         }
 
+        const hasAttachments = attachments && attachments.length > 0;
+        if (created && !hasAttachments && inputText) {
+            generateChatTitle({ text: inputText }).then(generatedTitle => {
+                if (generatedTitle) {
+                    updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
+                        if (updatedChat) {
+                            broadcastEvent('chat.upsert', {
+                                chat: updatedChat,
+                                originClientId: clientId,
+                            });
+                        }
+                    }).catch(() => undefined);
+                }
+            }).catch(() => undefined);
+        }
+
         const chatAgentId = normalizeAgentId(chat.agentId);
         const userMessageParts = buildUserMessageParts({
             text: inputText,
@@ -965,6 +1153,21 @@ app.post('/api/chat/send', async (req, res, next) => {
                 originClientId: clientId,
             });
 
+            if (created && hasAttachments) {
+                generateChatTitle({ text: inputText, attachments, aiText: assistantText }).then(generatedTitle => {
+                    if (generatedTitle) {
+                        updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
+                            if (updatedChat) {
+                                broadcastEvent('chat.upsert', {
+                                    chat: updatedChat,
+                                    originClientId: clientId,
+                                });
+                            }
+                        }).catch(() => undefined);
+                    }
+                }).catch(() => undefined);
+            }
+
             const usageRecord = await trackUsageRequest({
                 chatId: chat.id,
                 clientId,
@@ -1014,6 +1217,27 @@ app.post('/api/chat/send', async (req, res, next) => {
                 });
             }
 
+            // Trigger memory consolidation in background when message count exceeds window
+            if (MEMORY_CONFIG.enabled && !memoryStore.isConsolidating) {
+                const allMessages = await getChatMessages(chat.id);
+                if (allMessages.length >= MEMORY_CONFIG.window) {
+                    const halfWindow = Math.floor(MEMORY_CONFIG.window / 2);
+                    const messagesToConsolidate = allMessages.slice(0, -halfWindow);
+                    if (messagesToConsolidate.length > 0) {
+                        memoryStore.consolidate(messagesToConsolidate).then((ok) => {
+                            if (ok) {
+                                broadcastEvent('memory.consolidated', {});
+                                void writeSystemLog({
+                                    source: 'memory',
+                                    eventType: 'memory.consolidated',
+                                    message: `Consolidated ${messagesToConsolidate.length} messages into long-term memory.`,
+                                }).catch(() => undefined);
+                            }
+                        }).catch(() => undefined);
+                    }
+                }
+            }
+
             return {
                 chat: appendedAi.chat,
                 userMessage: appendedUser.message,
@@ -1042,10 +1266,162 @@ app.use((error, _req, res, next) => {
     res.status(500).json({ error: message });
 });
 
+async function handleCronJob(job) {
+    const chatId = job.chatId;
+    if (!chatId) {
+        console.warn(`[cron] Job "${job.name}" has no chatId, skipping.`);
+        return;
+    }
+
+    const chat = await getChat(chatId);
+    if (!chat) {
+        console.warn(`[cron] Chat ${chatId} not found for job "${job.name}", skipping.`);
+        return;
+    }
+
+    void writeSystemLog({
+        source: 'cron',
+        eventType: 'cron.fired',
+        message: `Scheduled job "${job.name}" fired.`,
+        data: { jobId: job.id, chatId, prompt: job.prompt.slice(0, 200) },
+    }).catch(() => undefined);
+
+    broadcastEvent('cron.executed', { jobId: job.id, name: job.name, chatId });
+
+    // Inject the cron prompt as a user message and generate a reply
+    const cronClientId = `cron-${job.id}`;
+    const cronMessageId = createMessageId();
+
+    await enqueueChatWork(chatId, async () => {
+        const appendedUser = await appendMessage(chatId, {
+            id: cronMessageId,
+            role: 'user',
+            text: `[Scheduled: ${job.name}] ${job.prompt}`,
+        });
+
+        broadcastEvent('message.added', {
+            chatId,
+            message: appendedUser.message,
+            originClientId: cronClientId,
+        });
+
+        broadcastEvent('chat.upsert', {
+            chat: appendedUser.chat,
+            originClientId: cronClientId,
+        });
+
+        const chatAgentId = normalizeAgentId(chat.agentId);
+        const runtimeAgentId = chatAgentId;
+        const history = await getRecentMessages(chatId, GEMINI_CONTEXT_MESSAGES + 1);
+
+        const aiMessageId = createMessageId();
+        const aiMessageCreatedAt = Date.now();
+        let assistantText = '';
+        let streamedThought = '';
+        let streamedParts = [];
+        let streamedSteps = [];
+        let usageMetadata = null;
+        let modelForUsage = getAgentConfig(runtimeAgentId).model;
+        let requestStatus = 'completed';
+
+        broadcastEvent('message.streaming', {
+            chatId,
+            message: { id: aiMessageId, chatId, role: 'ai', text: '', thought: '', parts: [], steps: [], createdAt: aiMessageCreatedAt },
+            originClientId: cronClientId,
+        });
+
+        try {
+            const streamResult = await generateAssistantReplyStream(history, {
+                chatId,
+                messageId: aiMessageId,
+                clientId: cronClientId,
+                onUpdate: async ({ text, thought, parts, steps }) => {
+                    assistantText = text;
+                    streamedThought = thought;
+                    streamedParts = Array.isArray(parts) ? parts : streamedParts;
+                    streamedSteps = Array.isArray(steps) ? steps : streamedSteps;
+                    broadcastEvent('message.streaming', {
+                        chatId,
+                        message: { id: aiMessageId, chatId, role: 'ai', text, thought, parts: streamedParts, steps: streamedSteps, createdAt: aiMessageCreatedAt },
+                        originClientId: cronClientId,
+                    });
+                },
+                shouldStop: () => false,
+                agentId: runtimeAgentId,
+            });
+
+            usageMetadata = streamResult.usageMetadata ?? null;
+            modelForUsage = String(streamResult.model ?? modelForUsage).trim() || modelForUsage;
+            assistantText = String(streamResult.text ?? '').trim() || 'No response.';
+            streamedThought = streamResult.thought;
+            streamedParts = Array.isArray(streamResult.parts) ? streamResult.parts : streamedParts;
+            streamedSteps = Array.isArray(streamResult.steps) ? streamResult.steps : streamedSteps;
+        } catch (error) {
+            requestStatus = 'error';
+            assistantText = assistantText
+                ? `${assistantText}\n\n${formatGeminiError(error)}`
+                : formatGeminiError(error);
+        }
+
+        const appendedAi = await appendMessage(chatId, {
+            id: aiMessageId,
+            role: 'ai',
+            text: assistantText,
+            thought: streamedThought,
+            parts: streamedParts,
+            steps: streamedSteps,
+            createdAt: aiMessageCreatedAt,
+        });
+
+        broadcastEvent('message.added', {
+            chatId,
+            message: appendedAi.message,
+            originClientId: cronClientId,
+        });
+
+        broadcastEvent('chat.upsert', {
+            chat: appendedAi.chat,
+            originClientId: cronClientId,
+        });
+
+        await trackUsageRequest({
+            chatId,
+            clientId: cronClientId,
+            status: requestStatus,
+            agentId: chatAgentId,
+            model: modelForUsage,
+            inputText: job.prompt,
+            outputText: assistantText,
+            createdAt: aiMessageCreatedAt,
+            usageMetadata,
+            originClientId: cronClientId,
+            source: 'cron',
+        });
+    });
+}
+
 async function start() {
     await initStorage();
     await initUsageStorage();
     await initLogStorage();
+
+    // Start cron service if enabled
+    if (CRON_CONFIG.enabled) {
+        cronService.start(async (job) => {
+            try {
+                await handleCronJob(job);
+            } catch (error) {
+                console.error(`[cron] Error executing job "${job.name}":`, error);
+                void writeSystemLog({
+                    level: 'error',
+                    source: 'cron',
+                    eventType: 'cron.error',
+                    message: `Cron job "${job.name}" failed: ${error?.message ?? error}`,
+                    data: { jobId: job.id },
+                }).catch(() => undefined);
+            }
+        });
+    }
 
     const server = http.createServer(app);
 
@@ -1063,6 +1439,7 @@ async function start() {
     });
 
     const shutdown = () => {
+        cronService.stop();
         server.close(() => {
             process.exit(0);
         });

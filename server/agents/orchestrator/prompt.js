@@ -1,5 +1,7 @@
 import os from 'node:os';
 import { basename, resolve } from 'node:path';
+import { memoryStore } from '../../services/memory.js';
+import { skillsLoader } from '../../services/skills.js';
 
 function getRuntimeContext() {
   const workspacePath = resolve(process.cwd());
@@ -66,5 +68,7 @@ Call tools as you normally would. The following list provides additional guidanc
 - Be explicit about assumptions.
 - Do not claim delegation or routing decisions inside the response.
 </behavior>
+${memoryStore.getMemoryContext()}
+${skillsLoader.getSkillsContext()}
 `.trim();
 }

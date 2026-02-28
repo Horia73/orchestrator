@@ -4,6 +4,7 @@ import {
     isValidElement,
     useCallback,
     useEffect,
+    useLayoutEffect,
     useMemo,
     useRef,
     useState,
@@ -360,6 +361,10 @@ function CodeBlock({ className, children }) {
 }
 
 export function MarkdownContent({ text, variant = 'ai' }) {
+    const [isExpanded, setIsExpanded] = useState(false);
+    const [isOverflowing, setIsOverflowing] = useState(false);
+    const contentRef = useRef(null);
+
     const components = useMemo(
         () => ({
             table({ children }) {
@@ -400,15 +405,53 @@ export function MarkdownContent({ text, variant = 'ai' }) {
         [],
     );
 
+    useLayoutEffect(() => {
+        if (variant !== 'user') return;
+        const el = contentRef.current;
+        if (!el) return;
+
+        const observer = new ResizeObserver(() => {
+            const shouldOverflow = el.scrollHeight > 480;
+            setIsOverflowing(shouldOverflow);
+            if (!shouldOverflow && isExpanded) {
+                setIsExpanded(false);
+            }
+        });
+
+        observer.observe(el);
+        return () => observer.disconnect();
+    }, [isExpanded, variant, text]);
+
+    const content = (
+        <ReactMarkdown
+            remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
+            rehypePlugins={[rehypeKatex]}
+            components={components}
+        >
+            {text ?? ''}
+        </ReactMarkdown>
+    );
+
+    if (variant === 'ai') {
+        return <div className="message-markdown ai">{content}</div>;
+    }
+
     return (
-        <div className={`message-markdown ${variant === 'user' ? 'user' : 'ai'}`}>
-            <ReactMarkdown
-                remarkPlugins={[remarkGfm, remarkBreaks, remarkMath]}
-                rehypePlugins={[rehypeKatex]}
-                components={components}
-            >
-                {text ?? ''}
-            </ReactMarkdown>
+        <div className={`message-markdown user${isOverflowing && !isExpanded ? ' clamped' : ''}`}>
+            <div ref={contentRef} className="markdown-inner">
+                {content}
+            </div>
+            {isOverflowing && (
+                <div className="markdown-expand-overlay">
+                    <button
+                        type="button"
+                        className="markdown-expand-btn"
+                        onClick={() => setIsExpanded(p => !p)}
+                    >
+                        {isExpanded ? 'Show less' : 'Show more'}
+                    </button>
+                </div>
+            )}
         </div>
     );
 }

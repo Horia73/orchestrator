@@ -1,5 +1,6 @@
 import os from 'node:os';
 import { basename, resolve } from 'node:path';
+import { memoryStore } from '../../services/memory.js';
 
 function getRuntimeContext() {
     const workspacePath = resolve(process.cwd());
@@ -670,5 +671,6 @@ namespace functions {
     }) => any;
 
 } // namespace functions
+${memoryStore.getMemoryContext()}
 `.trim();
 }

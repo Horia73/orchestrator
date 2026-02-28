@@ -1,10 +1,12 @@
-import { forwardRef, useRef } from 'react';
+import { forwardRef, useRef, useState, useEffect, useCallback } from 'react';
+import { createPortal } from 'react-dom';
 import { MarkdownContent } from './MarkdownContent.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
 import { ToolBlock } from './ToolBlock.jsx';
 import { FileManagementBlock } from './FileManagementBlock.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
 import { getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
+import { IconPlay, IconPause } from '../shared/icons.jsx';
 
 const FILE_MANAGEMENT_TOOLS = new Set([
     'view_file',
@@ -249,9 +251,144 @@ function buildToolBlocks(parts) {
     return renderedBlocks;
 }
 
-function MediaAttachment({ attachment }) {
+function formatAudioTime(seconds) {
+    if (!Number.isFinite(seconds) || seconds < 0) return '0:00';
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    return `${m}:${String(s).padStart(2, '0')}`;
+}
+
+function AudioPlayer({ href }) {
+    const audioRef = useRef(null);
+    const progressRef = useRef(null);
+    const seekingRef = useRef(false);
+    const [isPlaying, setIsPlaying] = useState(false);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+
+    useEffect(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+
+        const onLoadedMetadata = () => {
+            const d = audio.duration;
+            if (Number.isFinite(d) && d > 0) setDuration(d);
+        };
+        const onDurationChange = () => {
+            const d = audio.duration;
+            if (Number.isFinite(d) && d > 0) setDuration(d);
+        };
+        const onTimeUpdate = () => {
+            if (!seekingRef.current) setCurrentTime(audio.currentTime || 0);
+        };
+        const onEnded = () => { setIsPlaying(false); setCurrentTime(0); };
+        const onPlay = () => setIsPlaying(true);
+        const onPause = () => setIsPlaying(false);
+
+        audio.addEventListener('loadedmetadata', onLoadedMetadata);
+        audio.addEventListener('durationchange', onDurationChange);
+        audio.addEventListener('timeupdate', onTimeUpdate);
+        audio.addEventListener('ended', onEnded);
+        audio.addEventListener('play', onPlay);
+        audio.addEventListener('pause', onPause);
+
+        return () => {
+            audio.removeEventListener('loadedmetadata', onLoadedMetadata);
+            audio.removeEventListener('durationchange', onDurationChange);
+            audio.removeEventListener('timeupdate', onTimeUpdate);
+            audio.removeEventListener('ended', onEnded);
+            audio.removeEventListener('play', onPlay);
+            audio.removeEventListener('pause', onPause);
+        };
+    }, []);
+
+    const togglePlay = useCallback(() => {
+        const audio = audioRef.current;
+        if (!audio) return;
+        if (isPlaying) {
+            audio.pause();
+        } else {
+            void audio.play().catch(() => { });
+        }
+    }, [isPlaying]);
+
+    const seekToPosition = useCallback((clientX) => {
+        const audio = audioRef.current;
+        const bar = progressRef.current;
+        if (!audio || !bar || !duration) return;
+        const rect = bar.getBoundingClientRect();
+        const ratio = Math.max(0, Math.min(1, (clientX - rect.left) / rect.width));
+        audio.currentTime = ratio * duration;
+        setCurrentTime(ratio * duration);
+    }, [duration]);
+
+    const handleMouseDown = useCallback((e) => {
+        e.preventDefault();
+        seekingRef.current = true;
+        seekToPosition(e.clientX);
+
+        const onMouseMove = (moveEvent) => {
+            seekToPosition(moveEvent.clientX);
+        };
+        const onMouseUp = () => {
+            seekingRef.current = false;
+            document.removeEventListener('mousemove', onMouseMove);
+            document.removeEventListener('mouseup', onMouseUp);
+        };
+
+        document.addEventListener('mousemove', onMouseMove);
+        document.addEventListener('mouseup', onMouseUp);
+    }, [seekToPosition]);
+
+    const handleTouchStart = useCallback((e) => {
+        seekingRef.current = true;
+        if (e.touches.length > 0) {
+            seekToPosition(e.touches[0].clientX);
+        }
+
+        const onTouchMove = (moveEvent) => {
+            if (moveEvent.touches.length > 0) {
+                seekToPosition(moveEvent.touches[0].clientX);
+            }
+        };
+        const onTouchEnd = () => {
+            seekingRef.current = false;
+            document.removeEventListener('touchmove', onTouchMove);
+            document.removeEventListener('touchend', onTouchEnd);
+        };
+
+        document.addEventListener('touchmove', onTouchMove);
+        document.addEventListener('touchend', onTouchEnd);
+    }, [seekToPosition]);
+
+    const progress = duration > 0 ? (currentTime / duration) * 100 : 0;
+
+    return (
+        <div className="audio-player">
+            <audio ref={audioRef} src={href} preload="metadata" />
+            <button type="button" className="audio-play-btn" onClick={togglePlay}>
+                {isPlaying ? <IconPause /> : <IconPlay />}
+            </button>
+            <div
+                className="audio-progress-wrap"
+                ref={progressRef}
+                onMouseDown={handleMouseDown}
+                onTouchStart={handleTouchStart}
+            >
+                <div className="audio-progress-bar">
+                    <div className="audio-progress-fill" style={{ width: `${progress}%` }} />
+                    <div className="audio-progress-thumb" style={{ left: `${progress}%` }} />
+                </div>
+            </div>
+            <span className="audio-time">
+                {formatAudioTime(currentTime)}{duration > 0 ? ` / ${formatAudioTime(duration)}` : ''}
+            </span>
+        </div>
+    );
+}
+
+function VideoAttachment({ attachment }) {
     const mediaRef = useRef(null);
-    const isVideo = attachment.kind === 'video';
 
     const playFromCurrent = () => {
         const media = mediaRef.current;
@@ -283,22 +420,13 @@ function MediaAttachment({ attachment }) {
 
     return (
         <div className="message-media-preview">
-            {isVideo ? (
-                <video
-                    ref={mediaRef}
-                    className="message-attachment-video"
-                    src={attachment.href}
-                    preload="metadata"
-                    playsInline
-                />
-            ) : (
-                <audio
-                    ref={mediaRef}
-                    className="message-attachment-audio"
-                    src={attachment.href}
-                    preload="metadata"
-                />
-            )}
+            <video
+                ref={mediaRef}
+                className="message-attachment-video"
+                src={attachment.href}
+                preload="metadata"
+                playsInline
+            />
             <div className="message-media-controls">
                 <button type="button" onClick={startFromBeginning}>Start</button>
                 <button type="button" onClick={playFromCurrent}>Play</button>
@@ -308,7 +436,39 @@ function MediaAttachment({ attachment }) {
     );
 }
 
+function MediaAttachment({ attachment }) {
+    if (attachment.kind === 'video') {
+        return <VideoAttachment attachment={attachment} />;
+    }
+    return (
+        <div className="message-media-preview">
+            <AudioPlayer href={attachment.href} />
+        </div>
+    );
+}
+
+function ImageLightbox({ src, alt, onClose }) {
+    useEffect(() => {
+        const handler = (e) => { if (e.key === 'Escape') onClose(); };
+        document.addEventListener('keydown', handler);
+        return () => document.removeEventListener('keydown', handler);
+    }, [onClose]);
+
+    return createPortal(
+        <div className="lightbox-overlay" onClick={onClose} role="dialog" aria-modal="true">
+            <img
+                className="lightbox-image"
+                src={src}
+                alt={alt}
+                onClick={(e) => e.stopPropagation()}
+            />
+        </div>,
+        document.body,
+    );
+}
+
 function AttachmentCard({ attachment, index }) {
+    const [lightboxOpen, setLightboxOpen] = useState(false);
     const name = sanitizeAttachmentName(attachment.displayName, `attachment-${index + 1}`);
     const actionLabel = attachment.source === 'inline' ? 'Download' : 'Open';
     const actionProps = attachment.source === 'inline'
@@ -318,7 +478,20 @@ function AttachmentCard({ attachment, index }) {
     if (attachment.kind === 'image') {
         return (
             <figure className="message-attachment-image-wrap" key={attachment.id}>
-                <img className="message-attachment-image" src={attachment.href} alt={name} loading="lazy" />
+                <img
+                    className="message-attachment-image"
+                    src={attachment.href}
+                    alt={name}
+                    loading="lazy"
+                    onClick={() => setLightboxOpen(true)}
+                />
+                {lightboxOpen && (
+                    <ImageLightbox
+                        src={attachment.href}
+                        alt={name}
+                        onClose={() => setLightboxOpen(false)}
+                    />
+                )}
             </figure>
         );
     }
@@ -326,7 +499,9 @@ function AttachmentCard({ attachment, index }) {
     if (attachment.kind === 'audio' || attachment.kind === 'video') {
         return (
             <article className="message-attachment-card" key={attachment.id}>
-                <div className="message-attachment-header">{name}</div>
+                {attachment.kind === 'video' && (
+                    <div className="message-attachment-header">{name}</div>
+                )}
                 <MediaAttachment attachment={attachment} />
             </article>
         );
@@ -854,6 +1029,7 @@ export const Message = forwardRef(function Message({
                         parts,
                         fallbackParts: [],
                         bodyIsThinking: isThinking,
+                        showWorkedWhenNoThought: true,
                     })}
                 {shouldRenderMessageAttachmentsAfterSteps && <AttachmentGallery parts={parts} />}
             </div>

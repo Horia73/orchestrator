@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
-import { CONFIG_PATH } from './dataPaths.js';
+import { CONFIG_PATH, SETTINGS_PATH } from './dataPaths.js';
 
 const DEFAULT_API_PORT = 8787;
 const DEFAULT_CONTEXT_MESSAGES = 120;
@@ -84,8 +84,47 @@ function resolve(envKeys, configValue, fallback) {
     return fallback;
 }
 
+/**
+ * Migrate old split config (config.json + settings.json) into unified config.json.
+ * Called once at load time. If config.json has no `agents` key but settings.json exists,
+ * merge them and write back.
+ */
+function migrateIfNeeded(configJson) {
+    if (!configJson) return configJson;
+    if (configJson.agents) return configJson; // already unified
+
+    try {
+        if (!fs.existsSync(SETTINGS_PATH)) return configJson;
+        const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
+        const settings = JSON.parse(raw);
+        if (!settings || typeof settings !== 'object') return configJson;
+
+        // Merge settings into config under `agents`
+        configJson.agents = settings;
+
+        // Also migrate flat `contextMessages` → nested `context.messages`
+        if (configJson.contextMessages !== undefined && !configJson.context) {
+            configJson.context = { messages: configJson.contextMessages };
+        }
+
+        // Write the unified config
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify(configJson, null, 2) + '\n', 'utf8');
+
+        // Rename old settings.json so it's not re-migrated
+        const backupPath = SETTINGS_PATH + '.bak';
+        fs.renameSync(SETTINGS_PATH, backupPath);
+
+        console.log('[config] Migrated settings.json into unified config.json');
+    } catch {
+        // Migration failed — continue with what we have
+    }
+
+    return configJson;
+}
+
 loadEnvFiles();
-const configJson = loadConfigJson();
+const rawConfigJson = loadConfigJson();
+const configJson = migrateIfNeeded(rawConfigJson);
 
 export const API_PORT = Number(
     resolve(['API_PORT'], configJson?.port, DEFAULT_API_PORT),
@@ -95,10 +134,58 @@ export const GEMINI_API_KEY = String(
     resolve(['GEMINI_API_KEY', 'VITE_GEMINI_API_KEY'], configJson?.geminiApiKey, ''),
 ).trim();
 
+// Support both flat `contextMessages` and nested `context.messages`
+const contextMessagesValue = configJson?.context?.messages ?? configJson?.contextMessages;
 export const GEMINI_CONTEXT_MESSAGES = normalizeContextMessages(
-    resolve(['GEMINI_CONTEXT_MESSAGES'], configJson?.contextMessages, DEFAULT_CONTEXT_MESSAGES),
+    resolve(['GEMINI_CONTEXT_MESSAGES'], contextMessagesValue, DEFAULT_CONTEXT_MESSAGES),
 );
 
 export const TOOLS_MODEL = String(
     resolve(['TOOLS_MODEL', 'GEMINI_MODEL'], configJson?.toolsModel, DEFAULT_TOOLS_MODEL),
 ).trim() || DEFAULT_TOOLS_MODEL;
+
+// Agent settings from unified config
+export const AGENTS_CONFIG = configJson?.agents ?? {};
+
+// Memory config
+const DEFAULT_MEMORY_CONFIG = {
+    enabled: true,
+    consolidationModel: 'gemini-3-flash-preview',
+    window: 100,
+};
+
+export const MEMORY_CONFIG = {
+    enabled: configJson?.memory?.enabled !== false,
+    consolidationModel: String(configJson?.memory?.consolidationModel ?? DEFAULT_MEMORY_CONFIG.consolidationModel).trim() || DEFAULT_MEMORY_CONFIG.consolidationModel,
+    window: Number(configJson?.memory?.window) || DEFAULT_MEMORY_CONFIG.window,
+};
+
+// Cron config
+export const CRON_CONFIG = {
+    enabled: configJson?.cron?.enabled !== false,
+};
+
+/**
+ * Re-read config.json from disk (for runtime updates).
+ */
+export function reloadConfigJson() {
+    try {
+        if (fs.existsSync(CONFIG_PATH)) {
+            return JSON.parse(fs.readFileSync(CONFIG_PATH, 'utf8'));
+        }
+    } catch {
+        // ignore
+    }
+    return null;
+}
+
+/**
+ * Write a section back to config.json, merging with existing.
+ */
+export function updateConfigSection(section, value) {
+    const current = reloadConfigJson() ?? {};
+    current[section] = value;
+    fs.mkdirSync(path.dirname(CONFIG_PATH), { recursive: true });
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2) + '\n', 'utf8');
+    return current;
+}

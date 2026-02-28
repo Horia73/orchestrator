@@ -1392,3 +1392,36 @@ export async function listAvailableModels() {
     const data = await res.json();
     return data.models || [];
 }
+
+export async function generateChatTitle({ text, attachments, aiText }) {
+    const prompt = [];
+    if (attachments && attachments.length > 0) {
+        prompt.push('User uploaded some attachments/images.');
+    }
+    if (text) {
+        prompt.push(`User input: "${text}"`);
+    }
+    if (aiText) {
+        const truncated = String(aiText).slice(0, 1000);
+        prompt.push(`AI Response (preview): "${truncated}"`);
+    }
+
+    prompt.push('Task: Generate a short, conversational and concise title (1-5 words max) for this chat conversation based on the context above. Only output the title. Do not include quotes, markdown bolding, or any explanations.');
+
+    try {
+        const client = getClient();
+        const model = 'gemini-3-flash-preview';
+        const doc = prompt.join('\n\n');
+        const result = await client.models.generateContent({
+            model,
+            contents: doc,
+            config: { thinkingConfig: { thinkingLevel: 'minimal' } }
+        });
+
+        const generatedTitle = result.text?.trim();
+        return generatedTitle || null;
+    } catch (error) {
+        console.warn('Failed to generate chat title:', error?.message ?? error);
+        return null; // Fallback
+    }
+}

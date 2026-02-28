@@ -9,8 +9,8 @@ import {
     findLatestAgentToolCallInMessages,
 } from './agentCallUtils.js';
 
-const USER_TOP_OFFSET = 24;
-const AI_BOTTOM_GAP = 36;
+const USER_TOP_OFFSET = 54;
+const USER_SCROLL_FOCUS_OFFSET = 12;
 const AUTO_SCROLL_SNAP_DISTANCE = 24;
 const INPUT_FLIP_DURATION_MS = 260;
 const EXIT_FADE_DURATION_MS = INPUT_FLIP_DURATION_MS;
@@ -150,8 +150,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     }, []);
 
     function refreshScrollButton(container) {
-        const spacerHeight = spacerRef.current ? spacerRef.current.offsetHeight : 0;
-        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight - spacerHeight;
+        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
 
         if (isJumpingToBottomRef.current) {
             if (distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE) {
@@ -172,6 +171,10 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         if (!slot) return;
 
         const nextRect = slot.getBoundingClientRect();
+        if (slot.parentElement) {
+            slot.parentElement.style.setProperty('--input-slot-height', `${nextRect.height}px`);
+        }
+
         const previousRect = previousInputSlotRectRef.current;
         const wasChatMode = previousRenderChatModeRef.current;
         const prefersReducedMotion = (
@@ -286,15 +289,17 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         const container = scrollRef.current;
         if (!container) return;
 
-        const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
+        const requiredSpacer = Math.max(0, container.clientHeight - USER_TOP_OFFSET - paddingBottom);
+        if (spacerRef.current) {
+            spacerRef.current.style.height = `${requiredSpacer}px`;
+        }
+
+        const refreshedMaxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
         const savedScrollTop = scrollPositionsRef.current[pendingConversationKey];
         const targetScrollTop = Number.isFinite(savedScrollTop)
-            ? Math.min(Math.max(0, savedScrollTop), maxScrollTop)
-            : maxScrollTop;
-
-        if (spacerRef.current) {
-            spacerRef.current.style.height = '0px';
-        }
+            ? Math.min(Math.max(0, savedScrollTop), refreshedMaxScrollTop)
+            : refreshedMaxScrollTop;
 
         isProgrammaticScrollRef.current = true;
         container.scrollTop = targetScrollTop;
@@ -314,7 +319,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             if (snapshot.length > 0) {
                 if (exitFadeTimeoutRef.current) clearTimeout(exitFadeTimeoutRef.current);
 
-                exitSnapshotScrollTopRef.current = scrollRef.current?.scrollTop ?? 0;
+                exitSnapshotScrollTopRef.current = lastKnownScrollTopRef.current;
                 setExitSnapshotMessages(snapshot);
                 exitFadeTimeoutRef.current = setTimeout(() => {
                     setExitSnapshotMessages([]);
@@ -331,7 +336,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         }
 
         previousChatModeRef.current = isChatMode;
-    }, [isChatMode, exitSnapshotMessages.length]);
+    }, [isChatMode, exitSnapshotMessages.length, saveConversationScrollPosition]);
 
     useLayoutEffect(() => {
         const container = exitSnapshotRef.current;
@@ -429,13 +434,14 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 const contentBottom = Math.max(userBottom, aiBottom);
                 const containerHeight = container.clientHeight;
                 const contentBlockHeight = Math.max(0, contentBottom - userTop);
+                const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
 
                 // Setam spacer-ul initial pentru a permite scroll-ul pana la pozitia dorita.
-                const requiredSpacer = Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - AI_BOTTOM_GAP);
+                const requiredSpacer = Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - paddingBottom);
                 spacer.style.height = `${requiredSpacer}px`;
 
                 container.scrollTo({
-                    top: Math.max(0, userTop - USER_TOP_OFFSET),
+                    top: Math.max(0, userTop - USER_SCROLL_FOCUS_OFFSET),
                     behavior: 'smooth',
                 });
 
@@ -510,6 +516,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             const contentBottom = Math.max(userBottom, aiBottom);
             const containerHeight = container.clientHeight;
             const contentBlockHeight = Math.max(0, contentBottom - userTop);
+            const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
 
             // Pastram runway-ul daca:
             // 1. AI-ul scrie (isTyping).
@@ -522,7 +529,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             const shouldUseRunway = isTyping || isAnimatingEnterRef.current || shouldAutoFollowRef.current || (isAnchoredMode && isViewingLastTurn);
 
             const requiredSpacer = shouldUseRunway
-                ? Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - AI_BOTTOM_GAP)
+                ? Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - paddingBottom)
                 : 0;
 
             // Evitam flickers: daca noul spacer e mult mai mic dar nu suntem la bottom, 
