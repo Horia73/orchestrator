@@ -1,6 +1,6 @@
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { LEGACY_USAGE_LOG_PATH, USAGE_DATA_DIR, USAGE_LOG_PATH } from '../core/dataPaths.js';
+import { USAGE_DATA_DIR, USAGE_LOG_PATH } from '../core/dataPaths.js';
 
 let initialized = false;
 
@@ -93,17 +93,6 @@ async function ensureInitialized() {
     }
 
     await fs.mkdir(USAGE_DATA_DIR, { recursive: true });
-
-    try {
-        await fs.access(USAGE_LOG_PATH);
-    } catch {
-        try {
-            await fs.access(LEGACY_USAGE_LOG_PATH);
-            await fs.rename(LEGACY_USAGE_LOG_PATH, USAGE_LOG_PATH);
-        } catch {
-            // Legacy file does not exist. Create a new one.
-        }
-    }
 
     try {
         await fs.access(USAGE_LOG_PATH);

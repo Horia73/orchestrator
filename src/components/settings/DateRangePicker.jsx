@@ -76,7 +76,7 @@ function getCalendarCells(monthDate, selectedDateKey) {
     return cells;
 }
 
-function CalendarDatePicker({ label, dateKey, onChange }) {
+function CalendarDatePicker({ label, dateKey, onChange, popoverAlign = 'right' }) {
     const rootRef = useRef(null);
     const [open, setOpen] = useState(false);
     const [visibleMonth, setVisibleMonth] = useState(() => startOfMonth(parseDateKey(dateKey)));
@@ -131,7 +131,7 @@ function CalendarDatePicker({ label, dateKey, onChange }) {
             </button>
 
             {open && (
-                <div className="usage-calendar-popover" role="dialog" aria-label={`Select ${label}`}>
+                <div className={`usage-calendar-popover align-${popoverAlign}`} role="dialog" aria-label={`Select ${label}`}>
                     <div className="usage-calendar-header">
                         <button type="button" onClick={() => setVisibleMonth((current) => addMonths(current, -1))}>
                             ‹
@@ -216,11 +216,13 @@ export function DateRangePicker({ value, onChange }) {
                         label="From"
                         dateKey={normalized.startDate}
                         onChange={(dateKey) => applyCustomDate('startDate', dateKey)}
+                        popoverAlign="left"
                     />
                     <CalendarDatePicker
                         label="To"
                         dateKey={normalized.endDate}
                         onChange={(dateKey) => applyCustomDate('endDate', dateKey)}
+                        popoverAlign="right"
                     />
                 </div>
             )}

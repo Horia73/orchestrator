@@ -11,7 +11,7 @@ import {
     normalizeAgentId as normalizeRegistryAgentId,
     sanitizeAgentSettings,
 } from '../agents/index.js';
-import { LEGACY_SETTINGS_PATH, SETTINGS_PATH } from '../core/dataPaths.js';
+import { SETTINGS_PATH } from '../core/dataPaths.js';
 
 function defaultSettings() {
     return createDefaultSettings();
@@ -28,27 +28,12 @@ function ensureSettingsDir() {
     }
 }
 
-function migrateLegacySettingsIfNeeded() {
-    if (fs.existsSync(SETTINGS_PATH)) {
-        return;
-    }
-
-    if (!fs.existsSync(LEGACY_SETTINGS_PATH)) {
-        return;
-    }
-
-    ensureSettingsDir();
-    fs.renameSync(LEGACY_SETTINGS_PATH, SETTINGS_PATH);
-}
-
 export function normalizeAgentId(value) {
     return normalizeRegistryAgentId(value);
 }
 
 export function readSettings() {
     try {
-        migrateLegacySettingsIfNeeded();
-
         if (fs.existsSync(SETTINGS_PATH)) {
             const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
             const parsed = JSON.parse(raw);

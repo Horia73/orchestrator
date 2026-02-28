@@ -6,8 +6,6 @@ import {
     CHAT_DATA_DIR,
     CHAT_INDEX_PATH,
     CHAT_MESSAGES_DIR,
-    LEGACY_CHAT_FILES_DIR,
-    LEGACY_CHAT_INDEX_PATH,
 } from '../core/dataPaths.js';
 const CHATS_DIR = CHAT_MESSAGES_DIR;
 const INDEX_PATH = CHAT_INDEX_PATH;
@@ -167,45 +165,11 @@ async function persistIndex() {
     });
 }
 
-async function migrateLegacyChatLayout() {
-    await fs.mkdir(CHAT_DATA_DIR, { recursive: true });
-    await fs.mkdir(CHATS_DIR, { recursive: true });
-
-    try {
-        await fs.access(INDEX_PATH);
-    } catch {
-        try {
-            await fs.access(LEGACY_CHAT_INDEX_PATH);
-            await fs.rename(LEGACY_CHAT_INDEX_PATH, INDEX_PATH);
-        } catch {
-            // Legacy index does not exist.
-        }
-    }
-
-    try {
-        const entries = await fs.readdir(LEGACY_CHAT_FILES_DIR, { withFileTypes: true });
-        for (const entry of entries) {
-            if (!entry.isFile() || !/^chat-.*\.jsonl$/i.test(entry.name)) {
-                continue;
-            }
-
-            const fromPath = path.join(LEGACY_CHAT_FILES_DIR, entry.name);
-            const toPath = path.join(CHATS_DIR, entry.name);
-            try {
-                await fs.access(toPath);
-            } catch {
-                await fs.rename(fromPath, toPath);
-            }
-        }
-    } catch {
-        // Legacy chat files dir does not exist.
-    }
-}
-
 async function ensureInitialized() {
     if (initialized) return;
 
-    await migrateLegacyChatLayout();
+    await fs.mkdir(CHAT_DATA_DIR, { recursive: true });
+    await fs.mkdir(CHATS_DIR, { recursive: true });
 
     try {
         const raw = await fs.readFile(INDEX_PATH, 'utf8');

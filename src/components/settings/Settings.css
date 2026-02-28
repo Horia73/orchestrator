@@ -540,6 +540,22 @@
     white-space: nowrap;
 }
 
+.thinking-btn.disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    pointer-events: none;
+}
+
+.thinking-not-supported {
+    justify-content: center;
+}
+
+.thinking-not-supported-label {
+    font-size: 0.82rem;
+    color: var(--text-muted);
+    font-style: italic;
+}
+
 /* =============================================
    Grounding Selector
    ============================================= */
@@ -843,6 +859,16 @@
     box-shadow:
         0 10px 30px rgba(0, 0, 0, 0.08),
         0 2px 8px rgba(0, 0, 0, 0.05);
+}
+
+.usage-calendar-popover.align-left {
+    left: 0;
+    right: auto;
+}
+
+.usage-calendar-popover.align-right {
+    right: 0;
+    left: auto;
 }
 
 .usage-calendar-header {
@@ -1305,6 +1331,267 @@
 }
 
 /* =============================================
+   Prompting Panel (placeholder)
+   ============================================= */
+.prompting-panel {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 400px;
+}
+
+.prompting-placeholder {
+    text-align: center;
+    max-width: 400px;
+    padding: 40px 20px;
+}
+
+.prompting-placeholder-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 80px;
+    height: 80px;
+    border-radius: 20px;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-light);
+    color: var(--text-tertiary);
+    margin-bottom: 24px;
+}
+
+.prompting-placeholder h2 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--text-primary);
+    margin-bottom: 10px;
+}
+
+.prompting-placeholder p {
+    font-size: 14px;
+    color: var(--text-tertiary);
+    line-height: 1.55;
+}
+
+/* =============================================
+   Updates Panel
+   ============================================= */
+.updates-panel {
+    display: flex;
+    flex-direction: column;
+    gap: 22px;
+    max-width: 680px;
+}
+
+.updates-header-row {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 16px;
+}
+
+.updates-title {
+    font-size: 24px;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.updates-subtitle {
+    margin-top: 4px;
+    font-size: 13px;
+    color: var(--text-tertiary);
+}
+
+.updates-check-btn {
+    padding: 8px 16px;
+    border-radius: 10px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    font-size: 13px;
+    font-weight: 500;
+    white-space: nowrap;
+    transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.updates-check-btn:hover:not(:disabled) {
+    border-color: #cec9bf;
+    color: var(--text-primary);
+}
+
+.updates-check-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.updates-version-cards {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 14px;
+}
+
+.updates-version-card {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-light);
+    border-radius: 12px;
+    padding: 18px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+}
+
+.updates-version-label {
+    font-size: 11.5px;
+    color: var(--text-tertiary);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+}
+
+.updates-version-value {
+    font-size: 22px;
+    color: var(--text-primary);
+    font-weight: 600;
+    letter-spacing: -0.01em;
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.updates-version-date {
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.updates-error {
+    padding: 14px 18px;
+    border-radius: 10px;
+    background: color-mix(in srgb, #b53b3b 10%, var(--bg-sidebar));
+    border: 1px solid color-mix(in srgb, #b53b3b 30%, var(--border-light));
+    color: #8f3a3a;
+    font-size: 13px;
+}
+
+.updates-available {
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-light);
+    border-radius: 14px;
+    padding: 22px;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+}
+
+.updates-available-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.updates-badge {
+    display: inline-flex;
+    align-items: center;
+    padding: 5px 12px;
+    border-radius: 999px;
+    font-size: 12px;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    color: #326d44;
+    background: color-mix(in srgb, #6da17d 24%, transparent);
+    border: 1px solid color-mix(in srgb, #6da17d 35%, transparent);
+}
+
+.updates-release-link {
+    font-size: 13px;
+    color: var(--text-secondary);
+    text-decoration: underline;
+    text-underline-offset: 3px;
+    transition: color var(--transition-fast);
+}
+
+.updates-release-link:hover {
+    color: var(--text-primary);
+}
+
+.updates-release-notes {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.updates-release-notes h4 {
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--text-tertiary);
+}
+
+.updates-release-notes pre {
+    white-space: pre-wrap;
+    word-break: break-word;
+    margin: 0;
+    max-height: 200px;
+    overflow: auto;
+    background: var(--bg-main);
+    border: 1px solid var(--border-light);
+    border-radius: 10px;
+    padding: 12px 14px;
+    font-size: 12.5px;
+    line-height: 1.5;
+    color: var(--text-secondary);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+}
+
+.updates-install-btn {
+    align-self: flex-start;
+    padding: 10px 22px;
+    border-radius: 10px;
+    border: 1px solid color-mix(in srgb, var(--accent-orange) 60%, var(--border-input));
+    background: color-mix(in srgb, var(--accent-orange) 18%, var(--bg-input));
+    color: var(--text-primary);
+    font-size: 13.5px;
+    font-weight: 600;
+    transition: background var(--transition-fast), border-color var(--transition-fast), transform var(--transition-fast);
+}
+
+.updates-install-btn:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--accent-orange) 28%, var(--bg-input));
+    border-color: var(--accent-orange);
+    transform: translateY(-1px);
+}
+
+.updates-install-btn:disabled {
+    opacity: 0.6;
+    cursor: not-allowed;
+}
+
+.updates-install-result {
+    padding: 12px 16px;
+    border-radius: 10px;
+    font-size: 13px;
+}
+
+.updates-install-result.success {
+    background: color-mix(in srgb, #6da17d 16%, var(--bg-main));
+    border: 1px solid color-mix(in srgb, #6da17d 35%, transparent);
+    color: #326d44;
+}
+
+.updates-install-result.error {
+    background: color-mix(in srgb, #b53b3b 10%, var(--bg-main));
+    border: 1px solid color-mix(in srgb, #b53b3b 30%, transparent);
+    color: #8f3a3a;
+}
+
+.updates-up-to-date {
+    padding: 22px;
+    border-radius: 12px;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-light);
+    text-align: center;
+    font-size: 15px;
+    font-weight: 500;
+    color: #326d44;
+}
+
+/* =============================================
    Scrollbar styling
    ============================================= */
 .settings-content::-webkit-scrollbar,
@@ -1431,5 +1718,13 @@
     .usage-table thead th,
     .usage-table td {
         font-size: 12px;
+    }
+
+    .updates-version-cards {
+        grid-template-columns: 1fr;
+    }
+
+    .updates-header-row {
+        flex-direction: column;
     }
 }

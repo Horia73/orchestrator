@@ -6,7 +6,8 @@ import { listClientAgentDefinitions, DEFAULT_AGENT_ID } from './agents/index.js'
 import { CODING_AGENT_ID } from './agents/coding/index.js';
 import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
-import { generateAssistantReplyStream, listAvailableModels } from './services/geminiService.js';
+import { generateAssistantReplyStream, listAvailableModels, getUnsupportedLevels } from './services/geminiService.js';
+import { buildMergedModels } from '../src/config/agentModels.js';
 import { openEventsStream, broadcastEvent } from './core/events.js';
 import { getCommandStatusSnapshot } from './tools/index.js';
 import { estimateUsageCost } from './pricing/usage.js';
@@ -507,8 +508,17 @@ app.put('/api/settings', (req, res) => {
 
 app.get('/api/models', async (_req, res) => {
     try {
-        const models = await listAvailableModels();
-        res.json({ models });
+        const rawModels = await listAvailableModels();
+        const merged = buildMergedModels(rawModels);
+        const enriched = merged.map((m) => {
+            const raw = rawModels.find((r) => r.name === m.fullName);
+            return {
+                ...m,
+                thinking: raw?.thinking ?? false,
+                unsupportedThinkingLevels: getUnsupportedLevels(m.id),
+            };
+        });
+        res.json({ models: enriched });
     } catch {
         res.status(500).json({ error: 'Failed to fetch models.' });
     }
@@ -577,6 +587,17 @@ app.delete('/api/logs', async (_req, res, next) => {
         res.json({ ok: true });
     } catch (error) {
         next(error);
+    }
+});
+
+app.post('/api/update', async (_req, res) => {
+    const { execSync } = await import('node:child_process');
+    try {
+        execSync('git pull origin main', { cwd: process.cwd(), timeout: 30000, stdio: 'pipe' });
+        execSync('npm install', { cwd: process.cwd(), timeout: 60000, stdio: 'pipe' });
+        res.json({ ok: true, message: 'Update installed! Restart the server to apply changes.' });
+    } catch (error) {
+        res.status(500).json({ error: error.message || 'Update failed' });
     }
 });
 

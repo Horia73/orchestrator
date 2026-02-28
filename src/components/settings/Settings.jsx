@@ -1,13 +1,13 @@
 import { useState, useRef, useEffect, useMemo, useCallback } from 'react';
 import {
     THINKING_LEVELS,
-    buildMergedModels,
     tierColor,
 } from '../../config/agentModels.js';
 import { IconClose, IconSearch, IconSettings } from '../shared/icons.jsx';
 import { fetchRemoteModels } from '../../api/settingsApi.js';
 import { UsageDashboard } from './UsageDashboard.jsx';
 import { SystemLogsDashboard } from './SystemLogsDashboard.jsx';
+import { UpdatesPanel } from './UpdatesPanel.jsx';
 import './Settings.css';
 
 /* ─── Model Dropdown ─────────────────────────────────────────────────── */
@@ -141,24 +141,36 @@ function ModelDropdown({ selectedModelId, modelsList, onSelect }) {
 
 /* ─── Thinking Level Selector ────────────────────────────────────────── */
 
-function ThinkingSelector({ selected, onSelect, selectorRef }) {
+function ThinkingSelector({ selected, onSelect, selectorRef, disabledLevels = [], thinkingSupported = true }) {
+    if (!thinkingSupported) {
+        return (
+            <div className="thinking-selector thinking-not-supported" ref={selectorRef}>
+                <span className="thinking-not-supported-label">Thinking not available for this model</span>
+            </div>
+        );
+    }
+
     return (
         <div className="thinking-selector" ref={selectorRef}>
-            {THINKING_LEVELS.map((level) => (
-                <button
-                    key={level.id}
-                    className={`thinking-btn${level.id === selected ? ' active' : ''}`}
-                    onClick={() => onSelect(level.id)}
-                    title={level.description}
-                    type="button"
-                    style={{
-                        '--thinking-color': level.color,
-                    }}
-                >
-                    <span className="thinking-dot" />
-                    <span className="thinking-label">{level.label}</span>
-                </button>
-            ))}
+            {THINKING_LEVELS.map((level) => {
+                const isDisabled = disabledLevels.includes(level.id);
+                return (
+                    <button
+                        key={level.id}
+                        className={`thinking-btn${level.id === selected ? ' active' : ''}${isDisabled ? ' disabled' : ''}`}
+                        onClick={() => !isDisabled && onSelect(level.id)}
+                        title={isDisabled ? `${level.label} is not supported by this model` : level.description}
+                        type="button"
+                        disabled={isDisabled}
+                        style={{
+                            '--thinking-color': level.color,
+                        }}
+                    >
+                        <span className="thinking-dot" />
+                        <span className="thinking-label">{level.label}</span>
+                    </button>
+                );
+            })}
         </div>
     );
 }
@@ -336,6 +348,9 @@ function isCodingAgent(agentId) {
 
 function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
     const supportsThinking = agent.supportsThinking !== false;
+    const selectedModel = modelsList.find((m) => m.id === agentState.model);
+    const thinkingSupported = selectedModel ? selectedModel.thinking !== false : true;
+    const disabledLevels = selectedModel?.unsupportedThinkingLevels ?? [];
 
     const handleModelChange = useCallback(
         (modelId) => onChange({ ...agentState, model: modelId }),
@@ -373,6 +388,8 @@ function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
                         selected={agentState.thinkingLevel}
                         onSelect={handleThinkingChange}
                         selectorRef={null}
+                        disabledLevels={disabledLevels}
+                        thinkingSupported={thinkingSupported}
                     />
                 </div>
             )}
@@ -392,8 +409,10 @@ function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
 
 const TABS = [
     { id: 'models', label: 'Models' },
+    { id: 'prompting', label: 'Prompting' },
     { id: 'usage', label: 'Usage' },
     { id: 'logs', label: 'Logs' },
+    { id: 'updates', label: 'Updates' },
 ];
 const SETTINGS_ACTIVE_TAB_STORAGE_KEY = 'orchestrator.settings.active_tab';
 
@@ -416,13 +435,13 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
     const [agentStates, setAgentStates] = useState(() => buildAgentStates(agentDefinitions, savedSettings));
 
     const [activeTab, setActiveTab] = useState(() => getInitialActiveTab());
-    const [modelsList, setModelsList] = useState(() => buildMergedModels([]));
+    const [modelsList, setModelsList] = useState([]);
     const [modelsLoading, setModelsLoading] = useState(true);
 
     useEffect(() => {
         fetchRemoteModels()
             .then((list) => {
-                setModelsList(buildMergedModels(list));
+                setModelsList(Array.isArray(list) ? list : []);
             })
             .catch((err) => {
                 console.error("Failed to load generic models", err);
@@ -506,8 +525,27 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
                         <UsageDashboard modelsList={modelsList} agentDefinitions={agentDefinitions} />
                     )}
 
+                    {activeTab === 'prompting' && (
+                        <div className="prompting-panel">
+                            <div className="prompting-placeholder">
+                                <div className="prompting-placeholder-icon">
+                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M12 20h9" />
+                                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
+                                    </svg>
+                                </div>
+                                <h2>Prompting & Agents</h2>
+                                <p>Configure agent prompts, system instructions, memories, and behavior — coming soon.</p>
+                            </div>
+                        </div>
+                    )}
+
                     {activeTab === 'logs' && (
                         <SystemLogsDashboard agentDefinitions={agentDefinitions} />
+                    )}
+
+                    {activeTab === 'updates' && (
+                        <UpdatesPanel currentVersion="0.0.0" />
                     )}
                 </div>
             </div>

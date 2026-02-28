@@ -27,6 +27,43 @@ const THINKING_LEVEL_MAP = {
 
 let cachedClient = null;
 
+// ─── Thinking Level Compatibility ────────────────────────────────────────────
+// Runtime auto-discovery cache: modelId → Set<unsupported level strings>.
+// When a thinking level causes an API error, it's recorded here so subsequent
+// calls automatically fall back without retrying the bad level.
+const unsupportedLevelsCache = new Map();
+const THINKING_FALLBACK_CHAIN = ['MINIMAL', 'LOW', 'MEDIUM', 'HIGH', null];
+
+function getEffectiveThinkingLevel(modelId, requestedLevel) {
+    const unsupported = unsupportedLevelsCache.get(modelId);
+    if (!unsupported?.has(requestedLevel)) return requestedLevel;
+    const startIdx = THINKING_FALLBACK_CHAIN.indexOf(requestedLevel);
+    for (let i = startIdx + 1; i < THINKING_FALLBACK_CHAIN.length; i++) {
+        const candidate = THINKING_FALLBACK_CHAIN[i];
+        if (candidate === null || !unsupported.has(candidate)) return candidate;
+    }
+    return null;
+}
+
+function recordUnsupportedLevel(modelId, level) {
+    if (!unsupportedLevelsCache.has(modelId)) {
+        unsupportedLevelsCache.set(modelId, new Set());
+    }
+    unsupportedLevelsCache.get(modelId).add(level);
+}
+
+export function getUnsupportedLevels(modelId) {
+    const set = unsupportedLevelsCache.get(modelId);
+    return set ? [...set] : [];
+}
+
+function isThinkingLevelError(error) {
+    const msg = String(error?.message ?? error ?? '').toLowerCase();
+    return /thinking/i.test(msg) && /invalid|unsupported|not.+support|not.+available/i.test(msg);
+}
+
+// ─── Core helpers ────────────────────────────────────────────────────────────
+
 function mapThinkingLevel(level) {
     const normalized = String(level ?? '').trim().toUpperCase();
     return THINKING_LEVEL_MAP[normalized] ?? ThinkingLevel.MINIMAL;
@@ -34,9 +71,18 @@ function mapThinkingLevel(level) {
 
 function buildChatConfigForAgent({ agentId, agentConfig, sharedTools }) {
     const agentDefinition = getAgentDefinition(agentId);
+    const modelId = agentConfig.model;
+
+    const wrappedMapThinkingLevel = (level) => {
+        const requested = String(level ?? '').trim().toUpperCase();
+        const effective = getEffectiveThinkingLevel(modelId, requested);
+        if (effective === null) return null;
+        return mapThinkingLevel(effective);
+    };
+
     return agentDefinition.buildChatConfig({
         agentConfig,
-        mapThinkingLevel,
+        mapThinkingLevel: wrappedMapThinkingLevel,
         sharedTools,
     });
 }
@@ -403,6 +449,7 @@ function createChatSession(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_
         chat,
         latestMessage: normalizeMessageParts(latest),
         model: agentConfig.model,
+        agentConfig,
         allowedToolNames: new Set(toolAccess),
     };
 }
@@ -777,13 +824,25 @@ function buildFinalModelParts({ text, thought, mediaParts = [], signatureParts, 
 }
 
 export async function generateAssistantReply(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_ID } = {}) {
-    const { chat, latestMessage } = createChatSession(historyWithLatestUserTurn, { agentId });
+    const { chat, latestMessage, model, agentConfig } = createChatSession(historyWithLatestUserTurn, { agentId });
 
-    const response = await chat.sendMessage({
-        message: latestMessage,
-    });
-
-    return finalizeText(sanitizeVisibleText(response?.text));
+    try {
+        const response = await chat.sendMessage({
+            message: latestMessage,
+        });
+        return finalizeText(sanitizeVisibleText(response?.text));
+    } catch (error) {
+        const currentLevel = String(agentConfig?.thinkingLevel ?? '').trim().toUpperCase();
+        if (currentLevel && isThinkingLevelError(error)) {
+            recordUnsupportedLevel(model, currentLevel);
+            const retrySession = createChatSession(historyWithLatestUserTurn, { agentId });
+            const response = await retrySession.chat.sendMessage({
+                message: retrySession.latestMessage,
+            });
+            return finalizeText(sanitizeVisibleText(response?.text));
+        }
+        throw error;
+    }
 }
 
 export async function generateAssistantReplyStream(
@@ -794,6 +853,7 @@ export async function generateAssistantReplyStream(
         chat,
         latestMessage,
         model,
+        agentConfig,
         allowedToolNames,
     } = createChatSession(historyWithLatestUserTurn, { agentId });
     const isStopRequested = typeof shouldStop === 'function'
@@ -1135,10 +1195,31 @@ export async function generateAssistantReplyStream(
     // Show "thinking" immediately when API call starts, before first chunk arrives.
     currentStepSawThinking = true;
     await emitUpdate({ force: true, stepIsThinking: true });
-    const initialStream = await chat.sendMessageStream({
-        message: latestMessage,
-    });
-    const initialStreamResult = await processStream(initialStream);
+
+    let activeChat = chat;
+    let initialStreamResult;
+    try {
+        const initialStream = await activeChat.sendMessageStream({
+            message: latestMessage,
+        });
+        initialStreamResult = await processStream(initialStream);
+    } catch (error) {
+        // If the error is a thinking-level incompatibility, auto-fallback and retry once.
+        const currentLevel = String(agentConfig?.thinkingLevel ?? '').trim().toUpperCase();
+        if (currentLevel && isThinkingLevelError(error)) {
+            recordUnsupportedLevel(model, currentLevel);
+            // Recreate the chat session — buildChatConfigForAgent now uses the cache.
+            const retrySession = createChatSession(historyWithLatestUserTurn, { agentId });
+            activeChat = retrySession.chat;
+            const retryStream = await activeChat.sendMessageStream({
+                message: retrySession.latestMessage,
+            });
+            initialStreamResult = await processStream(retryStream);
+        } else {
+            throw error;
+        }
+    }
+
     accumulateUsage(initialStreamResult.usageMetadata);
     let pendingFunctionCalls = initialStreamResult.functionCalls;
 

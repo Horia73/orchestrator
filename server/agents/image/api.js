@@ -77,10 +77,13 @@ export function buildImageChatConfig({ agentConfig, mapThinkingLevel }) {
     }
 
     if (typeof mapThinkingLevel === 'function') {
-        config.thinkingConfig = {
-            thinkingLevel: mapThinkingLevel(agentConfig?.thinkingLevel),
-            includeThoughts: true,
-        };
+        const thinkingLevel = mapThinkingLevel(agentConfig?.thinkingLevel);
+        if (thinkingLevel !== null) {
+            config.thinkingConfig = {
+                thinkingLevel,
+                includeThoughts: true,
+            };
+        }
     }
 
     const imageGroundingTools = buildImageGroundingTools(modelId, agentConfig?.grounding);
