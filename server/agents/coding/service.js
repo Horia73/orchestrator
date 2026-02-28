@@ -1,4 +1,3 @@
-import { getAgentConfig } from '../../storage/settings.js';
 import { CODING_AGENT_ID } from './index.js';
 import { getExecutionContext } from '../../core/context.js';
 import { broadcastEvent } from '../../core/events.js';
@@ -8,7 +7,6 @@ import { broadcastEvent } from '../../core/events.js';
  * This version supports streaming and tool calls, making it "identical" to the orchestrator's workflow.
  */
 export async function generateCodingExpertAdvice({ task, context, files = [], attachments = [] } = {}) {
-    const defaultAgentConfig = getAgentConfig(CODING_AGENT_ID);
     const contextData = getExecutionContext();
 
     // 1. Build the initial turn for the expert

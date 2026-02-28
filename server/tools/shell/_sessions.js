@@ -1,8 +1,8 @@
-import { spawn } from 'node:child_process';
-import { stat } from 'node:fs/promises';
+import pty from 'node-pty';
 import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { normalizeInteger, clampInteger, sleep } from '../_utils.js';
+import { broadcastEvent } from '../../core/events.js';
 
 export const COMMAND_SESSIONS_MAX = 80;
 export const COMMAND_OUTPUT_MAX_CHARS = 240_000;
@@ -11,6 +11,8 @@ export const COMMAND_DEFAULT_WAIT_BEFORE_ASYNC_MS = 600;
 export const COMMAND_MAX_WAIT_BEFORE_ASYNC_MS = 15_000;
 export const COMMAND_MAX_WAIT_STATUS_SECONDS = 30;
 const COMMAND_STATUS_POLL_MS = 120;
+
+const SIGNAL_MAP = { 1: 'SIGHUP', 2: 'SIGINT', 3: 'SIGQUIT', 9: 'SIGKILL', 15: 'SIGTERM' };
 
 export const commandSessions = new Map();
 
@@ -168,14 +170,17 @@ export function startCommandSession(commandLine, cwd) {
     const now = Date.now();
     const commandId = `cmd_${randomUUID()}`;
     const name = createCommandName(commandLine);
-    const child = spawn('/bin/zsh', ['-lc', commandLine], {
+
+    const ptyProcess = pty.spawn('/bin/zsh', ['-lc', commandLine], {
+        name: 'xterm-256color',
+        cols: 220,
+        rows: 50,
         cwd,
         env: {
             ...process.env,
-            TERM: process.env.TERM || 'xterm-256color',
+            TERM: 'xterm-256color',
             PAGER: 'cat',
         },
-        stdio: ['pipe', 'pipe', 'pipe'],
     });
 
     const session = {
@@ -183,7 +188,7 @@ export function startCommandSession(commandLine, cwd) {
         name,
         command: commandLine,
         cwd,
-        pid: child.pid ?? null,
+        pid: ptyProcess.pid ?? null,
         status: 'running',
         startedAt: now,
         startedAtIso: new Date(now).toISOString(),
@@ -195,39 +200,28 @@ export function startCommandSession(commandLine, cwd) {
         outputCharsTotal: 0,
         outputTruncated: false,
         lastOutputAt: now,
-        process: child,
+        process: ptyProcess,
         donePromise: null,
     };
 
     commandSessions.set(commandId, session);
     pruneCommandSessions();
 
-    if (child.stdout) {
-        child.stdout.on('data', (chunk) => {
-            appendCommandOutput(session, chunk);
-        });
-    }
-    if (child.stderr) {
-        child.stderr.on('data', (chunk) => {
-            appendCommandOutput(session, chunk);
-        });
-    }
+    ptyProcess.on('data', (chunk) => {
+        appendCommandOutput(session, chunk);
+        broadcastEvent('command.output', { commandId, chunk });
+    });
 
     session.donePromise = new Promise((resolvePromise) => {
-        child.once('error', (error) => {
-            markCommandFinished(session, {
-                status: 'failed',
-                errorMessage: error?.message || 'Unknown process error.',
-            });
-            resolvePromise();
-        });
-
-        child.once('close', (code, signal) => {
+        ptyProcess.on('exit', (code, signal) => {
             if (session.status === 'running') {
-                const status = signal
-                    ? 'terminated'
-                    : (code === 0 ? 'completed' : 'failed');
-                markCommandFinished(session, { status, code, signal });
+                const signalName = signal > 0 ? (SIGNAL_MAP[signal] ?? `SIG${signal}`) : null;
+                const status = signalName ? 'terminated' : (code === 0 ? 'completed' : 'failed');
+                markCommandFinished(session, {
+                    status,
+                    code: signalName ? null : code,
+                    signal: signalName,
+                });
             }
             resolvePromise();
         });

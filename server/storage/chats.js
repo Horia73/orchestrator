@@ -34,13 +34,6 @@ function getChatFilePath(chatId) {
     return path.join(CHATS_DIR, `${chatId}.jsonl`);
 }
 
-function truncateForTitle(text) {
-    const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
-    if (!cleaned) return 'Untitled';
-    if (cleaned.length <= 48) return cleaned;
-    return `${cleaned.slice(0, 47).trimEnd()}…`;
-}
-
 function truncatePreview(text) {
     const cleaned = String(text ?? '').replace(/\s+/g, ' ').trim();
     if (!cleaned) return '';

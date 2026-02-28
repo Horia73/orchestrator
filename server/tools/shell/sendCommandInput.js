@@ -60,9 +60,9 @@ export async function execute({
         return createCommandSnapshot(session);
     }
 
-    if (input && session.process?.stdin && !session.process.stdin.destroyed) {
+    if (input && session.process) {
         try {
-            session.process.stdin.write(input);
+            session.process.write(input);
         } catch (error) {
             appendCommandOutput(session, `\n[stdin-error] ${error.message}\n`);
         }

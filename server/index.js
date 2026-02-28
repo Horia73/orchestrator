@@ -69,7 +69,7 @@ function countImageAttachments(attachments) {
     return count;
 }
 
-function detectOrchestratorRoute({ text, attachments }) {
+function detectOrchestratorRoute({ attachments }) {
     const imageAttachmentCount = countImageAttachments(attachments);
 
     return {

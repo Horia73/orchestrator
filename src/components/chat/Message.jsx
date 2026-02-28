@@ -6,7 +6,7 @@ import { ToolBlock } from './ToolBlock.jsx';
 import { FileManagementBlock } from './FileManagementBlock.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
 import { getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
-import { IconPlay, IconPause } from '../shared/icons.jsx';
+import { IconPlay, IconPause, IconCopy, IconCheck } from '../shared/icons.jsx';
 
 const FILE_MANAGEMENT_TOOLS = new Set([
     'view_file',
@@ -745,6 +745,37 @@ function unwrapStructuredText(text) {
     return text;
 }
 
+function CopyButton({ text }) {
+    const [copied, setCopied] = useState(false);
+    const timeoutRef = useRef(null);
+
+    const handleCopy = useCallback(() => {
+        const content = String(text ?? '').trim();
+        if (!content) return;
+        navigator.clipboard.writeText(content).then(() => {
+            setCopied(true);
+            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            timeoutRef.current = setTimeout(() => setCopied(false), 2000);
+        }).catch(() => {});
+    }, [text]);
+
+    useEffect(() => () => {
+        if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    }, []);
+
+    return (
+        <button
+            type="button"
+            className={`message-copy-btn${copied ? ' copied' : ''}`}
+            onClick={handleCopy}
+            title={copied ? 'Copied!' : 'Copy'}
+            aria-label={copied ? 'Copied!' : 'Copy message'}
+        >
+            {copied ? <IconCheck /> : <IconCopy />}
+        </button>
+    );
+}
+
 function doesImagePrecedeText(parts) {
     if (!Array.isArray(parts)) return false;
     let firstImageIndex = -1;
@@ -816,6 +847,7 @@ export const Message = forwardRef(function Message({
     isThinking = false,
     onAgentCallToggle,
     activeAgentCallId = '',
+    commandChunks = {},
 }, ref) {
     if (role === 'user') {
         const hasText = String(text ?? '').trim().length > 0;
@@ -828,6 +860,11 @@ export const Message = forwardRef(function Message({
                         </div>
                     )}
                     <AttachmentGallery parts={parts} />
+                    {hasText && (
+                        <div className="message-user-actions">
+                            <CopyButton text={text} />
+                        </div>
+                    )}
                 </div>
             </div>
         );
@@ -956,6 +993,7 @@ export const Message = forwardRef(function Message({
                             isExecuting={toolPart.isExecuting}
                             onAgentCallToggle={handleAgentCallToggle}
                             isAgentCallOpen={isAgentCallOpen}
+                            commandChunks={commandChunks}
                         />
                     );
                 })}
@@ -1003,6 +1041,13 @@ export const Message = forwardRef(function Message({
         && !normalizedSteps.some((step) => hasRenderedAttachments(step?.parts))
         && !hasStepUsingMessageAttachmentFallback;
 
+    const aiCopyText = shouldRenderSteps
+        ? normalizedSteps
+            .map((s) => unwrapStructuredText(String(s?.text ?? '')).trim())
+            .filter(Boolean)
+            .join('\n\n')
+        : unwrapStructuredText(String(text ?? '')).trim();
+
     return (
         <div className="message-ai" ref={ref}>
             <div className="message-ai-content">
@@ -1033,6 +1078,11 @@ export const Message = forwardRef(function Message({
                     })}
                 {shouldRenderMessageAttachmentsAfterSteps && <AttachmentGallery parts={parts} />}
             </div>
+            {aiCopyText && !isThinking && (
+                <div className="message-ai-actions">
+                    <CopyButton text={aiCopyText} />
+                </div>
+            )}
         </div>
     );
 });

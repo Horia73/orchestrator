@@ -292,7 +292,6 @@ export function findLatestAgentToolCallInMessages(messages, toolName = '') {
 export function buildAgentPanelMessage(agentCallDetails) {
     if (!agentCallDetails) return null;
 
-    const contextParts = Array.isArray(agentCallDetails.context?.parts) ? agentCallDetails.context.parts : [];
     const functionResponse = agentCallDetails.toolPart?.functionResponse;
     const isExecuting = agentCallDetails.toolPart?.isExecuting === true;
     const resp = functionResponse?.response;

@@ -7,7 +7,6 @@
  * Uses a Gemini function-call to extract structured memory from old messages.
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { GoogleGenAI } from '@google/genai';
 import { GEMINI_API_KEY, MEMORY_CONFIG } from '../core/config.js';
 import { MEMORY_DIR, MEMORY_PATH, HISTORY_PATH } from '../core/dataPaths.js';

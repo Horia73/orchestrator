@@ -10,7 +10,6 @@
  * When a job fires, the `onJob` callback is called with the job object.
  */
 import fs from 'node:fs';
-import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import cronParser from 'cron-parser';
 const { parseExpression } = cronParser;

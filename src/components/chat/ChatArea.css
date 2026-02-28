@@ -364,7 +364,7 @@
 /* AI message — left-aligned rich text */
 .message-ai {
     display: flex;
-    justify-content: flex-start;
+    flex-direction: column;
     padding-right: 48px;
 }
 
@@ -373,6 +373,60 @@
     font-size: 16px;
     line-height: 1.72;
     color: var(--text-primary);
+}
+
+/* Message action rows (copy button etc.) */
+.message-ai-actions {
+    display: flex;
+    align-items: center;
+    gap: 2px;
+    margin-top: 4px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.message-ai:hover .message-ai-actions,
+.message-ai-actions:has(.copied) {
+    opacity: 1;
+}
+
+.message-user-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 2px;
+    margin-top: -4px;
+    opacity: 0;
+    transition: opacity 0.15s ease;
+}
+
+.message-user:hover .message-user-actions,
+.message-user-actions:has(.copied) {
+    opacity: 1;
+}
+
+.message-copy-btn {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    border-radius: 7px;
+    border: none;
+    background: transparent;
+    color: var(--text-tertiary);
+    cursor: pointer;
+    flex-shrink: 0;
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.message-copy-btn:hover {
+    background: rgba(0, 0, 0, 0.06);
+    color: var(--text-primary);
+}
+
+.message-copy-btn.copied {
+    color: var(--text-secondary);
 }
 
 .message-attachments {

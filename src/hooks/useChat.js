@@ -214,6 +214,7 @@ export function useChat() {
     const [draftAgentId, setDraftAgentIdState] = useState(() => getStoredDraftAgentId());
     const [isHydrating, setIsHydrating] = useState(true);
     const [agentStreaming, setAgentStreaming] = useState({});
+    const [commandChunks, setCommandChunks] = useState({});
 
     const clientIdRef = useRef(getOrCreateClientId());
     const chatSummariesRef = useRef(chatSummaries);
@@ -404,6 +405,14 @@ export function useChat() {
                         [event.chatId]: mergeMessages(existingMessages, [incomingMessage]),
                     };
                 });
+                return;
+            }
+
+            if (event.type === 'command.output' && event.commandId && event.chunk) {
+                setCommandChunks((prev) => ({
+                    ...prev,
+                    [event.commandId]: [...(prev[event.commandId] ?? []), event.chunk],
+                }));
                 return;
             }
 
@@ -808,5 +817,6 @@ export function useChat() {
         setDraftAgentId,
         activeChatAgentId,
         agentStreaming,
+        commandChunks,
     };
 }

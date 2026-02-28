@@ -65,7 +65,7 @@ function persistScrollPositions(scrollPositions) {
     }
 }
 
-export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, agentStreaming, children }) {
+export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, agentStreaming, commandChunks, children }) {
     const scrollRef = useRef(null);
     const exitSnapshotRef = useRef(null);
     const lastUserMsgRef = useRef(null);
@@ -311,7 +311,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         requestAnimationFrame(() => {
             isProgrammaticScrollRef.current = false;
         });
-    }, [conversationKey, isChatMode, isTyping, messages.length]);
+    }, [conversationKey, isChatMode, isTyping, messages.length, saveConversationScrollPosition]);
 
     useLayoutEffect(() => {
         if (previousChatModeRef.current && !isChatMode) {
@@ -684,6 +684,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                                         }
                                         onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
                                         activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
+                                        commandChunks={commandChunks}
                                         ref={
                                             msg.id === lastUserMsgId
                                                 ? lastUserMsgRef

@@ -173,6 +173,7 @@ export default function App() {
             isTyping={chat.isTyping}
             isChatMode={chat.isChatMode}
             agentStreaming={chat.agentStreaming}
+            commandChunks={chat.commandChunks}
       >
         <ChatInput
           ref={chatInputRef}

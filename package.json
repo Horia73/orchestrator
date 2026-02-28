@@ -14,10 +14,13 @@
     "build": "vite build",
     "lint": "eslint .",
     "preview": "vite preview",
-    "start:api": "node server/index.js"
+    "start:api": "node server/index.js",
+    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
     "concurrently": "^9.2.1",
     "cron-parser": "^5.5.0",
     "dotenv": "^17.3.1",
@@ -25,6 +28,7 @@
     "highlight.js": "^11.11.1",
     "katex": "^0.16.33",
     "mermaid": "^11.12.3",
+    "node-pty": "^1.1.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",

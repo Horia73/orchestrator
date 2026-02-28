@@ -340,10 +340,6 @@ function buildAgentStates(agentDefinitions, savedSettings, previousStates = {}) 
     return next;
 }
 
-function isCodingAgent(agentId) {
-    return String(agentId ?? '').trim().toLowerCase() === 'coding';
-}
-
 /* ─── Agent Card ─────────────────────────────────────────────────────── */
 
 function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
