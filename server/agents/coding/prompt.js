@@ -1,9 +1,10 @@
 import os from 'node:os';
-import { basename, resolve } from 'node:path';
+import { resolve } from 'node:path';
 import { memoryStore } from '../../services/memory.js';
+import { PROJECTS_DIR } from '../../core/dataPaths.js';
 
 function getRuntimeContext() {
-    const workspacePath = resolve(process.cwd());
+    const sourceRoot = resolve(process.cwd());
     const osNameByPlatform = {
         darwin: 'macOS',
         linux: 'Linux',
@@ -14,8 +15,8 @@ function getRuntimeContext() {
     const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
     return {
-        workspacePath,
-        corpusName: basename(workspacePath) || 'workspace',
+        projectsDir: PROJECTS_DIR,
+        sourceRoot,
         osVersion: `${osName} ${os.release()}`,
         nowIso: now.toISOString(),
         timezone,
@@ -34,12 +35,10 @@ This information may or may not be relevant to the coding task, it is up for you
 </identity>
 
 <user_information>
-The USER's OS version is ${runtime.osVersion}.
-Current date/time is ${runtime.nowIso} (${runtime.timezone}).
-The user has 1 active workspaces, each defined by a URI and a CorpusName. Multiple URIs potentially map to the same CorpusName. The mapping is shown as follows in the format [URI] -> [CorpusName]:
-${runtime.workspacePath} -> ${runtime.corpusName}
-
-Code relating to the user's requests should be written in the locations listed above. Avoid writing project code files to tmp, in the .gemini dir, or directly to the Desktop and similar folders unless explicitly asked.
+OS: ${runtime.osVersion}.
+Date/time: ${runtime.nowIso} (${runtime.timezone}).
+Projects workspace: ${runtime.projectsDir} — create all new projects, files, and sub-folders here. This is also the default working directory for shell commands.
+Source code root: ${runtime.sourceRoot} — the orchestrator application itself. Only modify files here when the user explicitly asks to change the app.
 </user_information>
 
 <tool_calling>

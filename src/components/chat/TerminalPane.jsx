@@ -81,7 +81,7 @@ export function TerminalPane({ initialOutput = '', chunks = [], isRunning = fals
                 position: 'relative',
             }}
         >
-            <div ref={containerRef} style={{ width: '100%' }} />
+            <div ref={containerRef} style={{ width: '100%', height: '200px' }} />
             {isRunning && (
                 <span
                     style={{

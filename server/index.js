@@ -8,7 +8,7 @@ import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
 import { generateAssistantReplyStream, listAvailableModels, getUnsupportedLevels, generateChatTitle } from './services/geminiService.js';
 import { buildMergedModels } from '../src/config/agentModels.js';
-import { openEventsStream, broadcastEvent } from './core/events.js';
+import { openEventsStream, broadcastEvent, updateStreamingSnapshot, getStreamingSnapshot, clearStreamingSnapshot } from './core/events.js';
 import { getCommandStatusSnapshot } from './tools/index.js';
 import { estimateUsageCost } from './pricing/usage.js';
 import { appendSystemLog, clearLogs, getLogsSnapshot, initLogStorage } from './storage/logs.js';
@@ -23,6 +23,7 @@ import {
     getRecentMessages,
     removeChat,
     updateChatTitle,
+    updateChatLastConsolidated,
 } from './storage/chats.js';
 import { getAgentConfig, normalizeAgentId, readSettings, writeSettings } from './storage/settings.js';
 import { memoryStore } from './services/memory.js';
@@ -35,6 +36,7 @@ app.use(express.json({ limit: '80mb' }));
 
 const chatQueues = new Map();
 const activeGenerationsByClient = new Map();
+
 
 function createMessageId() {
     return `msg-${randomUUID()}`;
@@ -456,6 +458,17 @@ app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
 });
 
+app.get('/api/version', async (_req, res) => {
+    try {
+        const { readFile } = await import('node:fs/promises');
+        const { join } = await import('node:path');
+        const pkg = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8'));
+        res.json({ version: pkg.version });
+    } catch {
+        res.json({ version: '0.0.0' });
+    }
+});
+
 app.get('/api/events', (req, res) => {
     openEventsStream(req, res);
 });
@@ -542,6 +555,66 @@ app.delete('/api/memory', (_req, res) => {
         res.json({ ok: true });
     } catch {
         res.status(500).json({ error: 'Failed to clear memory.' });
+    }
+});
+
+/* ---- Archive chat to memory (used on "new chat") ---- */
+app.post('/api/chats/:chatId/archive', async (req, res, next) => {
+    try {
+        if (!MEMORY_CONFIG.enabled) {
+            res.json({ ok: true, skipped: true, reason: 'memory disabled' });
+            return;
+        }
+
+        const { chatId } = req.params;
+        const chat = await getChat(chatId);
+        if (!chat) {
+            res.status(404).json({ error: 'Chat not found.' });
+            return;
+        }
+
+        const lastConsolidated = chat.lastConsolidated ?? 0;
+        const allMessages = await getChatMessages(chatId);
+        const unconsolidated = allMessages.slice(lastConsolidated);
+
+        if (unconsolidated.length === 0) {
+            res.json({ ok: true, skipped: true, reason: 'nothing to consolidate' });
+            return;
+        }
+
+        // Immediately stash last 20 messages as pending context (sync, instant).
+        // This way, if the user sends a message in a new chat before consolidation
+        // finishes, the AI still has context from the previous conversation.
+        const recentForContext = unconsolidated.slice(-20);
+        const contextLines = recentForContext.map((m) => {
+            const ts = m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 16) : '?';
+            const role = String(m.role ?? 'user').toUpperCase();
+            const text = String(m.text ?? '').slice(0, 1000);
+            return `[${ts}] ${role}: ${text}`;
+        });
+        memoryStore.setPendingContext(contextLines.join('\n'));
+
+        // Respond immediately — consolidation runs in background
+        res.json({ ok: true, consolidated: unconsolidated.length, pending: true });
+
+        // Run LLM consolidation in background
+        memoryStore.consolidate(unconsolidated).then((ok) => {
+            if (ok) {
+                updateChatLastConsolidated(chatId, allMessages.length).catch(() => undefined);
+                broadcastEvent('memory.consolidated', {});
+                void writeSystemLog({
+                    source: 'memory',
+                    eventType: 'memory.archived',
+                    message: `Archived ${unconsolidated.length} messages from chat ${chatId} into long-term memory.`,
+                }).catch(() => undefined);
+            }
+            // Clear pending context once consolidation is done (memory is now in MEMORY.md)
+            memoryStore.clearPendingContext();
+        }).catch(() => {
+            memoryStore.clearPendingContext();
+        });
+    } catch (error) {
+        next(error);
     }
 });
 
@@ -763,11 +836,38 @@ app.delete('/api/logs', async (_req, res, next) => {
 });
 
 app.post('/api/update', async (_req, res) => {
-    const { execSync } = await import('node:child_process');
+    const { execSync, spawn } = await import('node:child_process');
     try {
-        execSync('git pull origin main', { cwd: process.cwd(), timeout: 30000, stdio: 'pipe' });
+        const pullOutput = execSync('git pull origin main', { cwd: process.cwd(), timeout: 30000, stdio: 'pipe' }).toString();
+
+        // Check if already up to date
+        if (/already up.to.date/i.test(pullOutput)) {
+            return res.json({ ok: true, message: 'Already up to date — no changes pulled.', restarting: false });
+        }
+
         execSync('npm install', { cwd: process.cwd(), timeout: 60000, stdio: 'pipe' });
-        res.json({ ok: true, message: 'Update installed! Restart the server to apply changes.' });
+
+        // Read new version from updated package.json
+        const { readFileSync } = await import('node:fs');
+        const { join } = await import('node:path');
+        let newVersion = 'unknown';
+        try {
+            const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
+            newVersion = pkg.version;
+        } catch { /* ignore */ }
+
+        res.json({ ok: true, message: `Update to v${newVersion} installed. Restarting…`, restarting: true });
+
+        // Schedule restart after response is sent
+        setTimeout(() => {
+            const child = spawn('npm', ['run', 'restart'], {
+                cwd: process.cwd(),
+                detached: true,
+                stdio: 'ignore',
+            });
+            child.unref();
+            process.exit(0);
+        }, 500);
     } catch (error) {
         res.status(500).json({ error: error.message || 'Update failed' });
     }
@@ -802,6 +902,36 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
     try {
         const { chatId } = req.params;
         const clientId = normalizeClientId(req.query.clientId);
+
+        // Archive unconsolidated messages to memory before deleting
+        if (MEMORY_CONFIG.enabled) {
+            try {
+                const chat = await getChat(chatId);
+                if (chat) {
+                    const lastConsolidated = chat.lastConsolidated ?? 0;
+                    const allMessages = await getChatMessages(chatId);
+                    const unconsolidated = allMessages.slice(lastConsolidated);
+                    if (unconsolidated.length > 0) {
+                        memoryStore.consolidate(unconsolidated).then((ok) => {
+                            if (ok) {
+                                broadcastEvent('memory.consolidated', {});
+                                void writeSystemLog({
+                                    source: 'memory',
+                                    eventType: 'memory.archived',
+                                    message: `Archived ${unconsolidated.length} messages from chat ${chatId} before deletion.`,
+                                }).catch(() => undefined);
+                            } else {
+                                console.warn(`[memory] Consolidation before delete failed for chat ${chatId}, proceeding with deletion`);
+                            }
+                        }).catch((memError) => {
+                            console.warn(`[memory] Error consolidating before delete for chat ${chatId}:`, memError?.message);
+                        });
+                    }
+                }
+            } catch (memError) {
+                console.warn(`[memory] Error consolidating before delete for chat ${chatId}:`, memError?.message);
+            }
+        }
 
         const removed = await removeChat(chatId);
         if (!removed) {
@@ -849,6 +979,23 @@ app.post('/api/chat/stop', (req, res) => {
         message: `Stop requested for ${stoppedCount} generation(s).`,
         data: { clientId, chatId, stoppedCount },
     }).catch(() => undefined);
+});
+
+app.get('/api/chat/:chatId/streaming-state', (req, res) => {
+    const chatId = String(req.params?.chatId ?? '').trim();
+    if (!chatId) {
+        return res.json({ active: false });
+    }
+    const snapshot = getStreamingSnapshot(chatId);
+    if (!snapshot) {
+        return res.json({ active: false });
+    }
+    res.json({
+        active: true,
+        message: snapshot.message,
+        agentStreaming: snapshot.agentStreaming,
+        updatedAt: snapshot.updatedAt,
+    });
 });
 
 app.get('/api/commands/:commandId/status', async (req, res) => {
@@ -1038,18 +1185,20 @@ app.post('/api/chat/send', async (req, res, next) => {
                         streamedAssistantThought = thought;
                         streamedAssistantParts = Array.isArray(parts) ? parts : streamedAssistantParts;
                         streamedAssistantSteps = Array.isArray(steps) ? steps : streamedAssistantSteps;
+                        const messageSnapshot = {
+                            id: aiMessageId,
+                            chatId: chat.id,
+                            role: 'ai',
+                            text,
+                            thought,
+                            parts: streamedAssistantParts,
+                            steps: streamedAssistantSteps,
+                            createdAt: aiMessageCreatedAt,
+                        };
+                        updateStreamingSnapshot(chat.id, { message: messageSnapshot });
                         broadcastEvent('message.streaming', {
                             chatId: chat.id,
-                            message: {
-                                id: aiMessageId,
-                                chatId: chat.id,
-                                role: 'ai',
-                                text,
-                                thought,
-                                parts: streamedAssistantParts,
-                                steps: streamedAssistantSteps,
-                                createdAt: aiMessageCreatedAt,
-                            },
+                            message: messageSnapshot,
                             originClientId: clientId,
                         });
                     },
@@ -1130,6 +1279,7 @@ app.post('/api/chat/send', async (req, res, next) => {
                 });
             } finally {
                 unregisterActiveGeneration(activeGeneration);
+                clearStreamingSnapshot(chat.id);
             }
 
             const appendedAi = await appendMessage(chat.id, {
@@ -1217,20 +1367,26 @@ app.post('/api/chat/send', async (req, res, next) => {
                 });
             }
 
-            // Trigger memory consolidation in background when message count exceeds window
+            // Trigger memory consolidation in background when unconsolidated count exceeds window
             if (MEMORY_CONFIG.enabled && !memoryStore.isConsolidating) {
-                const allMessages = await getChatMessages(chat.id);
-                if (allMessages.length >= MEMORY_CONFIG.window) {
+                const freshChat = await getChat(chat.id);
+                const lastConsolidated = freshChat?.lastConsolidated ?? 0;
+                const unconsolidatedCount = (freshChat?.messageCount ?? 0) - lastConsolidated;
+
+                if (unconsolidatedCount >= MEMORY_CONFIG.window) {
+                    const allMessages = await getChatMessages(chat.id);
                     const halfWindow = Math.floor(MEMORY_CONFIG.window / 2);
-                    const messagesToConsolidate = allMessages.slice(0, -halfWindow);
+                    const messagesToConsolidate = allMessages.slice(lastConsolidated, -halfWindow);
                     if (messagesToConsolidate.length > 0) {
+                        const newPointer = allMessages.length - halfWindow;
                         memoryStore.consolidate(messagesToConsolidate).then((ok) => {
                             if (ok) {
+                                updateChatLastConsolidated(chat.id, newPointer).catch(() => undefined);
                                 broadcastEvent('memory.consolidated', {});
                                 void writeSystemLog({
                                     source: 'memory',
                                     eventType: 'memory.consolidated',
-                                    message: `Consolidated ${messagesToConsolidate.length} messages into long-term memory.`,
+                                    message: `Consolidated ${messagesToConsolidate.length} messages into long-term memory (pointer: ${lastConsolidated} → ${newPointer}).`,
                                 }).catch(() => undefined);
                             }
                         }).catch(() => undefined);

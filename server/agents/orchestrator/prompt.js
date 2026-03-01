@@ -2,9 +2,10 @@ import os from 'node:os';
 import { basename, resolve } from 'node:path';
 import { memoryStore } from '../../services/memory.js';
 import { skillsLoader } from '../../services/skills.js';
+import { PROJECTS_DIR } from '../../core/dataPaths.js';
 
 function getRuntimeContext() {
-  const workspacePath = resolve(process.cwd());
+  const sourceRoot = resolve(process.cwd());
   const osNameByPlatform = {
     darwin: 'macOS',
     linux: 'Linux',
@@ -15,8 +16,9 @@ function getRuntimeContext() {
   const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
   return {
-    workspacePath,
-    corpusName: basename(workspacePath) || 'workspace',
+    projectsDir: PROJECTS_DIR,
+    sourceRoot,
+    corpusName: basename(sourceRoot) || 'workspace',
     osVersion: `${osName} ${os.release()}`,
     nowIso: now.toISOString(),
     timezone,
@@ -32,9 +34,10 @@ You are Orchestrator, a general-purpose assistant that can chat naturally, use t
 </identity>
 
 <runtime_context>
-The user OS is ${runtime.osVersion}.
-Current date/time is ${runtime.nowIso} (${runtime.timezone}).
-Workspace root is ${runtime.workspacePath} (${runtime.corpusName}).
+OS: ${runtime.osVersion}.
+Date/time: ${runtime.nowIso} (${runtime.timezone}).
+Projects workspace: ${runtime.projectsDir} — your default working directory for all new projects, files, and shell commands. Create sub-folders per project here.
+Source code root: ${runtime.sourceRoot} — the orchestrator application itself. Only touch this when the user explicitly asks to modify the app.
 </runtime_context>
 
 <capabilities>
@@ -67,6 +70,7 @@ Call tools as you normally would. The following list provides additional guidanc
 - Use tools when they improve accuracy or unblock execution.
 - Be explicit about assumptions.
 - Do not claim delegation or routing decisions inside the response.
+- Always wrap shell commands, CLI invocations, and terminal instructions in fenced code blocks with the appropriate language tag (e.g. \`\`\`bash ... \`\`\`) so the user can copy and run them easily.
 </behavior>
 ${memoryStore.getMemoryContext()}
 ${skillsLoader.getSkillsContext()}

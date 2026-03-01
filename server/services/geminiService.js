@@ -178,6 +178,26 @@ function normalizeParts(parts) {
     return normalized.length > 0 ? normalized : null;
 }
 
+/**
+ * Extract inline data attachments (images, audio, etc.) from a normalized message parts array.
+ * Returns an array of { mimeType, data } objects suitable for agent tool forwarding.
+ */
+function extractUserAttachments(messageParts) {
+    if (!Array.isArray(messageParts)) return [];
+    const attachments = [];
+    for (const part of messageParts) {
+        const inlineData = part?.inlineData;
+        if (inlineData && typeof inlineData === 'object') {
+            const mimeType = String(inlineData.mimeType ?? '').trim();
+            const data = String(inlineData.data ?? '').trim();
+            if (mimeType && data) {
+                attachments.push({ mimeType, data });
+            }
+        }
+    }
+    return attachments;
+}
+
 function normalizeMessageParts(message) {
     const preservedParts = normalizeParts(message?.parts);
     if (preservedParts) {
@@ -1259,6 +1279,9 @@ export async function generateAssistantReplyStream(
                     clientId,
                     toolCallId: (typeof functionCall?.id === 'string' ? functionCall.id : ''),
                     toolName: name,
+                    shouldStop: isStopRequested,
+                    userAttachments: extractUserAttachments(latestMessage),
+                    chatHistory: historyWithLatestUserTurn,
                 }, () => toolFn(args));
             } else {
                 result = { error: `Tool ${name} not found` };

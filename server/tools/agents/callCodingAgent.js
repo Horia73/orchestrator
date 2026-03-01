@@ -1,7 +1,63 @@
 import { readFile } from 'node:fs/promises';
 import { isAbsolute, resolve } from 'node:path';
+import { getExecutionContext } from '../../core/context.js';
 
 const CODING_AGENT_ID = 'coding';
+const TOOL_NAME = 'call_coding_agent';
+const MAX_PREVIOUS_TURNS = 10;
+
+/**
+ * Extract previous coding agent call/response pairs from the chat history
+ * and convert them into user/model turn pairs for multi-turn conversation.
+ */
+function extractPreviousAgentTurns(chatHistory) {
+    if (!Array.isArray(chatHistory)) return [];
+
+    const turns = [];
+    for (const message of chatHistory) {
+        if (message.role !== 'ai' || !Array.isArray(message.parts)) continue;
+
+        for (const part of message.parts) {
+            if (!part?.functionCall || part.functionCall.name !== TOOL_NAME) continue;
+
+            const args = part.functionCall.args ?? {};
+            const task = String(args.task ?? '').trim();
+            if (!task) continue;
+
+            // Find the matching response.
+            const callId = typeof part.functionCall.id === 'string' ? part.functionCall.id.trim() : '';
+            let responseText = '';
+            for (const rPart of message.parts) {
+                if (!rPart?.functionResponse) continue;
+                const rId = typeof rPart.functionResponse.id === 'string' ? rPart.functionResponse.id.trim() : '';
+                const rName = typeof rPart.functionResponse.name === 'string' ? rPart.functionResponse.name : '';
+                if ((callId && rId === callId) || rName === TOOL_NAME) {
+                    const resp = rPart.functionResponse.response ?? {};
+                    responseText = String(resp.text ?? '').trim();
+                    break;
+                }
+            }
+
+            if (!responseText) continue;
+
+            // Build the user prompt the agent would have seen.
+            let userText = '';
+            if (args.context) userText += `Context:\n${args.context}\n\n`;
+            userText += `Task:\n${task}`;
+
+            turns.push(
+                { role: 'user', text: userText, parts: [{ text: userText }] },
+                { role: 'ai', text: responseText, parts: [{ text: responseText }] },
+            );
+        }
+    }
+
+    // Keep only the most recent turns to avoid context overflow.
+    if (turns.length > MAX_PREVIOUS_TURNS * 2) {
+        return turns.slice(-(MAX_PREVIOUS_TURNS * 2));
+    }
+    return turns;
+}
 
 export const declaration = {
     name: 'call_coding_agent',
@@ -59,12 +115,22 @@ export async function execute({ task, context, file_paths, attachments }) {
             }
         }
 
+        // Merge explicit attachments with user attachments from the conversation context.
+        const explicitAttachments = Array.isArray(attachments) ? attachments : [];
+        const contextData = getExecutionContext();
+        const contextAttachments = Array.isArray(contextData?.userAttachments) ? contextData.userAttachments : [];
+        const allAttachments = [...explicitAttachments, ...contextAttachments];
+
+        // Extract previous coding agent interactions from chat history for multi-turn context.
+        const previousTurns = extractPreviousAgentTurns(contextData?.chatHistory);
+
         const { generateCodingExpertAdvice } = await import('../../agents/coding/service.js');
         const result = await generateCodingExpertAdvice({
             task: taskText,
             context,
             files: filesData,
-            attachments: Array.isArray(attachments) ? attachments : [],
+            attachments: allAttachments,
+            previousTurns,
         });
 
         const usageMetadata = result.usageMetadata && typeof result.usageMetadata === 'object'

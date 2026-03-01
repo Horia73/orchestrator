@@ -1,8 +1,10 @@
+import { getExecutionContext } from '../../core/context.js';
+
 const IMAGE_AGENT_ID = 'image';
 
 export const declaration = {
     name: 'generate_image',
-    description: 'Generate or edit images by delegating to the Image agent.',
+    description: 'Generate or edit images by delegating to the Image agent. When the user provides a reference image for editing, it will be forwarded automatically.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -38,8 +40,14 @@ export async function execute({ prompt, model, aspectRatio, imageSize }) {
     }
 
     try {
+        // Forward user attachments (images) from conversation context for editing.
+        const contextData = getExecutionContext();
+        const contextAttachments = Array.isArray(contextData?.userAttachments) ? contextData.userAttachments : [];
+        // Only forward image attachments to the image agent.
+        const imageAttachments = contextAttachments.filter(a => String(a.mimeType ?? '').startsWith('image/'));
+
         const { generateImageWithAgent } = await import('../../agents/image/service.js');
-        const result = await generateImageWithAgent({ prompt: promptText, model, aspectRatio, imageSize });
+        const result = await generateImageWithAgent({ prompt: promptText, model, aspectRatio, imageSize, attachments: imageAttachments });
         const usageMetadata = result.usageMetadata && typeof result.usageMetadata === 'object'
             ? result.usageMetadata
             : null;

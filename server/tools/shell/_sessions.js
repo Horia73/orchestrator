@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { isAbsolute, resolve } from 'node:path';
 import { normalizeInteger, clampInteger, sleep } from '../_utils.js';
 import { broadcastEvent } from '../../core/events.js';
+import { PROJECTS_DIR } from '../../core/dataPaths.js';
 
 export const COMMAND_SESSIONS_MAX = 80;
 export const COMMAND_OUTPUT_MAX_CHARS = 240_000;
@@ -18,9 +19,9 @@ export const commandSessions = new Map();
 
 export function resolveCommandWorkingDirectory(cwdValue) {
     const raw = String(cwdValue ?? '').trim();
-    if (!raw) return process.cwd();
+    if (!raw) return PROJECTS_DIR;
     if (isAbsolute(raw)) return raw;
-    return resolve(process.cwd(), raw);
+    return resolve(PROJECTS_DIR, raw);
 }
 
 export function normalizeOutputCharacterCount(value) {

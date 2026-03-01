@@ -186,6 +186,7 @@ async function ensureInitialized() {
             const createdAt = Number(rawChat.createdAt);
             const updatedAt = Number(rawChat.updatedAt);
             const messageCount = Number(rawChat.messageCount);
+            const lastConsolidated = Number(rawChat.lastConsolidated);
             const normalizedChat = {
                 id,
                 title: String(rawChat.title ?? 'Untitled'),
@@ -196,6 +197,9 @@ async function ensureInitialized() {
                     : 0,
                 lastMessagePreview: String(rawChat.lastMessagePreview ?? ''),
                 agentId: normalizeAgentId(rawChat.agentId),
+                lastConsolidated: Number.isFinite(lastConsolidated) && lastConsolidated >= 0
+                    ? Math.trunc(lastConsolidated)
+                    : 0,
             };
 
             if (String(rawChat.agentId ?? '').trim().toLowerCase() !== normalizedChat.agentId) {
@@ -269,6 +273,7 @@ export async function createChatFromFirstMessage(firstMessageText, options = {})
         messageCount: 0,
         lastMessagePreview: '',
         agentId: normalizeAgentId(options?.agentId),
+        lastConsolidated: 0,
     };
 
     state.chats = [chat, ...state.chats];
@@ -389,5 +394,22 @@ export async function updateChatTitle(chatId, newTitle) {
     state.chats = sortChats(state.chats);
     await persistIndex();
 
+    return updated;
+}
+
+export async function updateChatLastConsolidated(chatId, value) {
+    await ensureInitialized();
+
+    const chatIdx = findChatIndex(chatId);
+    if (chatIdx === -1) return null;
+
+    const current = state.chats[chatIdx];
+    const updated = {
+        ...current,
+        lastConsolidated: Math.trunc(Number(value) || 0),
+    };
+
+    state.chats[chatIdx] = updated;
+    await persistIndex();
     return updated;
 }

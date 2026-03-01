@@ -1,7 +1,12 @@
+import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 
 export const ORCHESTRATOR_HOME = path.join(os.homedir(), '.orchestrator');
+
+// Agent workspace — agents create and manage projects here.
+export const PROJECTS_DIR = path.join(ORCHESTRATOR_HOME, 'projects');
+fs.mkdirSync(PROJECTS_DIR, { recursive: true });
 export const CONFIG_PATH = path.join(ORCHESTRATOR_HOME, 'config.json');
 export const DATA_ROOT_DIR = path.join(ORCHESTRATOR_HOME, 'data');
 

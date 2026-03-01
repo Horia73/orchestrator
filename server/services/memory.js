@@ -40,6 +40,68 @@ const SAVE_MEMORY_TOOL = [{
     }],
 }];
 
+// ─── Tool info extraction for consolidation ────────────────────────────────
+
+function extractToolInfo(message) {
+    const allParts = [];
+
+    // Collect parts from top-level and steps
+    if (Array.isArray(message.parts)) {
+        allParts.push(...message.parts);
+    }
+    if (Array.isArray(message.steps)) {
+        for (const step of message.steps) {
+            if (Array.isArray(step.parts)) {
+                allParts.push(...step.parts);
+            }
+        }
+    }
+
+    if (allParts.length === 0) return '';
+
+    const toolNames = new Set();
+    const summaries = [];
+
+    for (const part of allParts) {
+        if (part.functionCall) {
+            toolNames.add(part.functionCall.name);
+        }
+        if (part.functionResponse) {
+            const name = part.functionResponse.name || 'unknown';
+            const resp = part.functionResponse.response;
+            if (resp && typeof resp === 'object') {
+                // Extract a short summary from the tool response
+                const summary = summarizeToolResponse(name, resp);
+                if (summary) summaries.push(summary);
+            }
+        }
+    }
+
+    if (toolNames.size === 0) return '';
+
+    const parts = [`[tools: ${[...toolNames].join(', ')}]`];
+    if (summaries.length > 0) {
+        parts.push(`[tool results: ${summaries.join('; ').slice(0, 500)}]`);
+    }
+    return parts.join(' ');
+}
+
+function summarizeToolResponse(toolName, resp) {
+    // Extract the most useful bits from common tool responses
+    if (toolName === 'run_command') {
+        const cmd = resp.command || '';
+        const output = String(resp.output ?? resp.stdout ?? '').slice(0, 200);
+        return cmd ? `${cmd} → ${output}`.trim() : '';
+    }
+    if (toolName === 'search_web') {
+        const answer = String(resp.answer ?? '').slice(0, 200);
+        return answer ? `web: ${answer}` : '';
+    }
+    // Generic: stringify the first 200 chars
+    const str = JSON.stringify(resp).slice(0, 200);
+    return `${toolName}: ${str}`;
+}
+
 // ─── MemoryStore ────────────────────────────────────────────────────────────
 
 class MemoryStore {
@@ -48,6 +110,7 @@ class MemoryStore {
         this.memoryFile = MEMORY_PATH;
         this.historyFile = HISTORY_PATH;
         this._consolidating = false;
+        this._pendingContext = '';
     }
 
     readLongTerm() {
@@ -82,10 +145,24 @@ class MemoryStore {
         fs.appendFileSync(this.historyFile, entry.trimEnd() + '\n\n', 'utf8');
     }
 
+    setPendingContext(text) {
+        this._pendingContext = String(text || '');
+    }
+
+    clearPendingContext() {
+        this._pendingContext = '';
+    }
+
     getMemoryContext() {
+        const parts = [];
         const longTerm = this.readLongTerm();
-        if (!longTerm) return '';
-        return `\n\n<long_term_memory>\n${longTerm}\n</long_term_memory>`;
+        if (longTerm) {
+            parts.push(`<long_term_memory>\n${longTerm}\n</long_term_memory>`);
+        }
+        if (this._pendingContext) {
+            parts.push(`<pending_context note="Recent conversation from previous chat — will be consolidated into long-term memory shortly.">\n${this._pendingContext}\n</pending_context>`);
+        }
+        return parts.length > 0 ? `\n\n${parts.join('\n\n')}` : '';
     }
 
     clearAll() {
@@ -113,7 +190,12 @@ class MemoryStore {
                 const ts = m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 16) : '?';
                 const role = String(m.role ?? 'user').toUpperCase();
                 const text = String(m.text ?? '').slice(0, 2000);
-                return `[${ts}] ${role}: ${text}`;
+
+                // Extract tool call names and summaries from parts/steps
+                const toolInfo = extractToolInfo(m);
+                const toolSuffix = toolInfo ? ` ${toolInfo}` : '';
+
+                return `[${ts}] ${role}${toolSuffix}: ${text}`;
             });
 
             const currentMemory = this.readLongTerm();

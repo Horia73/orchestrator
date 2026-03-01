@@ -375,8 +375,19 @@ export function MarkdownContent({ text, variant = 'ai' }) {
                 );
             },
             code({ inline, className, children }) {
-                if (inline) {
-                    return <code className="inline-code">{children}</code>;
+                // react-markdown v10 dropped the `inline` prop; fall back to
+                // checking for a language class (block code always has one).
+                if (inline || !className) {
+                    const text = toPlainText(children);
+                    return (
+                        <code
+                            className="inline-code"
+                            title="Click to copy"
+                            onClick={() => navigator.clipboard?.writeText(text)}
+                        >
+                            {children}
+                        </code>
+                    );
                 }
                 return <CodeBlock className={className}>{children}</CodeBlock>;
             },

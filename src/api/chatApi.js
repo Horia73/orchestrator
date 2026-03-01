@@ -60,6 +60,13 @@ export async function stopChatGeneration({ chatId, clientId }) {
     return parseApiResponse(response);
 }
 
+export async function archiveChat(chatId) {
+    const response = await fetch(`/api/chats/${encodeURIComponent(chatId)}/archive`, {
+        method: 'POST',
+    });
+    return parseApiResponse(response);
+}
+
 export async function deleteChat(chatId, clientId) {
     const response = await fetch(`/api/chats/${chatId}?clientId=${encodeURIComponent(clientId)}`, {
         method: 'DELETE',
@@ -74,6 +81,11 @@ export async function fetchCommandStatus({ commandId, waitSeconds = 0, chars = 1
         chars: String(chars),
     });
     const response = await fetch(`/api/commands/${encodeURIComponent(commandId)}/status?${query.toString()}`);
+    return parseApiResponse(response);
+}
+
+export async function fetchStreamingState(chatId) {
+    const response = await fetch(`/api/chat/${encodeURIComponent(chatId)}/streaming-state`);
     return parseApiResponse(response);
 }
 

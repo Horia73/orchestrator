@@ -541,7 +541,7 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
                     )}
 
                     {activeTab === 'updates' && (
-                        <UpdatesPanel currentVersion="0.0.0" />
+                        <UpdatesPanel />
                     )}
                 </div>
             </div>

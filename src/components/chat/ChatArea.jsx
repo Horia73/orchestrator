@@ -95,6 +95,8 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const [showScrollToBottom, setShowScrollToBottom] = useState(false);
     const [exitSnapshotMessages, setExitSnapshotMessages] = useState([]);
     const [isConversationEnterVisible, setIsConversationEnterVisible] = useState(false);
+    const agentPanelBodyRef = useRef(null);
+    const agentPanelAutoFollowRef = useRef(true);
     const [activeAgentCallSelection, setActiveAgentCallSelection] = useState(null);
     const [noSpacerAnim, setNoSpacerAnim] = useState(false);
     const [isConversationHidden, setIsConversationHidden] = useState(false);
@@ -580,6 +582,39 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         return () => container.removeEventListener('scroll', handleManualScroll);
     }, [isChatMode, conversationKey, saveActiveConversationScrollPosition]);
 
+    // Auto-scroll for agent side panel.
+    useEffect(() => {
+        const container = agentPanelBodyRef.current;
+        if (!container) return;
+
+        // Reset auto-follow when the agent panel selection changes.
+        agentPanelAutoFollowRef.current = true;
+
+        const handleScroll = () => {
+            const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            agentPanelAutoFollowRef.current = distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+        };
+
+        const observer = new ResizeObserver(() => {
+            if (agentPanelAutoFollowRef.current) {
+                container.scrollTop = container.scrollHeight;
+            }
+        });
+
+        // Observe the first child (the Message component wrapper) for size changes.
+        if (container.firstElementChild) {
+            observer.observe(container.firstElementChild);
+        } else {
+            observer.observe(container);
+        }
+
+        container.addEventListener('scroll', handleScroll, { passive: true });
+        return () => {
+            observer.disconnect();
+            container.removeEventListener('scroll', handleScroll);
+        };
+    }, [activeAgentCallSelection]);
+
     const lastUserMsgId = [...messages].reverse().find((m) => m.role === 'user')?.id;
     const lastAiMsgId = [...messages].reverse().find((m) => m.role === 'ai')?.id;
     const lastMessage = messages[messages.length - 1];
@@ -766,7 +801,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                                 <p className="agent-side-call-text">{callSummary}</p>
                             </div>
                         )}
-                        <div className="agent-side-body">
+                        <div className="agent-side-body" ref={agentPanelBodyRef}>
                             <Message
                                 role="ai"
                                 text={activeAgentPanelMessage.text}

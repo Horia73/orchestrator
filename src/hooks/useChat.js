@@ -1,8 +1,10 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import {
+    archiveChat,
     deleteChat as apiDeleteChat,
     fetchChatMessages,
     fetchChats,
+    fetchStreamingState,
     openChatEvents,
     stopChatGeneration,
     sendChatMessage,
@@ -303,10 +305,42 @@ export function useChat() {
 
         const payload = await fetchChatMessages(chatId);
         loadedChatIdsRef.current.add(chatId);
-        setMessagesByChat((prev) => ({
-            ...prev,
-            [chatId]: payload.messages ?? [],
-        }));
+
+        // Recover in-flight streaming state if the server is still generating.
+        let streamingMessage = null;
+        let recoveredAgentStreaming = null;
+        try {
+            const streamState = await fetchStreamingState(chatId);
+            if (streamState.active && streamState.message) {
+                streamingMessage = streamState.message;
+                if (streamState.agentStreaming && Object.keys(streamState.agentStreaming).length > 0) {
+                    recoveredAgentStreaming = streamState.agentStreaming;
+                }
+            }
+        } catch {
+            // Ignore - streaming state recovery is best-effort.
+        }
+
+        setMessagesByChat((prev) => {
+            const messages = payload.messages ?? [];
+            if (streamingMessage) {
+                return {
+                    ...prev,
+                    [chatId]: mergeMessages(messages, [streamingMessage]),
+                };
+            }
+            return {
+                ...prev,
+                [chatId]: messages,
+            };
+        });
+
+        if (streamingMessage) {
+            setPendingKey(chatId);
+        }
+        if (recoveredAgentStreaming) {
+            setAgentStreaming((prev) => ({ ...prev, ...recoveredAgentStreaming }));
+        }
     }, []);
 
     useEffect(() => {
@@ -515,6 +549,9 @@ export function useChat() {
 
             if (event.type === 'message.added' && event.chatId && event.message) {
                 setAgentStreaming({});
+                // Clear typing indicator when the final message arrives
+                // (needed for streaming state recovery after page refresh).
+                setPendingKey((current) => (current === event.chatId ? null : current));
                 setMessagesByChat((prev) => {
                     if (!(event.chatId in prev)) {
                         return prev;
@@ -538,6 +575,9 @@ export function useChat() {
             if (current === null) {
                 return current;
             }
+
+            // Archive current chat to memory before switching (fire-and-forget)
+            archiveChat(current).catch(() => undefined);
 
             setDraftMessages([]);
             setPendingKey(null);

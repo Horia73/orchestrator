@@ -855,10 +855,21 @@
 .message-markdown .inline-code {
     font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', monospace;
     font-size: 0.9em;
-    background: rgba(20, 18, 15, 0.07);
-    border: 1px solid rgba(26, 25, 21, 0.12);
+    color: #bf5a23ee;
+    background: rgb(240, 238, 235);
+    border: 1px solid #dbdad7;
     border-radius: 6px;
     padding: 0.14em 0.42em;
+    cursor: pointer;
+    transition: background 0.12s ease, opacity 0.12s ease;
+}
+
+.message-markdown .inline-code:hover {
+    background: #ece9e6;
+}
+
+.message-markdown .inline-code:active {
+    opacity: 0.6;
 }
 
 /* ---- Table ---- */

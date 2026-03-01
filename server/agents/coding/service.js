@@ -1,12 +1,12 @@
 import { CODING_AGENT_ID } from './index.js';
 import { getExecutionContext } from '../../core/context.js';
-import { broadcastEvent } from '../../core/events.js';
+import { broadcastEvent, updateStreamingSnapshot } from '../../core/events.js';
 
 /**
  * Generates expert advice from the Coding Agent.
  * This version supports streaming and tool calls, making it "identical" to the orchestrator's workflow.
  */
-export async function generateCodingExpertAdvice({ task, context, files = [], attachments = [] } = {}) {
+export async function generateCodingExpertAdvice({ task, context, files = [], attachments = [], previousTurns = [] } = {}) {
     const contextData = getExecutionContext();
 
     // 1. Build the initial turn for the expert
@@ -36,10 +36,11 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
         }
     }
 
-    const history = [{
-        role: 'user',
-        parts: parts
-    }];
+    // Build multi-turn history from previous agent interactions in this chat.
+    const history = [
+        ...previousTurns,
+        { role: 'user', parts },
+    ];
 
     console.log(`[CodingService] Starting expert execution for task: "${task.slice(0, 50)}..."`);
 
@@ -53,42 +54,53 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
             chatId: contextData?.chatId,
             messageId: contextData?.messageId,
             clientId: contextData?.clientId,
+            shouldStop: contextData?.shouldStop ?? (() => false),
             onUpdate: async ({ text, thought, parts: expertParts, steps }) => {
                 if (contextData?.chatId && contextData?.messageId) {
+                    const agentPayload = {
+                        text,
+                        thought,
+                        parts: expertParts,
+                        steps: steps,
+                        isThinking: true,
+                        clientId: contextData?.clientId
+                    };
                     broadcastEvent('agent.streaming', {
                         chatId: contextData.chatId,
                         messageId: contextData.messageId,
                         toolCallId: contextData.toolCallId,
                         toolName: contextData.toolName,
                         agentId: CODING_AGENT_ID,
-                        payload: {
-                            text,
-                            thought,
-                            parts: expertParts,
-                            steps: steps,
-                            isThinking: true,
-                            clientId: contextData?.clientId
-                        }
+                        payload: agentPayload,
+                    });
+                    updateStreamingSnapshot(contextData.chatId, {
+                        agentToolName: contextData.toolName,
+                        agentPayload,
                     });
                 }
             }
         });
 
         if (contextData?.chatId && contextData?.messageId) {
+            const finalPayload = {
+                text: finalResult.text,
+                thought: finalResult.thought,
+                parts: finalResult.parts,
+                steps: finalResult.steps,
+                isThinking: false,
+                clientId: contextData?.clientId
+            };
             broadcastEvent('agent.streaming', {
                 chatId: contextData.chatId,
                 messageId: contextData.messageId,
                 toolCallId: contextData.toolCallId,
                 toolName: contextData.toolName,
                 agentId: CODING_AGENT_ID,
-                payload: {
-                    text: finalResult.text,
-                    thought: finalResult.thought,
-                    parts: finalResult.parts,
-                    steps: finalResult.steps,
-                    isThinking: false,
-                    clientId: contextData?.clientId
-                }
+                payload: finalPayload,
+            });
+            updateStreamingSnapshot(contextData.chatId, {
+                agentToolName: contextData.toolName,
+                agentPayload: finalPayload,
             });
         }
 

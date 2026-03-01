@@ -177,6 +177,7 @@ export async function generateImageWithAgent({
     model,
     aspectRatio,
     imageSize,
+    attachments = [],
 } = {}) {
     const normalizedPrompt = normalizePrompt(prompt);
     if (!normalizedPrompt) {
@@ -208,9 +209,20 @@ export async function generateImageWithAgent({
         };
     }
 
+    // Build contents: text prompt + any image attachments for editing.
+    const contentParts = [{ text: normalizedPrompt }];
+    if (Array.isArray(attachments) && attachments.length > 0) {
+        for (const att of attachments) {
+            const mimeType = String(att?.mimeType ?? '').trim();
+            const data = String(att?.data ?? '').trim();
+            if (mimeType && data) {
+                contentParts.push({ inlineData: { mimeType, data } });
+            }
+        }
+    }
     const requestPayload = {
         model: resolvedModel,
-        contents: normalizedPrompt,
+        contents: contentParts.length > 1 ? contentParts : normalizedPrompt,
     };
     if (Object.keys(requestConfig).length > 0) {
         requestPayload.config = requestConfig;
