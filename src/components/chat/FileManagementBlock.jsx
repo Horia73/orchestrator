@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { IconEye } from '../shared/icons.jsx';
 import './ToolBlock.css';
 
 function formatJson(value) {
@@ -156,6 +157,7 @@ export function FileManagementBlock({ entries = [] }) {
                 className="file-tools-header"
                 onClick={() => setIsOpen((current) => !current)}
             >
+                <span className="tool-row-icon"><IconEye /></span>
                 <span className={`file-tools-title${hasRunningEntries ? ' status-running-text' : ''}`}>{title}</span>
                 <span className={`file-tools-chevron ${isOpen ? 'open' : ''}`}>▼</span>
             </button>

@@ -3,6 +3,7 @@ import { createPortal } from 'react-dom';
 import { MarkdownContent } from './MarkdownContent.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
 import { ToolBlock } from './ToolBlock.jsx';
+import { ToolCallsGroup } from './ToolCallsGroup.jsx';
 import { FileManagementBlock } from './FileManagementBlock.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
 import { getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
@@ -208,17 +209,7 @@ function buildToolBlocks(parts) {
     const renderedBlocks = [];
     for (let index = 0; index < toolParts.length; index += 1) {
         const current = toolParts[index];
-        const isFileGroup = isFileManagementTool(current);
         const isEditGroup = isEditTool(current);
-
-        if (!isFileGroup && !isEditGroup) {
-            renderedBlocks.push({
-                type: 'single_tool',
-                key: `tool-${index}`,
-                toolPart: current,
-            });
-            continue;
-        }
 
         if (isEditGroup) {
             renderedBlocks.push({
@@ -229,22 +220,11 @@ function buildToolBlocks(parts) {
             continue;
         }
 
-        const groupedEntries = [current];
-        const startIndex = index;
-
-        while (
-            index + 1 < toolParts.length
-            && isFileGroup
-            && isFileManagementTool(toolParts[index + 1])
-        ) {
-            index += 1;
-            groupedEntries.push(toolParts[index]);
-        }
-
+        // All tools (including file management) are rendered as single tool rows
         renderedBlocks.push({
-            type: isFileGroup ? 'file_management' : 'edit_management',
-            key: `${isFileGroup ? 'file-management' : 'edit-management'}-${startIndex}`,
-            entries: groupedEntries,
+            type: 'single_tool',
+            key: `tool-${index}`,
+            toolPart: current,
         });
     }
 
@@ -846,6 +826,7 @@ export const Message = forwardRef(function Message({
     steps,
     isThinking = false,
     onAgentCallToggle,
+    onToolPanelToggle,
     activeAgentCallId = '',
     commandChunks = {},
 }, ref) {
@@ -878,6 +859,7 @@ export const Message = forwardRef(function Message({
         bodyIsThinking,
         textFirst = false,
         showWorkedWhenNoThought = false,
+        thinkingDurationMs = 0,
     }) => {
         const normalizedBodyParts = Array.isArray(bodyParts) ? bodyParts : [];
         const normalizedFallbackParts = Array.isArray(fallbackParts) ? fallbackParts : [];
@@ -936,67 +918,62 @@ export const Message = forwardRef(function Message({
                         thought={bodyThought}
                         isThinking={bodyIsThinking}
                         showWorkedWhenIdle={showWorkedWhenNoThought}
+                        thinkingDurationMs={thinkingDurationMs}
                     />
                 )}
 
                 {textFirst && textNode}
 
-                {renderedBlocks.map((block) => {
-                    if (block.type === 'file_management') {
-                        return (
-                            <FileManagementBlock
-                                key={block.key}
-                                entries={block.entries}
-                            />
-                        );
-                    }
+                {(() => {
+                    // Group consecutive single_tool blocks into ToolCallsGroup
+                    const renderGroups = [];
+                    let currentToolGroup = [];
 
-                    if (block.type === 'edit_management') {
-                        return (
-                            <EditManagementBlock
-                                key={block.key}
-                                entries={block.entries}
-                            />
-                        );
-                    }
-
-                    const toolPart = block.toolPart;
-                    const toolName = String(toolPart?.functionCall?.name ?? '').trim();
-                    const agentMeta = getAgentToolMetadata(toolName);
-                    const toolCallId = getToolCallId(toolPart?.functionCall);
-                    const isAgentCallOpen = !!agentMeta && toolCallId === String(activeAgentCallId ?? '').trim();
-                    const handleAgentCallToggle = (agentMeta && onAgentCallToggle)
-                        ? () => {
-                            onAgentCallToggle({
-                                callId: toolCallId,
-                                agentId: agentMeta.agentId,
-                                agentName: agentMeta.agentName,
-                                toolName,
-                                sourceContext: {
-                                    text: bodyText,
-                                    thought: bodyThought,
-                                    parts: Array.isArray(parts) && parts.length > 0 ? parts : toolRenderParts,
-                                },
-                                toolPart: {
-                                    functionCall: toolPart.functionCall,
-                                    functionResponse: toolPart.functionResponse,
-                                    isExecuting: toolPart.isExecuting === true,
-                                },
-                            });
+                    const flushToolGroup = () => {
+                        if (currentToolGroup.length > 0) {
+                            const groupItems = currentToolGroup.map((b) => ({ kind: 'tool', block: b }));
+                            const isAnyRunning = currentToolGroup.some((b) => b.toolPart?.isExecuting === true && !b.toolPart?.functionResponse);
+                            const groupKey = `tool-group-${currentToolGroup[0].key}`;
+                            renderGroups.push(
+                                <ToolCallsGroup
+                                    key={groupKey}
+                                    items={groupItems}
+                                    onAgentCallToggle={onAgentCallToggle ? (info) => {
+                                        onAgentCallToggle({
+                                            ...info,
+                                            sourceContext: {
+                                                text: bodyText,
+                                                thought: bodyThought,
+                                                parts: Array.isArray(parts) && parts.length > 0 ? parts : toolRenderParts,
+                                            },
+                                        });
+                                    } : undefined}
+                                    activeAgentCallId={activeAgentCallId}
+                                    commandChunks={commandChunks}
+                                    isAnyRunning={isAnyRunning}
+                                    onToolPanelToggle={onToolPanelToggle}
+                                />,
+                            );
+                            currentToolGroup = [];
                         }
-                        : undefined;
-                    return (
-                        <ToolBlock
-                            key={block.key}
-                            functionCall={toolPart.functionCall}
-                            functionResponse={toolPart.functionResponse}
-                            isExecuting={toolPart.isExecuting}
-                            onAgentCallToggle={handleAgentCallToggle}
-                            isAgentCallOpen={isAgentCallOpen}
-                            commandChunks={commandChunks}
-                        />
-                    );
-                })}
+                    };
+
+                    for (const block of renderedBlocks) {
+                        if (block.type === 'single_tool') {
+                            currentToolGroup.push(block);
+                        } else {
+                            flushToolGroup();
+                            if (block.type === 'edit_management') {
+                                renderGroups.push(
+                                    <EditManagementBlock key={block.key} entries={block.entries} />,
+                                );
+                            }
+                        }
+                    }
+                    flushToolGroup();
+
+                    return renderGroups;
+                })()}
 
                 {!textFirst && imageBeforeText && (
                     <AttachmentGalleryFromList attachments={remainingAttachments} />
@@ -1052,29 +1029,183 @@ export const Message = forwardRef(function Message({
         <div className="message-ai" ref={ref}>
             <div className="message-ai-content">
                 {shouldRenderSteps
-                    ? normalizedSteps.map((step, index) => (
-                        <section
-                            key={`step-${step.index ?? index + 1}`}
-                            className="message-ai-step"
-                        >
-                            {renderAiContent({
-                                text: step.text,
-                                thought: step.thought,
-                                parts: step.parts,
-                                fallbackParts: stepUsesMessageAttachmentFallback[index] ? parts : [],
-                                bodyIsThinking: step?.isThinking === true,
-                                textFirst: step?.textFirst === true,
-                                showWorkedWhenNoThought: step?.isWorked === true,
-                            })}
-                        </section>
-                    ))
+                    ? (() => {
+                        // Flatten all steps into a sequence of render items,
+                        // then group consecutive tool calls across step boundaries.
+                        const flatItems = [];
+
+                        for (let si = 0; si < normalizedSteps.length; si++) {
+                            const step = normalizedSteps[si];
+                            const stepText = String(step?.text ?? '').trim();
+                            const stepThought = String(step?.thought ?? '').trim();
+                            const stepParts = Array.isArray(step?.parts) ? step.parts : [];
+                            const isThinkingStep = step?.isThinking === true;
+                            const stepDurationMs = step?.thinkingDurationMs || 0;
+                            const fallbackParts = stepUsesMessageAttachmentFallback[si] ? parts : [];
+
+                            // Thought block (only if there's actual thought content or actively thinking)
+                            if (stepThought || isThinkingStep) {
+                                flatItems.push({
+                                    type: 'thought',
+                                    key: `thought-${si}`,
+                                    thought: stepThought,
+                                    isThinking: isThinkingStep,
+                                    thinkingDurationMs: stepDurationMs,
+                                });
+                            }
+
+                            // Text before tools
+                            if (step?.textFirst && stepText) {
+                                flatItems.push({
+                                    type: 'text',
+                                    key: `text-${si}`,
+                                    text: stepText,
+                                    parts: stepParts,
+                                    fallbackParts,
+                                });
+                            }
+
+                            // Tool blocks from this step
+                            const toolBlocks = buildToolBlocks(stepParts);
+                            for (const block of toolBlocks) {
+                                flatItems.push({
+                                    type: block.type,
+                                    key: `${block.key}-s${si}`,
+                                    block,
+                                    stepParts,
+                                });
+                            }
+
+                            // Text after tools
+                            if (!step?.textFirst && stepText) {
+                                flatItems.push({
+                                    type: 'text',
+                                    key: `text-${si}`,
+                                    text: stepText,
+                                    parts: stepParts,
+                                    fallbackParts,
+                                });
+                            }
+
+                            // Attachments from this step
+                            const stepAttachments = getMessageAttachments(
+                                hasRenderedAttachments(stepParts) ? stepParts : fallbackParts,
+                            );
+                            if (stepAttachments.length > 0) {
+                                flatItems.push({
+                                    type: 'attachments',
+                                    key: `attach-${si}`,
+                                    attachments: stepAttachments,
+                                });
+                            }
+                        }
+
+                        // Now render flat items, grouping consecutive single_tool items
+                        const rendered = [];
+                        let pendingToolBlocks = [];
+
+                        const flushTools = () => {
+                            if (pendingToolBlocks.length === 0) return;
+                            const groupItems = [...pendingToolBlocks];
+                            const toolBlocks = groupItems.filter((i) => i.kind === 'tool').map((i) => i.block);
+                            const isAnyRunning = toolBlocks.some((b) => b.toolPart?.isExecuting === true && !b.toolPart?.functionResponse);
+                            const groupKey = `tool-group-${toolBlocks[0]?.key ?? 'empty'}`;
+                            rendered.push(
+                                <ToolCallsGroup
+                                    key={groupKey}
+                                    items={groupItems}
+                                    onAgentCallToggle={onAgentCallToggle ? (info) => {
+                                        onAgentCallToggle({
+                                            ...info,
+                                            sourceContext: { text, thought, parts },
+                                        });
+                                    } : undefined}
+                                    activeAgentCallId={activeAgentCallId}
+                                    commandChunks={commandChunks}
+                                    isAnyRunning={isAnyRunning}
+                                    onToolPanelToggle={onToolPanelToggle}
+                                />,
+                            );
+                            pendingToolBlocks = [];
+                        };
+
+                        for (const item of flatItems) {
+                            if (item.type === 'single_tool') {
+                                pendingToolBlocks.push({ kind: 'tool', block: item.block });
+                                continue;
+                            }
+
+                            // Thought between tools: include it in the group so it renders inline
+                            if (item.type === 'thought' && pendingToolBlocks.length > 0) {
+                                const itemIndex = flatItems.indexOf(item);
+                                const hasMoreToolsAfter = flatItems.slice(itemIndex + 1).some(
+                                    (next) => next.type === 'single_tool',
+                                );
+                                if (hasMoreToolsAfter) {
+                                    pendingToolBlocks.push({
+                                        kind: 'thought',
+                                        key: item.key,
+                                        thought: item.thought,
+                                        isThinking: item.isThinking,
+                                        thinkingDurationMs: item.thinkingDurationMs,
+                                    });
+                                    continue;
+                                }
+                            }
+
+                            flushTools();
+
+                            if (item.type === 'thought') {
+                                rendered.push(
+                                    <ThoughtBlock
+                                        key={item.key}
+                                        thought={item.thought}
+                                        isThinking={item.isThinking}
+                                        thinkingDurationMs={item.thinkingDurationMs}
+                                    />,
+                                );
+                            } else if (item.type === 'text') {
+                                const normalizedText = unwrapStructuredText(item.text);
+                                if (normalizedText.trim()) {
+                                    const inlinePlan = buildInlineImageRenderPlan(
+                                        normalizedText,
+                                        getMessageAttachments(
+                                            hasRenderedAttachments(item.parts) ? item.parts : item.fallbackParts,
+                                        ),
+                                    );
+                                    if (inlinePlan) {
+                                        rendered.push(
+                                            <div key={item.key} className="message-inline-content">
+                                                {inlinePlan.segments.map((seg, idx) => {
+                                                    if (seg.type === 'image') {
+                                                        return <AttachmentGalleryFromList key={`inline-img-${idx}`} attachments={[seg.attachment]} />;
+                                                    }
+                                                    const segText = String(seg.value ?? '');
+                                                    return segText.trim() ? <MarkdownContent key={`inline-txt-${idx}`} text={segText} variant="ai" /> : null;
+                                                })}
+                                            </div>,
+                                        );
+                                    } else {
+                                        rendered.push(<MarkdownContent key={item.key} text={normalizedText} variant="ai" />);
+                                    }
+                                }
+                            } else if (item.type === 'edit_management') {
+                                rendered.push(<EditManagementBlock key={item.key} entries={item.block.entries} />);
+                            } else if (item.type === 'attachments') {
+                                rendered.push(<AttachmentGalleryFromList key={item.key} attachments={item.attachments} />);
+                            }
+                        }
+
+                        flushTools();
+                        return rendered;
+                    })()
                     : renderAiContent({
                         text,
                         thought,
                         parts,
                         fallbackParts: [],
                         bodyIsThinking: isThinking,
-                        showWorkedWhenNoThought: true,
+                        showWorkedWhenNoThought: false,
                     })}
                 {shouldRenderMessageAttachmentsAfterSteps && <AttachmentGallery parts={parts} />}
             </div>

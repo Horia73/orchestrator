@@ -1,15 +1,18 @@
+import fs from 'node:fs';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
     GEMINI_API_KEY,
     GEMINI_CONTEXT_MESSAGES,
+    reloadConfigJson,
 } from '../core/config.js';
+import { CONFIG_PATH } from '../core/dataPaths.js';
 import {
     DEFAULT_AGENT_ID,
     getAgentDefinition,
     getAgentToolAccess,
     normalizeAgentId,
 } from '../agents/index.js';
-import { getAgentConfig } from '../storage/settings.js';
+import { getAgentConfig, readSettings, writeSettings } from '../storage/settings.js';
 import {
     buildFunctionTools,
     extractToolMediaParts,
@@ -45,11 +48,46 @@ function getEffectiveThinkingLevel(modelId, requestedLevel) {
     return null;
 }
 
-function recordUnsupportedLevel(modelId, level) {
+function persistUnsupportedLevel(modelId, level) {
+    try {
+        const current = reloadConfigJson() ?? {};
+        const caps = current.modelCapabilities ?? {};
+        const model = caps[modelId] ?? {};
+        const existing = new Set(Array.isArray(model.unsupportedThinkingLevels) ? model.unsupportedThinkingLevels : []);
+        existing.add(level);
+        model.unsupportedThinkingLevels = [...existing];
+        caps[modelId] = model;
+        current.modelCapabilities = caps;
+        fs.writeFileSync(CONFIG_PATH, JSON.stringify(current, null, 2) + '\n', 'utf8');
+    } catch (err) {
+        console.warn('[gemini] Failed to persist unsupported thinking level:', err?.message);
+    }
+}
+
+function autoFixAgentThinkingLevel(agentId, modelId, unsupportedLevel) {
+    try {
+        const agentConfig = getAgentConfig(agentId);
+        if (agentConfig.model !== modelId) return;
+        if (String(agentConfig.thinkingLevel ?? '').toUpperCase() !== unsupportedLevel) return;
+        const effectiveLevel = getEffectiveThinkingLevel(modelId, unsupportedLevel);
+        if (!effectiveLevel || effectiveLevel === unsupportedLevel) return;
+        const settings = readSettings();
+        if (!settings[agentId]) return;
+        settings[agentId] = { ...settings[agentId], thinkingLevel: effectiveLevel };
+        writeSettings(settings);
+        console.log(`[gemini] Auto-updated ${agentId} thinkingLevel: ${unsupportedLevel} → ${effectiveLevel}`);
+    } catch (err) {
+        console.warn('[gemini] Failed to auto-fix agent thinking level:', err?.message);
+    }
+}
+
+function recordUnsupportedLevel(modelId, level, { agentId } = {}) {
     if (!unsupportedLevelsCache.has(modelId)) {
         unsupportedLevelsCache.set(modelId, new Set());
     }
     unsupportedLevelsCache.get(modelId).add(level);
+    persistUnsupportedLevel(modelId, level);
+    if (agentId) autoFixAgentThinkingLevel(agentId, modelId, level);
 }
 
 export function getUnsupportedLevels(modelId) {
@@ -57,9 +95,56 @@ export function getUnsupportedLevels(modelId) {
     return set ? [...set] : [];
 }
 
+// Load persisted unsupported levels from disk on startup
+(function loadPersistedUnsupportedLevels() {
+    try {
+        const config = reloadConfigJson();
+        const caps = config?.modelCapabilities;
+        if (!caps || typeof caps !== 'object') return;
+        for (const [modelId, model] of Object.entries(caps)) {
+            if (!Array.isArray(model.unsupportedThinkingLevels)) continue;
+            for (const level of model.unsupportedThinkingLevels) {
+                if (!unsupportedLevelsCache.has(modelId)) unsupportedLevelsCache.set(modelId, new Set());
+                unsupportedLevelsCache.get(modelId).add(level);
+            }
+        }
+    } catch {
+        // ignore
+    }
+})();
+
 function isThinkingLevelError(error) {
     const msg = String(error?.message ?? error ?? '').toLowerCase();
     return /thinking/i.test(msg) && /invalid|unsupported|not.+support|not.+available/i.test(msg);
+}
+
+// ─── Rate Limit Retry ────────────────────────────────────────────────────────
+
+function isRateLimitError(error) {
+    const msg = String(error?.message ?? error ?? '');
+    const code = error?.code ?? error?.status;
+    return code === 429 || /RESOURCE_EXHAUSTED/i.test(msg) || /429/.test(msg);
+}
+
+function parseRetryDelayMs(error) {
+    const msg = String(error?.message ?? error ?? '');
+    const match = msg.match(/"retryDelay"\s*:\s*"([\d.]+)s"/);
+    if (match) return Math.ceil(parseFloat(match[1]) * 1000);
+    return null;
+}
+
+async function retryOnRateLimit(fn, { maxRetries = 4, onWaiting } = {}) {
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (!isRateLimitError(error) || attempt === maxRetries) throw error;
+            const ms = parseRetryDelayMs(error) ?? Math.min(5000 * Math.pow(2, attempt), 60000);
+            console.warn(`[gemini] Rate limit hit. Retrying in ${Math.round(ms / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`);
+            if (onWaiting) await onWaiting(ms);
+            await new Promise(resolve => setTimeout(resolve, ms));
+        }
+    }
 }
 
 // ─── Core helpers ────────────────────────────────────────────────────────────
@@ -340,7 +425,9 @@ function stripToolTraceBlocks(value) {
     const raw = String(value ?? '');
     if (!raw) return '';
 
-    const withoutTrace = raw.replace(/\[tool_trace][\s\S]*?\[\/tool_trace]/g, '');
+    const withoutTrace = raw
+        .replace(/\[tool_trace][\s\S]*?\[\/tool_trace]/g, '')  // complete blocks
+        .replace(/\[tool_trace][\s\S]*/g, '');                  // incomplete blocks (no closing tag)
     return withoutTrace
         .replace(/\n{3,}/g, '\n\n')
         .trim();
@@ -544,6 +631,11 @@ function normalizeStep(step) {
 
     if (textFirst) {
         normalized.textFirst = true;
+    }
+
+    const durationMs = Number(step.thinkingDurationMs);
+    if (Number.isFinite(durationMs) && durationMs > 0) {
+        normalized.thinkingDurationMs = durationMs;
     }
 
     return normalized;
@@ -847,18 +939,18 @@ export async function generateAssistantReply(historyWithLatestUserTurn, { agentI
     const { chat, latestMessage, model, agentConfig } = createChatSession(historyWithLatestUserTurn, { agentId });
 
     try {
-        const response = await chat.sendMessage({
+        const response = await retryOnRateLimit(() => chat.sendMessage({
             message: latestMessage,
-        });
+        }));
         return finalizeText(sanitizeVisibleText(response?.text));
     } catch (error) {
         const currentLevel = String(agentConfig?.thinkingLevel ?? '').trim().toUpperCase();
         if (currentLevel && isThinkingLevelError(error)) {
-            recordUnsupportedLevel(model, currentLevel);
+            recordUnsupportedLevel(model, currentLevel, { agentId });
             const retrySession = createChatSession(historyWithLatestUserTurn, { agentId });
-            const response = await retrySession.chat.sendMessage({
+            const response = await retryOnRateLimit(() => retrySession.chat.sendMessage({
                 message: retrySession.latestMessage,
-            });
+            }));
             return finalizeText(sanitizeVisibleText(response?.text));
         }
         throw error;
@@ -897,6 +989,7 @@ export async function generateAssistantReplyStream(
     let lastStepThoughtCheckpoint = '';
     let lastStepToolPartIndex = 0;
     let currentStepSawThinking = false;
+    let currentStepStartMs = null;
     let stepEventSequence = 0;
     let currentStepFirstTextEvent = null;
     let currentStepFirstToolEvent = null;
@@ -1019,6 +1112,9 @@ export async function generateAssistantReplyStream(
             candidate.isThinking = true;
         } else {
             candidate.isWorked = true;
+            if (currentStepStartMs !== null) {
+                candidate.thinkingDurationMs = Math.max(0, Date.now() - currentStepStartMs);
+            }
         }
 
         return normalizeStep(candidate);
@@ -1036,6 +1132,7 @@ export async function generateAssistantReplyStream(
         lastStepThoughtCheckpoint = fullThought;
         lastStepToolPartIndex = toolPartsAccumulator.length;
         currentStepSawThinking = false;
+        currentStepStartMs = null;
         currentStepFirstTextEvent = null;
         currentStepFirstToolEvent = null;
     }
@@ -1214,26 +1311,33 @@ export async function generateAssistantReplyStream(
 
     // Show "thinking" immediately when API call starts, before first chunk arrives.
     currentStepSawThinking = true;
+    currentStepStartMs = Date.now();
     await emitUpdate({ force: true, stepIsThinking: true });
+
+    const rateLimitOnWaiting = async (ms) => {
+        await emitUpdate({ force: true, thoughtOverride: `⏳ Rate limit reached. Retrying in ${Math.round(ms / 1000)}s...` });
+    };
 
     let activeChat = chat;
     let initialStreamResult;
     try {
-        const initialStream = await activeChat.sendMessageStream({
-            message: latestMessage,
-        });
+        const initialStream = await retryOnRateLimit(
+            () => activeChat.sendMessageStream({ message: latestMessage }),
+            { onWaiting: rateLimitOnWaiting },
+        );
         initialStreamResult = await processStream(initialStream);
     } catch (error) {
         // If the error is a thinking-level incompatibility, auto-fallback and retry once.
         const currentLevel = String(agentConfig?.thinkingLevel ?? '').trim().toUpperCase();
         if (currentLevel && isThinkingLevelError(error)) {
-            recordUnsupportedLevel(model, currentLevel);
+            recordUnsupportedLevel(model, currentLevel, { agentId });
             // Recreate the chat session — buildChatConfigForAgent now uses the cache.
             const retrySession = createChatSession(historyWithLatestUserTurn, { agentId });
             activeChat = retrySession.chat;
-            const retryStream = await activeChat.sendMessageStream({
-                message: retrySession.latestMessage,
-            });
+            const retryStream = await retryOnRateLimit(
+                () => activeChat.sendMessageStream({ message: retrySession.latestMessage }),
+                { onWaiting: rateLimitOnWaiting },
+            );
             initialStreamResult = await processStream(retryStream);
         } else {
             throw error;
@@ -1343,10 +1447,12 @@ export async function generateAssistantReplyStream(
         // Return tool outputs to the model and continue the stream.
         // Surface "thinking" immediately when the next API call is initiated.
         currentStepSawThinking = true;
+        currentStepStartMs = Date.now();
         await emitUpdate({ force: true, stepIsThinking: true });
-        const nextStream = await chat.sendMessageStream({
-            message: functionResponses,
-        });
+        const nextStream = await retryOnRateLimit(
+            () => chat.sendMessageStream({ message: functionResponses }),
+            { onWaiting: rateLimitOnWaiting },
+        );
         const nextStreamResult = await processStream(nextStream);
         accumulateUsage(nextStreamResult.usageMetadata);
         pendingFunctionCalls = nextStreamResult.functionCalls;
@@ -1435,11 +1541,11 @@ export async function generateChatTitle({ text, attachments, aiText }) {
         const client = getClient();
         const model = 'gemini-3-flash-preview';
         const doc = prompt.join('\n\n');
-        const result = await client.models.generateContent({
+        const result = await retryOnRateLimit(() => client.models.generateContent({
             model,
             contents: doc,
             config: { thinkingConfig: { thinkingLevel: 'minimal' } }
-        });
+        }));
 
         const generatedTitle = result.text?.trim();
         return generatedTitle || null;

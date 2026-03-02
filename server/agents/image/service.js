@@ -333,7 +333,7 @@ export async function generateImageWithAgent({
             payload: {
                 text: result.text,
                 thought: result.thought,
-                parts: [],
+                parts: result.mediaParts,
                 steps: [],
                 isThinking: false,
                 clientId: contextData?.clientId,

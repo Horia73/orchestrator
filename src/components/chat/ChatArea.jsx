@@ -3,6 +3,7 @@ import './ChatArea.css';
 import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
 import { IconArrowDown, IconClose } from '../shared/icons.jsx';
+import { ToolDetailPanel } from './ToolDetailPanel.jsx';
 import {
     buildAgentPanelMessage,
     findAgentToolCallInMessages,
@@ -85,6 +86,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const baselineConversationKeyRef = useRef(conversationKey);
     const enterAnchorConversationKeyRef = useRef(conversationKey);
     const pendingScrollRestoreConversationRef = useRef(normalizeConversationKey(conversationKey));
+    const isInitialScrollRestoreRef = useRef(true);
     const pendingConversationEnterAnimationRef = useRef(null);
     const scrollPositionsRef = useRef(loadScrollPositions());
     const exitSnapshotScrollTopRef = useRef(0);
@@ -98,6 +100,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const agentPanelBodyRef = useRef(null);
     const agentPanelAutoFollowRef = useRef(true);
     const [activeAgentCallSelection, setActiveAgentCallSelection] = useState(null);
+    const [activeToolPanelSelection, setActiveToolPanelSelection] = useState(null);
     const [noSpacerAnim, setNoSpacerAnim] = useState(false);
     const [isConversationHidden, setIsConversationHidden] = useState(false);
     const userMessageCount = useMemo(
@@ -140,12 +143,35 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 return null;
             }
 
+            // Close tool panel when opening agent panel
+            setActiveToolPanelSelection(null);
+
             return {
                 callId,
                 agentId: String(payload?.agentId ?? '').trim(),
                 agentName: String(payload?.agentName ?? '').trim() || 'Agent',
                 toolName: String(payload?.toolName ?? '').trim(),
                 sourceContext: payload?.sourceContext ?? null,
+                toolPart: payload?.toolPart ?? null,
+            };
+        });
+    }, []);
+
+    const handleToolPanelToggle = useCallback((payload) => {
+        const callId = String(payload?.callId ?? '').trim();
+        if (!callId) return;
+
+        setActiveToolPanelSelection((previous) => {
+            if (previous?.callId === callId) {
+                return null;
+            }
+
+            // Close agent panel when opening tool panel
+            setActiveAgentCallSelection(null);
+
+            return {
+                callId,
+                toolName: String(payload?.toolName ?? '').trim(),
                 toolPart: payload?.toolPart ?? null,
             };
         });
@@ -230,6 +256,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 // Use lastKnownScrollTopRef instead of scrollRef.current.scrollTop.
                 // When React clears the div content (switching to uncached conversation),
                 // the browser clamps scrollTop to 0 — the cached ref keeps the real value.
+                console.log('[SCROLL SAVE on switch]', { previousKey, scrollTop: lastKnownScrollTopRef.current });
                 saveConversationScrollPosition(previousKey, lastKnownScrollTopRef.current);
             }
             lastKnownScrollTopRef.current = 0;
@@ -248,6 +275,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             shouldAutoFollowRef.current = false;
             if (!isTransitioningDraftToSaved) {
                 setActiveAgentCallSelection(null);
+                setActiveToolPanelSelection(null);
             }
 
             // Suprima animatia spacerului (28vh→0) cand nu suntem pe new chat.
@@ -298,16 +326,29 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         }
 
         const refreshedMaxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+        const isInitialRestore = isInitialScrollRestoreRef.current;
+        isInitialScrollRestoreRef.current = false;
+
         const savedScrollTop = scrollPositionsRef.current[pendingConversationKey];
         const targetScrollTop = Number.isFinite(savedScrollTop)
             ? Math.min(Math.max(0, savedScrollTop), refreshedMaxScrollTop)
             : refreshedMaxScrollTop;
+        shouldAutoFollowRef.current = targetScrollTop >= refreshedMaxScrollTop - AUTO_SCROLL_SNAP_DISTANCE;
+
+        console.log('[SCROLL RESTORE]', {
+            key: pendingConversationKey,
+            isInitialRestore,
+            savedScrollTop,
+            refreshedMaxScrollTop,
+            targetScrollTop,
+            scrollHeight: container.scrollHeight,
+            clientHeight: container.clientHeight,
+            allSavedPositions: { ...scrollPositionsRef.current },
+        });
 
         isProgrammaticScrollRef.current = true;
         container.scrollTop = targetScrollTop;
         lastKnownScrollTopRef.current = targetScrollTop;
-        // Persist so that default-to-bottom (maxScrollTop) is also remembered.
-        saveConversationScrollPosition(conversationKey, targetScrollTop);
         refreshScrollButton(container);
         pendingScrollRestoreConversationRef.current = null;
         requestAnimationFrame(() => {
@@ -357,11 +398,11 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     // We must NOT use [conversationKey] deps here because the cleanup fires AFTER
     // the layoutEffect has already reset lastKnownScrollTopRef, causing it to
     // overwrite the correctly saved position with 0.
+    // Use lastKnownScrollTopRef instead of container.scrollTop — during page refresh
+    // the DOM is torn down and the browser clamps scrollTop to 0.
     useEffect(() => () => {
-        const container = scrollRef.current;
-        if (!container) return;
         const key = normalizeConversationKey(previousConversationKeyRef.current);
-        if (key) saveConversationScrollPosition(key, container.scrollTop);
+        if (key) saveConversationScrollPosition(key, lastKnownScrollTopRef.current);
     }, [saveConversationScrollPosition]);
 
     // Sync baseline only when switching conversations.
@@ -538,7 +579,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             // incercam sa nu il eliminam brutal daca suntem inca ancorati.
             spacer.style.height = `${requiredSpacer}px`;
 
-            if (isTyping && shouldAutoFollowRef.current && !isAnimatingEnterRef.current) {
+            if (shouldAutoFollowRef.current && !isAnimatingEnterRef.current) {
                 isProgrammaticScrollRef.current = true;
                 container.scrollTop = container.scrollHeight;
                 lastKnownScrollTopRef.current = container.scrollTop;
@@ -568,6 +609,9 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
 
         const handleManualScroll = () => {
             if (isProgrammaticScrollRef.current) return;
+            // Don't save during conversation transition — the spacer reset triggers
+            // a scroll event with scrollTop=0 that would overwrite the saved position.
+            if (pendingScrollRestoreConversationRef.current) return;
 
             lastKnownScrollTopRef.current = container.scrollTop;
             const distanceToBottom = refreshScrollButton(container);
@@ -682,10 +726,11 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         return buildAgentPanelMessage(activeAgentCallDetails);
     }, [activeAgentCallDetails, agentStreaming, activeAgentCallSelection]);
     const isAgentPanelOpen = isChatMode && !!activeAgentPanelMessage && !!activeAgentCallSelection;
+    const isToolPanelOpen = isChatMode && !!activeToolPanelSelection;
 
     return (
         <main
-            className={`main-content${isChatMode ? ' chat-active' : ''}${noSpacerAnim ? ' no-spacer-anim' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}`}
+            className={`main-content${isChatMode ? ' chat-active' : ''}${noSpacerAnim ? ' no-spacer-anim' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}${isToolPanelOpen ? ' tool-panel-open' : ''}`}
             id="mainContent"
         >
             <div className="chat-main-pane">
@@ -718,6 +763,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                                             && String(msg.text ?? '').trim().length === 0
                                         }
                                         onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
+                                        onToolPanelToggle={msg.role === 'ai' ? handleToolPanelToggle : undefined}
                                         activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
                                         commandChunks={commandChunks}
                                         ref={
@@ -771,6 +817,13 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                     {children}
                 </div>
             </div>
+
+            {isToolPanelOpen && activeToolPanelSelection && (
+                <ToolDetailPanel
+                    selection={activeToolPanelSelection}
+                    onClose={() => setActiveToolPanelSelection(null)}
+                />
+            )}
 
             {isAgentPanelOpen && activeAgentPanelMessage && (() => {
                 const callArgs = activeAgentCallDetails?.toolPart?.functionCall?.args;

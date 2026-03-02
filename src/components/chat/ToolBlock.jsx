@@ -2,6 +2,10 @@ import { useEffect, useMemo, useState } from 'react';
 import { fetchCommandStatus } from '../../api/chatApi.js';
 import { getAgentToolMetadata } from './agentCallUtils.js';
 import { TerminalPane } from './TerminalPane.jsx';
+import {
+    IconTerminal, IconCode, IconEye, IconPencil,
+    IconGlobe, IconImage, IconTool, IconCheckCircle,
+} from '../shared/icons.jsx';
 import './ToolBlock.css';
 
 const COMMAND_TOOL_NAMES = new Set([
@@ -12,6 +16,34 @@ const COMMAND_TOOL_NAMES = new Set([
 ]);
 const COMMAND_OUTPUT_CHARS = 32_000;
 const EMPTY_ARGS = Object.freeze({});
+
+const FILE_MANAGEMENT_TOOLS = new Set([
+    'view_file', 'list_dir', 'find_by_name', 'grep_search',
+    'view_file_outline', 'view_code_item', 'view_content_chunk',
+]);
+const EDIT_TOOLS = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
+const WEB_TOOLS = new Set(['read_url_content', 'search_web']);
+const IMAGE_TOOLS = new Set(['generate_image']);
+
+function getToolIcon(name) {
+    if (COMMAND_TOOL_NAMES.has(name)) return IconTerminal;
+    if (FILE_MANAGEMENT_TOOLS.has(name)) return IconEye;
+    if (EDIT_TOOLS.has(name)) return IconPencil;
+    if (WEB_TOOLS.has(name)) return IconGlobe;
+    if (IMAGE_TOOLS.has(name)) return IconImage;
+    if (getAgentToolMetadata(name)) return IconCode;
+    return IconTool;
+}
+
+function getToolBadge(name) {
+    if (COMMAND_TOOL_NAMES.has(name)) return 'Script';
+    if (FILE_MANAGEMENT_TOOLS.has(name)) return 'Search';
+    if (EDIT_TOOLS.has(name)) return 'Edit';
+    if (WEB_TOOLS.has(name)) return 'Web';
+    if (IMAGE_TOOLS.has(name)) return 'Image';
+    if (getAgentToolMetadata(name)) return 'Agent';
+    return null;
+}
 
 function parseTimestamp(value) {
     const millis = Date.parse(String(value ?? ''));
@@ -125,6 +157,12 @@ function formatAgentStatusLabel(status) {
     return 'Working...';
 }
 
+const PANEL_TOOL_NAMES = new Set([
+    ...['view_file', 'list_dir', 'find_by_name', 'grep_search', 'view_file_outline', 'view_code_item', 'view_content_chunk'],
+    ...['write_to_file', 'replace_file_content', 'multi_replace_file_content'],
+    ...['read_url_content', 'search_web'],
+]);
+
 export function ToolBlock({
     functionCall,
     functionResponse,
@@ -132,6 +170,7 @@ export function ToolBlock({
     onAgentCallToggle,
     isAgentCallOpen = false,
     commandChunks = {},
+    onToolPanelToggle,
 }) {
     const [isOpen, setIsOpen] = useState(false);
     const [polledSnapshot, setPolledSnapshot] = useState(null);
@@ -270,7 +309,9 @@ export function ToolBlock({
         runtimeStatus,
         hasError,
     );
-    let titleMain = `Used ${name}`;
+
+    // Build title
+    let titleMain = name;
     let titleDetail = '';
 
     if (isAgentTool) {
@@ -285,60 +326,46 @@ export function ToolBlock({
         }
         titleDetail = String(args?.prompt ?? '').trim();
     } else if (name === 'run_command') {
-        if (isCommandRunning) {
-            titleMain = 'Running command';
-        } else if (commandStatusLabel === 'stopped') {
-            titleMain = 'Stopped';
-        } else {
-            titleMain = 'Ran command';
-        }
+        titleMain = isCommandRunning ? 'Running command' : 'Ran command';
+        if (commandStatusLabel === 'stopped') titleMain = 'Stopped';
         titleDetail = commandText || commandId || '';
     } else if (name === 'command_status') {
-        if (commandStatusLabel === 'stopped') {
-            titleMain = 'Stopped';
-        } else if (commandStatusLabel === 'failed' || commandStatusLabel === 'error') {
-            titleMain = 'Command status failed';
-        } else if (commandStatusLabel === 'completed') {
-            titleMain = 'Command completed';
-        } else if (isExecuting && !hasResponse) {
-            titleMain = 'Checking command status';
-        } else {
-            titleMain = 'Command status';
-        }
+        if (commandStatusLabel === 'stopped') titleMain = 'Stopped';
+        else if (commandStatusLabel === 'failed' || commandStatusLabel === 'error') titleMain = 'Command status failed';
+        else if (commandStatusLabel === 'completed') titleMain = 'Command completed';
+        else if (isExecuting && !hasResponse) titleMain = 'Checking command status';
+        else titleMain = 'Command status';
         titleDetail = commandId || commandText || '';
     } else if (name === 'send_command_input') {
-        if (commandStatusLabel === 'stopped') {
-            titleMain = 'Stopped';
-        } else if (commandStatusLabel === 'failed' || commandStatusLabel === 'error') {
-            titleMain = 'Command input failed';
-        } else if (isExecuting && !hasResponse) {
-            titleMain = 'Sending command input';
-        } else {
-            titleMain = 'Sent command input';
-        }
+        if (commandStatusLabel === 'stopped') titleMain = 'Stopped';
+        else if (commandStatusLabel === 'failed' || commandStatusLabel === 'error') titleMain = 'Command input failed';
+        else if (isExecuting && !hasResponse) titleMain = 'Sending command input';
+        else titleMain = 'Sent command input';
         titleDetail = commandId || commandText || '';
     } else if (name === 'read_terminal') {
         titleMain = isExecuting && !hasResponse ? 'Reading terminal' : 'Read terminal';
         titleDetail = commandId || commandText || '';
     } else if (name === 'read_url_content') {
-        if (isExecuting && !hasResponse) {
-            titleMain = 'Fetching URL...';
-        } else if (hasResponse) {
-            titleMain = hasError ? 'Failed to fetch URL' : 'Fetched URL';
-        }
+        if (isExecuting && !hasResponse) titleMain = 'Fetching URL...';
+        else if (hasResponse) titleMain = hasError ? 'Failed to fetch URL' : 'Fetched URL';
         titleDetail = String(args?.Url ?? '').trim();
     } else if (name === 'search_web') {
-        if (isExecuting && !hasResponse) {
-            titleMain = 'Searching web...';
-        } else if (hasResponse) {
-            titleMain = hasError ? 'Web search failed' : 'Searched web';
-        }
+        if (isExecuting && !hasResponse) titleMain = 'Searching web...';
+        else if (hasResponse) titleMain = hasError ? 'Web search failed' : 'Searched web';
         titleDetail = String(args?.query ?? '').trim();
+    } else if (FILE_MANAGEMENT_TOOLS.has(name)) {
+        if (isExecuting && !hasResponse) titleMain = name.replace(/_/g, ' ');
+        else titleMain = name.replace(/_/g, ' ').replace(/^(\w)/, (c) => c.toUpperCase());
+        const filePath = String(args?.AbsolutePath ?? args?.DirectoryPath ?? args?.Query ?? args?.SearchDirectory ?? '').trim();
+        titleDetail = filePath;
+    } else if (EDIT_TOOLS.has(name)) {
+        if (isExecuting && !hasResponse) titleMain = 'Editing file';
+        else titleMain = 'Edited file';
+        titleDetail = String(args?.AbsolutePath ?? '').trim();
     }
 
     const terminalOutput = String(runtimeSnapshot?.output ?? responseObject?.output ?? '');
     const commandLine = commandText || String(responseObject?.command ?? '').trim();
-
     const commandInputPreview = String(args?.Input ?? '');
     const hasCommandOutput = terminalOutput.trim().length > 0;
 
@@ -348,9 +375,14 @@ export function ToolBlock({
         ? (typeof responseObject === 'object' ? formatJson(responseObject) : String(responseObject))
         : null;
     const canToggleAgentPanel = isAgentTool && typeof onAgentCallToggle === 'function';
+    const canToggleToolPanel = !isAgentTool && PANEL_TOOL_NAMES.has(name) && typeof onToolPanelToggle === 'function';
     const handleHeaderClick = () => {
         if (canToggleAgentPanel) {
             onAgentCallToggle();
+            return;
+        }
+        if (canToggleToolPanel && hasResponse) {
+            onToolPanelToggle();
             return;
         }
         setIsOpen((current) => !current);
@@ -358,47 +390,43 @@ export function ToolBlock({
 
     if (!hasFunctionCall) return null;
 
-    return (
-        <div className={`tool-block${isAgentTool ? ' agent-call' : ''}${isAgentCallOpen ? ' is-active' : ''}`}>
-            <div className="tool-block-header" onClick={handleHeaderClick}>
-                <div className="tool-block-title">
-                    <span className={`tool-name${isRunning ? ' status-running-text' : ''}`}>
-                        {titleMain}
-                    </span>
-                    {titleDetail && (
-                        <span className="tool-command-preview" title={titleDetail}>
-                            {titleDetail}
-                        </span>
-                    )}
-                </div>
+    const ToolIcon = getToolIcon(name);
+    const badge = getToolBadge(name);
 
-                <div className="tool-block-right">
+    return (
+        <div className={`tool-row${isAgentTool ? ' tool-row-agent' : ''}${isAgentCallOpen ? ' is-active' : ''}${isRunning ? ' is-running' : ''}`}>
+            <div className="tool-row-header" onClick={handleHeaderClick}>
+                <span className="tool-row-icon">
+                    <ToolIcon />
+                </span>
+                <span className={`tool-row-name${isRunning ? ' status-running-text' : ''}`}>
+                    {titleMain}
+                </span>
+                {titleDetail && (
+                    <span className="tool-row-detail" title={titleDetail}>
+                        {titleDetail}
+                    </span>
+                )}
+                <span className="tool-row-right">
+                    {badge && (
+                        <span className="tool-row-badge">{badge}</span>
+                    )}
                     {isAgentTool && (
                         <span className={`tool-agent-status status-${agentStatus}`}>
                             {formatAgentStatusLabel(agentStatus)}
                         </span>
-                    )}
-                    {canToggleAgentPanel && (
-                        <div className={`tool-chevron ${isAgentCallOpen ? 'open' : ''}`}>
-                            {isAgentCallOpen ? '▼' : '▶'}
-                        </div>
                     )}
                     {shouldShowCommandMeta && (
                         <span className="tool-command-elapsed">
                             {formatDuration(elapsedSeconds)}
                         </span>
                     )}
-                    {isRunning && <div className="tool-spinner" title="Tool is running..."></div>}
-                    {!canToggleAgentPanel && (
-                        <div className={`tool-chevron ${isOpen ? 'open' : ''}`}>
-                            {isOpen ? '▲' : '▼'}
-                        </div>
-                    )}
-                </div>
+                    {isRunning && <span className="tool-spinner" />}
+                </span>
             </div>
 
             {isOpen && (
-                <div className="tool-block-content">
+                <div className="tool-row-content">
                     {isCommandTool ? (
                         isRunCommandTool ? (
                             <div className="tool-terminal">
@@ -475,6 +503,13 @@ export function ToolBlock({
                             )}
                         </>
                     )}
+                    <button
+                        type="button"
+                        className="tool-show-less"
+                        onClick={() => setIsOpen(false)}
+                    >
+                        Show less
+                    </button>
                 </div>
             )}
         </div>

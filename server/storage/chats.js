@@ -126,6 +126,11 @@ function normalizeMessageStep(step, index) {
         normalized.textFirst = true;
     }
 
+    const durationMs = Number(step.thinkingDurationMs);
+    if (Number.isFinite(durationMs) && durationMs > 0) {
+        normalized.thinkingDurationMs = durationMs;
+    }
+
     if (!text.trim() && !thought.trim() && !normalizedParts && !isThinking && !isWorked) {
         return null;
     }

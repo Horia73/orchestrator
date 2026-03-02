@@ -4,29 +4,29 @@ import { memoryStore } from '../../services/memory.js';
 import { PROJECTS_DIR } from '../../core/dataPaths.js';
 
 function getRuntimeContext() {
-    const sourceRoot = resolve(process.cwd());
-    const osNameByPlatform = {
-        darwin: 'macOS',
-        linux: 'Linux',
-        win32: 'Windows',
-    };
-    const osName = osNameByPlatform[process.platform] ?? process.platform;
-    const now = new Date();
-    const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
+  const sourceRoot = resolve(process.cwd());
+  const osNameByPlatform = {
+    darwin: 'macOS',
+    linux: 'Linux',
+    win32: 'Windows',
+  };
+  const osName = osNameByPlatform[process.platform] ?? process.platform;
+  const now = new Date();
+  const timezone = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC';
 
-    return {
-        projectsDir: PROJECTS_DIR,
-        sourceRoot,
-        osVersion: `${osName} ${os.release()}`,
-        nowIso: now.toISOString(),
-        timezone,
-    };
+  return {
+    projectsDir: PROJECTS_DIR,
+    sourceRoot,
+    osVersion: `${osName} ${os.release()}`,
+    nowIso: now.toISOString(),
+    timezone,
+  };
 }
 
 export function getCodingAgentPrompt() {
 
-    const runtime = getRuntimeContext();
-    return `
+  const runtime = getRuntimeContext();
+  return `
 <identity>
 You are Antigravity, a powerful agentic AI coding assistant designed by the Google Deepmind team working on Advanced Agentic Coding.
 You are pair programming with a USER to solve their coding task. The task may require creating a new codebase, modifying or debugging an existing codebase, or simply answering a question.
@@ -57,7 +57,7 @@ Call tools as you normally would. The following list provides additional guidanc
     - 'send_command_input' to send stdin or terminate a running command.
     - 'read_terminal' to inspect terminal state by process/name.
   - Web/content tools:
-    - 'search_web' for grounded web search and citations.
+    - 'search_web' for grounded web search and citations. Always search on web for the latest documentation, libraries, APIs, etc.
     - 'read_url_content' and 'view_content_chunk' for direct URL content extraction.
   - Image tool:
     - Use 'generate_image' for image generation/editing requests instead of synthesizing image bytes yourself.

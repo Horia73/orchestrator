@@ -303,7 +303,9 @@ export function buildAgentPanelMessage(agentCallDetails) {
 
     const panelThought = String(resp?.agentThought ?? resp?.thought ?? '').trim();
     const panelText = agentError || agentText || textFallback;
-    const respParts = Array.isArray(resp?.parts) ? resp.parts : [];
+    const respParts = (Array.isArray(resp?.parts) && resp.parts.length > 0)
+        ? resp.parts
+        : (Array.isArray(resp?._mediaParts) ? resp._mediaParts : []);
     const respSteps = Array.isArray(resp?.steps) ? resp.steps : [];
 
     const panelParts = [...respParts];

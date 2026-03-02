@@ -1,4 +1,5 @@
 import { useMemo, useState } from 'react';
+import { IconPencil } from '../shared/icons.jsx';
 import './ToolBlock.css';
 
 function getLastPathSegment(pathValue) {
@@ -108,6 +109,7 @@ export function EditManagementBlock({ entries = [] }) {
                 className="edit-tools-header"
                 onClick={() => setIsOpen((current) => !current)}
             >
+                <span className="tool-row-icon"><IconPencil /></span>
                 <span className={`edit-tools-prefix${summary.isRunning ? ' status-running-text' : ''}`}>{summary.prefix}</span>
                 <span className="edit-tools-target">{summary.primaryLabel}</span>
                 <span className="edit-tools-delta edit-tools-delta-add">+{summary.totalAdded}</span>

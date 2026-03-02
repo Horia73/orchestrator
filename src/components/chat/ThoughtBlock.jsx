@@ -53,12 +53,18 @@ function extractThinkingTitle(thought) {
     return null;
 }
 
-export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle = false }) {
+export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle = false, thinkingDurationMs = 0 }) {
     const [open, setOpen] = useState(false);
+    const persistedSeconds = Math.max(0, Math.floor((thinkingDurationMs || 0) / 1000));
     const thinkingStartRef = useRef(null);
-    const [thinkingSeconds, setThinkingSeconds] = useState(0);
+    const [thinkingSeconds, setThinkingSeconds] = useState(persistedSeconds);
 
     useEffect(() => {
+        if (persistedSeconds > 0 && !isThinking) {
+            setThinkingSeconds(persistedSeconds);
+            return;
+        }
+
         let interval;
         if (isThinking) {
             const startMs = thinkingStartRef.current ?? Date.now();
@@ -79,7 +85,7 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
         return () => {
             if (interval) clearInterval(interval);
         };
-    }, [isThinking]);
+    }, [isThinking, persistedSeconds]);
 
     const hasThought = String(thought ?? '').trim().length > 0;
     const canToggle = hasThought;
@@ -99,9 +105,6 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
         isRunningTitle = true;
     } else if (hasThought) {
         title = 'Thought';
-        isRunningTitle = false;
-    } else if (showWorkedWhenIdle) {
-        title = 'Worked';
         isRunningTitle = false;
     } else {
         title = '';
@@ -129,7 +132,7 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
                         {title}
                         {timeDisplay}
                     </span>
-                    <span className="thought-arrow">{open ? '▼' : '▶'}</span>
+                    {!open && <span className="thought-arrow">&#9654;</span>}
                 </button>
             ) : (
                 <div className="thought-toggle thought-toggle-static">
@@ -144,6 +147,13 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
             {canToggle && open && (
                 <div className="thought-content">
                     <MarkdownContent text={thought} variant="ai" />
+                    <button
+                        type="button"
+                        className="thought-show-less"
+                        onClick={() => setOpen(false)}
+                    >
+                        Show less
+                    </button>
                 </div>
             )}
         </section>
