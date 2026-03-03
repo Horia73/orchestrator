@@ -1,6 +1,7 @@
 import { promises as fs } from 'node:fs';
 import { randomUUID } from 'node:crypto';
 import { USAGE_DATA_DIR, USAGE_LOG_PATH } from '../core/dataPaths.js';
+import { estimateUsageCost } from '../pricing/usage.js';
 
 let initialized = false;
 
@@ -85,6 +86,50 @@ function toSafeUsd(value) {
     }
 
     return parsed;
+}
+
+function rebuildUsageMetadata(record = {}) {
+    const toolUsePromptTokens = toSafeTokenCount(record.toolUsePromptTokens);
+    const inputTokens = toSafeTokenCount(record.inputTokens);
+
+    return {
+        promptTokenCount: Math.max(0, inputTokens - toolUsePromptTokens),
+        candidatesTokenCount: toSafeTokenCount(record.outputTokens),
+        thoughtsTokenCount: toSafeTokenCount(record.thoughtsTokens),
+        toolUsePromptTokenCount: toolUsePromptTokens,
+        totalTokenCount: toSafeTokenCount(record.totalTokens),
+        outputImageTokens: toSafeTokenCount(record.outputImageTokens),
+        outputImageCount: toSafeTokenCount(record.outputImageCount),
+    };
+}
+
+function recalculateUsageRecord(record = {}) {
+    const usageMetadata = (
+        record.usageMetadata && typeof record.usageMetadata === 'object'
+            ? record.usageMetadata
+            : rebuildUsageMetadata(record)
+    );
+    const usageEstimate = estimateUsageCost({
+        model: record.model,
+        usageMetadata,
+    });
+
+    return {
+        ...record,
+        model: toSafeString(record.model || usageEstimate.modelId),
+        inputTokens: usageEstimate.inputTokens,
+        outputTokens: usageEstimate.outputTokens,
+        outputImageTokens: usageEstimate.outputImageTokens,
+        outputImageCount: usageEstimate.outputImageCount,
+        thoughtsTokens: usageEstimate.thoughtsTokens,
+        toolUsePromptTokens: usageEstimate.toolUsePromptTokens,
+        totalTokens: usageEstimate.totalTokens,
+        priced: usageEstimate.priced,
+        inputCostUsd: usageEstimate.inputCostUsd,
+        outputCostUsd: usageEstimate.outputCostUsd,
+        totalCostUsd: usageEstimate.totalCostUsd,
+        usageMetadata,
+    };
 }
 
 async function ensureInitialized() {
@@ -331,6 +376,7 @@ export async function getUsageSnapshotByRange(input = {}) {
 
             return recordAgentId === agentFilter;
         })
+        .map((record) => recalculateUsageRecord(record))
         .sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
 
     const summary = summarizeUsageRecords(requests);

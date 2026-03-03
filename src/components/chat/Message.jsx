@@ -7,7 +7,7 @@ import { ToolCallsGroup } from './ToolCallsGroup.jsx';
 import { FileManagementBlock } from './FileManagementBlock.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
 import { getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
-import { IconPlay, IconPause, IconCopy, IconCheck } from '../shared/icons.jsx';
+import { IconPlay, IconPause, IconCopy, IconCheck, IconDownload, IconFile, IconFileText } from '../shared/icons.jsx';
 
 const FILE_MANAGEMENT_TOOLS = new Set([
     'view_file',
@@ -183,7 +183,7 @@ function buildToolBlocks(parts) {
 
         if (responseId && callIndexById.has(responseId)) {
             targetIndex = callIndexById.get(responseId);
-        } else {
+        } else if (!responseId) {
             const queue = pendingIndexesByName.get(responseName) ?? [];
             while (queue.length > 0) {
                 const candidate = queue.shift();
@@ -447,6 +447,125 @@ function ImageLightbox({ src, alt, onClose }) {
     );
 }
 
+function dataUriToBlob(dataUri) {
+    const parts = dataUri.split(',');
+    const mimeMatch = parts[0].match(/:(.*?);/);
+    const mime = mimeMatch ? mimeMatch[1] : 'application/octet-stream';
+    const raw = atob(parts[1]);
+    const bytes = new Uint8Array(raw.length);
+    for (let i = 0; i < raw.length; i++) {
+        bytes[i] = raw.charCodeAt(i);
+    }
+    return new Blob([bytes], { type: mime });
+}
+
+function PdfViewer({ attachment, name }) {
+    const iframeRef = useRef(null);
+    const [isFullscreen, setIsFullscreen] = useState(false);
+    const [blobUrl, setBlobUrl] = useState(null);
+
+    const actionProps = attachment.source === 'inline'
+        ? { download: name }
+        : { target: '_blank', rel: 'noreferrer' };
+
+    // Convert data: URI to blob URL so the browser can actually render the PDF
+    useEffect(() => {
+        const href = attachment.href;
+        if (href && href.startsWith('data:')) {
+            try {
+                const blob = dataUriToBlob(href);
+                const url = URL.createObjectURL(blob);
+                setBlobUrl(url);
+                return () => URL.revokeObjectURL(url);
+            } catch {
+                // fallback to raw href
+            }
+        }
+    }, [attachment.href]);
+
+    const renderUrl = blobUrl || attachment.href;
+    const previewUrl = renderUrl + (renderUrl.includes('#') ? '' : '#toolbar=0&navpanes=0&view=FitH');
+    const downloadHref = blobUrl || attachment.href;
+
+    const toggleFullscreen = useCallback(() => setIsFullscreen((v) => !v), []);
+
+    useEffect(() => {
+        if (!isFullscreen) return;
+        const handler = (e) => { if (e.key === 'Escape') setIsFullscreen(false); };
+        document.addEventListener('keydown', handler);
+        return () => document.removeEventListener('keydown', handler);
+    }, [isFullscreen]);
+
+    return (
+        <>
+            <article className="pdf-viewer-card" key={attachment.id}>
+                <div className="pdf-viewer-header">
+                    <div className="pdf-viewer-header-info">
+                        <span className="pdf-viewer-icon"><IconFileText /></span>
+                        <span className="pdf-viewer-filename" title={name}>{name}</span>
+                    </div>
+                    <div className="pdf-viewer-header-actions">
+                        <button
+                            type="button"
+                            className="pdf-viewer-action-btn"
+                            onClick={toggleFullscreen}
+                            title="Fullscreen"
+                        >
+                            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <polyline points="15 3 21 3 21 9" />
+                                <polyline points="9 21 3 21 3 15" />
+                                <line x1="21" y1="3" x2="14" y2="10" />
+                                <line x1="3" y1="21" x2="10" y2="14" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <div className="pdf-viewer-embed">
+                    <iframe
+                        ref={iframeRef}
+                        className="pdf-viewer-iframe"
+                        src={previewUrl}
+                        title={name}
+                    />
+                    <div
+                        className="pdf-viewer-click-overlay"
+                        onClick={toggleFullscreen}
+                        title="Click to expand"
+                        role="button"
+                        tabIndex={0}
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') toggleFullscreen(); }}
+                    />
+                </div>
+            </article>
+            {isFullscreen && createPortal(
+                <div className="pdf-fullscreen-overlay" onClick={toggleFullscreen} role="dialog" aria-modal="true">
+                    <div className="pdf-fullscreen-wrapper" onClick={(e) => e.stopPropagation()}>
+                        <div className="pdf-fullscreen-container">
+                            <iframe
+                                className="pdf-fullscreen-iframe"
+                                src={renderUrl}
+                                title={name}
+                            />
+                        </div>
+                        <button type="button" className="pdf-fullscreen-close-btn" onClick={toggleFullscreen} title="Close">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>,
+                document.body,
+            )}
+        </>
+    );
+}
+
+function getFileExtension(name) {
+    const parts = String(name ?? '').split('.');
+    return parts.length > 1 ? parts.pop().toUpperCase() : '';
+}
+
 function AttachmentCard({ attachment, index }) {
     const [lightboxOpen, setLightboxOpen] = useState(false);
     const name = sanitizeAttachmentName(attachment.displayName, `attachment-${index + 1}`);
@@ -488,30 +607,80 @@ function AttachmentCard({ attachment, index }) {
     }
 
     if (attachment.kind === 'pdf') {
-        return (
-            <article className="message-attachment-card" key={attachment.id}>
-                <div className="message-attachment-header">{name}</div>
-                <iframe
-                    className="message-attachment-pdf"
-                    src={attachment.href}
-                    title={name}
-                    loading="lazy"
-                />
-                <a className="message-attachment-action" href={attachment.href} {...actionProps}>
-                    {actionLabel}
-                </a>
-            </article>
-        );
+        return <PdfViewer key={attachment.id} attachment={attachment} name={name} />;
     }
 
+    const ext = getFileExtension(name);
+    const [previewOpen, setPreviewOpen] = useState(false);
+
+    // Build a blob URL for preview (same pattern as PDF)
+    const [fileBlobUrl, setFileBlobUrl] = useState(null);
+    useEffect(() => {
+        if (!previewOpen) return;
+        const href = attachment.href;
+        if (href && href.startsWith('data:')) {
+            try {
+                const blob = dataUriToBlob(href);
+                const url = URL.createObjectURL(blob);
+                setFileBlobUrl(url);
+                return () => URL.revokeObjectURL(url);
+            } catch {
+                // fallback
+            }
+        }
+    }, [previewOpen, attachment.href]);
+
+    const filePreviewUrl = fileBlobUrl || attachment.href;
+
     return (
-        <article className="message-attachment-card" key={attachment.id}>
-            <div className="message-attachment-header">{name}</div>
-            <div className="message-attachment-meta">{attachment.mimeType}</div>
-            <a className="message-attachment-action" href={attachment.href} {...actionProps}>
-                {actionLabel}
-            </a>
-        </article>
+        <>
+            <article
+                className="message-attachment-file-card message-attachment-file-card--clickable"
+                key={attachment.id}
+                onClick={() => setPreviewOpen(true)}
+                role="button"
+                tabIndex={0}
+                onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') setPreviewOpen(true); }}
+            >
+                <div className="file-card-icon-wrap">
+                    <IconFile />
+                    {ext && <span className="file-card-ext">{ext}</span>}
+                </div>
+                <div className="file-card-info">
+                    <div className="file-card-name" title={name}>{name}</div>
+                    <div className="file-card-meta">{attachment.mimeType}</div>
+                </div>
+                <a
+                    className="file-card-action"
+                    href={attachment.href}
+                    {...actionProps}
+                    title={actionLabel}
+                    onClick={(e) => e.stopPropagation()}
+                >
+                    <IconDownload />
+                </a>
+            </article>
+            {previewOpen && createPortal(
+                <div className="pdf-fullscreen-overlay" onClick={() => setPreviewOpen(false)} role="dialog" aria-modal="true">
+                    <div className="pdf-fullscreen-wrapper" onClick={(e) => e.stopPropagation()}>
+                        <div className="pdf-fullscreen-container">
+                            <iframe
+                                className="pdf-fullscreen-iframe"
+                                src={filePreviewUrl}
+                                title={name}
+                            />
+                        </div>
+                        <button type="button" className="pdf-fullscreen-close-btn" onClick={() => setPreviewOpen(false)} title="Close">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+                                <line x1="18" y1="6" x2="6" y2="18" />
+                                <line x1="6" y1="6" x2="18" y2="18" />
+                            </svg>
+                        </button>
+                    </div>
+                </div>,
+                document.body,
+            )}
+        </>
     );
 }
 
@@ -652,7 +821,7 @@ function buildInlineImageRenderPlan(text, attachments) {
     let cursor = 0;
     let match = INLINE_IMAGE_MARKDOWN_REGEX.exec(raw);
     while (match) {
-        const [fullMatch, altText, target] = match;
+        const [fullMatch, _altText, target] = match;
         const start = match.index;
 
         if (start > cursor) {
@@ -673,10 +842,10 @@ function buildInlineImageRenderPlan(text, attachments) {
                 type: 'image',
                 attachment: matchedAttachment,
             });
-        } else if (String(altText ?? '').trim()) {
+        } else {
             segments.push({
                 type: 'text',
-                value: String(altText),
+                value: fullMatch,
             });
         }
 
@@ -736,7 +905,7 @@ function CopyButton({ text }) {
             setCopied(true);
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             timeoutRef.current = setTimeout(() => setCopied(false), 2000);
-        }).catch(() => {});
+        }).catch(() => { });
     }, [text]);
 
     useEffect(() => () => {
@@ -753,6 +922,43 @@ function CopyButton({ text }) {
         >
             {copied ? <IconCheck /> : <IconCopy />}
         </button>
+    );
+}
+
+function AttachmentDownloadButton({ attachment }) {
+    const [blobUrl, setBlobUrl] = useState(null);
+
+    useEffect(() => {
+        const href = attachment.href;
+        if (href && href.startsWith('data:')) {
+            try {
+                const blob = dataUriToBlob(href);
+                const url = URL.createObjectURL(blob);
+                setBlobUrl(url);
+                return () => URL.revokeObjectURL(url);
+            } catch {
+                // fallback
+            }
+        }
+    }, [attachment.href]);
+
+    const downloadHref = blobUrl || attachment.href;
+    const name = sanitizeAttachmentName(attachment.displayName, 'attachment');
+    const actionProps = attachment.source === 'inline'
+        ? { download: name }
+        : { target: '_blank', rel: 'noreferrer' };
+
+    return (
+        <a
+            className="message-copy-btn"
+            href={downloadHref}
+            {...actionProps}
+            title={`Download ${name}`}
+            aria-label={`Download ${name}`}
+            style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', textDecoration: 'none' }}
+        >
+            <IconDownload />
+        </a>
     );
 }
 
@@ -829,9 +1035,13 @@ export const Message = forwardRef(function Message({
     onToolPanelToggle,
     activeAgentCallId = '',
     commandChunks = {},
+    showAllLiveToolCalls = false,
 }, ref) {
     if (role === 'user') {
         const hasText = String(text ?? '').trim().length > 0;
+        const attachments = getMessageAttachments(parts);
+        const hasActions = hasText || attachments.length > 0;
+
         return (
             <div className="message-user" ref={ref}>
                 <div className="message-user-stack">
@@ -841,9 +1051,12 @@ export const Message = forwardRef(function Message({
                         </div>
                     )}
                     <AttachmentGallery parts={parts} />
-                    {hasText && (
+                    {hasActions && (
                         <div className="message-user-actions">
-                            <CopyButton text={text} />
+                            {hasText && <CopyButton text={text} />}
+                            {attachments.map((att) => (
+                                <AttachmentDownloadButton key={att.id} attachment={att} />
+                            ))}
                         </div>
                     )}
                 </div>
@@ -951,7 +1164,9 @@ export const Message = forwardRef(function Message({
                                     activeAgentCallId={activeAgentCallId}
                                     commandChunks={commandChunks}
                                     isAnyRunning={isAnyRunning}
+                                    isMessageLive={bodyIsThinking}
                                     onToolPanelToggle={onToolPanelToggle}
+                                    showAllLive={showAllLiveToolCalls}
                                 />,
                             );
                             currentToolGroup = [];
@@ -996,7 +1211,7 @@ export const Message = forwardRef(function Message({
             return hasText || hasThought || hasParts || isThinkingStep || isWorkedStep;
         })
         : [];
-    const shouldRenderSteps = normalizedSteps.length > 1;
+    const shouldRenderSteps = normalizedSteps.length > 0;
     const messageHasAttachments = hasRenderedAttachments(parts);
     const stepUsesMessageAttachmentFallback = shouldRenderSteps
         ? normalizedSteps.map((step) => {
@@ -1024,6 +1239,9 @@ export const Message = forwardRef(function Message({
             .filter(Boolean)
             .join('\n\n')
         : unwrapStructuredText(String(text ?? '')).trim();
+
+    const aiAttachments = getMessageAttachments(parts);
+    const hasActions = !!(aiCopyText || aiAttachments.length > 0);
 
     return (
         <div className="message-ai" ref={ref}>
@@ -1123,7 +1341,9 @@ export const Message = forwardRef(function Message({
                                     activeAgentCallId={activeAgentCallId}
                                     commandChunks={commandChunks}
                                     isAnyRunning={isAnyRunning}
+                                    isMessageLive={isThinking}
                                     onToolPanelToggle={onToolPanelToggle}
+                                    showAllLive={showAllLiveToolCalls}
                                 />,
                             );
                             pendingToolBlocks = [];
@@ -1197,6 +1417,23 @@ export const Message = forwardRef(function Message({
                         }
 
                         flushTools();
+
+                        // If the message is still being generated overall, but there are no actively running steps or tools,
+                        // display a 'Working...' indicator to prevent the UI from appearing stalled.
+                        if (isThinking) {
+                            const hasActiveThought = flatItems.some((item) => item.type === 'thought' && item.isThinking);
+                            const hasActiveTool = flatItems.some((item) => item.type === 'single_tool' && item.block.toolPart?.isExecuting === true && !item.block.toolPart?.functionResponse);
+                            if (!hasActiveThought && !hasActiveTool) {
+                                rendered.push(
+                                    <ThoughtBlock
+                                        key="working-indicator"
+                                        thought=""
+                                        isThinking={true}
+                                    />
+                                );
+                            }
+                        }
+
                         return rendered;
                     })()
                     : renderAiContent({
@@ -1206,12 +1443,16 @@ export const Message = forwardRef(function Message({
                         fallbackParts: [],
                         bodyIsThinking: isThinking,
                         showWorkedWhenNoThought: false,
+                        thinkingDurationMs: Array.isArray(steps) && steps.length > 0 ? steps[0]?.thinkingDurationMs || 0 : 0,
                     })}
                 {shouldRenderMessageAttachmentsAfterSteps && <AttachmentGallery parts={parts} />}
             </div>
-            {aiCopyText && !isThinking && (
+            {hasActions && !isThinking && (
                 <div className="message-ai-actions">
-                    <CopyButton text={aiCopyText} />
+                    {aiCopyText && <CopyButton text={aiCopyText} />}
+                    {aiAttachments.map((att) => (
+                        <AttachmentDownloadButton key={att.id} attachment={att} />
+                    ))}
                 </div>
             )}
         </div>

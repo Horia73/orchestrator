@@ -1,7 +1,8 @@
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
-import { GEMINI_API_KEY } from '../../core/config.js';
+import { getGeminiApiKey, getToolsModel } from '../../core/config.js';
 import { getExecutionContext } from '../../core/context.js';
-import { broadcastEvent } from '../../core/events.js';
+import { broadcastEvent, updateStreamingSnapshot } from '../../core/events.js';
+import { retryOnRateLimit } from '../../core/rateLimit.js';
 import { getAgentConfig } from '../../storage/settings.js';
 import { buildImageChatConfig } from './api.js';
 import { IMAGE_AGENT_ID } from './index.js';
@@ -37,18 +38,17 @@ const VALID_ASPECT_RATIOS = new Set([
 
 const VALID_IMAGE_SIZES = new Set(['512px', '1K', '2K', '4K']);
 
-let cachedClient = null;
+let cachedV2Client = null;
 
-function getClient() {
-    if (!GEMINI_API_KEY) {
-        throw new Error('Missing GEMINI_API_KEY or VITE_GEMINI_API_KEY in environment.');
+function getNativeImagenClient() {
+    const key = getGeminiApiKey();
+    if (!key) throw new Error('GEMINI_API_KEY is required for image generation.');
+
+    if (!cachedV2Client || cachedV2Client._lastApiKey !== key) {
+        cachedV2Client = new GoogleGenAI({ apiKey: key });
+        cachedV2Client._lastApiKey = key;
     }
-
-    if (!cachedClient) {
-        cachedClient = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-    }
-
-    return cachedClient;
+    return cachedV2Client;
 }
 
 function normalizeModelId(value) {
@@ -220,8 +220,14 @@ export async function generateImageWithAgent({
             }
         }
     }
+
+    let endpointModel = resolvedModel;
+    if (!endpointModel) {
+        endpointModel = String(getToolsModel() ?? '').trim() || 'gemini-3-flash-preview';
+    }
+
     const requestPayload = {
-        model: resolvedModel,
+        model: endpointModel,
         contents: contentParts.length > 1 ? contentParts : normalizedPrompt,
     };
     if (Object.keys(requestConfig).length > 0) {
@@ -231,20 +237,26 @@ export async function generateImageWithAgent({
     const contextData = getExecutionContext();
 
     if (contextData?.chatId && contextData?.messageId) {
+        const initialPayload = {
+            text: '',
+            thought: '',
+            parts: [],
+            steps: [],
+            isThinking: true,
+            clientId: contextData?.clientId,
+        };
         broadcastEvent('agent.streaming', {
             chatId: contextData.chatId,
             messageId: contextData.messageId,
             toolCallId: contextData.toolCallId,
             toolName: contextData.toolName,
             agentId: IMAGE_AGENT_ID,
-            payload: {
-                text: '',
-                thought: '',
-                parts: [],
-                steps: [],
-                isThinking: true,
-                clientId: contextData?.clientId,
-            },
+            payload: initialPayload,
+        });
+        updateStreamingSnapshot(contextData.chatId, {
+            agentToolCallId: contextData.toolCallId,
+            agentToolName: contextData.toolName,
+            agentPayload: initialPayload,
         });
     }
 
@@ -252,49 +264,92 @@ export async function generateImageWithAgent({
     let accumulatedText = '';
     const accumulatedMediaParts = [];
     let lastChunk = null;
+    const rateLimitOnWaiting = async (ms) => {
+        if (!contextData?.chatId || !contextData?.messageId) {
+            return;
+        }
+
+        const waitingPayload = {
+            text: accumulatedText,
+            thought: `⏳ Rate limit reached. Retrying in ${Math.round(ms / 1000)}s...`,
+            parts: [],
+            steps: [],
+            isThinking: true,
+            clientId: contextData?.clientId,
+        };
+        broadcastEvent('agent.streaming', {
+            chatId: contextData.chatId,
+            messageId: contextData.messageId,
+            toolCallId: contextData.toolCallId,
+            toolName: contextData.toolName,
+            agentId: IMAGE_AGENT_ID,
+            payload: waitingPayload,
+        });
+        updateStreamingSnapshot(contextData.chatId, {
+            agentToolCallId: contextData.toolCallId,
+            agentToolName: contextData.toolName,
+            agentPayload: waitingPayload,
+        });
+    };
 
     try {
-        const stream = await getClient().models.generateContentStream(requestPayload);
+        await retryOnRateLimit(async () => {
+            accumulatedThought = '';
+            accumulatedText = '';
+            accumulatedMediaParts.length = 0;
+            lastChunk = null;
 
-        for await (const chunk of stream) {
-            lastChunk = chunk;
-            const chunkParts = chunk?.candidates?.[0]?.content?.parts ?? [];
+            const stream = await getNativeImagenClient().models.generateContentStream(requestPayload);
 
-            for (let index = 0; index < chunkParts.length; index += 1) {
-                const part = chunkParts[index];
-                if (part?.thought === true && typeof part?.text === 'string' && part.text) {
-                    accumulatedThought += part.text;
-                } else if (typeof part?.text === 'string' && part.text) {
-                    accumulatedText += part.text;
-                } else {
-                    const mediaPart = normalizeInlineDataPart(part, accumulatedMediaParts.length);
-                    if (mediaPart) {
-                        accumulatedMediaParts.push(mediaPart);
+            for await (const chunk of stream) {
+                lastChunk = chunk;
+                const chunkParts = chunk?.candidates?.[0]?.content?.parts ?? [];
+
+                for (let index = 0; index < chunkParts.length; index += 1) {
+                    const part = chunkParts[index];
+                    if (part?.thought === true && typeof part?.text === 'string' && part.text) {
+                        accumulatedThought += part.text;
+                    } else if (typeof part?.text === 'string' && part.text) {
+                        accumulatedText += part.text;
+                    } else {
+                        const mediaPart = normalizeInlineDataPart(part, accumulatedMediaParts.length);
+                        if (mediaPart) {
+                            accumulatedMediaParts.push(mediaPart);
+                        }
                     }
                 }
-            }
 
-            if (contextData?.chatId && contextData?.messageId && accumulatedThought) {
-                broadcastEvent('agent.streaming', {
-                    chatId: contextData.chatId,
-                    messageId: contextData.messageId,
-                    toolCallId: contextData.toolCallId,
-                    toolName: contextData.toolName,
-                    agentId: IMAGE_AGENT_ID,
-                    payload: {
+                if (contextData?.chatId && contextData?.messageId && accumulatedThought) {
+                    const streamingPayload = {
                         text: accumulatedText,
                         thought: accumulatedThought,
                         parts: [],
                         steps: [],
                         isThinking: true,
                         clientId: contextData?.clientId,
-                    },
-                });
+                    };
+                    broadcastEvent('agent.streaming', {
+                        chatId: contextData.chatId,
+                        messageId: contextData.messageId,
+                        toolCallId: contextData.toolCallId,
+                        toolName: contextData.toolName,
+                        agentId: IMAGE_AGENT_ID,
+                        payload: streamingPayload,
+                    });
+                    updateStreamingSnapshot(contextData.chatId, {
+                        agentToolCallId: contextData.toolCallId,
+                        agentToolName: contextData.toolName,
+                        agentPayload: streamingPayload,
+                    });
+                }
             }
-        }
+        }, { onWaiting: rateLimitOnWaiting });
     } catch {
         // Fall back to non-streaming for models that don't support it.
-        const response = await getClient().models.generateContent(requestPayload);
+        const response = await retryOnRateLimit(
+            () => getNativeImagenClient().models.generateContent(requestPayload),
+            { onWaiting: rateLimitOnWaiting },
+        );
         lastChunk = response;
         const responseParts = getResponseParts(response);
 
@@ -314,7 +369,7 @@ export async function generateImageWithAgent({
     }
 
     const result = {
-        model: resolvedModel,
+        model: endpointModel,
         text: accumulatedText.trim(),
         thought: accumulatedThought.trim(),
         mediaParts: accumulatedMediaParts,
@@ -324,20 +379,26 @@ export async function generateImageWithAgent({
     };
 
     if (contextData?.chatId && contextData?.messageId) {
+        const finalPayload = {
+            text: result.text,
+            thought: result.thought,
+            parts: result.mediaParts,
+            steps: [],
+            isThinking: false,
+            clientId: contextData?.clientId,
+        };
         broadcastEvent('agent.streaming', {
             chatId: contextData.chatId,
             messageId: contextData.messageId,
             toolCallId: contextData.toolCallId,
             toolName: contextData.toolName,
             agentId: IMAGE_AGENT_ID,
-            payload: {
-                text: result.text,
-                thought: result.thought,
-                parts: result.mediaParts,
-                steps: [],
-                isThinking: false,
-                clientId: contextData?.clientId,
-            },
+            payload: finalPayload,
+        });
+        updateStreamingSnapshot(contextData.chatId, {
+            agentToolCallId: contextData.toolCallId,
+            agentToolName: contextData.toolName,
+            agentPayload: finalPayload,
         });
     }
 

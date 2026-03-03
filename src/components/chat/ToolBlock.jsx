@@ -1,6 +1,10 @@
 import { useEffect, useMemo, useState } from 'react';
 import { fetchCommandStatus } from '../../api/chatApi.js';
-import { getAgentToolMetadata } from './agentCallUtils.js';
+import {
+    getAgentCallIdentity,
+    getAgentToolMetadata,
+    getToolCallId,
+} from './agentCallUtils.js';
 import { TerminalPane } from './TerminalPane.jsx';
 import {
     IconTerminal, IconCode, IconEye, IconPencil,
@@ -24,16 +28,6 @@ const FILE_MANAGEMENT_TOOLS = new Set([
 const EDIT_TOOLS = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
 const WEB_TOOLS = new Set(['read_url_content', 'search_web']);
 const IMAGE_TOOLS = new Set(['generate_image']);
-
-function getToolIcon(name) {
-    if (COMMAND_TOOL_NAMES.has(name)) return IconTerminal;
-    if (FILE_MANAGEMENT_TOOLS.has(name)) return IconEye;
-    if (EDIT_TOOLS.has(name)) return IconPencil;
-    if (WEB_TOOLS.has(name)) return IconGlobe;
-    if (IMAGE_TOOLS.has(name)) return IconImage;
-    if (getAgentToolMetadata(name)) return IconCode;
-    return IconTool;
-}
 
 function getToolBadge(name) {
     if (COMMAND_TOOL_NAMES.has(name)) return 'Script';
@@ -122,6 +116,10 @@ function normalizeAgentStatus({ isExecuting, hasResponse, responseObject, hasErr
         return 'thinking';
     }
 
+    if (rawStatus === 'spawned' || rawStatus === 'queued' || rawStatus === 'running') {
+        return hasAgentThought ? 'thinking' : 'working';
+    }
+
     if (rawStatus === 'working') {
         return 'working';
     }
@@ -176,12 +174,13 @@ export function ToolBlock({
     const [polledSnapshot, setPolledSnapshot] = useState(null);
     const [nowMs, setNowMs] = useState(0);
     const hasFunctionCall = !!functionCall;
-    const call = functionCall ?? {};
+    const call = functionCall ?? EMPTY_ARGS;
 
     const hasResponse = !!functionResponse;
     const name = call.name || 'unknown_tool';
     const agentMeta = getAgentToolMetadata(name);
     const isAgentTool = !!agentMeta;
+    const toolCallId = getToolCallId(call);
     const args = call.args && typeof call.args === 'object'
         ? call.args
         : EMPTY_ARGS;
@@ -199,6 +198,15 @@ export function ToolBlock({
         responseObject,
         hasError,
     });
+    const agentIdentity = useMemo(
+        () => getAgentCallIdentity({
+            toolName: name,
+            functionCall: call,
+            functionResponse,
+            callId: toolCallId,
+        }),
+        [call, functionResponse, name, toolCallId],
+    );
 
     const commandId = useMemo(
         () => getCommandId(args, runtimeSnapshot, responseObject),
@@ -316,15 +324,17 @@ export function ToolBlock({
 
     if (isAgentTool) {
         if (agentStatus === 'thinking' || agentStatus === 'working') {
-            titleMain = `Calling ${agentMeta.agentName}`;
+            titleMain = `Running ${agentIdentity.agentName}`;
         } else if (agentStatus === 'stopped') {
-            titleMain = `${agentMeta.agentName} stopped`;
+            titleMain = `${agentIdentity.agentName} stopped`;
         } else if (agentStatus === 'error') {
-            titleMain = `${agentMeta.agentName} failed`;
+            titleMain = `${agentIdentity.agentName} failed`;
         } else {
-            titleMain = `Called ${agentMeta.agentName}`;
+            titleMain = `Finished ${agentIdentity.agentName}`;
         }
-        titleDetail = String(args?.prompt ?? '').trim();
+        const taskLabel = String(args?.task ?? args?.prompt ?? '').trim();
+        const instanceLabel = String(agentIdentity.instanceLabel ?? '').trim();
+        titleDetail = [instanceLabel, taskLabel].filter(Boolean).join(' • ');
     } else if (name === 'run_command') {
         titleMain = isCommandRunning ? 'Running command' : 'Ran command';
         if (commandStatusLabel === 'stopped') titleMain = 'Stopped';
@@ -390,14 +400,21 @@ export function ToolBlock({
 
     if (!hasFunctionCall) return null;
 
-    const ToolIcon = getToolIcon(name);
     const badge = getToolBadge(name);
 
     return (
         <div className={`tool-row${isAgentTool ? ' tool-row-agent' : ''}${isAgentCallOpen ? ' is-active' : ''}${isRunning ? ' is-running' : ''}`}>
             <div className="tool-row-header" onClick={handleHeaderClick}>
                 <span className="tool-row-icon">
-                    <ToolIcon />
+                    {(() => {
+                        if (COMMAND_TOOL_NAMES.has(name)) return <IconTerminal />;
+                        if (FILE_MANAGEMENT_TOOLS.has(name)) return <IconEye />;
+                        if (EDIT_TOOLS.has(name)) return <IconPencil />;
+                        if (WEB_TOOLS.has(name)) return <IconGlobe />;
+                        if (IMAGE_TOOLS.has(name)) return <IconImage />;
+                        if (getAgentToolMetadata(name)) return <IconCode />;
+                        return <IconTool />;
+                    })()}
                 </span>
                 <span className={`tool-row-name${isRunning ? ' status-running-text' : ''}`}>
                     {titleMain}

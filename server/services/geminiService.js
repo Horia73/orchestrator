@@ -1,10 +1,12 @@
 import fs from 'node:fs';
+import { randomUUID } from 'node:crypto';
 import { GoogleGenAI, ThinkingLevel } from '@google/genai';
 import {
-    GEMINI_API_KEY,
-    GEMINI_CONTEXT_MESSAGES,
+    getGeminiApiKey,
+    getGeminiContextMessages,
     reloadConfigJson,
 } from '../core/config.js';
+import { retryOnRateLimit } from '../core/rateLimit.js';
 import { CONFIG_PATH } from '../core/dataPaths.js';
 import {
     DEFAULT_AGENT_ID,
@@ -12,6 +14,7 @@ import {
     getAgentToolAccess,
     normalizeAgentId,
 } from '../agents/index.js';
+import { MAX_SUBAGENT_TOOL_CALLS } from '../core/subagentPolicy.js';
 import { getAgentConfig, readSettings, writeSettings } from '../storage/settings.js';
 import {
     buildFunctionTools,
@@ -20,6 +23,31 @@ import {
     toolRegistry,
 } from '../tools/index.js';
 import { executionContext } from '../core/context.js';
+import { resolveUpload } from '../storage/uploads.js';
+
+const pendingSteeringNotes = new Map();
+const PARALLEL_TOOL_NAMES = new Set([
+    'spawn_subagent',
+    'search_web',
+    'read_url_content',
+]);
+const MAX_INLINE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
+
+export function injectSteeringNote(chatId, text) {
+    const existing = pendingSteeringNotes.get(chatId) || [];
+    existing.push(text);
+    pendingSteeringNotes.set(chatId, existing);
+}
+
+export function peekSteeringNotes(chatId) {
+    return [...(pendingSteeringNotes.get(chatId) || [])];
+}
+
+export function consumeSteeringNotes(chatId) {
+    const notes = peekSteeringNotes(chatId);
+    pendingSteeringNotes.delete(chatId);
+    return notes;
+}
 
 const THINKING_LEVEL_MAP = {
     MINIMAL: ThinkingLevel.MINIMAL,
@@ -118,35 +146,6 @@ function isThinkingLevelError(error) {
     return /thinking/i.test(msg) && /invalid|unsupported|not.+support|not.+available/i.test(msg);
 }
 
-// ─── Rate Limit Retry ────────────────────────────────────────────────────────
-
-function isRateLimitError(error) {
-    const msg = String(error?.message ?? error ?? '');
-    const code = error?.code ?? error?.status;
-    return code === 429 || /RESOURCE_EXHAUSTED/i.test(msg) || /429/.test(msg);
-}
-
-function parseRetryDelayMs(error) {
-    const msg = String(error?.message ?? error ?? '');
-    const match = msg.match(/"retryDelay"\s*:\s*"([\d.]+)s"/);
-    if (match) return Math.ceil(parseFloat(match[1]) * 1000);
-    return null;
-}
-
-async function retryOnRateLimit(fn, { maxRetries = 4, onWaiting } = {}) {
-    for (let attempt = 0; attempt <= maxRetries; attempt++) {
-        try {
-            return await fn();
-        } catch (error) {
-            if (!isRateLimitError(error) || attempt === maxRetries) throw error;
-            const ms = parseRetryDelayMs(error) ?? Math.min(5000 * Math.pow(2, attempt), 60000);
-            console.warn(`[gemini] Rate limit hit. Retrying in ${Math.round(ms / 1000)}s (attempt ${attempt + 1}/${maxRetries})...`);
-            if (onWaiting) await onWaiting(ms);
-            await new Promise(resolve => setTimeout(resolve, ms));
-        }
-    }
-}
-
 // ─── Core helpers ────────────────────────────────────────────────────────────
 
 function mapThinkingLevel(level) {
@@ -232,6 +231,9 @@ function normalizePart(part) {
 
     if (hasFunctionCall) {
         normalized.functionCall = part.functionCall;
+        if (typeof part.isExecuting === 'boolean') {
+            normalized.isExecuting = part.isExecuting;
+        }
     } else if (hasFunctionResponse) {
         normalized.functionResponse = part.functionResponse;
     } else if (hasText) {
@@ -281,15 +283,6 @@ function extractUserAttachments(messageParts) {
         }
     }
     return attachments;
-}
-
-function normalizeMessageParts(message) {
-    const preservedParts = normalizeParts(message?.parts);
-    if (preservedParts) {
-        return preservedParts;
-    }
-
-    return [{ text: String(message?.text ?? '') }];
 }
 
 const TOOL_TRACE_MAX_ARGS_CHARS = 1200;
@@ -410,8 +403,29 @@ function buildToolTraceText(parts) {
         const itemNo = index + 1;
         lines.push(`tool_${itemNo}_name=${item.name}`);
         lines.push(`tool_${itemNo}_args=${truncateForToolTrace(safeJsonStringify(item.args), TOOL_TRACE_MAX_ARGS_CHARS)}`);
+
         if (item.response !== undefined) {
-            lines.push(`tool_${itemNo}_response=${truncateForToolTrace(safeJsonStringify(item.response), TOOL_TRACE_MAX_RESPONSE_CHARS)}`);
+            let traceResponse = item.response;
+
+            // Special handling for view_file and similar tools to keep the trace compact and readable.
+            // We truncate the main 'content' or 'text' fields more aggressively in the trace logs.
+            if (traceResponse && typeof traceResponse === 'object') {
+                if (typeof traceResponse.content === 'string') {
+                    traceResponse = { ...traceResponse, content: truncateForToolTrace(traceResponse.content, 400) };
+                } else if (typeof traceResponse.text === 'string' && item.name !== 'generate_image') {
+                    traceResponse = { ...traceResponse, text: truncateForToolTrace(traceResponse.text, 400) };
+                } else if (Array.isArray(traceResponse.items)) {
+                    // For tools like view_code_item
+                    traceResponse = {
+                        ...traceResponse,
+                        items: traceResponse.items.map((it) => (it && typeof it.content === 'string'
+                            ? { ...it, content: truncateForToolTrace(it.content, 400) }
+                            : it)),
+                    };
+                }
+            }
+
+            lines.push(`tool_${itemNo}_response=${truncateForToolTrace(safeJsonStringify(traceResponse), TOOL_TRACE_MAX_RESPONSE_CHARS)}`);
         } else {
             lines.push(`tool_${itemNo}_response="[pending]"`);
         }
@@ -435,6 +449,219 @@ function stripToolTraceBlocks(value) {
 
 function sanitizeVisibleText(value) {
     return stripToolTraceBlocks(value);
+}
+
+function base64ByteLength(value) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return 0;
+    }
+
+    const padding = normalized.endsWith('==') ? 2 : (normalized.endsWith('=') ? 1 : 0);
+    return Math.max(0, Math.floor((normalized.length * 3) / 4) - padding);
+}
+
+function canInlineAttachmentForModel(mimeType) {
+    const normalized = String(mimeType ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return false;
+    }
+
+    return (
+        normalized.startsWith('image/')
+        || normalized.startsWith('audio/')
+        || normalized.startsWith('video/')
+        || normalized === 'application/pdf'
+        || normalized === 'text/plain'
+        || normalized === 'text/csv'
+        || normalized === 'application/json'
+    );
+}
+
+function buildAttachmentHint({
+    name,
+    mimeType,
+    sizeBytes,
+    absolutePath,
+    note = '',
+} = {}) {
+    const segments = [];
+    const safeName = String(name ?? '').trim() || 'attachment';
+    const safeMimeType = String(mimeType ?? '').trim() || 'application/octet-stream';
+
+    segments.push(`- ${safeName} [${safeMimeType}]`);
+    if (Number.isFinite(sizeBytes) && sizeBytes > 0) {
+        segments.push(`${Math.trunc(sizeBytes)} bytes`);
+    }
+    if (absolutePath) {
+        segments.push(`tool_path=${absolutePath}`);
+    }
+    if (note) {
+        segments.push(note);
+    }
+
+    return segments.join(' | ');
+}
+
+async function describeFileDataAttachment(fileData) {
+    if (!fileData || typeof fileData !== 'object') {
+        return null;
+    }
+
+    const uploadId = String(fileData.uploadId ?? '').trim();
+    if (!uploadId) {
+        const fileUri = String(fileData.fileUri ?? fileData.file_uri ?? '').trim();
+        const mimeType = String(fileData.mimeType ?? fileData.mime_type ?? '').trim();
+        const displayName = String(fileData.displayName ?? '').trim();
+        const sizeBytes = Number(fileData.sizeBytes);
+        return {
+            name: displayName || 'attachment',
+            mimeType,
+            sizeBytes: Number.isFinite(sizeBytes) && sizeBytes > 0 ? Math.trunc(sizeBytes) : 0,
+            absolutePath: '',
+            fileUri,
+            inlineData: null,
+        };
+    }
+
+    try {
+        const { metadata, absolutePath } = await resolveUpload(uploadId);
+        return {
+            name: metadata.name,
+            mimeType: metadata.mimeType,
+            sizeBytes: metadata.sizeBytes,
+            absolutePath,
+            fileUri: String(fileData.fileUri ?? fileData.file_uri ?? '').trim(),
+            inlineData: null,
+            uploadId,
+        };
+    } catch {
+        const mimeType = String(fileData.mimeType ?? fileData.mime_type ?? '').trim();
+        const displayName = String(fileData.displayName ?? '').trim();
+        const sizeBytes = Number(fileData.sizeBytes);
+        return {
+            name: displayName || 'attachment',
+            mimeType,
+            sizeBytes: Number.isFinite(sizeBytes) && sizeBytes > 0 ? Math.trunc(sizeBytes) : 0,
+            absolutePath: '',
+            fileUri: String(fileData.fileUri ?? fileData.file_uri ?? '').trim(),
+            inlineData: null,
+            uploadId,
+        };
+    }
+}
+
+async function buildUserMessagePartsForModel(message, { hydrateInlineAttachments = false } = {}) {
+    const rawParts = Array.isArray(message?.parts) ? message.parts : null;
+    if (!rawParts || rawParts.length === 0) {
+        return [{ text: String(message?.text ?? '') }];
+    }
+
+    const textSegments = [];
+    const attachmentHints = [];
+    const inlineParts = [];
+    let remainingInlineBudget = MAX_INLINE_ATTACHMENT_BYTES;
+
+    for (const rawPart of rawParts) {
+        if (!rawPart || typeof rawPart !== 'object') {
+            continue;
+        }
+
+        if (typeof rawPart.text === 'string' && rawPart.text.trim()) {
+            textSegments.push(rawPart.text);
+            continue;
+        }
+
+        const inlineData = rawPart.inlineData;
+        if (inlineData && typeof inlineData === 'object') {
+            const mimeType = String(inlineData.mimeType ?? inlineData.mime_type ?? '').trim();
+            const data = String(inlineData.data ?? '').trim();
+            const sizeBytes = base64ByteLength(data);
+            const displayName = String(inlineData.displayName ?? inlineData.display_name ?? '').trim();
+            attachmentHints.push(buildAttachmentHint({
+                name: displayName || 'attachment',
+                mimeType,
+                sizeBytes,
+                note: 'embedded_attachment',
+            }));
+
+            if (
+                hydrateInlineAttachments
+                && data
+                && canInlineAttachmentForModel(mimeType)
+                && sizeBytes > 0
+                && sizeBytes <= remainingInlineBudget
+            ) {
+                inlineParts.push({
+                    inlineData: {
+                        mimeType,
+                        data,
+                    },
+                });
+                remainingInlineBudget -= sizeBytes;
+            }
+            continue;
+        }
+
+        const fileData = rawPart.fileData;
+        if (fileData && typeof fileData === 'object') {
+            const attachment = await describeFileDataAttachment(fileData);
+            if (!attachment) {
+                continue;
+            }
+
+            const exceedsInlineBudget = attachment.sizeBytes > remainingInlineBudget;
+            let inlineNote = 'binary_omitted_from_history';
+            if (hydrateInlineAttachments && !canInlineAttachmentForModel(attachment.mimeType)) {
+                inlineNote = 'type_not_inlined';
+            } else if (hydrateInlineAttachments && exceedsInlineBudget) {
+                inlineNote = 'size_not_inlined';
+            }
+
+            attachmentHints.push(buildAttachmentHint({
+                name: attachment.name,
+                mimeType: attachment.mimeType,
+                sizeBytes: attachment.sizeBytes,
+                absolutePath: attachment.absolutePath,
+                note: inlineNote,
+            }));
+
+            if (
+                hydrateInlineAttachments
+                && attachment.absolutePath
+                && canInlineAttachmentForModel(attachment.mimeType)
+                && attachment.sizeBytes > 0
+                && attachment.sizeBytes <= remainingInlineBudget
+            ) {
+                const fileBytes = await fs.promises.readFile(attachment.absolutePath);
+                inlineParts.push({
+                    inlineData: {
+                        mimeType: attachment.mimeType,
+                        data: fileBytes.toString('base64'),
+                    },
+                });
+                remainingInlineBudget -= attachment.sizeBytes;
+            }
+        }
+    }
+
+    const combinedText = [
+        textSegments.join('\n').trim(),
+        attachmentHints.length > 0
+            ? ['[attachments]', ...attachmentHints].join('\n')
+            : '',
+    ]
+        .filter(Boolean)
+        .join('\n\n');
+
+    if (!combinedText && inlineParts.length > 0) {
+        return inlineParts;
+    }
+
+    const textPart = { text: combinedText || String(message?.text ?? '') };
+    return inlineParts.length > 0
+        ? [...inlineParts, textPart]
+        : [textPart];
 }
 
 function sanitizeStepsForOutput(steps) {
@@ -486,42 +713,55 @@ function buildModelHistoryMediaParts(message) {
     });
 }
 
-function normalizeHistory(messages) {
-    return messages
-        .filter((message) => message && (message.role === 'user' || message.role === 'ai'))
-        .map((message) => {
-            if (message.role === 'ai') {
-                // Keep prior model turns oneof-safe while preserving tool context.
-                const mediaParts = buildModelHistoryMediaParts(message);
-                const baseTextPart = { text: buildModelHistoryText(message) };
-                return {
-                    role: 'model',
-                    parts: mediaParts.length > 0
-                        ? [baseTextPart, ...mediaParts]
-                        : [baseTextPart],
-                };
-            }
+async function normalizeHistory(messages) {
+    const normalizedMessages = [];
 
-            return {
-                role: 'user',
-                parts: normalizeMessageParts(message),
-            };
+    for (const message of messages) {
+        if (!message || (message.role !== 'user' && message.role !== 'ai')) {
+            continue;
+        }
+
+        if (message.role === 'ai') {
+            const mediaParts = buildModelHistoryMediaParts(message);
+            const baseTextPart = { text: buildModelHistoryText(message) };
+            normalizedMessages.push({
+                role: 'model',
+                parts: mediaParts.length > 0
+                    ? [baseTextPart, ...mediaParts]
+                    : [baseTextPart],
+            });
+            continue;
+        }
+
+        normalizedMessages.push({
+            role: 'user',
+            parts: await buildUserMessagePartsForModel(message, {
+                hydrateInlineAttachments: false,
+            }),
         });
+    }
+
+    return normalizedMessages;
 }
 
 function getClient() {
-    if (!GEMINI_API_KEY) {
-        throw new Error('Missing GEMINI_API_KEY or VITE_GEMINI_API_KEY in environment.');
+    const freshKey = getGeminiApiKey();
+    if (!freshKey) {
+        throw new Error('Missing GEMINI_API_KEY or VITE_GEMINI_API_KEY in environment or config.json.');
     }
 
-    if (!cachedClient) {
-        cachedClient = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
+    if (!cachedClient || cachedClient._lastApiKey !== freshKey) {
+        cachedClient = new GoogleGenAI({ apiKey: freshKey });
+        cachedClient._lastApiKey = freshKey;
     }
 
     return cachedClient;
 }
 
-function createChatSession(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_ID } = {}) {
+async function createChatSession(
+    historyWithLatestUserTurn,
+    { agentId = DEFAULT_AGENT_ID, toolAccessOverride } = {},
+) {
     if (!Array.isArray(historyWithLatestUserTurn) || historyWithLatestUserTurn.length === 0) {
         throw new Error('Cannot generate reply without a user message.');
     }
@@ -533,18 +773,27 @@ function createChatSession(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_
 
     const previousTurns = historyWithLatestUserTurn
         .slice(0, -1)
-        .slice(-GEMINI_CONTEXT_MESSAGES);
+        .slice(-getGeminiContextMessages());
 
     const normalizedAgentId = normalizeAgentId(agentId);
 
     // Read model + generation options dynamically from saved settings
     const agentConfig = getAgentConfig(normalizedAgentId);
-    const toolAccess = getAgentToolAccess(normalizedAgentId);
+    const toolAccess = Array.isArray(toolAccessOverride)
+        ? toolAccessOverride
+            .map((name) => String(name ?? '').trim())
+            .filter(Boolean)
+        : getAgentToolAccess(normalizedAgentId);
     const sharedTools = buildFunctionTools(toolAccess);
+
+    const history = await normalizeHistory(previousTurns);
+    const latestMessage = await buildUserMessagePartsForModel(latest, {
+        hydrateInlineAttachments: true,
+    });
 
     const chat = getClient().chats.create({
         model: agentConfig.model,
-        history: normalizeHistory(previousTurns),
+        history,
         config: buildChatConfigForAgent({
             agentId: normalizedAgentId,
             agentConfig,
@@ -554,7 +803,7 @@ function createChatSession(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_
 
     return {
         chat,
-        latestMessage: normalizeMessageParts(latest),
+        latestMessage,
         model: agentConfig.model,
         agentConfig,
         allowedToolNames: new Set(toolAccess),
@@ -574,6 +823,10 @@ function mergeChunkIntoText(previousText, chunkText) {
     }
 
     return `${previousText}${nextChunk}`;
+}
+
+function isParallelToolName(toolName) {
+    return PARALLEL_TOOL_NAMES.has(String(toolName ?? '').trim());
 }
 
 function extractDelta(previousValue, currentValue) {
@@ -935,8 +1188,14 @@ function buildFinalModelParts({ text, thought, mediaParts = [], signatureParts, 
     return parts;
 }
 
-export async function generateAssistantReply(historyWithLatestUserTurn, { agentId = DEFAULT_AGENT_ID } = {}) {
-    const { chat, latestMessage, model, agentConfig } = createChatSession(historyWithLatestUserTurn, { agentId });
+export async function generateAssistantReply(
+    historyWithLatestUserTurn,
+    { agentId = DEFAULT_AGENT_ID, toolAccessOverride } = {},
+) {
+    const { chat, latestMessage, model, agentConfig } = await createChatSession(historyWithLatestUserTurn, {
+        agentId,
+        toolAccessOverride,
+    });
 
     try {
         const response = await retryOnRateLimit(() => chat.sendMessage({
@@ -947,7 +1206,10 @@ export async function generateAssistantReply(historyWithLatestUserTurn, { agentI
         const currentLevel = String(agentConfig?.thinkingLevel ?? '').trim().toUpperCase();
         if (currentLevel && isThinkingLevelError(error)) {
             recordUnsupportedLevel(model, currentLevel, { agentId });
-            const retrySession = createChatSession(historyWithLatestUserTurn, { agentId });
+            const retrySession = await createChatSession(historyWithLatestUserTurn, {
+                agentId,
+                toolAccessOverride,
+            });
             const response = await retryOnRateLimit(() => retrySession.chat.sendMessage({
                 message: retrySession.latestMessage,
             }));
@@ -959,7 +1221,17 @@ export async function generateAssistantReply(historyWithLatestUserTurn, { agentI
 
 export async function generateAssistantReplyStream(
     historyWithLatestUserTurn,
-    { onUpdate, shouldStop, agentId = DEFAULT_AGENT_ID, chatId = '', messageId = '', clientId = '' } = {},
+    {
+        onUpdate,
+        shouldStop,
+        agentId = DEFAULT_AGENT_ID,
+        chatId = '',
+        messageId = '',
+        clientId = '',
+        spawnDepth = 0,
+        maxSubagentSpawnDepth,
+        toolAccessOverride,
+    } = {},
 ) {
     const {
         chat,
@@ -967,7 +1239,10 @@ export async function generateAssistantReplyStream(
         model,
         agentConfig,
         allowedToolNames,
-    } = createChatSession(historyWithLatestUserTurn, { agentId });
+    } = await createChatSession(historyWithLatestUserTurn, {
+        agentId,
+        toolAccessOverride,
+    });
     const isStopRequested = typeof shouldStop === 'function'
         ? () => shouldStop() === true
         : () => false;
@@ -994,6 +1269,10 @@ export async function generateAssistantReplyStream(
     let currentStepFirstTextEvent = null;
     let currentStepFirstToolEvent = null;
     let apiCallCount = 0;
+    let toolCallCount = 0;
+    let stopReason = '';
+    let didAppendToolLimitNotice = false;
+    const syntheticToolCallIds = new Map();
     const usageAccumulator = {
         promptTokenCount: 0,
         candidatesTokenCount: 0,
@@ -1021,6 +1300,29 @@ export async function generateAssistantReplyStream(
         }
         stepEventSequence += 1;
         currentStepFirstToolEvent = stepEventSequence;
+    }
+
+    function ensureFunctionCallId(functionCall) {
+        if (!functionCall || typeof functionCall !== 'object') {
+            return functionCall;
+        }
+
+        const explicitId = typeof functionCall.id === 'string' ? functionCall.id.trim() : '';
+        if (explicitId) {
+            return functionCall;
+        }
+
+        const callKey = getFunctionCallKey(functionCall);
+        let syntheticId = syntheticToolCallIds.get(callKey);
+        if (!syntheticId) {
+            syntheticId = `toolcall-${randomUUID().slice(0, 8)}`;
+            syntheticToolCallIds.set(callKey, syntheticId);
+        }
+
+        return {
+            ...functionCall,
+            id: syntheticId,
+        };
     }
 
     function accumulateUsage(usageMetadata) {
@@ -1110,6 +1412,9 @@ export async function generateAssistantReplyStream(
 
         if (isThinking) {
             candidate.isThinking = true;
+            if (currentStepStartMs !== null) {
+                candidate.thinkingDurationMs = Math.max(0, Date.now() - currentStepStartMs);
+            }
         } else {
             candidate.isWorked = true;
             if (currentStepStartMs !== null) {
@@ -1145,6 +1450,66 @@ export async function generateAssistantReplyStream(
         }
 
         return normalizedCompletedSteps;
+    }
+
+    async function executeFunctionCall(functionCall) {
+        const name = typeof functionCall?.name === 'string' && functionCall.name
+            ? functionCall.name
+            : 'unknown_tool';
+        const args = functionCall?.args && typeof functionCall.args === 'object'
+            ? functionCall.args
+            : {};
+        const currentExecutionContext = executionContext.getStore() || null;
+
+        const toolFn = toolRegistry[name];
+        let result;
+        if (!allowedToolNames.has(name)) {
+            result = { error: `Tool ${name} is not allowed for this agent.` };
+        } else if (toolFn) {
+            try {
+                result = await executionContext.run({
+                    chatId,
+                    messageId,
+                    clientId,
+                    agentId,
+                    toolCallId: (typeof functionCall?.id === 'string' ? functionCall.id : ''),
+                    toolName: name,
+                    shouldStop: isStopRequested,
+                    userAttachments: extractUserAttachments(latestMessage),
+                    chatHistory: historyWithLatestUserTurn,
+                    spawnDepth,
+                    maxSubagentSpawnDepth,
+                    subagentId: String(currentExecutionContext?.subagentId ?? '').trim() || undefined,
+                    parentAgentId: String(currentExecutionContext?.parentAgentId ?? '').trim() || undefined,
+                }, () => toolFn(args));
+            } catch (error) {
+                result = { error: `Tool ${name} failed: ${error.message}` };
+            }
+        } else {
+            result = { error: `Tool ${name} not found` };
+        }
+
+        const toolUsageRecords = extractToolUsageRecords(result, {
+            toolName: name,
+            functionCall,
+            args,
+        });
+        const toolMediaParts = extractToolMediaParts(result);
+        const modelVisibleResult = sanitizeToolResultForModel(result);
+
+        const functionResponse = {
+            name,
+            response: modelVisibleResult,
+        };
+        if (typeof functionCall?.id === 'string' && functionCall.id.trim().length > 0) {
+            functionResponse.id = functionCall.id;
+        }
+
+        return {
+            functionResponse,
+            toolUsageRecords,
+            toolMediaParts,
+        };
     }
 
     async function emitUpdate({ force = false, stepIsThinking = false, textOverride, thoughtOverride, partsOverride, stepsOverride } = {}) {
@@ -1230,9 +1595,10 @@ export async function generateAssistantReplyStream(
                     }
 
                     if (part?.functionCall && typeof part.functionCall === 'object') {
-                        const callKey = getFunctionCallKey(part.functionCall);
+                        const normalizedFunctionCall = ensureFunctionCallId(part.functionCall);
+                        const callKey = getFunctionCallKey(normalizedFunctionCall);
                         if (!functionCallsByKey.has(callKey)) {
-                            functionCallsByKey.set(callKey, part.functionCall);
+                            functionCallsByKey.set(callKey, normalizedFunctionCall);
                             markCurrentStepToolEvent();
                         }
                         continue;
@@ -1269,9 +1635,10 @@ export async function generateAssistantReplyStream(
                     }
                 }
                 for (const functionCall of extractChunkFunctionCalls(chunk)) {
-                    const callKey = getFunctionCallKey(functionCall);
+                    const normalizedFunctionCall = ensureFunctionCallId(functionCall);
+                    const callKey = getFunctionCallKey(normalizedFunctionCall);
                     if (!functionCallsByKey.has(callKey)) {
-                        functionCallsByKey.set(callKey, functionCall);
+                        functionCallsByKey.set(callKey, normalizedFunctionCall);
                         markCurrentStepToolEvent();
                     }
                 }
@@ -1296,8 +1663,10 @@ export async function generateAssistantReplyStream(
             parts: [],
             steps: [],
             stopped: true,
+            stopReason: 'user_stop',
             model,
             apiCallCount: 0,
+            toolCallCount: 0,
             toolUsageRecords: [],
             usageMetadata: {
                 promptTokenCount: 0,
@@ -1332,7 +1701,10 @@ export async function generateAssistantReplyStream(
         if (currentLevel && isThinkingLevelError(error)) {
             recordUnsupportedLevel(model, currentLevel, { agentId });
             // Recreate the chat session — buildChatConfigForAgent now uses the cache.
-            const retrySession = createChatSession(historyWithLatestUserTurn, { agentId });
+            const retrySession = await createChatSession(historyWithLatestUserTurn, {
+                agentId,
+                toolAccessOverride,
+            });
             activeChat = retrySession.chat;
             const retryStream = await retryOnRateLimit(
                 () => activeChat.sendMessageStream({ message: retrySession.latestMessage }),
@@ -1346,11 +1718,29 @@ export async function generateAssistantReplyStream(
 
     accumulateUsage(initialStreamResult.usageMetadata);
     let pendingFunctionCalls = initialStreamResult.functionCalls;
+    const isSubagentExecution = Number(spawnDepth ?? 0) > 0;
 
     // Handle tool calls if any (potentially multiple rounds)
     while (pendingFunctionCalls.length > 0 && !stopped) {
-        const functionResponses = [];
-        for (const functionCall of pendingFunctionCalls) {
+        if (isSubagentExecution && toolCallCount >= MAX_SUBAGENT_TOOL_CALLS) {
+            stopReason = 'subagent_tool_call_limit';
+            stopped = true;
+            if (!didAppendToolLimitNotice) {
+                fullText = mergeChunkIntoText(
+                    fullText,
+                    `\n\nStopped after reaching the subagent tool-call limit (${MAX_SUBAGENT_TOOL_CALLS}).`,
+                );
+                didAppendToolLimitNotice = true;
+            }
+            break;
+        }
+
+        const orderedFunctionResponses = new Array(pendingFunctionCalls.length);
+        const parallelExecutions = [];
+        let toolCallLimitReachedThisRound = false;
+
+        for (let index = 0; index < pendingFunctionCalls.length; index += 1) {
+            const functionCall = pendingFunctionCalls[index];
             if (isStopRequested()) {
                 stopped = true;
                 break;
@@ -1359,9 +1749,25 @@ export async function generateAssistantReplyStream(
             const name = typeof functionCall?.name === 'string' && functionCall.name
                 ? functionCall.name
                 : 'unknown_tool';
-            const args = functionCall?.args && typeof functionCall.args === 'object'
-                ? functionCall.args
-                : {};
+
+            if (isSubagentExecution && toolCallCount >= MAX_SUBAGENT_TOOL_CALLS) {
+                toolCallLimitReachedThisRound = true;
+                const limitResponse = {
+                    name,
+                    response: {
+                        error: `Subagent tool-call limit reached (${MAX_SUBAGENT_TOOL_CALLS}). Stop using tools and answer with the findings already gathered.`,
+                    },
+                };
+                if (typeof functionCall?.id === 'string' && functionCall.id.trim().length > 0) {
+                    limitResponse.id = functionCall.id;
+                }
+                toolPartsAccumulator.push({ functionCall });
+                toolPartsAccumulator.push({ functionResponse: limitResponse });
+                orderedFunctionResponses[index] = { functionResponse: limitResponse };
+                continue;
+            }
+
+            toolCallCount += 1;
 
             const toolCallPartState = {
                 functionCall,
@@ -1372,68 +1778,50 @@ export async function generateAssistantReplyStream(
 
             await emitUpdate({ stepIsThinking: false });
 
-            const toolFn = toolRegistry[name];
-            let result;
-            if (!allowedToolNames.has(name)) {
-                result = { error: `Tool ${name} is not allowed for this agent.` };
-            } else if (toolFn) {
-                result = await executionContext.run({
-                    chatId,
-                    messageId,
-                    clientId,
-                    toolCallId: (typeof functionCall?.id === 'string' ? functionCall.id : ''),
-                    toolName: name,
-                    shouldStop: isStopRequested,
-                    userAttachments: extractUserAttachments(latestMessage),
-                    chatHistory: historyWithLatestUserTurn,
-                }, () => toolFn(args));
-            } else {
-                result = { error: `Tool ${name} not found` };
-            }
+            const finalizeExecution = async ({ functionResponse, toolUsageRecords, toolMediaParts }) => {
+                for (const usageRecord of toolUsageRecords) {
+                    toolUsageRecordsAccumulator.push(usageRecord);
+                }
 
-            const toolUsageRecords = extractToolUsageRecords(result, {
-                toolName: name,
-                functionCall,
-                args,
-            });
-            for (const usageRecord of toolUsageRecords) {
-                toolUsageRecordsAccumulator.push(usageRecord);
-            }
+                for (const toolMediaPart of toolMediaParts) {
+                    collectInlineMediaPart(toolMediaPart);
+                }
 
-            const toolMediaParts = extractToolMediaParts(result);
-            for (const toolMediaPart of toolMediaParts) {
-                collectInlineMediaPart(toolMediaPart);
-            }
-
-            const modelVisibleResult = sanitizeToolResultForModel(result);
-
-            toolCallPartState.isExecuting = false;
-
-            const functionResponse = {
-                name,
-                response: modelVisibleResult,
+                toolCallPartState.isExecuting = false;
+                toolPartsAccumulator.push({ functionResponse });
+                orderedFunctionResponses[index] = { functionResponse };
+                await emitUpdate({ stepIsThinking: false });
             };
-            if (typeof functionCall?.id === 'string' && functionCall.id.trim().length > 0) {
-                functionResponse.id = functionCall.id;
+
+            if (isParallelToolName(name)) {
+                parallelExecutions.push(
+                    executeFunctionCall(functionCall).then(finalizeExecution),
+                );
+                continue;
             }
 
-            toolPartsAccumulator.push({
-                functionResponse,
-            });
+            const completedExecution = await executeFunctionCall(functionCall);
+            await finalizeExecution(completedExecution);
+        }
 
-            functionResponses.push({
-                functionResponse,
-            });
-
-            await emitUpdate({ stepIsThinking: false });
+        if (parallelExecutions.length > 0) {
+            await Promise.all(parallelExecutions);
         }
 
         if (stopped) {
             break;
         }
 
+        const functionResponses = orderedFunctionResponses.filter(Boolean);
         if (functionResponses.length === 0) {
             break;
+        }
+
+        const notes = consumeSteeringNotes(chatId);
+        if (notes.length > 0) {
+            for (const note of notes) {
+                functionResponses.push({ text: `[System Injection/User Steering Note received during execution]: ${note}` });
+            }
         }
 
         // One API step is complete once tool outputs are ready for the next model call.
@@ -1456,6 +1844,18 @@ export async function generateAssistantReplyStream(
         const nextStreamResult = await processStream(nextStream);
         accumulateUsage(nextStreamResult.usageMetadata);
         pendingFunctionCalls = nextStreamResult.functionCalls;
+
+        if (toolCallLimitReachedThisRound && pendingFunctionCalls.length > 0) {
+            stopReason = 'subagent_tool_call_limit';
+            stopped = true;
+            if (!didAppendToolLimitNotice) {
+                fullText = mergeChunkIntoText(
+                    fullText,
+                    `\n\nStopped after reaching the subagent tool-call limit (${MAX_SUBAGENT_TOOL_CALLS}).`,
+                );
+                didAppendToolLimitNotice = true;
+            }
+        }
     }
 
     // Capture any trailing text/thought from the final model turn (no further tools).
@@ -1503,18 +1903,21 @@ export async function generateAssistantReplyStream(
         parts: finalParts,
         steps: finalSteps,
         stopped,
+        stopReason,
         model,
         apiCallCount,
+        toolCallCount,
         toolUsageRecords: toolUsageRecordsAccumulator,
         usageMetadata: usageAccumulator,
     };
 }
 
 export async function listAvailableModels() {
-    if (!GEMINI_API_KEY) {
-        throw new Error('Missing GEMINI_API_KEY in environment.');
+    const key = getGeminiApiKey();
+    if (!key) {
+        throw new Error('Missing GEMINI_API_KEY in environment or config.');
     }
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${GEMINI_API_KEY}`);
+    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
     if (!res.ok) {
         throw new Error(`Failed to fetch models: ${res.status}`);
     }

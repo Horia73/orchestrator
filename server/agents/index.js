@@ -1,10 +1,12 @@
 import { agent as orchestratorAgent } from './orchestrator/index.js';
 import { agent as codingAgent } from './coding/index.js';
 import { agent as imageAgent } from './image/index.js';
+import { agent as multipurposeAgent } from './multipurpose/index.js';
+import { agent as researcherAgent } from './researcher/index.js';
 
 const VALID_THINKING_LEVELS = new Set(['MINIMAL', 'LOW', 'MEDIUM', 'HIGH']);
 
-const loadedAgents = [orchestratorAgent, codingAgent, imageAgent].filter(Boolean);
+const loadedAgents = [orchestratorAgent, codingAgent, imageAgent, multipurposeAgent, researcherAgent].filter(Boolean);
 
 // Default agent first, then alphabetically by ID
 const AGENT_DEFINITIONS = loadedAgents.sort((a, b) => {

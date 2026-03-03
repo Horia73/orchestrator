@@ -1,6 +1,5 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import {
-    archiveChat,
     deleteChat as apiDeleteChat,
     fetchChatMessages,
     fetchChats,
@@ -9,6 +8,7 @@ import {
     stopChatGeneration,
     sendChatMessage,
 } from '../api/chatApi.js';
+import { getAgentToolMetadata, getToolCallId } from '../components/chat/agentCallUtils.js';
 
 const CLIENT_ID_STORAGE_KEY = 'gemini-ui-client-id';
 const ACTIVE_CHAT_STORAGE_KEY = 'gemini-ui-active-chat-id';
@@ -78,11 +78,11 @@ function mergeMessages(existing, incoming) {
     const byId = new Map();
 
     for (const message of existing) {
-        byId.set(message.id, message);
+        if (message) byId.set(message.id, message);
     }
 
     for (const message of incoming) {
-        byId.set(message.id, message);
+        if (message) byId.set(message.id, message);
     }
 
     return [...byId.values()].sort((a, b) => a.createdAt - b.createdAt);
@@ -90,10 +90,10 @@ function mergeMessages(existing, incoming) {
 
 function toErrorMessage(error) {
     if (error instanceof Error && error.message) {
-        return `Gemini error: ${error.message}`;
+        return `AI error: ${error.message}`;
     }
 
-    return 'Gemini error: Request failed.';
+    return 'AI error: Request failed.';
 }
 
 function normalizeAttachmentMimeType(value) {
@@ -105,7 +105,12 @@ function normalizeAttachmentMimeType(value) {
     return normalized;
 }
 
-function normalizeOutgoingAttachments(attachments) {
+function normalizeAttachmentSize(value) {
+    const normalized = Number(value);
+    return Number.isFinite(normalized) && normalized > 0 ? Math.trunc(normalized) : 0;
+}
+
+function normalizeDraftAttachments(attachments) {
     if (!Array.isArray(attachments)) {
         return [];
     }
@@ -119,32 +124,52 @@ function normalizeOutgoingAttachments(attachments) {
             const id = String(attachment.id ?? `att-${index + 1}`).trim() || `att-${index + 1}`;
             const name = String(attachment.name ?? `attachment-${index + 1}`).trim() || `attachment-${index + 1}`;
             const mimeType = normalizeAttachmentMimeType(attachment.mimeType ?? attachment.type);
-            const data = String(attachment.data ?? '').trim();
-            const size = Number(attachment.size ?? 0);
+            const uploadId = String(attachment.uploadId ?? '').trim();
+            const fileUri = String(attachment.fileUri ?? '').trim();
+            const previewUrl = String(attachment.previewUrl ?? '').trim();
+            const status = String(attachment.status ?? '').trim().toLowerCase() || 'ready';
+            const size = normalizeAttachmentSize(attachment.size ?? attachment.sizeBytes);
 
-            if (!data) {
+            if ((!uploadId || !fileUri) && status !== 'uploading') {
                 return null;
             }
 
             return {
                 id,
+                uploadId,
                 name,
                 mimeType,
-                data,
-                size: Number.isFinite(size) && size > 0 ? Math.trunc(size) : 0,
+                size,
+                fileUri,
+                previewUrl,
+                status,
             };
         })
         .filter(Boolean);
 }
 
+function serializeOutgoingAttachments(attachments) {
+    return normalizeDraftAttachments(attachments)
+        .filter((attachment) => attachment.status !== 'uploading' && attachment.uploadId && attachment.fileUri)
+        .map((attachment) => ({
+            uploadId: attachment.uploadId,
+            name: attachment.name,
+            mimeType: attachment.mimeType,
+            sizeBytes: attachment.size,
+        }));
+}
+
 function buildUserMessageParts(text, attachments) {
     const normalizedText = String(text ?? '').trim();
-    const normalizedAttachments = normalizeOutgoingAttachments(attachments);
+    const normalizedAttachments = normalizeDraftAttachments(attachments)
+        .filter((attachment) => attachment.status !== 'uploading' && attachment.uploadId && attachment.fileUri);
     const parts = normalizedAttachments.map((attachment) => ({
-        inlineData: {
+        fileData: {
+            uploadId: attachment.uploadId,
+            fileUri: attachment.fileUri,
             mimeType: attachment.mimeType,
-            data: attachment.data,
             displayName: attachment.name,
+            sizeBytes: attachment.size,
         },
     }));
 
@@ -153,6 +178,94 @@ function buildUserMessageParts(text, attachments) {
     }
 
     return parts.length > 0 ? parts : null;
+}
+
+function getAgentStreamingKey(toolCallId, toolName) {
+    const normalizedCallId = String(toolCallId ?? '').trim();
+    if (normalizedCallId) {
+        return normalizedCallId;
+    }
+
+    return String(toolName ?? '').trim();
+}
+
+function isCompletedStreamState(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    return normalized === 'complete' || normalized === 'completed' || normalized === 'done';
+}
+
+function collectAgentStreamingKeysFromParts(parts, into) {
+    if (!Array.isArray(parts)) {
+        return;
+    }
+
+    const responseIds = new Set();
+    const responseNames = new Set();
+    for (const part of parts) {
+        const functionResponse = part?.functionResponse;
+        if (!functionResponse) {
+            continue;
+        }
+
+        const responseId = String(functionResponse.id ?? '').trim();
+        const responseName = String(functionResponse.name ?? '').trim();
+        if (responseId) {
+            responseIds.add(responseId);
+        }
+        if (responseName) {
+            responseNames.add(responseName);
+        }
+    }
+
+    for (const part of parts) {
+        const functionCall = part?.functionCall;
+        if (!functionCall || !getAgentToolMetadata(functionCall.name)) {
+            const functionResponse = part?.functionResponse;
+            const responseName = String(functionResponse?.name ?? '').trim();
+            if (responseName === 'spawn_subagent_result') {
+                const parentToolCallId = String(
+                    functionResponse?.response?.parentToolCallId ?? '',
+                ).trim();
+                if (parentToolCallId) {
+                    into.add(parentToolCallId);
+                }
+            }
+            continue;
+        }
+
+        const callId = getToolCallId(functionCall);
+        const callName = String(functionCall.name ?? '').trim();
+        const hasCompletion = callId
+            ? responseIds.has(callId)
+            : responseNames.has(callName);
+        if (!hasCompletion) {
+            continue;
+        }
+
+        const key = getAgentStreamingKey(
+            callId,
+            callName,
+        );
+        if (key) {
+            into.add(key);
+        }
+    }
+}
+
+function collectAgentStreamingKeysFromMessage(message) {
+    const keys = new Set();
+    if (!message || typeof message !== 'object') {
+        return keys;
+    }
+
+    collectAgentStreamingKeysFromParts(message.parts, keys);
+    if (Array.isArray(message.steps)) {
+        for (const step of message.steps) {
+            collectAgentStreamingKeysFromParts(step?.parts, keys);
+        }
+    }
+
+    return keys;
 }
 
 function normalizeSendPayload(payload) {
@@ -172,7 +285,7 @@ function normalizeSendPayload(payload) {
 
     return {
         text: String(payload.text ?? ''),
-        attachments: normalizeOutgoingAttachments(payload.attachments),
+        attachments: normalizeDraftAttachments(payload.attachments),
     };
 }
 
@@ -221,10 +334,13 @@ export function useChat() {
     const clientIdRef = useRef(getOrCreateClientId());
     const chatSummariesRef = useRef(chatSummaries);
     const activeChatIdRef = useRef(activeChatId);
+    const draftMessagesRef = useRef(draftMessages);
+    const pendingKeyRef = useRef(pendingKey);
     const loadedChatIdsRef = useRef(new Set());
     const preferredActiveChatIdRef = useRef(getStoredActiveChatId());
     const draftAgentIdRef = useRef(draftAgentId);
     const chatAgentByIdRef = useRef(new Map());
+    const pendingDraftChatIdRef = useRef(null);
 
     useEffect(() => {
         chatSummariesRef.current = chatSummaries;
@@ -233,6 +349,14 @@ export function useChat() {
     useEffect(() => {
         activeChatIdRef.current = activeChatId;
     }, [activeChatId]);
+
+    useEffect(() => {
+        draftMessagesRef.current = draftMessages;
+    }, [draftMessages]);
+
+    useEffect(() => {
+        pendingKeyRef.current = pendingKey;
+    }, [pendingKey]);
 
     useEffect(() => {
         draftAgentIdRef.current = draftAgentId;
@@ -360,13 +484,50 @@ export function useChat() {
                 // Include own upserts so a brand-new chat appears in Recents
                 // immediately after pressing Enter on the first message.
                 setChatSummaries((prev) => upsertChatSummary(prev, event.chat));
+                const nextChatId = String(event.chat?.id ?? '').trim();
+                if (
+                    isOwnEvent
+                    && nextChatId
+                    && (activeChatIdRef.current === null || activeChatIdRef.current === undefined)
+                    && pendingKeyRef.current === 'draft'
+                ) {
+                    pendingDraftChatIdRef.current = nextChatId;
+                    setMessagesByChat((prev) => ({
+                        ...prev,
+                        [nextChatId]: mergeMessages(prev[nextChatId] ?? [], draftMessagesRef.current),
+                    }));
+                    setDraftMessages([]);
+                    setActiveChatId(nextChatId);
+                    setPendingKey(nextChatId);
+                }
                 return;
             }
 
             if (event.type === 'message.streaming' && event.chatId && event.message) {
+                const isCompletedStream = isCompletedStreamState(event.streamState);
+                const pendingDraftChatId = pendingDraftChatIdRef.current;
+                if (
+                    isOwnEvent
+                    && pendingDraftChatId
+                    && event.chatId === pendingDraftChatId
+                ) {
+                    setPendingKey(event.chatId);
+                    setActiveChatId((current) => current ?? event.chatId);
+                    setMessagesByChat((prev) => ({
+                        ...prev,
+                        [event.chatId]: mergeMessages(prev[event.chatId] ?? [], [event.message]),
+                    }));
+                    return;
+                }
+
                 if (isOwnEvent && (activeChatIdRef.current === null || activeChatIdRef.current === undefined)) {
+                    setPendingKey('draft');
                     setDraftMessages((prev) => mergeMessages(prev, [event.message]));
                     return;
+                }
+
+                if (isOwnEvent && activeChatIdRef.current === event.chatId) {
+                    setPendingKey(event.chatId);
                 }
 
                 setMessagesByChat((prev) => {
@@ -408,12 +569,21 @@ export function useChat() {
                             for (const existing of syntheticResponses) {
                                 const toolId = existing.functionResponse.id;
                                 const toolName = existing.functionResponse.name;
+                                const hasToolId = typeof toolId === 'string' && toolId.trim().length > 0;
                                 const alreadyPresent = result.some(p =>
-                                    p.functionResponse && (p.functionResponse.id === toolId || p.functionResponse.name === toolName)
+                                    p.functionResponse && (
+                                        hasToolId
+                                            ? p.functionResponse.id === toolId
+                                            : p.functionResponse.name === toolName
+                                    )
                                 );
                                 if (!alreadyPresent) {
                                     const callIndex = result.findIndex(p =>
-                                        p.functionCall && (p.functionCall.id === toolId || p.functionCall.name === toolName)
+                                        p.functionCall && (
+                                            hasToolId
+                                                ? p.functionCall.id === toolId
+                                                : p.functionCall.name === toolName
+                                        )
                                     );
                                     if (callIndex !== -1) {
                                         result.splice(callIndex + 1, 0, existing);
@@ -439,6 +609,18 @@ export function useChat() {
                         [event.chatId]: mergeMessages(existingMessages, [incomingMessage]),
                     };
                 });
+
+                if (isCompletedStream && event.message.role === 'ai') {
+                    setPendingKey((current) => {
+                        if (current === event.chatId) {
+                            return null;
+                        }
+                        if (isOwnEvent && current === 'draft') {
+                            return null;
+                        }
+                        return current;
+                    });
+                }
                 return;
             }
 
@@ -451,12 +633,9 @@ export function useChat() {
             }
 
             if (event.type === 'agent.streaming' && event.chatId && event.messageId && event.payload) {
-                // Store agent streaming payload keyed by toolName — this is
-                // reliable and matches the panel's activeAgentCallSelection.toolName.
-                // IMPORTANT: must be outside setMessagesByChat updater (React anti-pattern).
-                const toolName = String(event.toolName ?? '').trim();
-                if (toolName) {
-                    setAgentStreaming((curr) => ({ ...curr, [toolName]: event.payload }));
+                const agentStreamingKey = getAgentStreamingKey(event.toolCallId, event.toolName);
+                if (agentStreamingKey) {
+                    setAgentStreaming((curr) => ({ ...curr, [agentStreamingKey]: event.payload }));
                 }
 
                 setMessagesByChat((prev) => {
@@ -466,9 +645,14 @@ export function useChat() {
 
                     const message = messages[messageIndex];
                     const toolCallId = event.toolCallId;
+                    const hasToolCallId = typeof toolCallId === 'string' && toolCallId.trim().length > 0;
 
                     const matchesCall = (p) => (
-                        p.functionCall && (p.functionCall.id === toolCallId || p.functionCall.name === event.toolName)
+                        p.functionCall && (
+                            hasToolCallId
+                                ? p.functionCall.id === toolCallId
+                                : p.functionCall.name === event.toolName
+                        )
                     );
 
                     const syntheticResponse = {
@@ -480,7 +664,11 @@ export function useChat() {
                     };
 
                     const matchesResponse = (p) => (
-                        p.functionResponse && (p.functionResponse.id === toolCallId || p.functionResponse.name === event.toolName)
+                        p.functionResponse && (
+                            hasToolCallId
+                                ? p.functionResponse.id === toolCallId
+                                : p.functionResponse.name === event.toolName
+                        )
                     );
 
                     const injectInto = (parts) => {
@@ -523,6 +711,47 @@ export function useChat() {
                 return;
             }
 
+            if (event.type === 'message.added' && event.chatId && event.message) {
+                const pendingDraftChatId = pendingDraftChatIdRef.current;
+                const agentStreamingKeys = collectAgentStreamingKeysFromMessage(event.message);
+                if (agentStreamingKeys.size > 0) {
+                    setAgentStreaming((prev) => {
+                        let changed = false;
+                        const next = { ...prev };
+                        for (const key of agentStreamingKeys) {
+                            if (!(key in next)) continue;
+                            delete next[key];
+                            changed = true;
+                        }
+                        return changed ? next : prev;
+                    });
+                }
+
+                if (event.message.role === 'ai') {
+                    setPendingKey((current) => {
+                        if (current === event.chatId) {
+                            return null;
+                        }
+                        if (isOwnEvent && current === 'draft') {
+                            return null;
+                        }
+                        return current;
+                    });
+                }
+
+                setMessagesByChat((prev) => {
+                    if (!(event.chatId in prev) && !(isOwnEvent && pendingDraftChatId === event.chatId)) {
+                        return prev;
+                    }
+
+                    return {
+                        ...prev,
+                        [event.chatId]: mergeMessages(prev[event.chatId] ?? [], [event.message]),
+                    };
+                });
+                return;
+            }
+
             if (isOwnEvent) {
                 return;
             }
@@ -547,22 +776,7 @@ export function useChat() {
                 return;
             }
 
-            if (event.type === 'message.added' && event.chatId && event.message) {
-                setAgentStreaming({});
-                // Clear typing indicator when the final message arrives
-                // (needed for streaming state recovery after page refresh).
-                setPendingKey((current) => (current === event.chatId ? null : current));
-                setMessagesByChat((prev) => {
-                    if (!(event.chatId in prev)) {
-                        return prev;
-                    }
 
-                    return {
-                        ...prev,
-                        [event.chatId]: mergeMessages(prev[event.chatId], [event.message]),
-                    };
-                });
-            }
         });
 
         return () => {
@@ -573,20 +787,20 @@ export function useChat() {
     const createNewChat = useCallback(() => {
         setActiveChatId((current) => {
             if (current === null) {
+                pendingDraftChatIdRef.current = null;
                 return current;
             }
 
-            // Archive current chat to memory before switching (fire-and-forget)
-            archiveChat(current).catch(() => undefined);
-
             setDraftMessages([]);
             setPendingKey(null);
+            pendingDraftChatIdRef.current = null;
             return null;
         });
     }, []);
 
     const selectChat = useCallback((chatId) => {
         setDraftMessages([]);
+        pendingDraftChatIdRef.current = null;
         setActiveChatId(chatId);
     }, []);
 
@@ -622,6 +836,9 @@ export function useChat() {
             delete next[chatId];
             return next;
         });
+        if (pendingDraftChatIdRef.current === chatId) {
+            pendingDraftChatIdRef.current = null;
+        }
     }, []);
 
     const setInputDraft = useCallback((value) => {
@@ -648,7 +865,7 @@ export function useChat() {
 
     const setInputAttachments = useCallback((attachments) => {
         const key = getDraftKey(activeChatId);
-        const normalized = normalizeOutgoingAttachments(attachments);
+        const normalized = normalizeDraftAttachments(attachments);
 
         setInputAttachmentsByKey((prev) => {
             if (normalized.length === 0) {
@@ -684,11 +901,15 @@ export function useChat() {
 
         const normalizedPayload = normalizeSendPayload(payload);
         const trimmed = normalizedPayload.text.trim();
-        const attachments = normalizeOutgoingAttachments(normalizedPayload.attachments);
+        const draftAttachments = normalizeDraftAttachments(normalizedPayload.attachments);
+        const attachments = draftAttachments
+            .filter((attachment) => attachment.status !== 'uploading' && attachment.uploadId && attachment.fileUri);
+        const serializedAttachments = serializeOutgoingAttachments(draftAttachments);
         if (!trimmed && attachments.length === 0) return;
 
         const clientMessageId = createId('msg');
         const draftKey = getDraftKey(activeChatIdRef.current);
+        const currentChatId = activeChatIdRef.current ?? pendingDraftChatIdRef.current ?? null;
         setInputDraftByKey((prev) => {
             if (!(draftKey in prev)) return prev;
             const next = { ...prev };
@@ -704,7 +925,7 @@ export function useChat() {
 
         const optimisticParts = buildUserMessageParts(trimmed, attachments);
 
-        if (activeChatIdRef.current === null || activeChatIdRef.current === undefined) {
+        if (currentChatId === null) {
             const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed, {
                 parts: optimisticParts,
             });
@@ -714,10 +935,11 @@ export function useChat() {
             try {
                 const responsePayload = await sendChatMessage({
                     message: trimmed,
-                    attachments,
+                    attachments: serializedAttachments,
                     clientId: clientIdRef.current,
                     clientMessageId,
                     agentId: draftAgentIdRef.current,
+                    isSteering: payload.isSteering,
                 });
 
                 const chat = responsePayload.chat;
@@ -733,7 +955,13 @@ export function useChat() {
 
                 setDraftMessages([]);
                 setActiveChatId(chat.id);
+                pendingDraftChatIdRef.current = null;
             } catch (error) {
+                pendingDraftChatIdRef.current = null;
+                setInputDraftByKey((prev) => ({ ...prev, [draftKey]: trimmed }));
+                if (attachments.length > 0) {
+                    setInputAttachmentsByKey((prev) => ({ ...prev, [draftKey]: attachments }));
+                }
                 appendAiErrorToChat(null, toErrorMessage(error));
             } finally {
                 setPendingKey(null);
@@ -742,7 +970,7 @@ export function useChat() {
             return;
         }
 
-        const chatId = activeChatIdRef.current;
+        const chatId = currentChatId;
         const resolvedAgentId = chatAgentByIdRef.current.get(chatId) ?? draftAgentIdRef.current;
         const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed, {
             parts: optimisticParts,
@@ -758,10 +986,11 @@ export function useChat() {
             const responsePayload = await sendChatMessage({
                 chatId,
                 message: trimmed,
-                attachments,
+                attachments: serializedAttachments,
                 clientId: clientIdRef.current,
                 clientMessageId,
                 agentId: resolvedAgentId,
+                isSteering: payload.isSteering,
             });
 
             setChatSummaries((prev) => upsertChatSummary(prev, responsePayload.chat));
@@ -769,10 +998,19 @@ export function useChat() {
                 ...prev,
                 [chatId]: mergeMessages(prev[chatId] ?? [], [responsePayload.userMessage, responsePayload.aiMessage]),
             }));
+            if (pendingDraftChatIdRef.current === chatId) {
+                pendingDraftChatIdRef.current = null;
+            }
         } catch (error) {
+            setInputDraftByKey((prev) => ({ ...prev, [draftKey]: trimmed }));
+            if (attachments.length > 0) {
+                setInputAttachmentsByKey((prev) => ({ ...prev, [draftKey]: attachments }));
+            }
             appendAiErrorToChat(chatId, toErrorMessage(error));
         } finally {
-            setPendingKey((current) => (current === chatId ? null : current));
+            if (!payload.isSteering) {
+                setPendingKey((current) => (current === chatId ? null : current));
+            }
         }
     }, [appendAiErrorToChat, isHydrating]);
 

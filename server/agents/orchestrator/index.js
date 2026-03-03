@@ -1,4 +1,4 @@
-import { ALL_SHARED_TOOL_NAMES } from '../../tools/index.js';
+import { ALL_SHARED_TOOL_NAMES } from '../../tools/sharedToolNames.js';
 import { buildOrchestratorChatConfig } from './api.js';
 
 export const ORCHESTRATOR_AGENT_ID = 'orchestrator';

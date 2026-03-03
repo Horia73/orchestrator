@@ -21,6 +21,7 @@ export function Sidebar({
     onSelectChat,
     onDeleteChat,
     onOpenSettings,
+    uiSettings,
 }) {
     const [isSearchOpen, setIsSearchOpen] = useState(false);
     const [query, setQuery] = useState('');
@@ -74,7 +75,7 @@ export function Sidebar({
             <div className="sidebar-inner">
                 {/* Header — just the logo now, toggle is above */}
                 <div className="sidebar-header">
-                    <span className="logo-text">Gemini UI</span>
+                    <span className="logo-text">{uiSettings?.aiName ?? 'AI Chat'}</span>
                 </div>
 
                 {/* Nav */}

@@ -216,6 +216,27 @@ function parseCallout(children) {
     return { callout, children: nextBlocks };
 }
 
+function MarkdownImage({ src, alt }) {
+    const [hidden, setHidden] = useState(false);
+
+    if (!src || hidden) {
+        return null;
+    }
+
+    return (
+        <figure className="message-attachment-image-wrap">
+            <img
+                className="message-attachment-image"
+                src={src}
+                alt={alt || ''}
+                loading="lazy"
+                referrerPolicy="no-referrer"
+                onError={() => setHidden(true)}
+            />
+        </figure>
+    );
+}
+
 function MermaidBlock({ code }) {
     const [result, setResult] = useState({
         code: '',
@@ -398,8 +419,8 @@ export function MarkdownContent({ text, variant = 'ai' }) {
                     </a>
                 );
             },
-            img() {
-                return null;
+            img({ src, alt }) {
+                return <MarkdownImage src={src} alt={alt} />;
             },
             blockquote({ children }) {
                 const parsed = parseCallout(children);

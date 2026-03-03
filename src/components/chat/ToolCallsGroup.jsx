@@ -1,7 +1,7 @@
 import { useState, useRef, useEffect } from 'react';
 import { ToolBlock } from './ToolBlock.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
-import { getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
+import { getAgentCallIdentity, getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
 import { IconChevronRight, IconCheckCircle } from '../shared/icons.jsx';
 
 const MAX_VISIBLE_LIVE = 3;
@@ -49,52 +49,62 @@ export function ToolCallsGroup({
     activeAgentCallId = '',
     commandChunks = {},
     isAnyRunning = false,
+    isMessageLive = false,
     onToolPanelToggle,
+    showAllLive = false,
 }) {
     const [isExpanded, setIsExpanded] = useState(false);
+    const [isLiveExpanded, setIsLiveExpanded] = useState(false);
     const listRef = useRef(null);
     const prevCountRef = useRef(items.length);
 
+    const isLiveGroup = isMessageLive || isAnyRunning;
+
     useEffect(() => {
-        if (isAnyRunning && listRef.current && items.length > prevCountRef.current) {
+        if (isLiveGroup && listRef.current && items.length > prevCountRef.current) {
             const el = listRef.current;
             el.scrollTop = el.scrollHeight;
         }
         prevCountRef.current = items.length;
-    }, [items.length, isAnyRunning]);
+    }, [items.length, isLiveGroup]);
 
-    const allDone = !isAnyRunning;
+    const allDone = !isLiveGroup;
     const toolItems = items.filter((i) => i.kind === 'tool');
+    const actionableItems = items.filter((i) => i.kind === 'tool' || i.kind === 'thought');
     const totalToolCount = toolItems.length;
+    const totalActionCount = actionableItems.length;
     const showSummary = allDone && totalToolCount > 1;
 
-    // During live: show last MAX_VISIBLE_LIVE items (counting only tools for the limit)
     let visibleItems = items;
+    let hiddenItems = [];
     let hiddenCount = 0;
-    if (isAnyRunning && totalToolCount > MAX_VISIBLE_LIVE) {
-        // Find the start index so we show the last MAX_VISIBLE_LIVE tools
-        let toolsSeen = 0;
+    if (!showAllLive && isLiveGroup && totalActionCount > MAX_VISIBLE_LIVE) {
+        // Show only the last MAX_VISIBLE_LIVE actionable rows in a live stream.
+        let actionsSeen = 0;
         let cutIndex = items.length;
         for (let i = items.length - 1; i >= 0; i--) {
-            if (items[i].kind === 'tool') toolsSeen++;
-            if (toolsSeen >= MAX_VISIBLE_LIVE) {
+            if (items[i].kind === 'tool' || items[i].kind === 'thought') actionsSeen++;
+            if (actionsSeen >= MAX_VISIBLE_LIVE) {
                 cutIndex = i;
                 break;
             }
         }
         visibleItems = items.slice(cutIndex);
-        hiddenCount = totalToolCount - MAX_VISIBLE_LIVE;
+        hiddenItems = items.slice(0, cutIndex);
+        hiddenCount = totalActionCount - MAX_VISIBLE_LIVE;
     }
 
     const summaryText = buildSummaryText(items);
 
-    const renderItem = (item, index) => {
+    const renderItem = (item, index, listOffset = 0) => {
+        const itemKeySuffix = item.key || `idx-${listOffset + index}`;
         if (item.kind === 'thought') {
             return (
                 <ThoughtBlock
-                    key={item.key || `thought-${index}`}
+                    key={item.key || `thought-${itemKeySuffix}`}
                     thought={item.thought}
                     isThinking={item.isThinking}
+                    showWorkedWhenIdle={item.showWorkedWhenIdle}
                     thinkingDurationMs={item.thinkingDurationMs}
                 />
             );
@@ -106,12 +116,20 @@ export function ToolCallsGroup({
         const agentMeta = getAgentToolMetadata(toolName);
         const toolCallId = getToolCallId(toolPart?.functionCall);
         const isAgentCallOpen = !!agentMeta && toolCallId === String(activeAgentCallId ?? '').trim();
+        const agentIdentity = getAgentCallIdentity({
+            toolName,
+            functionCall: toolPart?.functionCall,
+            functionResponse: toolPart?.functionResponse,
+            callId: toolCallId,
+        });
         const handleAgentToggle = (agentMeta && onAgentCallToggle)
             ? () => {
                 onAgentCallToggle({
                     callId: toolCallId,
-                    agentId: agentMeta.agentId,
-                    agentName: agentMeta.agentName,
+                    agentId: agentIdentity.agentId,
+                    agentName: agentIdentity.agentName,
+                    instanceId: agentIdentity.instanceId,
+                    instanceLabel: agentIdentity.instanceLabel,
                     toolName,
                     toolPart: {
                         functionCall: toolPart.functionCall,
@@ -139,7 +157,7 @@ export function ToolCallsGroup({
 
         return (
             <ToolBlock
-                key={block.key}
+                key={block.key || `tool-${itemKeySuffix}`}
                 functionCall={toolPart.functionCall}
                 functionResponse={toolPart.functionResponse}
                 isExecuting={toolPart.isExecuting}
@@ -182,14 +200,28 @@ export function ToolCallsGroup({
             {(!showSummary || isExpanded) && (
                 <div
                     ref={listRef}
-                    className={`tool-calls-list${isAnyRunning ? ' tool-calls-list-live' : ''}`}
+                    className={`tool-calls-list${isLiveGroup ? ' tool-calls-list-live' : ''}`}
                 >
-                    {hiddenCount > 0 && (
-                        <div className="tool-calls-hidden-count">
-                            +{hiddenCount} more above
+                    {hiddenItems.length > 0 && (
+                        <div className="tool-calls-live-hidden-group">
+                            <div
+                                className="tool-calls-summary"
+                                onClick={() => setIsLiveExpanded((c) => !c)}
+                                style={{ margin: '4px 0 8px 0' }}
+                            >
+                                <span className={`tool-calls-summary-chevron${isLiveExpanded ? ' open' : ''}`}>
+                                    <IconChevronRight />
+                                </span>
+                                <span>{hiddenCount} older action{hiddenCount > 1 ? 's' : ''}</span>
+                            </div>
+                            {isLiveExpanded && (
+                                <div className="tool-calls-list tool-calls-list-live-hidden" style={{ paddingLeft: '14px', borderLeft: '2px solid var(--border-light, #e8e6e1)', marginLeft: '6px', marginBottom: '12px' }}>
+                                    {hiddenItems.map((item, index) => renderItem(item, index, 0))}
+                                </div>
+                            )}
                         </div>
                     )}
-                    {visibleItems.map(renderItem)}
+                    {visibleItems.map((item, index) => renderItem(item, index, hiddenItems.length))}
                 </div>
             )}
         </div>

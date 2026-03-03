@@ -33,6 +33,7 @@ export default function App() {
   // Settings page state
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsViewFromUrl());
   const [savedSettings, setSavedSettings] = useState(null);
+  const [uiSettings, setUiSettings] = useState({ aiName: 'AI Chat', userName: 'User' });
   const [agentDefinitions, setAgentDefinitions] = useState([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -40,8 +41,9 @@ export default function App() {
   // Load settings on mount
   useEffect(() => {
     fetchSettings()
-      .then((settings) => {
-        setSavedSettings(settings);
+      .then((data) => {
+        setSavedSettings(data.settings);
+        if (data.uiSettings) setUiSettings(data.uiSettings);
         setSettingsLoaded(true);
       })
       .catch(() => {
@@ -58,6 +60,12 @@ export default function App() {
         setAgentsLoaded(true);
       });
   }, []);
+
+  useEffect(() => {
+    if (uiSettings?.aiName) {
+      document.title = uiSettings.aiName;
+    }
+  }, [uiSettings?.aiName]);
 
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => {
@@ -88,9 +96,10 @@ export default function App() {
       fetchSettings().catch(() => null),
       fetchAgents().catch(() => []),
     ])
-      .then(([settings, agents]) => {
-        if (settings) {
-          setSavedSettings(settings);
+      .then(([data, agents]) => {
+        if (data) {
+          setSavedSettings(data.settings);
+          if (data.uiSettings) setUiSettings(data.uiSettings);
         }
         setAgentDefinitions(Array.isArray(agents) ? agents : []);
         setAgentsLoaded(true);
@@ -103,10 +112,16 @@ export default function App() {
       .finally(() => setSettingsOpen(true));
   }, []);
 
-  const handleSaveSettings = useCallback(async (newSettings) => {
-    const payload = await saveSettings(newSettings);
+  const handleSaveSettings = useCallback(async (newSettings, newUiSettings) => {
+    // If newUiSettings is not provided (removed from settings UI), 
+    // we keep the current uiSettings or don't send it.
+    const payload = await saveSettings({
+      settings: newSettings,
+      uiSettings: newUiSettings ?? uiSettings
+    });
     setSavedSettings(payload?.settings ?? newSettings);
-  }, []);
+    if (payload?.uiSettings) setUiSettings(payload.uiSettings);
+  }, [uiSettings]);
 
   const handleCloseSettings = useCallback(() => {
     setSettingsViewInUrl(false);
@@ -164,16 +179,18 @@ export default function App() {
         onSelectChat={handleSelectChat}
         onDeleteChat={handleDeleteChat}
         onOpenSettings={handleOpenSettings}
+        uiSettings={uiSettings}
       />
 
-        <ChatArea
-            greeting={chat.greeting}
-            messages={chat.messages}
-            conversationKey={chat.activeChatId}
-            isTyping={chat.isTyping}
-            isChatMode={chat.isChatMode}
-            agentStreaming={chat.agentStreaming}
-            commandChunks={chat.commandChunks}
+      <ChatArea
+        greeting={chat.greeting}
+        messages={chat.messages}
+        conversationKey={chat.activeChatId}
+        isTyping={chat.isTyping}
+        isChatMode={chat.isChatMode}
+        agentStreaming={chat.agentStreaming}
+        commandChunks={chat.commandChunks}
+        uiSettings={uiSettings}
       >
         <ChatInput
           ref={chatInputRef}
@@ -185,6 +202,7 @@ export default function App() {
           onAttachmentsChange={chat.setInputAttachments}
           isChatMode={chat.isChatMode}
           isSending={chat.isTyping}
+          uiSettings={uiSettings}
         />
       </ChatArea>
 

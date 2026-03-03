@@ -19,7 +19,12 @@ import * as sendCommandInput from './shell/sendCommandInput.js';
 import * as readTerminal from './shell/readTerminal.js';
 import * as generateImage from './agents/generateImage.js';
 import * as callCodingAgent from './agents/callCodingAgent.js';
+import * as callMultipurposeAgent from './agents/callMultipurposeAgent.js';
+import * as callResearcherAgent from './agents/callResearcherAgent.js';
+import * as spawnSubagent from './agents/spawnSubagent.js';
+import * as subagentStatus from './agents/subagentStatus.js';
 import * as manageSchedule from './cron.js';
+import { ALL_SHARED_TOOL_NAMES } from './sharedToolNames.js';
 
 const ALL_TOOLS = [
     listDir,
@@ -40,6 +45,10 @@ const ALL_TOOLS = [
     readTerminal,
     generateImage,
     callCodingAgent,
+    callMultipurposeAgent,
+    callResearcherAgent,
+    spawnSubagent,
+    subagentStatus,
     manageSchedule,
 ];
 
@@ -48,8 +57,6 @@ const declarationByName = new Map(ALL_TOOLS.map((tool) => [tool.declaration.name
 export const toolRegistry = Object.fromEntries(
     ALL_TOOLS.map((tool) => [tool.declaration.name, tool.execute]),
 );
-
-export const ALL_SHARED_TOOL_NAMES = ALL_TOOLS.map((tool) => tool.declaration.name);
 
 export function buildFunctionTools(toolNames = []) {
     const requestedNames = Array.isArray(toolNames) ? toolNames : [];

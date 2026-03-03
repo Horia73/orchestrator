@@ -12,7 +12,7 @@ async function parseApiResponse(response) {
 export async function fetchSettings() {
     const response = await fetch('/api/settings');
     const data = await parseApiResponse(response);
-    return data.settings;
+    return { settings: data.settings, uiSettings: data.uiSettings };
 }
 
 export async function fetchAgents() {
@@ -21,11 +21,11 @@ export async function fetchAgents() {
     return Array.isArray(data.agents) ? data.agents : [];
 }
 
-export async function saveSettings(settings) {
+export async function saveSettings(payload) {
     const response = await fetch('/api/settings', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ settings }),
+        body: JSON.stringify(payload),
     });
     return parseApiResponse(response);
 }
@@ -34,6 +34,34 @@ export async function fetchRemoteModels() {
     const response = await fetch('/api/models');
     const data = await parseApiResponse(response);
     return data.models;
+}
+
+export async function fetchEditableFileSections() {
+    const response = await fetch('/api/settings/editor/files');
+    const data = await parseApiResponse(response);
+    return Array.isArray(data.sections) ? data.sections : [];
+}
+
+export async function fetchEditableFile(path) {
+    const query = new URLSearchParams();
+    query.set('path', String(path ?? '').trim());
+    const response = await fetch(`/api/settings/editor/file?${query.toString()}`);
+    const data = await parseApiResponse(response);
+    return data.file;
+}
+
+export async function saveEditableFile({ path, content, modifiedAt }) {
+    const response = await fetch('/api/settings/editor/file', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+            path,
+            content,
+            modifiedAt,
+        }),
+    });
+    const data = await parseApiResponse(response);
+    return data.file;
 }
 
 export async function fetchUsage({ startDate, endDate, date, agentId } = {}) {

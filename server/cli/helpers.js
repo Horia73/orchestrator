@@ -60,6 +60,8 @@ export function ensureDataDirectories() {
         path.join(DATA_ROOT_DIR, 'usage'),
         path.join(DATA_ROOT_DIR, 'logs'),
         path.join(DATA_ROOT_DIR, 'memory'),
+        path.join(DATA_ROOT_DIR, 'memory', 'daily'),
+        path.join(DATA_ROOT_DIR, 'secrets'),
         path.join(DATA_ROOT_DIR, 'skills'),
         path.join(DATA_ROOT_DIR, 'cron'),
     ];

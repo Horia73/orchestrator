@@ -11,6 +11,7 @@ import path from 'node:path';
 import { execSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { SKILLS_WORKSPACE_DIR } from '../core/dataPaths.js';
+import { reloadConfigJson, updateConfigSection } from '../core/config.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const BUILTIN_SKILLS_DIR = path.resolve(__dirname, '..', 'skills');
@@ -25,7 +26,7 @@ function stripFrontmatter(content) {
     return content;
 }
 
-function parseFrontmatter(content) {
+export function parseFrontmatter(content) {
     if (!content.startsWith('---')) return {};
 
     const match = content.match(/^---\n([\s\S]*?)\n---/);
@@ -49,7 +50,7 @@ function parseFrontmatter(content) {
     return metadata;
 }
 
-function parseRequires(metadata) {
+export function parseRequires(metadata) {
     // requires can be inline YAML-like: `requires_bins: gh,docker`
     // or a JSON metadata field
     const requires = { bins: [], env: [] };
@@ -89,7 +90,7 @@ function checkBinaryExists(name) {
     }
 }
 
-function checkRequirements(requires) {
+export function checkRequirements(requires) {
     for (const bin of requires.bins) {
         if (!checkBinaryExists(bin)) return false;
     }
@@ -114,6 +115,19 @@ class SkillsLoader {
     constructor() {
         this.builtinDir = BUILTIN_SKILLS_DIR;
         this.workspaceDir = SKILLS_WORKSPACE_DIR;
+    }
+
+    /**
+     * Resolve the directory for a skill (workspace takes priority over builtin).
+     */
+    _resolveSkillDir(name) {
+        const workspacePath = path.join(this.workspaceDir, name);
+        if (fs.existsSync(path.join(workspacePath, 'SKILL.md'))) return workspacePath;
+
+        const builtinPath = path.join(this.builtinDir, name);
+        if (fs.existsSync(path.join(builtinPath, 'SKILL.md'))) return builtinPath;
+
+        return null;
     }
 
     listSkills(filterUnavailable = true) {
@@ -190,6 +204,79 @@ class SkillsLoader {
         return stripFrontmatter(content);
     }
 
+    /**
+     * List all resource files in a skill directory (everything except SKILL.md).
+     */
+    listSkillResources(name) {
+        const skillDir = this._resolveSkillDir(name);
+        if (!skillDir) return [];
+
+        const results = [];
+        const walk = (dir, prefix = '') => {
+            let entries;
+            try {
+                entries = fs.readdirSync(dir, { withFileTypes: true });
+            } catch {
+                return;
+            }
+            for (const entry of entries) {
+                const relPath = prefix ? `${prefix}/${entry.name}` : entry.name;
+                if (entry.isDirectory()) {
+                    walk(path.join(dir, entry.name), relPath);
+                } else if (entry.name !== 'SKILL.md') {
+                    try {
+                        const stat = fs.statSync(path.join(dir, entry.name));
+                        results.push({ path: relPath, size: stat.size });
+                    } catch {
+                        results.push({ path: relPath, size: 0 });
+                    }
+                }
+            }
+        };
+        walk(skillDir);
+        return results;
+    }
+
+    /**
+     * Load a specific resource file from a skill directory.
+     * Returns null if not found or path is invalid.
+     */
+    loadSkillResource(name, resourcePath) {
+        const skillDir = this._resolveSkillDir(name);
+        if (!skillDir) return null;
+
+        const resolved = path.resolve(skillDir, resourcePath);
+        // Security: prevent path traversal
+        if (!resolved.startsWith(skillDir + path.sep) && resolved !== skillDir) return null;
+
+        if (!fs.existsSync(resolved) || fs.statSync(resolved).isDirectory()) return null;
+
+        try {
+            return fs.readFileSync(resolved, 'utf8');
+        } catch {
+            return null;
+        }
+    }
+
+    /**
+     * Check if a skill is enabled (default: true).
+     */
+    isSkillEnabled(name) {
+        const config = reloadConfigJson();
+        return config?.skills?.[name]?.enabled !== false;
+    }
+
+    /**
+     * Set a skill's enabled/disabled state.
+     */
+    setSkillEnabled(name, enabled) {
+        const config = reloadConfigJson() ?? {};
+        const skillsConfig = config.skills ?? {};
+        if (!skillsConfig[name]) skillsConfig[name] = {};
+        skillsConfig[name].enabled = enabled;
+        updateConfigSection('skills', skillsConfig);
+    }
+
     buildSkillsSummary() {
         const allSkills = this.listSkills(false);
         if (allSkills.length === 0) return '';
@@ -201,6 +288,11 @@ class SkillsLoader {
             const meta = this.getSkillMetadata(s.name) ?? {};
             const requires = parseRequires(meta);
             const available = checkRequirements(requires);
+            const enabled = this.isSkillEnabled(s.name);
+
+            // Skip disabled skills from the prompt summary
+            if (!enabled) continue;
+
             const desc = escapeXml(meta.description ?? s.name);
 
             lines.push(`  <skill available="${available}">`);
@@ -224,11 +316,13 @@ class SkillsLoader {
         const alwaysNames = this.getAlwaysSkills();
         if (alwaysNames.length === 0) return '';
 
-        const parts = alwaysNames.map((name) => {
-            const content = this.loadSkillContent(name);
-            if (!content) return '';
-            return `### Skill: ${name}\n\n${content}`;
-        }).filter(Boolean);
+        const parts = alwaysNames
+            .filter((name) => this.isSkillEnabled(name))
+            .map((name) => {
+                const content = this.loadSkillContent(name);
+                if (!content) return '';
+                return `### Skill: ${name}\n\n${content}`;
+            }).filter(Boolean);
 
         if (parts.length === 0) return '';
         return '\n\n<active_skills>\n' + parts.join('\n\n---\n\n') + '\n</active_skills>';

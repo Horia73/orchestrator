@@ -1,18 +1,39 @@
 import express from 'express';
 import http from 'node:http';
+import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { API_PORT, GEMINI_CONTEXT_MESSAGES } from './core/config.js';
+import { API_PORT, getGeminiContextMessages } from './core/config.js';
 import { listClientAgentDefinitions, DEFAULT_AGENT_ID } from './agents/index.js';
 import { CODING_AGENT_ID } from './agents/coding/index.js';
 import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
-import { generateAssistantReplyStream, listAvailableModels, getUnsupportedLevels, generateChatTitle } from './services/geminiService.js';
+import {
+    generateAssistantReplyStream,
+    listAvailableModels,
+    getUnsupportedLevels,
+    generateChatTitle,
+    injectSteeringNote,
+    peekSteeringNotes,
+    consumeSteeringNotes,
+} from './services/geminiService.js';
 import { buildMergedModels } from '../src/config/agentModels.js';
 import { openEventsStream, broadcastEvent, updateStreamingSnapshot, getStreamingSnapshot, clearStreamingSnapshot } from './core/events.js';
 import { getCommandStatusSnapshot } from './tools/index.js';
-import { estimateUsageCost } from './pricing/usage.js';
+import { estimateUsageCost, getModelPricing } from './pricing/usage.js';
 import { appendSystemLog, clearLogs, getLogsSnapshot, initLogStorage } from './storage/logs.js';
 import { appendUsageRecord, clearUsageRecords, getUsageSnapshotByRange, initUsageStorage } from './storage/usage.js';
+import { listEditableFileSections, readEditableFile, writeEditableFile } from './storage/editableFiles.js';
+import {
+    buildUploadPartDescriptor,
+    createUploadFromBuffer,
+    createUploadFromRequestStream,
+    deleteUpload,
+    getUploadResponseHeaders,
+    initUploadStorage,
+    markUploadsCommitted,
+    readUploadMetadata,
+    resolveUpload,
+} from './storage/uploads.js';
 import {
     initStorage,
     listChats,
@@ -23,19 +44,151 @@ import {
     getRecentMessages,
     removeChat,
     updateChatTitle,
-    updateChatLastConsolidated,
 } from './storage/chats.js';
-import { getAgentConfig, normalizeAgentId, readSettings, writeSettings } from './storage/settings.js';
+import { getAgentConfig, normalizeAgentId, readSettings, writeSettings, readUiSettings, writeUiSettings } from './storage/settings.js';
 import { memoryStore } from './services/memory.js';
-import { skillsLoader } from './services/skills.js';
-import { MEMORY_CONFIG, CRON_CONFIG } from './core/config.js';
+import { skillsLoader, parseRequires, checkRequirements } from './services/skills.js';
+import { CRON_CONFIG } from './core/config.js';
 import { cronService } from './services/cron.js';
+import { MODELS_CONFIG_PATH, ORCHESTRATOR_HOME } from './core/dataPaths.js';
 
 const app = express();
-app.use(express.json({ limit: '80mb' }));
 
 const chatQueues = new Map();
 const activeGenerationsByClient = new Map();
+const steeringFollowUpsInFlight = new Set();
+
+function watchModelsConfig() {
+    let debounceTimer = null;
+
+    try {
+        fs.watch(ORCHESTRATOR_HOME, { persistent: false }, (_eventType, filename) => {
+            if (String(filename ?? '').trim() !== 'models.json') {
+                return;
+            }
+
+            clearTimeout(debounceTimer);
+            debounceTimer = setTimeout(() => {
+                broadcastEvent('models.updated', {
+                    path: MODELS_CONFIG_PATH,
+                    exists: fs.existsSync(MODELS_CONFIG_PATH),
+                });
+            }, 100);
+        });
+    } catch (error) {
+        console.warn(`[models] Failed to watch ${MODELS_CONFIG_PATH}: ${error.message}`);
+    }
+}
+
+watchModelsConfig();
+
+function decodeUploadHeaderValue(value) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+
+    try {
+        return decodeURIComponent(normalized);
+    } catch {
+        return normalized;
+    }
+}
+
+app.post('/api/uploads', async (req, res, next) => {
+    try {
+        const uploadName = decodeUploadHeaderValue(req.header('x-upload-name')) || 'attachment';
+        const uploadMimeType = decodeUploadHeaderValue(req.header('x-upload-mime-type'))
+            || req.header('content-type')
+            || 'application/octet-stream';
+
+        const upload = await createUploadFromRequestStream({
+            request: req,
+            name: uploadName,
+            mimeType: uploadMimeType,
+        });
+
+        res.json({ upload: upload.public });
+    } catch (error) {
+        if (error?.code === 'UPLOAD_TOO_LARGE' || error?.code === 'UPLOAD_EMPTY') {
+            res.status(400).json({ error: error.message });
+            return;
+        }
+        next(error);
+    }
+});
+
+app.delete('/api/uploads/:uploadId', async (req, res, next) => {
+    try {
+        const removed = await deleteUpload(req.params?.uploadId, { allowCommitted: false });
+        if (!removed) {
+            res.status(404).json({ error: 'Upload not found.' });
+            return;
+        }
+
+        res.json({ ok: true });
+    } catch (error) {
+        if (error?.code === 'UPLOAD_ALREADY_COMMITTED') {
+            res.status(409).json({ error: error.message });
+            return;
+        }
+        if (error?.code === 'UPLOAD_INVALID_ID') {
+            res.status(400).json({ error: error.message });
+            return;
+        }
+        next(error);
+    }
+});
+
+app.get('/api/uploads/:uploadId/content', async (req, res, next) => {
+    try {
+        const { metadata, absolutePath } = await resolveUpload(req.params?.uploadId);
+        const stats = await fs.promises.stat(absolutePath);
+        const headers = getUploadResponseHeaders(metadata);
+        const range = String(req.headers.range ?? '').trim();
+
+        if (range) {
+            const match = /^bytes=(\d*)-(\d*)$/i.exec(range);
+            if (!match) {
+                res.status(416).set('Content-Range', `bytes */${stats.size}`).end();
+                return;
+            }
+
+            const start = match[1] ? Number(match[1]) : 0;
+            const end = match[2] ? Number(match[2]) : (stats.size - 1);
+            if (!Number.isFinite(start) || !Number.isFinite(end) || start < 0 || end < start || end >= stats.size) {
+                res.status(416).set('Content-Range', `bytes */${stats.size}`).end();
+                return;
+            }
+
+            res.writeHead(206, {
+                ...headers,
+                'Content-Length': end - start + 1,
+                'Content-Range': `bytes ${start}-${end}/${stats.size}`,
+            });
+            fs.createReadStream(absolutePath, { start, end }).pipe(res);
+            return;
+        }
+
+        res.writeHead(200, {
+            ...headers,
+            'Content-Length': stats.size,
+        });
+        fs.createReadStream(absolutePath).pipe(res);
+    } catch (error) {
+        if (error?.code === 'UPLOAD_NOT_FOUND') {
+            res.status(404).json({ error: error.message });
+            return;
+        }
+        if (error?.code === 'UPLOAD_INVALID_ID') {
+            res.status(400).json({ error: error.message });
+            return;
+        }
+        next(error);
+    }
+});
+
+app.use(express.json({ limit: '10mb' }));
 
 
 function createMessageId() {
@@ -44,10 +197,10 @@ function createMessageId() {
 
 function formatGeminiError(error) {
     if (error instanceof Error && error.message) {
-        return `Gemini error: ${error.message}`;
+        return `AI error: ${error.message}`;
     }
 
-    return 'Gemini error: Request failed.';
+    return 'AI error: Request failed.';
 }
 
 function normalizeMessageText(value) {
@@ -100,8 +253,8 @@ function resolveRuntimeAgentForMessage({ chatAgentId, text, attachments }) {
 }
 
 const MAX_MESSAGE_ATTACHMENTS = 16;
-const MAX_ATTACHMENT_BYTES = 50 * 1024 * 1024;
-const MAX_TOTAL_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024;
+const MAX_TOTAL_ATTACHMENT_BYTES = 2 * 1024 * 1024 * 1024;
 
 function normalizeAttachmentMimeType(value) {
     const normalized = String(value ?? '').trim().toLowerCase();
@@ -120,7 +273,7 @@ function normalizeAttachmentName(value, index) {
     return `${normalized.slice(0, 217)}...`;
 }
 
-function normalizeIncomingAttachments(value) {
+async function normalizeIncomingAttachments(value) {
     if (value === undefined || value === null) {
         return [];
     }
@@ -142,36 +295,62 @@ function normalizeIncomingAttachments(value) {
             continue;
         }
 
-        const rawDataValue = String(rawAttachment.data ?? '').trim();
-        if (!rawDataValue) {
-            continue;
+        let uploadDescriptor = null;
+        const uploadId = String(rawAttachment.uploadId ?? '').trim();
+        if (uploadId) {
+            const metadata = await readUploadMetadata(uploadId);
+            if (!metadata) {
+                throw new Error(`Attachment "${normalizeAttachmentName(rawAttachment.name, index)}" was not found.`);
+            }
+            const descriptor = buildUploadPartDescriptor(metadata);
+            uploadDescriptor = {
+                uploadId: descriptor.uploadId,
+                name: descriptor.displayName,
+                mimeType: descriptor.mimeType,
+                sizeBytes: descriptor.sizeBytes,
+                fileUri: descriptor.fileUri,
+            };
+        } else {
+            const rawDataValue = String(rawAttachment.data ?? '').trim();
+            if (!rawDataValue) {
+                continue;
+            }
+
+            const data = rawDataValue.startsWith('data:')
+                ? rawDataValue.slice(rawDataValue.indexOf(',') + 1).trim()
+                : rawDataValue;
+
+            const bytes = Buffer.from(data, 'base64');
+            if (bytes.length === 0) {
+                throw new Error(`Attachment ${index + 1} is empty or not valid base64.`);
+            }
+
+            const createdUpload = await createUploadFromBuffer({
+                buffer: bytes,
+                name: normalizeAttachmentName(rawAttachment.name, index),
+                mimeType: normalizeAttachmentMimeType(rawAttachment.mimeType ?? rawAttachment.type),
+            });
+
+            const descriptor = buildUploadPartDescriptor(createdUpload.metadata);
+            uploadDescriptor = {
+                uploadId: descriptor.uploadId,
+                name: descriptor.displayName,
+                mimeType: descriptor.mimeType,
+                sizeBytes: descriptor.sizeBytes,
+                fileUri: descriptor.fileUri,
+            };
         }
 
-        const data = rawDataValue.startsWith('data:')
-            ? rawDataValue.slice(rawDataValue.indexOf(',') + 1).trim()
-            : rawDataValue;
-
-        const bytes = Buffer.from(data, 'base64');
-        if (bytes.length === 0) {
-            throw new Error(`Attachment ${index + 1} is empty or not valid base64.`);
+        if (uploadDescriptor.sizeBytes > MAX_ATTACHMENT_BYTES) {
+            throw new Error(`Attachment "${uploadDescriptor.name}" is larger than 1 GB.`);
         }
 
-        if (bytes.length > MAX_ATTACHMENT_BYTES) {
-            throw new Error(`Attachment "${normalizeAttachmentName(rawAttachment.name, index)}" is larger than 50 MB.`);
-        }
-
-        totalBytes += bytes.length;
+        totalBytes += uploadDescriptor.sizeBytes;
         if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
-            throw new Error('Total attachment size exceeds 50 MB.');
+            throw new Error('Total attachment size exceeds 2 GB.');
         }
 
-        const normalizedAttachment = {
-            name: normalizeAttachmentName(rawAttachment.name, index),
-            mimeType: normalizeAttachmentMimeType(rawAttachment.mimeType ?? rawAttachment.type),
-            data,
-            sizeBytes: bytes.length,
-        };
-        normalized.push(normalizedAttachment);
+        normalized.push(uploadDescriptor);
     }
 
     return normalized;
@@ -181,10 +360,12 @@ function buildUserMessageParts({ text, attachments }) {
     const normalizedText = String(text ?? '').trim();
     const normalizedAttachments = Array.isArray(attachments) ? attachments : [];
     const parts = normalizedAttachments.map((attachment) => ({
-        inlineData: {
+        fileData: {
+            uploadId: attachment.uploadId,
+            fileUri: attachment.fileUri,
             mimeType: attachment.mimeType,
-            data: attachment.data,
             displayName: attachment.name,
+            sizeBytes: attachment.sizeBytes,
         },
     }));
 
@@ -257,6 +438,7 @@ function registerActiveGeneration(clientId, chatId) {
         clientId,
         chatId,
         stopRequested: false,
+        stopReason: '',
     };
 
     const existing = activeGenerationsByClient.get(clientId) ?? new Set();
@@ -277,7 +459,25 @@ function unregisterActiveGeneration(generation) {
     }
 }
 
-function requestStopForClient(clientId, chatId) {
+function countActiveGenerationsForClient(clientId, chatId) {
+    const existing = activeGenerationsByClient.get(clientId);
+    if (!existing || existing.size === 0) {
+        return 0;
+    }
+
+    let count = 0;
+    for (const generation of existing) {
+        if (chatId && generation.chatId !== chatId) {
+            continue;
+        }
+
+        count += 1;
+    }
+
+    return count;
+}
+
+function requestStopForClient(clientId, chatId, reason = 'user_stop') {
     const existing = activeGenerationsByClient.get(clientId);
     if (!existing || existing.size === 0) {
         return 0;
@@ -291,11 +491,37 @@ function requestStopForClient(clientId, chatId) {
 
         if (!generation.stopRequested) {
             generation.stopRequested = true;
+            generation.stopReason = reason;
             stoppedCount += 1;
         }
     }
 
     return stoppedCount;
+}
+
+function buildDeferredSteeringPrompt(notes) {
+    const normalizedNotes = (Array.isArray(notes) ? notes : [])
+        .map((note) => String(note ?? '').trim())
+        .filter(Boolean);
+    if (normalizedNotes.length === 0) {
+        return '';
+    }
+
+    if (normalizedNotes.length === 1) {
+        return [
+            'A user sent the following steering note during your previous response and it has not been addressed yet.',
+            'Continue from the current conversation state and address it directly.',
+            '',
+            normalizedNotes[0],
+        ].join('\n');
+    }
+
+    return [
+        'A user sent the following steering notes during your previous response and they have not been addressed yet.',
+        'Continue from the current conversation state and address all of them directly without omitting anything.',
+        '',
+        normalizedNotes.map((note, index) => `${index + 1}. ${note}`).join('\n'),
+    ].join('\n');
 }
 
 async function writeSystemLog({ level = 'info', source = 'system', eventType, message, data, agentId } = {}) {
@@ -454,6 +680,344 @@ async function trackUsageRequest({
     return usageRecord;
 }
 
+async function trackToolUsageRecords({
+    chatId,
+    clientId,
+    originClientId,
+    toolUsageRecords,
+    fallbackAgentId,
+    parentRequestId,
+    fallbackCreatedAt,
+} = {}) {
+    for (const toolUsage of toolUsageRecords) {
+        if (!toolUsage || typeof toolUsage !== 'object') {
+            continue;
+        }
+
+        const toolUsageMetadata = toolUsage.usageMetadata && typeof toolUsage.usageMetadata === 'object'
+            ? toolUsage.usageMetadata
+            : null;
+        const toolModel = String(toolUsage.model ?? '').trim();
+        if (!toolModel && !toolUsageMetadata) {
+            continue;
+        }
+
+        const toolName = String(toolUsage.toolName ?? '').trim();
+        await trackUsageRequest({
+            chatId,
+            clientId,
+            status: normalizeUsageStatus(toolUsage.status),
+            agentId: String(toolUsage.agentId ?? '').trim() || fallbackAgentId,
+            model: toolModel,
+            inputText: normalizeUsageText(
+                toolUsage.inputText,
+                toolName ? `[tool:${toolName}]` : '[tool]',
+            ),
+            outputText: normalizeUsageText(toolUsage.outputText),
+            createdAt: normalizeUsageCreatedAt(toolUsage.createdAt, fallbackCreatedAt),
+            usageMetadata: toolUsageMetadata,
+            originClientId,
+            source: normalizeUsageSource(toolUsage.source, 'tool'),
+            parentRequestId,
+            toolName,
+            toolCallId: String(toolUsage.toolCallId ?? '').trim(),
+        });
+    }
+}
+
+async function generateStreamingAssistantTurn({
+    chat,
+    clientId,
+    originClientId = clientId,
+    runtimeAgentId,
+    usageAgentId,
+    usageInputText,
+    historyWithLatestUserTurn,
+} = {}) {
+    const aiMessageId = createMessageId();
+    const aiMessageCreatedAt = Date.now();
+    let streamedAssistantText = '';
+    let streamedAssistantThought = '';
+    let streamedAssistantParts = [];
+    let streamedAssistantSteps = [];
+    let assistantText = '';
+    let usageMetadata = null;
+    let modelForUsage = getAgentConfig(runtimeAgentId).model;
+    let requestStatus = 'completed';
+    let toolUsageRecords = [];
+
+    broadcastEvent('message.streaming', {
+        chatId: chat.id,
+        streamState: 'streaming',
+        message: {
+            id: aiMessageId,
+            chatId: chat.id,
+            role: 'ai',
+            text: '',
+            thought: '',
+            parts: [],
+            steps: [],
+            createdAt: aiMessageCreatedAt,
+        },
+        originClientId,
+    });
+
+    const activeGeneration = registerActiveGeneration(clientId, chat.id);
+    try {
+        const streamResult = await generateAssistantReplyStream(historyWithLatestUserTurn, {
+            chatId: chat.id,
+            messageId: aiMessageId,
+            clientId,
+            onUpdate: async ({ text, thought, parts, steps }) => {
+                streamedAssistantText = text;
+                streamedAssistantThought = thought;
+                streamedAssistantParts = Array.isArray(parts) ? parts : streamedAssistantParts;
+                streamedAssistantSteps = Array.isArray(steps) ? steps : streamedAssistantSteps;
+                const messageSnapshot = {
+                    id: aiMessageId,
+                    chatId: chat.id,
+                    role: 'ai',
+                    text,
+                    thought,
+                    parts: streamedAssistantParts,
+                    steps: streamedAssistantSteps,
+                    createdAt: aiMessageCreatedAt,
+                };
+                updateStreamingSnapshot(chat.id, { message: messageSnapshot });
+                broadcastEvent('message.streaming', {
+                    chatId: chat.id,
+                    streamState: 'streaming',
+                    message: messageSnapshot,
+                    originClientId,
+                });
+            },
+            shouldStop: () => activeGeneration.stopRequested,
+            agentId: runtimeAgentId,
+        });
+
+        usageMetadata = streamResult.usageMetadata ?? null;
+        modelForUsage = String(streamResult.model ?? modelForUsage).trim() || modelForUsage;
+        toolUsageRecords = Array.isArray(streamResult.toolUsageRecords)
+            ? streamResult.toolUsageRecords
+            : [];
+        assistantText = String(streamResult.text ?? '').trim();
+        if (streamResult.stopped) {
+            requestStatus = 'stopped';
+            if (!assistantText) {
+                assistantText = 'Stopped.';
+            } else if (!assistantText.endsWith('Stopped.')) {
+                assistantText = `${assistantText}\n\nStopped.`;
+            }
+        } else if (!assistantText) {
+            assistantText = 'No text response was returned by Gemini.';
+        }
+        streamedAssistantThought = streamResult.thought;
+        streamedAssistantParts = Array.isArray(streamResult.parts)
+            ? streamResult.parts
+            : streamedAssistantParts;
+        streamedAssistantSteps = Array.isArray(streamResult.steps)
+            ? streamResult.steps
+            : streamedAssistantSteps;
+
+        broadcastEvent('message.streaming', {
+            chatId: chat.id,
+            streamState: 'complete',
+            message: {
+                id: aiMessageId,
+                chatId: chat.id,
+                role: 'ai',
+                text: assistantText,
+                thought: streamedAssistantThought,
+                parts: streamedAssistantParts,
+                steps: streamedAssistantSteps,
+                createdAt: aiMessageCreatedAt,
+            },
+            originClientId,
+        });
+    } catch (error) {
+        requestStatus = 'error';
+        const formattedError = formatGeminiError(error);
+        assistantText = streamedAssistantText
+            ? `${streamedAssistantText}\n\n${formattedError}`
+            : formattedError;
+        void writeSystemLog({
+            level: 'error',
+            source: 'gemini',
+            eventType: 'generation.failed',
+            message: formattedError,
+            agentId: runtimeAgentId,
+            data: {
+                chatId: chat.id,
+                clientId,
+                agentId: runtimeAgentId,
+            },
+        }).catch(() => undefined);
+
+        broadcastEvent('message.streaming', {
+            chatId: chat.id,
+            streamState: 'complete',
+            message: {
+                id: aiMessageId,
+                chatId: chat.id,
+                role: 'ai',
+                text: assistantText,
+                thought: streamedAssistantThought,
+                parts: streamedAssistantParts,
+                steps: streamedAssistantSteps,
+                createdAt: aiMessageCreatedAt,
+            },
+            originClientId,
+        });
+    } finally {
+        unregisterActiveGeneration(activeGeneration);
+        clearStreamingSnapshot(chat.id);
+    }
+
+    const shouldPersistAiMessage = Boolean(
+        assistantText
+        || String(streamedAssistantThought ?? '').trim()
+        || (Array.isArray(streamedAssistantParts) && streamedAssistantParts.length > 0)
+        || (Array.isArray(streamedAssistantSteps) && streamedAssistantSteps.length > 0),
+    );
+    let finalChat = chat;
+    let appendedAiMessage = null;
+
+    if (shouldPersistAiMessage) {
+        const appendedAi = await appendMessage(chat.id, {
+            id: aiMessageId,
+            role: 'ai',
+            text: assistantText,
+            thought: streamedAssistantThought,
+            parts: streamedAssistantParts,
+            steps: streamedAssistantSteps,
+            createdAt: aiMessageCreatedAt,
+        });
+
+        appendedAiMessage = appendedAi.message;
+        finalChat = appendedAi.chat;
+
+        broadcastEvent('message.added', {
+            chatId: chat.id,
+            message: appendedAi.message,
+            originClientId,
+        });
+
+        broadcastEvent('chat.upsert', {
+            chat: appendedAi.chat,
+            originClientId,
+        });
+    }
+
+    const usageRecord = await trackUsageRequest({
+        chatId: chat.id,
+        clientId,
+        status: requestStatus,
+        agentId: usageAgentId,
+        model: modelForUsage,
+        inputText: usageInputText,
+        outputText: assistantText,
+        createdAt: aiMessageCreatedAt,
+        usageMetadata,
+        originClientId,
+        source: 'chat',
+    });
+
+    await trackToolUsageRecords({
+        chatId: chat.id,
+        clientId,
+        originClientId,
+        toolUsageRecords,
+        fallbackAgentId: usageAgentId,
+        parentRequestId: usageRecord.id,
+        fallbackCreatedAt: aiMessageCreatedAt,
+    });
+
+    return {
+        chat: finalChat,
+        aiMessage: appendedAiMessage,
+        assistantText,
+    };
+}
+
+function scheduleDeferredSteeringFollowUp({ chatId, clientId, originClientId = clientId } = {}) {
+    const normalizedChatId = String(chatId ?? '').trim();
+    if (!normalizedChatId || steeringFollowUpsInFlight.has(normalizedChatId)) {
+        return;
+    }
+
+    if (peekSteeringNotes(normalizedChatId).length === 0) {
+        return;
+    }
+
+    steeringFollowUpsInFlight.add(normalizedChatId);
+    void enqueueChatWork(normalizedChatId, async () => {
+        try {
+            const notes = consumeSteeringNotes(normalizedChatId);
+            if (notes.length === 0) {
+                return;
+            }
+
+            const chat = await getChat(normalizedChatId);
+            if (!chat) {
+                return;
+            }
+
+            const chatAgentId = normalizeAgentId(chat.agentId);
+            const runtimeAgentId = resolveRuntimeAgentForMessage({
+                chatAgentId,
+                text: notes.join('\n'),
+                attachments: [],
+            }).agentId;
+            const syntheticPrompt = buildDeferredSteeringPrompt(notes);
+            if (!syntheticPrompt) {
+                return;
+            }
+
+            const history = await getRecentMessages(normalizedChatId, getGeminiContextMessages());
+            const historyWithLatestUserTurn = [
+                ...history,
+                {
+                    id: createMessageId(),
+                    role: 'user',
+                    text: syntheticPrompt,
+                    createdAt: Date.now(),
+                },
+            ];
+
+            await generateStreamingAssistantTurn({
+                chat,
+                clientId,
+                originClientId,
+                runtimeAgentId,
+                usageAgentId: chatAgentId,
+                usageInputText: syntheticPrompt,
+                historyWithLatestUserTurn,
+            });
+        } catch (error) {
+            const message = formatGeminiError(error);
+            void writeSystemLog({
+                level: 'error',
+                source: 'chat',
+                eventType: 'chat.steering_follow_up_failed',
+                message,
+                data: {
+                    chatId: normalizedChatId,
+                    clientId,
+                },
+            }).catch(() => undefined);
+        } finally {
+            steeringFollowUpsInFlight.delete(normalizedChatId);
+            if (peekSteeringNotes(normalizedChatId).length > 0) {
+                scheduleDeferredSteeringFollowUp({
+                    chatId: normalizedChatId,
+                    clientId,
+                    originClientId,
+                });
+            }
+        }
+    });
+}
+
 app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
 });
@@ -486,7 +1050,8 @@ app.get('/api/agents', (_req, res) => {
 app.get('/api/settings', (_req, res) => {
     try {
         const settings = readSettings();
-        res.json({ settings });
+        const uiSettings = readUiSettings();
+        res.json({ settings, uiSettings });
     } catch {
         res.status(500).json({ error: 'Failed to read settings.' });
     }
@@ -495,7 +1060,12 @@ app.get('/api/settings', (_req, res) => {
 app.put('/api/settings', (req, res) => {
     try {
         const settings = req.body?.settings;
-        if (!settings || typeof settings !== 'object') {
+        const uiSettings = req.body?.uiSettings;
+
+        let normalizedSettings = null;
+        if (settings && typeof settings === 'object') {
+            normalizedSettings = writeSettings(settings);
+        } else if (settings !== undefined) {
             res.status(400).json({ error: 'Invalid settings payload.' });
             void writeSystemLog({
                 level: 'warn',
@@ -504,15 +1074,25 @@ app.put('/api/settings', (req, res) => {
                 message: 'Rejected invalid settings payload.',
             }).catch(() => undefined);
             return;
+        } else {
+            normalizedSettings = readSettings();
         }
-        const normalizedSettings = writeSettings(settings);
-        res.json({ ok: true, settings: normalizedSettings });
+
+        let normalizedUiSettings = null;
+        if (uiSettings && typeof uiSettings === 'object') {
+            normalizedUiSettings = writeUiSettings(uiSettings);
+        } else {
+            normalizedUiSettings = readUiSettings();
+        }
+
+        res.json({ ok: true, settings: normalizedSettings, uiSettings: normalizedUiSettings });
         void writeSystemLog({
             source: 'settings',
             eventType: 'settings.updated',
             message: 'Settings updated.',
-            data: { agents: Object.keys(normalizedSettings) },
+            data: { agents: Object.keys(normalizedSettings || {}) },
         }).catch(() => undefined);
+
     } catch {
         res.status(500).json({ error: 'Failed to save settings.' });
         void writeSystemLog({
@@ -524,14 +1104,89 @@ app.put('/api/settings', (req, res) => {
     }
 });
 
+app.get('/api/settings/editor/files', (_req, res) => {
+    try {
+        const sections = listEditableFileSections();
+        res.json({ sections });
+    } catch {
+        res.status(500).json({ error: 'Failed to list editable files.' });
+    }
+});
+
+app.get('/api/settings/editor/file', (req, res) => {
+    try {
+        const filePath = String(req.query?.path ?? '').trim();
+        const file = readEditableFile(filePath);
+        res.json({ file });
+    } catch (error) {
+        const code = error?.code;
+        if (code === 'EDITABLE_FILE_INVALID_PATH') {
+            res.status(400).json({ error: error.message });
+            return;
+        }
+        if (code === 'EDITABLE_FILE_NOT_FOUND') {
+            res.status(404).json({ error: error.message });
+            return;
+        }
+        if (code === 'EDITABLE_FILE_FORBIDDEN' || code === 'EDITABLE_FILE_BINARY') {
+            res.status(403).json({ error: error.message });
+            return;
+        }
+
+        res.status(500).json({ error: 'Failed to read editable file.' });
+    }
+});
+
+app.put('/api/settings/editor/file', (req, res) => {
+    try {
+        const filePath = String(req.body?.path ?? '').trim();
+        const content = String(req.body?.content ?? '');
+        const expectedModifiedAt = req.body?.modifiedAt;
+        const file = writeEditableFile({ filePath, content, expectedModifiedAt });
+        res.json({ ok: true, file });
+        void writeSystemLog({
+            source: 'settings',
+            eventType: 'settings.editable_file_saved',
+            message: 'Editable settings file saved.',
+            data: {
+                path: file.path,
+                kind: file.kind,
+            },
+        }).catch(() => undefined);
+    } catch (error) {
+        const code = error?.code;
+        if (code === 'EDITABLE_FILE_INVALID_PATH') {
+            res.status(400).json({ error: error.message });
+            return;
+        }
+        if (code === 'EDITABLE_FILE_NOT_FOUND') {
+            res.status(404).json({ error: error.message });
+            return;
+        }
+        if (code === 'EDITABLE_FILE_FORBIDDEN' || code === 'EDITABLE_FILE_BINARY') {
+            res.status(403).json({ error: error.message });
+            return;
+        }
+        if (code === 'EDITABLE_FILE_CONFLICT') {
+            res.status(409).json({ error: error.message });
+            return;
+        }
+
+        res.status(500).json({ error: 'Failed to save editable file.' });
+        void writeSystemLog({
+            level: 'error',
+            source: 'settings',
+            eventType: 'settings.editable_file_save_failed',
+            message: 'Failed to save editable settings file.',
+            data: { path: String(req.body?.path ?? '').trim() },
+        }).catch(() => undefined);
+    }
+});
+
 /* ---- Memory endpoints ---- */
 app.get('/api/memory', (_req, res) => {
     try {
-        res.json({
-            enabled: MEMORY_CONFIG.enabled,
-            memory: memoryStore.readLongTerm(),
-            history: memoryStore.readHistory(),
-        });
+        res.json(memoryStore.getSnapshot());
     } catch {
         res.status(500).json({ error: 'Failed to read memory.' });
     }
@@ -558,14 +1213,9 @@ app.delete('/api/memory', (_req, res) => {
     }
 });
 
-/* ---- Archive chat to memory (used on "new chat") ---- */
+/* ---- Legacy archive endpoint kept as a no-op for older clients ---- */
 app.post('/api/chats/:chatId/archive', async (req, res, next) => {
     try {
-        if (!MEMORY_CONFIG.enabled) {
-            res.json({ ok: true, skipped: true, reason: 'memory disabled' });
-            return;
-        }
-
         const { chatId } = req.params;
         const chat = await getChat(chatId);
         if (!chat) {
@@ -573,45 +1223,11 @@ app.post('/api/chats/:chatId/archive', async (req, res, next) => {
             return;
         }
 
-        const lastConsolidated = chat.lastConsolidated ?? 0;
-        const allMessages = await getChatMessages(chatId);
-        const unconsolidated = allMessages.slice(lastConsolidated);
-
-        if (unconsolidated.length === 0) {
-            res.json({ ok: true, skipped: true, reason: 'nothing to consolidate' });
-            return;
-        }
-
-        // Immediately stash last 20 messages as pending context (sync, instant).
-        // This way, if the user sends a message in a new chat before consolidation
-        // finishes, the AI still has context from the previous conversation.
-        const recentForContext = unconsolidated.slice(-20);
-        const contextLines = recentForContext.map((m) => {
-            const ts = m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 16) : '?';
-            const role = String(m.role ?? 'user').toUpperCase();
-            const text = String(m.text ?? '').slice(0, 1000);
-            return `[${ts}] ${role}: ${text}`;
-        });
-        memoryStore.setPendingContext(contextLines.join('\n'));
-
-        // Respond immediately — consolidation runs in background
-        res.json({ ok: true, consolidated: unconsolidated.length, pending: true });
-
-        // Run LLM consolidation in background
-        memoryStore.consolidate(unconsolidated).then((ok) => {
-            if (ok) {
-                updateChatLastConsolidated(chatId, allMessages.length).catch(() => undefined);
-                broadcastEvent('memory.consolidated', {});
-                void writeSystemLog({
-                    source: 'memory',
-                    eventType: 'memory.archived',
-                    message: `Archived ${unconsolidated.length} messages from chat ${chatId} into long-term memory.`,
-                }).catch(() => undefined);
-            }
-            // Clear pending context once consolidation is done (memory is now in MEMORY.md)
-            memoryStore.clearPendingContext();
-        }).catch(() => {
-            memoryStore.clearPendingContext();
+        res.json({
+            ok: true,
+            skipped: true,
+            reason: 'memory is curated explicitly by Orchestrator, not auto-archived',
+            chatId: chat.id,
         });
     } catch (error) {
         next(error);
@@ -623,18 +1239,55 @@ app.get('/api/skills', (_req, res) => {
     try {
         const skills = skillsLoader.listSkills(false).map((s) => {
             const meta = skillsLoader.getSkillMetadata(s.name) ?? {};
+            const requires = parseRequires(meta);
+            const available = checkRequirements(requires);
+            const resources = skillsLoader.listSkillResources(s.name);
             return {
                 name: s.name,
                 source: s.source,
                 description: meta.description ?? s.name,
                 always: meta.always === true,
-                available: true, // listSkills(false) includes unavailable
+                available,
+                enabled: skillsLoader.isSkillEnabled(s.name),
+                hasResources: resources.length > 0,
+                resourceCount: resources.length,
+                license: meta.license || null,
             };
         });
         res.json({ skills });
     } catch {
         res.status(500).json({ error: 'Failed to list skills.' });
     }
+});
+
+app.get('/api/skills/:name/resources', (req, res) => {
+    const name = String(req.params.name).trim();
+    const resources = skillsLoader.listSkillResources(name);
+    res.json({ name, resources });
+});
+
+app.get('/api/skills/:name/resources/*path', (req, res) => {
+    const name = String(req.params.name).trim();
+    const parsedPath = req.params.path || req.params[0] || '';
+    const resourcePath = Array.isArray(parsedPath) ? parsedPath.join('/') : parsedPath;
+    const content = skillsLoader.loadSkillResource(name, resourcePath);
+    if (content === null) {
+        res.status(404).json({ error: 'Resource not found.' });
+        return;
+    }
+    res.type('text/plain').send(content);
+});
+
+app.put('/api/skills/:name/enabled', (req, res) => {
+    const name = String(req.params.name).trim();
+    const enabled = req.body?.enabled === true;
+    skillsLoader.setSkillEnabled(name, enabled);
+    res.json({ ok: true, name, enabled });
+    void writeSystemLog({
+        source: 'skills',
+        eventType: 'skill.toggled',
+        message: `Skill "${name}" ${enabled ? 'enabled' : 'disabled'}.`,
+    }).catch(() => undefined);
 });
 
 app.get('/api/skills/:name', (req, res) => {
@@ -645,7 +1298,8 @@ app.get('/api/skills/:name', (req, res) => {
         return;
     }
     const meta = skillsLoader.getSkillMetadata(name) ?? {};
-    res.json({ name, content, metadata: meta });
+    const resources = skillsLoader.listSkillResources(name);
+    res.json({ name, content, metadata: meta, resources });
 });
 
 app.post('/api/skills/:name', (req, res) => {
@@ -755,10 +1409,14 @@ app.get('/api/models', async (_req, res) => {
     try {
         const rawModels = await listAvailableModels();
         const merged = buildMergedModels(rawModels);
+        const customPricing = getModelPricing();
+
         const enriched = merged.map((m) => {
             const raw = rawModels.find((r) => r.name === m.fullName);
+            const pricing = customPricing?.[m.id];
             return {
                 ...m,
+                ...pricing, // Override with models.json pricing if present
                 thinking: raw?.thinking ?? false,
                 unsupportedThinkingLevels: getUnsupportedLevels(m.id),
             };
@@ -903,36 +1561,6 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
         const { chatId } = req.params;
         const clientId = normalizeClientId(req.query.clientId);
 
-        // Archive unconsolidated messages to memory before deleting
-        if (MEMORY_CONFIG.enabled) {
-            try {
-                const chat = await getChat(chatId);
-                if (chat) {
-                    const lastConsolidated = chat.lastConsolidated ?? 0;
-                    const allMessages = await getChatMessages(chatId);
-                    const unconsolidated = allMessages.slice(lastConsolidated);
-                    if (unconsolidated.length > 0) {
-                        memoryStore.consolidate(unconsolidated).then((ok) => {
-                            if (ok) {
-                                broadcastEvent('memory.consolidated', {});
-                                void writeSystemLog({
-                                    source: 'memory',
-                                    eventType: 'memory.archived',
-                                    message: `Archived ${unconsolidated.length} messages from chat ${chatId} before deletion.`,
-                                }).catch(() => undefined);
-                            } else {
-                                console.warn(`[memory] Consolidation before delete failed for chat ${chatId}, proceeding with deletion`);
-                            }
-                        }).catch((memError) => {
-                            console.warn(`[memory] Error consolidating before delete for chat ${chatId}:`, memError?.message);
-                        });
-                    }
-                }
-            } catch (memError) {
-                console.warn(`[memory] Error consolidating before delete for chat ${chatId}:`, memError?.message);
-            }
-        }
-
         const removed = await removeChat(chatId);
         if (!removed) {
             res.status(404).json({ error: 'Chat not found.' });
@@ -1023,7 +1651,7 @@ app.post('/api/chat/send', async (req, res, next) => {
         const inputText = normalizeMessageText(req.body?.message);
         let attachments = [];
         try {
-            attachments = normalizeIncomingAttachments(req.body?.attachments);
+            attachments = await normalizeIncomingAttachments(req.body?.attachments);
         } catch (error) {
             const message = error instanceof Error && error.message
                 ? error.message
@@ -1041,6 +1669,7 @@ app.post('/api/chat/send', async (req, res, next) => {
         const clientMessageId = String(req.body?.clientMessageId ?? '').trim() || createMessageId();
         const requestedChatId = String(req.body?.chatId ?? '').trim();
         const requestedAgentId = normalizeAgentId(req.body?.agentId);
+        const isSteering = req.body?.isSteering === true;
 
         let chat = requestedChatId ? await getChat(requestedChatId) : null;
         let created = false;
@@ -1108,6 +1737,8 @@ app.post('/api/chat/send', async (req, res, next) => {
             attachments,
         });
         const runtimeAgentId = routingDecision.agentId;
+        const shouldDeferSteeringToActiveGeneration = isSteering
+            && countActiveGenerationsForClient(clientId, chat.id) > 0;
 
         if (routingDecision.routed) {
             void writeSystemLog({
@@ -1126,13 +1757,17 @@ app.post('/api/chat/send', async (req, res, next) => {
             }).catch(() => undefined);
         }
 
-        const result = await enqueueChatWork(chat.id, async () => {
+        if (shouldDeferSteeringToActiveGeneration) {
             const appendedUser = await appendMessage(chat.id, {
                 id: clientMessageId,
                 role: 'user',
                 text: inputText,
                 parts: userMessageParts,
             });
+            await markUploadsCommitted(
+                attachments.map((attachment) => attachment.uploadId),
+                { chatId: chat.id, messageId: appendedUser.message.id },
+            );
 
             broadcastEvent('message.added', {
                 chatId: chat.id,
@@ -1145,163 +1780,80 @@ app.post('/api/chat/send', async (req, res, next) => {
                 originClientId: clientId,
             });
 
-            const history = await getRecentMessages(chat.id, GEMINI_CONTEXT_MESSAGES + 1);
+            injectSteeringNote(chat.id, usageInputText);
 
-            const aiMessageId = createMessageId();
-            const aiMessageCreatedAt = Date.now();
-            let streamedAssistantText = '';
-            let streamedAssistantThought = '';
-            let streamedAssistantParts = [];
-            let streamedAssistantSteps = [];
-            let assistantText;
-            let usageMetadata = null;
-            let modelForUsage = getAgentConfig(runtimeAgentId).model;
-            let requestStatus = 'completed';
-            let toolUsageRecords = [];
-
-            broadcastEvent('message.streaming', {
-                chatId: chat.id,
-                message: {
-                    id: aiMessageId,
+            void writeSystemLog({
+                source: 'chat',
+                eventType: 'chat.steering_deferred',
+                message: 'Queued steering for the next reasoning boundary.',
+                data: {
                     chatId: chat.id,
-                    role: 'ai',
-                    text: '',
-                    thought: '',
-                    parts: [],
-                    steps: [],
-                    createdAt: aiMessageCreatedAt,
-                },
-                originClientId: clientId,
-            });
-
-            const activeGeneration = registerActiveGeneration(clientId, chat.id);
-            try {
-                const streamResult = await generateAssistantReplyStream(history, {
-                    chatId: chat.id,
-                    messageId: aiMessageId,
                     clientId,
-                    onUpdate: async ({ text, thought, parts, steps }) => {
-                        streamedAssistantText = text;
-                        streamedAssistantThought = thought;
-                        streamedAssistantParts = Array.isArray(parts) ? parts : streamedAssistantParts;
-                        streamedAssistantSteps = Array.isArray(steps) ? steps : streamedAssistantSteps;
-                        const messageSnapshot = {
-                            id: aiMessageId,
-                            chatId: chat.id,
-                            role: 'ai',
-                            text,
-                            thought,
-                            parts: streamedAssistantParts,
-                            steps: streamedAssistantSteps,
-                            createdAt: aiMessageCreatedAt,
-                        };
-                        updateStreamingSnapshot(chat.id, { message: messageSnapshot });
-                        broadcastEvent('message.streaming', {
-                            chatId: chat.id,
-                            message: messageSnapshot,
-                            originClientId: clientId,
-                        });
-                    },
-                    shouldStop: () => activeGeneration.stopRequested,
                     agentId: runtimeAgentId,
-                });
-                usageMetadata = streamResult.usageMetadata ?? null;
-                modelForUsage = String(streamResult.model ?? modelForUsage).trim() || modelForUsage;
-                toolUsageRecords = Array.isArray(streamResult.toolUsageRecords)
-                    ? streamResult.toolUsageRecords
-                    : [];
-                assistantText = String(streamResult.text ?? '').trim();
-                if (streamResult.stopped) {
-                    requestStatus = 'stopped';
-                    if (!assistantText) {
-                        assistantText = 'Stopped.';
-                    } else if (!assistantText.endsWith('Stopped.')) {
-                        assistantText = `${assistantText}\n\nStopped.`;
+                },
+            }).catch(() => undefined);
+
+            if (created && hasAttachments) {
+                generateChatTitle({ text: inputText, attachments }).then(generatedTitle => {
+                    if (generatedTitle) {
+                        updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
+                            if (updatedChat) {
+                                broadcastEvent('chat.upsert', {
+                                    chat: updatedChat,
+                                    originClientId: clientId,
+                                });
+                            }
+                        }).catch(() => undefined);
                     }
-                } else if (!assistantText) {
-                    assistantText = 'No text response was returned by Gemini.';
-                }
-                streamedAssistantThought = streamResult.thought;
-                streamedAssistantParts = Array.isArray(streamResult.parts)
-                    ? streamResult.parts
-                    : streamedAssistantParts;
-                streamedAssistantSteps = Array.isArray(streamResult.steps)
-                    ? streamResult.steps
-                    : streamedAssistantSteps;
-
-                // Ensure the final streaming frame contains per-step snapshots.
-                broadcastEvent('message.streaming', {
-                    chatId: chat.id,
-                    message: {
-                        id: aiMessageId,
-                        chatId: chat.id,
-                        role: 'ai',
-                        text: assistantText,
-                        thought: streamedAssistantThought,
-                        parts: streamedAssistantParts,
-                        steps: streamedAssistantSteps,
-                        createdAt: aiMessageCreatedAt,
-                    },
-                    originClientId: clientId,
-                });
-            } catch (error) {
-                requestStatus = 'error';
-                const formattedError = formatGeminiError(error);
-                assistantText = streamedAssistantText
-                    ? `${streamedAssistantText}\n\n${formattedError}`
-                    : formattedError;
-                void writeSystemLog({
-                    level: 'error',
-                    source: 'gemini',
-                    eventType: 'generation.failed',
-                    message: formattedError,
-                    agentId: runtimeAgentId,
-                    data: {
-                        chatId: chat.id,
-                        clientId,
-                        agentId: runtimeAgentId,
-                    },
                 }).catch(() => undefined);
-
-                broadcastEvent('message.streaming', {
-                    chatId: chat.id,
-                    message: {
-                        id: aiMessageId,
-                        chatId: chat.id,
-                        role: 'ai',
-                        text: assistantText,
-                        thought: streamedAssistantThought,
-                        parts: streamedAssistantParts,
-                        steps: streamedAssistantSteps,
-                        createdAt: aiMessageCreatedAt,
-                    },
-                    originClientId: clientId,
-                });
-            } finally {
-                unregisterActiveGeneration(activeGeneration);
-                clearStreamingSnapshot(chat.id);
             }
 
-            const appendedAi = await appendMessage(chat.id, {
-                id: aiMessageId,
-                role: 'ai',
-                text: assistantText,
-                thought: streamedAssistantThought,
-                parts: streamedAssistantParts,
-                steps: streamedAssistantSteps,
-                createdAt: aiMessageCreatedAt,
+            res.json({
+                chat: appendedUser.chat,
+                userMessage: appendedUser.message,
+                aiMessage: null,
+                created,
             });
+            return;
+        }
+
+        const result = await enqueueChatWork(chat.id, async () => {
+            const appendedUser = await appendMessage(chat.id, {
+                id: clientMessageId,
+                role: 'user',
+                text: inputText,
+                parts: userMessageParts,
+            });
+            await markUploadsCommitted(
+                attachments.map((attachment) => attachment.uploadId),
+                { chatId: chat.id, messageId: appendedUser.message.id },
+            );
 
             broadcastEvent('message.added', {
                 chatId: chat.id,
-                message: appendedAi.message,
+                message: appendedUser.message,
                 originClientId: clientId,
             });
 
             broadcastEvent('chat.upsert', {
-                chat: appendedAi.chat,
+                chat: appendedUser.chat,
                 originClientId: clientId,
             });
+
+            const history = await getRecentMessages(chat.id, getGeminiContextMessages() + 1);
+
+            const assistantResult = await generateStreamingAssistantTurn({
+                chat: appendedUser.chat,
+                clientId,
+                originClientId: clientId,
+                runtimeAgentId,
+                usageAgentId: chatAgentId,
+                usageInputText,
+                historyWithLatestUserTurn: history,
+            });
+            let finalChat = assistantResult.chat;
+            const appendedAiMessage = assistantResult.aiMessage;
+            const assistantText = assistantResult.assistantText;
 
             if (created && hasAttachments) {
                 generateChatTitle({ text: inputText, attachments, aiText: assistantText }).then(generatedTitle => {
@@ -1317,87 +1869,16 @@ app.post('/api/chat/send', async (req, res, next) => {
                     }
                 }).catch(() => undefined);
             }
-
-            const usageRecord = await trackUsageRequest({
+            scheduleDeferredSteeringFollowUp({
                 chatId: chat.id,
                 clientId,
-                status: requestStatus,
-                agentId: chatAgentId,
-                model: modelForUsage,
-                inputText: usageInputText,
-                outputText: assistantText,
-                createdAt: aiMessageCreatedAt,
-                usageMetadata,
                 originClientId: clientId,
-                source: 'chat',
             });
 
-            for (const toolUsage of toolUsageRecords) {
-                if (!toolUsage || typeof toolUsage !== 'object') {
-                    continue;
-                }
-
-                const toolUsageMetadata = toolUsage.usageMetadata && typeof toolUsage.usageMetadata === 'object'
-                    ? toolUsage.usageMetadata
-                    : null;
-                const toolModel = String(toolUsage.model ?? '').trim();
-                if (!toolModel && !toolUsageMetadata) {
-                    continue;
-                }
-
-                const toolName = String(toolUsage.toolName ?? '').trim();
-                await trackUsageRequest({
-                    chatId: chat.id,
-                    clientId,
-                    status: normalizeUsageStatus(toolUsage.status),
-                    agentId: String(toolUsage.agentId ?? '').trim() || chatAgentId,
-                    model: toolModel,
-                    inputText: normalizeUsageText(
-                        toolUsage.inputText,
-                        toolName ? `[tool:${toolName}]` : '[tool]',
-                    ),
-                    outputText: normalizeUsageText(toolUsage.outputText),
-                    createdAt: normalizeUsageCreatedAt(toolUsage.createdAt, aiMessageCreatedAt),
-                    usageMetadata: toolUsageMetadata,
-                    originClientId: clientId,
-                    source: normalizeUsageSource(toolUsage.source, 'tool'),
-                    parentRequestId: usageRecord.id,
-                    toolName,
-                    toolCallId: String(toolUsage.toolCallId ?? '').trim(),
-                });
-            }
-
-            // Trigger memory consolidation in background when unconsolidated count exceeds window
-            if (MEMORY_CONFIG.enabled && !memoryStore.isConsolidating) {
-                const freshChat = await getChat(chat.id);
-                const lastConsolidated = freshChat?.lastConsolidated ?? 0;
-                const unconsolidatedCount = (freshChat?.messageCount ?? 0) - lastConsolidated;
-
-                if (unconsolidatedCount >= MEMORY_CONFIG.window) {
-                    const allMessages = await getChatMessages(chat.id);
-                    const halfWindow = Math.floor(MEMORY_CONFIG.window / 2);
-                    const messagesToConsolidate = allMessages.slice(lastConsolidated, -halfWindow);
-                    if (messagesToConsolidate.length > 0) {
-                        const newPointer = allMessages.length - halfWindow;
-                        memoryStore.consolidate(messagesToConsolidate).then((ok) => {
-                            if (ok) {
-                                updateChatLastConsolidated(chat.id, newPointer).catch(() => undefined);
-                                broadcastEvent('memory.consolidated', {});
-                                void writeSystemLog({
-                                    source: 'memory',
-                                    eventType: 'memory.consolidated',
-                                    message: `Consolidated ${messagesToConsolidate.length} messages into long-term memory (pointer: ${lastConsolidated} → ${newPointer}).`,
-                                }).catch(() => undefined);
-                            }
-                        }).catch(() => undefined);
-                    }
-                }
-            }
-
             return {
-                chat: appendedAi.chat,
+                chat: finalChat,
                 userMessage: appendedUser.message,
-                aiMessage: appendedAi.message,
+                aiMessage: appendedAiMessage,
             };
         });
 
@@ -1468,7 +1949,7 @@ async function handleCronJob(job) {
 
         const chatAgentId = normalizeAgentId(chat.agentId);
         const runtimeAgentId = chatAgentId;
-        const history = await getRecentMessages(chatId, GEMINI_CONTEXT_MESSAGES + 1);
+        const history = await getRecentMessages(chatId, getGeminiContextMessages() + 1);
 
         const aiMessageId = createMessageId();
         const aiMessageCreatedAt = Date.now();
@@ -1482,6 +1963,7 @@ async function handleCronJob(job) {
 
         broadcastEvent('message.streaming', {
             chatId,
+            streamState: 'streaming',
             message: { id: aiMessageId, chatId, role: 'ai', text: '', thought: '', parts: [], steps: [], createdAt: aiMessageCreatedAt },
             originClientId: cronClientId,
         });
@@ -1498,6 +1980,7 @@ async function handleCronJob(job) {
                     streamedSteps = Array.isArray(steps) ? steps : streamedSteps;
                     broadcastEvent('message.streaming', {
                         chatId,
+                        streamState: 'streaming',
                         message: { id: aiMessageId, chatId, role: 'ai', text, thought, parts: streamedParts, steps: streamedSteps, createdAt: aiMessageCreatedAt },
                         originClientId: cronClientId,
                     });
@@ -1518,6 +2001,13 @@ async function handleCronJob(job) {
                 ? `${assistantText}\n\n${formatGeminiError(error)}`
                 : formatGeminiError(error);
         }
+
+        broadcastEvent('message.streaming', {
+            chatId,
+            streamState: 'complete',
+            message: { id: aiMessageId, chatId, role: 'ai', text: assistantText, thought: streamedThought, parts: streamedParts, steps: streamedSteps, createdAt: aiMessageCreatedAt },
+            originClientId: cronClientId,
+        });
 
         const appendedAi = await appendMessage(chatId, {
             id: aiMessageId,
@@ -1558,6 +2048,7 @@ async function handleCronJob(job) {
 
 async function start() {
     await initStorage();
+    await initUploadStorage();
     await initUsageStorage();
     await initLogStorage();
 

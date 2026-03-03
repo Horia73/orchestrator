@@ -131,25 +131,30 @@ export async function execute({ task, context, file_paths, attachments }) {
             files: filesData,
             attachments: allAttachments,
             previousTurns,
+            spawnDepth: contextData?.spawnDepth ?? 0,
         });
 
         const usageMetadata = result.usageMetadata && typeof result.usageMetadata === 'object'
             ? result.usageMetadata
             : null;
+        const wasStopped = result?.stopped === true || String(result?.stopReason ?? '').trim().length > 0;
+        const toolStatus = wasStopped
+            ? 'stopped'
+            : (result.ok !== false ? 'completed' : 'error');
 
         return {
-            ok: result.ok !== false,
-            status: result.ok !== false ? 'completed' : 'error',
+            ok: toolStatus !== 'error',
+            status: toolStatus,
             model: result.model,
             agentThought: result.thought || '',
             text: result.text || '',
-            parts: result.parts || [],
-            steps: result.steps || [],
+            stopReason: wasStopped ? (result.stopReason || 'stopped') : undefined,
             fileCount: filesData.length,
             attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
+            _usageRecords: Array.isArray(result.toolUsageRecords) ? result.toolUsageRecords : [],
             _usage: {
                 model: result.model,
-                status: result.ok !== false ? 'completed' : 'error',
+                status: toolStatus,
                 agentId: CODING_AGENT_ID,
                 inputText: taskText,
                 outputText: result.text || '',

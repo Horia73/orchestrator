@@ -7,6 +7,7 @@ import {
     CHAT_INDEX_PATH,
     CHAT_MESSAGES_DIR,
 } from '../core/dataPaths.js';
+import { deleteUploads } from './uploads.js';
 const CHATS_DIR = CHAT_MESSAGES_DIR;
 const INDEX_PATH = CHAT_INDEX_PATH;
 
@@ -79,6 +80,19 @@ function normalizeMessagePart(part) {
     }
 
     return Object.keys(normalized).length > 0 ? normalized : null;
+}
+
+function collectUploadIdsFromParts(parts, into) {
+    if (!Array.isArray(parts)) {
+        return;
+    }
+
+    for (const part of parts) {
+        const uploadId = String(part?.fileData?.uploadId ?? '').trim();
+        if (uploadId) {
+            into.add(uploadId);
+        }
+    }
 }
 
 function normalizeMessageParts(parts) {
@@ -234,6 +248,13 @@ async function appendLine(filePath, payload) {
     await fs.appendFile(filePath, `${JSON.stringify(payload)}\n`, 'utf8');
 }
 
+async function rewriteJsonLines(filePath, payloads) {
+    const serialized = Array.isArray(payloads) && payloads.length > 0
+        ? `${payloads.map((payload) => JSON.stringify(payload)).join('\n')}\n`
+        : '';
+    await fs.writeFile(filePath, serialized, 'utf8');
+}
+
 async function readJsonLines(filePath) {
     try {
         const raw = await fs.readFile(filePath, 'utf8');
@@ -342,6 +363,95 @@ export async function appendMessage(chatId, payload) {
     };
 }
 
+function normalizePersistedMessage(chatId, payload) {
+    const normalizedParts = normalizeMessageParts(payload.parts);
+    const normalizedSteps = normalizeMessageSteps(payload.steps);
+    const message = {
+        id: String(payload.id ?? createMessageId()).trim() || createMessageId(),
+        chatId,
+        role: payload.role,
+        text: String(payload.text ?? ''),
+        thought: String(payload.thought ?? ''),
+        createdAt: payload.createdAt ?? Date.now(),
+    };
+
+    if (normalizedParts) {
+        message.parts = normalizedParts;
+    }
+
+    if (normalizedSteps) {
+        message.steps = normalizedSteps;
+    }
+
+    return message;
+}
+
+export async function updateMessage(chatId, messageId, updater) {
+    await ensureInitialized();
+
+    const chatIdx = findChatIndex(chatId);
+    if (chatIdx === -1) {
+        throw new Error(`Chat "${chatId}" was not found.`);
+    }
+
+    const normalizedMessageId = String(messageId ?? '').trim();
+    if (!normalizedMessageId) {
+        throw new Error('messageId is required.');
+    }
+
+    const filePath = getChatFilePath(chatId);
+    const messages = await readJsonLines(filePath);
+    const messageIndex = messages.findIndex((message) => String(message?.id ?? '').trim() === normalizedMessageId);
+    if (messageIndex === -1) {
+        return null;
+    }
+
+    const currentMessage = messages[messageIndex];
+    const nextValue = typeof updater === 'function'
+        ? await updater(currentMessage)
+        : updater;
+
+    if (!nextValue || typeof nextValue !== 'object') {
+        return null;
+    }
+
+    const nextMessage = normalizePersistedMessage(chatId, {
+        ...currentMessage,
+        ...nextValue,
+        id: currentMessage.id,
+        chatId,
+        role: nextValue.role ?? currentMessage.role,
+        createdAt: nextValue.createdAt ?? currentMessage.createdAt,
+    });
+
+    messages[messageIndex] = nextMessage;
+    await rewriteJsonLines(filePath, messages);
+
+    const currentChat = state.chats[chatIdx];
+    const lastMessage = messages[messages.length - 1] ?? null;
+    const updated = {
+        ...currentChat,
+        updatedAt: Math.max(
+            Number(currentChat.updatedAt) || 0,
+            Number(nextMessage.createdAt) || 0,
+        ),
+        lastMessagePreview: (
+            lastMessage?.role === 'ai'
+                ? truncatePreview(lastMessage.text)
+                : currentChat.lastMessagePreview
+        ),
+    };
+
+    state.chats[chatIdx] = updated;
+    state.chats = sortChats(state.chats);
+    await persistIndex();
+
+    return {
+        message: nextMessage,
+        chat: updated,
+    };
+}
+
 export async function getChatMessages(chatId) {
     await ensureInitialized();
     return readJsonLines(getChatFilePath(chatId));
@@ -368,7 +478,19 @@ export async function removeChat(chatId) {
     await persistIndex();
 
     const chatPath = getChatFilePath(chatId);
+    const messages = await readJsonLines(chatPath);
+    const uploadIds = new Set();
+    for (const message of messages) {
+        collectUploadIdsFromParts(message?.parts, uploadIds);
+        if (Array.isArray(message?.steps)) {
+            for (const step of message.steps) {
+                collectUploadIdsFromParts(step?.parts, uploadIds);
+            }
+        }
+    }
+
     await fs.rm(chatPath, { force: true });
+    await deleteUploads([...uploadIds], { allowCommitted: true });
     return true;
 }
 

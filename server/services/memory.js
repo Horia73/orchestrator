@@ -1,268 +1,340 @@
-/**
- * Two-layer memory system:
- * - MEMORY.md: long-term facts, always injected into system prompt
- * - HISTORY.md: timestamped event log, grep-searchable
- *
- * Consolidation runs automatically when the message window fills up.
- * Uses a Gemini function-call to extract structured memory from old messages.
- */
 import fs from 'node:fs';
-import { GoogleGenAI } from '@google/genai';
-import { GEMINI_API_KEY, MEMORY_CONFIG } from '../core/config.js';
-import { MEMORY_DIR, MEMORY_PATH, HISTORY_PATH } from '../core/dataPaths.js';
+import path from 'node:path';
+import {
+    DAILY_MEMORY_DIR,
+    IDENTITY_MEMORY_PATH,
+    INTEGRATIONS_MEMORY_PATH,
+    MEMORY_DIR,
+    MEMORY_PATH,
+    SECRETS_ENV_PATH,
+    SECRETS_DIR,
+    SOUL_MEMORY_PATH,
+    USER_MEMORY_PATH,
+} from '../core/dataPaths.js';
+
+const RECENT_DAILY_DAYS = 2;
+
+const FILE_TEMPLATES = Object.freeze({
+    permanent: '# Permanent Memory\n\n',
+    user: '# User\n\n',
+    identity: '# Identity\n\n',
+    soul: '# Soul\n\n',
+    integrations: '# Integrations\n\n',
+    secretEnv: [
+        '# Sensitive values only. Loaded automatically into process.env.',
+        '# Keep raw tokens, passwords, API keys, and login secrets here.',
+        '# Example:',
+        '# GEMINI_API_KEY=your_key_here',
+        '# HOME_ASSISTANT_TOKEN=your_token_here',
+        '',
+    ].join('\n'),
+});
+
+function normalizeText(value) {
+    return String(value ?? '').replace(/\r\n/g, '\n');
+}
+
+function normalizeComparable(value) {
+    return normalizeText(value).trim();
+}
 
 function ensureDir(dirPath) {
-    if (!fs.existsSync(dirPath)) {
-        fs.mkdirSync(dirPath, { recursive: true });
-    }
+    fs.mkdirSync(dirPath, { recursive: true });
 }
 
-// ─── Save Memory Tool Definition (for consolidation agent) ──────────────────
-
-const SAVE_MEMORY_TOOL = [{
-    functionDeclarations: [{
-        name: 'save_memory',
-        description: 'Save the memory consolidation result to persistent storage.',
-        parameters: {
-            type: 'OBJECT',
-            properties: {
-                history_entry: {
-                    type: 'STRING',
-                    description: 'A paragraph (2-5 sentences) summarizing key events/decisions/topics. Start with [YYYY-MM-DD HH:MM]. Include detail useful for grep search.',
-                },
-                memory_update: {
-                    type: 'STRING',
-                    description: 'Full updated long-term memory as markdown. Include all existing facts plus new ones. Return unchanged if nothing new.',
-                },
-            },
-            required: ['history_entry', 'memory_update'],
-        },
-    }],
-}];
-
-// ─── Tool info extraction for consolidation ────────────────────────────────
-
-function extractToolInfo(message) {
-    const allParts = [];
-
-    // Collect parts from top-level and steps
-    if (Array.isArray(message.parts)) {
-        allParts.push(...message.parts);
-    }
-    if (Array.isArray(message.steps)) {
-        for (const step of message.steps) {
-            if (Array.isArray(step.parts)) {
-                allParts.push(...step.parts);
-            }
-        }
+function ensureFile(filePath, defaultContent) {
+    if (fs.existsSync(filePath)) {
+        return;
     }
 
-    if (allParts.length === 0) return '';
-
-    const toolNames = new Set();
-    const summaries = [];
-
-    for (const part of allParts) {
-        if (part.functionCall) {
-            toolNames.add(part.functionCall.name);
-        }
-        if (part.functionResponse) {
-            const name = part.functionResponse.name || 'unknown';
-            const resp = part.functionResponse.response;
-            if (resp && typeof resp === 'object') {
-                // Extract a short summary from the tool response
-                const summary = summarizeToolResponse(name, resp);
-                if (summary) summaries.push(summary);
-            }
-        }
-    }
-
-    if (toolNames.size === 0) return '';
-
-    const parts = [`[tools: ${[...toolNames].join(', ')}]`];
-    if (summaries.length > 0) {
-        parts.push(`[tool results: ${summaries.join('; ').slice(0, 500)}]`);
-    }
-    return parts.join(' ');
+    ensureDir(path.dirname(filePath));
+    fs.writeFileSync(filePath, defaultContent, 'utf8');
 }
 
-function summarizeToolResponse(toolName, resp) {
-    // Extract the most useful bits from common tool responses
-    if (toolName === 'run_command') {
-        const cmd = resp.command || '';
-        const output = String(resp.output ?? resp.stdout ?? '').slice(0, 200);
-        return cmd ? `${cmd} → ${output}`.trim() : '';
+function readFileSafe(filePath) {
+    try {
+        if (fs.existsSync(filePath)) {
+            return fs.readFileSync(filePath, 'utf8');
+        }
+    } catch {
+        // ignore
     }
-    if (toolName === 'search_web') {
-        const answer = String(resp.answer ?? '').slice(0, 200);
-        return answer ? `web: ${answer}` : '';
-    }
-    // Generic: stringify the first 200 chars
-    const str = JSON.stringify(resp).slice(0, 200);
-    return `${toolName}: ${str}`;
+
+    return '';
 }
 
-// ─── MemoryStore ────────────────────────────────────────────────────────────
+function writeFileSafe(filePath, content) {
+    ensureDir(path.dirname(filePath));
+    fs.writeFileSync(filePath, normalizeText(content), 'utf8');
+}
+
+function formatDateKey(dateValue = new Date()) {
+    const date = new Date(dateValue);
+    const year = String(date.getFullYear());
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+    const day = String(date.getDate()).padStart(2, '0');
+    return `${year}-${month}-${day}`;
+}
+
+function buildDailyTemplate(dateKey) {
+    return `# Daily Memory ${dateKey}\n\n`;
+}
+
+function isDefaultTemplate(kind, content, options = {}) {
+    const normalized = normalizeComparable(content);
+    if (!normalized) {
+        return true;
+    }
+
+    if (kind === 'daily') {
+        return normalized === normalizeComparable(buildDailyTemplate(options.dateKey));
+    }
+
+    return normalized === normalizeComparable(FILE_TEMPLATES[kind] ?? '');
+}
+
+function escapeAttribute(value) {
+    return String(value ?? '')
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;');
+}
 
 class MemoryStore {
     constructor() {
         this.memoryDir = MEMORY_DIR;
-        this.memoryFile = MEMORY_PATH;
-        this.historyFile = HISTORY_PATH;
-        this._consolidating = false;
-        this._pendingContext = '';
+        this.dailyDir = DAILY_MEMORY_DIR;
+        this.permanentFile = MEMORY_PATH;
+        this.userFile = USER_MEMORY_PATH;
+        this.identityFile = IDENTITY_MEMORY_PATH;
+        this.soulFile = SOUL_MEMORY_PATH;
+        this.integrationsFile = INTEGRATIONS_MEMORY_PATH;
+        this.secretEnvFile = SECRETS_ENV_PATH;
+        this.secretEnvDir = SECRETS_DIR;
+    }
+
+    ensureScaffold() {
+        ensureDir(this.memoryDir);
+        ensureDir(this.dailyDir);
+        ensureDir(this.secretEnvDir);
+
+        ensureFile(this.permanentFile, FILE_TEMPLATES.permanent);
+        ensureFile(this.userFile, FILE_TEMPLATES.user);
+        ensureFile(this.identityFile, FILE_TEMPLATES.identity);
+        ensureFile(this.soulFile, FILE_TEMPLATES.soul);
+        ensureFile(this.integrationsFile, FILE_TEMPLATES.integrations);
+        ensureFile(this.secretEnvFile, FILE_TEMPLATES.secretEnv);
+
+        for (const dateKey of this.getRecentDailyDateKeys()) {
+            ensureFile(this.getDailyFilePath(dateKey), buildDailyTemplate(dateKey));
+        }
+    }
+
+    getRecentDailyDateKeys(days = RECENT_DAILY_DAYS) {
+        const results = [];
+        const base = new Date();
+
+        for (let offset = 0; offset < days; offset += 1) {
+            const dateValue = new Date(base);
+            dateValue.setDate(base.getDate() - offset);
+            results.push(formatDateKey(dateValue));
+        }
+
+        return results;
+    }
+
+    getDailyFilePath(dateValue = new Date()) {
+        const dateKey = /^\d{4}-\d{2}-\d{2}$/.test(String(dateValue ?? ''))
+            ? String(dateValue)
+            : formatDateKey(dateValue);
+        return path.join(this.dailyDir, `${dateKey}.md`);
+    }
+
+    getPaths() {
+        this.ensureScaffold();
+
+        return {
+            rootDir: this.memoryDir,
+            permanentFile: this.permanentFile,
+            userFile: this.userFile,
+            identityFile: this.identityFile,
+            soulFile: this.soulFile,
+            integrationsFile: this.integrationsFile,
+            dailyFiles: this.getRecentDailyDateKeys().map((dateKey) => ({
+                date: dateKey,
+                path: this.getDailyFilePath(dateKey),
+            })),
+            secretEnvFile: this.secretEnvFile,
+        };
     }
 
     readLongTerm() {
-        try {
-            if (fs.existsSync(this.memoryFile)) {
-                return fs.readFileSync(this.memoryFile, 'utf8');
-            }
-        } catch {
-            // ignore
-        }
-        return '';
+        this.ensureScaffold();
+        return readFileSafe(this.permanentFile);
     }
 
     writeLongTerm(content) {
-        ensureDir(this.memoryDir);
-        fs.writeFileSync(this.memoryFile, content, 'utf8');
+        this.ensureScaffold();
+        writeFileSafe(this.permanentFile, content);
     }
 
     readHistory() {
-        try {
-            if (fs.existsSync(this.historyFile)) {
-                return fs.readFileSync(this.historyFile, 'utf8');
-            }
-        } catch {
-            // ignore
-        }
-        return '';
-    }
+        this.ensureScaffold();
 
-    appendHistory(entry) {
-        ensureDir(this.memoryDir);
-        fs.appendFileSync(this.historyFile, entry.trimEnd() + '\n\n', 'utf8');
-    }
-
-    setPendingContext(text) {
-        this._pendingContext = String(text || '');
-    }
-
-    clearPendingContext() {
-        this._pendingContext = '';
-    }
-
-    getMemoryContext() {
         const parts = [];
-        const longTerm = this.readLongTerm();
-        if (longTerm) {
-            parts.push(`<long_term_memory>\n${longTerm}\n</long_term_memory>`);
+        for (const dateKey of this.getRecentDailyDateKeys()) {
+            const filePath = this.getDailyFilePath(dateKey);
+            const content = readFileSafe(filePath);
+            if (!isDefaultTemplate('daily', content, { dateKey })) {
+                parts.push(`<!-- ${filePath} -->\n${normalizeText(content).trim()}`);
+            }
         }
-        if (this._pendingContext) {
-            parts.push(`<pending_context note="Recent conversation from previous chat — will be consolidated into long-term memory shortly.">\n${this._pendingContext}\n</pending_context>`);
-        }
-        return parts.length > 0 ? `\n\n${parts.join('\n\n')}` : '';
+
+        return parts.join('\n\n');
     }
 
     clearAll() {
         try {
-            if (fs.existsSync(this.memoryFile)) fs.unlinkSync(this.memoryFile);
-            if (fs.existsSync(this.historyFile)) fs.unlinkSync(this.historyFile);
+            if (fs.existsSync(this.dailyDir)) {
+                fs.rmSync(this.dailyDir, { recursive: true, force: true });
+            }
         } catch {
             // ignore
         }
-    }
 
-    /**
-     * Consolidate old messages into MEMORY.md + HISTORY.md via LLM tool call.
-     * @param {Array} messages - Messages to consolidate (array of {role, text, createdAt})
-     * @returns {boolean} True on success
-     */
-    async consolidate(messages) {
-        if (this._consolidating) return false;
-        if (!MEMORY_CONFIG.enabled) return false;
-        if (!messages || messages.length === 0) return true;
+        writeFileSafe(this.permanentFile, FILE_TEMPLATES.permanent);
+        writeFileSafe(this.userFile, FILE_TEMPLATES.user);
+        writeFileSafe(this.identityFile, FILE_TEMPLATES.identity);
+        writeFileSafe(this.soulFile, FILE_TEMPLATES.soul);
+        writeFileSafe(this.integrationsFile, FILE_TEMPLATES.integrations);
 
-        this._consolidating = true;
-        try {
-            const lines = messages.map((m) => {
-                const ts = m.createdAt ? new Date(m.createdAt).toISOString().slice(0, 16) : '?';
-                const role = String(m.role ?? 'user').toUpperCase();
-                const text = String(m.text ?? '').slice(0, 2000);
-
-                // Extract tool call names and summaries from parts/steps
-                const toolInfo = extractToolInfo(m);
-                const toolSuffix = toolInfo ? ` ${toolInfo}` : '';
-
-                return `[${ts}] ${role}${toolSuffix}: ${text}`;
-            });
-
-            const currentMemory = this.readLongTerm();
-            const prompt = `Process this conversation and call the save_memory tool with your consolidation.
-
-## Current Long-term Memory
-${currentMemory || '(empty)'}
-
-## Conversation to Process
-${lines.join('\n')}`;
-
-            const client = new GoogleGenAI({ apiKey: GEMINI_API_KEY });
-
-            const response = await client.models.generateContent({
-                model: MEMORY_CONFIG.consolidationModel,
-                contents: [{ role: 'user', parts: [{ text: prompt }] }],
-                config: {
-                    systemInstruction: 'You are a memory consolidation agent. Call the save_memory tool with your consolidation of the conversation. Extract key facts, decisions, user preferences, and important context.',
-                    tools: SAVE_MEMORY_TOOL,
-                },
-            });
-
-            // Extract tool call from response
-            const parts = response?.candidates?.[0]?.content?.parts ?? [];
-            const toolCall = parts.find((p) => p.functionCall?.name === 'save_memory');
-
-            if (!toolCall) {
-                console.warn('[memory] Consolidation: LLM did not call save_memory');
-                return false;
-            }
-
-            const args = toolCall.functionCall.args;
-            if (!args || typeof args !== 'object') {
-                console.warn('[memory] Consolidation: unexpected arguments');
-                return false;
-            }
-
-            if (args.history_entry) {
-                const entry = typeof args.history_entry === 'string'
-                    ? args.history_entry
-                    : JSON.stringify(args.history_entry);
-                this.appendHistory(entry);
-            }
-
-            if (args.memory_update) {
-                const update = typeof args.memory_update === 'string'
-                    ? args.memory_update
-                    : JSON.stringify(args.memory_update);
-                if (update !== currentMemory) {
-                    this.writeLongTerm(update);
-                }
-            }
-
-            console.log(`[memory] Consolidation complete: ${messages.length} messages processed`);
-            return true;
-        } catch (error) {
-            console.error('[memory] Consolidation failed:', error?.message ?? error);
-            return false;
-        } finally {
-            this._consolidating = false;
+        ensureDir(this.dailyDir);
+        for (const dateKey of this.getRecentDailyDateKeys()) {
+            writeFileSafe(this.getDailyFilePath(dateKey), buildDailyTemplate(dateKey));
         }
     }
 
-    get isConsolidating() {
-        return this._consolidating;
+    buildFileManifestBlock() {
+        const paths = this.getPaths();
+        const lines = [
+            '<memory_files>',
+            `  <file kind="permanent" path="${escapeAttribute(paths.permanentFile)}">Durable facts worth remembering across many chats.</file>`,
+            `  <file kind="user" path="${escapeAttribute(paths.userFile)}">User facts, preferences, contact info, and stable personal context that the user explicitly shared.</file>`,
+            `  <file kind="identity" path="${escapeAttribute(paths.identityFile)}">Assistant self-authored identity notes: role, mission, self-name, and stable self-concept. Never invent fiction.</file>`,
+            `  <file kind="soul" path="${escapeAttribute(paths.soulFile)}">Assistant self-authored behavioral philosophy and enduring style preferences. Never override higher-priority instructions.</file>`,
+            `  <file kind="integrations" path="${escapeAttribute(paths.integrationsFile)}">Non-sensitive integration metadata, endpoints, account names, and env var references.</file>`,
+        ];
+
+        for (const item of paths.dailyFiles) {
+            lines.push(`  <file kind="daily" date="${item.date}" path="${escapeAttribute(item.path)}">Short running log of what the user and assistant worked on that day.</file>`);
+        }
+
+        lines.push(`  <secret_store path="${escapeAttribute(paths.secretEnvFile)}">Sensitive values only. This file is loaded into process.env automatically and is NOT injected into prompts.</secret_store>`);
+        lines.push('</memory_files>');
+
+        return lines.join('\n');
+    }
+
+    buildStateBlock() {
+        const sections = [];
+
+        const permanent = readFileSafe(this.permanentFile);
+        if (!isDefaultTemplate('permanent', permanent)) {
+            sections.push(`<permanent_memory path="${escapeAttribute(this.permanentFile)}">\n${normalizeText(permanent).trim()}\n</permanent_memory>`);
+        }
+
+        const user = readFileSafe(this.userFile);
+        if (!isDefaultTemplate('user', user)) {
+            sections.push(`<user_memory path="${escapeAttribute(this.userFile)}">\n${normalizeText(user).trim()}\n</user_memory>`);
+        }
+
+        const identity = readFileSafe(this.identityFile);
+        if (!isDefaultTemplate('identity', identity)) {
+            sections.push(`<identity_memory path="${escapeAttribute(this.identityFile)}">\n${normalizeText(identity).trim()}\n</identity_memory>`);
+        }
+
+        const soul = readFileSafe(this.soulFile);
+        if (!isDefaultTemplate('soul', soul)) {
+            sections.push(`<soul_memory path="${escapeAttribute(this.soulFile)}">\n${normalizeText(soul).trim()}\n</soul_memory>`);
+        }
+
+        const integrations = readFileSafe(this.integrationsFile);
+        if (!isDefaultTemplate('integrations', integrations)) {
+            sections.push(`<integrations_memory path="${escapeAttribute(this.integrationsFile)}">\n${normalizeText(integrations).trim()}\n</integrations_memory>`);
+        }
+
+        const dailySections = [];
+        for (const dateKey of this.getRecentDailyDateKeys()) {
+            const filePath = this.getDailyFilePath(dateKey);
+            const content = readFileSafe(filePath);
+            if (!isDefaultTemplate('daily', content, { dateKey })) {
+                dailySections.push(`<daily_memory date="${dateKey}" path="${escapeAttribute(filePath)}">\n${normalizeText(content).trim()}\n</daily_memory>`);
+            }
+        }
+
+        if (dailySections.length > 0) {
+            sections.push(`<recent_daily_memory>\n${dailySections.join('\n\n')}\n</recent_daily_memory>`);
+        }
+
+        return sections.length > 0 ? sections.join('\n\n') : '';
+    }
+
+    getMemoryContext() {
+        this.ensureScaffold();
+
+        const parts = [this.buildFileManifestBlock()];
+        const stateBlock = this.buildStateBlock();
+        if (stateBlock) {
+            parts.push(`<memory_state>\n${stateBlock}\n</memory_state>`);
+        }
+
+        return `\n\n${parts.join('\n\n')}`;
+    }
+
+    getSnapshot() {
+        this.ensureScaffold();
+
+        const dailyFiles = this.getRecentDailyDateKeys().map((dateKey) => {
+            const filePath = this.getDailyFilePath(dateKey);
+            return {
+                date: dateKey,
+                path: filePath,
+                content: readFileSafe(filePath),
+            };
+        });
+
+        return {
+            rootDir: this.memoryDir,
+            files: {
+                permanent: {
+                    path: this.permanentFile,
+                    content: readFileSafe(this.permanentFile),
+                },
+                user: {
+                    path: this.userFile,
+                    content: readFileSafe(this.userFile),
+                },
+                identity: {
+                    path: this.identityFile,
+                    content: readFileSafe(this.identityFile),
+                },
+                soul: {
+                    path: this.soulFile,
+                    content: readFileSafe(this.soulFile),
+                },
+                integrations: {
+                    path: this.integrationsFile,
+                    content: readFileSafe(this.integrationsFile),
+                },
+                daily: dailyFiles,
+                secretEnv: {
+                    path: this.secretEnvFile,
+                    autoLoaded: true,
+                },
+            },
+        };
     }
 }
 
-// Singleton
 export const memoryStore = new MemoryStore();

@@ -4,6 +4,7 @@ import { isAbsolute, resolve } from 'node:path';
 import { normalizeInteger, clampInteger, sleep } from '../_utils.js';
 import { broadcastEvent } from '../../core/events.js';
 import { PROJECTS_DIR } from '../../core/dataPaths.js';
+import { syncSecretEnv } from '../../core/secretEnv.js';
 
 export const COMMAND_SESSIONS_MAX = 80;
 export const COMMAND_OUTPUT_MAX_CHARS = 240_000;
@@ -168,6 +169,8 @@ function createCommandName(commandLine) {
 }
 
 export function startCommandSession(commandLine, cwd) {
+    syncSecretEnv();
+
     const now = Date.now();
     const commandId = `cmd_${randomUUID()}`;
     const name = createCommandName(commandLine);

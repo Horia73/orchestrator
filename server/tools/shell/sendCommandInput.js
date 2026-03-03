@@ -1,5 +1,6 @@
 import { normalizeBoolean, clampInteger } from '../_utils.js';
 import { commandSessions, waitForCommandChange, appendCommandOutput, createCommandSnapshot } from './_sessions.js';
+import { isSubagentId } from '../agents/_subagentRegistry.js';
 
 export const declaration = {
     name: 'send_command_input',
@@ -45,6 +46,12 @@ export async function execute({
     const normalizedId = String(CommandId ?? '').trim();
     if (!normalizedId) {
         return { error: 'CommandId is required.' };
+    }
+
+    if (isSubagentId(normalizedId)) {
+        return {
+            error: `Subagent IDs are not command IDs: ${normalizedId}. Use subagent_status instead.`,
+        };
     }
 
     const session = commandSessions.get(normalizedId);

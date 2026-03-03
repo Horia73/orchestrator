@@ -7,12 +7,14 @@ import {
     useState,
 } from 'react';
 import './ChatInput.css';
-import { IconPlus, IconMic, IconStop, IconArrowUp, IconClose, IconTrash, IconPause } from '../shared/icons.jsx';
+import { IconPlus, IconMic, IconStop, IconArrowUp, IconClose, IconTrash, IconPause, IconFile } from '../shared/icons.jsx';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder.js';
+import { deleteChatAttachmentUpload, uploadChatAttachment } from '../../api/chatApi.js';
 
 /* ---- constants ---- */
 const MAX_BARS = 120;
 const SAMPLE_MS = 100;
+const EMPTY_ATTACHMENTS = [];
 
 /* ---- helpers ---- */
 
@@ -36,42 +38,17 @@ function formatFileSize(size) {
     return `${rounded} ${units[unitIndex]}`;
 }
 
-function fileToBase64(file) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const result = String(reader.result ?? '');
-            const separator = result.indexOf(',');
-            if (separator < 0 || separator === result.length - 1) {
-                reject(new Error(`Failed to encode ${file?.name || 'file'}.`));
-                return;
-            }
-            resolve(result.slice(separator + 1));
-        };
-        reader.onerror = () => {
-            reject(new Error(`Failed to read ${file?.name || 'file'}.`));
-        };
-        reader.readAsDataURL(file);
-    });
+function getFileIcon(mimeType) {
+    const m = String(mimeType ?? '').toLowerCase();
+    if (m.startsWith('image/')) return '🖼️';
+    if (m.startsWith('audio/')) return '🎵';
+    if (m.startsWith('video/')) return '🎬';
+    if (m === 'application/pdf') return '📄';
+    return null;
 }
 
-function blobToBase64(blob) {
-    return new Promise((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onload = () => {
-            const result = String(reader.result ?? '');
-            const separator = result.indexOf(',');
-            if (separator < 0 || separator === result.length - 1) {
-                reject(new Error('Failed to encode voice message.'));
-                return;
-            }
-            resolve(result.slice(separator + 1));
-        };
-        reader.onerror = () => {
-            reject(new Error('Failed to encode voice message.'));
-        };
-        reader.readAsDataURL(blob);
-    });
+function isImageMime(mimeType) {
+    return String(mimeType ?? '').toLowerCase().startsWith('image/');
 }
 
 function formatDuration(seconds) {
@@ -96,6 +73,7 @@ export const ChatInput = forwardRef(function ChatInput({
     onAttachmentsChange,
     isChatMode,
     isSending,
+    uiSettings,
 }, ref) {
     const textareaRef = useRef(null);
     const fileInputRef = useRef(null);
@@ -104,9 +82,11 @@ export const ChatInput = forwardRef(function ChatInput({
 
     const value = String(draftValue ?? '');
     const hasContent = value.trim().length > 0;
-    const attachmentList = Array.isArray(attachments) ? attachments : [];
+    const attachmentList = Array.isArray(attachments) ? attachments : EMPTY_ATTACHMENTS;
+    const attachmentListRef = useRef(attachmentList);
     const hasAttachments = attachmentList.length > 0;
-    const canSubmit = hasContent || hasAttachments;
+    const hasUploadingAttachments = attachmentList.some((attachment) => attachment?.status === 'uploading');
+    const canSubmit = (hasContent || hasAttachments) && !hasUploadingAttachments;
 
     /* ---- Voice recording ---- */
     const {
@@ -130,6 +110,7 @@ export const ChatInput = forwardRef(function ChatInput({
 
     useEffect(() => { getAmplitudeRef.current = getAmplitude; }, [getAmplitude]);
     useEffect(() => { getDurationRef.current = getDuration; }, [getDuration]);
+    useEffect(() => { attachmentListRef.current = attachmentList; }, [attachmentList]);
 
     // Waveform sampling + duration tick — only while recording
     useEffect(() => {
@@ -199,7 +180,6 @@ export const ChatInput = forwardRef(function ChatInput({
 
     /* ---- Text input handlers ---- */
     function handleKeyDown(e) {
-        if (isSending) return;
         if (e.key === 'Enter' && !e.shiftKey) {
             e.preventDefault();
             submit();
@@ -216,32 +196,70 @@ export const ChatInput = forwardRef(function ChatInput({
         if (selectedFiles.length === 0) return;
 
         setAttachmentError('');
-        try {
-            const converted = await Promise.all(
-                selectedFiles.map(async (file, index) => ({
-                    id: createAttachmentId(file),
-                    name: String(file?.name ?? `attachment-${index + 1}`).trim() || `attachment-${index + 1}`,
-                    mimeType: String(file?.type ?? '').trim() || 'application/octet-stream',
-                    size: Number(file?.size ?? 0),
-                    data: await fileToBase64(file),
-                })),
-            );
+        const pendingAttachments = selectedFiles.map((file, index) => ({
+            id: createAttachmentId(file),
+            name: String(file?.name ?? `attachment-${index + 1}`).trim() || `attachment-${index + 1}`,
+            mimeType: String(file?.type ?? '').trim() || 'application/octet-stream',
+            size: Number(file?.size ?? 0),
+            status: 'uploading',
+            fileUri: '',
+            previewUrl: '',
+        }));
 
-            const merged = new Map(
-                attachmentList.map((attachment, index) => [
-                    String(attachment?.id ?? `att-${index}`),
-                    attachment,
-                ]),
-            );
-            for (const attachment of converted) {
-                merged.set(String(attachment.id), attachment);
+        const merged = new Map(
+            attachmentListRef.current.map((attachment, index) => [
+                String(attachment?.id ?? `att-${index}`),
+                attachment,
+            ]),
+        );
+        for (const attachment of pendingAttachments) {
+            merged.set(String(attachment.id), attachment);
+        }
+        onAttachmentsChange?.([...merged.values()]);
+
+        for (let index = 0; index < selectedFiles.length; index += 1) {
+            const file = selectedFiles[index];
+            const pendingAttachment = pendingAttachments[index];
+            try {
+                const payload = await uploadChatAttachment(file);
+                const uploaded = payload?.upload;
+                const uploadId = String(uploaded?.uploadId ?? '').trim();
+                const fileUri = String(uploaded?.fileUri ?? '').trim();
+                const stillPresent = attachmentListRef.current.some(
+                    (attachment) => String(attachment?.id) === String(pendingAttachment.id),
+                );
+                if (!stillPresent) {
+                    if (uploadId) {
+                        deleteChatAttachmentUpload(uploadId).catch(() => undefined);
+                    }
+                    continue;
+                }
+                const nextAttachment = {
+                    ...pendingAttachment,
+                    uploadId,
+                    fileUri,
+                    status: 'ready',
+                    previewUrl: isImageMime(pendingAttachment.mimeType)
+                        ? fileUri
+                        : '',
+                };
+
+                const nextList = attachmentListRef.current.map((attachment) => (
+                    String(attachment?.id) === String(pendingAttachment.id)
+                        ? nextAttachment
+                        : attachment
+                ));
+                onAttachmentsChange?.(nextList);
+            } catch (error) {
+                const nextList = attachmentListRef.current.filter(
+                    (attachment) => String(attachment?.id) !== String(pendingAttachment.id),
+                );
+                onAttachmentsChange?.(nextList);
+                const message = error instanceof Error && error.message
+                    ? error.message
+                    : `Unable to upload ${pendingAttachment.name}.`;
+                setAttachmentError(message);
             }
-            onAttachmentsChange?.([...merged.values()]);
-        } catch (error) {
-            const message = error instanceof Error && error.message
-                ? error.message
-                : 'Unable to attach files.';
-            setAttachmentError(message);
         }
     }
 
@@ -251,14 +269,19 @@ export const ChatInput = forwardRef(function ChatInput({
     }
 
     function removeAttachment(attachmentId) {
+        const removed = attachmentList.find((attachment) => String(attachment?.id) === String(attachmentId));
         const next = attachmentList.filter((a) => String(a?.id) !== String(attachmentId));
         onAttachmentsChange?.(next);
         setAttachmentError('');
+        const uploadId = String(removed?.uploadId ?? '').trim();
+        if (uploadId) {
+            deleteChatAttachmentUpload(uploadId).catch(() => undefined);
+        }
     }
 
     function submit() {
-        if (isSending || !canSubmit) return;
-        onSend({ text: value, attachments: attachmentList });
+        if (!canSubmit) return;
+        onSend({ text: value, attachments: attachmentList, isSteering: isSending });
         onDraftChange?.('');
         onAttachmentsChange?.([]);
         setAttachmentError('');
@@ -280,20 +303,31 @@ export const ChatInput = forwardRef(function ChatInput({
         setIsRecording(false);
         if (result) {
             try {
-                const base64 = await blobToBase64(result.blob);
                 const extension = result.mimeType.includes('mp4') ? 'm4a' : 'webm';
+                const name = `voice-message.${extension}`;
+                const payload = await uploadChatAttachment(result.blob, {
+                    name,
+                    mimeType: result.mimeType,
+                });
+                const uploaded = payload?.upload;
                 onSend({
                     text: '',
                     attachments: [{
                         id: `voice-${Date.now()}`,
-                        name: `voice-message.${extension}`,
+                        uploadId: String(uploaded?.uploadId ?? '').trim(),
+                        fileUri: String(uploaded?.fileUri ?? '').trim(),
+                        name,
                         mimeType: result.mimeType,
                         size: result.blob.size,
-                        data: base64,
+                        status: 'ready',
                     }],
                 });
-            } catch {
-                // encoding failed
+            } catch (error) {
+                setAttachmentError(
+                    error instanceof Error && error.message
+                        ? error.message
+                        : 'Unable to upload voice message.',
+                );
             }
         }
         focusTextarea();
@@ -326,7 +360,7 @@ export const ChatInput = forwardRef(function ChatInput({
                         ref={textareaRef}
                         id="chatInput"
                         value={value}
-                        placeholder={isSending ? 'Gemini is thinking…' : isChatMode ? 'Reply…' : 'How can I help you today?'}
+                        placeholder={isSending ? `${uiSettings?.aiName ?? 'AI Chat'} is thinking…` : isChatMode ? 'Reply…' : 'How can I help you today?'}
                         rows={1}
                         autoFocus={!isSending}
                         onChange={handleInput}
@@ -383,11 +417,32 @@ export const ChatInput = forwardRef(function ChatInput({
                         {attachmentList.map((attachment, index) => {
                             const attachmentId = String(attachment?.id ?? `att-${index}`);
                             const attachmentName = String(attachment?.name ?? `attachment-${index + 1}`);
+                            const mimeType = String(attachment?.mimeType ?? '');
+                            const isImage = isImageMime(mimeType);
+                            const fileIcon = getFileIcon(mimeType);
+                            const previewSrc = isImage && (attachment?.previewUrl || attachment?.fileUri)
+                                ? (attachment.previewUrl || attachment.fileUri)
+                                : null;
+                            const attachmentStatus = attachment?.status === 'uploading'
+                                ? 'Uploading...'
+                                : formatFileSize(attachment?.size);
+
                             return (
                                 <div className="input-attachment-chip" key={attachmentId}>
+                                    {previewSrc ? (
+                                        <img
+                                            className="input-attachment-thumb"
+                                            src={previewSrc}
+                                            alt={attachmentName}
+                                        />
+                                    ) : (
+                                        <div className="input-attachment-icon">
+                                            {fileIcon || <IconFile />}
+                                        </div>
+                                    )}
                                     <div className="input-attachment-chip-text" title={attachmentName}>
                                         <span className="input-attachment-name">{attachmentName}</span>
-                                        <span className="input-attachment-size">{formatFileSize(attachment?.size)}</span>
+                                        <span className="input-attachment-size">{attachmentStatus}</span>
                                     </div>
                                     <button
                                         type="button"
@@ -452,6 +507,15 @@ export const ChatInput = forwardRef(function ChatInput({
                                     <IconArrowUp />
                                 </button>
                             </>
+                        ) : isSending && canSubmit ? (
+                            <button
+                                type="button"
+                                className="send-btn steering-action"
+                                title="Send steering note"
+                                onClick={submit}
+                            >
+                                <IconArrowUp />
+                            </button>
                         ) : isSending ? (
                             <button
                                 type="button"
@@ -467,7 +531,7 @@ export const ChatInput = forwardRef(function ChatInput({
                                 className="send-btn"
                                 title="Send message"
                                 onClick={submit}
-                                disabled={isSending}
+                                disabled={isSending || hasUploadingAttachments}
                             >
                                 <IconArrowUp />
                             </button>

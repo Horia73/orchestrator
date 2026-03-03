@@ -2,12 +2,11 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import './ChatArea.css';
 import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
-import { IconArrowDown, IconClose } from '../shared/icons.jsx';
+import { IconArrowDown, IconClose, IconArrowLeft } from '../shared/icons.jsx';
 import { ToolDetailPanel } from './ToolDetailPanel.jsx';
 import {
     buildAgentPanelMessage,
     findAgentToolCallInMessages,
-    findLatestAgentToolCallInMessages,
 } from './agentCallUtils.js';
 
 const USER_TOP_OFFSET = 54;
@@ -17,6 +16,7 @@ const INPUT_FLIP_DURATION_MS = 260;
 const EXIT_FADE_DURATION_MS = INPUT_FLIP_DURATION_MS;
 const ENTER_FADE_DURATION_MS = 340;
 const SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.scroll_positions.v1';
+const AGENT_PANEL_STACK_STORAGE_KEY = 'orchestrator.chat.agent_panel_stack.v1';
 
 function getElementOffsets(container, element) {
     const containerRect = container.getBoundingClientRect();
@@ -66,6 +66,74 @@ function persistScrollPositions(scrollPositions) {
     }
 }
 
+function sanitizeAgentPanelEntry(entry) {
+    if (!entry || typeof entry !== 'object') {
+        return null;
+    }
+
+    const callId = String(entry.callId ?? '').trim();
+    if (!callId) {
+        return null;
+    }
+
+    return {
+        callId,
+        agentId: String(entry.agentId ?? '').trim(),
+        agentName: String(entry.agentName ?? '').trim() || 'Agent',
+        instanceId: String(entry.instanceId ?? '').trim(),
+        instanceLabel: String(entry.instanceLabel ?? '').trim(),
+        toolName: String(entry.toolName ?? '').trim(),
+        sourceContext: entry.sourceContext ?? null,
+        toolPart: entry.toolPart ?? null,
+    };
+}
+
+function loadAgentPanelStacks() {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const raw = window.localStorage.getItem(AGENT_PANEL_STACK_STORAGE_KEY);
+        if (!raw) return {};
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return {};
+        }
+
+        const sanitized = {};
+        for (const [key, value] of Object.entries(parsed)) {
+            const conversationKey = normalizeConversationKey(key);
+            if (!conversationKey || !Array.isArray(value)) {
+                continue;
+            }
+
+            const stack = value
+                .map(sanitizeAgentPanelEntry)
+                .filter(Boolean);
+            if (stack.length > 0) {
+                sanitized[conversationKey] = stack;
+            }
+        }
+
+        return sanitized;
+    } catch {
+        return {};
+    }
+}
+
+function persistAgentPanelStacks(stacks) {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.setItem(
+            AGENT_PANEL_STACK_STORAGE_KEY,
+            JSON.stringify(stacks),
+        );
+    } catch {
+        // Ignore localStorage quota/permission issues.
+    }
+}
+
 export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, agentStreaming, commandChunks, children }) {
     const scrollRef = useRef(null);
     const exitSnapshotRef = useRef(null);
@@ -99,7 +167,60 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const [isConversationEnterVisible, setIsConversationEnterVisible] = useState(false);
     const agentPanelBodyRef = useRef(null);
     const agentPanelAutoFollowRef = useRef(true);
-    const [activeAgentCallSelection, setActiveAgentCallSelection] = useState(null);
+    const agentPanelStacksRef = useRef(null);
+    if (agentPanelStacksRef.current === null) {
+        agentPanelStacksRef.current = loadAgentPanelStacks();
+    }
+    const [agentPanelStack, setAgentPanelStack] = useState(() => {
+        const key = normalizeConversationKey(conversationKey);
+        return key ? (agentPanelStacksRef.current[key] ?? []) : [];
+    });
+    const activeAgentCallSelection = agentPanelStack.length > 0 ? agentPanelStack[agentPanelStack.length - 1] : null;
+    const persistAgentPanelStack = useCallback((rawKey, stack) => {
+        const key = normalizeConversationKey(rawKey);
+        const nextStack = Array.isArray(stack)
+            ? stack.map(sanitizeAgentPanelEntry).filter(Boolean)
+            : [];
+
+        if (!key) {
+            return;
+        }
+
+        const nextStacks = { ...agentPanelStacksRef.current };
+        if (nextStack.length > 0) {
+            nextStacks[key] = nextStack;
+        } else {
+            delete nextStacks[key];
+        }
+
+        agentPanelStacksRef.current = nextStacks;
+        persistAgentPanelStacks(nextStacks);
+    }, []);
+    const applyAgentPanelStack = useCallback((value, rawKey = conversationKey) => {
+        setAgentPanelStack((prev) => {
+            const next = typeof value === 'function' ? value(prev) : value;
+            const sanitizedNext = Array.isArray(next)
+                ? next.map(sanitizeAgentPanelEntry).filter(Boolean)
+                : [];
+            persistAgentPanelStack(rawKey, sanitizedNext);
+            return sanitizedNext;
+        });
+    }, [conversationKey, persistAgentPanelStack]);
+    const setActiveAgentCallSelection = useCallback((value) => {
+        if (value === null) {
+            applyAgentPanelStack([]);
+        } else if (typeof value === 'function') {
+            applyAgentPanelStack((prev) => {
+                const current = prev.length > 0 ? prev[prev.length - 1] : null;
+                const result = value(current);
+                if (result === null) return [];
+                if (prev.length === 0) return [result];
+                return [...prev.slice(0, -1), result];
+            });
+        } else {
+            applyAgentPanelStack([value]);
+        }
+    }, [applyAgentPanelStack]);
     const [activeToolPanelSelection, setActiveToolPanelSelection] = useState(null);
     const [noSpacerAnim, setNoSpacerAnim] = useState(false);
     const [isConversationHidden, setIsConversationHidden] = useState(false);
@@ -138,24 +259,37 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             return;
         }
 
-        setActiveAgentCallSelection((previous) => {
-            if (previous?.callId === callId) {
-                return null;
+        // Close tool panel when opening agent panel
+        setActiveToolPanelSelection(null);
+
+        const newEntry = {
+            callId,
+            agentId: String(payload?.agentId ?? '').trim(),
+            agentName: String(payload?.agentName ?? '').trim() || 'Agent',
+            instanceId: String(payload?.instanceId ?? '').trim(),
+            instanceLabel: String(payload?.instanceLabel ?? '').trim(),
+            toolName: String(payload?.toolName ?? '').trim(),
+            sourceContext: payload?.sourceContext ?? null,
+            toolPart: payload?.toolPart ?? null,
+        };
+
+        applyAgentPanelStack((prev) => {
+            // If clicking the same call as the top of stack, pop it
+            if (prev.length > 0 && prev[prev.length - 1].callId === callId) {
+                return prev.slice(0, -1);
             }
-
-            // Close tool panel when opening agent panel
-            setActiveToolPanelSelection(null);
-
-            return {
-                callId,
-                agentId: String(payload?.agentId ?? '').trim(),
-                agentName: String(payload?.agentName ?? '').trim() || 'Agent',
-                toolName: String(payload?.toolName ?? '').trim(),
-                sourceContext: payload?.sourceContext ?? null,
-                toolPart: payload?.toolPart ?? null,
-            };
+            // If clicking from main chat (stack empty), start fresh
+            if (prev.length === 0) {
+                return [newEntry];
+            }
+            // Otherwise push onto stack (nested agent call from agent panel)
+            return [...prev, newEntry];
         });
-    }, []);
+    }, [applyAgentPanelStack]);
+
+    const handleAgentPanelBack = useCallback(() => {
+        applyAgentPanelStack((prev) => prev.length > 1 ? prev.slice(0, -1) : prev);
+    }, [applyAgentPanelStack]);
 
     const handleToolPanelToggle = useCallback((payload) => {
         const callId = String(payload?.callId ?? '').trim();
@@ -175,7 +309,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 toolPart: payload?.toolPart ?? null,
             };
         });
-    }, []);
+    }, [setActiveAgentCallSelection]);
 
     function refreshScrollButton(container) {
         const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -274,7 +408,12 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 : null;
             shouldAutoFollowRef.current = false;
             if (!isTransitioningDraftToSaved) {
-                setActiveAgentCallSelection(null);
+                applyAgentPanelStack(
+                    hasConcreteConversation
+                        ? (agentPanelStacksRef.current[normalizeConversationKey(conversationKey)] ?? [])
+                        : [],
+                    conversationKey,
+                );
                 setActiveToolPanelSelection(null);
             }
 
@@ -288,7 +427,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 setIsConversationHidden(messages.length === 0);
             }
         }
-    }, [conversationKey, userMessageCount, saveConversationScrollPosition, messages.length]);
+    }, [conversationKey, userMessageCount, saveConversationScrollPosition, messages.length, applyAgentPanelStack]);
 
     // Declanseaza animatia de enter abia cand mesajele sunt disponibile.
     // Astfel evitam flash-ul cu greeting-ul si lipsa fade-ului dupa refresh.
@@ -311,7 +450,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     useLayoutEffect(() => {
         const pendingConversationKey = pendingScrollRestoreConversationRef.current;
         if (!pendingConversationKey) return;
-        if (!isChatMode || isTyping || messages.length === 0) return;
+        if (!isChatMode || messages.length === 0) return;
 
         const activeConversationKey = normalizeConversationKey(conversationKey);
         if (!activeConversationKey || activeConversationKey !== pendingConversationKey) return;
@@ -354,7 +493,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         requestAnimationFrame(() => {
             isProgrammaticScrollRef.current = false;
         });
-    }, [conversationKey, isChatMode, isTyping, messages.length, saveConversationScrollPosition]);
+    }, [conversationKey, isChatMode, messages.length, saveConversationScrollPosition]);
 
     useLayoutEffect(() => {
         if (previousChatModeRef.current && !isChatMode) {
@@ -633,6 +772,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
 
         // Reset auto-follow when the agent panel selection changes.
         agentPanelAutoFollowRef.current = true;
+        container.scrollTop = 0;
 
         const handleScroll = () => {
             const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
@@ -674,14 +814,6 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             return resolvedFromMessages;
         }
 
-        const resolvedFromToolName = findLatestAgentToolCallInMessages(
-            messages,
-            activeAgentCallSelection?.toolName,
-        );
-        if (resolvedFromToolName) {
-            return resolvedFromToolName;
-        }
-
         if (!activeAgentCallSelection) {
             return null;
         }
@@ -690,6 +822,8 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             callId,
             agentId: activeAgentCallSelection.agentId,
             agentName: activeAgentCallSelection.agentName,
+            instanceId: activeAgentCallSelection.instanceId,
+            instanceLabel: activeAgentCallSelection.instanceLabel,
             toolName: activeAgentCallSelection.toolName,
             sourceMessageId: '',
             context: activeAgentCallSelection.sourceContext ?? {
@@ -705,11 +839,10 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         };
     }, [messages, activeAgentCallSelection]);
     const activeAgentPanelMessage = useMemo(() => {
-        const toolName = String(activeAgentCallSelection?.toolName ?? '').trim();
+        const callId = String(activeAgentCallSelection?.callId ?? '').trim();
 
-        // Use live agent streaming data keyed by toolName.
-        if (toolName && agentStreaming) {
-            const streamData = agentStreaming[toolName];
+        if (agentStreaming) {
+            const streamData = callId ? agentStreaming[callId] : null;
             if (streamData) {
                 return {
                     role: 'ai',
@@ -723,8 +856,13 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         }
 
         // Fall back to completed message data.
-        return buildAgentPanelMessage(activeAgentCallDetails);
-    }, [activeAgentCallDetails, agentStreaming, activeAgentCallSelection]);
+        return buildAgentPanelMessage(activeAgentCallDetails, messages);
+    }, [activeAgentCallDetails, agentStreaming, activeAgentCallSelection, messages]);
+    const activeAgentPanelRenderKey = useMemo(() => {
+        const callId = String(activeAgentCallSelection?.callId ?? '').trim();
+        const instanceId = String(activeAgentCallSelection?.instanceId ?? '').trim();
+        return [callId, instanceId, agentPanelStack.length].filter(Boolean).join(':') || 'agent-panel';
+    }, [activeAgentCallSelection, agentPanelStack.length]);
     const isAgentPanelOpen = isChatMode && !!activeAgentPanelMessage && !!activeAgentCallSelection;
     const isToolPanelOpen = isChatMode && !!activeToolPanelSelection;
 
@@ -830,18 +968,32 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 const callSummary = callArgs
                     ? String(callArgs.task ?? callArgs.prompt ?? '').trim()
                     : '';
+                const hasBackStack = agentPanelStack.length > 1;
                 return (
                     <aside className="agent-side-panel" aria-label="Agent activity panel">
                         <header className="agent-side-header">
+                            {hasBackStack && (
+                                <button
+                                    className="agent-side-back"
+                                    onClick={handleAgentPanelBack}
+                                    title="Back to parent agent"
+                                    aria-label="Back to parent agent"
+                                    type="button"
+                                >
+                                    <IconArrowLeft />
+                                </button>
+                            )}
                             <div className="agent-side-header-text">
                                 <h2 className="agent-side-title">{activeAgentCallDetails?.agentName || 'Agent'}</h2>
                                 <p className="agent-side-subtitle">
-                                    {String(activeAgentCallDetails?.toolName ?? '').trim() || 'Agent call'}
+                                    {String(activeAgentCallDetails?.instanceLabel ?? '').trim()
+                                        || String(activeAgentCallDetails?.toolName ?? '').trim()
+                                        || 'Agent call'}
                                 </p>
                             </div>
                             <button
                                 className="agent-side-close"
-                                onClick={() => setActiveAgentCallSelection(null)}
+                                onClick={() => applyAgentPanelStack([])}
                                 title="Close panel"
                                 aria-label="Close agent panel"
                                 type="button"
@@ -856,12 +1008,15 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                         )}
                         <div className="agent-side-body" ref={agentPanelBodyRef}>
                             <Message
+                                key={activeAgentPanelRenderKey}
                                 role="ai"
                                 text={activeAgentPanelMessage.text}
                                 thought={activeAgentPanelMessage.thought}
                                 parts={activeAgentPanelMessage.parts}
                                 steps={activeAgentPanelMessage.steps}
                                 isThinking={activeAgentPanelMessage.isThinking}
+                                onAgentCallToggle={handleAgentCallToggle}
+                                showAllLiveToolCalls
                             />
                         </div>
                     </aside>

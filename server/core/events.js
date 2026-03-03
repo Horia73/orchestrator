@@ -3,15 +3,22 @@ let sequence = 0;
 
 /**
  * Snapshot of the latest streaming state per chatId for recovery on reconnect.
- * Each entry: { message, agentStreaming: { [toolName]: payload }, updatedAt }
+ * Each entry: { message, agentStreaming: { [toolKey]: payload }, updatedAt }
+ * where toolKey is toolCallId when available, otherwise the tool name.
  */
 const streamingSnapshots = new Map();
 
-export function updateStreamingSnapshot(chatId, { message, agentToolName, agentPayload } = {}) {
+export function updateStreamingSnapshot(chatId, {
+    message,
+    agentToolCallId,
+    agentToolName,
+    agentPayload,
+} = {}) {
     if (!chatId) return;
     const snapshot = streamingSnapshots.get(chatId) ?? { message: null, agentStreaming: {}, updatedAt: 0 };
     if (message) snapshot.message = message;
-    if (agentToolName && agentPayload) snapshot.agentStreaming[agentToolName] = agentPayload;
+    const toolKey = String(agentToolCallId ?? '').trim() || String(agentToolName ?? '').trim();
+    if (toolKey && agentPayload) snapshot.agentStreaming[toolKey] = agentPayload;
     snapshot.updatedAt = Date.now();
     streamingSnapshots.set(chatId, snapshot);
 }

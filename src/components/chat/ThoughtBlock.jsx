@@ -67,7 +67,7 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
 
         let interval;
         if (isThinking) {
-            const startMs = thinkingStartRef.current ?? Date.now();
+            const startMs = thinkingStartRef.current ?? (Date.now() - persistedSeconds * 1000);
             if (thinkingStartRef.current === null) {
                 thinkingStartRef.current = startMs;
             }
@@ -105,6 +105,9 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
         isRunningTitle = true;
     } else if (hasThought) {
         title = 'Thought';
+        isRunningTitle = false;
+    } else if (showWorkedWhenIdle) {
+        title = 'Worked';
         isRunningTitle = false;
     } else {
         title = '';

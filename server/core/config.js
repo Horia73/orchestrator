@@ -1,14 +1,12 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
-import { CONFIG_PATH, SETTINGS_PATH } from './dataPaths.js';
+import { CONFIG_PATH } from './dataPaths.js';
+import { getSecretEnvValue, isShellEnvKey, syncSecretEnv } from './secretEnv.js';
 
 const DEFAULT_API_PORT = 8787;
 const DEFAULT_CONTEXT_MESSAGES = 120;
 const DEFAULT_TOOLS_MODEL = 'gemini-3-flash-preview';
-
-// Capture keys that were already in the shell BEFORE .env loading
-const shellEnvKeys = new Set(Object.keys(process.env));
 
 function loadConfigJson() {
     try {
@@ -24,6 +22,8 @@ function loadConfigJson() {
 }
 
 function loadEnvFiles() {
+    syncSecretEnv();
+
     const cwd = process.cwd();
     const mode = String(process.env.NODE_ENV ?? 'development').trim() || 'development';
     const envFiles = [
@@ -45,7 +45,9 @@ function loadEnvFiles() {
     }
 
     for (const [key, value] of Object.entries(merged)) {
-        if (shellEnvKeys.has(key)) continue;
+        if (process.env[key] !== undefined && (isShellEnvKey(key) || getSecretEnvValue(key) !== undefined)) {
+            continue;
+        }
         process.env[key] = value;
     }
 }
@@ -60,14 +62,22 @@ function normalizeContextMessages(value) {
 }
 
 // Resolve a config value with correct precedence:
-// 1. Shell env var (existed before .env loading)
-// 2. config.json value
-// 3. .env file value (loaded into process.env)
-// 4. default
+// 1. Shell env var
+// 2. Secret env store (~/.orchestrator/data/secrets/SECRETS.env)
+// 3. config.json value
+// 4. Project .env file value
+// 5. default
 function resolve(envKeys, configValue, fallback) {
     for (const key of envKeys) {
-        if (shellEnvKeys.has(key) && process.env[key] !== undefined) {
+        if (isShellEnvKey(key) && process.env[key] !== undefined) {
             return process.env[key];
+        }
+    }
+
+    for (const key of envKeys) {
+        const secretValue = getSecretEnvValue(key);
+        if (secretValue !== undefined) {
+            return secretValue;
         }
     }
 
@@ -91,30 +101,15 @@ function resolve(envKeys, configValue, fallback) {
  */
 function migrateIfNeeded(configJson) {
     if (!configJson) return configJson;
-    if (configJson.agents) return configJson; // already unified
 
     try {
-        if (!fs.existsSync(SETTINGS_PATH)) return configJson;
-        const raw = fs.readFileSync(SETTINGS_PATH, 'utf8');
-        const settings = JSON.parse(raw);
-        if (!settings || typeof settings !== 'object') return configJson;
-
-        // Merge settings into config under `agents`
-        configJson.agents = settings;
-
-        // Also migrate flat `contextMessages` → nested `context.messages`
+        // Migrate flat `contextMessages` → nested `context.messages`
         if (configJson.contextMessages !== undefined && !configJson.context) {
             configJson.context = { messages: configJson.contextMessages };
+
+            // Write the config
+            fs.writeFileSync(CONFIG_PATH, JSON.stringify(configJson, null, 2) + '\n', 'utf8');
         }
-
-        // Write the unified config
-        fs.writeFileSync(CONFIG_PATH, JSON.stringify(configJson, null, 2) + '\n', 'utf8');
-
-        // Rename old settings.json so it's not re-migrated
-        const backupPath = SETTINGS_PATH + '.bak';
-        fs.renameSync(SETTINGS_PATH, backupPath);
-
-        console.log('[config] Migrated settings.json into unified config.json');
     } catch {
         // Migration failed — continue with what we have
     }
@@ -130,35 +125,30 @@ export const API_PORT = Number(
     resolve(['API_PORT'], configJson?.port, DEFAULT_API_PORT),
 );
 
-export const GEMINI_API_KEY = String(
-    resolve(['GEMINI_API_KEY', 'VITE_GEMINI_API_KEY'], configJson?.geminiApiKey, ''),
-).trim();
-
 // Support both flat `contextMessages` and nested `context.messages`
-const contextMessagesValue = configJson?.context?.messages ?? configJson?.contextMessages;
-export const GEMINI_CONTEXT_MESSAGES = normalizeContextMessages(
-    resolve(['GEMINI_CONTEXT_MESSAGES'], contextMessagesValue, DEFAULT_CONTEXT_MESSAGES),
-);
+export function getGeminiContextMessages() {
+    const fresh = reloadConfigJson();
+    const contextValue = fresh?.context?.messages ?? fresh?.contextMessages;
+    return normalizeContextMessages(
+        resolve(['GEMINI_CONTEXT_MESSAGES'], contextValue, DEFAULT_CONTEXT_MESSAGES),
+    );
+}
 
-export const TOOLS_MODEL = String(
-    resolve(['TOOLS_MODEL', 'GEMINI_MODEL'], configJson?.toolsModel, DEFAULT_TOOLS_MODEL),
-).trim() || DEFAULT_TOOLS_MODEL;
+export function getGeminiApiKey() {
+    syncSecretEnv();
+    return String(
+        resolve(['GEMINI_API_KEY', 'VITE_GEMINI_API_KEY'], reloadConfigJson()?.geminiApiKey, ''),
+    ).trim();
+}
+
+export function getToolsModel() {
+    return String(
+        resolve(['TOOLS_MODEL', 'GEMINI_MODEL'], reloadConfigJson()?.toolsModel, DEFAULT_TOOLS_MODEL),
+    ).trim() || DEFAULT_TOOLS_MODEL;
+}
 
 // Agent settings from unified config
 export const AGENTS_CONFIG = configJson?.agents ?? {};
-
-// Memory config
-const DEFAULT_MEMORY_CONFIG = {
-    enabled: true,
-    consolidationModel: 'gemini-3-flash-preview',
-    window: 100,
-};
-
-export const MEMORY_CONFIG = {
-    enabled: configJson?.memory?.enabled !== false,
-    consolidationModel: String(configJson?.memory?.consolidationModel ?? DEFAULT_MEMORY_CONFIG.consolidationModel).trim() || DEFAULT_MEMORY_CONFIG.consolidationModel,
-    window: Number(configJson?.memory?.window) || DEFAULT_MEMORY_CONFIG.window,
-};
 
 // Cron config
 export const CRON_CONFIG = {

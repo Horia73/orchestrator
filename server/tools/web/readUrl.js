@@ -1,10 +1,10 @@
 import { truncateText } from '../_utils.js';
 import { URL_CONTENT_MAX_CHARS, URL_CONTENT_CHUNK_SIZE, createUrlDocumentId, cacheUrlContentDocument, splitTextIntoChunks } from './_cache.js';
-import { stripHtmlToText, fetchUrlWithCurl } from './_fetch.js';
+import { stripHtmlToText, fetchUrlWithCurl, extractFeaturedImagesFromHtml } from './_fetch.js';
 
 export const declaration = {
     name: 'read_url_content',
-    description: 'Fetch the content of a URL via HTTP request.',
+    description: 'Fetch the content of a URL via HTTP request. For HTML pages, also returns title and representative page image URLs when available.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -38,7 +38,18 @@ export async function execute({ Url }) {
         return { error: `Unsupported URL protocol: ${parsedUrl.protocol}` };
     }
 
-    function buildResult({ finalUrl, status, ok, contentType, title, content, transport }) {
+    function buildResult({
+        finalUrl,
+        status,
+        ok,
+        contentType,
+        title,
+        content,
+        transport,
+        featuredImageUrl,
+        featuredImageAlt,
+        imageCandidates = [],
+    }) {
         const normalizedContent = String(content ?? '');
         const normalizedFinalUrl = String(finalUrl ?? parsedUrl.toString()) || parsedUrl.toString();
         const documentId = createUrlDocumentId(normalizedFinalUrl, normalizedContent);
@@ -59,6 +70,9 @@ export async function execute({ Url }) {
             ok: Boolean(ok),
             contentType: contentType || null,
             title: title || null,
+            featured_image_url: featuredImageUrl || null,
+            featured_image_alt: featuredImageAlt || null,
+            image_candidates: Array.isArray(imageCandidates) ? imageCandidates : [],
             content: truncateText(normalizedContent, URL_CONTENT_MAX_CHARS),
             truncated: normalizedContent.length > URL_CONTENT_MAX_CHARS,
             document_id: documentId,
@@ -78,6 +92,9 @@ export async function execute({ Url }) {
             ? rawBody.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
             : null;
         const title = titleMatch ? stripHtmlToText(titleMatch[1]) : '';
+        const imageInfo = contentType.includes('text/html')
+            ? extractFeaturedImagesFromHtml(rawBody, response.url || parsedUrl.toString())
+            : { featuredImageUrl: '', featuredImageAlt: '', imageCandidates: [] };
 
         return buildResult({
             finalUrl: response.url || parsedUrl.toString(),
@@ -85,6 +102,9 @@ export async function execute({ Url }) {
             ok: response.ok,
             contentType,
             title,
+            featuredImageUrl: imageInfo.featuredImageUrl,
+            featuredImageAlt: imageInfo.featuredImageAlt,
+            imageCandidates: imageInfo.imageCandidates,
             content,
             transport: 'fetch',
         });
@@ -99,6 +119,9 @@ export async function execute({ Url }) {
                 ? rawBody.match(/<title[^>]*>([\s\S]*?)<\/title>/i)
                 : null;
             const title = titleMatch ? stripHtmlToText(titleMatch[1]) : '';
+            const imageInfo = contentType.includes('text/html')
+                ? extractFeaturedImagesFromHtml(rawBody, curlResponse.finalUrl || parsedUrl.toString())
+                : { featuredImageUrl: '', featuredImageAlt: '', imageCandidates: [] };
             const status = Number(curlResponse.status) || 0;
 
             return buildResult({
@@ -107,6 +130,9 @@ export async function execute({ Url }) {
                 ok: status >= 200 && status < 300,
                 contentType,
                 title,
+                featuredImageUrl: imageInfo.featuredImageUrl,
+                featuredImageAlt: imageInfo.featuredImageAlt,
+                imageCandidates: imageInfo.imageCandidates,
                 content,
                 transport: 'curl',
             });

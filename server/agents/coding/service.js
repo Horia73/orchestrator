@@ -6,8 +6,17 @@ import { broadcastEvent, updateStreamingSnapshot } from '../../core/events.js';
  * Generates expert advice from the Coding Agent.
  * This version supports streaming and tool calls, making it "identical" to the orchestrator's workflow.
  */
-export async function generateCodingExpertAdvice({ task, context, files = [], attachments = [], previousTurns = [] } = {}) {
+export async function generateCodingExpertAdvice({
+    task,
+    context,
+    files = [],
+    attachments = [],
+    previousTurns = [],
+    spawnDepth = 0,
+    maxSubagentSpawnDepth,
+} = {}) {
     const contextData = getExecutionContext();
+    const subagentId = String(contextData?.subagentId ?? '').trim();
 
     // 1. Build the initial turn for the expert
     let promptText = `Solve the following coding task.\n\n`;
@@ -54,6 +63,8 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
             chatId: contextData?.chatId,
             messageId: contextData?.messageId,
             clientId: contextData?.clientId,
+            spawnDepth: spawnDepth ?? contextData?.spawnDepth ?? 0,
+            maxSubagentSpawnDepth: maxSubagentSpawnDepth ?? contextData?.maxSubagentSpawnDepth,
             shouldStop: contextData?.shouldStop ?? (() => false),
             onUpdate: async ({ text, thought, parts: expertParts, steps }) => {
                 if (contextData?.chatId && contextData?.messageId) {
@@ -63,7 +74,10 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
                         parts: expertParts,
                         steps: steps,
                         isThinking: true,
-                        clientId: contextData?.clientId
+                        status: thought ? 'thinking' : 'running',
+                        clientId: contextData?.clientId,
+                        subagentId: subagentId || undefined,
+                        agentId: CODING_AGENT_ID,
                     };
                     broadcastEvent('agent.streaming', {
                         chatId: contextData.chatId,
@@ -74,12 +88,16 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
                         payload: agentPayload,
                     });
                     updateStreamingSnapshot(contextData.chatId, {
+                        agentToolCallId: contextData.toolCallId,
                         agentToolName: contextData.toolName,
                         agentPayload,
                     });
                 }
             }
         });
+
+        const completedOk = finalResult?.stopped !== true;
+        const finalStatus = completedOk ? 'completed' : 'stopped';
 
         if (contextData?.chatId && contextData?.messageId) {
             const finalPayload = {
@@ -88,7 +106,11 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
                 parts: finalResult.parts,
                 steps: finalResult.steps,
                 isThinking: false,
-                clientId: contextData?.clientId
+                status: finalStatus,
+                stopReason: finalResult.stopReason || undefined,
+                clientId: contextData?.clientId,
+                subagentId: subagentId || undefined,
+                agentId: CODING_AGENT_ID,
             };
             broadcastEvent('agent.streaming', {
                 chatId: contextData.chatId,
@@ -99,22 +121,53 @@ export async function generateCodingExpertAdvice({ task, context, files = [], at
                 payload: finalPayload,
             });
             updateStreamingSnapshot(contextData.chatId, {
+                agentToolCallId: contextData.toolCallId,
                 agentToolName: contextData.toolName,
                 agentPayload: finalPayload,
             });
         }
 
         return {
-            ok: true,
+            ok: completedOk,
             model: finalResult.model,
             text: finalResult.text,
             thought: finalResult.thought,
             parts: finalResult.parts,
             steps: finalResult.steps,
+            stopped: finalResult.stopped === true,
+            stopReason: finalResult.stopReason || '',
             usageMetadata: finalResult.usageMetadata,
+            toolUsageRecords: Array.isArray(finalResult.toolUsageRecords) ? finalResult.toolUsageRecords : [],
         };
     } catch (error) {
         console.error(`[CodingService] Expert execution failed:`, error);
+        if (contextData?.chatId && contextData?.messageId) {
+            const errorPayload = {
+                text: `Expert encountered an error: ${error.message}`,
+                thought: '',
+                parts: [],
+                steps: [],
+                isThinking: false,
+                status: 'error',
+                error: error.message,
+                clientId: contextData?.clientId,
+                subagentId: subagentId || undefined,
+                agentId: CODING_AGENT_ID,
+            };
+            broadcastEvent('agent.streaming', {
+                chatId: contextData.chatId,
+                messageId: contextData.messageId,
+                toolCallId: contextData.toolCallId,
+                toolName: contextData.toolName,
+                agentId: CODING_AGENT_ID,
+                payload: errorPayload,
+            });
+            updateStreamingSnapshot(contextData.chatId, {
+                agentToolCallId: contextData.toolCallId,
+                agentToolName: contextData.toolName,
+                agentPayload: errorPayload,
+            });
+        }
         return {
             ok: false,
             error: error.message,

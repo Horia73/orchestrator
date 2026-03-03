@@ -1,5 +1,6 @@
 import { COMMAND_OUTPUT_DEFAULT_CHARS } from './_sessions.js';
 import { getCommandStatusSnapshot } from './_sessions.js';
+import { isSubagentId } from '../agents/_subagentRegistry.js';
 
 export const declaration = {
     name: 'command_status',
@@ -33,8 +34,15 @@ export async function execute({
     WaitDurationSeconds = 0,
     OutputCharacterCount = COMMAND_OUTPUT_DEFAULT_CHARS,
 }) {
+    const normalizedId = String(CommandId ?? '').trim();
+    if (isSubagentId(normalizedId)) {
+        return {
+            error: `Subagent IDs are not command IDs: ${normalizedId}. Use subagent_status instead.`,
+        };
+    }
+
     return getCommandStatusSnapshot({
-        commandId: CommandId,
+        commandId: normalizedId,
         waitDurationSeconds: WaitDurationSeconds,
         outputCharacterCount: OutputCharacterCount,
     });

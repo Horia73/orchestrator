@@ -56,3 +56,28 @@ export function getAgentConfig(agentId = DEFAULT_AGENT_ID) {
 
     return settings[normalizedAgentId] ?? fallback[normalizedAgentId] ?? fallback[DEFAULT_AGENT_ID];
 }
+
+export function readUiSettings() {
+    try {
+        const config = reloadConfigJson();
+        const uiSection = config?.ui;
+        if (uiSection && typeof uiSection === 'object') {
+            return {
+                aiName: String(uiSection.aiName ?? 'AI Chat'),
+                userName: String(uiSection.userName ?? 'User'),
+            };
+        }
+    } catch {
+        // ignore
+    }
+    return { aiName: 'AI Chat', userName: 'User' };
+}
+
+export function writeUiSettings(uiSettings) {
+    const sanitized = {
+        aiName: String(uiSettings?.aiName ?? 'AI Chat').trim() || 'AI Chat',
+        userName: String(uiSettings?.userName ?? 'User').trim() || 'User',
+    };
+    updateConfigSection('ui', sanitized);
+    return sanitized;
+}

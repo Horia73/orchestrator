@@ -8,9 +8,36 @@ import { fetchRemoteModels } from '../../api/settingsApi.js';
 import { UsageDashboard } from './UsageDashboard.jsx';
 import { SystemLogsDashboard } from './SystemLogsDashboard.jsx';
 import { UpdatesPanel } from './UpdatesPanel.jsx';
+import { SkillsPanel } from './SkillsPanel.jsx';
+import { FilesEditorPanel } from './FilesEditorPanel.jsx';
 import './Settings.css';
 
 /* ─── Model Dropdown ─────────────────────────────────────────────────── */
+
+function normalizeModelRef(value) {
+    const raw = String(value ?? '').trim();
+    if (!raw) {
+        return '';
+    }
+
+    return raw.startsWith('models/') ? raw.slice('models/'.length) : raw;
+}
+
+function matchesModelRef(model, selectedModelId) {
+    const target = normalizeModelRef(selectedModelId);
+    if (!target) {
+        return false;
+    }
+
+    return (
+        normalizeModelRef(model?.id) === target
+        || normalizeModelRef(model?.fullName) === target
+    );
+}
+
+function formatPriceAmount(value, decimals = 2) {
+    return `$${Number(value).toFixed(decimals)}`;
+}
 
 function ModelDropdown({ selectedModelId, modelsList, onSelect }) {
     const [open, setOpen] = useState(false);
@@ -49,7 +76,7 @@ function ModelDropdown({ selectedModelId, modelsList, onSelect }) {
         );
     }, [search, modelsList]);
 
-    const selectedModel = modelsList.find((m) => m.id === selectedModelId);
+    const selectedModel = modelsList.find((m) => matchesModelRef(m, selectedModelId));
 
     return (
         <div className="model-dropdown" ref={dropdownRef}>
@@ -63,7 +90,7 @@ function ModelDropdown({ selectedModelId, modelsList, onSelect }) {
             >
                 <div className="model-trigger-content">
                     <span className="model-trigger-name">
-                        {selectedModel?.displayName ?? selectedModelId}
+                        {selectedModel?.displayName ?? normalizeModelRef(selectedModelId)}
                     </span>
                     <span
                         className="model-trigger-tier"
@@ -118,9 +145,9 @@ function ModelDropdown({ selectedModelId, modelsList, onSelect }) {
                         {filtered.map((model) => (
                             <button
                                 key={model.id}
-                                className={`model-option${model.id === selectedModelId ? ' active' : ''}`}
+                                className={`model-option${matchesModelRef(model, selectedModelId) ? ' active' : ''}`}
                                 onClick={() => {
-                                    onSelect(model.id);
+                                    onSelect(normalizeModelRef(model.id || model.fullName));
                                     setOpen(false);
                                     setSearch('');
                                 }}
@@ -220,7 +247,7 @@ function GroundingSelector({ grounding, onChange }) {
 /* ─── Price Indicator ────────────────────────────────────────────────── */
 
 function PriceIndicator({ modelId, modelsList, modelsLoading }) {
-    const model = modelsList.find((m) => m.id === modelId);
+    const model = modelsList.find((m) => matchesModelRef(m, modelId));
     if (!model) {
         // Reserve space while models are still loading to prevent card resize.
         return modelsLoading
@@ -228,15 +255,94 @@ function PriceIndicator({ modelId, modelsList, modelsLoading }) {
             : null;
     }
 
-    const hasInputPricing = Number.isFinite(model.inputPrice200k);
-    const hasOutputPricing = (
-        Number.isFinite(model.outputPrice200k)
-        || Number.isFinite(model.outputTextPrice200k)
-        || Number.isFinite(model.outputImagePrice200k)
-        || Number.isFinite(model.outputImagePricePerImage)
-    );
+    const pricingRows = [];
 
-    if (!hasInputPricing || !hasOutputPricing) {
+    if (Number.isFinite(model.inputPrice200k)) {
+        pricingRows.push({
+            label: 'Input:',
+            value: `${formatPriceAmount(model.inputPrice200k)} / 1M tokens`,
+        });
+    }
+    if (Number.isFinite(model.inputPriceOver200k)) {
+        pricingRows.push({
+            label: 'Input (>200k tokens):',
+            value: `${formatPriceAmount(model.inputPriceOver200k)} / 1M tokens`,
+        });
+    }
+    if (Number.isFinite(model.outputPrice200k)) {
+        pricingRows.push({
+            label: 'Output:',
+            value: `${formatPriceAmount(model.outputPrice200k)} / 1M tokens`,
+        });
+    }
+    if (Number.isFinite(model.outputPriceOver200k)) {
+        pricingRows.push({
+            label: 'Output (>200k tokens):',
+            value: `${formatPriceAmount(model.outputPriceOver200k)} / 1M tokens`,
+        });
+    }
+    if (Number.isFinite(model.outputTextPrice200k)) {
+        pricingRows.push({
+            label: 'Output text/thinking:',
+            value: `${formatPriceAmount(model.outputTextPrice200k)} / 1M tokens`,
+        });
+    }
+    if (Number.isFinite(model.outputImagePrice200k)) {
+        pricingRows.push({
+            label: 'Output images:',
+            value: `${formatPriceAmount(model.outputImagePrice200k)} / 1M tokens`,
+        });
+    }
+    if (Number.isFinite(model.outputImagePricePerImage)) {
+        pricingRows.push({
+            label: 'Output images:',
+            value: `${formatPriceAmount(model.outputImagePricePerImage, 3)} / image`,
+        });
+    }
+    if (Number.isFinite(model.outputImagePrice1K)) {
+        pricingRows.push({
+            label: 'Output image (1K):',
+            value: `${formatPriceAmount(model.outputImagePrice1K, 3)} / image`,
+        });
+    }
+    if (Number.isFinite(model.outputImagePrice2K)) {
+        pricingRows.push({
+            label: 'Output image (2K):',
+            value: `${formatPriceAmount(model.outputImagePrice2K, 3)} / image`,
+        });
+    }
+    if (Number.isFinite(model.outputImagePrice4K)) {
+        pricingRows.push({
+            label: 'Output image (4K):',
+            value: `${formatPriceAmount(model.outputImagePrice4K, 3)} / image`,
+        });
+    }
+    if (Number.isFinite(model.outputAudioPrice)) {
+        pricingRows.push({
+            label: 'Output audio:',
+            value: `${formatPriceAmount(model.outputAudioPrice)} / 1M audio tokens`,
+        });
+    }
+    if (Number.isFinite(model.outputPricePerSecond)) {
+        pricingRows.push({
+            label: 'Output video:',
+            value: `${formatPriceAmount(model.outputPricePerSecond)} / second`,
+        });
+    }
+    if (Number.isFinite(model.pricePerQuery)) {
+        pricingRows.push({
+            label: 'Per query:',
+            value: `${formatPriceAmount(model.pricePerQuery)} / query`,
+        });
+    }
+    if (Number.isFinite(model.groundingPricePer1k)) {
+        pricingRows.push({
+            label: 'Grounding:',
+            value: `${formatPriceAmount(model.groundingPricePer1k)} / 1K requests`,
+        });
+    }
+
+    if (pricingRows.length === 0) {
         return (
             <div className="price-indicator">
                 <div className="price-header">
@@ -256,56 +362,14 @@ function PriceIndicator({ modelId, modelsList, modelsLoading }) {
                 <span className="price-label">Model Pricing Details</span>
             </div>
             <div className="price-details">
-                {model.inputPriceOver200k !== undefined && model.outputPriceOver200k !== undefined ? (
-                    <>
-                        <div className="price-row">
-                            <span className="price-row-heading">Input (≤200k tokens):</span>
-                            <span>${model.inputPrice200k.toFixed(2)} / 1M tokens</span>
-                        </div>
-                        <div className="price-row">
-                            <span className="price-row-heading">Input (&gt;200k tokens):</span>
-                            <span>${model.inputPriceOver200k.toFixed(2)} / 1M tokens</span>
-                        </div>
-                        <div className="price-row">
-                            <span className="price-row-heading">Output (≤200k tokens):</span>
-                            <span>${model.outputPrice200k.toFixed(2)} / 1M tokens</span>
-                        </div>
-                        <div className="price-row">
-                            <span className="price-row-heading">Output (&gt;200k tokens):</span>
-                            <span>${model.outputPriceOver200k.toFixed(2)} / 1M tokens</span>
-                        </div>
-                    </>
-                ) : (
-                    <>
-                        <div className="price-row">
-                            <span className="price-row-heading">Input:</span>
-                            <span>${model.inputPrice200k.toFixed(2)} / 1M tokens</span>
-                        </div>
-                        {Number.isFinite(model.outputPrice200k) && (
-                            <div className="price-row">
-                                <span className="price-row-heading">Output:</span>
-                                <span>${model.outputPrice200k.toFixed(2)} / 1M tokens</span>
-                            </div>
-                        )}
-                        {Number.isFinite(model.outputTextPrice200k) && (
-                            <div className="price-row">
-                                <span className="price-row-heading">Output text/thinking:</span>
-                                <span>${model.outputTextPrice200k.toFixed(2)} / 1M tokens</span>
-                            </div>
-                        )}
-                        {Number.isFinite(model.outputImagePrice200k) && (
-                            <div className="price-row">
-                                <span className="price-row-heading">Output images:</span>
-                                <span>${model.outputImagePrice200k.toFixed(2)} / 1M tokens</span>
-                            </div>
-                        )}
-                        {Number.isFinite(model.outputImagePricePerImage) && (
-                            <div className="price-row">
-                                <span className="price-row-heading">Output images:</span>
-                                <span>${model.outputImagePricePerImage.toFixed(3)} / image</span>
-                            </div>
-                        )}
-                    </>
+                {pricingRows.map((row, index) => (
+                    <div className="price-row" key={`${index}-${row.label}`}>
+                        <span className="price-row-heading">{row.label}</span>
+                        <span>{row.value}</span>
+                    </div>
+                ))}
+                {model.note && (
+                    <span>{model.note}</span>
                 )}
             </div>
         </div>
@@ -344,7 +408,7 @@ function buildAgentStates(agentDefinitions, savedSettings, previousStates = {}) 
 
 function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
     const supportsThinking = agent.supportsThinking !== false;
-    const selectedModel = modelsList.find((m) => m.id === agentState.model);
+    const selectedModel = modelsList.find((m) => matchesModelRef(m, agentState.model));
     const thinkingSupported = selectedModel ? selectedModel.thinking !== false : true;
     const disabledLevels = selectedModel?.unsupportedThinkingLevels ?? [];
 
@@ -405,7 +469,8 @@ function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
 
 const TABS = [
     { id: 'models', label: 'Models' },
-    { id: 'prompting', label: 'Prompting' },
+    { id: 'files', label: 'Files' },
+    { id: 'skills', label: 'Skills' },
     { id: 'usage', label: 'Usage' },
     { id: 'logs', label: 'Logs' },
     { id: 'updates', label: 'Updates' },
@@ -429,21 +494,44 @@ function getInitialActiveTab() {
 
 export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave }) {
     const [agentStates, setAgentStates] = useState(() => buildAgentStates(agentDefinitions, savedSettings));
-
     const [activeTab, setActiveTab] = useState(() => getInitialActiveTab());
     const [modelsList, setModelsList] = useState([]);
     const [modelsLoading, setModelsLoading] = useState(true);
 
-    useEffect(() => {
-        fetchRemoteModels()
-            .then((list) => {
-                setModelsList(Array.isArray(list) ? list : []);
-            })
-            .catch((err) => {
-                console.error("Failed to load generic models", err);
-            })
-            .finally(() => setModelsLoading(false));
+    const loadModels = useCallback(async () => {
+        setModelsLoading(true);
+        try {
+            const list = await fetchRemoteModels();
+            setModelsList(Array.isArray(list) ? list : []);
+        } catch (err) {
+            console.error('Failed to load generic models', err);
+        } finally {
+            setModelsLoading(false);
+        }
     }, []);
+
+    useEffect(() => {
+        loadModels().catch(() => undefined);
+    }, [loadModels]);
+
+    useEffect(() => {
+        const source = new EventSource('/api/events');
+
+        source.onmessage = (event) => {
+            try {
+                const payload = JSON.parse(event.data);
+                if (payload?.type === 'models.updated') {
+                    loadModels().catch(() => undefined);
+                }
+            } catch {
+                // Ignore malformed payloads.
+            }
+        };
+
+        return () => {
+            source.close();
+        };
+    }, [loadModels]);
 
     useEffect(() => {
         try {
@@ -461,6 +549,8 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
             return nextStates;
         });
     }, [onSave]);
+
+
 
     return (
         <div className="settings-page">
@@ -497,6 +587,7 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
                 <div className="settings-content">
                     {activeTab === 'models' && (
                         <div className="settings-agents-grid">
+
                             {agentDefinitions.length === 0 ? (
                                 <div className="settings-placeholder">
                                     <h2>Agents unavailable</h2>
@@ -521,19 +612,12 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
                         <UsageDashboard modelsList={modelsList} agentDefinitions={agentDefinitions} />
                     )}
 
-                    {activeTab === 'prompting' && (
-                        <div className="prompting-panel">
-                            <div className="prompting-placeholder">
-                                <div className="prompting-placeholder-icon">
-                                    <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round">
-                                        <path d="M12 20h9" />
-                                        <path d="M16.5 3.5a2.121 2.121 0 0 1 3 3L7 19l-4 1 1-4L16.5 3.5z" />
-                                    </svg>
-                                </div>
-                                <h2>Prompting & Agents</h2>
-                                <p>Configure agent prompts, system instructions, memories, and behavior — coming soon.</p>
-                            </div>
-                        </div>
+                    {activeTab === 'files' && (
+                        <FilesEditorPanel />
+                    )}
+
+                    {activeTab === 'skills' && (
+                        <SkillsPanel />
                     )}
 
                     {activeTab === 'logs' && (

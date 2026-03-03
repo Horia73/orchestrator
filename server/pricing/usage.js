@@ -1,7 +1,10 @@
+import fs from 'node:fs';
+import { MODELS_CONFIG_PATH } from '../core/dataPaths.js';
+
 const TOKEN_MILLION = 1_000_000;
 const CONTEXT_WINDOW_THRESHOLD = 200_000;
 
-const MODEL_PRICING = {
+const DEFAULT_MODEL_PRICING = {
     'gemini-3.1-pro-preview': {
         inputPrice200k: 2.00,
         inputPriceOver200k: 4.00,
@@ -58,6 +61,22 @@ const MODEL_PRICING = {
     },
 };
 
+function toFiniteNumber(value) {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : undefined;
+}
+
+function firstFiniteNumber(...values) {
+    for (const value of values) {
+        const parsed = toFiniteNumber(value);
+        if (parsed !== undefined) {
+            return parsed;
+        }
+    }
+
+    return undefined;
+}
+
 function normalizeModelId(value) {
     const raw = String(value ?? '').trim();
     if (!raw) {
@@ -69,6 +88,77 @@ function normalizeModelId(value) {
     }
 
     return raw;
+}
+
+function normalizePricingEntry(rawEntry = {}) {
+    if (!rawEntry || typeof rawEntry !== 'object') {
+        return {};
+    }
+
+    const normalized = {
+        inputPrice200k: firstFiniteNumber(rawEntry.inputPrice200k, rawEntry.inputPrice),
+        inputPriceOver200k: firstFiniteNumber(rawEntry.inputPriceOver200k),
+        outputPrice200k: firstFiniteNumber(rawEntry.outputPrice200k, rawEntry.outputPrice),
+        outputPriceOver200k: firstFiniteNumber(rawEntry.outputPriceOver200k),
+        outputTextPrice200k: firstFiniteNumber(rawEntry.outputTextPrice200k, rawEntry.outputPriceText),
+        outputImagePrice200k: firstFiniteNumber(rawEntry.outputImagePrice200k),
+        outputImagePricePerImage: firstFiniteNumber(rawEntry.outputImagePricePerImage, rawEntry.outputPriceImage),
+        outputImagePrice1K: firstFiniteNumber(rawEntry.outputImagePrice1K),
+        outputImagePrice2K: firstFiniteNumber(rawEntry.outputImagePrice2K),
+        outputImagePrice4K: firstFiniteNumber(rawEntry.outputImagePrice4K),
+        outputAudioPrice: firstFiniteNumber(rawEntry.outputAudioPrice),
+        outputPricePerSecond: firstFiniteNumber(rawEntry.outputPricePerSecond),
+        pricePerQuery: firstFiniteNumber(rawEntry.pricePerQuery),
+        groundingPricePer1k: firstFiniteNumber(rawEntry.groundingPricePer1k),
+        defaultImageTokensPerOutput: firstFiniteNumber(rawEntry.defaultImageTokensPerOutput),
+        contextWindow: firstFiniteNumber(rawEntry.contextWindow),
+    };
+
+    const name = String(rawEntry.name ?? rawEntry.displayName ?? '').trim();
+    if (name) {
+        normalized.displayName = name;
+    }
+
+    const note = String(rawEntry.note ?? '').trim();
+    if (note) {
+        normalized.note = note;
+    }
+
+    return Object.fromEntries(
+        Object.entries(normalized).filter(([, value]) => value !== undefined && value !== ''),
+    );
+}
+
+export function getModelPricing() {
+    const pricing = Object.fromEntries(
+        Object.entries(DEFAULT_MODEL_PRICING).map(([modelId, entry]) => [
+            normalizeModelId(modelId),
+            { ...entry },
+        ]),
+    );
+
+    try {
+        if (fs.existsSync(MODELS_CONFIG_PATH)) {
+            const extra = JSON.parse(fs.readFileSync(MODELS_CONFIG_PATH, 'utf8'));
+            if (extra && typeof extra === 'object') {
+                for (const [rawKey, rawEntry] of Object.entries(extra)) {
+                    const modelId = normalizeModelId(rawEntry?.id ?? rawKey);
+                    if (!modelId || modelId === 'unknown-model') {
+                        continue;
+                    }
+
+                    pricing[modelId] = {
+                        ...(pricing[modelId] ?? {}),
+                        ...normalizePricingEntry(rawEntry),
+                    };
+                }
+            }
+        }
+    } catch {
+        // ignore
+    }
+
+    return pricing;
 }
 
 function toTokenCount(value) {
@@ -123,24 +213,35 @@ export function normalizeUsageMetadata(usageMetadata) {
         usageMetadata?.candidatesTokenCount ?? usageMetadata?.responseTokenCount,
     );
     const thoughtsTokenCount = toTokenCount(usageMetadata?.thoughtsTokenCount);
+    const explicitImageOutputTokens = toTokenCount(
+        usageMetadata?.imageOutputTokens ?? usageMetadata?.outputImageTokens,
+    );
+    const explicitTextOutputTokens = toTokenCount(
+        usageMetadata?.textOutputTokens ?? usageMetadata?.outputTextTokens,
+    );
 
     const candidatesTokensDetails = Array.isArray(usageMetadata?.candidatesTokensDetails)
         ? usageMetadata.candidatesTokensDetails
         : [];
 
-    const imageOutputTokens = sumModalityTokens(
+    const imageOutputTokensFromDetails = sumModalityTokens(
         candidatesTokensDetails,
         new Set(['IMAGE']),
     );
+    const imageOutputTokens = explicitImageOutputTokens > 0
+        ? explicitImageOutputTokens
+        : imageOutputTokensFromDetails;
 
     const textOutputTokensFromDetails = sumModalityTokens(
         candidatesTokensDetails,
         new Set(['TEXT']),
     );
 
-    const textOutputTokens = textOutputTokensFromDetails > 0
-        ? textOutputTokensFromDetails
-        : Math.max(0, candidatesTokenCount - imageOutputTokens);
+    const textOutputTokens = explicitTextOutputTokens > 0
+        ? explicitTextOutputTokens
+        : (textOutputTokensFromDetails > 0
+            ? textOutputTokensFromDetails
+            : Math.max(0, candidatesTokenCount - imageOutputTokens));
 
     let imageOutputCount = toImageCount(
         usageMetadata?.candidatesImageCount
@@ -176,7 +277,9 @@ export function normalizeUsageMetadata(usageMetadata) {
 }
 
 function resolveRate(pricing, baseName, isOver200kContext) {
-    const overName = `${baseName}Over200k`;
+    const overName = baseName.endsWith('200k')
+        ? baseName.replace(/200k$/, 'Over200k')
+        : `${baseName}Over200k`;
     if (isOver200kContext && Number.isFinite(pricing?.[overName])) {
         return pricing[overName];
     }
@@ -191,7 +294,7 @@ export function estimateUsageCost({ model, usageMetadata } = {}) {
     const outputTokens = usage.candidatesTokenCount;
     const billableOutputTextTokens = usage.textOutputTokens + usage.thoughtsTokenCount;
 
-    const pricing = MODEL_PRICING[modelId];
+    const pricing = getModelPricing()[modelId];
     if (!pricing) {
         return {
             modelId,
@@ -224,7 +327,7 @@ export function estimateUsageCost({ model, usageMetadata } = {}) {
         ? usage.imageOutputTokens
         : (
             (Number.isFinite(imageOutputRate) || Number.isFinite(imageOutputPricePerImage))
-            && outputTokens > 0
+                && outputTokens > 0
                 ? outputTokens
                 : 0
         );

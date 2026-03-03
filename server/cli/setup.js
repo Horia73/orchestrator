@@ -76,8 +76,8 @@ async function main() {
                 messages: existing?.context?.messages ?? existing?.contextMessages ?? 120,
             },
             agents: existing?.agents ?? {},
-            memory: existing?.memory ?? { enabled: true, consolidationModel: 'gemini-3-flash-preview', window: 100 },
             cron: existing?.cron ?? { enabled: true },
+            ui: existing?.ui ?? { aiName: 'AI Chat', userName: 'User' },
         };
 
         writeConfig(config);

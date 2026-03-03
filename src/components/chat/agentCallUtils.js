@@ -7,7 +7,40 @@ const AGENT_TOOL_METADATA = Object.freeze({
         agentId: 'coding',
         agentName: 'Coding Expert',
     }),
+    call_multipurpose_agent: Object.freeze({
+        agentId: 'multipurpose',
+        agentName: 'Multipurpose Agent',
+    }),
+    call_researcher_agent: Object.freeze({
+        agentId: 'researcher',
+        agentName: 'Researcher Expert',
+    }),
+    spawn_subagent: Object.freeze({
+        agentId: 'subagent',
+        agentName: 'Subagent',
+    }),
 });
+
+const SUBAGENT_RESULT_TOOL_NAME = 'spawn_subagent_result';
+
+function formatAgentDisplayName(agentId, { isSubagent = false } = {}) {
+    const normalizedAgentId = String(agentId ?? '').trim().toLowerCase();
+
+    if (normalizedAgentId === 'coding') {
+        return isSubagent ? 'Coding Subagent' : 'Coding Expert';
+    }
+    if (normalizedAgentId === 'researcher') {
+        return isSubagent ? 'Researcher Subagent' : 'Researcher Expert';
+    }
+    if (normalizedAgentId === 'multipurpose') {
+        return isSubagent ? 'Multipurpose Subagent' : 'Multipurpose Agent';
+    }
+    if (normalizedAgentId === 'image') {
+        return 'Image Agent';
+    }
+
+    return isSubagent ? 'Subagent' : 'Agent';
+}
 
 function safeJsonStringify(value) {
     try {
@@ -50,6 +83,8 @@ export function findMatchingFunctionResponse(parts, functionCall, callIndex = -1
         if (matchById?.functionResponse) {
             return matchById.functionResponse;
         }
+
+        return null;
     }
 
     if (callName) {
@@ -74,6 +109,38 @@ export function findMatchingFunctionResponse(parts, functionCall, callIndex = -1
     }
 
     return null;
+}
+
+export function getAgentCallIdentity({ toolName, functionCall, functionResponse, callId } = {}) {
+    const normalizedToolName = String(toolName ?? functionCall?.name ?? '').trim();
+    const normalizedCallId = String(callId ?? getToolCallId(functionCall)).trim();
+    const metadata = getAgentToolMetadata(normalizedToolName);
+    const responseObject = functionResponse?.response ?? {};
+
+    if (normalizedToolName === 'spawn_subagent') {
+        const delegatedAgentId = String(
+            responseObject?.agentId
+            ?? functionCall?.args?.agentId
+            ?? 'multipurpose',
+        ).trim().toLowerCase() || 'multipurpose';
+        const subagentId = String(responseObject?.subagentId ?? '').trim();
+        const instanceId = subagentId || normalizedCallId;
+
+        return {
+            agentId: `subagent:${delegatedAgentId}`,
+            agentName: formatAgentDisplayName(delegatedAgentId, { isSubagent: true }),
+            instanceId,
+            instanceLabel: subagentId || (normalizedCallId ? `call ${normalizedCallId}` : ''),
+        };
+    }
+
+    const agentId = String(metadata?.agentId ?? '').trim();
+    return {
+        agentId,
+        agentName: String(metadata?.agentName ?? '').trim() || formatAgentDisplayName(agentId),
+        instanceId: normalizedCallId,
+        instanceLabel: normalizedCallId,
+    };
 }
 
 function normalizeImageMimeType(value) {
@@ -174,13 +241,11 @@ function mergePartsWithImageMedia(parts, imageParts) {
     return merged;
 }
 
-function getPartsContextsFromMessage(message) {
-    if (!message || message.role !== 'ai') return [];
+function getPartsContextsFromPayload(payload) {
+    const messageImageParts = collectImageMediaParts(payload?.parts);
 
-    const messageImageParts = collectImageMediaParts(message.parts);
-
-    if (Array.isArray(message.steps) && message.steps.length > 0) {
-        return message.steps
+    if (Array.isArray(payload?.steps) && payload.steps.length > 0) {
+        return payload.steps
             .map((step, index) => ({
                 stepIndex: index,
                 text: String(step?.text ?? ''),
@@ -192,10 +257,71 @@ function getPartsContextsFromMessage(message) {
 
     return [{
         stepIndex: -1,
-        text: String(message.text ?? ''),
-        thought: String(message.thought ?? ''),
-        parts: mergePartsWithImageMedia(message.parts, messageImageParts),
+        text: String(payload?.text ?? ''),
+        thought: String(payload?.thought ?? ''),
+        parts: mergePartsWithImageMedia(payload?.parts, messageImageParts),
     }];
+}
+
+function getNestedPayloadFromFunctionResponse(functionResponse) {
+    const responseObject = functionResponse?.response;
+    if (!responseObject || typeof responseObject !== 'object') {
+        return null;
+    }
+
+    const parts = Array.isArray(responseObject.parts) ? responseObject.parts : [];
+    const steps = Array.isArray(responseObject.steps) ? responseObject.steps : [];
+    const text = String(responseObject.text ?? '').trim();
+    const thought = String(responseObject.agentThought ?? responseObject.thought ?? '').trim();
+
+    if (parts.length === 0 && steps.length === 0 && !text && !thought) {
+        return null;
+    }
+
+    return {
+        text,
+        thought,
+        parts,
+        steps,
+    };
+}
+
+function collectContextNodesFromPayload(payload, sourceMessageId, into, depth = 0) {
+    if (!payload || depth > 12) {
+        return;
+    }
+
+    const contexts = getPartsContextsFromPayload(payload);
+    for (const context of contexts) {
+        into.push({
+            sourceMessageId,
+            context,
+        });
+
+        const contextParts = Array.isArray(context.parts) ? context.parts : [];
+        for (const part of contextParts) {
+            const nestedPayload = getNestedPayloadFromFunctionResponse(part?.functionResponse);
+            if (!nestedPayload) {
+                continue;
+            }
+            collectContextNodesFromPayload(nestedPayload, sourceMessageId, into, depth + 1);
+        }
+    }
+}
+
+function getAllContextNodesFromMessage(message) {
+    if (!message || message.role !== 'ai') {
+        return [];
+    }
+
+    const nodes = [];
+    collectContextNodesFromPayload({
+        text: message.text,
+        thought: message.thought,
+        parts: message.parts,
+        steps: message.steps,
+    }, String(message.id ?? ''), nodes);
+    return nodes;
 }
 
 export function findAgentToolCallInMessages(messages, callId) {
@@ -204,9 +330,9 @@ export function findAgentToolCallInMessages(messages, callId) {
 
     for (let i = messages.length - 1; i >= 0; i--) {
         const message = messages[i];
-        const contexts = getPartsContextsFromMessage(message);
+        const contextNodes = getAllContextNodesFromMessage(message);
 
-        for (const context of contexts) {
+        for (const { sourceMessageId, context } of contextNodes) {
             const contextParts = Array.isArray(context.parts) ? context.parts : [];
             for (let partIndex = 0; partIndex < contextParts.length; partIndex++) {
                 const part = contextParts[partIndex];
@@ -219,13 +345,21 @@ export function findAgentToolCallInMessages(messages, callId) {
                 if (!agentMeta) continue;
 
                 const functionResponse = findMatchingFunctionResponse(contextParts, functionCall, partIndex);
+                const identity = getAgentCallIdentity({
+                    toolName: functionCall.name,
+                    functionCall,
+                    functionResponse,
+                    callId: normalizedCallId,
+                });
 
                 return {
                     callId: normalizedCallId,
                     toolName: String(functionCall.name),
-                    agentId: agentMeta.agentId,
-                    agentName: agentMeta.agentName,
-                    sourceMessageId: String(message.id ?? ''),
+                    agentId: identity.agentId,
+                    agentName: identity.agentName,
+                    instanceId: identity.instanceId,
+                    instanceLabel: identity.instanceLabel,
+                    sourceMessageId,
                     context: {
                         text: context.text,
                         thought: context.thought,
@@ -249,9 +383,9 @@ export function findLatestAgentToolCallInMessages(messages, toolName = '') {
 
     for (let i = messages.length - 1; i >= 0; i--) {
         const message = messages[i];
-        const contexts = getPartsContextsFromMessage(message);
+        const contextNodes = getAllContextNodesFromMessage(message);
 
-        for (const context of contexts) {
+        for (const { sourceMessageId, context } of contextNodes) {
             const contextParts = Array.isArray(context.parts) ? context.parts : [];
             for (let partIndex = contextParts.length - 1; partIndex >= 0; partIndex--) {
                 const part = contextParts[partIndex];
@@ -265,13 +399,21 @@ export function findLatestAgentToolCallInMessages(messages, toolName = '') {
                 if (!agentMeta) continue;
 
                 const functionResponse = findMatchingFunctionResponse(contextParts, functionCall, partIndex);
+                const identity = getAgentCallIdentity({
+                    toolName: name,
+                    functionCall,
+                    functionResponse,
+                    callId: getToolCallId(functionCall),
+                });
 
                 return {
                     callId: getToolCallId(functionCall),
                     toolName: name,
-                    agentId: agentMeta.agentId,
-                    agentName: agentMeta.agentName,
-                    sourceMessageId: String(message.id ?? ''),
+                    agentId: identity.agentId,
+                    agentName: identity.agentName,
+                    instanceId: identity.instanceId,
+                    instanceLabel: identity.instanceLabel,
+                    sourceMessageId,
                     context: {
                         text: context.text,
                         thought: context.thought,
@@ -289,20 +431,140 @@ export function findLatestAgentToolCallInMessages(messages, toolName = '') {
     return null;
 }
 
-export function buildAgentPanelMessage(agentCallDetails) {
+function getFunctionResponsesFromParts(parts) {
+    if (!Array.isArray(parts) || parts.length === 0) {
+        return [];
+    }
+
+    return parts
+        .map((part) => part?.functionResponse)
+        .filter(Boolean);
+}
+
+function collectFunctionResponsesFromPayload(payload, into, depth = 0) {
+    if (!payload || depth > 12) {
+        return;
+    }
+
+    const contexts = getPartsContextsFromPayload(payload);
+    for (const context of contexts) {
+        const contextParts = Array.isArray(context.parts) ? context.parts : [];
+        for (const functionResponse of getFunctionResponsesFromParts(contextParts)) {
+            into.push(functionResponse);
+            const nestedPayload = getNestedPayloadFromFunctionResponse(functionResponse);
+            if (nestedPayload) {
+                collectFunctionResponsesFromPayload(nestedPayload, into, depth + 1);
+            }
+        }
+    }
+}
+
+export function findSubagentResultInMessages(messages, { callId, subagentId } = {}) {
+    const normalizedCallId = String(callId ?? '').trim();
+    const normalizedSubagentId = String(subagentId ?? '').trim();
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return null;
+    }
+
+    for (let i = messages.length - 1; i >= 0; i -= 1) {
+        const message = messages[i];
+        const responseParts = [];
+        collectFunctionResponsesFromPayload({
+            text: message?.text,
+            thought: message?.thought,
+            parts: message?.parts,
+            steps: message?.steps,
+        }, responseParts);
+
+        for (const functionResponse of responseParts) {
+            const responseName = String(functionResponse?.name ?? '').trim();
+            if (responseName !== SUBAGENT_RESULT_TOOL_NAME) {
+                continue;
+            }
+
+            const responseObject = functionResponse?.response ?? {};
+            const responseCallId = String(responseObject?.parentToolCallId ?? '').trim();
+            const responseSubagentId = String(
+                responseObject?.subagentId
+                ?? functionResponse?.id
+                ?? '',
+            ).trim();
+
+            if (normalizedCallId && responseCallId === normalizedCallId) {
+                return {
+                    message,
+                    functionResponse,
+                };
+            }
+
+            if (normalizedSubagentId && responseSubagentId === normalizedSubagentId) {
+                return {
+                    message,
+                    functionResponse,
+                };
+            }
+        }
+    }
+
+    return null;
+}
+
+function hasRenderableAgentResult(responseObject) {
+    if (!responseObject || typeof responseObject !== 'object') {
+        return false;
+    }
+
+    const text = String(responseObject.text ?? '').trim();
+    const thought = String(responseObject.agentThought ?? responseObject.thought ?? '').trim();
+    const hasParts = Array.isArray(responseObject.parts) && responseObject.parts.length > 0;
+    const hasSteps = Array.isArray(responseObject.steps) && responseObject.steps.length > 0;
+    const error = String(responseObject.error ?? '').trim();
+
+    return Boolean(text || thought || hasParts || hasSteps || error);
+}
+
+export function buildAgentPanelMessage(agentCallDetails, messages = []) {
     if (!agentCallDetails) return null;
 
     const functionResponse = agentCallDetails.toolPart?.functionResponse;
     const isExecuting = agentCallDetails.toolPart?.isExecuting === true;
-    const resp = functionResponse?.response;
+    let resp = functionResponse?.response;
+
+    if (String(agentCallDetails?.toolName ?? '').trim() === 'spawn_subagent') {
+        const resolvedSubagentId = String(
+            resp?.subagentId
+            ?? agentCallDetails?.instanceId
+            ?? '',
+        ).trim();
+        if (!hasRenderableAgentResult(resp)) {
+            const subagentResult = findSubagentResultInMessages(messages, {
+                callId: agentCallDetails?.callId,
+                subagentId: resolvedSubagentId,
+            });
+            if (subagentResult?.functionResponse?.response) {
+                resp = subagentResult.functionResponse.response;
+            }
+        }
+    }
 
     const agentText = String(resp?.text ?? '').trim();
     const agentError = String(resp?.error ?? '').trim();
-    const isThinking = (isExecuting && !functionResponse) || resp?.isThinking === true;
-    const textFallback = isThinking ? 'Working...' : (Number(resp?.fileCount) > 0 ? `Analyzed ${resp.fileCount} file(s).` : '');
+    const rawStatus = String(resp?.status ?? '').trim().toLowerCase();
+    const isThinking = (
+        (isExecuting && !functionResponse)
+        || resp?.isThinking === true
+        || rawStatus === 'thinking'
+        || rawStatus === 'running'
+        || rawStatus === 'working'
+        || rawStatus === 'spawned'
+    );
+    const textFallback = isThinking
+        ? 'Working...'
+        : (Number(resp?.fileCount) > 0 ? `Analyzed ${resp.fileCount} file(s).` : '');
 
     const panelThought = String(resp?.agentThought ?? resp?.thought ?? '').trim();
-    const panelText = agentError || agentText || textFallback;
+    const queuedText = String(resp?.message ?? '').trim();
+    const panelText = agentError || agentText || queuedText || textFallback;
     const respParts = (Array.isArray(resp?.parts) && resp.parts.length > 0)
         ? resp.parts
         : (Array.isArray(resp?._mediaParts) ? resp._mediaParts : []);

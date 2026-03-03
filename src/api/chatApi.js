@@ -26,6 +26,7 @@ export async function sendChatMessage({
     clientMessageId,
     agentId,
     attachments,
+    isSteering,
 }) {
     const response = await fetch('/api/chat/send', {
         method: 'POST',
@@ -39,7 +40,33 @@ export async function sendChatMessage({
             clientMessageId,
             agentId,
             attachments,
+            isSteering,
         }),
+    });
+
+    return parseApiResponse(response);
+}
+
+export async function uploadChatAttachment(file, { name, mimeType } = {}) {
+    const uploadName = String(name ?? file?.name ?? 'attachment').trim() || 'attachment';
+    const uploadMimeType = String(mimeType ?? file?.type ?? '').trim() || 'application/octet-stream';
+
+    const response = await fetch('/api/uploads', {
+        method: 'POST',
+        headers: {
+            'Content-Type': uploadMimeType,
+            'X-Upload-Name': encodeURIComponent(uploadName),
+            'X-Upload-Mime-Type': encodeURIComponent(uploadMimeType),
+        },
+        body: file,
+    });
+
+    return parseApiResponse(response);
+}
+
+export async function deleteChatAttachmentUpload(uploadId) {
+    const response = await fetch(`/api/uploads/${encodeURIComponent(uploadId)}`, {
+        method: 'DELETE',
     });
 
     return parseApiResponse(response);
@@ -57,13 +84,6 @@ export async function stopChatGeneration({ chatId, clientId }) {
         }),
     });
 
-    return parseApiResponse(response);
-}
-
-export async function archiveChat(chatId) {
-    const response = await fetch(`/api/chats/${encodeURIComponent(chatId)}/archive`, {
-        method: 'POST',
-    });
     return parseApiResponse(response);
 }
 

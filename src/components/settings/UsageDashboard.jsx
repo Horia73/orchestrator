@@ -228,6 +228,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
     const [isClearingUsage, setIsClearingUsage] = useState(false);
     const [errorMessage, setErrorMessage] = useState('');
     const [expandedRequestId, setExpandedRequestId] = useState(null);
+    const [reloadVersion, setReloadVersion] = useState(0);
 
     useEffect(() => {
         let cancelled = false;
@@ -261,7 +262,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
         return () => {
             cancelled = true;
         };
-    }, [range.startDate, range.endDate, agentFilter]);
+    }, [range.startDate, range.endDate, agentFilter, reloadVersion]);
 
     useEffect(() => {
         const source = new EventSource('/api/events');
@@ -272,6 +273,10 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                 if (payload?.type === 'usage.cleared') {
                     setRequests([]);
                     setExpandedRequestId(null);
+                    return;
+                }
+                if (payload?.type === 'models.updated') {
+                    setReloadVersion((current) => current + 1);
                     return;
                 }
                 if (payload?.type !== 'usage.logged' || !payload?.request) {
@@ -353,8 +358,15 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
     const modelNameMap = useMemo(() => {
         const map = new Map();
         for (const model of modelsList ?? []) {
-            if (!model?.id) continue;
-            map.set(String(model.id), model.displayName || model.id);
+            const displayName = model?.displayName || model?.id;
+            const normalizedId = normalizeModelId(model?.id);
+            const normalizedFullName = normalizeModelId(model?.fullName);
+            if (normalizedId) {
+                map.set(normalizedId, displayName);
+            }
+            if (normalizedFullName) {
+                map.set(normalizedFullName, displayName);
+            }
         }
         return map;
     }, [modelsList]);
