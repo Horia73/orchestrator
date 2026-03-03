@@ -48,6 +48,7 @@ import {
 import { getAgentConfig, normalizeAgentId, readSettings, writeSettings, readUiSettings, writeUiSettings } from './storage/settings.js';
 import { memoryStore } from './services/memory.js';
 import { skillsLoader, parseRequires, checkRequirements } from './services/skills.js';
+import { mcpService, writeMcpServers } from './services/mcp.js';
 import { CRON_CONFIG } from './core/config.js';
 import { cronService } from './services/cron.js';
 import { MODELS_CONFIG_PATH, ORCHESTRATOR_HOME } from './core/dataPaths.js';
@@ -1100,6 +1101,63 @@ app.put('/api/settings', (req, res) => {
             source: 'settings',
             eventType: 'settings.update_failed',
             message: 'Failed to save settings.',
+        }).catch(() => undefined);
+    }
+});
+
+app.get('/api/mcp/servers', async (req, res) => {
+    try {
+        const includeTools = req.query?.includeTools === '1' || req.query?.includeTools === 'true';
+        const servers = await mcpService.getServersSnapshot({ includeTools });
+        res.json({ servers });
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to read MCP servers.' });
+        void writeSystemLog({
+            level: 'error',
+            source: 'mcp',
+            eventType: 'mcp.read_failed',
+            message: 'Failed to read MCP servers.',
+            data: {
+                error: String(error?.message ?? error ?? ''),
+            },
+        }).catch(() => undefined);
+    }
+});
+
+app.put('/api/mcp/servers', async (req, res) => {
+    try {
+        const serversPayload = req.body?.servers;
+        if (!Array.isArray(serversPayload)) {
+            res.status(400).json({ error: 'Invalid MCP servers payload.' });
+            return;
+        }
+
+        const savedServers = writeMcpServers(serversPayload);
+        await mcpService.syncConfig(savedServers);
+        const servers = await mcpService.getServersSnapshot({ includeTools: false });
+
+        res.json({ ok: true, servers });
+        broadcastEvent('mcp.updated', {
+            serverCount: servers.length,
+        });
+        void writeSystemLog({
+            source: 'mcp',
+            eventType: 'mcp.updated',
+            message: 'MCP servers updated.',
+            data: {
+                serverCount: servers.length,
+            },
+        }).catch(() => undefined);
+    } catch (error) {
+        res.status(500).json({ error: 'Failed to save MCP servers.' });
+        void writeSystemLog({
+            level: 'error',
+            source: 'mcp',
+            eventType: 'mcp.update_failed',
+            message: 'Failed to save MCP servers.',
+            data: {
+                error: String(error?.message ?? error ?? ''),
+            },
         }).catch(() => undefined);
     }
 });

@@ -1,33 +1,32 @@
 ---
 name: theme-factory
-description: Toolkit for styling artifacts with a theme. These artifacts can be slides, docs, reportings, HTML landing pages, etc. There are 10 pre-set themes with colors/fonts that you can apply to any artifact that has been creating, or can generate a new theme on-the-fly.
+description: Toolkit for styling artifacts with a reusable theme. Use when the user wants to restyle slides, documents, reports, dashboards, HTML pages, or other artifacts with a coherent visual direction. Includes 10 preset themes with color palettes and font pairings, and can also generate a custom theme when none of the presets fit.
 license: Complete terms in LICENSE.txt
 ---
 
-
 # Theme Factory Skill
 
-This skill provides a curated collection of professional font and color themes themes, each with carefully selected color palettes and font pairings. Once a theme is chosen, it can be applied to any artifact.
+This skill provides a curated collection of reusable themes. Each theme file in `themes/` defines:
 
-## Purpose
+- a named visual direction
+- a color palette with hex codes
+- header and body font choices
+- guidance on when the theme works best
 
-To apply consistent, professional styling to presentation slide decks, use this skill. Each theme includes:
-- A cohesive color palette with hex codes
-- Complementary font pairings for headers and body text
-- A distinct visual identity suitable for different contexts and audiences
+## Workflow
 
-## Usage Instructions
+When the user wants a theme applied:
 
-To apply styling to a slide deck or other artifact:
+1. Show the available preset themes by listing them from the `themes/` directory and summarizing each theme briefly.
+2. If the user wants a closer look, read one or more specific theme files and present the palette, typography, and intended mood.
+3. Ask the user to choose a preset or request a custom theme.
+4. After the choice is clear, apply the colors and fonts consistently to the target artifact.
 
-1. **Show the theme showcase**: Display the `theme-showcase.pdf` file to allow users to see all available themes visually. Do not make any modifications to it; simply show the file for viewing.
-2. **Ask for their choice**: Ask which theme to apply to the deck
-3. **Wait for selection**: Get explicit confirmation about the chosen theme
-4. **Apply the theme**: Once a theme has been chosen, apply the selected theme's colors and fonts to the deck/artifact
+If a visual preview would help and none exists yet, create a quick temporary HTML or markdown preview from the theme files instead of referring to a missing showcase asset.
 
-## Themes Available
+## Preset Themes
 
-The following 10 themes are available, each showcased in `theme-showcase.pdf`:
+The following preset themes are available in `themes/`:
 
 1. **Ocean Depths** - Professional and calming maritime theme
 2. **Sunset Boulevard** - Warm and vibrant sunset colors
@@ -40,20 +39,37 @@ The following 10 themes are available, each showcased in `theme-showcase.pdf`:
 9. **Botanical Garden** - Fresh and organic garden colors
 10. **Midnight Galaxy** - Dramatic and cosmic deep tones
 
-## Theme Details
+## Applying a Theme
 
-Each theme is defined in the `themes/` directory with complete specifications including:
-- Cohesive color palette with hex codes
-- Complementary font pairings for headers and body text
-- Distinct visual identity suitable for different contexts and audiences
+After the user chooses a theme:
 
-## Application Process
+1. Read the corresponding file in `themes/`.
+2. Extract the palette, font pairings, and usage guidance.
+3. Apply the style consistently across the artifact:
+   - headings
+   - body text
+   - accents and highlights
+   - backgrounds and surfaces
+   - charts, shapes, borders, or callouts if present
+4. Maintain readability and contrast. Do not sacrifice legibility just to force the palette.
 
-After a preferred theme is selected:
-1. Read the corresponding theme file from the `themes/` directory
-2. Apply the specified colors and fonts consistently throughout the deck
-3. Ensure proper contrast and readability
-4. Maintain the theme's visual identity across all slides
+If the artifact already has a strong visual identity, adapt the chosen theme instead of replacing everything mechanically.
 
-## Create your Own Theme
-To handle cases where none of the existing themes work for an artifact, create a custom theme. Based on provided inputs, generate a new theme similar to the ones above. Give the theme a similar name describing what the font/color combinations represent. Use any basic description provided to choose appropriate colors/fonts. After generating the theme, show it for review and verification. Following that, apply the theme as described above.
+## Custom Themes
+
+If none of the presets fit:
+
+1. Ask for the intended mood, audience, and medium.
+2. Generate a new theme in the same format as the preset files:
+   - short theme name
+   - palette with named colors and hex values
+   - header/body font pairing
+   - short "best used for" note
+3. Show the proposed theme for review.
+4. Once approved, apply it to the artifact.
+
+## Practical Guidance
+
+- Prefer presets when the user wants to move quickly.
+- Use a custom theme when the work needs a distinct brand, event, campaign, or product-specific identity.
+- If multiple artifacts belong to the same project, reuse the same theme to keep the output coherent.

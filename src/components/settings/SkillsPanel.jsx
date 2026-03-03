@@ -103,7 +103,6 @@ function SkillDetail({ name, onBack, onRefreshList }) {
     if (error) return <div className="skill-detail-error">{error}</div>;
     if (!skill) return null;
 
-    const isWorkspace = skill.metadata?.source === 'workspace' || !skill.content?.startsWith?.('---');
     const resources = Array.isArray(skill.resources) ? skill.resources : [];
 
     return (

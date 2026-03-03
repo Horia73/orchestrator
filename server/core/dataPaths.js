@@ -32,11 +32,14 @@ export const IDENTITY_MEMORY_PATH = path.join(MEMORY_DIR, 'IDENTITY.md');
 export const SOUL_MEMORY_PATH = path.join(MEMORY_DIR, 'SOUL.md');
 export const INTEGRATIONS_MEMORY_PATH = path.join(MEMORY_DIR, 'INTEGRATIONS.md');
 export const DAILY_MEMORY_DIR = path.join(MEMORY_DIR, 'daily');
+export const AGENT_MEMORY_DIR = path.join(MEMORY_DIR, 'agents');
 
 export const SKILLS_WORKSPACE_DIR = path.join(DATA_ROOT_DIR, 'skills');
 
 export const CRON_DATA_DIR = path.join(DATA_ROOT_DIR, 'cron');
 export const CRON_STORE_PATH = path.join(CRON_DATA_DIR, 'jobs.json');
+
+export const TODO_DATA_DIR = path.join(DATA_ROOT_DIR, 'todos');
 
 export const SECRETS_DIR = path.join(DATA_ROOT_DIR, 'secrets');
 export const SECRETS_ENV_PATH = path.join(SECRETS_DIR, 'SECRETS.env');

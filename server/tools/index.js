@@ -24,6 +24,7 @@ import * as callResearcherAgent from './agents/callResearcherAgent.js';
 import * as spawnSubagent from './agents/spawnSubagent.js';
 import * as subagentStatus from './agents/subagentStatus.js';
 import * as manageSchedule from './cron.js';
+import * as manageTodoList from './todo/manageTodoList.js';
 import { ALL_SHARED_TOOL_NAMES } from './sharedToolNames.js';
 
 const ALL_TOOLS = [
@@ -50,6 +51,7 @@ const ALL_TOOLS = [
     spawnSubagent,
     subagentStatus,
     manageSchedule,
+    manageTodoList,
 ];
 
 const declarationByName = new Map(ALL_TOOLS.map((tool) => [tool.declaration.name, tool.declaration]));

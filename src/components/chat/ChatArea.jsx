@@ -4,10 +4,12 @@ import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
 import { IconArrowDown, IconClose, IconArrowLeft } from '../shared/icons.jsx';
 import { ToolDetailPanel } from './ToolDetailPanel.jsx';
+import { TodoBoard } from './TodoBoard.jsx';
 import {
     buildAgentPanelMessage,
     findAgentToolCallInMessages,
 } from './agentCallUtils.js';
+import { extractLatestTodoState } from './todoUtils.js';
 
 const USER_TOP_OFFSET = 54;
 const USER_SCROLL_FOCUS_OFFSET = 12;
@@ -863,6 +865,10 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         const instanceId = String(activeAgentCallSelection?.instanceId ?? '').trim();
         return [callId, instanceId, agentPanelStack.length].filter(Boolean).join(':') || 'agent-panel';
     }, [activeAgentCallSelection, agentPanelStack.length]);
+    const activeTodoState = useMemo(
+        () => extractLatestTodoState(messages),
+        [messages],
+    );
     const isAgentPanelOpen = isChatMode && !!activeAgentPanelMessage && !!activeAgentCallSelection;
     const isToolPanelOpen = isChatMode && !!activeToolPanelSelection;
 
@@ -882,6 +888,11 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
 
                 {isChatMode && (
                     <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}${isConversationHidden ? ' chat-messages-hidden' : ''}`} id="chatMessages" ref={scrollRef}>
+                        {activeTodoState && (
+                            <div className="chat-todo-sticky">
+                                <TodoBoard todoState={activeTodoState} />
+                            </div>
+                        )}
                         {messages.map((msg) => {
                             return (
                                 <div

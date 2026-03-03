@@ -10,6 +10,7 @@ import { SystemLogsDashboard } from './SystemLogsDashboard.jsx';
 import { UpdatesPanel } from './UpdatesPanel.jsx';
 import { SkillsPanel } from './SkillsPanel.jsx';
 import { FilesEditorPanel } from './FilesEditorPanel.jsx';
+import { McpPanel } from './McpPanel.jsx';
 import './Settings.css';
 
 /* ─── Model Dropdown ─────────────────────────────────────────────────── */
@@ -469,6 +470,7 @@ function AgentCard({ agent, agentState, onChange, modelsList, modelsLoading }) {
 
 const TABS = [
     { id: 'models', label: 'Models' },
+    { id: 'mcp', label: 'MCP' },
     { id: 'files', label: 'Files' },
     { id: 'skills', label: 'Skills' },
     { id: 'usage', label: 'Usage' },
@@ -610,6 +612,10 @@ export function Settings({ onClose, savedSettings, agentDefinitions = [], onSave
 
                     {activeTab === 'usage' && (
                         <UsageDashboard modelsList={modelsList} agentDefinitions={agentDefinitions} />
+                    )}
+
+                    {activeTab === 'mcp' && (
+                        <McpPanel />
                     )}
 
                     {activeTab === 'files' && (

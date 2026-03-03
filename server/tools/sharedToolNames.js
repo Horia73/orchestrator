@@ -22,4 +22,5 @@ export const ALL_SHARED_TOOL_NAMES = Object.freeze([
     'spawn_subagent',
     'subagent_status',
     'manage_schedule',
+    'manage_todo_list',
 ]);

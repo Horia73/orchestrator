@@ -1,23 +1,12 @@
-import { forwardRef, useRef, useState, useEffect, useCallback } from 'react';
+import { forwardRef, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { MarkdownContent } from './MarkdownContent.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
 import { ToolBlock } from './ToolBlock.jsx';
 import { ToolCallsGroup } from './ToolCallsGroup.jsx';
-import { FileManagementBlock } from './FileManagementBlock.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
-import { getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
 import { IconPlay, IconPause, IconCopy, IconCheck, IconDownload, IconFile, IconFileText } from '../shared/icons.jsx';
 
-const FILE_MANAGEMENT_TOOLS = new Set([
-    'view_file',
-    'list_dir',
-    'find_by_name',
-    'grep_search',
-    'view_file_outline',
-    'view_code_item',
-    'view_content_chunk',
-]);
 const EDIT_TOOLS = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
 const INLINE_IMAGE_MARKDOWN_REGEX = /!\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const INLINE_IMAGE_MARKDOWN_TEST_REGEX = /!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
@@ -127,14 +116,6 @@ function getMessageAttachments(parts) {
     }
 
     return attachments;
-}
-
-function isFileManagementTool(part) {
-    const name = typeof part?.functionCall?.name === 'string'
-        ? part.functionCall.name
-        : '';
-
-    return FILE_MANAGEMENT_TOOLS.has(name);
 }
 
 function isEditTool(part) {
@@ -459,33 +440,36 @@ function dataUriToBlob(dataUri) {
     return new Blob([bytes], { type: mime });
 }
 
+function useObjectUrlForDataHref(href, enabled = true) {
+    const objectUrl = useMemo(() => {
+        const normalizedHref = String(href ?? '').trim();
+        if (!enabled || !normalizedHref.startsWith('data:')) {
+            return null;
+        }
+
+        try {
+            return URL.createObjectURL(dataUriToBlob(normalizedHref));
+        } catch {
+            return null;
+        }
+    }, [enabled, href]);
+
+    useEffect(() => () => {
+        if (objectUrl) {
+            URL.revokeObjectURL(objectUrl);
+        }
+    }, [objectUrl]);
+
+    return objectUrl;
+}
+
 function PdfViewer({ attachment, name }) {
     const iframeRef = useRef(null);
     const [isFullscreen, setIsFullscreen] = useState(false);
-    const [blobUrl, setBlobUrl] = useState(null);
-
-    const actionProps = attachment.source === 'inline'
-        ? { download: name }
-        : { target: '_blank', rel: 'noreferrer' };
-
-    // Convert data: URI to blob URL so the browser can actually render the PDF
-    useEffect(() => {
-        const href = attachment.href;
-        if (href && href.startsWith('data:')) {
-            try {
-                const blob = dataUriToBlob(href);
-                const url = URL.createObjectURL(blob);
-                setBlobUrl(url);
-                return () => URL.revokeObjectURL(url);
-            } catch {
-                // fallback to raw href
-            }
-        }
-    }, [attachment.href]);
+    const blobUrl = useObjectUrlForDataHref(attachment.href);
 
     const renderUrl = blobUrl || attachment.href;
     const previewUrl = renderUrl + (renderUrl.includes('#') ? '' : '#toolbar=0&navpanes=0&view=FitH');
-    const downloadHref = blobUrl || attachment.href;
 
     const toggleFullscreen = useCallback(() => setIsFullscreen((v) => !v), []);
 
@@ -568,11 +552,15 @@ function getFileExtension(name) {
 
 function AttachmentCard({ attachment, index }) {
     const [lightboxOpen, setLightboxOpen] = useState(false);
+    const [previewOpen, setPreviewOpen] = useState(false);
     const name = sanitizeAttachmentName(attachment.displayName, `attachment-${index + 1}`);
     const actionLabel = attachment.source === 'inline' ? 'Download' : 'Open';
     const actionProps = attachment.source === 'inline'
         ? { download: name }
         : { target: '_blank', rel: 'noreferrer' };
+    const ext = getFileExtension(name);
+    const fileBlobUrl = useObjectUrlForDataHref(attachment.href, previewOpen);
+    const filePreviewUrl = fileBlobUrl || attachment.href;
 
     if (attachment.kind === 'image') {
         return (
@@ -609,28 +597,6 @@ function AttachmentCard({ attachment, index }) {
     if (attachment.kind === 'pdf') {
         return <PdfViewer key={attachment.id} attachment={attachment} name={name} />;
     }
-
-    const ext = getFileExtension(name);
-    const [previewOpen, setPreviewOpen] = useState(false);
-
-    // Build a blob URL for preview (same pattern as PDF)
-    const [fileBlobUrl, setFileBlobUrl] = useState(null);
-    useEffect(() => {
-        if (!previewOpen) return;
-        const href = attachment.href;
-        if (href && href.startsWith('data:')) {
-            try {
-                const blob = dataUriToBlob(href);
-                const url = URL.createObjectURL(blob);
-                setFileBlobUrl(url);
-                return () => URL.revokeObjectURL(url);
-            } catch {
-                // fallback
-            }
-        }
-    }, [previewOpen, attachment.href]);
-
-    const filePreviewUrl = fileBlobUrl || attachment.href;
 
     return (
         <>
@@ -926,22 +892,7 @@ function CopyButton({ text }) {
 }
 
 function AttachmentDownloadButton({ attachment }) {
-    const [blobUrl, setBlobUrl] = useState(null);
-
-    useEffect(() => {
-        const href = attachment.href;
-        if (href && href.startsWith('data:')) {
-            try {
-                const blob = dataUriToBlob(href);
-                const url = URL.createObjectURL(blob);
-                setBlobUrl(url);
-                return () => URL.revokeObjectURL(url);
-            } catch {
-                // fallback
-            }
-        }
-    }, [attachment.href]);
-
+    const blobUrl = useObjectUrlForDataHref(attachment.href);
     const downloadHref = blobUrl || attachment.href;
     const name = sanitizeAttachmentName(attachment.displayName, 'attachment');
     const actionProps = attachment.source === 'inline'

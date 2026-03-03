@@ -1,29 +1,35 @@
 ---
 name: brand-guidelines
-description: Applies Anthropic's official brand colors and typography to any sort of artifact that may benefit from having Anthropic's look-and-feel. Use it when brand colors or style guidelines, visual formatting, or company design standards apply.
+description: Apply Anthropic's official brand colors and typography to artifacts that are explicitly meant to look Anthropic-branded. Use only when the user asks for Anthropic branding, Anthropic visual identity, or company-specific brand styling. Do not use for generic theming or general UI beautification.
 license: Complete terms in LICENSE.txt
 ---
 
 # Anthropic Brand Styling
 
+Use this skill only for Anthropic-branded work.
+
+If the user wants a generic theme, a fresh visual direction, or non-Anthropic styling, use a different skill.
+
 ## Overview
 
-To access Anthropic's official brand identity and style resources, use this skill.
+This skill provides Anthropic's official brand palette and typography guidance for artifacts that should match Anthropic's look and feel.
 
-**Keywords**: branding, corporate identity, visual identity, post-processing, styling, brand colors, typography, Anthropic brand, visual formatting, visual design
+## Keywords
+
+Anthropic brand, Anthropic colors, Anthropic typography, corporate identity, visual identity, brand styling, brand compliance
 
 ## Brand Guidelines
 
 ### Colors
 
-**Main Colors:**
+**Main Colors**
 
 - Dark: `#141413` - Primary text and dark backgrounds
 - Light: `#faf9f5` - Light backgrounds and text on dark
 - Mid Gray: `#b0aea5` - Secondary elements
 - Light Gray: `#e8e6dc` - Subtle backgrounds
 
-**Accent Colors:**
+**Accent Colors**
 
 - Orange: `#d97757` - Primary accent
 - Blue: `#6a9bcc` - Secondary accent
@@ -31,43 +37,18 @@ To access Anthropic's official brand identity and style resources, use this skil
 
 ### Typography
 
-- **Headings**: Poppins (with Arial fallback)
-- **Body Text**: Lora (with Georgia fallback)
-- **Note**: Fonts should be pre-installed in your environment for best results
+- **Headings**: Poppins (Arial fallback)
+- **Body text**: Lora (Georgia fallback)
 
-## Features
+## Application Guidance
 
-### Smart Font Application
+- Use Poppins for major headings and display text.
+- Use Lora for body copy and longer reading passages.
+- Keep contrast high and layout restrained.
+- Use accent colors intentionally rather than distributing them evenly.
 
-- Applies Poppins font to headings (24pt and larger)
-- Applies Lora font to body text
-- Automatically falls back to Arial/Georgia if custom fonts unavailable
-- Preserves readability across all systems
+## Technical Notes
 
-### Text Styling
-
-- Headings (24pt+): Poppins font
-- Body text: Lora font
-- Smart color selection based on background
-- Preserves text hierarchy and formatting
-
-### Shape and Accent Colors
-
-- Non-text shapes use accent colors
-- Cycles through orange, blue, and green accents
-- Maintains visual interest while staying on-brand
-
-## Technical Details
-
-### Font Management
-
-- Uses system-installed Poppins and Lora fonts when available
-- Provides automatic fallback to Arial (headings) and Georgia (body)
-- No font installation required - works with existing system fonts
-- For best results, pre-install Poppins and Lora fonts in your environment
-
-### Color Application
-
-- Uses RGB color values for precise brand matching
-- Applied via python-pptx's RGBColor class
-- Maintains color fidelity across different systems
+- Prefer system-installed Poppins and Lora when available.
+- Fall back to Arial for headings and Georgia for body text if needed.
+- Preserve readability first; do not force brand styling when it makes the output harder to read.

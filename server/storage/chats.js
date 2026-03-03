@@ -8,6 +8,7 @@ import {
     CHAT_MESSAGES_DIR,
 } from '../core/dataPaths.js';
 import { deleteUploads } from './uploads.js';
+import { removeTodoState } from './todos.js';
 const CHATS_DIR = CHAT_MESSAGES_DIR;
 const INDEX_PATH = CHAT_INDEX_PATH;
 
@@ -491,6 +492,7 @@ export async function removeChat(chatId) {
 
     await fs.rm(chatPath, { force: true });
     await deleteUploads([...uploadIds], { allowCommitted: true });
+    await removeTodoState(chatId);
     return true;
 }
 

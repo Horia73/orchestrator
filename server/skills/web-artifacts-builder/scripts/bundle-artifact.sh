@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-echo "📦 Bundling React app to single HTML artifact..."
+echo "📦 Bundling React app to a single self-contained HTML file..."
 
 # Check if we're in a project directory
 if [ ! -f "package.json" ]; then
@@ -50,5 +50,5 @@ echo ""
 echo "✅ Bundle complete!"
 echo "📄 Output: bundle.html ($FILE_SIZE)"
 echo ""
-echo "You can now use this single HTML file as an artifact in Claude conversations."
+echo "You can now open this single HTML file locally in a browser or share it as a standalone HTML bundle."
 echo "To test locally: open bundle.html in your browser"

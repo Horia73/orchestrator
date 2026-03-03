@@ -1,0 +1,220 @@
+.todo-board {
+    width: min(100%, 430px);
+    border: 1px solid rgba(97, 111, 88, 0.18);
+    border-radius: 18px;
+    background:
+        linear-gradient(180deg, rgba(255, 255, 255, 0.96) 0%, rgba(248, 246, 240, 0.94) 100%),
+        radial-gradient(circle at top right, rgba(93, 135, 99, 0.12), transparent 46%);
+    box-shadow: 0 18px 40px rgba(41, 39, 33, 0.08);
+    backdrop-filter: blur(14px);
+    -webkit-backdrop-filter: blur(14px);
+    overflow: hidden;
+}
+
+.todo-board.compact {
+    width: 100%;
+    border-radius: 14px;
+    box-shadow: none;
+}
+
+.todo-board-header {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 14px;
+    padding: 16px 16px 12px;
+    border-bottom: 1px solid rgba(97, 111, 88, 0.12);
+}
+
+.todo-board-title-wrap {
+    display: flex;
+    align-items: flex-start;
+    gap: 10px;
+    min-width: 0;
+}
+
+.todo-board-icon {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 30px;
+    height: 30px;
+    border-radius: 10px;
+    color: #355d43;
+    background: rgba(83, 120, 85, 0.12);
+    flex-shrink: 0;
+}
+
+.todo-board-title {
+    margin: 0;
+    font-size: 0.98rem;
+    font-weight: 700;
+    color: #273428;
+    line-height: 1.2;
+}
+
+.todo-board-subtitle {
+    margin: 4px 0 0;
+    font-size: 0.76rem;
+    color: #6f7168;
+}
+
+.todo-board-summary {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+    justify-content: flex-end;
+}
+
+.todo-board-pill {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 9px;
+    border-radius: 999px;
+    font-size: 0.73rem;
+    color: #4f574d;
+    background: rgba(77, 90, 70, 0.07);
+}
+
+.todo-board-pill strong {
+    font-size: 0.78rem;
+}
+
+.todo-board-pill.status-in_progress {
+    color: #6d5200;
+    background: rgba(234, 187, 71, 0.17);
+}
+
+.todo-board-pill.status-completed {
+    color: #245a3d;
+    background: rgba(74, 176, 118, 0.15);
+}
+
+.todo-board-pill.status-blocked {
+    color: #7a2f2f;
+    background: rgba(205, 92, 92, 0.14);
+}
+
+.todo-board-items {
+    display: flex;
+    flex-direction: column;
+    gap: 0;
+}
+
+.todo-board-item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 13px 16px;
+}
+
+.todo-board-item + .todo-board-item {
+    border-top: 1px solid rgba(97, 111, 88, 0.09);
+}
+
+.todo-board-item-mark {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    flex-shrink: 0;
+    color: #245a3d;
+}
+
+.todo-board-item-dot {
+    width: 8px;
+    height: 8px;
+    border-radius: 999px;
+    background: currentColor;
+}
+
+.todo-board-item.status-pending .todo-board-item-mark {
+    color: #7b7c74;
+}
+
+.todo-board-item.status-in_progress .todo-board-item-mark {
+    color: #c48c0d;
+}
+
+.todo-board-item.status-blocked .todo-board-item-mark {
+    color: #b64646;
+}
+
+.todo-board-item-copy {
+    min-width: 0;
+    flex: 1;
+}
+
+.todo-board-item-topline {
+    display: flex;
+    align-items: flex-start;
+    justify-content: space-between;
+    gap: 10px;
+}
+
+.todo-board-item-label {
+    font-size: 0.91rem;
+    font-weight: 600;
+    color: #283028;
+    line-height: 1.35;
+}
+
+.todo-board-item-status {
+    flex-shrink: 0;
+    padding: 2px 8px;
+    border-radius: 999px;
+    font-size: 0.68rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+}
+
+.todo-board-item-status.status-pending {
+    color: #696d67;
+    background: rgba(106, 110, 102, 0.12);
+}
+
+.todo-board-item-status.status-in_progress {
+    color: #7a5b06;
+    background: rgba(234, 187, 71, 0.18);
+}
+
+.todo-board-item-status.status-completed {
+    color: #245a3d;
+    background: rgba(74, 176, 118, 0.16);
+}
+
+.todo-board-item-status.status-blocked {
+    color: #8a3131;
+    background: rgba(205, 92, 92, 0.15);
+}
+
+.todo-board-item-details {
+    margin: 6px 0 0;
+    font-size: 0.82rem;
+    line-height: 1.45;
+    color: #66675f;
+}
+
+@media (max-width: 768px) {
+    .todo-board {
+        width: 100%;
+    }
+
+    .todo-board-header {
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .todo-board-summary {
+        justify-content: flex-start;
+    }
+
+    .todo-board-item-topline {
+        flex-direction: column;
+        align-items: flex-start;
+    }
+}

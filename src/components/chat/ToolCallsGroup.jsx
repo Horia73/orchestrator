@@ -12,12 +12,14 @@ function buildSummaryText(items) {
     let edits = 0;
     let web = 0;
     let agents = 0;
+    let plans = 0;
     let other = 0;
 
     const COMMAND_NAMES = new Set(['run_command', 'command_status', 'send_command_input', 'read_terminal']);
     const FILE_NAMES = new Set(['view_file', 'list_dir', 'find_by_name', 'grep_search', 'view_file_outline', 'view_code_item', 'view_content_chunk']);
     const EDIT_NAMES = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
     const WEB_NAMES = new Set(['read_url_content', 'search_web']);
+    const PLAN_NAMES = new Set(['manage_todo_list']);
 
     for (const item of items) {
         if (item.kind !== 'tool') continue;
@@ -26,6 +28,7 @@ function buildSummaryText(items) {
         else if (FILE_NAMES.has(name)) views++;
         else if (EDIT_NAMES.has(name)) edits++;
         else if (WEB_NAMES.has(name)) web++;
+        else if (PLAN_NAMES.has(name)) plans++;
         else if (name.startsWith('call_') || name === 'generate_image') agents++;
         else other++;
     }
@@ -35,6 +38,7 @@ function buildSummaryText(items) {
     if (views > 0) parts.push(`viewed ${views} file${views > 1 ? 's' : ''}`);
     if (edits > 0) parts.push(`${edits} edit${edits > 1 ? 's' : ''}`);
     if (web > 0) parts.push(`${web} web request${web > 1 ? 's' : ''}`);
+    if (plans > 0) parts.push(`${plans} plan update${plans > 1 ? 's' : ''}`);
     if (agents > 0) parts.push(`${agents} agent call${agents > 1 ? 's' : ''}`);
     if (other > 0) parts.push(`${other} tool${other > 1 ? 's' : ''}`);
 

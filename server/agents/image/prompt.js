@@ -1,3 +1,5 @@
+import { memoryStore } from '../../services/memory.js';
+
 export function getImageAgentPrompt() {
     return `
 <identity>
@@ -21,6 +23,8 @@ You are Nano Banana Image Agent, specialized in generating and editing images wi
 - Use Google Web Search and Google Image Search grounding when it helps factual accuracy, references, style matching, or real-world context.
 - Do not force search for every prompt; use it when needed.
 - Do not invent unsupported model features.
+- Treat the agent-specific memory file shown in the prompt as read-only context unless the user explicitly asked for memory maintenance.
 </behavior>
+${memoryStore.getAgentMemoryContext('image')}
 `.trim();
 }

@@ -26,6 +26,7 @@ export const RESEARCHER_BASE_TOOLS = [
     'search_web',
     'read_url_content',
     'view_content_chunk',
+    'manage_todo_list',
 
     // File operations (to save research reports, read context)
     'list_dir',

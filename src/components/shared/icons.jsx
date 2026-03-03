@@ -269,6 +269,17 @@ export const IconCheckCircle = () => (
     </svg>
 );
 
+export const IconChecklist = () => (
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M9 6h11" />
+        <path d="M9 12h11" />
+        <path d="M9 18h11" />
+        <path d="M3 6.5l1.5 1.5L7 5.5" />
+        <path d="M3 12.5l1.5 1.5L7 11.5" />
+        <circle cx="5" cy="18" r="1.5" />
+    </svg>
+);
+
 export const IconImage = () => (
     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
         <rect x="3" y="3" width="18" height="18" rx="2" ry="2" />

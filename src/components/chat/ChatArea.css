@@ -423,6 +423,21 @@
     margin-bottom: -12px;
 }
 
+.chat-todo-sticky {
+    position: sticky;
+    top: 12px;
+    z-index: 3;
+    display: flex;
+    justify-content: flex-end;
+    margin-top: -6px;
+    margin-bottom: -2px;
+    pointer-events: none;
+}
+
+.chat-todo-sticky .todo-board {
+    pointer-events: auto;
+}
+
 .chat-messages::-webkit-scrollbar {
     width: 5px;
 }
@@ -1681,6 +1696,10 @@
     .chat-messages {
         gap: 22px;
         padding: 24px 20px 36px;
+    }
+
+    .chat-todo-sticky {
+        justify-content: stretch;
     }
 
     .scroll-to-bottom-btn {

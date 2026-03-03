@@ -1,17 +1,17 @@
 ---
 name: web-artifacts-builder
-description: Suite of tools for creating elaborate, multi-component claude.ai HTML artifacts using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex artifacts requiring state management, routing, or shadcn/ui components - not for simple single-file HTML/JSX artifacts.
+description: Toolkit for creating elaborate, multi-component single-file HTML web bundles using modern frontend web technologies (React, Tailwind CSS, shadcn/ui). Use for complex interactive web outputs requiring state management, routing, or shadcn/ui components, not for simple single-file HTML/JSX snippets.
 license: Complete terms in LICENSE.txt
 ---
 
 # Web Artifacts Builder
 
-To build powerful frontend claude.ai artifacts, follow these steps:
+To build powerful frontend single-file web bundles, follow these steps:
 1. Initialize the frontend repo using `scripts/init-artifact.sh`
-2. Develop your artifact by editing the generated code
+2. Develop your web app by editing the generated code
 3. Bundle all code into a single HTML file using `scripts/bundle-artifact.sh`
-4. Display artifact to user
-5. (Optional) Test the artifact
+4. Share the generated `bundle.html` path with the user and tell them how to open it locally
+5. (Optional) Test the bundle in a browser
 
 **Stack**: React 18 + TypeScript + Vite + Parcel (bundling) + Tailwind CSS + shadcn/ui
 
@@ -40,16 +40,16 @@ This creates a fully configured project with:
 
 ### Step 2: Develop Your Artifact
 
-To build the artifact, edit the generated files. See **Common Development Tasks** below for guidance.
+To build the app, edit the generated files.
 
 ### Step 3: Bundle to Single HTML File
 
-To bundle the React app into a single HTML artifact:
+To bundle the React app into a single HTML file:
 ```bash
 bash scripts/bundle-artifact.sh
 ```
 
-This creates `bundle.html` - a self-contained artifact with all JavaScript, CSS, and dependencies inlined. This file can be directly shared in Claude conversations as an artifact.
+This creates `bundle.html`, a self-contained HTML file with all JavaScript, CSS, and dependencies inlined. It is meant to be opened locally in a browser or shared anywhere a standalone HTML file makes sense. Do not claim it will render inline as a chat artifact unless the runtime explicitly supports that.
 
 **Requirements**: Your project must have an `index.html` in the root directory.
 
@@ -59,22 +59,22 @@ This creates `bundle.html` - a self-contained artifact with all JavaScript, CSS,
 - Builds with Parcel (no source maps)
 - Inlines all assets into single HTML using html-inline
 
-### Step 4: Share Artifact with User
+### Step 4: Share the Output with the User
 
-Finally, share the bundled HTML file in conversation with the user so they can view it as an artifact.
+Finally, share the bundled HTML file in conversation so the user can open it locally.
 
 When you present the result:
-- State the artifact title clearly.
+- State the app or bundle title clearly.
 - Mention the exact absolute path to `bundle.html`.
-- Give one explicit next step telling the user to open/view the artifact.
+- Give one explicit next step telling the user to open the file in a browser.
 - Only after that, optionally ask what they want changed.
 - Do not stop at a vague presentation like "How does this look?" without telling the user where/how to open it.
 
-### Step 5: Testing/Visualizing the Artifact (Optional)
+### Step 5: Testing/Visualizing the Bundle (Optional)
 
 Note: This is a completely optional step. Only perform if necessary or requested.
 
-To test/visualize the artifact, use available tools (including other Skills or built-in tools like Playwright or Puppeteer). In general, avoid testing the artifact upfront as it adds latency between the request and when the finished artifact can be seen. Test later, after presenting the artifact, if requested or if issues arise.
+To test or inspect the bundle, use available tools such as the `webapp-testing` skill or other browser automation tools available in the environment. In general, avoid testing upfront because it adds latency before the user can open the finished result. Test later, after presenting the bundle, if requested or if issues arise.
 
 ## Reference
 

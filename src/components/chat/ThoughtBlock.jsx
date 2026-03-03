@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import { MarkdownContent } from './MarkdownContent.jsx';
 
 const MAX_TITLE_LENGTH = 62;
@@ -56,33 +56,35 @@ function extractThinkingTitle(thought) {
 export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle = false, thinkingDurationMs = 0 }) {
     const [open, setOpen] = useState(false);
     const persistedSeconds = Math.max(0, Math.floor((thinkingDurationMs || 0) / 1000));
-    const thinkingStartRef = useRef(null);
     const [thinkingSeconds, setThinkingSeconds] = useState(persistedSeconds);
 
     useEffect(() => {
-        if (persistedSeconds > 0 && !isThinking) {
-            setThinkingSeconds(persistedSeconds);
-            return;
-        }
+        let interval = null;
+        let cancelled = false;
 
-        let interval;
         if (isThinking) {
-            const startMs = thinkingStartRef.current ?? (Date.now() - persistedSeconds * 1000);
-            if (thinkingStartRef.current === null) {
-                thinkingStartRef.current = startMs;
-            }
+            const startMs = Date.now() - persistedSeconds * 1000;
+            const updateElapsed = () => {
+                if (cancelled) {
+                    return;
+                }
 
-            interval = setInterval(() => {
-                setThinkingSeconds(Math.floor((Date.now() - startMs) / 1000));
-            }, 1000);
+                const elapsedSeconds = Math.floor((Date.now() - startMs) / 1000);
+                setThinkingSeconds(Math.max(persistedSeconds, elapsedSeconds));
+            };
+
+            queueMicrotask(updateElapsed);
+            interval = setInterval(updateElapsed, 1000);
         } else {
-            if (thinkingStartRef.current !== null) {
-                const elapsed = Math.max(1, Math.floor((Date.now() - thinkingStartRef.current) / 1000));
-                setThinkingSeconds(elapsed);
-                thinkingStartRef.current = null;
-            }
+            queueMicrotask(() => {
+                if (!cancelled) {
+                    setThinkingSeconds((current) => Math.max(persistedSeconds, current));
+                }
+            });
         }
+
         return () => {
+            cancelled = true;
             if (interval) clearInterval(interval);
         };
     }, [isThinking, persistedSeconds]);

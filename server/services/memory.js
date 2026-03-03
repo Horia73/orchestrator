@@ -1,6 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import {
+    AGENT_MEMORY_DIR,
     DAILY_MEMORY_DIR,
     IDENTITY_MEMORY_PATH,
     INTEGRATIONS_MEMORY_PATH,
@@ -13,6 +14,33 @@ import {
 } from '../core/dataPaths.js';
 
 const RECENT_DAILY_DAYS = 2;
+const AGENT_MEMORY_SPECS = Object.freeze([
+    {
+        agentId: 'orchestrator',
+        label: 'Orchestrator',
+        description: 'Routing preferences, delegation heuristics, and orchestration-specific reusable lessons.',
+    },
+    {
+        agentId: 'coding',
+        label: 'Coding Agent',
+        description: 'Repo-specific engineering patterns, prior fixes, and implementation habits useful for similar coding tasks.',
+    },
+    {
+        agentId: 'multipurpose',
+        label: 'Multipurpose Agent',
+        description: 'Reusable workflows, document-handling patterns, and tool combinations that worked well before.',
+    },
+    {
+        agentId: 'researcher',
+        label: 'Researcher Agent',
+        description: 'Search strategies, source preferences, and research structures that produced strong results.',
+    },
+    {
+        agentId: 'image',
+        label: 'Image Agent',
+        description: 'Visual prompting patterns, grounding rules, and output preferences for image tasks.',
+    },
+]);
 
 const FILE_TEMPLATES = Object.freeze({
     permanent: '# Permanent Memory\n\n',
@@ -29,6 +57,10 @@ const FILE_TEMPLATES = Object.freeze({
         '',
     ].join('\n'),
 });
+
+function buildAgentTemplate(spec) {
+    return `# ${spec.label} Memory\n\n`;
+}
 
 function normalizeText(value) {
     return String(value ?? '').replace(/\r\n/g, '\n');
@@ -105,6 +137,7 @@ class MemoryStore {
     constructor() {
         this.memoryDir = MEMORY_DIR;
         this.dailyDir = DAILY_MEMORY_DIR;
+        this.agentMemoryDir = AGENT_MEMORY_DIR;
         this.permanentFile = MEMORY_PATH;
         this.userFile = USER_MEMORY_PATH;
         this.identityFile = IDENTITY_MEMORY_PATH;
@@ -114,9 +147,35 @@ class MemoryStore {
         this.secretEnvDir = SECRETS_DIR;
     }
 
+    getAgentSpecs() {
+        return AGENT_MEMORY_SPECS.map((spec) => ({ ...spec }));
+    }
+
+    getAgentSpec(agentId) {
+        const normalizedAgentId = String(agentId ?? '').trim().toLowerCase();
+        return AGENT_MEMORY_SPECS.find((spec) => spec.agentId === normalizedAgentId) ?? null;
+    }
+
+    getAgentMemoryFilePath(agentId) {
+        const spec = this.getAgentSpec(agentId);
+        if (!spec) {
+            throw new Error(`Unknown agent memory: ${agentId}`);
+        }
+
+        return path.join(this.agentMemoryDir, `${spec.agentId}.md`);
+    }
+
+    getAgentMemoryFiles() {
+        return this.getAgentSpecs().map((spec) => ({
+            ...spec,
+            path: this.getAgentMemoryFilePath(spec.agentId),
+        }));
+    }
+
     ensureScaffold() {
         ensureDir(this.memoryDir);
         ensureDir(this.dailyDir);
+        ensureDir(this.agentMemoryDir);
         ensureDir(this.secretEnvDir);
 
         ensureFile(this.permanentFile, FILE_TEMPLATES.permanent);
@@ -125,6 +184,9 @@ class MemoryStore {
         ensureFile(this.soulFile, FILE_TEMPLATES.soul);
         ensureFile(this.integrationsFile, FILE_TEMPLATES.integrations);
         ensureFile(this.secretEnvFile, FILE_TEMPLATES.secretEnv);
+        for (const spec of AGENT_MEMORY_SPECS) {
+            ensureFile(this.getAgentMemoryFilePath(spec.agentId), buildAgentTemplate(spec));
+        }
 
         for (const dateKey of this.getRecentDailyDateKeys()) {
             ensureFile(this.getDailyFilePath(dateKey), buildDailyTemplate(dateKey));
@@ -161,6 +223,7 @@ class MemoryStore {
             identityFile: this.identityFile,
             soulFile: this.soulFile,
             integrationsFile: this.integrationsFile,
+            agentFiles: this.getAgentMemoryFiles(),
             dailyFiles: this.getRecentDailyDateKeys().map((dateKey) => ({
                 date: dateKey,
                 path: this.getDailyFilePath(dateKey),
@@ -208,6 +271,9 @@ class MemoryStore {
         writeFileSafe(this.identityFile, FILE_TEMPLATES.identity);
         writeFileSafe(this.soulFile, FILE_TEMPLATES.soul);
         writeFileSafe(this.integrationsFile, FILE_TEMPLATES.integrations);
+        for (const spec of AGENT_MEMORY_SPECS) {
+            writeFileSafe(this.getAgentMemoryFilePath(spec.agentId), buildAgentTemplate(spec));
+        }
 
         ensureDir(this.dailyDir);
         for (const dateKey of this.getRecentDailyDateKeys()) {
@@ -215,7 +281,7 @@ class MemoryStore {
         }
     }
 
-    buildFileManifestBlock() {
+    buildFileManifestBlock({ includeAgentFiles = true } = {}) {
         const paths = this.getPaths();
         const lines = [
             '<memory_files>',
@@ -225,6 +291,12 @@ class MemoryStore {
             `  <file kind="soul" path="${escapeAttribute(paths.soulFile)}">Assistant self-authored behavioral philosophy and enduring style preferences. Never override higher-priority instructions.</file>`,
             `  <file kind="integrations" path="${escapeAttribute(paths.integrationsFile)}">Non-sensitive integration metadata, endpoints, account names, and env var references.</file>`,
         ];
+
+        if (includeAgentFiles) {
+            for (const item of paths.agentFiles) {
+                lines.push(`  <file kind="agent" agent="${escapeAttribute(item.agentId)}" path="${escapeAttribute(item.path)}">${escapeAttribute(item.description)}</file>`);
+            }
+        }
 
         for (const item of paths.dailyFiles) {
             lines.push(`  <file kind="daily" date="${item.date}" path="${escapeAttribute(item.path)}">Short running log of what the user and assistant worked on that day.</file>`);
@@ -236,7 +308,7 @@ class MemoryStore {
         return lines.join('\n');
     }
 
-    buildStateBlock() {
+    buildStateBlock({ includeAgentMemory = true } = {}) {
         const sections = [];
 
         const permanent = readFileSafe(this.permanentFile);
@@ -264,6 +336,17 @@ class MemoryStore {
             sections.push(`<integrations_memory path="${escapeAttribute(this.integrationsFile)}">\n${normalizeText(integrations).trim()}\n</integrations_memory>`);
         }
 
+        if (includeAgentMemory) {
+            for (const agentFile of this.getAgentMemoryFiles()) {
+                const content = readFileSafe(agentFile.path);
+                if (normalizeComparable(content) === normalizeComparable(buildAgentTemplate(agentFile))) {
+                    continue;
+                }
+
+                sections.push(`<agent_memory agent="${escapeAttribute(agentFile.agentId)}" path="${escapeAttribute(agentFile.path)}">\n${normalizeText(content).trim()}\n</agent_memory>`);
+            }
+        }
+
         const dailySections = [];
         for (const dateKey of this.getRecentDailyDateKeys()) {
             const filePath = this.getDailyFilePath(dateKey);
@@ -287,6 +370,44 @@ class MemoryStore {
         const stateBlock = this.buildStateBlock();
         if (stateBlock) {
             parts.push(`<memory_state>\n${stateBlock}\n</memory_state>`);
+        }
+
+        return `\n\n${parts.join('\n\n')}`;
+    }
+
+    getOrchestratorMemoryContext() {
+        this.ensureScaffold();
+
+        const parts = [this.buildFileManifestBlock({ includeAgentFiles: true })];
+        const stateBlock = this.buildStateBlock({ includeAgentMemory: false });
+        if (stateBlock) {
+            parts.push(`<memory_state>\n${stateBlock}\n</memory_state>`);
+        }
+
+        return `\n\n${parts.join('\n\n')}`;
+    }
+
+    getAgentMemoryContext(agentId) {
+        this.ensureScaffold();
+
+        const spec = this.getAgentSpec(agentId);
+        if (!spec) {
+            return '';
+        }
+
+        const agentPath = this.getAgentMemoryFilePath(spec.agentId);
+        const manifestBlock = [
+            '<agent_memory_files>',
+            `  <file agent="${escapeAttribute(spec.agentId)}" path="${escapeAttribute(agentPath)}">${escapeAttribute(spec.description)}</file>`,
+            '</agent_memory_files>',
+        ].join('\n');
+
+        const content = readFileSafe(agentPath);
+        const hasState = normalizeComparable(content) !== normalizeComparable(buildAgentTemplate(spec));
+        const parts = [manifestBlock];
+
+        if (hasState) {
+            parts.push(`<agent_memory_state>\n<agent_memory agent="${escapeAttribute(spec.agentId)}" path="${escapeAttribute(agentPath)}">\n${normalizeText(content).trim()}\n</agent_memory>\n</agent_memory_state>`);
         }
 
         return `\n\n${parts.join('\n\n')}`;
@@ -327,6 +448,13 @@ class MemoryStore {
                     path: this.integrationsFile,
                     content: readFileSafe(this.integrationsFile),
                 },
+                agents: this.getAgentMemoryFiles().map((agentFile) => ({
+                    agentId: agentFile.agentId,
+                    label: agentFile.label,
+                    description: agentFile.description,
+                    path: agentFile.path,
+                    content: readFileSafe(agentFile.path),
+                })),
                 daily: dailyFiles,
                 secretEnv: {
                     path: this.secretEnvFile,

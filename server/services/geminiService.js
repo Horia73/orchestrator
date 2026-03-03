@@ -24,6 +24,7 @@ import {
 } from '../tools/index.js';
 import { executionContext } from '../core/context.js';
 import { resolveUpload } from '../storage/uploads.js';
+import { mcpService } from './mcp.js';
 
 const pendingSteeringNotes = new Map();
 const PARALLEL_TOOL_NAMES = new Set([
@@ -169,6 +170,22 @@ function buildChatConfigForAgent({ agentId, agentConfig, sharedTools }) {
         mapThinkingLevel: wrappedMapThinkingLevel,
         sharedTools,
     });
+}
+
+function mergeFunctionDeclarationTools(baseTools, extraDeclarations = []) {
+    const declarations = Array.isArray(extraDeclarations)
+        ? extraDeclarations.filter((item) => item && typeof item === 'object')
+        : [];
+
+    if (declarations.length === 0) {
+        return baseTools;
+    }
+
+    const merged = Array.isArray(baseTools) ? [...baseTools] : [];
+    merged.push({
+        functionDeclarations: declarations,
+    });
+    return merged;
 }
 
 function sanitizeInlineDataForGemini(inlineData) {
@@ -784,7 +801,11 @@ async function createChatSession(
             .map((name) => String(name ?? '').trim())
             .filter(Boolean)
         : getAgentToolAccess(normalizedAgentId);
-    const sharedTools = buildFunctionTools(toolAccess);
+    const localTools = buildFunctionTools(toolAccess);
+    const mcpCatalog = toolAccess.length > 0
+        ? await mcpService.getActiveToolCatalog()
+        : { declarations: [], bindings: new Map() };
+    const sharedTools = mergeFunctionDeclarationTools(localTools, mcpCatalog.declarations);
 
     const history = await normalizeHistory(previousTurns);
     const latestMessage = await buildUserMessagePartsForModel(latest, {
@@ -806,7 +827,10 @@ async function createChatSession(
         latestMessage,
         model: agentConfig.model,
         agentConfig,
-        allowedToolNames: new Set(toolAccess),
+        allowedToolNames: new Set([
+            ...toolAccess,
+            ...mcpCatalog.bindings.keys(),
+        ]),
     };
 }
 
@@ -1486,7 +1510,7 @@ export async function generateAssistantReplyStream(
                 result = { error: `Tool ${name} failed: ${error.message}` };
             }
         } else {
-            result = { error: `Tool ${name} not found` };
+            result = await mcpService.callToolByAlias(name, args);
         }
 
         const toolUsageRecords = extractToolUsageRecords(result, {

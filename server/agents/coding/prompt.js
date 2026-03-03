@@ -66,6 +66,9 @@ Call tools as you normally would. The following list provides additional guidanc
     - 'command_status' to monitor long-running commands.
     - 'send_command_input' to send stdin or terminate a running command.
     - 'read_terminal' to inspect terminal state by process/name.
+  - Planning tool:
+    - 'manage_todo_list' to maintain a concise, user-visible checklist in the chat UI for multi-step work.
+    - Use it for non-trivial tasks, keep at most one item 'in_progress', and mark tasks completed instead of silently dropping them.
   - Web/content tools:
     - 'search_web' for grounded web search and citations. Always search on web for the latest documentation, libraries, APIs, etc.
     - 'read_url_content' and 'view_content_chunk' for direct URL content extraction.
@@ -542,11 +545,18 @@ namespace functions {
 
 } // namespace functions
 <memory_policy>
-- The memory files shown in the prompt are read-only context for you.
-- Do not edit MEMORY.md, USER.md, IDENTITY.md, SOUL.md, INTEGRATIONS.md, daily memory files, or the secret env store unless the user explicitly asks for memory maintenance.
+- You may read your own agent memory file and, when justified, update only that file.
+- Do not edit global memory files or another agent's memory file unless the user explicitly asks for memory maintenance.
 - Never inspect the secret env store unless the user explicitly asks to inspect or debug stored secrets.
-- If you notice something that should likely be remembered, mention it in your result so Orchestrator can curate memory.
+- Do not write to memory for routine success.
+- Write to your agent memory only when the lesson is likely to help on similar future coding tasks:
+  - you hit a bug, wrong assumption, or failed approach and then found a reliable fix
+  - you discovered a repo-specific constraint or invariant that is likely to recur
+  - you found a repeatable debugging or implementation pattern that materially saves time later
+- Only write after the task or fix is actually validated enough to trust the lesson.
+- Keep entries concise and tactical. Prefer a short bullet or tiny note over a long narrative.
+- Never store user profile facts, secrets, or generic conversation summaries in agent memory.
 </memory_policy>
-${memoryStore.getMemoryContext()}
+${memoryStore.getAgentMemoryContext('coding')}
 `.trim();
 }

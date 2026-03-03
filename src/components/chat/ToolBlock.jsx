@@ -6,9 +6,11 @@ import {
     getToolCallId,
 } from './agentCallUtils.js';
 import { TerminalPane } from './TerminalPane.jsx';
+import { TodoBoard } from './TodoBoard.jsx';
+import { getTodoToolState, isTodoToolName } from './todoUtils.js';
 import {
     IconTerminal, IconCode, IconEye, IconPencil,
-    IconGlobe, IconImage, IconTool, IconCheckCircle,
+    IconGlobe, IconImage, IconTool, IconCheckCircle, IconChecklist,
 } from '../shared/icons.jsx';
 import './ToolBlock.css';
 
@@ -31,6 +33,7 @@ const IMAGE_TOOLS = new Set(['generate_image']);
 
 function getToolBadge(name) {
     if (COMMAND_TOOL_NAMES.has(name)) return 'Script';
+    if (isTodoToolName(name)) return 'Plan';
     if (FILE_MANAGEMENT_TOOLS.has(name)) return 'Search';
     if (EDIT_TOOLS.has(name)) return 'Edit';
     if (WEB_TOOLS.has(name)) return 'Web';
@@ -191,6 +194,10 @@ export function ToolBlock({
     const responseSnapshot = responseObject && typeof responseObject === 'object'
         ? responseObject
         : null;
+    const todoToolState = useMemo(
+        () => (isTodoToolName(name) ? getTodoToolState({ functionCall: call, functionResponse }) : null),
+        [call, functionResponse, name],
+    );
     const runtimeSnapshot = polledSnapshot ?? responseSnapshot;
     const agentStatus = normalizeAgentStatus({
         isExecuting,
@@ -363,6 +370,20 @@ export function ToolBlock({
         if (isExecuting && !hasResponse) titleMain = 'Searching web...';
         else if (hasResponse) titleMain = hasError ? 'Web search failed' : 'Searched web';
         titleDetail = String(args?.query ?? '').trim();
+    } else if (isTodoToolName(name)) {
+        if (isExecuting && !hasResponse) {
+            titleMain = 'Updating to-do list';
+        } else if (todoToolState?.action === 'get') {
+            titleMain = todoToolState?.todoList?.itemCount > 0 ? 'Viewed to-do list' : 'Viewed empty to-do list';
+        } else if (todoToolState?.isCleared) {
+            titleMain = 'Cleared to-do list';
+        } else {
+            titleMain = 'Updated to-do list';
+        }
+
+        titleDetail = todoToolState?.todoList?.itemCount > 0
+            ? `${todoToolState.todoList.itemCount} item${todoToolState.todoList.itemCount === 1 ? '' : 's'}`
+            : '';
     } else if (FILE_MANAGEMENT_TOOLS.has(name)) {
         if (isExecuting && !hasResponse) titleMain = name.replace(/_/g, ' ');
         else titleMain = name.replace(/_/g, ' ').replace(/^(\w)/, (c) => c.toUpperCase());
@@ -408,6 +429,7 @@ export function ToolBlock({
                 <span className="tool-row-icon">
                     {(() => {
                         if (COMMAND_TOOL_NAMES.has(name)) return <IconTerminal />;
+                        if (isTodoToolName(name)) return <IconChecklist />;
                         if (FILE_MANAGEMENT_TOOLS.has(name)) return <IconEye />;
                         if (EDIT_TOOLS.has(name)) return <IconPencil />;
                         if (WEB_TOOLS.has(name)) return <IconGlobe />;
@@ -506,6 +528,21 @@ export function ToolBlock({
                                 )}
                             </div>
                         )
+                    ) : isTodoToolName(name) ? (
+                        <>
+                            <div className="tool-section">
+                                <div className="tool-section-title">To-do list</div>
+                                {todoToolState?.todoList?.itemCount > 0 ? (
+                                    <TodoBoard todoState={todoToolState} compact />
+                                ) : (
+                                    <pre>{todoToolState?.message || 'Todo list is empty.'}</pre>
+                                )}
+                            </div>
+                            <div className="tool-section">
+                                <div className="tool-section-title">Action</div>
+                                <pre>{todoToolState?.action || 'replace'}</pre>
+                            </div>
+                        </>
                     ) : (
                         <>
                             <div className="tool-section">

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run trigger evaluation for a skill description.
 
-Tests whether a skill's description causes Claude to trigger (read the skill)
+Tests whether a skill's description causes the `claude` CLI runtime to trigger (read the skill)
 for a set of queries. Outputs results as JSON.
 """
 
@@ -22,7 +22,7 @@ from scripts.utils import parse_skill_md
 def find_project_root() -> Path:
     """Find the project root by walking up from cwd looking for .claude/.
 
-    Mimics how Claude Code discovers its project root, so the command file
+    Mimics how the `claude` CLI discovers its project root, so the command file
     we create ends up where claude -p will look for it.
     """
     current = Path.cwd()
@@ -42,7 +42,7 @@ def run_single_query(
 ) -> bool:
     """Run a single query and return whether the skill was triggered.
 
-    Creates a command file in .claude/commands/ so it appears in Claude's
+    Creates a command file in .claude/commands/ so it appears in the runtime's
     available_skills list, then runs `claude -p` with the raw query.
     Uses --include-partial-messages to detect triggering early from
     stream events (content_block_start) rather than waiting for the
@@ -78,7 +78,7 @@ def run_single_query(
             cmd.extend(["--model", model])
 
         # Remove CLAUDECODE env var to allow nesting claude -p inside a
-        # Claude Code session. The guard is for interactive terminal conflicts;
+        # `claude` CLI session. The guard is for interactive terminal conflicts;
         # programmatic subprocess usage is safe.
         env = {k: v for k, v in os.environ.items() if k != "CLAUDECODE"}
 

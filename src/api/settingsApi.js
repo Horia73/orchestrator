@@ -36,6 +36,28 @@ export async function fetchRemoteModels() {
     return data.models;
 }
 
+export async function fetchMcpServers({ includeTools = false } = {}) {
+    const query = new URLSearchParams();
+    if (includeTools) {
+        query.set('includeTools', '1');
+    }
+
+    const queryString = query.toString();
+    const response = await fetch(queryString ? `/api/mcp/servers?${queryString}` : '/api/mcp/servers');
+    const data = await parseApiResponse(response);
+    return Array.isArray(data.servers) ? data.servers : [];
+}
+
+export async function saveMcpServers(servers) {
+    const response = await fetch('/api/mcp/servers', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ servers }),
+    });
+    const data = await parseApiResponse(response);
+    return Array.isArray(data.servers) ? data.servers : [];
+}
+
 export async function fetchEditableFileSections() {
     const response = await fetch('/api/settings/editor/files');
     const data = await parseApiResponse(response);

@@ -318,6 +318,85 @@ function upsertChatSummary(chats, summary) {
     return sortChatsByRecent(next);
 }
 
+function messageHasVisibleContent(message) {
+    if (!message || typeof message !== 'object') {
+        return false;
+    }
+
+    if (String(message.text ?? '').trim()) {
+        return true;
+    }
+
+    if (String(message.thought ?? '').trim()) {
+        return true;
+    }
+
+    if (Array.isArray(message.parts) && message.parts.length > 0) {
+        return true;
+    }
+
+    return Array.isArray(message.steps) && message.steps.length > 0;
+}
+
+function hasAssistantReplyAfterLatestUser(messages) {
+    if (!Array.isArray(messages) || messages.length === 0) {
+        return false;
+    }
+
+    let latestUserIndex = -1;
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+        if (messages[index]?.role === 'user') {
+            latestUserIndex = index;
+            break;
+        }
+    }
+
+    const startIndex = latestUserIndex === -1 ? 0 : latestUserIndex + 1;
+    for (let index = messages.length - 1; index >= startIndex; index -= 1) {
+        const message = messages[index];
+        if (message?.role !== 'ai') {
+            continue;
+        }
+
+        if (messageHasVisibleContent(message)) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+function clearAgentStreamingForMessages(currentAgentStreaming, messages) {
+    if (!currentAgentStreaming || typeof currentAgentStreaming !== 'object') {
+        return currentAgentStreaming;
+    }
+
+    const keys = new Set();
+    for (const message of messages) {
+        const messageKeys = collectAgentStreamingKeysFromMessage(message);
+        for (const key of messageKeys) {
+            keys.add(key);
+        }
+    }
+
+    if (keys.size === 0) {
+        return currentAgentStreaming;
+    }
+
+    let changed = false;
+    const next = { ...currentAgentStreaming };
+    for (const key of keys) {
+        if (!(key in next)) {
+            continue;
+        }
+
+        delete next[key];
+        changed = true;
+    }
+
+    return changed ? next : currentAgentStreaming;
+}
+
 export function useChat() {
     const [chatSummaries, setChatSummaries] = useState([]);
     const [messagesByChat, setMessagesByChat] = useState({});
@@ -333,6 +412,7 @@ export function useChat() {
 
     const clientIdRef = useRef(getOrCreateClientId());
     const chatSummariesRef = useRef(chatSummaries);
+    const messagesByChatRef = useRef(messagesByChat);
     const activeChatIdRef = useRef(activeChatId);
     const draftMessagesRef = useRef(draftMessages);
     const pendingKeyRef = useRef(pendingKey);
@@ -345,6 +425,10 @@ export function useChat() {
     useEffect(() => {
         chatSummariesRef.current = chatSummaries;
     }, [chatSummaries]);
+
+    useEffect(() => {
+        messagesByChatRef.current = messagesByChat;
+    }, [messagesByChat]);
 
     useEffect(() => {
         activeChatIdRef.current = activeChatId;
@@ -475,6 +559,100 @@ export function useChat() {
         if (!activeChatId) return;
         loadMessagesForChat(activeChatId).catch(() => undefined);
     }, [activeChatId, loadMessagesForChat]);
+
+    useEffect(() => {
+        const pendingChatId = (
+            typeof pendingKey === 'string'
+            && pendingKey.length > 0
+            && pendingKey !== 'draft'
+            && pendingKey === activeChatId
+        )
+            ? pendingKey
+            : null;
+        if (!pendingChatId) {
+            return undefined;
+        }
+
+        let cancelled = false;
+        let timeoutId = null;
+
+        const scheduleNextPoll = (delayMs = 2500) => {
+            if (cancelled) {
+                return;
+            }
+
+            timeoutId = setTimeout(() => {
+                void reconcileStreamingState();
+            }, delayMs);
+        };
+
+        // Recover if the SSE completion event is missed while the request is still in-flight.
+        const reconcileStreamingState = async () => {
+            try {
+                const streamState = await fetchStreamingState(pendingChatId);
+                if (cancelled) {
+                    return;
+                }
+
+                if (streamState.active) {
+                    if (streamState.message) {
+                        setMessagesByChat((prev) => ({
+                            ...prev,
+                            [pendingChatId]: mergeMessages(prev[pendingChatId] ?? [], [streamState.message]),
+                        }));
+                    }
+
+                    if (streamState.agentStreaming && Object.keys(streamState.agentStreaming).length > 0) {
+                        setAgentStreaming((prev) => ({ ...prev, ...streamState.agentStreaming }));
+                    }
+
+                    scheduleNextPoll();
+                    return;
+                }
+
+                const payload = await fetchChatMessages(pendingChatId);
+                if (cancelled) {
+                    return;
+                }
+
+                const refreshedMessages = payload.messages ?? [];
+                const currentMessages = messagesByChatRef.current[pendingChatId] ?? [];
+                const shouldResolvePending = hasAssistantReplyAfterLatestUser(refreshedMessages)
+                    || hasAssistantReplyAfterLatestUser(currentMessages);
+                const messagesForCleanup = refreshedMessages.length > 0
+                    ? refreshedMessages
+                    : currentMessages;
+
+                if (!shouldResolvePending) {
+                    scheduleNextPoll(1200);
+                    return;
+                }
+
+                loadedChatIdsRef.current.add(pendingChatId);
+                setMessagesByChat((prev) => ({
+                    ...prev,
+                    [pendingChatId]: mergeMessages(prev[pendingChatId] ?? [], refreshedMessages),
+                }));
+                setAgentStreaming((prev) => clearAgentStreamingForMessages(prev, messagesForCleanup));
+                setPendingKey((current) => (current === pendingChatId ? null : current));
+            } catch {
+                if (cancelled) {
+                    return;
+                }
+
+                scheduleNextPoll();
+            }
+        };
+
+        scheduleNextPoll();
+
+        return () => {
+            cancelled = true;
+            if (timeoutId !== null) {
+                clearTimeout(timeoutId);
+            }
+        };
+    }, [activeChatId, pendingKey]);
 
     useEffect(() => {
         const source = openChatEvents((event) => {
