@@ -488,6 +488,13 @@ export function useChat() {
     const [isHydrating, setIsHydrating] = useState(true);
     const [agentStreaming, setAgentStreaming] = useState({});
     const [commandChunks, setCommandChunks] = useState({});
+    const [readCounts, setReadCounts] = useState(() => {
+        try {
+            return JSON.parse(localStorage.getItem('gemini-ui-read-counts')) || {};
+        } catch {
+            return {};
+        }
+    });
 
     const clientIdRef = useRef(getOrCreateClientId());
     const chatSummariesRef = useRef(chatSummaries);
@@ -547,6 +554,25 @@ export function useChat() {
     }, [chatSummaries]);
 
     useEffect(() => {
+        if (!activeChatId) return;
+        const activeSummary = chatSummariesRef.current.find((c) => c.id === activeChatId);
+        if (activeSummary) {
+            setReadCounts((prev) => {
+                const prevCount = prev[activeChatId] || 0;
+                const count = activeSummary.messageCount || 0;
+                if (prevCount >= count) return prev;
+                const next = { ...prev, [activeChatId]: count };
+                try {
+                    localStorage.setItem('gemini-ui-read-counts', JSON.stringify(next));
+                } catch {
+                    // ignore
+                }
+                return next;
+            });
+        }
+    }, [activeChatId, chatSummaries]);
+
+    useEffect(() => {
         if (activeChatId === undefined) return;
 
         try {
@@ -571,6 +597,9 @@ export function useChat() {
 
             setActiveChatId((current) => {
                 if (current === undefined) {
+                    if (preferredActiveChatIdRef.current === null) {
+                        return null;
+                    }
                     return pickDefaultActiveChatId(nextChats, {
                         preferredId: preferredActiveChatIdRef.current,
                     });
@@ -788,7 +817,7 @@ export function useChat() {
                     return;
                 }
 
-                if (isOwnEvent && activeChatIdRef.current === event.chatId) {
+                if (activeChatIdRef.current === event.chatId) {
                     setPendingKey(event.chatId);
                 }
 
@@ -1375,8 +1404,9 @@ export function useChat() {
             kind: chat.kind,
             pinned: chat.pinned === true,
             deletable: chat.deletable !== false,
+            unreadCount: Math.max(0, (chat.messageCount || 0) - (readCounts[chat.id] || 0)),
         })),
-        [chatSummaries, activeChatId],
+        [chatSummaries, activeChatId, readCounts],
     );
     const inputDraft = useMemo(
         () => inputDraftByKey[getDraftKey(activeChatId)] ?? '',
@@ -1413,7 +1443,7 @@ export function useChat() {
         messages: activeMessages,
         activeChatId,
         isTyping,
-        isChatMode: activeMessages.length > 0 || !isDraftChat || Boolean(draftReplyContext),
+        isChatMode: activeMessages.length > 0 || !isDraftChat,
         sendMessage,
         stopGeneration,
         inputDraft,

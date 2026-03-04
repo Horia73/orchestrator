@@ -452,12 +452,11 @@
     flex-direction: column;
     gap: 26px;
     width: 100%;
-    padding: 28px max(24px, calc(50% - var(--chat-message-max-width) / 2)) calc(var(--input-slot-height, 120px) + 12px);
+    padding: 28px max(24px, calc(50% - var(--chat-message-max-width) / 2)) 28px;
     flex: 1;
     min-height: 0;
     overflow-y: auto;
     overflow-x: hidden;
-    margin-bottom: -12px;
 }
 
 .chat-empty-notice {

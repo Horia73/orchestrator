@@ -10,6 +10,7 @@
 .chat-input-container {
     width: 100%;
     max-width: var(--input-landing-width);
+    margin-inline: auto;
     padding: 0 24px;
     display: flex;
     flex-direction: column;
@@ -106,8 +107,8 @@
     width: 100%;
 }
 
-.chat-input-todo + .chat-input-box,
-.chat-input-todo-shell + .chat-input-box {
+.chat-input-todo+.chat-input-box,
+.chat-input-todo-shell+.chat-input-box {
     margin-top: 10px;
 }
 

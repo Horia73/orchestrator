@@ -138,6 +138,25 @@
     flex-shrink: 0;
 }
 
+.nav-badge {
+    margin-left: auto;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 5px;
+    border-radius: 9px;
+    background: var(--accent-orange);
+    color: #fff;
+    font-size: 11px;
+    font-weight: 600;
+    line-height: 18px;
+    text-align: center;
+    flex-shrink: 0;
+}
+
+.sidebar.collapsed .nav-badge {
+    display: none;
+}
+
 /* Text labels — fade out on collapse, fade in on expand */
 .nav-label {
     opacity: 1;
@@ -324,35 +343,38 @@
     border-radius: 10px;
     font-size: 14.5px;
     text-align: left;
+    overflow: hidden;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.recent-item span.label {
     white-space: nowrap;
     text-overflow: ellipsis;
     overflow: hidden;
+    flex: 1;
 }
 
-.recent-row.active .recent-item {
-    font-weight: 500;
+.unread-badge {
+    background: var(--accent-orange);
+    color: white;
+    border-radius: 12px;
+    padding: 2px 7px;
+    margin-left: auto;
+    font-size: 11px;
+    font-weight: 700;
+    line-height: 1.2;
+    display: flex;
+    align-items: center;
+    justify-content: center;
 }
 
-.recent-delete-btn {
-    width: 28px;
-    height: 28px;
-    flex-shrink: 0;
-    margin-right: 4px;
-    border-radius: 8px;
-    color: var(--text-tertiary);
-    opacity: 0;
-    transition: opacity var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+.recent-row.active .recent-item span.label {
+    font-weight: 600;
 }
 
-.recent-row:hover .recent-delete-btn,
-.recent-row.active .recent-delete-btn {
-    opacity: 1;
-}
-
-.recent-delete-btn:hover {
-    background: rgba(0, 0, 0, 0.06);
-    color: var(--text-primary);
-}
 
 /* ---- Footer ---- */
 .sidebar-footer {

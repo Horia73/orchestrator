@@ -5,6 +5,7 @@ import { useSidebar } from './hooks/useSidebar.js';
 import { useChat } from './hooks/useChat.js';
 import { Sidebar } from './components/layout/Sidebar.jsx';
 import { ChatArea } from './components/chat/ChatArea.jsx';
+import { InboxArea } from './components/chat/InboxArea.jsx';
 import { ChatInput } from './components/chat/ChatInput.jsx';
 import { extractLatestTodoState } from './components/chat/todoUtils.js';
 import { Settings } from './components/settings/Settings.jsx';
@@ -17,10 +18,10 @@ function buildModelCatalogTaskPrompt({ focusModelId = '', missingModelIds = [] }
   const normalizedFocusModelId = String(focusModelId ?? '').trim();
   const normalizedMissingModelIds = Array.isArray(missingModelIds)
     ? [...new Set(
-        missingModelIds
-          .map((modelId) => String(modelId ?? '').trim())
-          .filter(Boolean),
-      )]
+      missingModelIds
+        .map((modelId) => String(modelId ?? '').trim())
+        .filter(Boolean),
+    )]
     : [];
 
   const lines = [
@@ -250,25 +251,37 @@ export default function App() {
         onNewChat={handleNewChat}
         recentChats={chat.recents}
         onSelectChat={handleSelectChat}
-        onDeleteChat={handleDeleteChat}
         onOpenSettings={handleOpenSettings}
         uiSettings={uiSettings}
       />
 
-      <ChatArea
-        greeting={chat.greeting}
-        messages={chat.messages}
-        conversationKey={chat.activeChatId}
-        clientId={chat.clientId}
-        isTyping={chat.isTyping}
-        isChatMode={chat.isChatMode}
-        activeChatKind={chat.activeChatKind}
-        onReplyFromMessage={handleReplyFromInboxMessage}
-        agentStreaming={chat.agentStreaming}
-        commandChunks={chat.commandChunks}
-        uiSettings={uiSettings}
-      >
-        {!chat.isInboxChatActive && (
+      {chat.isInboxChatActive ? (
+        <InboxArea
+          messages={chat.messages}
+          conversationKey={chat.activeChatId}
+          clientId={chat.clientId}
+          isTyping={chat.isTyping}
+          onReplyFromMessage={handleReplyFromInboxMessage}
+          onClear={() => handleDeleteChat(chat.activeChatId)}
+          agentStreaming={chat.agentStreaming}
+          commandChunks={chat.commandChunks}
+          uiSettings={uiSettings}
+        />
+      ) : (
+        <ChatArea
+          greeting={chat.greeting}
+          messages={chat.messages}
+          conversationKey={chat.activeChatId}
+          clientId={chat.clientId}
+          isTyping={chat.isTyping}
+          isChatMode={chat.isChatMode}
+          activeChatKind={chat.activeChatKind}
+          onReplyFromMessage={handleReplyFromInboxMessage}
+          onDeleteChat={() => handleDeleteChat(chat.activeChatId)}
+          agentStreaming={chat.agentStreaming}
+          commandChunks={chat.commandChunks}
+          uiSettings={uiSettings}
+        >
           <ChatInput
             ref={chatInputRef}
             onSend={chat.sendMessage}
@@ -285,8 +298,8 @@ export default function App() {
             todoState={activeTodoState}
             todoBoardKey={chat.activeChatId ?? 'chat-input-todo'}
           />
-        )}
-      </ChatArea>
+        </ChatArea>
+      )}
 
     </div>
   );

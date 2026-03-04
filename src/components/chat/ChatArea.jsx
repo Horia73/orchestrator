@@ -14,6 +14,7 @@ import {
 const USER_TOP_OFFSET = 54;
 const USER_SCROLL_FOCUS_OFFSET = 12;
 const AUTO_SCROLL_SNAP_DISTANCE = 24;
+const SCROLL_AT_BOTTOM_SENTINEL = Number.MAX_SAFE_INTEGER;
 const INPUT_FLIP_DURATION_MS = 260;
 const EXIT_FADE_DURATION_MS = INPUT_FLIP_DURATION_MS;
 const ENTER_FADE_DURATION_MS = 340;
@@ -224,6 +225,9 @@ export function ChatArea({
     onReplyFromMessage,
     agentStreaming,
     commandChunks,
+    emptyStateFallback,
+    disableScrollAnchoring = false,
+    onDeleteChat,
     children,
 }) {
     const scrollRef = useRef(null);
@@ -347,7 +351,12 @@ export function ChatArea({
 
     const saveActiveConversationScrollPosition = useCallback((container = scrollRef.current) => {
         if (!container) return;
-        saveConversationScrollPosition(conversationKey, container.scrollTop);
+        const maxScrollTop = container.scrollHeight - container.clientHeight;
+        const distanceFromBottom = maxScrollTop - container.scrollTop;
+        const scrollTop = distanceFromBottom <= AUTO_SCROLL_SNAP_DISTANCE
+            ? SCROLL_AT_BOTTOM_SENTINEL
+            : container.scrollTop;
+        saveConversationScrollPosition(conversationKey, scrollTop);
     }, [conversationKey, saveConversationScrollPosition]);
 
     const saveAgentPanelScrollPosition = useCallback((rawConversationKey, panelKey, scrollTop) => {
@@ -545,8 +554,13 @@ export function ChatArea({
                 // Use lastKnownScrollTopRef instead of scrollRef.current.scrollTop.
                 // When React clears the div content (switching to uncached conversation),
                 // the browser clamps scrollTop to 0 — the cached ref keeps the real value.
-                console.log('[SCROLL SAVE on switch]', { previousKey, scrollTop: lastKnownScrollTopRef.current });
-                saveConversationScrollPosition(previousKey, lastKnownScrollTopRef.current);
+                // When the user was at/near the bottom, save a sentinel so restore snaps
+                // to the actual bottom (content height may differ slightly on re-render).
+                const scrollTopToSave = shouldAutoFollowRef.current
+                    ? SCROLL_AT_BOTTOM_SENTINEL
+                    : lastKnownScrollTopRef.current;
+                console.log('[SCROLL SAVE on switch]', { previousKey, scrollTop: scrollTopToSave, wasAtBottom: shouldAutoFollowRef.current });
+                saveConversationScrollPosition(previousKey, scrollTopToSave);
             }
             lastKnownScrollTopRef.current = 0;
 
@@ -614,23 +628,25 @@ export function ChatArea({
         if (!container) return;
 
         const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
-        const requiredSpacer = Math.max(0, container.clientHeight - USER_TOP_OFFSET - paddingBottom);
-        if (spacerRef.current) {
-            spacerRef.current.style.height = `${requiredSpacer}px`;
+        if (!disableScrollAnchoring) {
+            const requiredSpacer = Math.max(0, container.clientHeight - USER_TOP_OFFSET - paddingBottom);
+            if (spacerRef.current) {
+                spacerRef.current.style.height = `${requiredSpacer}px`;
+            }
         }
 
         const refreshedMaxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
         const isInitialRestore = isInitialScrollRestoreRef.current;
         isInitialScrollRestoreRef.current = false;
 
-        const savedScrollTop = scrollPositionsRef.current[pendingConversationKey];
+        const savedScrollTop = scrollPositionsRef.current[activeConversationKey];
         const targetScrollTop = Number.isFinite(savedScrollTop)
             ? Math.min(Math.max(0, savedScrollTop), refreshedMaxScrollTop)
             : refreshedMaxScrollTop;
         shouldAutoFollowRef.current = targetScrollTop >= refreshedMaxScrollTop - AUTO_SCROLL_SNAP_DISTANCE;
 
         console.log('[SCROLL RESTORE]', {
-            key: pendingConversationKey,
+            key: activeConversationKey,
             isInitialRestore,
             savedScrollTop,
             refreshedMaxScrollTop,
@@ -716,6 +732,8 @@ export function ChatArea({
     // Trigger-ul este cresterea numarului de mesaje user.
     // Daca AI-ul inca nu a inceput sa scrie, asteptam pana cand isTyping devine true.
     useEffect(() => {
+        if (disableScrollAnchoring) return;
+
         // Conversatia s-a schimbat — sincronizam baseline fara animatie.
         if (enterAnchorConversationKeyRef.current !== conversationKey) {
             enterAnchorConversationKeyRef.current = conversationKey;
@@ -841,7 +859,7 @@ export function ChatArea({
 
     // Spacer dinamic + follow in timpul stream-ului.
     useEffect(() => {
-        if (!isChatMode) return;
+        if (!isChatMode || disableScrollAnchoring) return;
         const container = scrollRef.current;
         const userEl = lastUserMsgRef.current;
         const aiEl = lastAiMsgRef.current;
@@ -1202,7 +1220,7 @@ export function ChatArea({
 
     return (
         <main
-            className={`main-content${isChatMode ? ' chat-active' : ''}${noSpacerAnim ? ' no-spacer-anim' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}${isToolPanelOpen ? ' tool-panel-open' : ''}`}
+            className={`main-content${isChatMode ? ' chat-active' : ''}${noSpacerAnim ? ' no-spacer-anim' : ''}${isAgentPanelOpen ? ' agent-panel-open' : ''}${isToolPanelOpen ? ' tool-panel-open' : ''}${disableScrollAnchoring ? ' disable-anchoring' : ''}`}
             id="mainContent"
         >
             <div className="chat-main-pane">
@@ -1215,55 +1233,89 @@ export function ChatArea({
                 )}
 
                 {isChatMode && (
-                    <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}${isConversationHidden ? ' chat-messages-hidden' : ''}`} id="chatMessages" ref={scrollRef}>
-                        {messages.length === 0 && activeChatKind === 'inbox' && (
-                            <div className="chat-empty-notice">
-                                <strong>Inbox is read-only</strong>
-                                <span>Scheduled reminders and AI-initiated notes land here. Use Reply on any message to continue in a new chat.</span>
+                    <>
+                        {activeChatKind !== 'inbox' && conversationKey && typeof onDeleteChat === 'function' && (
+                            <div style={{ position: 'absolute', top: 12, right: 32, zIndex: 10 }}>
+                                <button
+                                    type="button"
+                                    onClick={onDeleteChat}
+                                    style={{
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        gap: '6px',
+                                        background: 'transparent',
+                                        border: 'none',
+                                        color: 'var(--text-tertiary)',
+                                        fontSize: '13px',
+                                        fontWeight: '500',
+                                        cursor: 'pointer',
+                                        padding: '6px 10px',
+                                        borderRadius: '8px',
+                                        transition: 'background 0.2s, color 0.2s'
+                                    }}
+                                    onMouseEnter={(e) => {
+                                        e.currentTarget.style.background = 'rgba(0, 0, 0, 0.04)';
+                                        e.currentTarget.style.color = 'var(--text-primary)';
+                                    }}
+                                    onMouseLeave={(e) => {
+                                        e.currentTarget.style.background = 'transparent';
+                                        e.currentTarget.style.color = 'var(--text-tertiary)';
+                                    }}
+                                    title="Clear chat"
+                                >
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <polyline points="3 6 5 6 21 6"></polyline>
+                                        <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
+                                    </svg>
+                                    Clear
+                                </button>
                             </div>
                         )}
-                        {messages.map((msg) => {
-                            return (
-                                <div
-                                    key={msg.id}
-                                    className="chat-message-row"
-                                >
-                                    <Message
-                                        role={msg.role}
-                                        text={msg.text}
-                                        thought={msg.thought}
-                                        parts={msg.parts}
-                                        steps={msg.steps}
-                                        replyTo={msg.replyTo}
-                                        isThinking={
-                                            isTyping
-                                            && msg.id === lastAiMsgId
-                                            && msg.role === 'ai'
-                                            && String(msg.text ?? '').trim().length === 0
-                                        }
-                                        showReplyAction={activeChatKind === 'inbox' && msg.role === 'ai'}
-                                        onReply={activeChatKind === 'inbox' && typeof onReplyFromMessage === 'function'
-                                            ? () => onReplyFromMessage(msg)
-                                            : undefined}
-                                        onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
-                                        onToolPanelToggle={msg.role === 'ai' ? handleToolPanelToggle : undefined}
-                                        agentToggleSource="main"
-                                        activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
-                                        commandChunks={commandChunks}
-                                        ref={
-                                            msg.id === lastUserMsgId
-                                                ? lastUserMsgRef
-                                                : msg.id === lastAiMsgId
-                                                    ? lastAiMsgRef
-                                                    : null
-                                        }
-                                    />
-                                </div>
-                            );
-                        })}
-                        {shouldRenderTypingIndicator && <TypingIndicator />}
-                        <div ref={spacerRef} style={{ flexShrink: 0, width: '100%' }} />
-                    </div>
+                        <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}${isConversationHidden ? ' chat-messages-hidden' : ''}`} id="chatMessages" ref={scrollRef}>
+                            {messages.length === 0 && emptyStateFallback}
+                            {messages.map((msg) => {
+                                return (
+                                    <div
+                                        key={msg.id}
+                                        className="chat-message-row"
+                                    >
+                                        <Message
+                                            role={msg.role}
+                                            text={msg.text}
+                                            thought={msg.thought}
+                                            parts={msg.parts}
+                                            steps={msg.steps}
+                                            replyTo={msg.replyTo}
+                                            isThinking={
+                                                isTyping
+                                                && msg.id === lastAiMsgId
+                                                && msg.role === 'ai'
+                                                && String(msg.text ?? '').trim().length === 0
+                                            }
+                                            showReplyAction={activeChatKind === 'inbox' && msg.role === 'ai' && !msg.isFakeNotice}
+                                            onReply={activeChatKind === 'inbox' && typeof onReplyFromMessage === 'function' && !msg.isFakeNotice
+                                                ? () => onReplyFromMessage(msg)
+                                                : undefined}
+                                            onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
+                                            onToolPanelToggle={msg.role === 'ai' ? handleToolPanelToggle : undefined}
+                                            agentToggleSource="main"
+                                            activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
+                                            commandChunks={commandChunks}
+                                            ref={
+                                                msg.id === lastUserMsgId
+                                                    ? lastUserMsgRef
+                                                    : msg.id === lastAiMsgId
+                                                        ? lastAiMsgRef
+                                                        : null
+                                            }
+                                        />
+                                    </div>
+                                );
+                            })}
+                            {shouldRenderTypingIndicator && <TypingIndicator />}
+                            <div ref={spacerRef} style={{ flexShrink: 0, width: '100%' }} />
+                        </div>
+                    </>
                 )}
 
                 {!isChatMode && exitSnapshotMessages.length > 0 && (
@@ -1286,7 +1338,7 @@ export function ChatArea({
                     </div>
                 )}
 
-                {isChatMode && showScrollToBottom && (
+                {isChatMode && showScrollToBottom && messages.length > 0 && !messages[0]?.isFakeNotice && (
                     <button
                         className="scroll-to-bottom-btn"
                         type="button"
