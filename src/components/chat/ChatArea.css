@@ -459,6 +459,13 @@
     overflow-x: hidden;
 }
 
+/* In chat-active mode the input bar floats over the messages —
+   give enough bottom padding so the last message is never hidden behind it. */
+.main-content.chat-active .chat-messages {
+    padding-bottom: calc(var(--input-slot-height, 120px) + 20px);
+}
+
+
 .chat-empty-notice {
     max-width: 560px;
     display: flex;

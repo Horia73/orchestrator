@@ -4,12 +4,12 @@ import './App.css';
 import { useSidebar } from './hooks/useSidebar.js';
 import { useChat } from './hooks/useChat.js';
 import { Sidebar } from './components/layout/Sidebar.jsx';
+import { TopNavBar } from './components/layout/TopNavBar.jsx';
 import { ChatArea } from './components/chat/ChatArea.jsx';
 import { InboxArea } from './components/chat/InboxArea.jsx';
 import { ChatInput } from './components/chat/ChatInput.jsx';
 import { extractLatestTodoState } from './components/chat/todoUtils.js';
 import { Settings } from './components/settings/Settings.jsx';
-import { IconPanel } from './components/shared/icons.jsx';
 import { fetchAgents, fetchSettings, saveSettings } from './api/settingsApi.js';
 
 const MODEL_CATALOG_PATH = '~/.orchestrator/models.json';
@@ -78,6 +78,13 @@ export default function App() {
     () => extractLatestTodoState(chat.messages),
     [chat.messages],
   );
+
+  // Derive the active conversation title from the sidebar recents list
+  const activeChatTitle = useMemo(() => {
+    if (!chat.activeChatId) return '';
+    const found = chat.recents?.find((c) => c.id === chat.activeChatId);
+    return found?.label ?? '';
+  }, [chat.activeChatId, chat.recents]);
 
   // Settings page state
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsViewFromUrl());
@@ -229,14 +236,7 @@ export default function App() {
     <div className="app">
 
       {/* Mobile: floating open button, shown only when sidebar is closed */}
-      <button
-        className={`mobile-menu-btn${sidebar.collapsed ? ' visible' : ''}`}
-        onClick={sidebar.expand}
-        title="Open sidebar"
-        aria-label="Open sidebar"
-      >
-        <IconPanel />
-      </button>
+      {/* Removed mobile-menu-btn */}
 
       {/* Mobile: dim overlay behind open sidebar */}
       <div
@@ -255,51 +255,66 @@ export default function App() {
         uiSettings={uiSettings}
       />
 
-      {chat.isInboxChatActive ? (
-        <InboxArea
-          messages={chat.messages}
-          conversationKey={chat.activeChatId}
-          clientId={chat.clientId}
-          isTyping={chat.isTyping}
-          onReplyFromMessage={handleReplyFromInboxMessage}
-          onClear={() => handleDeleteChat(chat.activeChatId)}
-          agentStreaming={chat.agentStreaming}
-          commandChunks={chat.commandChunks}
-          uiSettings={uiSettings}
+      {/* Main content column: TopNavBar + chat/inbox area */}
+      <div className="main-column">
+        <TopNavBar
+          title={chat.isInboxChatActive ? 'Inbox' : activeChatTitle}
+          onClear={
+            chat.isInboxChatActive
+              ? () => chat.clearInboxMessages(chat.activeChatId)
+              : chat.activeChatId
+                ? () => handleDeleteChat(chat.activeChatId)
+                : null
+          }
+          onOpenSidebar={sidebar.expand}
+          sidebarOpen={!sidebar.collapsed}
         />
-      ) : (
-        <ChatArea
-          greeting={chat.greeting}
-          messages={chat.messages}
-          conversationKey={chat.activeChatId}
-          clientId={chat.clientId}
-          isTyping={chat.isTyping}
-          isChatMode={chat.isChatMode}
-          activeChatKind={chat.activeChatKind}
-          onReplyFromMessage={handleReplyFromInboxMessage}
-          onDeleteChat={() => handleDeleteChat(chat.activeChatId)}
-          agentStreaming={chat.agentStreaming}
-          commandChunks={chat.commandChunks}
-          uiSettings={uiSettings}
-        >
-          <ChatInput
-            ref={chatInputRef}
-            onSend={chat.sendMessage}
-            onStop={chat.stopGeneration}
-            draftValue={chat.inputDraft}
-            onDraftChange={chat.setInputDraft}
-            attachments={chat.inputAttachments}
-            onAttachmentsChange={chat.setInputAttachments}
-            isChatMode={chat.isChatMode}
-            isSending={chat.isTyping}
-            replyPreview={chat.draftReplyContext}
-            onClearReplyPreview={chat.clearDraftReplyContext}
+
+        {chat.isInboxChatActive ? (
+          <InboxArea
+            messages={chat.messages}
+            conversationKey={chat.activeChatId}
+            clientId={chat.clientId}
+            isTyping={chat.isTyping}
+            onReplyFromMessage={handleReplyFromInboxMessage}
+            agentStreaming={chat.agentStreaming}
+            commandChunks={chat.commandChunks}
             uiSettings={uiSettings}
-            todoState={activeTodoState}
-            todoBoardKey={chat.activeChatId ?? 'chat-input-todo'}
           />
-        </ChatArea>
-      )}
+        ) : (
+          <ChatArea
+            greeting={chat.greeting}
+            messages={chat.messages}
+            conversationKey={chat.activeChatId}
+            clientId={chat.clientId}
+            isTyping={chat.isTyping}
+            isChatMode={chat.isChatMode}
+            activeChatKind={chat.activeChatKind}
+            onReplyFromMessage={handleReplyFromInboxMessage}
+            onDeleteChat={() => handleDeleteChat(chat.activeChatId)}
+            agentStreaming={chat.agentStreaming}
+            commandChunks={chat.commandChunks}
+            uiSettings={uiSettings}
+          >
+            <ChatInput
+              ref={chatInputRef}
+              onSend={chat.sendMessage}
+              onStop={chat.stopGeneration}
+              draftValue={chat.inputDraft}
+              onDraftChange={chat.setInputDraft}
+              attachments={chat.inputAttachments}
+              onAttachmentsChange={chat.setInputAttachments}
+              isChatMode={chat.isChatMode}
+              isSending={chat.isTyping}
+              replyPreview={chat.draftReplyContext}
+              onClearReplyPreview={chat.clearDraftReplyContext}
+              uiSettings={uiSettings}
+              todoState={activeTodoState}
+              todoBoardKey={chat.activeChatId ?? 'chat-input-todo'}
+            />
+          </ChatArea>
+        )}
+      </div>
 
     </div>
   );

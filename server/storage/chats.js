@@ -592,6 +592,43 @@ export async function removeChat(chatId) {
     return true;
 }
 
+export async function clearChatMessages(chatId) {
+    await ensureInitialized();
+
+    const chatIdx = findChatIndex(chatId);
+    if (chatIdx === -1) {
+        return false;
+    }
+
+    const chatPath = getChatFilePath(chatId);
+    const messages = await readJsonLines(chatPath);
+    const uploadIds = new Set();
+    for (const message of messages) {
+        collectUploadIdsFromParts(message?.parts, uploadIds);
+        if (Array.isArray(message?.steps)) {
+            for (const step of message.steps) {
+                collectUploadIdsFromParts(step?.parts, uploadIds);
+            }
+        }
+    }
+
+    await rewriteJsonLines(chatPath, []);
+    await deleteUploads([...uploadIds], { allowCommitted: true });
+
+    const current = state.chats[chatIdx];
+    const updated = {
+        ...current,
+        messageCount: 0,
+        lastMessagePreview: '',
+        updatedAt: Date.now(),
+    };
+    state.chats[chatIdx] = updated;
+    state.chats = sortChats(state.chats);
+    await persistIndex();
+
+    return true;
+}
+
 export async function updateChatTitle(chatId, newTitle) {
     await ensureInitialized();
 

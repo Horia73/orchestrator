@@ -43,6 +43,7 @@ import {
     getChatMessages,
     getRecentMessages,
     removeChat,
+    clearChatMessages,
     updateChatTitle,
     INBOX_CHAT_KIND,
 } from './storage/chats.js';
@@ -1787,6 +1788,40 @@ app.get('/api/chats/:chatId/messages', async (req, res, next) => {
 
         const messages = await getChatMessages(chatId);
         res.json({ chat, messages });
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.delete('/api/chats/:chatId/messages', async (req, res, next) => {
+    try {
+        const { chatId } = req.params;
+        const clientId = normalizeClientId(req.query.clientId);
+        const existingChat = await getChat(chatId);
+
+        if (!existingChat) {
+            res.status(404).json({ error: 'Chat not found.' });
+            return;
+        }
+
+        const cleared = await clearChatMessages(chatId);
+        if (!cleared) {
+            res.status(404).json({ error: 'Chat not found.' });
+            return;
+        }
+
+        broadcastEvent('chat.messages_cleared', {
+            chatId,
+            originClientId: clientId,
+        });
+
+        res.json({ ok: true });
+        void writeSystemLog({
+            source: 'chat',
+            eventType: 'chat.messages_cleared',
+            message: 'Chat messages cleared.',
+            data: { chatId, clientId },
+        }).catch(() => undefined);
     } catch (error) {
         next(error);
     }

@@ -97,6 +97,15 @@ export async function deleteChat(chatId, clientId) {
     return parseApiResponse(response);
 }
 
+export async function clearChatMessages(chatId, clientId) {
+    const response = await fetch(`/api/chats/${chatId}/messages?clientId=${encodeURIComponent(clientId)}`, {
+        method: 'DELETE',
+    });
+
+    return parseApiResponse(response);
+}
+
+
 export async function fetchCommandStatus({ commandId, waitSeconds = 0, chars = 12000 }) {
     const query = new URLSearchParams({
         wait: String(waitSeconds),

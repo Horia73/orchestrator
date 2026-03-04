@@ -1,0 +1,132 @@
+/* =============================================
+   TopNavBar
+   ============================================= */
+
+.top-nav-bar {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    height: 48px;
+    padding: 0 20px 0 16px;
+    border-bottom: 1px solid var(--border-light);
+    background: var(--bg-main);
+    flex-shrink: 0;
+    /* Ensures text doesn't overflow & stays on one line */
+    min-width: 0;
+}
+
+/* ---- Hamburger (mobile-only) ---- */
+.top-nav-hamburger {
+    display: none;
+    /* hidden on desktop */
+    align-items: center;
+    justify-content: center;
+    flex-shrink: 0;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border-radius: 8px;
+    color: var(--text-secondary);
+    transition:
+        background var(--transition-fast),
+        color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.top-nav-hamburger svg {
+    display: block;
+    width: 18px;
+    height: 18px;
+}
+
+.top-nav-hamburger:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+    transform: scale(1.05);
+}
+
+.top-nav-hamburger:active {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+    transform: scale(0.96);
+}
+
+/* When sidebar is already open, animation-fade-out the button */
+.top-nav-hamburger.hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+/* ---- Title ---- */
+.top-nav-title {
+    flex: 1;
+    min-width: 0;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    /* We want it left-aligned on desktop (sidebar provides context),
+       but centred-ish on mobile where there's a hamburger on the left */
+}
+
+/* ---- Clear button ---- */
+.top-nav-clear-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    flex-shrink: 0;
+    padding: 5px 10px;
+    border-radius: 8px;
+    font-size: 13px;
+    font-weight: 500;
+    color: var(--text-tertiary);
+    background: transparent;
+    transition:
+        background var(--transition-fast),
+        color var(--transition-fast),
+        transform var(--transition-fast);
+}
+
+.top-nav-clear-btn:hover {
+    background: var(--bg-sidebar-hover);
+    color: var(--text-primary);
+}
+
+.top-nav-clear-btn:active {
+    transform: scale(0.97);
+}
+
+/* Placeholder that keeps the title left-aligned by mirroring the clear-btn width */
+.top-nav-clear-placeholder {
+    /* Match the approximate width of the clear button so the title stays left */
+    flex-shrink: 0;
+    width: 68px;
+    /* approx "🗑 Clear" size */
+}
+
+/* =============================================
+   Mobile (≤ 768px)
+   ============================================= */
+@media (max-width: 768px) {
+    .top-nav-bar {
+        padding: 0 12px 0 8px;
+    }
+
+    .top-nav-hamburger {
+        display: flex;
+        /* show on mobile */
+    }
+
+    .top-nav-title {
+        /* On mobile the title sits between hamburger and clear btn,
+           so it doesn't need any extra adjustments */
+        font-size: 14px;
+    }
+
+    /* Hide the placeholder on mobile so the title gets full remaining space */
+    .top-nav-clear-placeholder {
+        display: none;
+    }
+}

@@ -1,6 +1,7 @@
 import { useState, useRef, useMemo, useEffect, useCallback } from 'react';
 import {
     deleteChat as apiDeleteChat,
+    clearChatMessages as apiClearChatMessages,
     fetchChatMessages,
     fetchChats,
     fetchStreamingState,
@@ -1067,6 +1068,20 @@ export function useChat() {
                 return;
             }
 
+            if (event.type === 'chat.messages_cleared' && event.chatId) {
+                setMessagesByChat((prev) => ({
+                    ...prev,
+                    [event.chatId]: [],
+                }));
+
+                setChatSummaries((prev) => prev.map((chat) => {
+                    if (chat.id !== event.chatId) return chat;
+                    return { ...chat, messageCount: 0, lastMessagePreview: '' };
+                }));
+
+                return;
+            }
+
 
         });
 
@@ -1165,6 +1180,20 @@ export function useChat() {
         if (pendingDraftChatIdRef.current === chatId) {
             pendingDraftChatIdRef.current = null;
         }
+    }, []);
+
+    const clearInboxMessages = useCallback(async (chatId) => {
+        await apiClearChatMessages(chatId, clientIdRef.current);
+
+        setMessagesByChat((prev) => ({
+            ...prev,
+            [chatId]: [],
+        }));
+
+        setChatSummaries((prev) => prev.map((chat) => {
+            if (chat.id !== chatId) return chat;
+            return { ...chat, messageCount: 0, lastMessagePreview: '' };
+        }));
     }, []);
 
     const setInputDraft = useCallback((value) => {
@@ -1456,6 +1485,7 @@ export function useChat() {
         createNewChat,
         selectChat,
         deleteChat,
+        clearInboxMessages,
         startReplyFromMessage,
         isDraftChat,
         activeChatKind,

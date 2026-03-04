@@ -18,7 +18,6 @@ export function InboxArea({
     uiSettings,
     isTyping,
     onReplyFromMessage,
-    onClear,
 }) {
     const displayMessages = Array.isArray(messages) ? messages : [];
 
@@ -36,47 +35,8 @@ export function InboxArea({
         </div>
     );
 
-    const hasMessages = displayMessages.length > 0;
-
     return (
         <div style={{ display: 'flex', flexDirection: 'column', flex: 1, minWidth: 0, position: 'relative' }}>
-            {hasMessages && (
-                <div style={{ position: 'absolute', top: 12, right: 32, zIndex: 10 }}>
-                    <button
-                        type="button"
-                        onClick={onClear}
-                        style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            gap: '6px',
-                            background: 'transparent',
-                            border: 'none',
-                            color: 'var(--text-tertiary)',
-                            fontSize: '13px',
-                            fontWeight: '500',
-                            cursor: 'pointer',
-                            padding: '6px 10px',
-                            borderRadius: '8px',
-                            transition: 'background 0.2s, color 0.2s'
-                        }}
-                        onMouseEnter={(e) => {
-                            e.currentTarget.style.background = 'rgba(0, 0, 0, 0.04)';
-                            e.currentTarget.style.color = 'var(--text-primary)';
-                        }}
-                        onMouseLeave={(e) => {
-                            e.currentTarget.style.background = 'transparent';
-                            e.currentTarget.style.color = 'var(--text-tertiary)';
-                        }}
-                        title="Clear inbox"
-                    >
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                            <polyline points="3 6 5 6 21 6"></polyline>
-                            <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"></path>
-                        </svg>
-                        Clear
-                    </button>
-                </div>
-            )}
             <ChatArea
                 greeting=""
                 messages={displayMessages}
