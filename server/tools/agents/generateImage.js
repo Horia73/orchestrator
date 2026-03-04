@@ -71,7 +71,7 @@ export async function execute({ prompt, model, aspectRatio, imageSize }) {
             grounding: result.grounding,
             _mediaParts: result.mediaParts,
             _usageRecords: [{
-                source: 'tool',
+                source: 'agent',
                 toolName: 'generate_image',
                 status: 'completed',
                 agentId: IMAGE_AGENT_ID,

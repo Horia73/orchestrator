@@ -266,25 +266,6 @@ export function FilesEditorPanel() {
 
     return (
         <div className="files-editor-panel">
-            <div className="files-editor-toolbar">
-                <div>
-                    <h2 className="files-editor-title">Files and prompts</h2>
-                    <p className="files-editor-subtitle">
-                        Browse and edit files under `/Users/horia/.orchestrator/data` and the prompt source files for all agents.
-                    </p>
-                </div>
-                <div className="files-editor-toolbar-actions">
-                    <button
-                        className="files-editor-btn files-editor-btn--secondary"
-                        onClick={handleRefreshList}
-                        type="button"
-                        disabled={isLoadingSections}
-                    >
-                        {isLoadingSections ? 'Refreshing…' : 'Refresh list'}
-                    </button>
-                </div>
-            </div>
-
             <div className="files-editor-layout">
                 <aside className="files-editor-sidebar">
                     <div className="files-editor-search">
@@ -329,16 +310,10 @@ export function FilesEditorPanel() {
                 </aside>
 
                 <section className="files-editor-detail">
-                    {!selectedPath && !isLoadingSections && (
-                        <div className="files-editor-placeholder">
-                            Select a file to inspect and edit it.
-                        </div>
-                    )}
-
-                    {selectedPath && (
-                        <>
-                            <div className="files-editor-detail-header">
-                                <div className="files-editor-detail-heading">
+                    <div className="files-editor-detail-header">
+                        <div className="files-editor-detail-heading">
+                            {selectedPath ? (
+                                <>
                                     <h3>{file?.label ?? 'Loading…'}</h3>
                                     <div className="files-editor-badges">
                                         {file?.kind === 'data' && <span className="files-editor-badge">data</span>}
@@ -347,28 +322,56 @@ export function FilesEditorPanel() {
                                         {file?.restartRequired && <span className="files-editor-badge files-editor-badge--info">restart may be required</span>}
                                         {isDirty && <span className="files-editor-badge files-editor-badge--dirty">unsaved</span>}
                                     </div>
-                                </div>
+                                </>
+                            ) : (
+                                <h3>File preview</h3>
+                            )}
+                        </div>
 
-                                <div className="files-editor-detail-actions">
-                                    <button
-                                        className="files-editor-btn files-editor-btn--secondary"
-                                        onClick={handleRefreshCurrentFile}
-                                        type="button"
-                                        disabled={isLoadingFile || !selectedPath}
-                                    >
-                                        {isLoadingFile ? 'Loading…' : 'Reload'}
-                                    </button>
-                                    <button
-                                        className="files-editor-btn files-editor-btn--primary"
-                                        onClick={() => handleSave().catch(() => undefined)}
-                                        type="button"
-                                        disabled={!file || !isDirty || isSaving || isLoadingFile}
-                                    >
-                                        {isSaving ? 'Saving…' : 'Save'}
-                                    </button>
-                                </div>
-                            </div>
+                        <div className="files-editor-detail-actions">
+                            <button
+                                className="files-editor-btn files-editor-btn--secondary"
+                                onClick={handleRefreshList}
+                                type="button"
+                                disabled={isLoadingSections}
+                            >
+                                {isLoadingSections ? 'Refreshing…' : 'Refresh list'}
+                            </button>
+                            <button
+                                className="files-editor-btn files-editor-btn--secondary"
+                                onClick={handleRefreshCurrentFile}
+                                type="button"
+                                disabled={isLoadingFile || !selectedPath}
+                            >
+                                {isLoadingFile ? 'Loading…' : 'Reload'}
+                            </button>
+                            <button
+                                className="files-editor-btn files-editor-btn--primary"
+                                onClick={() => handleSave().catch(() => undefined)}
+                                type="button"
+                                disabled={!file || !isDirty || isSaving || isLoadingFile}
+                            >
+                                {isSaving ? 'Saving…' : 'Save'}
+                            </button>
+                        </div>
+                    </div>
 
+                    {errorMessage && (
+                        <div className="files-editor-message files-editor-message--error">{errorMessage}</div>
+                    )}
+
+                    {!errorMessage && statusMessage && (
+                        <div className="files-editor-message files-editor-message--success">{statusMessage}</div>
+                    )}
+
+                    {!selectedPath && !isLoadingSections && (
+                        <div className="files-editor-placeholder">
+                            Select a file to inspect and edit it.
+                        </div>
+                    )}
+
+                    {selectedPath && (
+                        <>
                             {file && (
                                 <div className="files-editor-meta">
                                     <span>{file.path}</span>
@@ -387,14 +390,6 @@ export function FilesEditorPanel() {
                                 <div className="files-editor-note files-editor-note--warn">
                                     This file can contain secrets. Edit it deliberately.
                                 </div>
-                            )}
-
-                            {errorMessage && (
-                                <div className="files-editor-message files-editor-message--error">{errorMessage}</div>
-                            )}
-
-                            {!errorMessage && statusMessage && (
-                                <div className="files-editor-message files-editor-message--success">{statusMessage}</div>
                             )}
 
                             <textarea

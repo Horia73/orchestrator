@@ -1,5 +1,6 @@
 import { Fragment, useCallback, useEffect, useMemo, useState } from 'react';
 import { clearUsage, fetchUsage } from '../../api/settingsApi.js';
+import { BrowserActivityLog } from '../shared/BrowserActivityLog.jsx';
 import { DateRangePicker } from './DateRangePicker.jsx';
 import { getPresetRange, isDateWithinRange, parseDateKey } from './dateRangeUtils.js';
 
@@ -20,6 +21,10 @@ function normalizeModelId(value) {
     }
 
     return raw;
+}
+
+function isVisibleUsageRequest(request) {
+    return !normalizeModelId(request?.model).toLowerCase().startsWith('tool:');
 }
 
 function formatNumber(value) {
@@ -220,6 +225,10 @@ function statusClassName(value) {
     return 'completed';
 }
 
+function getRequestActivityLog(request) {
+    return Array.isArray(request?.activityLog) ? request.activityLog : [];
+}
+
 export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
     const [range, setRange] = useState(() => getPresetRange('today'));
     const [agentFilter, setAgentFilter] = useState('all');
@@ -244,7 +253,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                     agentId: agentFilter === 'all' ? undefined : agentFilter,
                 });
                 if (cancelled) return;
-                setRequests(sortRequestsByNewest(payload.requests ?? []));
+                setRequests(sortRequestsByNewest((payload.requests ?? []).filter(isVisibleUsageRequest)));
             } catch (error) {
                 if (cancelled) return;
                 const message = error instanceof Error ? error.message : 'Failed to load usage.';
@@ -284,6 +293,9 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                 }
 
                 const request = payload.request;
+                if (!isVisibleUsageRequest(request)) {
+                    return;
+                }
                 if (!isDateWithinRange(request.dateKey, range.startDate, range.endDate)) {
                     return;
                 }
@@ -543,6 +555,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
 
                             {requests.map((request) => {
                                 const expanded = request.id === expandedRequestId;
+                                const activityLog = getRequestActivityLog(request);
 
                                 return (
                                     <Fragment key={request.id}>
@@ -601,6 +614,14 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                                                                 <pre>{request.outputText || '-'}</pre>
                                                             </div>
                                                         </div>
+
+                                                        {activityLog.length > 0 && (
+                                                            <BrowserActivityLog
+                                                                entries={activityLog}
+                                                                title="Browser Activity Log"
+                                                                className="usage-browser-activity-log"
+                                                            />
+                                                        )}
                                                     </div>
                                                 </td>
                                             </tr>

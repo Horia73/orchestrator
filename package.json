@@ -1,21 +1,27 @@
 {
   "name": "orchestrator",
+  "description": "Self-hosted multi-agent Gemini workspace with chat, browser automation, MCP, skills, scheduling, and local persistence.",
   "private": true,
   "version": "1.0.0",
   "type": "module",
+  "engines": {
+    "node": "^20.19.0 || >=22.12.0"
+  },
   "scripts": {
     "kill-ports": "sh -c 'for p in 8787 5173; do pids=$(lsof -ti tcp:$p); if [ -n \"$pids\" ]; then echo \"[kill-ports] Releasing port $p (pid: $pids)\"; kill $pids 2>/dev/null || true; sleep 0.2; kill -9 $pids 2>/dev/null || true; fi; done'",
     "setup": "node server/cli/setup.js",
-    "status": "node server/cli/status.js",
-    "restart": "npm run kill-ports && npm run dev",
+    "start": "node server/cli/appLifecycle.js start",
+    "stop": "node server/cli/appLifecycle.js stop",
+    "status": "node server/cli/appLifecycle.js status",
+    "restart": "node server/cli/appLifecycle.js restart",
+    "restart:dev": "npm run kill-ports && npm run dev",
     "dev": "npm run kill-ports && concurrently -k \"npm:dev:api\" \"npm:dev:web\"",
     "dev:web": "vite",
     "dev:api": "node server/index.js",
+    "serve": "node server/index.js",
     "build": "vite build",
     "lint": "eslint .",
-    "preview": "vite preview",
-    "start:api": "node server/index.js",
-    "postinstall": "chmod +x node_modules/node-pty/prebuilds/darwin-arm64/spawn-helper 2>/dev/null || true"
+    "postinstall": "node -e \"const fs = require('node:fs'); const path = require('node:path'); const root = path.join(process.cwd(), 'node_modules', 'node-pty', 'prebuilds'); if (fs.existsSync(root)) { for (const entry of fs.readdirSync(root)) { const helperPath = path.join(root, entry, 'spawn-helper'); try { fs.chmodSync(helperPath, 0o755); } catch {} } }\""
   },
   "dependencies": {
     "@google/genai": "^1.42.0",
@@ -30,18 +36,18 @@
     "katex": "^0.16.33",
     "mermaid": "^11.12.3",
     "node-pty": "^1.1.0",
+    "patchright": "^1.57.0",
     "react": "^19.2.0",
     "react-dom": "^19.2.0",
     "react-markdown": "^10.1.0",
     "rehype-katex": "^7.0.1",
     "remark-breaks": "^4.0.0",
     "remark-gfm": "^4.0.1",
-    "remark-math": "^6.0.0"
+    "remark-math": "^6.0.0",
+    "ws": "^8.19.0"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.1",
-    "@types/react": "^19.2.7",
-    "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.1",
     "eslint": "^9.39.1",
     "eslint-plugin-react-hooks": "^7.0.1",

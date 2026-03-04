@@ -9,7 +9,7 @@ function formatJson(value) {
     }
 }
 
-function getToolDisplayName(toolName) {
+function getToolDisplayName(toolName, response = null) {
     const MAP = {
         view_file: 'File Contents',
         list_dir: 'Directory Listing',
@@ -18,7 +18,7 @@ function getToolDisplayName(toolName) {
         view_file_outline: 'File Outline',
         view_code_item: 'Code Item',
         view_content_chunk: 'Content Chunk',
-        write_to_file: 'File Created',
+        write_to_file: response?.created ? 'File Created' : 'File Overwritten',
         replace_file_content: 'File Edited',
         multi_replace_file_content: 'File Edited',
         read_url_content: 'URL Content',
@@ -147,7 +147,7 @@ export function ToolDetailPanel({ selection, onClose }) {
     const isExecuting = toolPart?.isExecuting === true;
     const hasError = typeof response?.error === 'string' && response.error.trim().length > 0;
 
-    const displayName = getToolDisplayName(toolName);
+    const displayName = getToolDisplayName(toolName, response);
     const filePath = getFilePath(toolName, args, response);
 
     const renderContent = () => {
@@ -185,7 +185,18 @@ export function ToolDetailPanel({ selection, onClose }) {
 
         // Edit tools — show diff
         if (['write_to_file', 'replace_file_content', 'multi_replace_file_content'].includes(toolName)) {
-            return renderDiffPreview(response) || renderGenericResult(response);
+            const diffPreview = renderDiffPreview(response);
+            if (toolName === 'write_to_file' && response?.created && diffPreview) {
+                return (
+                    <>
+                        <div className="tool-panel-loading">
+                            Created file with {Math.max(0, Number(response?.addedLines ?? 0) || 0)} line(s).
+                        </div>
+                        {diffPreview}
+                    </>
+                );
+            }
+            return diffPreview || renderGenericResult(response);
         }
 
         return renderGenericResult(response);
@@ -208,7 +219,9 @@ export function ToolDetailPanel({ selection, onClose }) {
                 </button>
             </header>
             <div className="tool-detail-body">
-                {renderContent()}
+                <div className="tool-detail-panel-frame" key={selection.callId || toolName}>
+                    {renderContent()}
+                </div>
             </div>
         </aside>
     );

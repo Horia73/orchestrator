@@ -40,6 +40,11 @@ const AGENT_MEMORY_SPECS = Object.freeze([
         label: 'Image Agent',
         description: 'Visual prompting patterns, grounding rules, and output preferences for image tasks.',
     },
+    {
+        agentId: 'browser',
+        label: 'Browser Agent',
+        description: 'Reusable browser interaction lessons, site quirks, and confirmed UI workflows for physical web automation.',
+    },
 ]);
 
 const FILE_TEMPLATES = Object.freeze({

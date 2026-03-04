@@ -11,6 +11,8 @@
     width: 100%;
     max-width: var(--input-landing-width);
     padding: 0 24px;
+    display: flex;
+    flex-direction: column;
     transition: max-width 380ms cubic-bezier(0.4, 0, 0.2, 1);
 }
 
@@ -30,6 +32,83 @@
     border-radius: 16px;
     box-shadow: 0 1px 3px rgba(0, 0, 0, 0.04), 0 4px 12px rgba(0, 0, 0, 0.02);
     transition: border-color var(--transition-fast), box-shadow var(--transition-fast);
+}
+
+.input-reply-preview {
+    display: flex;
+    align-items: stretch;
+    gap: 12px;
+    margin: 12px 12px 0;
+    padding: 11px 12px;
+    border-radius: 12px;
+    background: color-mix(in srgb, var(--bg-sidebar) 88%, white 12%);
+    border: 1px solid color-mix(in srgb, var(--border-light) 82%, var(--accent-orange) 18%);
+}
+
+.input-reply-preview-bar {
+    width: 3px;
+    border-radius: 999px;
+    background: var(--accent-orange);
+    flex-shrink: 0;
+}
+
+.input-reply-preview-body {
+    min-width: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+    flex: 1;
+}
+
+.input-reply-preview-label {
+    font-size: 11px;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    color: var(--accent-orange);
+}
+
+.input-reply-preview-text {
+    font-size: 13.5px;
+    line-height: 1.35;
+    color: var(--text-secondary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.input-reply-preview-close {
+    width: 28px;
+    height: 28px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 8px;
+    color: var(--text-tertiary);
+    flex-shrink: 0;
+    transition: background var(--transition-fast), color var(--transition-fast);
+}
+
+.input-reply-preview-close:hover {
+    background: var(--bg-pill-hover);
+    color: var(--text-secondary);
+}
+
+.chat-input-todo {
+    margin-top: 12px;
+}
+
+.chat-input-todo-shell {
+    width: 100%;
+}
+
+.chat-input-todo-shell-inner {
+    width: 100%;
+}
+
+.chat-input-todo + .chat-input-box,
+.chat-input-todo-shell + .chat-input-box {
+    margin-top: 10px;
 }
 
 .chat-input-box:focus-within {

@@ -39,6 +39,43 @@ function toSafeString(value) {
     return String(value ?? '');
 }
 
+function sanitizeActivityLogEntries(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .map((entry, index) => {
+            if (!entry || typeof entry !== 'object') {
+                const content = toSafeString(entry).trim();
+                if (!content) {
+                    return null;
+                }
+
+                return {
+                    id: `browser-activity-${index + 1}`,
+                    content,
+                    isLive: false,
+                };
+            }
+
+            const content = toSafeString(entry.content ?? entry.message).trim();
+            if (!content) {
+                return null;
+            }
+
+            const createdAt = Number(entry.createdAt);
+
+            return {
+                id: toSafeString(entry.id).trim() || `browser-activity-${index + 1}`,
+                content,
+                createdAt: Number.isFinite(createdAt) && createdAt > 0 ? Math.trunc(createdAt) : undefined,
+                isLive: entry.isLive === true || entry.isThinking === true,
+            };
+        })
+        .filter(Boolean);
+}
+
 function normalizeAgentId(value) {
     const normalized = String(value ?? '').trim().toLowerCase();
     if (!normalized || normalized === 'all' || normalized === 'system') {
@@ -68,6 +105,11 @@ function normalizeUsageSource(value) {
     }
 
     return normalized;
+}
+
+function isSyntheticToolUsageRecord(record) {
+    const model = toSafeString(record?.model).trim().toLowerCase();
+    return model.startsWith('tool:');
 }
 
 function toSafeTokenCount(value) {
@@ -338,6 +380,11 @@ export async function appendUsageRecord(payload = {}) {
         record.usageMetadata = payload.usageMetadata;
     }
 
+    const activityLog = sanitizeActivityLogEntries(payload.activityLog);
+    if (activityLog.length > 0) {
+        record.activityLog = activityLog;
+    }
+
     await appendLine(USAGE_LOG_PATH, record);
     return record;
 }
@@ -360,6 +407,10 @@ export async function getUsageSnapshotByRange(input = {}) {
     const records = await readUsageRecords();
     const requests = records
         .filter((record) => {
+            if (isSyntheticToolUsageRecord(record)) {
+                return false;
+            }
+
             const dateKey = String(record?.dateKey ?? '');
             if (dateKey < startDate || dateKey > endDate) {
                 return false;

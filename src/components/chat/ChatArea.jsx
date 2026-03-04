@@ -4,12 +4,12 @@ import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
 import { IconArrowDown, IconClose, IconArrowLeft } from '../shared/icons.jsx';
 import { ToolDetailPanel } from './ToolDetailPanel.jsx';
-import { TodoBoard } from './TodoBoard.jsx';
+import { BrowserAgentPanel } from './BrowserAgentPanel.jsx';
 import {
     buildAgentPanelMessage,
     findAgentToolCallInMessages,
+    findLatestAgentToolCallInMessages,
 } from './agentCallUtils.js';
-import { extractLatestTodoState } from './todoUtils.js';
 
 const USER_TOP_OFFSET = 54;
 const USER_SCROLL_FOCUS_OFFSET = 12;
@@ -19,6 +19,7 @@ const EXIT_FADE_DURATION_MS = INPUT_FLIP_DURATION_MS;
 const ENTER_FADE_DURATION_MS = 340;
 const SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.scroll_positions.v1';
 const AGENT_PANEL_STACK_STORAGE_KEY = 'orchestrator.chat.agent_panel_stack.v1';
+const AGENT_PANEL_SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.agent_panel_scroll_positions.v1';
 
 function getElementOffsets(container, element) {
     const containerRect = container.getBoundingClientRect();
@@ -136,7 +137,95 @@ function persistAgentPanelStacks(stacks) {
     }
 }
 
-export function ChatArea({ greeting, messages, isTyping, isChatMode, conversationKey, agentStreaming, commandChunks, children }) {
+function loadAgentPanelScrollPositions() {
+    if (typeof window === 'undefined') return {};
+
+    try {
+        const raw = window.localStorage.getItem(AGENT_PANEL_SCROLL_POSITIONS_STORAGE_KEY);
+        if (!raw) return {};
+
+        const parsed = JSON.parse(raw);
+        if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            return {};
+        }
+
+        const sanitized = {};
+        for (const [conversationKey, value] of Object.entries(parsed)) {
+            const normalizedConversationKey = normalizeConversationKey(conversationKey);
+            if (!normalizedConversationKey || !value || typeof value !== 'object' || Array.isArray(value)) {
+                continue;
+            }
+
+            const entryMap = {};
+            for (const [panelKey, scrollTop] of Object.entries(value)) {
+                const normalizedPanelKey = String(panelKey ?? '').trim();
+                const numericValue = Number(scrollTop);
+                if (normalizedPanelKey && Number.isFinite(numericValue) && numericValue >= 0) {
+                    entryMap[normalizedPanelKey] = Math.trunc(numericValue);
+                }
+            }
+
+            if (Object.keys(entryMap).length > 0) {
+                sanitized[normalizedConversationKey] = entryMap;
+            }
+        }
+
+        return sanitized;
+    } catch {
+        return {};
+    }
+}
+
+function persistAgentPanelScrollPositions(scrollPositions) {
+    if (typeof window === 'undefined') return;
+
+    try {
+        window.localStorage.setItem(
+            AGENT_PANEL_SCROLL_POSITIONS_STORAGE_KEY,
+            JSON.stringify(scrollPositions),
+        );
+    } catch {
+        // Ignore localStorage quota/permission issues.
+    }
+}
+
+function buildAgentPanelScrollKey(selection, stack = []) {
+    const stackPath = Array.isArray(stack)
+        ? stack.map((entry) => String(entry?.callId ?? '').trim()).filter(Boolean).join('>')
+        : '';
+    const callId = String(selection?.callId ?? '').trim();
+    const instanceId = String(selection?.instanceId ?? '').trim();
+    const baseKey = stackPath || callId;
+    if (!baseKey) {
+        return '';
+    }
+
+    return [baseKey, instanceId].filter(Boolean).join(':');
+}
+
+function syncInputSlotHeight(slot) {
+    if (!slot || !slot.parentElement) {
+        return null;
+    }
+
+    const nextRect = slot.getBoundingClientRect();
+    slot.parentElement.style.setProperty('--input-slot-height', `${nextRect.height}px`);
+    return nextRect;
+}
+
+export function ChatArea({
+    greeting,
+    messages,
+    isTyping,
+    isChatMode,
+    conversationKey,
+    clientId,
+    activeChatKind = null,
+    onReplyFromMessage,
+    agentStreaming,
+    commandChunks,
+    children,
+}) {
     const scrollRef = useRef(null);
     const exitSnapshotRef = useRef(null);
     const lastUserMsgRef = useRef(null);
@@ -169,7 +258,13 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     const [isConversationEnterVisible, setIsConversationEnterVisible] = useState(false);
     const agentPanelBodyRef = useRef(null);
     const agentPanelAutoFollowRef = useRef(true);
+    const agentPanelProgrammaticScrollRef = useRef(false);
     const agentPanelStacksRef = useRef(null);
+    const agentPanelScrollPositionsRef = useRef(loadAgentPanelScrollPositions());
+    const panelLayoutFreezeTopRef = useRef(null);
+    const panelLayoutFreezeRafRef = useRef(null);
+    const panelLayoutFreezeTimeoutRef = useRef(null);
+    const previousSidePanelStateRef = useRef({ isAgentPanelOpen: false, isToolPanelOpen: false });
     if (agentPanelStacksRef.current === null) {
         agentPanelStacksRef.current = loadAgentPanelStacks();
     }
@@ -255,11 +350,37 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         saveConversationScrollPosition(conversationKey, container.scrollTop);
     }, [conversationKey, saveConversationScrollPosition]);
 
+    const saveAgentPanelScrollPosition = useCallback((rawConversationKey, panelKey, scrollTop) => {
+        const conversationStorageKey = normalizeConversationKey(rawConversationKey);
+        const normalizedPanelKey = String(panelKey ?? '').trim();
+        const numericScrollTop = Number(scrollTop);
+        if (!conversationStorageKey || !normalizedPanelKey || !Number.isFinite(numericScrollTop)) {
+            return;
+        }
+
+        const normalizedScrollTop = Math.max(0, Math.trunc(numericScrollTop));
+        const currentConversationMap = agentPanelScrollPositionsRef.current[conversationStorageKey] ?? {};
+        if (currentConversationMap[normalizedPanelKey] === normalizedScrollTop) {
+            return;
+        }
+
+        const nextConversationMap = {
+            ...currentConversationMap,
+            [normalizedPanelKey]: normalizedScrollTop,
+        };
+        agentPanelScrollPositionsRef.current = {
+            ...agentPanelScrollPositionsRef.current,
+            [conversationStorageKey]: nextConversationMap,
+        };
+        persistAgentPanelScrollPositions(agentPanelScrollPositionsRef.current);
+    }, []);
+
     const handleAgentCallToggle = useCallback((payload) => {
         const callId = String(payload?.callId ?? '').trim();
         if (!callId) {
             return;
         }
+        const toggleSource = String(payload?.toggleSource ?? 'main').trim().toLowerCase();
 
         // Close tool panel when opening agent panel
         setActiveToolPanelSelection(null);
@@ -276,15 +397,33 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         };
 
         applyAgentPanelStack((prev) => {
-            // If clicking the same call as the top of stack, pop it
-            if (prev.length > 0 && prev[prev.length - 1].callId === callId) {
-                return prev.slice(0, -1);
+            const topEntry = prev.length > 0 ? prev[prev.length - 1] : null;
+            const isSameEntry = (entry) => (
+                !!entry
+                && entry.callId === newEntry.callId
+                && String(entry.instanceId ?? '').trim() === newEntry.instanceId
+            );
+
+            if (toggleSource !== 'panel') {
+                if (isSameEntry(topEntry)) {
+                    return [];
+                }
+                return [newEntry];
             }
-            // If clicking from main chat (stack empty), start fresh
+
+            if (isSameEntry(topEntry)) {
+                return prev.length > 1 ? prev.slice(0, -1) : [];
+            }
+
+            const existingIndex = prev.findIndex((entry) => isSameEntry(entry));
+            if (existingIndex >= 0) {
+                return prev.slice(0, existingIndex + 1);
+            }
+
             if (prev.length === 0) {
                 return [newEntry];
             }
-            // Otherwise push onto stack (nested agent call from agent panel)
+
             return [...prev, newEntry];
         });
     }, [applyAgentPanelStack]);
@@ -334,10 +473,8 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         const slot = inputSlotRef.current;
         if (!slot) return;
 
-        const nextRect = slot.getBoundingClientRect();
-        if (slot.parentElement) {
-            slot.parentElement.style.setProperty('--input-slot-height', `${nextRect.height}px`);
-        }
+        const nextRect = syncInputSlotHeight(slot);
+        if (!nextRect) return;
 
         const previousRect = previousInputSlotRectRef.current;
         const wasChatMode = previousRenderChatModeRef.current;
@@ -369,6 +506,22 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         previousInputSlotRectRef.current = nextRect;
         previousRenderChatModeRef.current = isChatMode;
     });
+
+    useEffect(() => {
+        const slot = inputSlotRef.current;
+        if (!slot || typeof ResizeObserver === 'undefined') {
+            return undefined;
+        }
+
+        const observer = new ResizeObserver(() => {
+            syncInputSlotHeight(slot);
+        });
+
+        observer.observe(slot);
+        syncInputSlotHeight(slot);
+
+        return () => observer.disconnect();
+    }, []);
 
     useLayoutEffect(() => {
         if (isChatMode && messages.length > 0) {
@@ -531,6 +684,8 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
     useEffect(() => () => {
         if (enterFadeTimeoutRef.current) clearTimeout(enterFadeTimeoutRef.current);
         if (exitFadeTimeoutRef.current) clearTimeout(exitFadeTimeoutRef.current);
+        if (panelLayoutFreezeTimeoutRef.current) clearTimeout(panelLayoutFreezeTimeoutRef.current);
+        if (panelLayoutFreezeRafRef.current !== null) cancelAnimationFrame(panelLayoutFreezeRafRef.current);
         inputFlipAnimationRef.current?.cancel();
     }, []);
 
@@ -720,6 +875,19 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
             // incercam sa nu il eliminam brutal daca suntem inca ancorati.
             spacer.style.height = `${requiredSpacer}px`;
 
+            if (panelLayoutFreezeTopRef.current !== null) {
+                const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+                isProgrammaticScrollRef.current = true;
+                container.scrollTop = Math.min(panelLayoutFreezeTopRef.current, maxScrollTop);
+                lastKnownScrollTopRef.current = container.scrollTop;
+
+                requestAnimationFrame(() => {
+                    isProgrammaticScrollRef.current = false;
+                    refreshScrollButton(container);
+                });
+                return;
+            }
+
             if (shouldAutoFollowRef.current && !isAnimatingEnterRef.current) {
                 isProgrammaticScrollRef.current = true;
                 container.scrollTop = container.scrollHeight;
@@ -766,40 +934,6 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         container.addEventListener('scroll', handleManualScroll, { passive: true });
         return () => container.removeEventListener('scroll', handleManualScroll);
     }, [isChatMode, conversationKey, saveActiveConversationScrollPosition]);
-
-    // Auto-scroll for agent side panel.
-    useEffect(() => {
-        const container = agentPanelBodyRef.current;
-        if (!container) return;
-
-        // Reset auto-follow when the agent panel selection changes.
-        agentPanelAutoFollowRef.current = true;
-        container.scrollTop = 0;
-
-        const handleScroll = () => {
-            const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
-            agentPanelAutoFollowRef.current = distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
-        };
-
-        const observer = new ResizeObserver(() => {
-            if (agentPanelAutoFollowRef.current) {
-                container.scrollTop = container.scrollHeight;
-            }
-        });
-
-        // Observe the first child (the Message component wrapper) for size changes.
-        if (container.firstElementChild) {
-            observer.observe(container.firstElementChild);
-        } else {
-            observer.observe(container);
-        }
-
-        container.addEventListener('scroll', handleScroll, { passive: true });
-        return () => {
-            observer.disconnect();
-            container.removeEventListener('scroll', handleScroll);
-        };
-    }, [activeAgentCallSelection]);
 
     const lastUserMsgId = [...messages].reverse().find((m) => m.role === 'user')?.id;
     const lastAiMsgId = [...messages].reverse().find((m) => m.role === 'ai')?.id;
@@ -852,6 +986,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                     thought: String(streamData.thought ?? '').trim(),
                     parts: Array.isArray(streamData.parts) ? streamData.parts : [],
                     steps: Array.isArray(streamData.steps) ? streamData.steps : [],
+                    thinkingDurationMs: Number(streamData.thinkingDurationMs ?? 0) || 0,
                     isThinking: streamData.isThinking === true,
                 };
             }
@@ -860,17 +995,210 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
         // Fall back to completed message data.
         return buildAgentPanelMessage(activeAgentCallDetails, messages);
     }, [activeAgentCallDetails, agentStreaming, activeAgentCallSelection, messages]);
+    const activeAgentPanelPayload = useMemo(() => {
+        const callId = String(activeAgentCallSelection?.callId ?? '').trim();
+        if (callId && agentStreaming?.[callId]) {
+            return agentStreaming[callId];
+        }
+
+        const responseObject = activeAgentCallDetails?.toolPart?.functionResponse?.response;
+        return responseObject && typeof responseObject === 'object' ? responseObject : null;
+    }, [activeAgentCallDetails, activeAgentCallSelection, agentStreaming]);
     const activeAgentPanelRenderKey = useMemo(() => {
         const callId = String(activeAgentCallSelection?.callId ?? '').trim();
         const instanceId = String(activeAgentCallSelection?.instanceId ?? '').trim();
         return [callId, instanceId, agentPanelStack.length].filter(Boolean).join(':') || 'agent-panel';
     }, [activeAgentCallSelection, agentPanelStack.length]);
-    const activeTodoState = useMemo(
-        () => extractLatestTodoState(messages),
-        [messages],
+    const activeAgentPanelScrollKey = useMemo(
+        () => buildAgentPanelScrollKey(activeAgentCallSelection, agentPanelStack),
+        [activeAgentCallSelection, agentPanelStack],
     );
+    const latestBrowserAttentionCall = useMemo(() => {
+        const streamingEntries = Object.entries(agentStreaming ?? {});
+        for (let index = streamingEntries.length - 1; index >= 0; index -= 1) {
+            const [callId, payload] = streamingEntries[index];
+            const isBrowser = String(payload?.agentId ?? '').trim().toLowerCase() === 'browser';
+            const questionType = String(payload?.questionType ?? '').trim().toLowerCase();
+            const isWaiting = (
+                questionType === 'captcha'
+                && String(payload?.status ?? '').trim().toLowerCase() === 'awaiting_user'
+            ) || String(payload?.controlMode ?? '').trim().toLowerCase() === 'user';
+            if (!isBrowser || !isWaiting) {
+                continue;
+            }
+
+            const resolved = findAgentToolCallInMessages(messages, callId);
+            if (resolved) {
+                return resolved;
+            }
+        }
+
+        const latestBrowserCall = findLatestAgentToolCallInMessages(messages, 'call_browser_agent');
+        const responseObject = latestBrowserCall?.toolPart?.functionResponse?.response;
+        const responseStatus = String(responseObject?.status ?? '').trim().toLowerCase();
+        const controlMode = String(responseObject?.controlMode ?? '').trim().toLowerCase();
+        const questionType = String(responseObject?.questionType ?? '').trim().toLowerCase();
+        if (latestBrowserCall && ((responseStatus === 'awaiting_user' && questionType === 'captcha') || controlMode === 'user')) {
+            return latestBrowserCall;
+        }
+
+        return null;
+    }, [agentStreaming, messages]);
     const isAgentPanelOpen = isChatMode && !!activeAgentPanelMessage && !!activeAgentCallSelection;
     const isToolPanelOpen = isChatMode && !!activeToolPanelSelection;
+    const browserNeedsAttention = Boolean(
+        latestBrowserAttentionCall
+        && (
+            activeAgentCallSelection?.callId !== latestBrowserAttentionCall.callId
+            || !isAgentPanelOpen
+        ),
+    );
+
+    useLayoutEffect(() => {
+        const previousState = previousSidePanelStateRef.current;
+        const hasLayoutChanged = (
+            previousState.isAgentPanelOpen !== isAgentPanelOpen
+            || previousState.isToolPanelOpen !== isToolPanelOpen
+        );
+        previousSidePanelStateRef.current = { isAgentPanelOpen, isToolPanelOpen };
+
+        if (!hasLayoutChanged || !isChatMode) {
+            return undefined;
+        }
+
+        const container = scrollRef.current;
+        if (!container) {
+            return undefined;
+        }
+
+        const freezeTop = Math.max(0, lastKnownScrollTopRef.current || container.scrollTop || 0);
+        panelLayoutFreezeTopRef.current = freezeTop;
+
+        const restoreScrollPosition = () => {
+            const activeContainer = scrollRef.current;
+            if (!activeContainer) {
+                return;
+            }
+
+            const maxScrollTop = Math.max(0, activeContainer.scrollHeight - activeContainer.clientHeight);
+            activeContainer.scrollTop = Math.min(freezeTop, maxScrollTop);
+            lastKnownScrollTopRef.current = activeContainer.scrollTop;
+            refreshScrollButton(activeContainer);
+        };
+
+        restoreScrollPosition();
+
+        if (panelLayoutFreezeRafRef.current !== null) {
+            cancelAnimationFrame(panelLayoutFreezeRafRef.current);
+        }
+        if (panelLayoutFreezeTimeoutRef.current !== null) {
+            clearTimeout(panelLayoutFreezeTimeoutRef.current);
+        }
+
+        panelLayoutFreezeRafRef.current = requestAnimationFrame(() => {
+            restoreScrollPosition();
+            panelLayoutFreezeRafRef.current = requestAnimationFrame(() => {
+                restoreScrollPosition();
+            });
+        });
+
+        panelLayoutFreezeTimeoutRef.current = setTimeout(() => {
+            panelLayoutFreezeTopRef.current = null;
+            panelLayoutFreezeTimeoutRef.current = null;
+        }, 380);
+
+        return () => {
+            if (panelLayoutFreezeRafRef.current !== null) {
+                cancelAnimationFrame(panelLayoutFreezeRafRef.current);
+                panelLayoutFreezeRafRef.current = null;
+            }
+            if (panelLayoutFreezeTimeoutRef.current !== null) {
+                clearTimeout(panelLayoutFreezeTimeoutRef.current);
+                panelLayoutFreezeTimeoutRef.current = null;
+            }
+        };
+    }, [isAgentPanelOpen, isToolPanelOpen, isChatMode]);
+
+    useEffect(() => {
+        if (!isAgentPanelOpen) {
+            return undefined;
+        }
+
+        const container = agentPanelBodyRef.current;
+        const conversationStorageKey = normalizeConversationKey(conversationKey);
+        const panelKey = activeAgentPanelScrollKey;
+        if (!container || !conversationStorageKey || !panelKey) {
+            return undefined;
+        }
+
+        const isBrowserPanel = activeAgentCallSelection?.agentId === 'browser';
+        const savedScrollTop = agentPanelScrollPositionsRef.current[conversationStorageKey]?.[panelKey];
+
+        const restoreScroll = () => {
+            const activeContainer = agentPanelBodyRef.current;
+            if (!activeContainer) {
+                return;
+            }
+
+            const maxScrollTop = Math.max(0, activeContainer.scrollHeight - activeContainer.clientHeight);
+            const targetScrollTop = Number.isFinite(savedScrollTop)
+                ? Math.min(Math.max(0, savedScrollTop), maxScrollTop)
+                : 0;
+
+            agentPanelProgrammaticScrollRef.current = true;
+            activeContainer.scrollTop = targetScrollTop;
+            requestAnimationFrame(() => {
+                agentPanelProgrammaticScrollRef.current = false;
+            });
+
+            const distanceToBottom = maxScrollTop - targetScrollTop;
+            agentPanelAutoFollowRef.current = !isBrowserPanel && distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+        };
+
+        const restoreFrameId = requestAnimationFrame(restoreScroll);
+
+        const handleScroll = () => {
+            if (agentPanelProgrammaticScrollRef.current) {
+                return;
+            }
+
+            const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+            agentPanelAutoFollowRef.current = !isBrowserPanel && distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+            saveAgentPanelScrollPosition(conversationStorageKey, panelKey, container.scrollTop);
+        };
+
+        const observer = new ResizeObserver(() => {
+            const activeContainer = agentPanelBodyRef.current;
+            if (!activeContainer) {
+                return;
+            }
+
+            if (agentPanelAutoFollowRef.current && !isBrowserPanel) {
+                agentPanelProgrammaticScrollRef.current = true;
+                activeContainer.scrollTop = activeContainer.scrollHeight;
+                saveAgentPanelScrollPosition(conversationStorageKey, panelKey, activeContainer.scrollTop);
+                requestAnimationFrame(() => {
+                    agentPanelProgrammaticScrollRef.current = false;
+                });
+            }
+        });
+
+        observer.observe(container.firstElementChild ?? container);
+        container.addEventListener('scroll', handleScroll, { passive: true });
+
+        return () => {
+            cancelAnimationFrame(restoreFrameId);
+            observer.disconnect();
+            container.removeEventListener('scroll', handleScroll);
+            saveAgentPanelScrollPosition(conversationStorageKey, panelKey, container.scrollTop);
+        };
+    }, [
+        isAgentPanelOpen,
+        conversationKey,
+        activeAgentPanelScrollKey,
+        activeAgentCallSelection?.agentId,
+        saveAgentPanelScrollPosition,
+    ]);
 
     return (
         <main
@@ -888,9 +1216,10 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
 
                 {isChatMode && (
                     <div className={`chat-messages${isConversationEnterVisible ? ' chat-messages-enter' : ''}${isConversationHidden ? ' chat-messages-hidden' : ''}`} id="chatMessages" ref={scrollRef}>
-                        {activeTodoState && (
-                            <div className="chat-todo-sticky">
-                                <TodoBoard todoState={activeTodoState} />
+                        {messages.length === 0 && activeChatKind === 'inbox' && (
+                            <div className="chat-empty-notice">
+                                <strong>Inbox is read-only</strong>
+                                <span>Scheduled reminders and AI-initiated notes land here. Use Reply on any message to continue in a new chat.</span>
                             </div>
                         )}
                         {messages.map((msg) => {
@@ -905,14 +1234,20 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                                         thought={msg.thought}
                                         parts={msg.parts}
                                         steps={msg.steps}
+                                        replyTo={msg.replyTo}
                                         isThinking={
                                             isTyping
                                             && msg.id === lastAiMsgId
                                             && msg.role === 'ai'
                                             && String(msg.text ?? '').trim().length === 0
                                         }
+                                        showReplyAction={activeChatKind === 'inbox' && msg.role === 'ai'}
+                                        onReply={activeChatKind === 'inbox' && typeof onReplyFromMessage === 'function'
+                                            ? () => onReplyFromMessage(msg)
+                                            : undefined}
                                         onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
                                         onToolPanelToggle={msg.role === 'ai' ? handleToolPanelToggle : undefined}
+                                        agentToggleSource="main"
                                         activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
                                         commandChunks={commandChunks}
                                         ref={
@@ -945,6 +1280,7 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                                 thought={msg.thought}
                                 parts={msg.parts}
                                 steps={msg.steps}
+                                replyTo={msg.replyTo}
                             />
                         ))}
                     </div>
@@ -963,6 +1299,25 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                 )}
 
                 <div className="chat-input-slot" ref={inputSlotRef}>
+                    {browserNeedsAttention && (
+                        <div className="chat-input-attention-wrap">
+                            <div className="browser-attention-banner">
+                                <div className="browser-attention-copy">
+                                    <strong>Browser Agent needs you</strong>
+                                    <span>
+                                        {String(latestBrowserAttentionCall?.toolPart?.functionResponse?.response?.question ?? 'Open the browser panel to continue.').trim()
+                                            || 'Open the browser panel to continue.'}
+                                    </span>
+                                </div>
+                                <button
+                                    type="button"
+                                    onClick={() => setActiveAgentCallSelection(latestBrowserAttentionCall)}
+                                >
+                                    Open panel
+                                </button>
+                            </div>
+                        </div>
+                    )}
                     {children}
                 </div>
             </div>
@@ -1018,17 +1373,31 @@ export function ChatArea({ greeting, messages, isTyping, isChatMode, conversatio
                             </div>
                         )}
                         <div className="agent-side-body" ref={agentPanelBodyRef}>
-                            <Message
-                                key={activeAgentPanelRenderKey}
-                                role="ai"
-                                text={activeAgentPanelMessage.text}
-                                thought={activeAgentPanelMessage.thought}
-                                parts={activeAgentPanelMessage.parts}
-                                steps={activeAgentPanelMessage.steps}
-                                isThinking={activeAgentPanelMessage.isThinking}
-                                onAgentCallToggle={handleAgentCallToggle}
-                                showAllLiveToolCalls
-                            />
+                            <div className="agent-side-panel-frame" key={activeAgentPanelRenderKey}>
+                                {activeAgentCallDetails?.agentId === 'browser' && activeAgentPanelPayload
+                                    ? (
+                                        <BrowserAgentPanel
+                                            chatId={conversationKey}
+                                            clientId={clientId}
+                                            payload={activeAgentPanelPayload}
+                                        />
+                                    )
+                                    : (
+                                        <Message
+                                            role="ai"
+                                            text={activeAgentPanelMessage.text}
+                                            thought={activeAgentPanelMessage.thought}
+                                            parts={activeAgentPanelMessage.parts}
+                                            steps={activeAgentPanelMessage.steps}
+                                            thinkingDurationMs={activeAgentPanelMessage.thinkingDurationMs}
+                                            isThinking={activeAgentPanelMessage.isThinking}
+                                            onAgentCallToggle={handleAgentCallToggle}
+                                            agentToggleSource="panel"
+                                            showAllLiveToolCalls
+                                            renderMode={activeAgentCallDetails?.agentId === 'browser' ? 'browser_log' : 'default'}
+                                        />
+                                    )}
+                            </div>
                         </div>
                     </aside>
                 );

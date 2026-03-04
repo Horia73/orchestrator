@@ -3,6 +3,7 @@ import { ToolBlock } from './ToolBlock.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
 import { getAgentCallIdentity, getAgentToolMetadata, getToolCallId } from './agentCallUtils.js';
 import { IconChevronRight, IconCheckCircle } from '../shared/icons.jsx';
+import { AnimatedCollapse } from '../shared/AnimatedCollapse.jsx';
 
 const MAX_VISIBLE_LIVE = 3;
 
@@ -29,7 +30,7 @@ function buildSummaryText(items) {
         else if (EDIT_NAMES.has(name)) edits++;
         else if (WEB_NAMES.has(name)) web++;
         else if (PLAN_NAMES.has(name)) plans++;
-        else if (name.startsWith('call_') || name === 'generate_image') agents++;
+        else if (name.startsWith('call_') || name === 'generate_image' || name === 'spawn_subagent') agents++;
         else other++;
     }
 
@@ -57,12 +58,18 @@ export function ToolCallsGroup({
     onToolPanelToggle,
     showAllLive = false,
 }) {
-    const [isExpanded, setIsExpanded] = useState(false);
+    const isLiveGroup = isMessageLive || isAnyRunning;
+
+    // Initialize expanded for already-completed multi-tool groups (e.g. on refresh/conversation switch)
+    // so the height is correct during the first render — before scroll position is restored.
+    const [isExpanded, setIsExpanded] = useState(
+        () => !isLiveGroup && items.filter((i) => i.kind === 'tool').length > 1,
+    );
     const [isLiveExpanded, setIsLiveExpanded] = useState(false);
     const listRef = useRef(null);
     const prevCountRef = useRef(items.length);
-
-    const isLiveGroup = isMessageLive || isAnyRunning;
+    const prevLiveGroupRef = useRef(isLiveGroup);
+    const hasUserToggledSummaryRef = useRef(false);
 
     useEffect(() => {
         if (isLiveGroup && listRef.current && items.length > prevCountRef.current) {
@@ -97,6 +104,40 @@ export function ToolCallsGroup({
         hiddenItems = items.slice(0, cutIndex);
         hiddenCount = totalActionCount - MAX_VISIBLE_LIVE;
     }
+
+    useEffect(() => {
+        let frameId = null;
+        if (hiddenItems.length === 0) {
+            frameId = window.requestAnimationFrame(() => {
+                setIsLiveExpanded(false);
+            });
+        }
+        return () => {
+            if (frameId !== null) {
+                window.cancelAnimationFrame(frameId);
+            }
+        };
+    }, [hiddenItems.length]);
+
+    useEffect(() => {
+        let frameId = null;
+        if (
+            prevLiveGroupRef.current
+            && !isLiveGroup
+            && totalToolCount > 1
+            && !hasUserToggledSummaryRef.current
+        ) {
+            frameId = window.requestAnimationFrame(() => {
+                setIsExpanded(true);
+            });
+        }
+        prevLiveGroupRef.current = isLiveGroup;
+        return () => {
+            if (frameId !== null) {
+                window.cancelAnimationFrame(frameId);
+            }
+        };
+    }, [isLiveGroup, totalToolCount]);
 
     const summaryText = buildSummaryText(items);
 
@@ -187,7 +228,10 @@ export function ToolCallsGroup({
             {showSummary && (
                 <div
                     className="tool-calls-summary"
-                    onClick={() => setIsExpanded((c) => !c)}
+                    onClick={() => {
+                        hasUserToggledSummaryRef.current = true;
+                        setIsExpanded((c) => !c);
+                    }}
                 >
                     <span className={`tool-calls-summary-chevron${isExpanded ? ' open' : ''}`}>
                         <IconChevronRight />
@@ -201,7 +245,7 @@ export function ToolCallsGroup({
                 </div>
             )}
 
-            {(!showSummary || isExpanded) && (
+            <AnimatedCollapse isOpen={!showSummary || isExpanded} className="tool-calls-list-shell">
                 <div
                     ref={listRef}
                     className={`tool-calls-list${isLiveGroup ? ' tool-calls-list-live' : ''}`}
@@ -212,22 +256,22 @@ export function ToolCallsGroup({
                                 className="tool-calls-summary"
                                 onClick={() => setIsLiveExpanded((c) => !c)}
                                 style={{ margin: '4px 0 8px 0' }}
-                            >
-                                <span className={`tool-calls-summary-chevron${isLiveExpanded ? ' open' : ''}`}>
-                                    <IconChevronRight />
-                                </span>
-                                <span>{hiddenCount} older action{hiddenCount > 1 ? 's' : ''}</span>
-                            </div>
-                            {isLiveExpanded && (
-                                <div className="tool-calls-list tool-calls-list-live-hidden" style={{ paddingLeft: '14px', borderLeft: '2px solid var(--border-light, #e8e6e1)', marginLeft: '6px', marginBottom: '12px' }}>
+                                >
+                                    <span className={`tool-calls-summary-chevron${isLiveExpanded ? ' open' : ''}`}>
+                                        <IconChevronRight />
+                                    </span>
+                                    <span>{hiddenCount} older action{hiddenCount > 1 ? 's' : ''}</span>
+                                </div>
+                            <AnimatedCollapse isOpen={isLiveExpanded} className="tool-calls-live-hidden-shell">
+                                <div className="tool-calls-list tool-calls-list-live-hidden">
                                     {hiddenItems.map((item, index) => renderItem(item, index, 0))}
                                 </div>
-                            )}
+                            </AnimatedCollapse>
                         </div>
                     )}
                     {visibleItems.map((item, index) => renderItem(item, index, hiddenItems.length))}
                 </div>
-            )}
+            </AnimatedCollapse>
         </div>
     );
 }

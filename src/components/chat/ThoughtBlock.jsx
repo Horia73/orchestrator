@@ -1,5 +1,6 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MarkdownContent } from './MarkdownContent.jsx';
+import { captureCollapseScrollAnchor, restoreCollapseScrollAnchor } from './scrollAnchor.js';
 
 const MAX_TITLE_LENGTH = 62;
 
@@ -55,6 +56,9 @@ function extractThinkingTitle(thought) {
 
 export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle = false, thinkingDurationMs = 0 }) {
     const [open, setOpen] = useState(false);
+    const rootRef = useRef(null);
+    const collapseAnchorRef = useRef(null);
+    const restoreScrollCleanupRef = useRef(null);
     const persistedSeconds = Math.max(0, Math.floor((thinkingDurationMs || 0) / 1000));
     const [thinkingSeconds, setThinkingSeconds] = useState(persistedSeconds);
 
@@ -89,6 +93,38 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
         };
     }, [isThinking, persistedSeconds]);
 
+    useEffect(() => () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+            restoreScrollCleanupRef.current = null;
+        }
+    }, []);
+
+    const openThought = () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+            restoreScrollCleanupRef.current = null;
+        }
+        collapseAnchorRef.current = captureCollapseScrollAnchor(rootRef.current);
+        setOpen(true);
+    };
+
+    const closeThought = () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+        }
+        setOpen(false);
+        restoreScrollCleanupRef.current = restoreCollapseScrollAnchor(collapseAnchorRef.current);
+    };
+
+    const toggleThought = () => {
+        if (open) {
+            closeThought();
+        } else {
+            openThought();
+        }
+    };
+
     const hasThought = String(thought ?? '').trim().length > 0;
     const canToggle = hasThought;
 
@@ -99,10 +135,9 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
 
     if (isThinking && hasThought) {
         // Show the latest thought title streaming in
-        title = baseTitle ?? 'Thinking...';
+        title = baseTitle ?? 'Working...';
         isRunningTitle = true;
     } else if (isThinking && !hasThought) {
-        // Tool-execution step with no thought — keep "Working..." unchanged
         title = 'Working...';
         isRunningTitle = true;
     } else if (hasThought) {
@@ -124,13 +159,13 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
     }
 
     return (
-        <section className={`thought-block${isThinking ? ' is-thinking' : ''}`}>
+        <section ref={rootRef} className={`thought-block${isThinking ? ' is-thinking' : ''}`}>
             {canToggle ? (
                 <button
                     type="button"
                     className="thought-toggle"
                     aria-expanded={open}
-                    onClick={() => setOpen((current) => !current)}
+                    onClick={toggleThought}
                 >
                     {isRunningTitle && <span className="thought-spinner" />}
                     <span className={`thought-title${isRunningTitle ? ' status-running-text' : ''}`}>
@@ -155,7 +190,7 @@ export function ThoughtBlock({ thought, isThinking = false, showWorkedWhenIdle =
                     <button
                         type="button"
                         className="thought-show-less"
-                        onClick={() => setOpen(false)}
+                        onClick={closeThought}
                     >
                         Show less
                     </button>

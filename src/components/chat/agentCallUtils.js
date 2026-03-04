@@ -3,6 +3,10 @@ const AGENT_TOOL_METADATA = Object.freeze({
         agentId: 'image',
         agentName: 'Image Agent',  // matches imageAgent.name
     }),
+    call_browser_agent: Object.freeze({
+        agentId: 'browser',
+        agentName: 'Browser Agent',
+    }),
     call_coding_agent: Object.freeze({
         agentId: 'coding',
         agentName: 'Coding Expert',
@@ -28,6 +32,9 @@ function formatAgentDisplayName(agentId, { isSubagent = false } = {}) {
 
     if (normalizedAgentId === 'coding') {
         return isSubagent ? 'Coding Subagent' : 'Coding Expert';
+    }
+    if (normalizedAgentId === 'browser') {
+        return 'Browser Agent';
     }
     if (normalizedAgentId === 'researcher') {
         return isSubagent ? 'Researcher Subagent' : 'Researcher Expert';
@@ -523,6 +530,27 @@ function hasRenderableAgentResult(responseObject) {
     return Boolean(text || thought || hasParts || hasSteps || error);
 }
 
+function getPrimaryThinkingDurationMs(responseObject) {
+    if (!responseObject || typeof responseObject !== 'object') {
+        return 0;
+    }
+
+    const directDurationMs = Number(responseObject.thinkingDurationMs);
+    if (Number.isFinite(directDurationMs) && directDurationMs > 0) {
+        return directDurationMs;
+    }
+
+    const steps = Array.isArray(responseObject.steps) ? responseObject.steps : [];
+    for (const step of steps) {
+        const durationMs = Number(step?.thinkingDurationMs);
+        if (Number.isFinite(durationMs) && durationMs > 0) {
+            return durationMs;
+        }
+    }
+
+    return 0;
+}
+
 export function buildAgentPanelMessage(agentCallDetails, messages = []) {
     if (!agentCallDetails) return null;
 
@@ -557,6 +585,7 @@ export function buildAgentPanelMessage(agentCallDetails, messages = []) {
         || rawStatus === 'running'
         || rawStatus === 'working'
         || rawStatus === 'spawned'
+        || rawStatus === 'queued'
     );
     const textFallback = isThinking
         ? 'Working...'
@@ -578,6 +607,7 @@ export function buildAgentPanelMessage(agentCallDetails, messages = []) {
         thought: panelThought,
         parts: panelParts,
         steps: respSteps,
-        isThinking: (isExecuting && !functionResponse) || resp?.isThinking === true,
+        thinkingDurationMs: getPrimaryThinkingDurationMs(resp),
+        isThinking,
     };
 }

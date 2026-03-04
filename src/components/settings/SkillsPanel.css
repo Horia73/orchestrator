@@ -9,7 +9,7 @@
 
 .skills-panel-header {
     display: flex;
-    align-items: center;
+    align-items: flex-start;
     justify-content: space-between;
     gap: 20px;
     margin-bottom: 24px;
@@ -19,6 +19,7 @@
     display: flex;
     align-items: baseline;
     gap: 10px;
+    flex-shrink: 0;
 }
 
 .skills-panel-title h2 {
@@ -34,13 +35,23 @@
     color: var(--text-tertiary);
 }
 
+.skills-panel-actions {
+    display: flex;
+    align-items: center;
+    justify-content: flex-end;
+    gap: 12px;
+    flex: 1;
+    flex-wrap: wrap;
+    min-width: 0;
+}
+
 /* ---- Filters ---- */
 
 .skills-filters {
     display: flex;
     gap: 8px;
-    margin-bottom: 24px;
     flex-wrap: wrap;
+    justify-content: flex-end;
 }
 
 .skills-filter-btn {
@@ -565,6 +576,16 @@
     .skill-detail-header {
         flex-direction: column;
         align-items: stretch;
+    }
+
+    .skills-panel-actions {
+        width: 100%;
+        flex-direction: column;
+        align-items: stretch;
+    }
+
+    .skills-filters {
+        justify-content: flex-start;
     }
 
     .skill-detail-actions,

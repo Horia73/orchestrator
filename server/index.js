@@ -1,7 +1,9 @@
 import express from 'express';
 import http from 'node:http';
 import fs from 'node:fs';
+import path from 'node:path';
 import { randomUUID } from 'node:crypto';
+import { fileURLToPath } from 'node:url';
 import { API_PORT, getGeminiContextMessages } from './core/config.js';
 import { listClientAgentDefinitions, DEFAULT_AGENT_ID } from './agents/index.js';
 import { CODING_AGENT_ID } from './agents/coding/index.js';
@@ -9,17 +11,14 @@ import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
 import {
     generateAssistantReplyStream,
-    listAvailableModels,
-    getUnsupportedLevels,
     generateChatTitle,
     injectSteeringNote,
     peekSteeringNotes,
     consumeSteeringNotes,
 } from './services/geminiService.js';
-import { buildMergedModels } from '../src/config/agentModels.js';
 import { openEventsStream, broadcastEvent, updateStreamingSnapshot, getStreamingSnapshot, clearStreamingSnapshot } from './core/events.js';
 import { getCommandStatusSnapshot } from './tools/index.js';
-import { estimateUsageCost, getModelPricing } from './pricing/usage.js';
+import { estimateUsageCost } from './pricing/usage.js';
 import { appendSystemLog, clearLogs, getLogsSnapshot, initLogStorage } from './storage/logs.js';
 import { appendUsageRecord, clearUsageRecords, getUsageSnapshotByRange, initUsageStorage } from './storage/usage.js';
 import { listEditableFileSections, readEditableFile, writeEditableFile } from './storage/editableFiles.js';
@@ -40,10 +39,12 @@ import {
     getChat,
     createChatFromFirstMessage,
     appendMessage,
+    ensureInboxChat,
     getChatMessages,
     getRecentMessages,
     removeChat,
     updateChatTitle,
+    INBOX_CHAT_KIND,
 } from './storage/chats.js';
 import { getAgentConfig, normalizeAgentId, readSettings, writeSettings, readUiSettings, writeUiSettings } from './storage/settings.js';
 import { memoryStore } from './services/memory.js';
@@ -52,12 +53,84 @@ import { mcpService, writeMcpServers } from './services/mcp.js';
 import { CRON_CONFIG } from './core/config.js';
 import { cronService } from './services/cron.js';
 import { MODELS_CONFIG_PATH, ORCHESTRATOR_HOME } from './core/dataPaths.js';
+import { ensureModelCatalogExists } from './core/modelCatalogSeed.js';
+import { getModelsForClient } from './services/modelCatalog.js';
+import {
+    continueBrowserAgentSession,
+    getBrowserAgentRecordingForChat,
+    getBrowserAgentRecordingVideoForChat,
+    handleBrowserAgentRemoteDesktopUpgrade,
+    inspectBrowserAgentSessionForChat,
+    performBrowserAgentLiveAction,
+    streamBrowserAgentLiveView,
+} from './services/browserAgent.js';
 
 const app = express();
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const PROJECT_ROOT = path.resolve(__dirname, '..');
+const DIST_DIR = path.join(PROJECT_ROOT, 'dist');
+const DIST_INDEX_PATH = path.join(DIST_DIR, 'index.html');
+const frontendAssets = express.static(DIST_DIR, {
+    index: false,
+    extensions: false,
+});
+
+ensureModelCatalogExists();
+
+app.disable('x-powered-by');
 
 const chatQueues = new Map();
 const activeGenerationsByClient = new Map();
 const steeringFollowUpsInFlight = new Set();
+
+function renderMissingFrontendHtml() {
+    return `<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Orchestrator build missing</title>
+    <style>
+      body {
+        margin: 0;
+        min-height: 100vh;
+        display: grid;
+        place-items: center;
+        background: #0f172a;
+        color: #e2e8f0;
+        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      }
+      main {
+        width: min(640px, calc(100vw - 48px));
+        padding: 32px;
+        border: 1px solid rgba(148, 163, 184, 0.22);
+        border-radius: 20px;
+        background: rgba(15, 23, 42, 0.88);
+        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.45);
+      }
+      h1 {
+        margin: 0 0 12px;
+        font-size: 28px;
+      }
+      p {
+        margin: 0 0 12px;
+      }
+      code {
+        padding: 2px 6px;
+        border-radius: 6px;
+        background: rgba(148, 163, 184, 0.12);
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>Frontend build missing</h1>
+      <p>Build the Vite app before opening Orchestrator in production mode.</p>
+      <p>Run <code>npm run build</code> and restart the server, or use <code>npm run setup</code> for first-time onboarding.</p>
+    </main>
+  </body>
+</html>`;
+}
 
 function watchModelsConfig() {
     let debounceTimer = null;
@@ -419,6 +492,33 @@ function normalizeClientId(value) {
     return normalized || 'unknown-client';
 }
 
+function normalizeReplyToPayload(value) {
+    if (!value || typeof value !== 'object') {
+        return null;
+    }
+
+    const chatId = String(value.chatId ?? '').trim();
+    const messageId = String(value.messageId ?? '').trim();
+    if (!chatId || !messageId) {
+        return null;
+    }
+
+    const previewText = String(value.previewText ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+    const chatTitle = String(value.chatTitle ?? '').trim().slice(0, 80);
+    const role = String(value.role ?? '').trim().toLowerCase() === 'user' ? 'user' : 'ai';
+
+    return {
+        chatId,
+        messageId,
+        role,
+        previewText,
+        ...(chatTitle ? { chatTitle } : {}),
+    };
+}
+
 function enqueueChatWork(chatId, task) {
     const previous = chatQueues.get(chatId) ?? Promise.resolve();
     const run = previous
@@ -525,6 +625,44 @@ function buildDeferredSteeringPrompt(notes) {
     ].join('\n');
 }
 
+function buildBrowserResumeFollowUpNote(result) {
+    const status = String(result?.status ?? '').trim().toLowerCase();
+    const questionType = String(result?.questionType ?? '').trim().toLowerCase();
+    const summary = String(result?.text ?? '').trim();
+
+    if (status === 'awaiting_user' && questionType && questionType !== 'captcha') {
+        return [
+            `The Browser Agent resumed after a direct CAPTCHA handoff and is now waiting for ${questionType}.`,
+            'Continue from the current conversation state and handle this yourself in chat.',
+            'Do not tell the user to open the Browser Agent panel again unless a new CAPTCHA or another human-only verification appears.',
+            '',
+            summary,
+        ].join('\n');
+    }
+
+    if (status === 'completed') {
+        return [
+            'The Browser Agent resumed after a direct CAPTCHA handoff and has now completed its task.',
+            'Continue from the current conversation state and use the browser result directly.',
+            'Do not ask the user to reopen the Browser Agent panel unless another CAPTCHA or human-only verification appears.',
+            '',
+            summary,
+        ].join('\n');
+    }
+
+    if (status === 'error' || status === 'stopped') {
+        return [
+            `The Browser Agent resumed after a direct CAPTCHA handoff and ended with status: ${status}.`,
+            'Continue from the current conversation state, explain the outcome, and decide the next best step.',
+            'Do not ask the user to reopen the Browser Agent panel unless another CAPTCHA or human-only verification appears.',
+            '',
+            summary,
+        ].join('\n');
+    }
+
+    return '';
+}
+
 async function writeSystemLog({ level = 'info', source = 'system', eventType, message, data, agentId } = {}) {
     const log = await appendSystemLog({
         level,
@@ -594,6 +732,7 @@ async function trackUsageRequest({
     parentRequestId,
     toolName,
     toolCallId,
+    activityLog,
 } = {}) {
     const normalizedStatus = normalizeUsageStatus(status);
     const normalizedSource = normalizeUsageSource(source);
@@ -625,6 +764,7 @@ async function trackUsageRequest({
         totalCostUsd: usageEstimate.totalCostUsd,
         usageMetadata,
         source: normalizedSource,
+        activityLog,
     };
 
     const normalizedParentRequestId = String(parentRequestId ?? '').trim();
@@ -702,6 +842,9 @@ async function trackToolUsageRecords({
         if (!toolModel && !toolUsageMetadata) {
             continue;
         }
+        if (toolModel.toLowerCase().startsWith('tool:')) {
+            continue;
+        }
 
         const toolName = String(toolUsage.toolName ?? '').trim();
         await trackUsageRequest({
@@ -722,6 +865,7 @@ async function trackToolUsageRecords({
             parentRequestId,
             toolName,
             toolCallId: String(toolUsage.toolCallId ?? '').trim(),
+            activityLog: Array.isArray(toolUsage.activityLog) ? toolUsage.activityLog : undefined,
         });
     }
 }
@@ -1124,6 +1268,34 @@ app.get('/api/mcp/servers', async (req, res) => {
     }
 });
 
+app.get('/api/mcp/servers/:serverId/tools', async (req, res) => {
+    try {
+        const serverId = String(req.params?.serverId ?? '').trim();
+        const server = await mcpService.getServerSnapshot(serverId, {
+            includeTools: true,
+            forceRefresh: true,
+        });
+        res.json({ server });
+    } catch (error) {
+        if (error?.code === 'MCP_SERVER_NOT_FOUND') {
+            res.status(404).json({ error: error.message });
+            return;
+        }
+
+        res.status(500).json({ error: 'Failed to read MCP server tools.' });
+        void writeSystemLog({
+            level: 'error',
+            source: 'mcp',
+            eventType: 'mcp.tools_read_failed',
+            message: 'Failed to read MCP server tools.',
+            data: {
+                serverId: String(req.params?.serverId ?? ''),
+                error: String(error?.message ?? error ?? ''),
+            },
+        }).catch(() => undefined);
+    }
+});
+
 app.put('/api/mcp/servers', async (req, res) => {
     try {
         const serversPayload = req.body?.servers;
@@ -1465,23 +1637,19 @@ app.post('/api/cron/:jobId/run', async (req, res) => {
 
 app.get('/api/models', async (_req, res) => {
     try {
-        const rawModels = await listAvailableModels();
-        const merged = buildMergedModels(rawModels);
-        const customPricing = getModelPricing();
-
-        const enriched = merged.map((m) => {
-            const raw = rawModels.find((r) => r.name === m.fullName);
-            const pricing = customPricing?.[m.id];
-            return {
-                ...m,
-                ...pricing, // Override with models.json pricing if present
-                thinking: raw?.thinking ?? false,
-                unsupportedThinkingLevels: getUnsupportedLevels(m.id),
-            };
-        });
-        res.json({ models: enriched });
-    } catch {
+        const models = await getModelsForClient();
+        res.json({ models });
+    } catch (error) {
         res.status(500).json({ error: 'Failed to fetch models.' });
+        void appendSystemLog({
+            level: 'error',
+            source: 'models',
+            eventType: 'models.fetch_failed',
+            message: 'Failed to fetch model catalog.',
+            data: {
+                error: String(error?.message ?? error ?? ''),
+            },
+        }).catch(() => undefined);
     }
 });
 
@@ -1553,6 +1721,7 @@ app.delete('/api/logs', async (_req, res, next) => {
 
 app.post('/api/update', async (_req, res) => {
     const { execSync, spawn } = await import('node:child_process');
+    const { join } = await import('node:path');
     try {
         const pullOutput = execSync('git pull origin main', { cwd: process.cwd(), timeout: 30000, stdio: 'pipe' }).toString();
 
@@ -1561,28 +1730,37 @@ app.post('/api/update', async (_req, res) => {
             return res.json({ ok: true, message: 'Already up to date — no changes pulled.', restarting: false });
         }
 
-        execSync('npm install', { cwd: process.cwd(), timeout: 60000, stdio: 'pipe' });
+        execSync('npm install', { cwd: process.cwd(), timeout: 120000, stdio: 'pipe' });
+        execSync('npm run build', { cwd: process.cwd(), timeout: 120000, stdio: 'pipe' });
 
         // Read new version from updated package.json
         const { readFileSync } = await import('node:fs');
-        const { join } = await import('node:path');
         let newVersion = 'unknown';
         try {
             const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
             newVersion = pkg.version;
         } catch { /* ignore */ }
 
-        res.json({ ok: true, message: `Update to v${newVersion} installed. Restarting…`, restarting: true });
+        res.json({ ok: true, message: `Update to v${newVersion} installed and built. Restarting…`, restarting: true });
 
-        // Schedule restart after response is sent
+        const restartHelperPath = join(process.cwd(), 'server', 'cli', 'restartApi.js');
+
+        // Schedule an API-only restart after the response is sent.
         setTimeout(() => {
-            const child = spawn('npm', ['run', 'restart'], {
-                cwd: process.cwd(),
-                detached: true,
-                stdio: 'ignore',
-            });
-            child.unref();
-            process.exit(0);
+            try {
+                const child = spawn(process.execPath, [restartHelperPath, String(process.pid)], {
+                    cwd: process.cwd(),
+                    detached: true,
+                    stdio: 'ignore',
+                    env: {
+                        ...process.env,
+                    },
+                });
+                child.unref();
+                process.exit(0);
+            } catch (restartError) {
+                console.error(`[update] Failed to schedule restart: ${restartError.message}`);
+            }
         }, 500);
     } catch (error) {
         res.status(500).json({ error: error.message || 'Update failed' });
@@ -1618,9 +1796,9 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
     try {
         const { chatId } = req.params;
         const clientId = normalizeClientId(req.query.clientId);
+        const existingChat = await getChat(chatId);
 
-        const removed = await removeChat(chatId);
-        if (!removed) {
+        if (!existingChat) {
             res.status(404).json({ error: 'Chat not found.' });
             void writeSystemLog({
                 level: 'warn',
@@ -1629,6 +1807,24 @@ app.delete('/api/chats/:chatId', async (req, res, next) => {
                 message: 'Delete requested for missing chat.',
                 data: { chatId, clientId },
             }).catch(() => undefined);
+            return;
+        }
+
+        if (existingChat.deletable === false) {
+            res.status(403).json({ error: 'This chat cannot be deleted.' });
+            void writeSystemLog({
+                level: 'warn',
+                source: 'chat',
+                eventType: 'chat.delete_forbidden',
+                message: 'Delete requested for protected chat.',
+                data: { chatId, clientId, kind: existingChat.kind },
+            }).catch(() => undefined);
+            return;
+        }
+
+        const removed = await removeChat(chatId);
+        if (!removed) {
+            res.status(404).json({ error: 'Chat not found.' });
             return;
         }
 
@@ -1684,6 +1880,160 @@ app.get('/api/chat/:chatId/streaming-state', (req, res) => {
     });
 });
 
+app.get('/api/browser-agent/sessions/:sessionId/live.mjpeg', async (req, res, next) => {
+    try {
+        const sessionId = String(req.params?.sessionId ?? '').trim();
+        const chatId = String(req.query?.chatId ?? '').trim();
+        if (!sessionId || !chatId) {
+            return res.status(400).json({ error: 'sessionId and chatId are required.' });
+        }
+
+        await streamBrowserAgentLiveView({
+            sessionId,
+            chatId,
+            req,
+            res,
+        });
+    } catch (error) {
+        if (!res.headersSent) {
+            next(error);
+        }
+    }
+});
+
+app.get('/api/browser-agent/sessions/:sessionId', async (req, res, next) => {
+    try {
+        const sessionId = String(req.params?.sessionId ?? '').trim();
+        const chatId = String(req.query?.chatId ?? '').trim();
+        if (!sessionId || !chatId) {
+            return res.status(400).json({ error: 'sessionId and chatId are required.' });
+        }
+
+        const result = await inspectBrowserAgentSessionForChat({
+            sessionId,
+            chatId,
+        });
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/browser-agent/sessions/:sessionId/recording', async (req, res, next) => {
+    try {
+        const sessionId = String(req.params?.sessionId ?? '').trim();
+        const chatId = String(req.query?.chatId ?? '').trim();
+        const limit = Number(req.query?.limit);
+        if (!sessionId || !chatId) {
+            return res.status(400).json({ error: 'sessionId and chatId are required.' });
+        }
+
+        const result = await getBrowserAgentRecordingForChat({
+            sessionId,
+            chatId,
+            limit,
+        });
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.get('/api/browser-agent/sessions/:sessionId/recording/video', async (req, res, next) => {
+    try {
+        const sessionId = String(req.params?.sessionId ?? '').trim();
+        const chatId = String(req.query?.chatId ?? '').trim();
+        const index = Number(req.query?.index);
+        const download = String(req.query?.download ?? '').trim() === '1';
+        if (!sessionId || !chatId) {
+            return res.status(400).json({ error: 'sessionId and chatId are required.' });
+        }
+
+        const videoFile = await getBrowserAgentRecordingVideoForChat({
+            sessionId,
+            chatId,
+            index,
+        });
+
+        if (download) {
+            res.attachment(videoFile.fileName);
+        }
+        if (videoFile.mimeType) {
+            res.type(videoFile.mimeType);
+        }
+        res.sendFile(videoFile.localPath);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/browser-agent/sessions/:sessionId/control', async (req, res, next) => {
+    try {
+        const sessionId = String(req.params?.sessionId ?? '').trim();
+        const chatId = String(req.body?.chatId ?? '').trim();
+        const action = String(req.body?.action ?? '').trim();
+        if (!sessionId || !chatId || !action) {
+            return res.status(400).json({ error: 'sessionId, chatId, and action are required.' });
+        }
+
+        const result = await performBrowserAgentLiveAction(sessionId, {
+            chatId,
+            action,
+            x: req.body?.x,
+            y: req.body?.y,
+            text: req.body?.text,
+            key: req.body?.key,
+            url: req.body?.url,
+            durationMs: req.body?.durationMs,
+        });
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
+app.post('/api/browser-agent/sessions/:sessionId/continue', async (req, res, next) => {
+    try {
+        const sessionId = String(req.params?.sessionId ?? '').trim();
+        const chatId = String(req.body?.chatId ?? '').trim();
+        const clientId = String(req.body?.clientId ?? '').trim();
+        if (!sessionId || !chatId) {
+            return res.status(400).json({ error: 'sessionId and chatId are required.' });
+        }
+
+        const result = await continueBrowserAgentSession({
+            sessionId,
+            chatId,
+            clientId,
+            note: req.body?.note,
+        });
+
+        const shouldResumeOrchestrator = result?.profileMode === 'persistent' && (
+            ['completed', 'error', 'stopped'].includes(String(result?.status ?? '').trim().toLowerCase())
+            || (
+                String(result?.status ?? '').trim().toLowerCase() === 'awaiting_user'
+                && ['confirmation', 'info'].includes(String(result?.questionType ?? '').trim().toLowerCase())
+            )
+        );
+
+        if (shouldResumeOrchestrator) {
+            const note = buildBrowserResumeFollowUpNote(result);
+            if (note) {
+                injectSteeringNote(chatId, note);
+                scheduleDeferredSteeringFollowUp({
+                    chatId,
+                    clientId,
+                    originClientId: clientId,
+                });
+            }
+        }
+
+        res.json(result);
+    } catch (error) {
+        next(error);
+    }
+});
+
 app.get('/api/commands/:commandId/status', async (req, res) => {
     const commandId = String(req.params?.commandId ?? '').trim();
     const waitDurationSeconds = Number(req.query?.wait ?? 0);
@@ -1728,9 +2078,22 @@ app.post('/api/chat/send', async (req, res, next) => {
         const requestedChatId = String(req.body?.chatId ?? '').trim();
         const requestedAgentId = normalizeAgentId(req.body?.agentId);
         const isSteering = req.body?.isSteering === true;
+        const replyTo = normalizeReplyToPayload(req.body?.replyTo);
 
         let chat = requestedChatId ? await getChat(requestedChatId) : null;
         let created = false;
+
+        if (chat?.kind === INBOX_CHAT_KIND) {
+            res.status(403).json({ error: 'Inbox is read-only. Use Reply to start a new chat.' });
+            void writeSystemLog({
+                level: 'warn',
+                source: 'chat',
+                eventType: 'chat.send_inbox_forbidden',
+                message: 'Direct send requested for Inbox chat.',
+                data: { chatId: requestedChatId, clientId },
+            }).catch(() => undefined);
+            return;
+        }
 
         if (!chat) {
             if (requestedChatId) {
@@ -1821,6 +2184,7 @@ app.post('/api/chat/send', async (req, res, next) => {
                 role: 'user',
                 text: inputText,
                 parts: userMessageParts,
+                replyTo,
             });
             await markUploadsCommitted(
                 attachments.map((attachment) => attachment.uploadId),
@@ -1881,6 +2245,7 @@ app.post('/api/chat/send', async (req, res, next) => {
                 role: 'user',
                 text: inputText,
                 parts: userMessageParts,
+                replyTo,
             });
             await markUploadsCommitted(
                 attachments.map((attachment) => attachment.uploadId),
@@ -1949,6 +2314,43 @@ app.post('/api/chat/send', async (req, res, next) => {
     }
 });
 
+app.use((req, res, next) => {
+    if (req.method !== 'GET' && req.method !== 'HEAD') {
+        next();
+        return;
+    }
+
+    if (req.path === '/api' || req.path.startsWith('/api/')) {
+        next();
+        return;
+    }
+
+    if (!fs.existsSync(DIST_INDEX_PATH)) {
+        if (req.accepts('html')) {
+            res.status(503).type('html').send(renderMissingFrontendHtml());
+            return;
+        }
+
+        next();
+        return;
+    }
+
+    frontendAssets(req, res, (error) => {
+        if (error) {
+            next(error);
+            return;
+        }
+
+        const isAssetRequest = req.path.includes('.');
+        if (isAssetRequest || !req.accepts('html')) {
+            next();
+            return;
+        }
+
+        res.sendFile(DIST_INDEX_PATH);
+    });
+});
+
 app.use((error, _req, res, next) => {
     void next;
     const message = error instanceof Error ? error.message : 'Unknown server error.';
@@ -1962,17 +2364,9 @@ app.use((error, _req, res, next) => {
 });
 
 async function handleCronJob(job) {
-    const chatId = job.chatId;
-    if (!chatId) {
-        console.warn(`[cron] Job "${job.name}" has no chatId, skipping.`);
-        return;
-    }
-
-    const chat = await getChat(chatId);
-    if (!chat) {
-        console.warn(`[cron] Chat ${chatId} not found for job "${job.name}", skipping.`);
-        return;
-    }
+    const chat = await ensureInboxChat();
+    const chatId = chat.id;
+    const syntheticPrompt = `[Scheduled: ${job.name}] ${job.prompt}`;
 
     void writeSystemLog({
         source: 'cron',
@@ -1983,129 +2377,38 @@ async function handleCronJob(job) {
 
     broadcastEvent('cron.executed', { jobId: job.id, name: job.name, chatId });
 
-    // Inject the cron prompt as a user message and generate a reply
     const cronClientId = `cron-${job.id}`;
-    const cronMessageId = createMessageId();
 
     await enqueueChatWork(chatId, async () => {
-        const appendedUser = await appendMessage(chatId, {
-            id: cronMessageId,
-            role: 'user',
-            text: `[Scheduled: ${job.name}] ${job.prompt}`,
-        });
-
-        broadcastEvent('message.added', {
-            chatId,
-            message: appendedUser.message,
-            originClientId: cronClientId,
-        });
-
-        broadcastEvent('chat.upsert', {
-            chat: appendedUser.chat,
-            originClientId: cronClientId,
-        });
-
         const chatAgentId = normalizeAgentId(chat.agentId);
         const runtimeAgentId = chatAgentId;
-        const history = await getRecentMessages(chatId, getGeminiContextMessages() + 1);
-
-        const aiMessageId = createMessageId();
-        const aiMessageCreatedAt = Date.now();
-        let assistantText = '';
-        let streamedThought = '';
-        let streamedParts = [];
-        let streamedSteps = [];
-        let usageMetadata = null;
-        let modelForUsage = getAgentConfig(runtimeAgentId).model;
-        let requestStatus = 'completed';
-
-        broadcastEvent('message.streaming', {
-            chatId,
-            streamState: 'streaming',
-            message: { id: aiMessageId, chatId, role: 'ai', text: '', thought: '', parts: [], steps: [], createdAt: aiMessageCreatedAt },
-            originClientId: cronClientId,
-        });
-
-        try {
-            const streamResult = await generateAssistantReplyStream(history, {
+        const history = await getRecentMessages(chatId, getGeminiContextMessages());
+        const historyWithLatestUserTurn = [
+            ...history,
+            {
+                id: createMessageId(),
                 chatId,
-                messageId: aiMessageId,
-                clientId: cronClientId,
-                onUpdate: async ({ text, thought, parts, steps }) => {
-                    assistantText = text;
-                    streamedThought = thought;
-                    streamedParts = Array.isArray(parts) ? parts : streamedParts;
-                    streamedSteps = Array.isArray(steps) ? steps : streamedSteps;
-                    broadcastEvent('message.streaming', {
-                        chatId,
-                        streamState: 'streaming',
-                        message: { id: aiMessageId, chatId, role: 'ai', text, thought, parts: streamedParts, steps: streamedSteps, createdAt: aiMessageCreatedAt },
-                        originClientId: cronClientId,
-                    });
-                },
-                shouldStop: () => false,
-                agentId: runtimeAgentId,
-            });
+                role: 'user',
+                text: syntheticPrompt,
+                createdAt: Date.now(),
+            },
+        ];
 
-            usageMetadata = streamResult.usageMetadata ?? null;
-            modelForUsage = String(streamResult.model ?? modelForUsage).trim() || modelForUsage;
-            assistantText = String(streamResult.text ?? '').trim() || 'No response.';
-            streamedThought = streamResult.thought;
-            streamedParts = Array.isArray(streamResult.parts) ? streamResult.parts : streamedParts;
-            streamedSteps = Array.isArray(streamResult.steps) ? streamResult.steps : streamedSteps;
-        } catch (error) {
-            requestStatus = 'error';
-            assistantText = assistantText
-                ? `${assistantText}\n\n${formatGeminiError(error)}`
-                : formatGeminiError(error);
-        }
-
-        broadcastEvent('message.streaming', {
-            chatId,
-            streamState: 'complete',
-            message: { id: aiMessageId, chatId, role: 'ai', text: assistantText, thought: streamedThought, parts: streamedParts, steps: streamedSteps, createdAt: aiMessageCreatedAt },
-            originClientId: cronClientId,
-        });
-
-        const appendedAi = await appendMessage(chatId, {
-            id: aiMessageId,
-            role: 'ai',
-            text: assistantText,
-            thought: streamedThought,
-            parts: streamedParts,
-            steps: streamedSteps,
-            createdAt: aiMessageCreatedAt,
-        });
-
-        broadcastEvent('message.added', {
-            chatId,
-            message: appendedAi.message,
-            originClientId: cronClientId,
-        });
-
-        broadcastEvent('chat.upsert', {
-            chat: appendedAi.chat,
-            originClientId: cronClientId,
-        });
-
-        await trackUsageRequest({
-            chatId,
+        await generateStreamingAssistantTurn({
+            chat,
             clientId: cronClientId,
-            status: requestStatus,
-            agentId: chatAgentId,
-            model: modelForUsage,
-            inputText: job.prompt,
-            outputText: assistantText,
-            createdAt: aiMessageCreatedAt,
-            usageMetadata,
             originClientId: cronClientId,
-            source: 'cron',
+            runtimeAgentId,
+            usageAgentId: chatAgentId,
+            usageInputText: syntheticPrompt,
+            historyWithLatestUserTurn,
         });
     });
 }
 
 async function start() {
     await initStorage();
+    await ensureInboxChat();
     await initUploadStorage();
     await initUsageStorage();
     await initLogStorage();
@@ -2129,15 +2432,26 @@ async function start() {
     }
 
     const server = http.createServer(app);
+    server.on('upgrade', (req, socket, head) => {
+        void handleBrowserAgentRemoteDesktopUpgrade(req, socket, head)
+            .then((handled) => {
+                if (!handled) {
+                    socket.destroy();
+                }
+            })
+            .catch(() => {
+                socket.destroy();
+            });
+    });
 
     await new Promise((resolve, reject) => {
         server.once('error', reject);
         server.listen(API_PORT, () => {
-            console.log(`API listening on http://localhost:${API_PORT}`);
+            console.log(`Orchestrator listening on http://localhost:${API_PORT}`);
             void writeSystemLog({
                 source: 'system',
                 eventType: 'server.started',
-                message: `API started on port ${API_PORT}.`,
+                message: `Orchestrator started on port ${API_PORT}.`,
             }).catch(() => undefined);
             resolve();
         });

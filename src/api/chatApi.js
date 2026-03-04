@@ -27,6 +27,7 @@ export async function sendChatMessage({
     agentId,
     attachments,
     isSteering,
+    replyTo,
 }) {
     const response = await fetch('/api/chat/send', {
         method: 'POST',
@@ -41,6 +42,7 @@ export async function sendChatMessage({
             agentId,
             attachments,
             isSteering,
+            replyTo,
         }),
     });
 
@@ -106,6 +108,99 @@ export async function fetchCommandStatus({ commandId, waitSeconds = 0, chars = 1
 
 export async function fetchStreamingState(chatId) {
     const response = await fetch(`/api/chat/${encodeURIComponent(chatId)}/streaming-state`);
+    return parseApiResponse(response);
+}
+
+export function getBrowserAgentLiveStreamUrl({ sessionId, chatId }) {
+    const normalizedSessionId = String(sessionId ?? '').trim();
+    const normalizedChatId = String(chatId ?? '').trim();
+    const query = new URLSearchParams();
+    query.set('chatId', normalizedChatId);
+    return `/api/browser-agent/sessions/${encodeURIComponent(normalizedSessionId)}/live.mjpeg?${query.toString()}`;
+}
+
+export async function fetchBrowserAgentSession({ sessionId, chatId }) {
+    const query = new URLSearchParams();
+    query.set('chatId', String(chatId ?? '').trim());
+    const response = await fetch(`/api/browser-agent/sessions/${encodeURIComponent(String(sessionId ?? '').trim())}?${query.toString()}`);
+    return parseApiResponse(response);
+}
+
+export async function fetchBrowserAgentRecording({ sessionId, chatId, limit = 120 }) {
+    const query = new URLSearchParams();
+    query.set('chatId', String(chatId ?? '').trim());
+    query.set('limit', String(limit));
+    const response = await fetch(`/api/browser-agent/sessions/${encodeURIComponent(String(sessionId ?? '').trim())}/recording?${query.toString()}`);
+    return parseApiResponse(response);
+}
+
+export function getBrowserAgentRecordingVideoUrl({ sessionId, chatId, index = 0, download = false }) {
+    const query = new URLSearchParams();
+    query.set('chatId', String(chatId ?? '').trim());
+    if (Number.isFinite(Number(index)) && Number(index) > 0) {
+        query.set('index', String(Math.trunc(Number(index))));
+    }
+    if (download) {
+        query.set('download', '1');
+    }
+    return `/api/browser-agent/sessions/${encodeURIComponent(String(sessionId ?? '').trim())}/recording/video?${query.toString()}`;
+}
+
+export function getBrowserAgentRemoteDesktopWsUrl({ sessionId, chatId }) {
+    const query = new URLSearchParams();
+    query.set('chatId', String(chatId ?? '').trim());
+    const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+    const path = `/api/browser-agent/sessions/${encodeURIComponent(String(sessionId ?? '').trim())}/vnc/ws?${query.toString()}`;
+    return `${protocol}//${window.location.host}${path}`;
+}
+
+export async function controlBrowserAgentSession({
+    sessionId,
+    chatId,
+    action,
+    x,
+    y,
+    text,
+    key,
+    url,
+    durationMs,
+}) {
+    const response = await fetch(`/api/browser-agent/sessions/${encodeURIComponent(String(sessionId ?? '').trim())}/control`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            chatId,
+            action,
+            x,
+            y,
+            text,
+            key,
+            url,
+            durationMs,
+        }),
+    });
+    return parseApiResponse(response);
+}
+
+export async function continueBrowserAgentSessionRequest({
+    sessionId,
+    chatId,
+    clientId,
+    note,
+}) {
+    const response = await fetch(`/api/browser-agent/sessions/${encodeURIComponent(String(sessionId ?? '').trim())}/continue`, {
+        method: 'POST',
+        headers: {
+            'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+            chatId,
+            clientId,
+            note,
+        }),
+    });
     return parseApiResponse(response);
 }
 

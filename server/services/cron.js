@@ -11,8 +11,7 @@
  */
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import cronParser from 'cron-parser';
-const { parseExpression } = cronParser;
+import { CronExpressionParser } from 'cron-parser';
 import { CRON_DATA_DIR, CRON_STORE_PATH } from '../core/dataPaths.js';
 
 function nowMs() {
@@ -23,6 +22,10 @@ function ensureDir(dirPath) {
     if (!fs.existsSync(dirPath)) {
         fs.mkdirSync(dirPath, { recursive: true });
     }
+}
+
+function parseCronSchedule(expression, options = {}) {
+    return CronExpressionParser.parse(String(expression ?? '').trim(), options);
 }
 
 /**
@@ -51,7 +54,7 @@ function computeNextRun(schedule, fromMs = nowMs()) {
             if (schedule.tz) {
                 options.tz = schedule.tz;
             }
-            const interval = parseExpression(schedule.cron, options);
+            const interval = parseCronSchedule(schedule.cron, options);
             const next = interval.next();
             return next.getTime();
         } catch {
@@ -84,7 +87,7 @@ function validateSchedule(schedule) {
         try {
             const opts = {};
             if (schedule.tz) opts.tz = schedule.tz;
-            parseExpression(schedule.cron, opts);
+            parseCronSchedule(schedule.cron, opts);
         } catch (e) {
             return `Invalid cron expression: ${e.message}`;
         }
@@ -187,6 +190,8 @@ class CronService {
         const job = this._jobs.find((j) => j.id === id);
         if (!job) return null;
         await this._executeJob(job);
+        this._saveStore();
+        this._armTimer();
         return { ...job };
     }
 
@@ -273,6 +278,7 @@ class CronService {
     }
 
     async _executeJob(job) {
+        const isOneShot = Boolean(job?.schedule?.at);
         job.lastRun = nowMs();
         try {
             if (this._onJob) {
@@ -285,14 +291,20 @@ class CronService {
             job.lastError = error?.message ?? String(error);
         }
 
-        // Handle one-shot `at` schedules
-        if (job.schedule.at) {
+        if (isOneShot) {
+            if (job.lastStatus === 'ok') {
+                this._jobs = this._jobs.filter((candidate) => candidate.id !== job.id);
+                return;
+            }
+
+            // Keep failed one-shot jobs for inspection, but prevent retries.
             job.enabled = false;
             job.nextRun = null;
-        } else {
-            // Recompute next run
-            job.nextRun = computeNextRun(job.schedule, nowMs());
+            return;
         }
+
+        // Recompute next run
+        job.nextRun = computeNextRun(job.schedule, nowMs());
     }
 }
 

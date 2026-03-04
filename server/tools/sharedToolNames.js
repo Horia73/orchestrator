@@ -16,6 +16,7 @@ export const ALL_SHARED_TOOL_NAMES = Object.freeze([
     'send_command_input',
     'read_terminal',
     'generate_image',
+    'call_browser_agent',
     'call_coding_agent',
     'call_multipurpose_agent',
     'call_researcher_agent',

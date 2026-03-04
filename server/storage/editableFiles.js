@@ -1,12 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { listAgentDefinitions } from '../agents/index.js';
-import { DATA_ROOT_DIR, SECRETS_ENV_PATH } from '../core/dataPaths.js';
+import { BROWSER_PROFILES_DIR, CHAT_DATA_DIR, DATA_ROOT_DIR, SECRETS_ENV_PATH } from '../core/dataPaths.js';
 import { syncSecretEnv } from '../core/secretEnv.js';
 
 const SOURCE_ROOT_DIR = path.resolve(process.cwd());
 const AGENTS_ROOT_DIR = path.join(SOURCE_ROOT_DIR, 'server', 'agents');
 const SKIPPED_BASENAMES = new Set(['.DS_Store']);
+const SKIPPED_DATA_DIRECTORIES = [
+    path.resolve(BROWSER_PROFILES_DIR),
+    path.resolve(CHAT_DATA_DIR),
+];
 const DATA_GROUP_ORDER = new Map([
     ['memory', 0],
     ['secrets', 1],
@@ -38,6 +42,15 @@ function isInsidePath(parentPath, candidatePath) {
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative));
 }
 
+function isSkippedDataPath(targetPath) {
+    const normalizedTargetPath = path.resolve(targetPath);
+    if (SKIPPED_BASENAMES.has(path.basename(normalizedTargetPath))) {
+        return true;
+    }
+
+    return SKIPPED_DATA_DIRECTORIES.some((directoryPath) => isInsidePath(directoryPath, normalizedTargetPath));
+}
+
 function getFileStat(filePath) {
     const stat = fs.statSync(filePath, { throwIfNoEntry: false });
     if (!stat || !stat.isFile()) {
@@ -66,7 +79,7 @@ function walkFiles(dirPath) {
     }
 
     const entries = fs.readdirSync(dirPath, { withFileTypes: true })
-        .filter((entry) => !SKIPPED_BASENAMES.has(entry.name))
+        .filter((entry) => !isSkippedDataPath(path.join(dirPath, entry.name)))
         .sort((a, b) => a.name.localeCompare(b.name));
 
     const files = [];
@@ -160,7 +173,7 @@ function resolveEditableEntry(filePath) {
     }
     const normalizedPath = path.resolve(normalizedInput);
 
-    if (isInsidePath(path.resolve(DATA_ROOT_DIR), normalizedPath) && !SKIPPED_BASENAMES.has(path.basename(normalizedPath))) {
+    if (isInsidePath(path.resolve(DATA_ROOT_DIR), normalizedPath) && !isSkippedDataPath(normalizedPath)) {
         return buildDataEntry(normalizedPath);
     }
 

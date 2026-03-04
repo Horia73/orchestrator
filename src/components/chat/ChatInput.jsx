@@ -10,6 +10,8 @@ import './ChatInput.css';
 import { IconPlus, IconMic, IconStop, IconArrowUp, IconClose, IconTrash, IconPause, IconFile } from '../shared/icons.jsx';
 import { useVoiceRecorder } from '../../hooks/useVoiceRecorder.js';
 import { deleteChatAttachmentUpload, uploadChatAttachment } from '../../api/chatApi.js';
+import { TodoBoard } from './TodoBoard.jsx';
+import { AnimatedCollapse } from '../shared/AnimatedCollapse.jsx';
 
 /* ---- constants ---- */
 const MAX_BARS = 120;
@@ -58,6 +60,11 @@ function formatDuration(seconds) {
     return `${m}:${String(s).padStart(2, '0')}`;
 }
 
+function hasTodoItems(state) {
+    const todoList = state?.todoList ?? state ?? null;
+    return Array.isArray(todoList?.items) && todoList.items.length > 0;
+}
+
 /**
  * Chat input box.
  * - Auto-resizes the textarea.
@@ -73,7 +80,11 @@ export const ChatInput = forwardRef(function ChatInput({
     onAttachmentsChange,
     isChatMode,
     isSending,
+    replyPreview = null,
+    onClearReplyPreview,
     uiSettings,
+    todoState = null,
+    todoBoardKey = 'chat-input-todo',
 }, ref) {
     const textareaRef = useRef(null);
     const fileInputRef = useRef(null);
@@ -104,6 +115,9 @@ export const ChatInput = forwardRef(function ChatInput({
     const [isRecording, setIsRecording] = useState(false);
     const [waveformBars, setWaveformBars] = useState([]);
     const [recordingDuration, setRecordingDuration] = useState(0);
+    const [displayedTodoState, setDisplayedTodoState] = useState(() => (
+        isChatMode && hasTodoItems(todoState) ? todoState : null
+    ));
     const waveformHistoryRef = useRef([]);
     const getAmplitudeRef = useRef(getAmplitude);
     const getDurationRef = useRef(getDuration);
@@ -135,6 +149,20 @@ export const ChatInput = forwardRef(function ChatInput({
             setRecordingDuration(getDurationRef.current());
         }
     }, [recorderState]);
+
+    useEffect(() => {
+        if (!(isChatMode && hasTodoItems(todoState))) {
+            return undefined;
+        }
+
+        const frameId = window.requestAnimationFrame(() => {
+            setDisplayedTodoState(todoState);
+        });
+
+        return () => {
+            window.cancelAnimationFrame(frameId);
+        };
+    }, [isChatMode, todoState]);
 
     // Auto-cancel on error
     useEffect(() => {
@@ -350,10 +378,52 @@ export const ChatInput = forwardRef(function ChatInput({
     /* ---- Render ---- */
     const showRecordingUI = isRecording && (recorderState === 'recording' || recorderState === 'paused');
     const showRecordingStatus = isRecording && (recorderState === 'requesting' || recorderState === 'error');
+    const shouldShowTodoBoard = isChatMode && hasTodoItems(todoState);
 
     return (
         <div className={`chat-input-container${isChatMode ? ' pinned' : ''}`}>
+            <AnimatedCollapse
+                isOpen={shouldShowTodoBoard}
+                className="chat-input-todo-shell"
+                innerClassName="chat-input-todo-shell-inner"
+                onExited={() => setDisplayedTodoState(null)}
+            >
+                {displayedTodoState && (
+                    <div className="chat-input-todo">
+                        <TodoBoard
+                            key={todoBoardKey}
+                            todoState={displayedTodoState}
+                            collapsible
+                            docked
+                            persistenceKey={todoBoardKey}
+                        />
+                    </div>
+                )}
+            </AnimatedCollapse>
             <div className="chat-input-box">
+                {!isRecording && replyPreview && (
+                    <div className="input-reply-preview">
+                        <div className="input-reply-preview-bar" aria-hidden="true" />
+                        <div className="input-reply-preview-body">
+                            <div className="input-reply-preview-label">
+                                Replying to {String(replyPreview?.chatTitle ?? '').trim() || 'message'}
+                            </div>
+                            <div className="input-reply-preview-text">
+                                {String(replyPreview?.previewText ?? '').trim() || 'Message'}
+                            </div>
+                        </div>
+                        <button
+                            type="button"
+                            className="input-reply-preview-close"
+                            title="Clear reply"
+                            aria-label="Clear reply"
+                            onClick={() => onClearReplyPreview?.()}
+                        >
+                            <IconClose />
+                        </button>
+                    </div>
+                )}
+
                 {/* ---- Input area: stacked to preserve exact height during voice recording ---- */}
                 <div className="input-area" style={{ display: 'grid' }}>
                     <textarea

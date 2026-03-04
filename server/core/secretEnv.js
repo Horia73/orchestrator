@@ -1,4 +1,5 @@
 import fs from 'node:fs';
+import path from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
 import { SECRETS_ENV_PATH } from './dataPaths.js';
 
@@ -16,6 +17,15 @@ function readSecretEnvFile() {
     } catch {
         return {};
     }
+}
+
+function serializeSecretEnvValue(value) {
+    const normalized = String(value ?? '');
+    if (/^[A-Za-z0-9_./:@%+=,-]+$/.test(normalized)) {
+        return normalized;
+    }
+
+    return JSON.stringify(normalized);
 }
 
 export function syncSecretEnv() {
@@ -52,6 +62,37 @@ export function isShellEnvKey(key) {
 
 export function getSecretEnvPath() {
     return SECRETS_ENV_PATH;
+}
+
+export function upsertSecretEnvValues(updates = {}) {
+    const existing = readSecretEnvFile();
+    const next = { ...existing };
+    const orderedKeys = [...Object.keys(existing)];
+
+    for (const [rawKey, rawValue] of Object.entries(updates ?? {})) {
+        const key = String(rawKey ?? '').trim();
+        if (!key) {
+            continue;
+        }
+
+        if (rawValue === undefined || rawValue === null || rawValue === '') {
+            delete next[key];
+            continue;
+        }
+
+        if (!orderedKeys.includes(key)) {
+            orderedKeys.push(key);
+        }
+        next[key] = String(rawValue);
+    }
+
+    const lines = orderedKeys
+        .filter((key) => Object.prototype.hasOwnProperty.call(next, key))
+        .map((key) => `${key}=${serializeSecretEnvValue(next[key])}`);
+
+    fs.mkdirSync(path.dirname(SECRETS_ENV_PATH), { recursive: true });
+    fs.writeFileSync(SECRETS_ENV_PATH, `${lines.join('\n')}\n`, 'utf8');
+    return syncSecretEnv();
 }
 
 syncSecretEnv();

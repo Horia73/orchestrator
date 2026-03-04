@@ -1,0 +1,2300 @@
+{
+    "aqa": {
+        "id": "models/aqa",
+        "displayName": "Model that performs Attributed Question Answering.",
+        "description": "Model trained to return answers to questions that are grounded in provided sources, along with estimating answerable probability.",
+        "note": "Pricing is based on a per-query rate for the generateAnswer method in the Pay-as-you-go tier. It is free in the Free tier with rate limits.",
+        "tier": "standard",
+        "status": "active",
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/release-notes",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:06:33.242Z",
+        "supportedGenerationMethods": [
+            "generateAnswer"
+        ],
+        "modelKind": "aqa",
+        "thinkingMode": "none",
+        "pricePerQuery": 0.01,
+        "contextWindow": 7168
+    },
+    "deep-research-pro-preview-12-2025": {
+        "id": "models/deep-research-pro-preview-12-2025",
+        "displayName": "Deep Research Pro Preview (Dec-12-2025)",
+        "description": "Preview release (December 12th, 2025) of Deep Research Pro",
+        "note": "Pricing follows a pay-as-you-go model based on the underlying Gemini 3.1 Pro model and the specific tools the agent utilizes.",
+        "tier": "pro",
+        "status": "active",
+        "restrictions": [
+            "Exclusively available using the Interactions API",
+            "Cannot be accessed through generate_content",
+            "Requires background=True and store=True",
+            "Max research time: 60 minutes",
+            "Audio inputs are not supported",
+            "Does not support human-approved planning or structured outputs",
+            "Thinking probes did not verify level or budget support."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/deep-research",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:01:42.684Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 2,
+        "inputPriceOver200k": 4,
+        "outputPrice200k": 12,
+        "outputPriceOver200k": 18,
+        "outputTextPrice200k": 12,
+        "outputImagePrice200k": 120,
+        "outputImagePrice1K": 0.134,
+        "outputImagePrice2K": 0.134,
+        "outputImagePrice4K": 0.24,
+        "groundingPricePer1k": 14,
+        "contextWindow": 131072
+    },
+    "gemini-2.0-flash": {
+        "id": "models/gemini-2.0-flash",
+        "displayName": "Gemini 2.0 Flash",
+        "description": "Gemini 2.0 Flash",
+        "note": "Scheduled for shutdown on 2026-06-01.",
+        "tier": "flash",
+        "status": "deprecated",
+        "deprecatedAt": "2026-03-04",
+        "recommendedReplacement": "models/gemini-3.1-flash",
+        "restrictions": [
+            "Maximum input tokens: 1,048,576",
+            "Maximum output tokens: 8,192",
+            "Free tier data used for product improvement"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/pricing",
+            "https://ai.google.dev/gemini-api/docs/release-notes"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.1,
+        "inputPriceOver200k": 0.1,
+        "outputPrice200k": 0.4,
+        "outputPriceOver200k": 0.4,
+        "outputTextPrice200k": 0.4,
+        "outputImagePrice200k": 30,
+        "outputImagePricePerImage": 0.039,
+        "outputImagePrice1K": 0.039,
+        "outputAudioPrice": 10,
+        "groundingPricePer1k": 35,
+        "contextWindow": 1048576
+    },
+    "gemini-2.0-flash-001": {
+        "id": "models/gemini-2.0-flash-001",
+        "displayName": "Gemini 2.0 Flash 001",
+        "description": "Stable version of Gemini 2.0 Flash, our fast and versatile multimodal model for scaling across diverse tasks, released in January of 2025.",
+        "note": "Scheduled for shutdown on June 1, 2026.",
+        "tier": "flash",
+        "status": "deprecated",
+        "deprecatedAt": "2026-02-18",
+        "recommendedReplacement": "models/gemini-2.5-flash-lite",
+        "restrictions": [
+            "text-only output"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini",
+            "https://ai.google.dev/gemini-api/docs/release-notes"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:53:05.719Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.1,
+        "inputPriceOver200k": 0.1,
+        "outputPrice200k": 0.4,
+        "outputPriceOver200k": 0.4,
+        "outputTextPrice200k": 0.4,
+        "groundingPricePer1k": 14,
+        "contextWindow": 1048576
+    },
+    "gemini-2.0-flash-lite": {
+        "id": "models/gemini-2.0-flash-lite",
+        "displayName": "Gemini 2.0 Flash-Lite",
+        "description": "Gemini 2.0 Flash-Lite",
+        "note": "Paid tier pricing per 1 million tokens; simplified flat pricing with no context threshold.",
+        "tier": "flash-lite",
+        "status": "active",
+        "restrictions": [
+            "text output only"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/gemini"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:54:12.874Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.075,
+        "outputPrice200k": 0.3,
+        "contextWindow": 1048576
+    },
+    "gemini-2.0-flash-lite-001": {
+        "id": "models/gemini-2.0-flash-lite-001",
+        "displayName": "Gemini 2.0 Flash-Lite 001",
+        "description": "Stable version of Gemini 2.0 Flash-Lite",
+        "note": "Single price per input type; no tiered pricing. Scheduled for shutdown on June 1, 2026.",
+        "tier": "flash-lite",
+        "status": "deprecated",
+        "deprecatedAt": "2026-02-18",
+        "recommendedReplacement": "models/gemini-2.5-flash-lite",
+        "restrictions": [
+            "Maximum input tokens: 1,048,576",
+            "Maximum output tokens: 8,192",
+            "Audio generation not supported",
+            "Image generation not supported",
+            "Search grounding not supported",
+            "Code execution not supported"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.0-flash-lite",
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/release-notes"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:54:13.846Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.075,
+        "outputPrice200k": 0.3,
+        "contextWindow": 1048576
+    },
+    "gemini-2.5-computer-use-preview-10-2025": {
+        "id": "models/gemini-2.5-computer-use-preview-10-2025",
+        "displayName": "Gemini 2.5 Computer Use Preview 10-2025",
+        "description": "Gemini 2.5 Computer Use Preview 10-2025",
+        "note": "Optimized for building browser control agents. Gemini 3 Pro and Flash models support built-in computer use without a separate model.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Closely supervise during important tasks",
+            "Do not use for tasks involving critical decisions, sensitive data, or actions where serious errors cannot be corrected",
+            "Run in a secure and controlled environment (e.g., sandboxed VM or container)",
+            "Not fully optimized for mobile",
+            "Thinking mode (Dynamic budget only); set include_thoughts to true in thinking config",
+            "Thinking probes did not verify level or budget support."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/computer-use",
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-computer-use",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:06:56.906Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "computer-use",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 1.25,
+        "inputPriceOver200k": 2.5,
+        "outputPrice200k": 10,
+        "outputPriceOver200k": 15,
+        "contextWindow": 131072
+    },
+    "gemini-2.5-flash": {
+        "id": "models/gemini-2.5-flash",
+        "displayName": "Gemini 2.5 Flash",
+        "description": "Stable version of Gemini 2.5 Flash, our mid-size multimodal model that supports up to 1 million tokens, released in June of 2025.",
+        "note": "Scheduled for shutdown on 2026-06-17.",
+        "tier": "flash",
+        "status": "deprecated",
+        "deprecatedAt": "2026-03-04",
+        "recommendedReplacement": "models/gemini-3.1-flash",
+        "restrictions": [
+            "Maximum input tokens: 1,048,576",
+            "Maximum output tokens: 65,535",
+            "Use thinkingBudget parameter to guide the model on the specific number of thinking tokens to use for reasoning. Setting thinkingBudget to -1 turns on dynamic thinking."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/thinking"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "inputPrice200k": 0.3,
+        "inputPriceOver200k": 0.3,
+        "outputPrice200k": 2.5,
+        "outputPriceOver200k": 2.5,
+        "outputTextPrice200k": 2.5,
+        "groundingPricePer1k": 35,
+        "contextWindow": 1048576
+    },
+    "gemini-2.5-flash-image": {
+        "id": "models/gemini-2.5-flash-image",
+        "displayName": "Nano Banana",
+        "description": "Gemini 2.5 Flash Preview Image",
+        "note": "Image output is billed at $30.00 per 1M tokens (~$0.039/image). Text modalities follow standard Gemini 2.5 Flash pricing.",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "Audio generation not supported",
+            "Code execution not supported",
+            "Function calling not supported",
+            "Search grounding not supported",
+            "Live API not supported",
+            "SynthID digital watermarking included in all images",
+            "Maximum 3 input images per prompt",
+            "Maximum 10 output images per prompt"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-2.5-flash-image",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:59:03.411Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "batchGenerateContent"
+        ],
+        "modelKind": "image-generation",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "image"
+        ],
+        "inputPrice200k": 0.3,
+        "outputTextPrice200k": 2.5,
+        "outputImagePrice200k": 30,
+        "outputImagePricePerImage": 0.039,
+        "contextWindow": 32768
+    },
+    "gemini-2.5-flash-lite": {
+        "id": "models/gemini-2.5-flash-lite",
+        "displayName": "Gemini 2.5 Flash-Lite",
+        "description": "Stable version of Gemini 2.5 Flash-Lite, released in July of 2025",
+        "note": "Flat pricing for all context lengths. Audio input is priced at $0.30 per 1M tokens.",
+        "tier": "flash-lite",
+        "status": "active",
+        "restrictions": [
+            "Thinking is disabled by default (thinking_budget: 0). Supported budget range is 512 to 24576 tokens."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/thinking"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:58:10.576Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "inputPrice200k": 0.1,
+        "outputPrice200k": 0.4,
+        "groundingPricePer1k": 35,
+        "contextWindow": 1048576
+    },
+    "gemini-2.5-flash-lite-preview-09-2025": {
+        "id": "models/gemini-2.5-flash-lite-preview-09-2025",
+        "displayName": "Gemini 2.5 Flash-Lite Preview Sep 2025",
+        "description": "Preview release (Septempber 25th, 2025) of Gemini 2.5 Flash-Lite",
+        "note": "Pricing for prompts over 200k tokens is double the base rate. Thinking tokens are billed at the same rate as output tokens.",
+        "tier": "flash-lite",
+        "status": "active",
+        "restrictions": [
+            "Preview models may change before becoming stable and have more restrictive rate limits.",
+            "thinking_budget"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/gemini#gemini-2.5-flash-lite"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:58:54.910Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "inputPrice200k": 0.1,
+        "inputPriceOver200k": 0.2,
+        "outputPrice200k": 0.4,
+        "outputPriceOver200k": 0.8,
+        "groundingPricePer1k": 14,
+        "contextWindow": 1048576
+    },
+    "gemini-2.5-flash-native-audio-latest": {
+        "id": "models/gemini-2.5-flash-native-audio-latest",
+        "displayName": "Gemini 2.5 Flash Native Audio Latest",
+        "description": "Stable alias for the most recent version of the native audio model (currently 12-2025).",
+        "note": "Optimized for real-time conversational agents with sub-second native audio streaming. Long-context rates (1.5x) apply for prompts > 200k tokens. Thinking tokens are billed at the same rate as output tokens.",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "Requires responseModalities: [AUDIO] for audio input",
+            "Preview model with restrictive rate limits",
+            "thinking_budget",
+            "Thinking support could not be probed automatically because this model does not expose generateContent."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "countTokens",
+            "bidiGenerateContent"
+        ],
+        "modelKind": "live-audio",
+        "inputPrice200k": 0.5,
+        "inputPriceOver200k": 0.75,
+        "outputPrice200k": 2,
+        "outputPriceOver200k": 18,
+        "outputTextPrice200k": 2,
+        "outputAudioPrice": 12,
+        "groundingPricePer1k": 14,
+        "contextWindow": 1048576,
+        "thinkingMode": "budget"
+    },
+    "gemini-2.5-flash-native-audio-preview-09-2025": {
+        "id": "models/gemini-2.5-flash-native-audio-preview-09-2025",
+        "displayName": "Gemini 2.5 Flash Native Audio Preview 09-2025",
+        "description": "Gemini 2.5 Flash Native Audio Preview 09-2025",
+        "note": "Input price is $0.50 (text) and $3.00 (audio/video) per 1M tokens. Audio output is $12.00 per 1M tokens for prompts <= 200k and $18.00 for prompts > 200k.",
+        "tier": "flash",
+        "status": "retired",
+        "restrictions": [
+            "Batch API: Not supported",
+            "Caching: Not supported",
+            "Code execution: Not supported",
+            "File search: Not supported",
+            "Structured outputs: Not supported",
+            "URL context: Not supported",
+            "Audio input does not trigger history recall in Live API",
+            "thinkingConfig: { thinkingBudget: number, includeThoughts: boolean }",
+            "Thinking support could not be probed automatically because this model does not expose generateContent."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/release-notes",
+            "https://ai.google.dev/gemini-api/docs/live-api"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": false,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "countTokens",
+            "bidiGenerateContent"
+        ],
+        "modelKind": "live-audio",
+        "inputPrice200k": 0.5,
+        "outputPrice200k": 2,
+        "outputAudioPrice": 12,
+        "groundingPricePer1k": 14,
+        "contextWindow": 131072,
+        "retiredAt": "2026-02-17"
+    },
+    "gemini-2.5-flash-native-audio-preview-12-2025": {
+        "id": "models/gemini-2.5-flash-native-audio-preview-12-2025",
+        "displayName": "Gemini 2.5 Flash (Native Audio Preview 12-2025)",
+        "description": "Specialized for the Gemini Live API. Processes audio natively (end-to-end) to reduce latency and capture emotional nuance. Improved over the 09-2025 version with better cut-off detection.",
+        "note": "Preview model for the Live API. Optimized for higher quality audio outputs with better pacing and naturalness. Input price for audio/video is $3.00 per 1M tokens.",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "Input token limit: 131,072",
+            "Output token limit: 8,192",
+            "Batch API not supported",
+            "Caching not supported",
+            "Code execution not supported",
+            "File search not supported",
+            "Grounding with Google Maps not supported",
+            "Image generation not supported",
+            "Structured outputs not supported",
+            "URL context not supported",
+            "thinkingBudget parameter",
+            "Thinking support could not be probed automatically because this model does not expose generateContent."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "countTokens",
+            "bidiGenerateContent"
+        ],
+        "modelKind": "live-audio",
+        "inputPrice200k": 0.5,
+        "outputAudioPrice": 12,
+        "groundingPricePer1k": 35,
+        "contextWindow": 1048576,
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "outputPrice200k": 2
+    },
+    "gemini-2.5-flash-preview-tts": {
+        "id": "models/gemini-2.5-flash-preview-tts",
+        "displayName": "Gemini 2.5 Flash Preview TTS",
+        "description": "Gemini 2.5 Flash Preview TTS",
+        "note": "Preview model optimized for price-performant, low-latency, controllable speech generation. Pricing is based on tokens rather than characters or seconds.",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "Text-only input",
+            "Audio-only output",
+            "32k token context window limit",
+            "8,192 input token limit",
+            "16,384 output token limit",
+            "No support for search grounding, function calling, or code execution",
+            "No support for context caching"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/tts",
+            "https://ai.google.dev/gemini-api/docs/models/gemini#gemini-2.5-flash-preview-tts",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:59:47.153Z",
+        "supportedGenerationMethods": [
+            "countTokens",
+            "generateContent"
+        ],
+        "modelKind": "tts",
+        "thinkingMode": "none",
+        "inputPrice200k": 0.5,
+        "outputPrice200k": 10,
+        "outputAudioPrice": 10,
+        "contextWindow": 8192
+    },
+    "gemini-2.5-pro": {
+        "id": "models/gemini-2.5-pro",
+        "displayName": "Gemini 2.5 Pro",
+        "description": "Stable release (June 17th, 2025) of Gemini 2.5 Pro",
+        "note": "Scheduled for shutdown on 2026-06-17.",
+        "tier": "pro",
+        "status": "deprecated",
+        "deprecatedAt": "2026-03-04",
+        "recommendedReplacement": "models/gemini-3.1-pro",
+        "restrictions": [
+            "Gemini Live API not supported",
+            "Content Credentials (C2PA) not supported",
+            "Thinking cannot be disabled",
+            "thinking_budget (default 8192 tokens)",
+            "Thinking cannot be disabled on this model."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "inputPrice200k": 1.25,
+        "inputPriceOver200k": 2.5,
+        "outputPrice200k": 10,
+        "outputPriceOver200k": 15,
+        "contextWindow": 1048576
+    },
+    "gemini-2.5-pro-preview-tts": {
+        "id": "models/gemini-2.5-pro-preview-tts",
+        "displayName": "Gemini 2.5 Pro (TTS Preview)",
+        "description": "A Text-to-Speech optimized variant of Gemini 2.5 Pro. Focuses on high-fidelity, expressive human voice generation for long-form content.",
+        "note": "Price per 1M audio tokens",
+        "tier": "pro",
+        "status": "active",
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "countTokens",
+            "generateContent"
+        ],
+        "modelKind": "tts",
+        "thinkingMode": "none",
+        "inputPrice200k": 1.25,
+        "outputAudioPrice": 20,
+        "contextWindow": 8192,
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ]
+    },
+    "gemini-3-flash-preview": {
+        "id": "models/gemini-3-flash-preview",
+        "displayName": "Gemini 3 Flash Preview",
+        "description": "Gemini 3 Flash Preview",
+        "note": "Pricing is per 1 million tokens. The thinking_level parameter replaces thinking_budget for Gemini 3 models.",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "Preview models may change before becoming stable and have more restrictive rate limits.",
+            "Thought signatures are required for multi-turn conversations to maintain reasoning context.",
+            "Grounding with Google Maps is not supported.",
+            "Image generation is not supported.",
+            "minimal, low, medium, high"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:59:46.936Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "MINIMAL",
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "MINIMAL",
+                "label": "Minimal",
+                "description": "Verified by API probe for minimal thinking.",
+                "default": false,
+                "thinkingLevel": "MINIMAL"
+            },
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "MEDIUM",
+                "label": "Medium",
+                "description": "Verified by API probe for medium thinking.",
+                "default": false,
+                "thinkingLevel": "MEDIUM"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.5,
+        "inputPriceOver200k": 0.5,
+        "outputPrice200k": 3,
+        "outputPriceOver200k": 3,
+        "groundingPricePer1k": 14,
+        "contextWindow": 1048576
+    },
+    "gemini-3-pro-image-preview": {
+        "id": "models/gemini-3-pro-image-preview",
+        "displayName": "Nano Banana Pro",
+        "description": "Gemini 3 Pro Image Preview",
+        "note": "Thought signatures are required for conversational editing to maintain reasoning context. Text pricing matches Gemini 3 Pro. Image input is set at 560 tokens per image.",
+        "tier": "pro",
+        "status": "active",
+        "restrictions": [
+            "Audio generation",
+            "Caching",
+            "Code execution",
+            "File search",
+            "Function calling",
+            "Grounding with Google Maps",
+            "Live API",
+            "URL context",
+            "Controls the maximum depth of internal reasoning via the thinking_level parameter; defaults to 'high' if not specified."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3",
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3-pro-image-preview"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:01:02.471Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "batchGenerateContent"
+        ],
+        "modelKind": "image-generation",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "image"
+        ],
+        "inputPrice200k": 2,
+        "outputPrice200k": 12,
+        "outputTextPrice200k": 12,
+        "outputImagePrice200k": 120,
+        "outputImagePrice1K": 0.134,
+        "outputImagePrice2K": 0.134,
+        "outputImagePrice4K": 0.24,
+        "groundingPricePer1k": 14,
+        "contextWindow": 131072
+    },
+    "gemini-3-pro-preview": {
+        "id": "models/gemini-3-pro-preview",
+        "displayName": "Gemini 3 Pro Preview",
+        "description": "Gemini 3 Pro Preview",
+        "note": "Scheduled for shutdown on 2026-03-09.",
+        "tier": "pro",
+        "status": "deprecated",
+        "deprecatedAt": "2026-02-18",
+        "recommendedReplacement": "models/gemini-3.1-pro-preview",
+        "restrictions": [
+            "Preview models may change before becoming stable and have more restrictive rate limits.",
+            "Not designed around prioritizing supporting audio understanding or image segmentation use cases.",
+            "PDF token counts will be listed under the IMAGE modality instead of the DOCUMENT modality.",
+            "Use the thinking_level parameter to control the amount of internal reasoning the model performs (low or high) to balance response quality, reasoning complexity, latency, and cost.",
+            "Thinking cannot be fully minimized on this model."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "LOW",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 2,
+        "outputPrice200k": 12,
+        "contextWindow": 1048576
+    },
+    "gemini-3.1-flash-image-preview": {
+        "id": "models/gemini-3.1-flash-image-preview",
+        "displayName": "Nano Banana 2",
+        "description": "Gemini 3.1 Flash Image Preview.",
+        "note": "Pricing is per 1 million tokens for text. Image pricing varies by resolution: 0.5K ($0.045), 1K ($0.067), 2K ($0.101), and 4K ($0.151).",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "Audio generation: Not supported",
+            "Caching: Not supported",
+            "Code execution: Not supported",
+            "File search: Not supported",
+            "Function calling: Not supported",
+            "Grounding with Google Maps: Not supported",
+            "Live API: Not supported",
+            "Structured outputs: Not supported",
+            "URL context: Not supported",
+            "Content Credentials (C2PA): Not supported",
+            "minimal, low, medium, high"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-3-1-flash-image-preview",
+            "https://ai.google.dev/gemini-api/docs/image-generation"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:01:08.109Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "batchGenerateContent"
+        ],
+        "modelKind": "image-generation",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "MINIMAL",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "MINIMAL",
+                "label": "Minimal",
+                "description": "Verified by API probe for minimal thinking.",
+                "default": false,
+                "thinkingLevel": "MINIMAL"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "image"
+        ],
+        "inputPrice200k": 0.25,
+        "outputPrice200k": 60,
+        "outputImagePricePerImage": 0.067,
+        "outputImagePrice1K": 0.067,
+        "outputImagePrice2K": 0.101,
+        "outputImagePrice4K": 0.151,
+        "contextWindow": 65536
+    },
+    "gemini-3.1-flash-lite-preview": {
+        "id": "models/gemini-3.1-flash-lite-preview",
+        "displayName": "Gemini 3.1 Flash Lite Preview",
+        "description": "Gemini 3.1 Flash Lite Preview",
+        "note": "Most cost-efficient model optimized for high-volume agentic tasks; pricing for grounding starts after 5,000 free monthly queries.",
+        "tier": "flash-lite",
+        "status": "active",
+        "restrictions": [
+            "Preview models may change before becoming stable and have more restrictive rate limits.",
+            "minimal, low, medium, high"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini#gemini-3.1-flash-lite",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:00:12.325Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "MINIMAL",
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "MINIMAL",
+                "label": "Minimal",
+                "description": "Verified by API probe for minimal thinking.",
+                "default": false,
+                "thinkingLevel": "MINIMAL"
+            },
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "MEDIUM",
+                "label": "Medium",
+                "description": "Verified by API probe for medium thinking.",
+                "default": false,
+                "thinkingLevel": "MEDIUM"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.25,
+        "inputPriceOver200k": 0.25,
+        "outputPrice200k": 1.5,
+        "outputPriceOver200k": 1.5,
+        "outputTextPrice200k": 1.5,
+        "groundingPricePer1k": 14,
+        "contextWindow": 1048576
+    },
+    "gemini-3.1-pro-preview": {
+        "id": "models/gemini-3.1-pro-preview",
+        "displayName": "Gemini 3.1 Pro",
+        "description": "The latest flagship model (released Feb 19, 2026). Optimized for \"agentic reasoning,\" complex problem solving, and generating animated SVGs directly. Features a 1M token context window.",
+        "note": "Pricing is identical to Gemini 3 Pro Preview. Thinking tokens are included in output price. Supports 1M input context and 64k output tokens. thinking_level defaults to high.",
+        "tier": "pro",
+        "status": "active",
+        "restrictions": [
+            "Audio generation not supported",
+            "Image generation not supported",
+            "Live API not supported",
+            "Grounding with Google Maps not supported",
+            "Thinking cannot be fully minimized on this model."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "MINIMAL",
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "MEDIUM",
+                "label": "Medium",
+                "description": "Verified by API probe for medium thinking.",
+                "default": false,
+                "thinkingLevel": "MEDIUM"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 2,
+        "inputPriceOver200k": 4,
+        "outputPrice200k": 12,
+        "outputPriceOver200k": 18,
+        "contextWindow": 1048576
+    },
+    "gemini-3.1-pro-preview-customtools": {
+        "id": "models/gemini-3.1-pro-preview-customtools",
+        "displayName": "Gemini 3.1 Pro Preview Custom Tools",
+        "description": "Gemini 3.1 Pro Preview optimized for custom tool usage",
+        "note": "Optimized for agentic workflows that use custom tools and bash; may see quality fluctuations in use cases which don't benefit from such tools.",
+        "tier": "pro",
+        "status": "active",
+        "restrictions": [
+            "Provisioned Throughput (PT) is not supported",
+            "minimal, low, medium, high",
+            "Thinking cannot be fully minimized on this model."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemini-v3"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:00:19.346Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "MEDIUM",
+                "label": "Medium",
+                "description": "Verified by API probe for medium thinking.",
+                "default": false,
+                "thinkingLevel": "MEDIUM"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 2,
+        "inputPriceOver200k": 4,
+        "outputPrice200k": 12,
+        "outputPriceOver200k": 18,
+        "outputImagePricePerImage": 0.0001,
+        "contextWindow": 1048576
+    },
+    "gemini-embedding-001": {
+        "id": "models/gemini-embedding-001",
+        "displayName": "Gemini Embedding 001",
+        "description": "Obtain a distributed representation of a text.",
+        "note": "Uses Matryoshka Representation Learning (MRL) for flexible output dimensions (default 3072, can be truncated to 768 or 1536). Supports over 100 languages. Scheduled for shutdown on July 14, 2026.",
+        "tier": "standard",
+        "status": "deprecated",
+        "deprecatedAt": "2025-07-14",
+        "restrictions": [
+            "Maximum input token length of 2,048 per input text",
+            "Maximum of 250 input texts per request",
+            "Maximum of 20,000 tokens per request"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/deprecation",
+            "https://ai.google.dev/gemini-api/docs/embeddings",
+            "https://ai.google.dev/gemini-api/docs/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:02:07.060Z",
+        "supportedGenerationMethods": [
+            "embedContent",
+            "countTextTokens",
+            "countTokens",
+            "asyncBatchEmbedContent"
+        ],
+        "modelKind": "embedding",
+        "thinkingMode": "none",
+        "inputPrice200k": 0.15,
+        "contextWindow": 2048
+    },
+    "gemini-flash-latest": {
+        "id": "models/gemini-flash-latest",
+        "displayName": "Gemini Flash Latest",
+        "description": "Latest release of Gemini Flash",
+        "note": "Alias currently pointing to gemini-3-flash-preview. Flat pricing applies regardless of context length.",
+        "tier": "flash",
+        "status": "active",
+        "restrictions": [
+            "minimal, low, medium, high"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/gemini-api/docs/pricing",
+            "https://ai.google.dev/gemini-api/docs/thinking",
+            "https://ai.google.dev/gemini-api/docs/release-notes"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:56:36.053Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "MINIMAL",
+            "LOW",
+            "MEDIUM",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "MINIMAL",
+                "label": "Minimal",
+                "description": "Verified by API probe for minimal thinking.",
+                "default": false,
+                "thinkingLevel": "MINIMAL"
+            },
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "MEDIUM",
+                "label": "Medium",
+                "description": "Verified by API probe for medium thinking.",
+                "default": false,
+                "thinkingLevel": "MEDIUM"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 0.5,
+        "inputPriceOver200k": 0.5,
+        "outputPrice200k": 3,
+        "outputPriceOver200k": 3,
+        "outputTextPrice200k": 3,
+        "groundingPricePer1k": 14,
+        "contextWindow": 1048576
+    },
+    "gemini-flash-lite-latest": {
+        "id": "models/gemini-flash-lite-latest",
+        "displayName": "Gemini Flash-Lite Latest",
+        "description": "Latest release of Gemini Flash-Lite",
+        "note": "Alias for gemini-2.5-flash-lite-preview-09-2025.",
+        "tier": "flash-lite",
+        "status": "active",
+        "restrictions": [
+            "thinkingBudget"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/gemini"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:57:26.232Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "inputPrice200k": 0.1,
+        "inputPriceOver200k": 0.1,
+        "outputPrice200k": 0.4,
+        "outputPriceOver200k": 0.4,
+        "contextWindow": 1048576
+    },
+    "gemini-pro-latest": {
+        "id": "models/gemini-pro-latest",
+        "displayName": "Gemini Pro Latest",
+        "description": "Latest release of Gemini Pro",
+        "note": "Alias currently points to gemini-3-pro-preview; will switch to gemini-3.1-pro-preview on March 6, 2026. gemini-3-pro-preview shuts down March 9, 2026.",
+        "tier": "pro",
+        "status": "active",
+        "restrictions": [
+            "Fine-tuning isn't supported when thinking is enabled.",
+            "Preview models may change before becoming stable and have more restrictive rate limits.",
+            "Uses thinking_level parameter (HIGH, LOW). Default is HIGH. Gemini 3.1 Pro adds MEDIUM.",
+            "Thinking cannot be fully minimized on this model."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/release-notes"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:57:54.320Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "createCachedContent",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "LOW",
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "thinkingPresets": [
+            {
+                "id": "LOW",
+                "label": "Low",
+                "description": "Verified by API probe for low thinking.",
+                "default": false,
+                "thinkingLevel": "LOW"
+            },
+            {
+                "id": "HIGH",
+                "label": "High",
+                "description": "Verified by API probe for high thinking.",
+                "default": true,
+                "thinkingLevel": "HIGH"
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "inputPrice200k": 2,
+        "inputPriceOver200k": 4,
+        "outputPrice200k": 12,
+        "outputPriceOver200k": 18,
+        "contextWindow": 1048576
+    },
+    "gemini-robotics-er-1.5-preview": {
+        "id": "models/gemini-robotics-er-1.5-preview",
+        "displayName": "Gemini Robotics-ER 1.5 (Preview)",
+        "description": "A specialized vision-language model for \"Embodied Reasoning.\" Capable of spatial grounding (2D/3D coordinates) and planning robotic actions.",
+        "tier": "standard",
+        "status": "active",
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "contextWindow": 1048576,
+        "inputPrice200k": 0.3,
+        "outputPrice200k": 2.5,
+        "outputAudioPrice": 1,
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ]
+    },
+    "gemma-3-12b-it": {
+        "id": "models/gemma-3-12b-it",
+        "displayName": "Gemma 3 12B",
+        "note": "Free of charge in Google AI Studio.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Gemma Prohibited Use Policy",
+            "Gemma License"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/models/gemma",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:01:04.688Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "contextWindow": 32768
+    },
+    "gemma-3-1b-it": {
+        "id": "models/gemma-3-1b-it",
+        "displayName": "Gemma 3 1B",
+        "note": "Gemma 3 1B is a text-only model with a 32k context window. It is available for free in Google AI Studio.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Gemma Terms of Use"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemma/docs/model_overview",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:55:16.332Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "contextWindow": 32768
+    },
+    "gemma-3-27b-it": {
+        "id": "models/gemma-3-27b-it",
+        "displayName": "Gemma 3 27B",
+        "note": "Multimodal model supporting text and image input with text output. Features a 128K token context window.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Gemma Terms of Use"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/gemma",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:56:02.869Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "contextWindow": 131072
+    },
+    "gemma-3-4b-it": {
+        "id": "models/gemma-3-4b-it",
+        "displayName": "Gemma 3 4B",
+        "note": "Gemma 3 models are available for free in Google AI Studio within rate limits. Pricing for paid tiers or Vertex AI deployments may vary by provider.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Gemma Terms of Use",
+            "Google Generative AI Prohibited Use Policy"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemma/docs/model_card_3",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:55:24.777Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "contextWindow": 32768
+    },
+    "gemma-3n-e2b-it": {
+        "id": "models/gemma-3n-e2b-it",
+        "displayName": "Gemma 3n E2B",
+        "note": "Free of charge in Google AI Studio.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Gemma Terms of Use"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemma/docs"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:56:56.031Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "groundingPricePer1k": 35,
+        "contextWindow": 8192
+    },
+    "gemma-3n-e4b-it": {
+        "id": "models/gemma-3n-e4b-it",
+        "displayName": "Gemma 3n E4B",
+        "note": "Gemma 3n models are available in the Gemini API Free Tier; paid tier pricing for this specific model ID is not explicitly detailed on the official pricing page as of March 2026.",
+        "tier": "standard",
+        "status": "active",
+        "restrictions": [
+            "Gemma Terms of Use",
+            "Google Generative AI Additional Terms of Service"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/gemma",
+            "https://ai.google.dev/gemini-api/docs/audio-processing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T11:56:08.709Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "groundingPricePer1k": 35,
+        "contextWindow": 8192
+    },
+    "imagen-4.0-fast-generate-001": {
+        "id": "models/imagen-4.0-fast-generate-001",
+        "displayName": "Imagen 4 Fast",
+        "description": "Vertex served Imagen 4.0 Fast model",
+        "note": "Priced at $0.02 per image.",
+        "tier": "image",
+        "status": "active",
+        "restrictions": [
+            "Input token limit: 480 tokens (text)",
+            "Output images: 1 to 4",
+            "Limit text in images to 25 characters or less",
+            "Avoid exceeding three phrases for text in images"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/imagen"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:03:21.770Z",
+        "supportedGenerationMethods": [
+            "predict"
+        ],
+        "modelKind": "image-generation",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "image"
+        ],
+        "outputImagePricePerImage": 0.02,
+        "contextWindow": 480
+    },
+    "imagen-4.0-generate-001": {
+        "id": "models/imagen-4.0-generate-001",
+        "displayName": "Imagen 4",
+        "description": "Vertex served Imagen 4.0 model",
+        "note": "Pricing is $0.04 per image for the Standard variant.",
+        "tier": "image",
+        "status": "active",
+        "restrictions": [
+            "All generated images include a SynthID watermark",
+            "Supports 1 to 4 images per request",
+            "Supported resolutions: 1K and 2K",
+            "Supported aspect ratios: 1:1, 3:4, 4:3, 9:16, 16:9",
+            "Text rendering in images limited to 25 characters or less"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/imagen"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:02:20.311Z",
+        "supportedGenerationMethods": [
+            "predict"
+        ],
+        "modelKind": "image-generation",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "image"
+        ],
+        "outputImagePricePerImage": 0.04,
+        "contextWindow": 480
+    },
+    "imagen-4.0-ultra-generate-001": {
+        "id": "models/imagen-4.0-ultra-generate-001",
+        "displayName": "Imagen 4 Ultra",
+        "description": "Vertex served Imagen 4.0 ultra model",
+        "note": "Available in paid preview in the Gemini API.",
+        "tier": "image",
+        "status": "active",
+        "restrictions": [
+            "SynthID digital watermarking",
+            "Maximum 4 images per request",
+            "Supported aspect ratios: 1:1, 3:4, 4:3, 9:16, 16:9",
+            "Supported resolutions: 1K, 2K"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/imagen",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:02:35.422Z",
+        "supportedGenerationMethods": [
+            "predict"
+        ],
+        "modelKind": "image-generation",
+        "thinkingMode": "none",
+        "allowedAgentIds": [
+            "image"
+        ],
+        "outputImagePricePerImage": 0.06,
+        "outputImagePrice1K": 0.06,
+        "outputImagePrice2K": 0.06,
+        "contextWindow": 480
+    },
+    "nano-banana-pro-preview": {
+        "id": "models/nano-banana-pro-preview",
+        "displayName": "Nano Banana Pro",
+        "description": "Gemini 3 Pro Image Preview",
+        "note": "4K outputs charged at 2x standard rate. Thinking process generates up to two interim images.",
+        "tier": "pro",
+        "status": "deprecated",
+        "deprecatedAt": "2026-03-09",
+        "recommendedReplacement": "models/gemini-3.1-flash-image-preview",
+        "restrictions": [
+            "SynthID invisible watermark",
+            "Up to 14 reference images",
+            "Up to 4 images per request",
+            "The model generates up to two interim images to test composition and logic."
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models/nano-banana"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:01:05.920Z",
+        "supportedGenerationMethods": [
+            "generateContent",
+            "countTokens",
+            "batchGenerateContent"
+        ],
+        "modelKind": "chat",
+        "thinkingMode": "budget",
+        "supportedThinkingBudgets": [
+            -1,
+            0,
+            1024,
+            8192
+        ],
+        "defaultThinkingPreset": "DYNAMIC",
+        "thinkingPresets": [
+            {
+                "id": "OFF",
+                "label": "Off",
+                "description": "Disable thinking with budget 0.",
+                "default": false,
+                "thinkingBudget": 0
+            },
+            {
+                "id": "BUDGET_1024",
+                "label": "Budget 1024",
+                "description": "Verified thinking budget 1024.",
+                "default": false,
+                "thinkingBudget": 1024
+            },
+            {
+                "id": "BUDGET_8192",
+                "label": "Budget 8192",
+                "description": "Verified thinking budget 8192.",
+                "default": false,
+                "thinkingBudget": 8192
+            },
+            {
+                "id": "DYNAMIC",
+                "label": "Dynamic",
+                "description": "Use the model default dynamic thinking budget.",
+                "default": true,
+                "thinkingBudget": -1
+            }
+        ],
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher"
+        ],
+        "inputPrice200k": 0.4,
+        "inputPriceOver200k": 0.4,
+        "outputPrice200k": 2.4,
+        "outputPriceOver200k": 2.4,
+        "outputTextPrice200k": 2.4,
+        "outputImagePricePerImage": 0.134,
+        "outputImagePrice1K": 0.134,
+        "outputImagePrice2K": 0.134,
+        "outputImagePrice4K": 0.24,
+        "groundingPricePer1k": 14,
+        "contextWindow": 131072
+    },
+    "veo-2.0-generate-001": {
+        "id": "models/veo-2.0-generate-001",
+        "displayName": "Veo 2",
+        "description": "Vertex served Veo 2 model. Access to this model requires billing to be enabled on the associated Google Cloud Platform account. Please visit https://console.cloud.google.com/billing to enable it.",
+        "note": "Pricing is per second of generated video. Supports prompt enhancement and person generation controls.",
+        "tier": "video",
+        "status": "active",
+        "restrictions": [
+            "Video length limited to 5-8 seconds",
+            "Maximum 4 output videos per prompt",
+            "Output resolution limited to 720p",
+            "Audio generation not supported",
+            "Input image size limited to 20MB"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/veo"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:03:15.567Z",
+        "supportedGenerationMethods": [
+            "predictLongRunning"
+        ],
+        "modelKind": "video-generation",
+        "thinkingMode": "none",
+        "outputPricePerSecond": 0.35,
+        "contextWindow": 480
+    },
+    "veo-3.0-fast-generate-001": {
+        "id": "models/veo-3.0-fast-generate-001",
+        "displayName": "Veo 3 fast",
+        "description": "Veo 3 fast",
+        "note": "Pricing is $0.15 per second for video with audio (default) and $0.10 per second for video only.",
+        "tier": "video",
+        "status": "active",
+        "restrictions": [
+            "Video lengths: 4, 6, or 8 seconds",
+            "Maximum 2 output videos per prompt",
+            "Supported aspect ratios: 9:16, 16:9",
+            "Supported output resolutions: 720p, 1080p",
+            "Prompt language: English",
+            "Max input image size: 20 MB",
+            "Supported framerate: 24 FPS",
+            "Supported MIME type: video/mp4"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/veo"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:04:15.678Z",
+        "supportedGenerationMethods": [
+            "predictLongRunning"
+        ],
+        "modelKind": "video-generation",
+        "thinkingMode": "none",
+        "outputPricePerSecond": 0.15,
+        "contextWindow": 480
+    },
+    "veo-3.0-generate-001": {
+        "id": "models/veo-3.0-generate-001",
+        "displayName": "Veo 3",
+        "description": "Veo 3",
+        "note": "Pricing is per second of video. Image-to-video is in preview.",
+        "tier": "video",
+        "status": "active",
+        "restrictions": [
+            "Requires paid tier",
+            "Maximum video length: 8 seconds",
+            "Supported resolutions: 720p, 1080p"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:03:50.586Z",
+        "supportedGenerationMethods": [
+            "predictLongRunning"
+        ],
+        "modelKind": "video-generation",
+        "thinkingMode": "none",
+        "outputPricePerSecond": 0.4,
+        "contextWindow": 480
+    },
+    "veo-3.1-fast-generate-preview": {
+        "id": "models/veo-3.1-fast-generate-preview",
+        "displayName": "Veo 3.1 fast",
+        "description": "Veo 3.1 fast",
+        "note": "Pricing includes natively generated audio. Available on the paid tier of the Gemini API.",
+        "tier": "video",
+        "status": "active",
+        "restrictions": [
+            "Text input limit: 1,024 tokens",
+            "Video duration: 4, 6, or 8 seconds",
+            "Supported resolutions: 720p, 1080p, 4k",
+            "Supported aspect ratios: 16:9 (landscape), 9:16 (portrait)",
+            "Up to 3 reference images supported",
+            "Does not support referenceImages.style",
+            "Video extension limited to 720p"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/pricing",
+            "https://ai.google.dev/gemini-api/docs/models/veo"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:04:59.197Z",
+        "supportedGenerationMethods": [
+            "predictLongRunning"
+        ],
+        "modelKind": "video-generation",
+        "thinkingMode": "none",
+        "outputPricePerSecond": 0.15,
+        "contextWindow": 480
+    },
+    "veo-3.1-generate-preview": {
+        "id": "models/veo-3.1-generate-preview",
+        "displayName": "Veo 3.1",
+        "description": "Veo 3.1",
+        "note": "Pricing is $0.40/sec for 720p and 1080p, and $0.60/sec for 4k. Audio generation is included in the per-second rate. Users are only charged for successfully generated videos.",
+        "tier": "video",
+        "status": "active",
+        "restrictions": [
+            "English prompts only",
+            "Video lengths: 4, 6, or 8 seconds (reference image-to-video only supports 8 seconds)",
+            "Maximum 4 output videos per prompt",
+            "Image-to-video maximum input image size: 20 MB",
+            "Supported aspect ratios: 9:16, 16:9",
+            "Supported resolutions: 720p, 1080p, 4k",
+            "Video extension limited to 720p",
+            "Does not support referenceImages.style"
+        ],
+        "sourceUrls": [
+            "https://ai.google.dev/pricing",
+            "https://ai.google.dev/gemini-api/docs/veo"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "schemaVersion": 3,
+        "lastVerifiedAt": "2026-03-04T12:04:20.493Z",
+        "supportedGenerationMethods": [
+            "predictLongRunning"
+        ],
+        "modelKind": "video-generation",
+        "thinkingMode": "none",
+        "outputPricePerSecond": 0.4,
+        "contextWindow": 480
+    },
+    "gemini-3.1-flash-lite": {
+        "id": "models/gemini-3.1-flash-lite",
+        "displayName": "Gemini 3.1 Flash-Lite",
+        "description": "Released March 3, 2026. The most cost-efficient model in the 3.1 family, designed for high-volume, low-latency tasks like real-time translation and content moderation.",
+        "tier": "flash-lite",
+        "status": "active",
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "MINIMAL",
+            "LOW"
+        ],
+        "defaultThinkingPreset": "LOW",
+        "inputPrice200k": 0.25,
+        "outputPrice200k": 1.5,
+        "contextWindow": 1048576,
+        "allowedAgentIds": [
+            "coding",
+            "multipurpose",
+            "orchestrator",
+            "researcher",
+            "browser"
+        ],
+        "schemaVersion": 3,
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z"
+    },
+    "gemini-3-deep-think": {
+        "id": "models/gemini-3-deep-think",
+        "displayName": "Gemini 3 Deep Think",
+        "description": "Specialized reasoning model for scientific research, engineering, and autonomous planning. Uses extensive internal \"thought\" tokens before responding.",
+        "tier": "pro",
+        "status": "active",
+        "modelKind": "chat",
+        "thinkingMode": "level",
+        "supportedThinkingLevels": [
+            "HIGH"
+        ],
+        "defaultThinkingPreset": "HIGH",
+        "inputPrice200k": 2,
+        "outputPrice200k": 12,
+        "contextWindow": 1048576,
+        "allowedAgentIds": [
+            "coding",
+            "researcher"
+        ],
+        "schemaVersion": 3,
+        "sourceUrls": [
+            "https://ai.google.dev/gemini-api/docs/models",
+            "https://ai.google.dev/pricing"
+        ],
+        "pricingVerified": true,
+        "thinkingVerified": true,
+        "lifecycleVerified": true,
+        "lastVerifiedAt": "2026-03-04T16:01:20.110Z"
+    }
+}

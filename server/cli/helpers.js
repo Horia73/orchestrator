@@ -64,6 +64,7 @@ export function ensureDataDirectories() {
         path.join(DATA_ROOT_DIR, 'secrets'),
         path.join(DATA_ROOT_DIR, 'skills'),
         path.join(DATA_ROOT_DIR, 'cron'),
+        path.join(DATA_ROOT_DIR, 'runtime'),
     ];
 
     for (const dir of dirs) {

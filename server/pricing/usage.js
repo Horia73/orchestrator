@@ -1,65 +1,7 @@
-import fs from 'node:fs';
-import { MODELS_CONFIG_PATH } from '../core/dataPaths.js';
+import { readModelCatalog } from '../services/modelCatalog.js';
 
 const TOKEN_MILLION = 1_000_000;
 const CONTEXT_WINDOW_THRESHOLD = 200_000;
-
-const DEFAULT_MODEL_PRICING = {
-    'gemini-3.1-pro-preview': {
-        inputPrice200k: 2.00,
-        inputPriceOver200k: 4.00,
-        outputPrice200k: 8.00,
-        outputPriceOver200k: 24.00,
-    },
-    'gemini-3-pro-preview': {
-        inputPrice200k: 2.00,
-        inputPriceOver200k: 4.00,
-        outputPrice200k: 8.00,
-        outputPriceOver200k: 24.00,
-    },
-    'gemini-3-flash-preview': {
-        inputPrice200k: 0.15,
-        outputPrice200k: 0.60,
-    },
-    'gemini-3.1-flash-image-preview': {
-        inputPrice200k: 0.30,
-        outputTextPrice200k: 1.50,
-        outputImagePrice200k: 60.00,
-    },
-    'gemini-3-pro-image-preview': {
-        inputPrice200k: 0.30,
-        outputTextPrice200k: 12.00,
-        outputImagePrice200k: 120.00,
-    },
-    'gemini-2.5-flash-image': {
-        inputPrice200k: 0.30,
-        outputTextPrice200k: 2.50,
-        outputImagePricePerImage: 0.039,
-        defaultImageTokensPerOutput: 1290,
-    },
-    'gemini-2.5-pro': {
-        inputPrice200k: 1.25,
-        inputPriceOver200k: 2.50,
-        outputPrice200k: 10.00,
-        outputPriceOver200k: 15.00,
-    },
-    'gemini-2.5-flash': {
-        inputPrice200k: 0.30,
-        outputPrice200k: 2.50,
-    },
-    'gemini-2.5-flash-lite': {
-        inputPrice200k: 0.10,
-        outputPrice200k: 0.40,
-    },
-    'gemini-2.0-flash': {
-        inputPrice200k: 0.10,
-        outputPrice200k: 0.40,
-    },
-    'gemini-2.0-flash-lite': {
-        inputPrice200k: 0.075,
-        outputPrice200k: 0.30,
-    },
-};
 
 function toFiniteNumber(value) {
     const parsed = Number(value);
@@ -130,32 +72,16 @@ function normalizePricingEntry(rawEntry = {}) {
 }
 
 export function getModelPricing() {
-    const pricing = Object.fromEntries(
-        Object.entries(DEFAULT_MODEL_PRICING).map(([modelId, entry]) => [
-            normalizeModelId(modelId),
-            { ...entry },
-        ]),
-    );
+    const catalog = readModelCatalog();
+    const pricing = {};
 
-    try {
-        if (fs.existsSync(MODELS_CONFIG_PATH)) {
-            const extra = JSON.parse(fs.readFileSync(MODELS_CONFIG_PATH, 'utf8'));
-            if (extra && typeof extra === 'object') {
-                for (const [rawKey, rawEntry] of Object.entries(extra)) {
-                    const modelId = normalizeModelId(rawEntry?.id ?? rawKey);
-                    if (!modelId || modelId === 'unknown-model') {
-                        continue;
-                    }
-
-                    pricing[modelId] = {
-                        ...(pricing[modelId] ?? {}),
-                        ...normalizePricingEntry(rawEntry),
-                    };
-                }
-            }
+    for (const [modelId, rawEntry] of Object.entries(catalog)) {
+        const normalizedId = normalizeModelId(rawEntry?.id ?? modelId);
+        if (!normalizedId || normalizedId === 'unknown-model') {
+            continue;
         }
-    } catch {
-        // ignore
+
+        pricing[normalizedId] = normalizePricingEntry(rawEntry);
     }
 
     return pricing;

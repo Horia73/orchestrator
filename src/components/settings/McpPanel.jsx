@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
-import { fetchMcpServers, saveMcpServers } from '../../api/settingsApi.js';
+import { fetchMcpServerTools, fetchMcpServers, saveMcpServers } from '../../api/settingsApi.js';
 
 function createDraftId() {
     if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -160,22 +160,40 @@ function getTransportLabel(transport) {
     return 'stdio';
 }
 
+function hasServerIssues(server) {
+    return (Array.isArray(server.validationErrors) && server.validationErrors.length > 0) || Boolean(server.lastError);
+}
+
+function isDraftServer(serverId) {
+    return String(serverId ?? '').startsWith('draft-');
+}
+
 export function McpPanel() {
     const [servers, setServers] = useState([]);
+    const [editingServerId, setEditingServerId] = useState('');
     const [loading, setLoading] = useState(true);
+    const [loadingToolsServerId, setLoadingToolsServerId] = useState('');
     const [saving, setSaving] = useState(false);
     const [dirty, setDirty] = useState(false);
     const [error, setError] = useState('');
-    const [notice, setNotice] = useState('');
 
-    const loadServers = useCallback(async () => {
+    const loadServers = useCallback(async ({ nextEditingServerId = null } = {}) => {
         setLoading(true);
         setError('');
 
         try {
-            const nextServers = await fetchMcpServers({ includeTools: true });
-            setServers(nextServers.map(toEditableServer));
+            const nextServers = await fetchMcpServers({ includeTools: false });
+            const editableServers = nextServers.map(toEditableServer);
+
+            setServers(editableServers);
             setDirty(false);
+            setEditingServerId((currentEditingServerId) => {
+                const preferredServerId = nextEditingServerId === null ? currentEditingServerId : nextEditingServerId;
+                if (preferredServerId && editableServers.some((server) => server.id === preferredServerId)) {
+                    return preferredServerId;
+                }
+                return '';
+            });
         } catch (nextError) {
             setError(nextError.message);
         } finally {
@@ -187,6 +205,78 @@ export function McpPanel() {
         loadServers().catch(() => undefined);
     }, [loadServers]);
 
+    const editingServer = servers.find((server) => server.id === editingServerId) ?? null;
+    const isLoadingEditedServerTools = Boolean(editingServer && loadingToolsServerId === editingServer.id);
+    const isCreatingServer = Boolean(editingServer && isDraftServer(editingServer.id));
+
+    useEffect(() => {
+        if (!editingServerId || loading || saving || dirty) {
+            return undefined;
+        }
+
+        const server = servers.find((candidate) => candidate.id === editingServerId);
+        if (!server) {
+            return undefined;
+        }
+
+        const canLoadTools = !isDraftServer(server.id)
+            && server.enabled
+            && server.validationErrors.length === 0
+            && server.connectionStatus === 'idle'
+            && server.tools.length === 0
+            && loadingToolsServerId !== server.id;
+
+        if (!canLoadTools) {
+            return undefined;
+        }
+
+        let cancelled = false;
+        setLoadingToolsServerId(server.id);
+
+        fetchMcpServerTools(server.id)
+            .then((serverSnapshot) => {
+                if (cancelled || !serverSnapshot) {
+                    return;
+                }
+
+                setServers((currentServers) => currentServers.map((currentServer) => {
+                    if (currentServer.id !== server.id) {
+                        return currentServer;
+                    }
+
+                    return toEditableServer(serverSnapshot);
+                }));
+            })
+            .catch((nextError) => {
+                if (cancelled) {
+                    return;
+                }
+
+                setServers((currentServers) => currentServers.map((currentServer) => {
+                    if (currentServer.id !== server.id) {
+                        return currentServer;
+                    }
+
+                    return toEditableServer({
+                        ...currentServer,
+                        connectionStatus: 'error',
+                        lastError: nextError.message,
+                        tools: [],
+                        toolCount: 0,
+                    });
+                }));
+            })
+            .finally(() => {
+                if (!cancelled) {
+                    setLoadingToolsServerId('');
+                }
+            });
+
+        return () => {
+            cancelled = true;
+        };
+    }, [dirty, editingServerId, loading, loadingToolsServerId, saving, servers]);
+
     const updateServer = useCallback((serverId, updater) => {
         setServers((currentServers) => currentServers.map((server) => {
             if (server.id !== serverId) {
@@ -197,53 +287,59 @@ export function McpPanel() {
             return toEditableServer(nextServer);
         }));
         setDirty(true);
-        setNotice('');
+        setError('');
     }, []);
 
     const handleAddServer = useCallback(() => {
-        setServers((currentServers) => [...currentServers, createEmptyServer()]);
+        const nextServer = createEmptyServer();
+        setServers((currentServers) => [...currentServers, nextServer]);
+        setEditingServerId(nextServer.id);
         setDirty(true);
-        setNotice('');
+        setError('');
+    }, []);
+
+    const handleEditServer = useCallback((serverId) => {
+        setEditingServerId(serverId);
+        setError('');
     }, []);
 
     const handleRemoveServer = useCallback((serverId) => {
         setServers((currentServers) => currentServers.filter((server) => server.id !== serverId));
+        setEditingServerId((currentEditingServerId) => (currentEditingServerId === serverId ? '' : currentEditingServerId));
         setDirty(true);
-        setNotice('');
+        setError('');
     }, []);
 
     const handleSave = useCallback(async () => {
         setSaving(true);
         setError('');
-        setNotice('');
 
         try {
             await saveMcpServers(servers.map(serializeServer));
-            const refreshedServers = await fetchMcpServers({ includeTools: true });
-            setServers(refreshedServers.map(toEditableServer));
-            setDirty(false);
-            setNotice('MCP settings saved.');
+            await loadServers({ nextEditingServerId: editingServerId });
         } catch (nextError) {
             setError(nextError.message);
         } finally {
             setSaving(false);
         }
-    }, [servers]);
+    }, [editingServerId, loadServers, servers]);
 
-    const enabledServers = servers.filter((server) => server.enabled);
-    const connectedServers = servers.filter((server) => String(server.connectionStatus ?? '').trim().toLowerCase() === 'connected');
-    const problematicServers = servers.filter((server) => (
-        String(server.connectionStatus ?? '').trim().toLowerCase() === 'error'
-        || Array.isArray(server.validationErrors) && server.validationErrors.length > 0
-    ));
-    const totalTools = servers.reduce((sum, server) => sum + (Number(server.toolCount) || 0), 0);
+    const handleCancelEdit = useCallback(() => {
+        if (editingServer && isDraftServer(editingServer.id)) {
+            setServers((currentServers) => currentServers.filter((server) => server.id !== editingServer.id));
+            setEditingServerId('');
+            setDirty(false);
+            setError('');
+            return;
+        }
 
-    const overviewStats = [
-        { label: 'Configured', value: String(servers.length).padStart(2, '0') },
-        { label: 'Enabled', value: String(enabledServers.length).padStart(2, '0') },
-        { label: 'Live tools', value: String(totalTools).padStart(2, '0') },
-        { label: 'Needs attention', value: String(problematicServers.length).padStart(2, '0') },
-    ];
+        if (dirty) {
+            loadServers({ nextEditingServerId: '' }).catch(() => undefined);
+            return;
+        }
+
+        setEditingServerId('');
+    }, [dirty, editingServer, loadServers]);
 
     if (loading) {
         return (
@@ -259,71 +355,70 @@ export function McpPanel() {
             <div className="mcp-panel-header">
                 <div className="mcp-panel-intro">
                     <h2 className="mcp-panel-title">Model Context Protocol</h2>
-                    <p className="mcp-panel-copy">
-                        Add stdio or remote MCP servers. Tools are surfaced directly in chat and auto-namespaced with a stable prefix.
-                    </p>
-                    <div className="mcp-panel-note">
-                        {connectedServers.length > 0
-                            ? `${connectedServers.length} server${connectedServers.length === 1 ? '' : 's'} connected right now.`
-                            : 'No live MCP connections yet.'}
-                    </div>
+                    <p className="mcp-panel-copy">Configure MCP servers.</p>
                 </div>
                 <div className="mcp-panel-actions">
-                    <button className="mcp-secondary-btn" type="button" onClick={() => loadServers().catch(() => undefined)}>
+                    <button
+                        className="mcp-secondary-btn"
+                        type="button"
+                        onClick={() => loadServers().catch(() => undefined)}
+                        disabled={saving}
+                    >
                         Refresh
                     </button>
-                    <button className="mcp-secondary-btn" type="button" onClick={handleAddServer}>
-                        Add server
-                    </button>
-                    <button
-                        className="mcp-primary-btn"
-                        type="button"
-                        onClick={() => handleSave().catch(() => undefined)}
-                        disabled={saving || !dirty}
-                    >
-                        {saving ? 'Saving...' : 'Save changes'}
-                    </button>
                 </div>
-            </div>
-
-            <div className="mcp-overview-grid">
-                {overviewStats.map((item) => (
-                    <div className="mcp-overview-card" key={item.label}>
-                        <span>{item.label}</span>
-                        <strong>{item.value}</strong>
-                    </div>
-                ))}
             </div>
 
             {error && <div className="mcp-banner mcp-banner-error">{error}</div>}
-            {!error && notice && <div className="mcp-banner mcp-banner-success">{notice}</div>}
 
             {servers.length === 0 ? (
-                <div className="settings-placeholder">
-                    <h2>No MCP servers configured</h2>
-                    <p>Add a server to expose external MCP tools inside the app.</p>
+                <div className="mcp-empty-state">
+                    <div className="mcp-empty-state-card">
+                        <span className="mcp-empty-eyebrow">Model Context Protocol</span>
+                        <h3>No MCP servers yet</h3>
+                        <p>Add the first server and then edit only what matters.</p>
+                        <button className="mcp-primary-btn" type="button" onClick={handleAddServer}>
+                            Add first server
+                        </button>
+                    </div>
                 </div>
             ) : (
-                <div className="mcp-server-list">
-                    {servers.map((server) => (
-                        <section className="mcp-server-card" key={server.id}>
-                            <div className="mcp-server-shell">
-                                <div className="mcp-server-main">
-                                    <div className="mcp-server-header">
-                                        <div className="mcp-server-heading">
-                                            <span className="mcp-server-kicker">MCP server</span>
-                                            <h3>{server.name || 'New MCP server'}</h3>
-                                            <p className="mcp-server-caption">
-                                                {server.transport === 'stdio'
-                                                    ? 'Local process transport for workspace-native tools.'
-                                                    : 'Remote transport for hosted MCP endpoints.'}
-                                            </p>
+                <div className="mcp-workbench">
+                    {!isCreatingServer && (
+                        <section className="mcp-list-section">
+                            <div className="mcp-list-header">
+                                <h3>Servers</h3>
+                            </div>
+
+                            <div className="mcp-server-grid">
+                                {servers.map((server) => (
+                                    <section className={`mcp-server-card${editingServerId === server.id ? ' is-editing' : ''}`} key={server.id}>
+                                        <div className="mcp-card-header">
+                                            <div className="mcp-card-name">
+                                                <strong>{server.name || 'New MCP server'}</strong>
+                                                <span>{getStatusLabel(server)}</span>
+                                            </div>
+                                            <span className={`mcp-status-dot status-${server.connectionStatus}`} aria-hidden="true" />
                                         </div>
 
-                                        <div className="mcp-server-actions">
-                                            <span className={`mcp-status-badge status-${server.connectionStatus}`}>
-                                                {getStatusLabel(server)}
-                                            </span>
+                                        <div className="mcp-card-tags">
+                                            <span>{getTransportLabel(server.transport)}</span>
+                                            {!server.enabled && <span>Disabled</span>}
+                                            {server.tools.length > 0 && <span>{server.tools.length} tools</span>}
+                                        </div>
+
+                                        {hasServerIssues(server) && (
+                                            <div className="mcp-server-item-alert">Check config</div>
+                                        )}
+
+                                        <div className="mcp-card-actions">
+                                            <button
+                                                className="mcp-secondary-btn"
+                                                type="button"
+                                                onClick={() => handleEditServer(server.id)}
+                                            >
+                                                Edit
+                                            </button>
                                             <button
                                                 className="mcp-danger-btn"
                                                 type="button"
@@ -332,223 +427,214 @@ export function McpPanel() {
                                                 Remove
                                             </button>
                                         </div>
-                                    </div>
+                                    </section>
+                                ))}
+                            </div>
 
-                                    <div className="mcp-summary-strip">
-                                        <div className="mcp-summary-pill">
-                                            <span>Transport</span>
-                                            <strong>{getTransportLabel(server.transport)}</strong>
-                                        </div>
-                                        <div className="mcp-summary-pill">
-                                            <span>Effective prefix</span>
-                                            <strong>{server.effectiveToolPrefix || 'mcp'}</strong>
-                                        </div>
-                                        <div className="mcp-summary-pill">
-                                            <span>Visible tools</span>
-                                            <strong>{server.toolCount || 0}</strong>
-                                        </div>
-                                        <div className="mcp-summary-pill">
-                                            <span>Timeout</span>
-                                            <strong>{server.timeoutMs} ms</strong>
-                                        </div>
-                                    </div>
+                            <div className="mcp-list-footer">
+                                <button className="mcp-secondary-btn" type="button" onClick={handleAddServer} disabled={saving}>
+                                    Add server
+                                </button>
+                            </div>
+                        </section>
+                    )}
 
-                                    <div className="mcp-section-card">
-                                        <div className="mcp-section-header">
-                                            <div>
-                                                <h4>Identity</h4>
-                                                <p>Controls naming, exposure, and invocation style inside the app.</p>
-                                            </div>
-                                        </div>
-
-                                        <div className="mcp-grid">
-                                            <label className="mcp-field">
-                                                <span>Name</span>
-                                                <input
-                                                    type="text"
-                                                    value={server.name}
-                                                    onChange={(event) => updateServer(server.id, { name: event.target.value })}
-                                                    placeholder="github"
-                                                />
-                                            </label>
-
-                                            <label className="mcp-field">
-                                                <span>Tool prefix</span>
-                                                <input
-                                                    type="text"
-                                                    value={server.toolPrefix}
-                                                    onChange={(event) => updateServer(server.id, { toolPrefix: event.target.value })}
-                                                    placeholder="github"
-                                                />
-                                            </label>
-
-                                            <label className="mcp-field">
-                                                <span>Transport</span>
-                                                <select
-                                                    value={server.transport}
-                                                    onChange={(event) => updateServer(server.id, (currentServer) => ({
-                                                        ...currentServer,
-                                                        transport: event.target.value,
-                                                    }))}
-                                                >
-                                                    <option value="stdio">stdio</option>
-                                                    <option value="streamable-http">streamable-http</option>
-                                                    <option value="sse">sse</option>
-                                                </select>
-                                            </label>
-
-                                            <label className="mcp-field">
-                                                <span>Timeout (ms)</span>
-                                                <input
-                                                    type="number"
-                                                    min="1000"
-                                                    step="1000"
-                                                    value={server.timeoutMs}
-                                                    onChange={(event) => updateServer(server.id, {
-                                                        timeoutMs: Number(event.target.value) || 20000,
-                                                    })}
-                                                />
-                                            </label>
-                                        </div>
-                                    </div>
-
-                                    <div className="mcp-section-card">
-                                        <div className="mcp-section-header">
-                                            <div>
-                                                <h4>Connection</h4>
-                                                <p>
-                                                    {server.transport === 'stdio'
-                                                        ? 'Launch a local process and speak MCP over stdin/stdout.'
-                                                        : 'Connect to an externally hosted MCP server with optional headers.'}
-                                                </p>
-                                            </div>
-                                        </div>
-
-                                        {server.transport === 'stdio' ? (
-                                            <div className="mcp-grid">
-                                                <label className="mcp-field mcp-field-wide">
-                                                    <span>Command</span>
-                                                    <input
-                                                        type="text"
-                                                        value={server.command}
-                                                        onChange={(event) => updateServer(server.id, { command: event.target.value })}
-                                                        placeholder="npx"
-                                                    />
-                                                </label>
-
-                                                <label className="mcp-field">
-                                                    <span>Working directory</span>
-                                                    <input
-                                                        type="text"
-                                                        value={server.cwd}
-                                                        onChange={(event) => updateServer(server.id, { cwd: event.target.value })}
-                                                        placeholder="/absolute/path"
-                                                    />
-                                                </label>
-
-                                                <label className="mcp-field mcp-field-wide">
-                                                    <span>Args (one per line)</span>
-                                                    <textarea
-                                                        value={formatListInput(server.args)}
-                                                        onChange={(event) => updateServer(server.id, {
-                                                            args: parseListInput(event.target.value),
-                                                        })}
-                                                        placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/Users/horia/orchestrator'}
-                                                    />
-                                                </label>
-
-                                                <label className="mcp-field mcp-field-wide">
-                                                    <span>Environment (KEY=VALUE)</span>
-                                                    <textarea
-                                                        value={formatKeyValueLines(server.env)}
-                                                        onChange={(event) => updateServer(server.id, {
-                                                            env: parseKeyValueLines(event.target.value),
-                                                        })}
-                                                        placeholder={'GITHUB_TOKEN=...\nAPI_KEY=...'}
-                                                    />
-                                                </label>
-                                            </div>
-                                        ) : (
-                                            <div className="mcp-grid">
-                                                <label className="mcp-field mcp-field-wide">
-                                                    <span>URL</span>
-                                                    <input
-                                                        type="text"
-                                                        value={server.url}
-                                                        onChange={(event) => updateServer(server.id, { url: event.target.value })}
-                                                        placeholder="https://example.com/mcp"
-                                                    />
-                                                </label>
-
-                                                <label className="mcp-field mcp-field-wide">
-                                                    <span>Headers (KEY=VALUE)</span>
-                                                    <textarea
-                                                        value={formatKeyValueLines(server.headers)}
-                                                        onChange={(event) => updateServer(server.id, {
-                                                            headers: parseKeyValueLines(event.target.value),
-                                                        })}
-                                                        placeholder={'Authorization=Bearer ...\nX-API-Key=...'}
-                                                    />
-                                                </label>
-                                            </div>
-                                        )}
-                                    </div>
+                    {editingServer ? (
+                        <section className="mcp-editor-shell">
+                            <div className="mcp-editor-header">
+                                <div className="mcp-editor-heading">
+                                    <h3>{editingServer.name || 'New MCP server'}</h3>
+                                    <p>{getTransportLabel(editingServer.transport)}</p>
                                 </div>
+                                <span className={`mcp-status-badge status-${editingServer.connectionStatus}`}>
+                                    {getStatusLabel(editingServer)}
+                                </span>
+                            </div>
 
-                                <aside className="mcp-server-side">
-                                    <div className="mcp-side-card">
-                                        <div className="mcp-side-card-header">
-                                            <div>
-                                                <h4>Runtime</h4>
-                                                <p>Toggle exposure without deleting the configuration.</p>
-                                            </div>
-                                        </div>
+                            <div className="mcp-editor-main">
+                                <div className="mcp-section-card">
+                                    <div className="mcp-section-header">
+                                        <h4>General</h4>
+                                    </div>
+
+                                    <div className="mcp-section-row">
                                         <label className="mcp-toggle">
                                             <input
                                                 type="checkbox"
-                                                checked={server.enabled}
-                                                onChange={(event) => updateServer(server.id, { enabled: event.target.checked })}
+                                                checked={editingServer.enabled}
+                                                onChange={(event) => updateServer(editingServer.id, { enabled: event.target.checked })}
                                             />
-                                            <span>{server.enabled ? 'Server enabled' : 'Server disabled'}</span>
+                                            <span>{editingServer.enabled ? 'Enabled' : 'Disabled'}</span>
                                         </label>
                                     </div>
 
-                                    {(server.validationErrors.length > 0 || server.lastError) && (
-                                        <div className="mcp-errors">
-                                            {server.validationErrors.map((message, index) => (
-                                                <p key={`${server.id}-validation-${index}`}>{message}</p>
-                                            ))}
-                                            {server.lastError && <p>{server.lastError}</p>}
+                                    <div className="mcp-grid">
+                                        <label className="mcp-field">
+                                            <span>Name</span>
+                                            <input
+                                                type="text"
+                                                value={editingServer.name}
+                                                onChange={(event) => updateServer(editingServer.id, { name: event.target.value })}
+                                                placeholder="github"
+                                            />
+                                        </label>
+
+                                        <label className="mcp-field">
+                                            <span>Tool prefix</span>
+                                            <input
+                                                type="text"
+                                                value={editingServer.toolPrefix}
+                                                onChange={(event) => updateServer(editingServer.id, { toolPrefix: event.target.value })}
+                                                placeholder="github"
+                                            />
+                                        </label>
+
+                                        <label className="mcp-field">
+                                            <span>Transport</span>
+                                            <select
+                                                value={editingServer.transport}
+                                                onChange={(event) => updateServer(editingServer.id, (currentServer) => ({
+                                                    ...currentServer,
+                                                    transport: event.target.value,
+                                                }))}
+                                            >
+                                                <option value="stdio">stdio</option>
+                                                <option value="streamable-http">streamable-http</option>
+                                                <option value="sse">sse</option>
+                                            </select>
+                                        </label>
+
+                                        <label className="mcp-field">
+                                            <span>Timeout (ms)</span>
+                                            <input
+                                                type="number"
+                                                min="1000"
+                                                step="1000"
+                                                value={editingServer.timeoutMs}
+                                                onChange={(event) => updateServer(editingServer.id, {
+                                                    timeoutMs: Number(event.target.value) || 20000,
+                                                })}
+                                            />
+                                        </label>
+                                    </div>
+                                </div>
+
+                                <div className="mcp-section-card">
+                                    <div className="mcp-section-header">
+                                        <h4>Connection</h4>
+                                    </div>
+
+                                    {editingServer.transport === 'stdio' ? (
+                                        <div className="mcp-grid">
+                                            <label className="mcp-field mcp-field-wide">
+                                                <span>Command</span>
+                                                <input
+                                                    type="text"
+                                                    value={editingServer.command}
+                                                    onChange={(event) => updateServer(editingServer.id, { command: event.target.value })}
+                                                    placeholder="npx"
+                                                />
+                                            </label>
+
+                                            <label className="mcp-field">
+                                                <span>Working directory</span>
+                                                <input
+                                                    type="text"
+                                                    value={editingServer.cwd}
+                                                    onChange={(event) => updateServer(editingServer.id, { cwd: event.target.value })}
+                                                    placeholder="/absolute/path"
+                                                />
+                                            </label>
+
+                                            <label className="mcp-field mcp-field-wide">
+                                                <span>Args (one per line)</span>
+                                                <textarea
+                                                    value={formatListInput(editingServer.args)}
+                                                    onChange={(event) => updateServer(editingServer.id, {
+                                                        args: parseListInput(event.target.value),
+                                                    })}
+                                                    placeholder={'-y\n@modelcontextprotocol/server-filesystem\n/absolute/path/to/workspace'}
+                                                />
+                                            </label>
+
+                                            <label className="mcp-field mcp-field-wide">
+                                                <span>Environment (KEY=VALUE)</span>
+                                                <textarea
+                                                    value={formatKeyValueLines(editingServer.env)}
+                                                    onChange={(event) => updateServer(editingServer.id, {
+                                                        env: parseKeyValueLines(event.target.value),
+                                                    })}
+                                                    placeholder={'GITHUB_TOKEN=...\nAPI_KEY=...'}
+                                                />
+                                            </label>
+                                        </div>
+                                    ) : (
+                                        <div className="mcp-grid">
+                                            <label className="mcp-field mcp-field-wide">
+                                                <span>URL</span>
+                                                <input
+                                                    type="text"
+                                                    value={editingServer.url}
+                                                    onChange={(event) => updateServer(editingServer.id, { url: event.target.value })}
+                                                    placeholder="https://example.com/mcp"
+                                                />
+                                            </label>
+
+                                            <label className="mcp-field mcp-field-wide">
+                                                <span>Headers (KEY=VALUE)</span>
+                                                <textarea
+                                                    value={formatKeyValueLines(editingServer.headers)}
+                                                    onChange={(event) => updateServer(editingServer.id, {
+                                                        headers: parseKeyValueLines(event.target.value),
+                                                    })}
+                                                    placeholder={'Authorization=Bearer ...\nX-API-Key=...'}
+                                                />
+                                            </label>
                                         </div>
                                     )}
+                                </div>
 
-                                    <div className="mcp-side-card">
-                                        <div className="mcp-side-card-header">
-                                            <div>
-                                                <h4>Exposed tools</h4>
-                                                <p>These names are what the runtime can call from chat.</p>
-                                            </div>
+                                {hasServerIssues(editingServer) && (
+                                    <div className="mcp-errors">
+                                        {editingServer.validationErrors.map((message, index) => (
+                                            <p key={`${editingServer.id}-validation-${index}`}>{message}</p>
+                                        ))}
+                                        {editingServer.lastError && <p>{editingServer.lastError}</p>}
+                                    </div>
+                                )}
+
+                                {(isLoadingEditedServerTools || editingServer.tools.length > 0) && (
+                                    <div className="mcp-section-card">
+                                        <div className="mcp-section-header">
+                                            <h4>Tools</h4>
                                         </div>
 
-                                        {server.tools.length > 0 ? (
+                                        {isLoadingEditedServerTools ? (
+                                            <div className="mcp-side-empty">Loading tools...</div>
+                                        ) : (
                                             <div className="mcp-tools">
-                                                {server.tools.map((tool) => (
-                                                    <div className="mcp-tool-pill" key={`${server.id}-${tool.alias}`}>
+                                                {editingServer.tools.map((tool) => (
+                                                    <div className="mcp-tool-pill" key={`${editingServer.id}-${tool.alias}`}>
                                                         <code>{tool.alias}</code>
                                                         {tool.description && <span>{tool.description}</span>}
                                                     </div>
                                                 ))}
                                             </div>
-                                        ) : (
-                                            <div className="mcp-side-empty">
-                                                Save and refresh to inspect the resolved tool catalog.
-                                            </div>
                                         )}
                                     </div>
-                                </aside>
+                                )}
+                            </div>
+
+                            <div className="mcp-editor-footer">
+                                <button className="mcp-secondary-btn" type="button" onClick={handleCancelEdit} disabled={saving}>
+                                    Cancel
+                                </button>
+                                <button className="mcp-primary-btn" type="button" onClick={() => handleSave().catch(() => undefined)} disabled={saving || !dirty}>
+                                    {saving ? 'Saving...' : 'Save changes'}
+                                </button>
                             </div>
                         </section>
-                    ))}
+                    ) : null}
                 </div>
             )}
         </div>

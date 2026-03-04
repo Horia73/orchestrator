@@ -58,6 +58,13 @@ export async function saveMcpServers(servers) {
     return Array.isArray(data.servers) ? data.servers : [];
 }
 
+export async function fetchMcpServerTools(serverId) {
+    const normalizedServerId = String(serverId ?? '').trim();
+    const response = await fetch(`/api/mcp/servers/${encodeURIComponent(normalizedServerId)}/tools`);
+    const data = await parseApiResponse(response);
+    return data.server;
+}
+
 export async function fetchEditableFileSections() {
     const response = await fetch('/api/settings/editor/files');
     const data = await parseApiResponse(response);

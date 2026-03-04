@@ -59,6 +59,43 @@ export function Sidebar({
 
         return recentChats.filter((chat) => chat.label.toLowerCase().includes(normalizedQuery));
     }, [query, recentChats]);
+    const inboxChats = useMemo(
+        () => filteredChats.filter((chat) => chat.kind === 'inbox'),
+        [filteredChats],
+    );
+    const regularChats = useMemo(
+        () => filteredChats.filter((chat) => chat.kind !== 'inbox'),
+        [filteredChats],
+    );
+
+    const renderChatRow = (item) => (
+        <div
+            key={item.id}
+            className={`recent-row${item.active ? ' active' : ''}`}
+        >
+            <button
+                className="recent-item"
+                onClick={() => onSelectChat(item.id)}
+                title={item.label}
+            >
+                {item.label}
+            </button>
+
+            {item.deletable !== false && (
+                <button
+                    className="recent-delete-btn"
+                    title="Delete chat"
+                    aria-label={`Delete ${item.label}`}
+                    onClick={(event) => {
+                        event.stopPropagation();
+                        onDeleteChat(item.id);
+                    }}
+                >
+                    <IconTrash />
+                </button>
+            )}
+        </div>
+    );
 
     return (
         <aside className={`sidebar${collapsed ? ' collapsed' : ''}`} id="sidebar">
@@ -147,6 +184,13 @@ export function Sidebar({
 
                 {/* Recents */}
                 <div className="sidebar-recents">
+                    {inboxChats.length > 0 && (
+                        <>
+                            <div className="recents-label">Inbox</div>
+                            {inboxChats.map(renderChatRow)}
+                        </>
+                    )}
+
                     <div className="recents-label">Recents</div>
 
                     {filteredChats.length === 0 && (
@@ -155,32 +199,7 @@ export function Sidebar({
                         </div>
                     )}
 
-                    {filteredChats.map((item) => (
-                        <div
-                            key={item.id}
-                            className={`recent-row${item.active ? ' active' : ''}`}
-                        >
-                            <button
-                                className="recent-item"
-                                onClick={() => onSelectChat(item.id)}
-                                title={item.label}
-                            >
-                                {item.label}
-                            </button>
-
-                            <button
-                                className="recent-delete-btn"
-                                title="Delete chat"
-                                aria-label={`Delete ${item.label}`}
-                                onClick={(event) => {
-                                    event.stopPropagation();
-                                    onDeleteChat(item.id);
-                                }}
-                            >
-                                <IconTrash />
-                            </button>
-                        </div>
-                    ))}
+                    {regularChats.map(renderChatRow)}
                 </div>
 
                 {/* Footer */}

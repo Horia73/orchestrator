@@ -2,14 +2,43 @@ import { forwardRef, useRef, useState, useEffect, useCallback, useMemo } from 'r
 import { createPortal } from 'react-dom';
 import { MarkdownContent } from './MarkdownContent.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
-import { ToolBlock } from './ToolBlock.jsx';
 import { ToolCallsGroup } from './ToolCallsGroup.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
-import { IconPlay, IconPause, IconCopy, IconCheck, IconDownload, IconFile, IconFileText } from '../shared/icons.jsx';
+import { getAgentToolMetadata } from './agentCallUtils.js';
+import { BrowserActivityLog } from '../shared/BrowserActivityLog.jsx';
+import { IconPlay, IconPause, IconCopy, IconCheck, IconDownload, IconFile, IconFileText, IconArrowLeft } from '../shared/icons.jsx';
 
 const EDIT_TOOLS = new Set(['write_to_file', 'replace_file_content', 'multi_replace_file_content']);
 const INLINE_IMAGE_MARKDOWN_REGEX = /!\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const INLINE_IMAGE_MARKDOWN_TEST_REGEX = /!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
+const LIVE_AGENT_STATUSES = new Set(['thinking', 'running', 'working', 'spawned', 'queued', 'awaiting_user', 'awaiting-user', 'question']);
+
+function isToolPartStillRunning(toolPart) {
+    if (!toolPart || typeof toolPart !== 'object') {
+        return false;
+    }
+
+    if (toolPart.isExecuting === true && !toolPart.functionResponse) {
+        return true;
+    }
+
+    const toolName = String(toolPart?.functionCall?.name ?? '').trim();
+    const response = toolPart?.functionResponse?.response;
+    if (!response || typeof response !== 'object') {
+        return false;
+    }
+
+    const status = String(response.status ?? '').trim().toLowerCase();
+    if (toolName === 'run_command') {
+        return response.running === true || status === 'running';
+    }
+
+    if (getAgentToolMetadata(toolName)) {
+        return response.isThinking === true || LIVE_AGENT_STATUSES.has(status);
+    }
+
+    return false;
+}
 
 function normalizeMimeType(value) {
     const normalized = String(value ?? '').trim().toLowerCase();
@@ -860,6 +889,34 @@ function unwrapStructuredText(text) {
     return text;
 }
 
+function getReplyReferenceLabel(replyTo) {
+    const chatTitle = String(replyTo?.chatTitle ?? '').trim();
+    if (chatTitle) {
+        return chatTitle;
+    }
+
+    return String(replyTo?.role ?? '').trim().toLowerCase() === 'user' ? 'Message' : 'Assistant';
+}
+
+function ReplyReference({ replyTo, compact = false }) {
+    if (!replyTo || typeof replyTo !== 'object') {
+        return null;
+    }
+
+    const previewText = String(replyTo.previewText ?? '').trim() || 'Message';
+    const label = getReplyReferenceLabel(replyTo);
+
+    return (
+        <div className={`message-reply-reference${compact ? ' compact' : ''}`}>
+            <div className="message-reply-reference-bar" aria-hidden="true" />
+            <div className="message-reply-reference-body">
+                <div className="message-reply-reference-label">{label}</div>
+                <div className="message-reply-reference-text">{previewText}</div>
+            </div>
+        </div>
+    );
+}
+
 function CopyButton({ text }) {
     const [copied, setCopied] = useState(false);
     const timeoutRef = useRef(null);
@@ -887,6 +944,21 @@ function CopyButton({ text }) {
             aria-label={copied ? 'Copied!' : 'Copy message'}
         >
             {copied ? <IconCheck /> : <IconCopy />}
+        </button>
+    );
+}
+
+function ReplyButton({ onReply }) {
+    return (
+        <button
+            type="button"
+            className="message-reply-btn"
+            onClick={onReply}
+            title="Reply in new chat"
+            aria-label="Reply in new chat"
+        >
+            <IconArrowLeft />
+            <span>Reply</span>
         </button>
     );
 }
@@ -981,12 +1053,18 @@ export const Message = forwardRef(function Message({
     thought,
     parts,
     steps,
+    replyTo = null,
     isThinking = false,
+    showReplyAction = false,
+    onReply,
     onAgentCallToggle,
     onToolPanelToggle,
     activeAgentCallId = '',
     commandChunks = {},
     showAllLiveToolCalls = false,
+    renderMode = 'default',
+    thinkingDurationMs = 0,
+    agentToggleSource = 'main',
 }, ref) {
     if (role === 'user') {
         const hasText = String(text ?? '').trim().length > 0;
@@ -998,7 +1076,13 @@ export const Message = forwardRef(function Message({
                 <div className="message-user-stack">
                     {hasText && (
                         <div className="message-user-bubble">
+                            <ReplyReference replyTo={replyTo} />
                             <MarkdownContent text={text} variant="user" />
+                        </div>
+                    )}
+                    {!hasText && replyTo && (
+                        <div className="message-user-bubble">
+                            <ReplyReference replyTo={replyTo} />
                         </div>
                     )}
                     <AttachmentGallery parts={parts} />
@@ -1033,6 +1117,14 @@ export const Message = forwardRef(function Message({
             : normalizedFallbackParts;
         const imageBeforeText = doesImagePrecedeText(attachmentSourceParts);
         const renderedBlocks = buildToolBlocks(toolRenderParts);
+        const hasActiveAgentTool = renderedBlocks.some((block) => {
+            if (block.type !== 'single_tool') {
+                return false;
+            }
+
+            const toolName = String(block?.toolPart?.functionCall?.name ?? '').trim();
+            return Boolean(getAgentToolMetadata(toolName) && isToolPartStillRunning(block.toolPart));
+        });
         const attachments = getMessageAttachments(attachmentSourceParts);
         const inlineRenderPlan = buildInlineImageRenderPlan(bodyText, attachments);
         const consumedAttachmentIds = inlineRenderPlan?.consumedAttachmentIds ?? new Set();
@@ -1042,7 +1134,11 @@ export const Message = forwardRef(function Message({
         const normalizedBodyText = unwrapStructuredText(String(bodyText ?? ''));
         const hasText = normalizedBodyText.trim().length > 0;
         const hasThought = String(bodyThought ?? '').trim().length > 0;
-        const shouldRenderThoughtBlock = bodyIsThinking || hasThought || showWorkedWhenNoThought;
+        const shouldRenderThoughtBlock = (
+            bodyIsThinking
+            || hasThought
+            || showWorkedWhenNoThought
+        ) && !(bodyIsThinking && !hasThought && hasActiveAgentTool);
         const textNode = inlineRenderPlan
             ? (
                 <div className="message-inline-content">
@@ -1096,7 +1192,7 @@ export const Message = forwardRef(function Message({
                     const flushToolGroup = () => {
                         if (currentToolGroup.length > 0) {
                             const groupItems = currentToolGroup.map((b) => ({ kind: 'tool', block: b }));
-                            const isAnyRunning = currentToolGroup.some((b) => b.toolPart?.isExecuting === true && !b.toolPart?.functionResponse);
+                            const isAnyRunning = currentToolGroup.some((b) => isToolPartStillRunning(b.toolPart));
                             const groupKey = `tool-group-${currentToolGroup[0].key}`;
                             renderGroups.push(
                                 <ToolCallsGroup
@@ -1105,6 +1201,7 @@ export const Message = forwardRef(function Message({
                                     onAgentCallToggle={onAgentCallToggle ? (info) => {
                                         onAgentCallToggle({
                                             ...info,
+                                            toggleSource: agentToggleSource,
                                             sourceContext: {
                                                 text: bodyText,
                                                 thought: bodyThought,
@@ -1163,6 +1260,30 @@ export const Message = forwardRef(function Message({
         })
         : [];
     const shouldRenderSteps = normalizedSteps.length > 0;
+    const shouldRenderBrowserLogMode = renderMode === 'browser_log'
+        && shouldRenderSteps
+        && normalizedSteps.every((step) => {
+            const stepParts = Array.isArray(step?.parts) ? step.parts : [];
+            return !stepParts.some((part) => part?.functionCall || part?.functionResponse);
+        });
+    const browserLogEntries = shouldRenderBrowserLogMode
+        ? normalizedSteps
+            .map((step, index) => {
+                const stepText = unwrapStructuredText(String(step?.text ?? '')).trim();
+                const stepThought = String(step?.thought ?? '').trim();
+                const content = stepText || stepThought;
+                if (!content) {
+                    return null;
+                }
+
+                return {
+                    id: `browser-log-${index + 1}`,
+                    content,
+                    isThinking: step?.isThinking === true,
+                };
+            })
+            .filter(Boolean)
+        : [];
     const messageHasAttachments = hasRenderedAttachments(parts);
     const stepUsesMessageAttachmentFallback = shouldRenderSteps
         ? normalizedSteps.map((step) => {
@@ -1192,12 +1313,22 @@ export const Message = forwardRef(function Message({
         : unwrapStructuredText(String(text ?? '')).trim();
 
     const aiAttachments = getMessageAttachments(parts);
-    const hasActions = !!(aiCopyText || aiAttachments.length > 0);
+    const canReply = showReplyAction && typeof onReply === 'function';
+    const hasActions = !!(aiCopyText || aiAttachments.length > 0 || canReply);
 
     return (
         <div className="message-ai" ref={ref}>
-            <div className="message-ai-content">
-                {shouldRenderSteps
+            <div className={`message-ai-content${shouldRenderBrowserLogMode ? ' message-ai-content-browser-log' : ''}`}>
+                {shouldRenderBrowserLogMode
+                    ? (
+                        <BrowserActivityLog
+                            entries={browserLogEntries.map((entry) => ({
+                                ...entry,
+                                isLive: entry.isThinking,
+                            }))}
+                        />
+                    )
+                    : shouldRenderSteps
                     ? (() => {
                         // Flatten all steps into a sequence of render items,
                         // then group consecutive tool calls across step boundaries.
@@ -1277,7 +1408,7 @@ export const Message = forwardRef(function Message({
                             if (pendingToolBlocks.length === 0) return;
                             const groupItems = [...pendingToolBlocks];
                             const toolBlocks = groupItems.filter((i) => i.kind === 'tool').map((i) => i.block);
-                            const isAnyRunning = toolBlocks.some((b) => b.toolPart?.isExecuting === true && !b.toolPart?.functionResponse);
+                            const isAnyRunning = toolBlocks.some((b) => isToolPartStillRunning(b.toolPart));
                             const groupKey = `tool-group-${toolBlocks[0]?.key ?? 'empty'}`;
                             rendered.push(
                                 <ToolCallsGroup
@@ -1286,6 +1417,7 @@ export const Message = forwardRef(function Message({
                                     onAgentCallToggle={onAgentCallToggle ? (info) => {
                                         onAgentCallToggle({
                                             ...info,
+                                            toggleSource: agentToggleSource,
                                             sourceContext: { text, thought, parts },
                                         });
                                     } : undefined}
@@ -1373,7 +1505,7 @@ export const Message = forwardRef(function Message({
                         // display a 'Working...' indicator to prevent the UI from appearing stalled.
                         if (isThinking) {
                             const hasActiveThought = flatItems.some((item) => item.type === 'thought' && item.isThinking);
-                            const hasActiveTool = flatItems.some((item) => item.type === 'single_tool' && item.block.toolPart?.isExecuting === true && !item.block.toolPart?.functionResponse);
+                            const hasActiveTool = flatItems.some((item) => item.type === 'single_tool' && isToolPartStillRunning(item.block.toolPart));
                             if (!hasActiveThought && !hasActiveTool) {
                                 rendered.push(
                                     <ThoughtBlock
@@ -1394,12 +1526,13 @@ export const Message = forwardRef(function Message({
                         fallbackParts: [],
                         bodyIsThinking: isThinking,
                         showWorkedWhenNoThought: false,
-                        thinkingDurationMs: Array.isArray(steps) && steps.length > 0 ? steps[0]?.thinkingDurationMs || 0 : 0,
+                        thinkingDurationMs: Number(thinkingDurationMs) || (Array.isArray(steps) && steps.length > 0 ? steps[0]?.thinkingDurationMs || 0 : 0),
                     })}
                 {shouldRenderMessageAttachmentsAfterSteps && <AttachmentGallery parts={parts} />}
             </div>
             {hasActions && !isThinking && (
-                <div className="message-ai-actions">
+                <div className={`message-ai-actions${canReply ? ' message-ai-actions-visible' : ''}`}>
+                    {canReply && <ReplyButton onReply={onReply} />}
                     {aiCopyText && <CopyButton text={aiCopyText} />}
                     {aiAttachments.map((att) => (
                         <AttachmentDownloadButton key={att.id} attachment={att} />

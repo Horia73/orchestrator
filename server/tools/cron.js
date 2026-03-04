@@ -2,11 +2,11 @@
  * manage_schedule tool — allows agents to create, list, and remove scheduled tasks.
  */
 import { cronService } from '../services/cron.js';
-import { getExecutionContext } from '../core/context.js';
+import { INBOX_CHAT_ID } from '../storage/chats.js';
 
 export const declaration = {
     name: 'manage_schedule',
-    description: 'Create, list, or remove scheduled/recurring tasks. Jobs fire their prompt as a message in the chat.',
+    description: 'Create, list, or remove scheduled/recurring tasks. Jobs fire their prompt as an AI-authored message in Inbox.',
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -47,7 +47,6 @@ export const declaration = {
 };
 
 export async function execute(args) {
-    const context = getExecutionContext();
     const action = String(args?.action ?? '').trim().toLowerCase();
 
     switch (action) {
@@ -80,10 +79,8 @@ export async function execute(args) {
             const prompt = String(args?.prompt ?? '').trim();
             if (!prompt) return { error: 'Prompt is required — this is what gets sent when the job fires.' };
 
-            const chatId = context?.chatId ?? '';
-
             try {
-                const job = cronService.addJob({ name, schedule, prompt, chatId });
+                const job = cronService.addJob({ name, schedule, prompt, chatId: INBOX_CHAT_ID });
                 return {
                     ok: true,
                     job: {

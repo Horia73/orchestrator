@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import { randomUUID } from 'node:crypto';
-import { GoogleGenAI, ThinkingLevel } from '@google/genai';
+import { GoogleGenAI } from '@google/genai';
 import {
     getGeminiApiKey,
     getGeminiContextMessages,
@@ -25,6 +25,7 @@ import {
 import { executionContext } from '../core/context.js';
 import { resolveUpload } from '../storage/uploads.js';
 import { mcpService } from './mcp.js';
+import { listAvailableModelsFromApi, resolveThinkingConfig as resolveCatalogThinkingConfig } from './modelCatalog.js';
 
 const pendingSteeringNotes = new Map();
 const PARALLEL_TOOL_NAMES = new Set([
@@ -49,13 +50,6 @@ export function consumeSteeringNotes(chatId) {
     pendingSteeringNotes.delete(chatId);
     return notes;
 }
-
-const THINKING_LEVEL_MAP = {
-    MINIMAL: ThinkingLevel.MINIMAL,
-    LOW: ThinkingLevel.LOW,
-    MEDIUM: ThinkingLevel.MEDIUM,
-    HIGH: ThinkingLevel.HIGH,
-};
 
 let cachedClient = null;
 
@@ -149,20 +143,17 @@ function isThinkingLevelError(error) {
 
 // ─── Core helpers ────────────────────────────────────────────────────────────
 
-function mapThinkingLevel(level) {
-    const normalized = String(level ?? '').trim().toUpperCase();
-    return THINKING_LEVEL_MAP[normalized] ?? ThinkingLevel.MINIMAL;
-}
-
 function buildChatConfigForAgent({ agentId, agentConfig, sharedTools }) {
     const agentDefinition = getAgentDefinition(agentId);
     const modelId = agentConfig.model;
 
     const wrappedMapThinkingLevel = (level) => {
         const requested = String(level ?? '').trim().toUpperCase();
-        const effective = getEffectiveThinkingLevel(modelId, requested);
+        const effective = THINKING_FALLBACK_CHAIN.includes(requested)
+            ? getEffectiveThinkingLevel(modelId, requested)
+            : requested;
         if (effective === null) return null;
-        return mapThinkingLevel(effective);
+        return resolveCatalogThinkingConfig(modelId, effective);
     };
 
     return agentDefinition.buildChatConfig({
@@ -994,6 +985,43 @@ function normalizeToolUsageStatus(value) {
     return 'completed';
 }
 
+function normalizeToolUsageActivityLog(value) {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .map((entry, index) => {
+            if (!entry || typeof entry !== 'object') {
+                const content = String(entry ?? '').trim();
+                if (!content) {
+                    return null;
+                }
+
+                return {
+                    id: `browser-activity-${index + 1}`,
+                    content,
+                    isLive: false,
+                };
+            }
+
+            const content = String(entry.content ?? entry.message ?? '').trim();
+            if (!content) {
+                return null;
+            }
+
+            const createdAt = Number(entry.createdAt);
+
+            return {
+                id: String(entry.id ?? '').trim() || `browser-activity-${index + 1}`,
+                content,
+                createdAt: Number.isFinite(createdAt) && createdAt > 0 ? Math.trunc(createdAt) : undefined,
+                isLive: entry.isLive === true || entry.isThinking === true,
+            };
+        })
+        .filter(Boolean);
+}
+
 function normalizeToolUsageRecord(
     rawRecord,
     {
@@ -1038,6 +1066,7 @@ function normalizeToolUsageRecord(
         model,
         inputText: truncateForToolUsage(rawRecord.inputText || fallbackInputText),
         outputText: truncateForToolUsage(rawRecord.outputText || fallbackOutputText),
+        activityLog: normalizeToolUsageActivityLog(rawRecord.activityLog),
         createdAt,
         usageMetadata,
     };
@@ -1072,7 +1101,37 @@ function extractToolUsageRecords(
         }))
         .filter(Boolean);
 
-    return normalized;
+    if (normalized.length > 0) {
+        return normalized;
+    }
+
+    const resolvedToolName = String(toolName ?? '').trim();
+    if (!resolvedToolName) {
+        return [];
+    }
+
+    const toolCallId = typeof functionCall?.id === 'string' && functionCall.id.trim()
+        ? functionCall.id.trim()
+        : '';
+    const sanitizedResult = sanitizeToolResultForModel(toolResult);
+    const fallbackOutputText = typeof toolResult?.error === 'string' && toolResult.error.trim()
+        ? `Tool error: ${toolResult.error.trim()}`
+        : safeJsonStringify(sanitizedResult ?? {});
+
+    return [{
+        source: 'tool',
+        toolName: resolvedToolName,
+        toolCallId,
+        status: normalizeToolUsageStatus(toolResult?.error ? 'error' : 'completed'),
+        agentId: '',
+        model: `tool:${resolvedToolName}`,
+        inputText: truncateForToolUsage(`[tool:${resolvedToolName}] ${safeJsonStringify(args ?? {})}`),
+        outputText: truncateForToolUsage(fallbackOutputText),
+        activityLog: [],
+        createdAt: Date.now(),
+        usageMetadata: null,
+    }];
+
 }
 
 function extractChunkThoughtText(chunk) {
@@ -1937,16 +1996,7 @@ export async function generateAssistantReplyStream(
 }
 
 export async function listAvailableModels() {
-    const key = getGeminiApiKey();
-    if (!key) {
-        throw new Error('Missing GEMINI_API_KEY in environment or config.');
-    }
-    const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models?key=${key}`);
-    if (!res.ok) {
-        throw new Error(`Failed to fetch models: ${res.status}`);
-    }
-    const data = await res.json();
-    return data.models || [];
+    return listAvailableModelsFromApi();
 }
 
 export async function generateChatTitle({ text, attachments, aiText }) {

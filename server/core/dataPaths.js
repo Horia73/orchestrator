@@ -24,6 +24,7 @@ export const USAGE_LOG_PATH = path.join(USAGE_DATA_DIR, 'requests.jsonl');
 
 export const LOG_DATA_DIR = path.join(DATA_ROOT_DIR, 'logs');
 export const LOGS_PATH = path.join(LOG_DATA_DIR, 'system.jsonl');
+export const APP_LOG_PATH = path.join(LOG_DATA_DIR, 'app.log');
 
 export const MEMORY_DIR = path.join(DATA_ROOT_DIR, 'memory');
 export const MEMORY_PATH = path.join(MEMORY_DIR, 'MEMORY.md');
@@ -39,7 +40,17 @@ export const SKILLS_WORKSPACE_DIR = path.join(DATA_ROOT_DIR, 'skills');
 export const CRON_DATA_DIR = path.join(DATA_ROOT_DIR, 'cron');
 export const CRON_STORE_PATH = path.join(CRON_DATA_DIR, 'jobs.json');
 
+export const RUNTIME_DATA_DIR = path.join(DATA_ROOT_DIR, 'runtime');
+export const APP_RUNTIME_PATH = path.join(RUNTIME_DATA_DIR, 'app.json');
+
 export const TODO_DATA_DIR = path.join(DATA_ROOT_DIR, 'todos');
+
+export const BROWSER_DATA_DIR = path.join(DATA_ROOT_DIR, 'browser');
+export const BROWSER_PROFILES_DIR = path.join(BROWSER_DATA_DIR, 'profiles');
+export const BROWSER_PERSISTENT_PROFILE_DIR = path.join(BROWSER_PROFILES_DIR, 'orchestrator');
+export const BROWSER_SESSION_DATA_DIR = path.join(BROWSER_DATA_DIR, 'sessions');
+export const BROWSER_RECORDINGS_DIR = path.join(BROWSER_DATA_DIR, 'recordings');
+fs.mkdirSync(BROWSER_RECORDINGS_DIR, { recursive: true });
 
 export const SECRETS_DIR = path.join(DATA_ROOT_DIR, 'secrets');
 export const SECRETS_ENV_PATH = path.join(SECRETS_DIR, 'SECRETS.env');

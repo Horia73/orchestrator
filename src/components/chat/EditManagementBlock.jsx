@@ -1,20 +1,39 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { IconPencil } from '../shared/icons.jsx';
+import { captureCollapseScrollAnchor, restoreCollapseScrollAnchor } from './scrollAnchor.js';
 import './ToolBlock.css';
 
-function getLastPathSegment(pathValue) {
+function normalizePathValue(pathValue) {
     const rawPath = typeof pathValue === 'string' ? pathValue.trim() : '';
-    if (!rawPath) return 'file';
+    if (!rawPath) return '';
 
     const normalizedPath = rawPath.replace(/\\/g, '/');
     const withoutTrailingSlash = normalizedPath.endsWith('/')
         ? normalizedPath.slice(0, -1)
         : normalizedPath;
 
-    if (!withoutTrailingSlash) return 'file';
+    return withoutTrailingSlash;
+}
 
-    const segments = withoutTrailingSlash.split('/').filter(Boolean);
-    return segments[segments.length - 1] || 'file';
+function getPathParts(pathValue) {
+    const normalizedPath = normalizePathValue(pathValue);
+    if (!normalizedPath) {
+        return {
+            fullPath: '',
+            directory: '',
+            name: 'file',
+        };
+    }
+
+    const segments = normalizedPath.split('/').filter(Boolean);
+    const name = segments.pop() || normalizedPath;
+    const directory = segments.length > 0 ? `${segments.join('/')}/` : '';
+
+    return {
+        fullPath: normalizedPath,
+        directory,
+        name,
+    };
 }
 
 function getToolPath(entry) {
@@ -50,7 +69,8 @@ function getSummary(entries) {
     let executingOnlyCreate = true;
 
     for (const entry of entries) {
-        files.push(getLastPathSegment(getToolPath(entry)));
+        const toolPath = normalizePathValue(getToolPath(entry));
+        files.push(toolPath);
         const delta = getDelta(entry);
         totalAdded += delta.added;
         totalRemoved += delta.removed;
@@ -68,8 +88,9 @@ function getSummary(entries) {
     }
 
     const uniqueFiles = [...new Set(files.filter(Boolean))];
-    const primaryLabel = uniqueFiles.length === 1
-        ? uniqueFiles[0]
+    const primaryPath = uniqueFiles.length === 1 ? getPathParts(uniqueFiles[0]) : null;
+    const primaryLabel = primaryPath
+        ? primaryPath.fullPath
         : `${uniqueFiles.length} files`;
 
     let prefix = 'Edited';
@@ -82,6 +103,7 @@ function getSummary(entries) {
     return {
         prefix,
         primaryLabel,
+        primaryPath,
         totalAdded,
         totalRemoved,
         isRunning: hasExecuting,
@@ -98,20 +120,71 @@ function renderDiffLineContent(line) {
     return String(line?.text ?? '');
 }
 
+function formatLineCount(value) {
+    const count = Math.max(0, Number(value) || 0);
+    return `${count} line${count === 1 ? '' : 's'}`;
+}
+
 export function EditManagementBlock({ entries = [] }) {
     const [isOpen, setIsOpen] = useState(false);
+    const rootRef = useRef(null);
+    const collapseAnchorRef = useRef(null);
+    const restoreScrollCleanupRef = useRef(null);
     const summary = useMemo(() => getSummary(entries), [entries]);
 
+    useEffect(() => () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+            restoreScrollCleanupRef.current = null;
+        }
+    }, []);
+
+    const openEditList = () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+            restoreScrollCleanupRef.current = null;
+        }
+        collapseAnchorRef.current = captureCollapseScrollAnchor(rootRef.current);
+        setIsOpen(true);
+    };
+
+    const closeEditList = () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+        }
+        setIsOpen(false);
+        restoreScrollCleanupRef.current = restoreCollapseScrollAnchor(collapseAnchorRef.current);
+    };
+
+    const toggleEditList = () => {
+        if (isOpen) {
+            closeEditList();
+        } else {
+            openEditList();
+        }
+    };
+
     return (
-        <div className="edit-tools-block">
+        <div ref={rootRef} className="edit-tools-block">
             <button
                 type="button"
                 className="edit-tools-header"
-                onClick={() => setIsOpen((current) => !current)}
+                onClick={toggleEditList}
             >
                 <span className="tool-row-icon"><IconPencil /></span>
                 <span className={`edit-tools-prefix${summary.isRunning ? ' status-running-text' : ''}`}>{summary.prefix}</span>
-                <span className="edit-tools-target">{summary.primaryLabel}</span>
+                {summary.primaryPath
+                    ? (
+                        <span className="edit-tools-target-group" title={summary.primaryPath.fullPath}>
+                            {summary.primaryPath.directory && (
+                                <span className="edit-tools-target-path">{summary.primaryPath.directory}</span>
+                            )}
+                            <span className="edit-tools-target-name">{summary.primaryPath.name}</span>
+                        </span>
+                    )
+                    : (
+                        <span className="edit-tools-target">{summary.primaryLabel}</span>
+                    )}
                 <span className="edit-tools-delta edit-tools-delta-add">+{summary.totalAdded}</span>
                 <span className="edit-tools-delta edit-tools-delta-remove">-{summary.totalRemoved}</span>
                 <span className={`edit-tools-chevron ${isOpen ? 'open' : ''}`}>▼</span>
@@ -125,14 +198,27 @@ export function EditManagementBlock({ entries = [] }) {
                             : '';
                         const itemKey = callId || `${entry?.functionCall?.name ?? 'tool'}-${index}`;
                         const response = entry?.functionResponse?.response ?? {};
+                        const toolName = String(entry?.functionCall?.name ?? '').trim();
                         const hasError = typeof response?.error === 'string' && response.error.trim().length > 0;
                         const diffLines = Array.isArray(response?.diffPreview?.lines)
                             ? response.diffPreview.lines
                             : [];
                         const isExecuting = entry?.isExecuting === true && !entry?.functionResponse;
+                        const isCreatedFile = toolName === 'write_to_file' && response?.created === true;
+                        const isOverwriteWrite = toolName === 'write_to_file' && response?.overwritten === true;
+                        const pathParts = getPathParts(getToolPath(entry));
 
                         return (
                             <article key={itemKey} className="edit-file-card">
+                                <div className="edit-file-header">
+                                    <div className="edit-file-path" title={pathParts.fullPath || pathParts.name}>
+                                        {pathParts.directory && (
+                                            <span className="edit-file-path-dir">{pathParts.directory}</span>
+                                        )}
+                                        <span className="edit-file-path-name">{pathParts.name}</span>
+                                    </div>
+                                </div>
+
                                 {isExecuting && (
                                     <div className="edit-file-empty status-running-text">
                                         In progress...
@@ -141,6 +227,18 @@ export function EditManagementBlock({ entries = [] }) {
 
                                 {!isExecuting && hasError && (
                                     <div className="edit-file-error">{response.error}</div>
+                                )}
+
+                                {!isExecuting && !hasError && isCreatedFile && (
+                                    <div className="edit-file-note">
+                                        Created file with {formatLineCount(response?.addedLines)}.
+                                    </div>
+                                )}
+
+                                {!isExecuting && !hasError && !isCreatedFile && isOverwriteWrite && (
+                                    <div className="edit-file-note">
+                                        Full-file overwrite preview
+                                    </div>
                                 )}
 
                                 {!isExecuting && !hasError && diffLines.length > 0 && (
@@ -163,6 +261,13 @@ export function EditManagementBlock({ entries = [] }) {
                             </article>
                         );
                     })}
+                    <button
+                        type="button"
+                        className="tool-show-less"
+                        onClick={closeEditList}
+                    >
+                        Show less
+                    </button>
                 </div>
             )}
         </div>

@@ -18,6 +18,7 @@ import * as commandStatus from './shell/commandStatus.js';
 import * as sendCommandInput from './shell/sendCommandInput.js';
 import * as readTerminal from './shell/readTerminal.js';
 import * as generateImage from './agents/generateImage.js';
+import * as callBrowserAgent from './agents/callBrowserAgent.js';
 import * as callCodingAgent from './agents/callCodingAgent.js';
 import * as callMultipurposeAgent from './agents/callMultipurposeAgent.js';
 import * as callResearcherAgent from './agents/callResearcherAgent.js';
@@ -45,6 +46,7 @@ const ALL_TOOLS = [
     sendCommandInput,
     readTerminal,
     generateImage,
+    callBrowserAgent,
     callCodingAgent,
     callMultipurposeAgent,
     callResearcherAgent,

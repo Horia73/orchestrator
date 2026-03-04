@@ -6,6 +6,28 @@ const CODING_AGENT_ID = 'coding';
 const TOOL_NAME = 'call_coding_agent';
 const MAX_PREVIOUS_TURNS = 10;
 
+function extractInlineImageParts(parts) {
+    if (!Array.isArray(parts)) {
+        return [];
+    }
+
+    return parts
+        .filter((part) => {
+            const mimeType = String(part?.inlineData?.mimeType ?? '').trim().toLowerCase();
+            const data = String(part?.inlineData?.data ?? '').trim();
+            return mimeType.startsWith('image/') && data;
+        })
+        .map((part) => ({
+            inlineData: {
+                mimeType: String(part.inlineData.mimeType).trim(),
+                data: String(part.inlineData.data).trim(),
+                ...(String(part.inlineData.displayName ?? '').trim()
+                    ? { displayName: String(part.inlineData.displayName).trim() }
+                    : {}),
+            },
+        }));
+}
+
 /**
  * Extract previous coding agent call/response pairs from the chat history
  * and convert them into user/model turn pairs for multi-turn conversation.
@@ -148,11 +170,15 @@ export async function execute({ task, context, file_paths, attachments }) {
             model: result.model,
             agentThought: result.thought || '',
             text: result.text || '',
+            parts: Array.isArray(result.parts) ? result.parts : [],
+            steps: Array.isArray(result.steps) ? result.steps : [],
             stopReason: wasStopped ? (result.stopReason || 'stopped') : undefined,
             fileCount: filesData.length,
             attachmentCount: Array.isArray(attachments) ? attachments.length : 0,
             _usageRecords: Array.isArray(result.toolUsageRecords) ? result.toolUsageRecords : [],
+            _mediaParts: extractInlineImageParts(result.parts),
             _usage: {
+                source: 'agent',
                 model: result.model,
                 status: toolStatus,
                 agentId: CODING_AGENT_ID,

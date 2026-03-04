@@ -77,12 +77,9 @@ export function buildImageChatConfig({ agentConfig, mapThinkingLevel }) {
     }
 
     if (typeof mapThinkingLevel === 'function') {
-        const thinkingLevel = mapThinkingLevel(agentConfig?.thinkingLevel);
-        if (thinkingLevel !== null) {
-            config.thinkingConfig = {
-                thinkingLevel,
-                includeThoughts: true,
-            };
+        const thinkingConfig = mapThinkingLevel(agentConfig?.thinkingLevel);
+        if (thinkingConfig) {
+            config.thinkingConfig = thinkingConfig;
         }
     }
 

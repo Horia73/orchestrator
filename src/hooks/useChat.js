@@ -15,6 +15,7 @@ const ACTIVE_CHAT_STORAGE_KEY = 'gemini-ui-active-chat-id';
 const DRAFT_AGENT_STORAGE_KEY = 'gemini-ui-draft-agent-id';
 const DEFAULT_AGENT_ID = 'orchestrator';
 const DRAFT_CHAT_KEY = '__draft__';
+const INBOX_CHAT_KIND = 'inbox';
 
 function getGreeting() {
     const hour = new Date().getHours();
@@ -67,11 +68,84 @@ function getStoredDraftAgentId() {
 }
 
 function sortChatsByRecent(chats) {
-    return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...chats].sort((a, b) => {
+        const pinnedDiff = Number(Boolean(b?.pinned)) - Number(Boolean(a?.pinned));
+        if (pinnedDiff !== 0) {
+            return pinnedDiff;
+        }
+
+        return b.updatedAt - a.updatedAt;
+    });
 }
 
 function getDraftKey(chatId) {
     return (chatId === null || chatId === undefined) ? DRAFT_CHAT_KEY : String(chatId);
+}
+
+function isInboxChat(chat) {
+    return String(chat?.kind ?? '').trim().toLowerCase() === INBOX_CHAT_KIND;
+}
+
+function pickDefaultActiveChatId(chats, { preferredId, allowInboxFallback = false } = {}) {
+    const normalizedChats = Array.isArray(chats) ? chats : [];
+    if (preferredId) {
+        const preferred = normalizedChats.find((chat) => chat.id === preferredId);
+        if (preferred) {
+            return preferred.id;
+        }
+    }
+
+    const firstRegularChat = normalizedChats.find((chat) => !isInboxChat(chat));
+    if (firstRegularChat) {
+        return firstRegularChat.id;
+    }
+
+    if (allowInboxFallback) {
+        return normalizedChats[0]?.id ?? null;
+    }
+
+    return null;
+}
+
+function truncateReplyPreview(text, maxLength = 160) {
+    const normalized = String(text ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+        return '';
+    }
+
+    if (normalized.length <= maxLength) {
+        return normalized;
+    }
+
+    return `${normalized.slice(0, maxLength - 1).trimEnd()}…`;
+}
+
+function buildReplyPreviewText(message) {
+    const directText = truncateReplyPreview(message?.text, 160);
+    if (directText) {
+        return directText;
+    }
+
+    const stepPreview = Array.isArray(message?.steps)
+        ? truncateReplyPreview(
+            message.steps
+                .map((step) => String(step?.text ?? '').trim() || String(step?.thought ?? '').trim())
+                .filter(Boolean)
+                .join(' '),
+            160,
+        )
+        : '';
+    if (stepPreview) {
+        return stepPreview;
+    }
+
+    const hasAttachment = Array.isArray(message?.parts)
+        && message.parts.some((part) => part?.fileData || part?.inlineData);
+    if (hasAttachment) {
+        return 'Attachment';
+    }
+
+    return 'Message';
 }
 
 function mergeMessages(existing, incoming) {
@@ -304,6 +378,10 @@ function createLocalMessage(id, role, text, options = {}) {
         message.parts = normalizedParts;
     }
 
+    if (options.replyTo && typeof options.replyTo === 'object') {
+        message.replyTo = options.replyTo;
+    }
+
     return message;
 }
 
@@ -402,6 +480,7 @@ export function useChat() {
     const [messagesByChat, setMessagesByChat] = useState({});
     const [activeChatId, setActiveChatId] = useState(undefined);
     const [draftMessages, setDraftMessages] = useState([]);
+    const [draftReplyContext, setDraftReplyContext] = useState(null);
     const [inputDraftByKey, setInputDraftByKey] = useState({});
     const [inputAttachmentsByKey, setInputAttachmentsByKey] = useState({});
     const [pendingKey, setPendingKey] = useState(null);
@@ -415,6 +494,7 @@ export function useChat() {
     const messagesByChatRef = useRef(messagesByChat);
     const activeChatIdRef = useRef(activeChatId);
     const draftMessagesRef = useRef(draftMessages);
+    const draftReplyContextRef = useRef(draftReplyContext);
     const pendingKeyRef = useRef(pendingKey);
     const loadedChatIdsRef = useRef(new Set());
     const preferredActiveChatIdRef = useRef(getStoredActiveChatId());
@@ -437,6 +517,10 @@ export function useChat() {
     useEffect(() => {
         draftMessagesRef.current = draftMessages;
     }, [draftMessages]);
+
+    useEffect(() => {
+        draftReplyContextRef.current = draftReplyContext;
+    }, [draftReplyContext]);
 
     useEffect(() => {
         pendingKeyRef.current = pendingKey;
@@ -487,13 +571,9 @@ export function useChat() {
 
             setActiveChatId((current) => {
                 if (current === undefined) {
-                    const preferred = preferredActiveChatIdRef.current;
-                    if (preferred) {
-                        const preferredExists = nextChats.some((chat) => chat.id === preferred);
-                        if (preferredExists) return preferred;
-                    }
-
-                    return nextChats[0]?.id ?? null;
+                    return pickDefaultActiveChatId(nextChats, {
+                        preferredId: preferredActiveChatIdRef.current,
+                    });
                 }
 
                 if (current === null) {
@@ -501,7 +581,11 @@ export function useChat() {
                 }
 
                 const exists = nextChats.some((chat) => chat.id === current);
-                return exists ? current : (nextChats[0]?.id ?? null);
+                return exists
+                    ? current
+                    : pickDefaultActiveChatId(nextChats, {
+                        preferredId: preferredActiveChatIdRef.current,
+                    });
             });
         } finally {
             setIsHydrating(false);
@@ -947,8 +1031,8 @@ export function useChat() {
 
                 setActiveChatId((current) => {
                     if (current !== event.chatId) return current;
-                    const firstRemaining = chatSummariesRef.current.find((chat) => chat.id !== event.chatId);
-                    return firstRemaining?.id ?? null;
+                    const remaining = chatSummariesRef.current.filter((chat) => chat.id !== event.chatId);
+                    return pickDefaultActiveChatId(remaining);
                 });
 
                 return;
@@ -962,22 +1046,57 @@ export function useChat() {
         };
     }, []);
 
-    const createNewChat = useCallback(() => {
-        setActiveChatId((current) => {
-            if (current === null) {
-                pendingDraftChatIdRef.current = null;
-                return current;
-            }
-
-            setDraftMessages([]);
-            setPendingKey(null);
-            pendingDraftChatIdRef.current = null;
-            return null;
+    const clearDraftComposer = useCallback(() => {
+        const draftKey = getDraftKey(null);
+        setDraftMessages([]);
+        setPendingKey(null);
+        pendingDraftChatIdRef.current = null;
+        setDraftReplyContext(null);
+        setInputDraftByKey((prev) => {
+            if (!(draftKey in prev)) return prev;
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
+        });
+        setInputAttachmentsByKey((prev) => {
+            if (!(draftKey in prev)) return prev;
+            const next = { ...prev };
+            delete next[draftKey];
+            return next;
         });
     }, []);
 
+    const createNewChat = useCallback(() => {
+        clearDraftComposer();
+        activeChatIdRef.current = null;
+        setActiveChatId(null);
+    }, [clearDraftComposer]);
+
+    const startReplyFromMessage = useCallback((message) => {
+        const activeSummary = chatSummariesRef.current.find((chat) => chat.id === activeChatIdRef.current) ?? null;
+        const sourceChatId = String(activeSummary?.id ?? activeChatIdRef.current ?? '').trim();
+        const sourceMessageId = String(message?.id ?? '').trim();
+        if (!sourceChatId || !sourceMessageId) {
+            return;
+        }
+
+        clearDraftComposer();
+        draftAgentIdRef.current = DEFAULT_AGENT_ID;
+        setDraftAgentIdState(DEFAULT_AGENT_ID);
+        setDraftReplyContext({
+            chatId: sourceChatId,
+            messageId: sourceMessageId,
+            role: String(message?.role ?? '').trim().toLowerCase() === 'user' ? 'user' : 'ai',
+            previewText: buildReplyPreviewText(message),
+            chatTitle: String(activeSummary?.title ?? 'Inbox').trim() || 'Inbox',
+        });
+        activeChatIdRef.current = null;
+        setActiveChatId(null);
+    }, [clearDraftComposer]);
+
     const selectChat = useCallback((chatId) => {
         setDraftMessages([]);
+        setDraftReplyContext(null);
         pendingDraftChatIdRef.current = null;
         setActiveChatId(chatId);
     }, []);
@@ -998,7 +1117,7 @@ export function useChat() {
 
         setActiveChatId((current) => {
             if (current !== chatId) return current;
-            return remaining[0]?.id ?? null;
+            return pickDefaultActiveChatId(remaining);
         });
 
         setInputDraftByKey((prev) => {
@@ -1102,10 +1221,12 @@ export function useChat() {
         });
 
         const optimisticParts = buildUserMessageParts(trimmed, attachments);
+        const draftReplyTarget = currentChatId === null ? draftReplyContextRef.current : null;
 
         if (currentChatId === null) {
             const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed, {
                 parts: optimisticParts,
+                replyTo: draftReplyTarget,
             });
             setDraftMessages([optimisticUser]);
             setPendingKey('draft');
@@ -1118,6 +1239,7 @@ export function useChat() {
                     clientMessageId,
                     agentId: draftAgentIdRef.current,
                     isSteering: payload.isSteering,
+                    replyTo: draftReplyTarget,
                 });
 
                 const chat = responsePayload.chat;
@@ -1132,6 +1254,7 @@ export function useChat() {
                 }));
 
                 setDraftMessages([]);
+                setDraftReplyContext(null);
                 setActiveChatId(chat.id);
                 pendingDraftChatIdRef.current = null;
             } catch (error) {
@@ -1197,6 +1320,33 @@ export function useChat() {
         setDraftAgentIdState(normalized);
     }, []);
 
+    const startNewChatWithMessage = useCallback(async ({
+        text = '',
+        attachments = [],
+        agentId = DEFAULT_AGENT_ID,
+        isSteering = false,
+    } = {}) => {
+        const normalizedAgentId = String(agentId ?? '').trim() || DEFAULT_AGENT_ID;
+
+        draftAgentIdRef.current = normalizedAgentId;
+        setDraftAgentIdState(normalizedAgentId);
+        pendingDraftChatIdRef.current = null;
+        activeChatIdRef.current = null;
+
+        clearDraftComposer();
+        setActiveChatId(null);
+
+        await sendMessage({
+            text,
+            attachments,
+            isSteering,
+        });
+    }, [clearDraftComposer, sendMessage]);
+
+    const clearDraftReplyContext = useCallback(() => {
+        setDraftReplyContext(null);
+    }, []);
+
     const stopGeneration = useCallback(async () => {
         const chatId = activeChatIdRef.current;
         try {
@@ -1222,6 +1372,9 @@ export function useChat() {
             id: chat.id,
             label: chat.title,
             active: chat.id === activeChatId,
+            kind: chat.kind,
+            pinned: chat.pinned === true,
+            deletable: chat.deletable !== false,
         })),
         [chatSummaries, activeChatId],
     );
@@ -1242,6 +1395,10 @@ export function useChat() {
     }, [chatSummaries, activeChatId]);
 
     const isDraftChat = activeChatId === null || activeChatId === undefined;
+    const activeChatKind = isDraftChat
+        ? null
+        : (String(activeChatSummary?.kind ?? '').trim().toLowerCase() || null);
+    const isInboxChatActive = activeChatKind === INBOX_CHAT_KIND;
     const activeChatAgentId = isDraftChat
         ? null
         : (String(activeChatSummary?.agentId ?? '').trim() || DEFAULT_AGENT_ID);
@@ -1256,23 +1413,30 @@ export function useChat() {
         messages: activeMessages,
         activeChatId,
         isTyping,
-        isChatMode: activeMessages.length > 0 || !isDraftChat,
+        isChatMode: activeMessages.length > 0 || !isDraftChat || Boolean(draftReplyContext),
         sendMessage,
         stopGeneration,
         inputDraft,
         setInputDraft,
         inputAttachments,
         setInputAttachments,
+        draftReplyContext,
+        clearDraftReplyContext,
         recents,
         createNewChat,
         selectChat,
         deleteChat,
+        startReplyFromMessage,
         isDraftChat,
+        activeChatKind,
+        isInboxChatActive,
         selectedAgentId,
         draftAgentId,
         setDraftAgentId,
+        startNewChatWithMessage,
         activeChatAgentId,
         agentStreaming,
         commandChunks,
+        clientId: clientIdRef.current,
     };
 }

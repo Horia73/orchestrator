@@ -192,10 +192,13 @@ async function runSubagentInline({
         task,
         text: resultText,
         thought: resultThought,
+        parts: Array.isArray(resultParts) ? resultParts : [],
+        steps: Array.isArray(resultSteps) ? resultSteps : [],
         stopReason: resultStopReason || undefined,
         error: errorText || undefined,
         _usage: usageMetadata
             ? {
+                source: 'agent',
                 model: resultModel || undefined,
                 status: resultStatus,
                 agentId,

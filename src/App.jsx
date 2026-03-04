@@ -1,4 +1,4 @@
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import './styles/globals.css';
 import './App.css';
 import { useSidebar } from './hooks/useSidebar.js';
@@ -6,9 +6,53 @@ import { useChat } from './hooks/useChat.js';
 import { Sidebar } from './components/layout/Sidebar.jsx';
 import { ChatArea } from './components/chat/ChatArea.jsx';
 import { ChatInput } from './components/chat/ChatInput.jsx';
+import { extractLatestTodoState } from './components/chat/todoUtils.js';
 import { Settings } from './components/settings/Settings.jsx';
 import { IconPanel } from './components/shared/icons.jsx';
 import { fetchAgents, fetchSettings, saveSettings } from './api/settingsApi.js';
+
+const MODEL_CATALOG_PATH = '~/.orchestrator/models.json';
+
+function buildModelCatalogTaskPrompt({ focusModelId = '', missingModelIds = [] } = {}) {
+  const normalizedFocusModelId = String(focusModelId ?? '').trim();
+  const normalizedMissingModelIds = Array.isArray(missingModelIds)
+    ? [...new Set(
+        missingModelIds
+          .map((modelId) => String(modelId ?? '').trim())
+          .filter(Boolean),
+      )]
+    : [];
+
+  const lines = [
+    `Update the Gemini model catalog at ${MODEL_CATALOG_PATH}.`,
+    '',
+    'What you need to do:',
+    `1. Read ${MODEL_CATALOG_PATH}.`,
+    '2. Get the current live Gemini model list from the API.',
+    '3. Compare the live API models with the local catalog.',
+    '4. For every new or changed model, find verified pricing and verified thinking support, then update the catalog.',
+    '5. If the docs are unclear for thinking, test the model directly in the API and determine thinkingMode = none | level | budget.',
+    '6. If a model no longer exists in the API, mark it retired but keep it in the catalog for history.',
+    '7. Do not guess. If something cannot be verified, leave it null/empty or preserve the verified existing value.',
+    '8. Finish by editing the file directly.',
+    '',
+    'Notes:',
+    '- Use official Google AI sources when you need documentation.',
+    '- Use whatever tools you need.',
+    '- When useful, do searches and API checks in parallel.',
+    '- Do not stop at analysis. Make the file update yourself.',
+  ];
+
+  if (normalizedFocusModelId) {
+    lines.push('', `Priority model: ${normalizedFocusModelId}`);
+  }
+
+  if (normalizedMissingModelIds.length > 0) {
+    lines.push('', `Models currently missing catalog data: ${normalizedMissingModelIds.join(', ')}`);
+  }
+
+  return lines.join('\n');
+}
 
 function isSettingsViewFromUrl() {
   const params = new URLSearchParams(window.location.search);
@@ -29,6 +73,10 @@ export default function App() {
   const sidebar = useSidebar();
   const chat = useChat();
   const chatInputRef = useRef(null);
+  const activeTodoState = useMemo(
+    () => extractLatestTodoState(chat.messages),
+    [chat.messages],
+  );
 
   // Settings page state
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsViewFromUrl());
@@ -88,6 +136,11 @@ export default function App() {
     focusInput();
   }, [chat, focusInput]);
 
+  const handleReplyFromInboxMessage = useCallback((message) => {
+    chat.startReplyFromMessage(message);
+    focusInput();
+  }, [chat, focusInput]);
+
   const handleOpenSettings = useCallback(() => {
     setSettingsViewInUrl(true);
     setSettingsLoaded(false);
@@ -128,6 +181,25 @@ export default function App() {
     setSettingsOpen(false);
   }, []);
 
+  const handleLaunchModelCatalogTask = useCallback(({ focusModelId = '', missingModelIds = [] } = {}) => {
+    const prompt = buildModelCatalogTaskPrompt({
+      focusModelId,
+      missingModelIds,
+    });
+
+    setSettingsViewInUrl(false);
+    setSettingsOpen(false);
+
+    requestAnimationFrame(() => {
+      chat.startNewChatWithMessage({
+        agentId: 'orchestrator',
+        text: prompt,
+      }).catch((error) => {
+        console.error('Failed to launch model catalog task', error);
+      });
+    });
+  }, [chat]);
+
   if (settingsOpen) {
     if (!agentsLoaded || !settingsLoaded) {
       return (
@@ -146,6 +218,7 @@ export default function App() {
           savedSettings={savedSettings}
           agentDefinitions={agentDefinitions}
           onSave={handleSaveSettings}
+          onLaunchModelCatalogTask={handleLaunchModelCatalogTask}
         />
       </div>
     );
@@ -186,24 +259,33 @@ export default function App() {
         greeting={chat.greeting}
         messages={chat.messages}
         conversationKey={chat.activeChatId}
+        clientId={chat.clientId}
         isTyping={chat.isTyping}
         isChatMode={chat.isChatMode}
+        activeChatKind={chat.activeChatKind}
+        onReplyFromMessage={handleReplyFromInboxMessage}
         agentStreaming={chat.agentStreaming}
         commandChunks={chat.commandChunks}
         uiSettings={uiSettings}
       >
-        <ChatInput
-          ref={chatInputRef}
-          onSend={chat.sendMessage}
-          onStop={chat.stopGeneration}
-          draftValue={chat.inputDraft}
-          onDraftChange={chat.setInputDraft}
-          attachments={chat.inputAttachments}
-          onAttachmentsChange={chat.setInputAttachments}
-          isChatMode={chat.isChatMode}
-          isSending={chat.isTyping}
-          uiSettings={uiSettings}
-        />
+        {!chat.isInboxChatActive && (
+          <ChatInput
+            ref={chatInputRef}
+            onSend={chat.sendMessage}
+            onStop={chat.stopGeneration}
+            draftValue={chat.inputDraft}
+            onDraftChange={chat.setInputDraft}
+            attachments={chat.inputAttachments}
+            onAttachmentsChange={chat.setInputAttachments}
+            isChatMode={chat.isChatMode}
+            isSending={chat.isTyping}
+            replyPreview={chat.draftReplyContext}
+            onClearReplyPreview={chat.clearDraftReplyContext}
+            uiSettings={uiSettings}
+            todoState={activeTodoState}
+            todoBoardKey={chat.activeChatId ?? 'chat-input-todo'}
+          />
+        )}
       </ChatArea>
 
     </div>

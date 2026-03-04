@@ -160,6 +160,9 @@ export async function execute({ query, domain }) {
                 : Promise.resolve(citation)
         )),
     );
+    const usageMetadata = payload?.usageMetadata && typeof payload.usageMetadata === 'object'
+        ? payload.usageMetadata
+        : null;
 
     return {
         query: queryText,
@@ -170,5 +173,12 @@ export async function execute({ query, domain }) {
         web_search_queries: webSearchQueries,
         citations: enrichedCitations,
         citation_count: enrichedCitations.length,
+        _usage: {
+            source: 'model',
+            model,
+            inputText: queryText,
+            outputText: truncateText(displayText, 4000),
+            usageMetadata,
+        },
     };
 }

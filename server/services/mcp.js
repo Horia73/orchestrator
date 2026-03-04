@@ -75,6 +75,23 @@ function sanitizeStringMap(value) {
     return result;
 }
 
+function hasPersistableMcpFields(server) {
+    if (!server || typeof server !== 'object') {
+        return false;
+    }
+
+    return Boolean(
+        String(server.name ?? '').trim()
+        || String(server.toolPrefix ?? '').trim()
+        || String(server.command ?? '').trim()
+        || String(server.cwd ?? '').trim()
+        || String(server.url ?? '').trim()
+        || (Array.isArray(server.args) && server.args.length > 0)
+        || Object.keys(server.env ?? {}).length > 0
+        || Object.keys(server.headers ?? {}).length > 0
+    );
+}
+
 function slugifySegment(value, fallback = 'mcp') {
     const normalized = String(value ?? '')
         .trim()
@@ -187,12 +204,16 @@ function readMcpSection() {
 export function readMcpServers() {
     const section = readMcpSection();
     const rawServers = Array.isArray(section.servers) ? section.servers : [];
-    return rawServers.map(sanitizeMcpServer);
+    return rawServers
+        .map(sanitizeMcpServer)
+        .filter(hasPersistableMcpFields);
 }
 
 export function writeMcpServers(rawServers) {
     const currentSection = readMcpSection();
-    const servers = Array.isArray(rawServers) ? rawServers.map(sanitizeMcpServer) : [];
+    const servers = Array.isArray(rawServers)
+        ? rawServers.map(sanitizeMcpServer).filter(hasPersistableMcpFields)
+        : [];
     updateConfigSection(MCP_SECTION_NAME, {
         ...currentSection,
         servers,
@@ -716,6 +737,56 @@ class McpService {
         }
 
         return descriptors;
+    }
+
+    async getServerSnapshot(serverId, { includeTools = false, forceRefresh = false } = {}) {
+        const normalizedServerId = String(serverId ?? '').trim();
+        const servers = readMcpServers();
+        await this.syncConfig(servers);
+
+        const server = servers.find((candidate) => candidate.id === normalizedServerId);
+        if (!server) {
+            const error = new Error('MCP server was not found.');
+            error.code = 'MCP_SERVER_NOT_FOUND';
+            throw error;
+        }
+
+        const effectivePrefixes = computeEffectivePrefixes(servers);
+        const validationErrors = buildValidationErrors(server);
+        const descriptor = {
+            ...server,
+            effectiveToolPrefix: effectivePrefixes.get(server.id) || slugifySegment(server.name || server.id),
+            validationErrors,
+            connectionStatus: server.enabled ? (validationErrors.length > 0 ? 'invalid' : 'idle') : 'disabled',
+            lastError: '',
+            tools: [],
+            toolCount: 0,
+        };
+
+        if (!includeTools || descriptor.connectionStatus !== 'idle') {
+            return descriptor;
+        }
+
+        try {
+            const tools = await this.listServerTools(server, { forceRefresh });
+            const aliasCounts = new Map();
+            descriptor.tools = tools.map((tool) => {
+                const originalName = String(tool?.name ?? '').trim();
+                const alias = buildToolAlias(descriptor.effectiveToolPrefix, originalName, aliasCounts);
+                return {
+                    alias,
+                    name: originalName,
+                    description: String(tool?.description ?? '').trim(),
+                };
+            });
+            descriptor.toolCount = descriptor.tools.length;
+            descriptor.connectionStatus = 'connected';
+        } catch (error) {
+            descriptor.connectionStatus = 'error';
+            descriptor.lastError = String(error?.message ?? error ?? 'Failed to connect to MCP server.');
+        }
+
+        return descriptor;
     }
 }
 

@@ -1,10 +1,11 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { fetchCommandStatus } from '../../api/chatApi.js';
 import {
     getAgentCallIdentity,
     getAgentToolMetadata,
     getToolCallId,
 } from './agentCallUtils.js';
+import { captureCollapseScrollAnchor, restoreCollapseScrollAnchor } from './scrollAnchor.js';
 import { TerminalPane } from './TerminalPane.jsx';
 import { TodoBoard } from './TodoBoard.jsx';
 import { getTodoToolState, isTodoToolName } from './todoUtils.js';
@@ -12,6 +13,7 @@ import {
     IconTerminal, IconCode, IconEye, IconPencil,
     IconGlobe, IconImage, IconTool, IconCheckCircle, IconChecklist,
 } from '../shared/icons.jsx';
+import { AnimatedCollapse } from '../shared/AnimatedCollapse.jsx';
 import './ToolBlock.css';
 
 const COMMAND_TOOL_NAMES = new Set([
@@ -90,37 +92,28 @@ function getCommandStatusLabel(isRunning, status, hasError) {
     return 'done';
 }
 
-function getAgentThoughtText(responseObject) {
-    if (!responseObject || typeof responseObject !== 'object') {
-        return '';
-    }
-
-    return String(responseObject.agentThought ?? responseObject.thought ?? '').trim();
-}
-
 function normalizeAgentStatus({ isExecuting, hasResponse, responseObject, hasError }) {
     const rawStatus = String(responseObject?.status ?? '').trim().toLowerCase();
     const responseError = String(responseObject?.error ?? '').trim().toLowerCase();
-    const hasAgentThought = getAgentThoughtText(responseObject).length > 0;
 
     if (isExecuting && !hasResponse) {
-        return hasAgentThought ? 'thinking' : 'working';
+        return 'working';
     }
 
     if (rawStatus === 'stopped') {
         return 'stopped';
     }
 
+    if (rawStatus === 'awaiting_user' || rawStatus === 'awaiting-user' || rawStatus === 'question') {
+        return 'awaiting_user';
+    }
+
     if (responseError.includes('stopped')) {
         return 'stopped';
     }
 
-    if (rawStatus === 'thinking') {
-        return 'thinking';
-    }
-
-    if (rawStatus === 'spawned' || rawStatus === 'queued' || rawStatus === 'running') {
-        return hasAgentThought ? 'thinking' : 'working';
+    if (rawStatus === 'thinking' || rawStatus === 'spawned' || rawStatus === 'queued' || rawStatus === 'running') {
+        return 'working';
     }
 
     if (rawStatus === 'working') {
@@ -150,10 +143,10 @@ function normalizeAgentStatus({ isExecuting, hasResponse, responseObject, hasErr
 }
 
 function formatAgentStatusLabel(status) {
-    if (status === 'thinking') return 'Thinking...';
     if (status === 'working') return 'Working...';
     if (status === 'done') return 'Done';
     if (status === 'stopped') return 'Stopped';
+    if (status === 'awaiting_user') return 'Waiting';
     if (status === 'error') return 'Failed';
     return 'Working...';
 }
@@ -176,6 +169,9 @@ export function ToolBlock({
     const [isOpen, setIsOpen] = useState(false);
     const [polledSnapshot, setPolledSnapshot] = useState(null);
     const [nowMs, setNowMs] = useState(0);
+    const rootRef = useRef(null);
+    const collapseAnchorRef = useRef(null);
+    const restoreScrollCleanupRef = useRef(null);
     const hasFunctionCall = !!functionCall;
     const call = functionCall ?? EMPTY_ARGS;
 
@@ -274,6 +270,38 @@ export function ToolBlock({
         || (isExecuting && !hasResponse && !hasPolledSnapshot)
     );
 
+    useEffect(() => () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+            restoreScrollCleanupRef.current = null;
+        }
+    }, []);
+
+    const openInlineContent = () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+            restoreScrollCleanupRef.current = null;
+        }
+        collapseAnchorRef.current = captureCollapseScrollAnchor(rootRef.current);
+        setIsOpen(true);
+    };
+
+    const closeInlineContent = () => {
+        if (restoreScrollCleanupRef.current) {
+            restoreScrollCleanupRef.current();
+        }
+        setIsOpen(false);
+        restoreScrollCleanupRef.current = restoreCollapseScrollAnchor(collapseAnchorRef.current);
+    };
+
+    const toggleInlineContent = () => {
+        if (isOpen) {
+            closeInlineContent();
+        } else {
+            openInlineContent();
+        }
+    };
+
     useEffect(() => {
         if (!shouldPollCommand) return undefined;
 
@@ -332,6 +360,8 @@ export function ToolBlock({
     if (isAgentTool) {
         if (agentStatus === 'thinking' || agentStatus === 'working') {
             titleMain = `Running ${agentIdentity.agentName}`;
+        } else if (agentStatus === 'awaiting_user') {
+            titleMain = `${agentIdentity.agentName} waiting`;
         } else if (agentStatus === 'stopped') {
             titleMain = `${agentIdentity.agentName} stopped`;
         } else if (agentStatus === 'error') {
@@ -401,7 +431,7 @@ export function ToolBlock({
     const hasCommandOutput = terminalOutput.trim().length > 0;
 
     const hasDuration = Number.isFinite(Number(runtimeSnapshot?.durationMs ?? responseObject?.durationMs));
-    const shouldShowCommandMeta = isCommandTool && (supportsLiveTracking || hasDuration);
+    const shouldShowCommandMeta = isRunCommandTool && (supportsLiveTracking || hasDuration);
     const summaryData = hasResponse
         ? (typeof responseObject === 'object' ? formatJson(responseObject) : String(responseObject))
         : null;
@@ -416,7 +446,7 @@ export function ToolBlock({
             onToolPanelToggle();
             return;
         }
-        setIsOpen((current) => !current);
+        toggleInlineContent();
     };
 
     if (!hasFunctionCall) return null;
@@ -424,7 +454,10 @@ export function ToolBlock({
     const badge = getToolBadge(name);
 
     return (
-        <div className={`tool-row${isAgentTool ? ' tool-row-agent' : ''}${isAgentCallOpen ? ' is-active' : ''}${isRunning ? ' is-running' : ''}`}>
+        <div
+            ref={rootRef}
+            className={`tool-row${isAgentTool ? ' tool-row-agent' : ''}${isAgentCallOpen ? ' is-active' : ''}${isRunning ? ' is-running' : ''}`}
+        >
             <div className="tool-row-header" onClick={handleHeaderClick}>
                 <span className="tool-row-icon">
                     {(() => {
@@ -464,7 +497,7 @@ export function ToolBlock({
                 </span>
             </div>
 
-            {isOpen && (
+            <AnimatedCollapse isOpen={isOpen} className="tool-row-content-shell">
                 <div className="tool-row-content">
                     {isCommandTool ? (
                         isRunCommandTool ? (
@@ -560,12 +593,12 @@ export function ToolBlock({
                     <button
                         type="button"
                         className="tool-show-less"
-                        onClick={() => setIsOpen(false)}
+                        onClick={closeInlineContent}
                     >
                         Show less
                     </button>
                 </div>
-            )}
+            </AnimatedCollapse>
         </div>
     );
 }

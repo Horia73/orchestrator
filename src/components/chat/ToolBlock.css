@@ -1,6 +1,7 @@
 /* ---- Tool Row (Claude.ai style) ---- */
 .tool-row {
     max-width: 100%;
+    overflow: hidden;
 }
 
 .tool-row + .tool-row {
@@ -143,6 +144,10 @@
 }
 
 /* ---- Expanded content ---- */
+.tool-row-content-shell {
+    padding-top: 2px;
+}
+
 .tool-row-content {
     padding: 6px 4px 10px 32px;
     border-left: 2px solid var(--border-light, #e8e6e1);
@@ -319,6 +324,10 @@
     padding: 2px 0;
 }
 
+.tool-calls-list-shell {
+    transform-origin: top left;
+}
+
 /* Carousel: hide overflow tools with smooth transition */
 .tool-calls-list-live {
     overflow: hidden;
@@ -344,6 +353,16 @@
     font-size: 0.78rem;
     color: var(--text-tertiary, #7a766d);
     font-style: italic;
+}
+
+.tool-calls-live-hidden-shell {
+    margin-bottom: 12px;
+}
+
+.tool-calls-list-live-hidden {
+    padding-left: 14px;
+    border-left: 2px solid var(--border-light, #e8e6e1);
+    margin-left: 6px;
 }
 
 /* ---- File Management Block (updated style) ---- */
@@ -512,6 +531,26 @@
     color: #6d695f;
 }
 
+.edit-tools-target-group {
+    display: inline-flex;
+    align-items: baseline;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+}
+
+.edit-tools-target-path {
+    color: #7a766d;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.edit-tools-target-name {
+    color: #1f7ae0;
+    font-weight: 600;
+    flex-shrink: 0;
+}
+
 .edit-tools-target {
     color: #1f7ae0;
     font-weight: 500;
@@ -558,10 +597,47 @@
     margin-top: 8px;
 }
 
+.edit-file-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 9px 12px;
+    border-bottom: 1px solid rgba(122, 118, 109, 0.1);
+    background: rgba(255, 255, 255, 0.48);
+}
+
+.edit-file-path {
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    font-size: 0.84rem;
+    line-height: 1.35;
+}
+
+.edit-file-path-dir {
+    color: #7a766d;
+}
+
+.edit-file-path-name {
+    color: #3f3b33;
+    font-weight: 600;
+}
+
 .edit-file-error {
     color: #9b2c2c;
     padding: 10px 12px;
     font-size: 0.95rem;
+}
+
+.edit-file-note {
+    padding: 9px 12px 0;
+    color: #7a766d;
+    font-size: 0.8rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
 }
 
 .edit-diff-preview {

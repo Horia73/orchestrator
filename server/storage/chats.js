@@ -13,9 +13,14 @@ const CHATS_DIR = CHAT_MESSAGES_DIR;
 const INDEX_PATH = CHAT_INDEX_PATH;
 
 const DEFAULT_INDEX = {
-    version: 2,
+    version: 3,
     chats: [],
 };
+
+export const DEFAULT_CHAT_KIND = 'default';
+export const INBOX_CHAT_KIND = 'inbox';
+export const INBOX_CHAT_ID = 'chat-inbox';
+export const INBOX_CHAT_TITLE = 'Inbox';
 
 let initialized = false;
 let state = { ...DEFAULT_INDEX };
@@ -29,7 +34,14 @@ function createMessageId() {
 }
 
 function sortChats(chats) {
-    return [...chats].sort((a, b) => b.updatedAt - a.updatedAt);
+    return [...chats].sort((a, b) => {
+        const pinnedDiff = Number(Boolean(b?.pinned)) - Number(Boolean(a?.pinned));
+        if (pinnedDiff !== 0) {
+            return pinnedDiff;
+        }
+
+        return b.updatedAt - a.updatedAt;
+    });
 }
 
 function getChatFilePath(chatId) {
@@ -45,6 +57,66 @@ function truncatePreview(text) {
 
 function findChatIndex(chatId) {
     return state.chats.findIndex((chat) => chat.id === chatId);
+}
+
+function normalizeChatKind(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    return normalized === INBOX_CHAT_KIND ? INBOX_CHAT_KIND : DEFAULT_CHAT_KIND;
+}
+
+function buildChatRecord(rawChat = {}) {
+    const id = String(rawChat.id ?? '').trim() || createChatId();
+    const kind = normalizeChatKind(rawChat.kind);
+    const isInbox = kind === INBOX_CHAT_KIND || id === INBOX_CHAT_ID;
+    const createdAt = Number(rawChat.createdAt);
+    const updatedAt = Number(rawChat.updatedAt);
+    const messageCount = Number(rawChat.messageCount);
+    const lastConsolidated = Number(rawChat.lastConsolidated);
+
+    return {
+        id: isInbox ? INBOX_CHAT_ID : id,
+        title: isInbox ? INBOX_CHAT_TITLE : String(rawChat.title ?? 'Untitled'),
+        createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
+        updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
+        messageCount: Number.isFinite(messageCount) && messageCount >= 0
+            ? Math.trunc(messageCount)
+            : 0,
+        lastMessagePreview: String(rawChat.lastMessagePreview ?? ''),
+        agentId: normalizeAgentId(rawChat.agentId),
+        lastConsolidated: Number.isFinite(lastConsolidated) && lastConsolidated >= 0
+            ? Math.trunc(lastConsolidated)
+            : 0,
+        kind: isInbox ? INBOX_CHAT_KIND : kind,
+        pinned: isInbox ? true : rawChat.pinned === true,
+        deletable: isInbox ? false : rawChat.deletable !== false,
+    };
+}
+
+function normalizeReplyTo(replyTo) {
+    if (!replyTo || typeof replyTo !== 'object') {
+        return null;
+    }
+
+    const chatId = String(replyTo.chatId ?? '').trim();
+    const messageId = String(replyTo.messageId ?? '').trim();
+    if (!chatId || !messageId) {
+        return null;
+    }
+
+    const previewText = String(replyTo.previewText ?? '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .slice(0, 220);
+    const chatTitle = String(replyTo.chatTitle ?? '').trim().slice(0, 80);
+    const role = String(replyTo.role ?? '').trim().toLowerCase() === 'user' ? 'user' : 'ai';
+
+    return {
+        chatId,
+        messageId,
+        role,
+        previewText,
+        ...(chatTitle ? { chatTitle } : {}),
+    };
 }
 
 function normalizeMessagePart(part) {
@@ -70,6 +142,9 @@ function normalizeMessagePart(part) {
 
     if (hasFunctionCall) {
         normalized.functionCall = part.functionCall;
+        if (typeof part.isExecuting === 'boolean') {
+            normalized.isExecuting = part.isExecuting;
+        }
     } else if (hasFunctionResponse) {
         normalized.functionResponse = part.functionResponse;
     } else if (hasText) {
@@ -203,26 +278,16 @@ async function ensureInitialized() {
                 continue;
             }
 
-            const createdAt = Number(rawChat.createdAt);
-            const updatedAt = Number(rawChat.updatedAt);
-            const messageCount = Number(rawChat.messageCount);
-            const lastConsolidated = Number(rawChat.lastConsolidated);
-            const normalizedChat = {
-                id,
-                title: String(rawChat.title ?? 'Untitled'),
-                createdAt: Number.isFinite(createdAt) ? createdAt : Date.now(),
-                updatedAt: Number.isFinite(updatedAt) ? updatedAt : Date.now(),
-                messageCount: Number.isFinite(messageCount) && messageCount >= 0
-                    ? Math.trunc(messageCount)
-                    : 0,
-                lastMessagePreview: String(rawChat.lastMessagePreview ?? ''),
-                agentId: normalizeAgentId(rawChat.agentId),
-                lastConsolidated: Number.isFinite(lastConsolidated) && lastConsolidated >= 0
-                    ? Math.trunc(lastConsolidated)
-                    : 0,
-            };
+            const normalizedChat = buildChatRecord(rawChat);
 
-            if (String(rawChat.agentId ?? '').trim().toLowerCase() !== normalizedChat.agentId) {
+            if (
+                String(rawChat.agentId ?? '').trim().toLowerCase() !== normalizedChat.agentId
+                || normalizeChatKind(rawChat.kind) !== normalizedChat.kind
+                || Boolean(rawChat.pinned) !== Boolean(normalizedChat.pinned)
+                || Boolean(rawChat.deletable !== false) !== Boolean(normalizedChat.deletable)
+                || (normalizedChat.kind === INBOX_CHAT_KIND && normalizedChat.id !== id)
+                || (normalizedChat.kind === INBOX_CHAT_KIND && normalizedChat.title !== String(rawChat.title ?? ''))
+            ) {
                 shouldPersist = true;
             }
 
@@ -238,6 +303,20 @@ async function ensureInitialized() {
         }
     } catch {
         state = { ...DEFAULT_INDEX };
+        await persistIndex();
+    }
+
+    if (!state.chats.some((chat) => chat.id === INBOX_CHAT_ID)) {
+        const inboxChat = buildChatRecord({
+            id: INBOX_CHAT_ID,
+            title: INBOX_CHAT_TITLE,
+            agentId: 'orchestrator',
+            kind: INBOX_CHAT_KIND,
+            pinned: true,
+            deletable: false,
+        });
+        state.chats = sortChats([inboxChat, ...state.chats]);
+        await fs.writeFile(getChatFilePath(inboxChat.id), '', 'utf8');
         await persistIndex();
     }
 
@@ -280,11 +359,15 @@ export async function initStorage() {
 
 export async function listChats() {
     await ensureInitialized();
+    await ensureInboxChat();
     return sortChats(state.chats);
 }
 
 export async function getChat(chatId) {
     await ensureInitialized();
+    if (String(chatId ?? '').trim() === INBOX_CHAT_ID) {
+        return ensureInboxChat();
+    }
     return state.chats.find((chat) => chat.id === chatId) ?? null;
 }
 
@@ -292,7 +375,7 @@ export async function createChatFromFirstMessage(firstMessageText, options = {})
     await ensureInitialized();
     const now = Date.now();
 
-    const chat = {
+    const chat = buildChatRecord({
         id: createChatId(),
         title: 'Untitled',
         createdAt: now,
@@ -301,7 +384,10 @@ export async function createChatFromFirstMessage(firstMessageText, options = {})
         lastMessagePreview: '',
         agentId: normalizeAgentId(options?.agentId),
         lastConsolidated: 0,
-    };
+        kind: options?.kind,
+        pinned: options?.pinned,
+        deletable: options?.deletable,
+    });
 
     state.chats = [chat, ...state.chats];
     await fs.writeFile(getChatFilePath(chat.id), '', 'utf8');
@@ -328,6 +414,7 @@ export async function appendMessage(chatId, payload) {
         thought: String(payload.thought ?? ''),
         createdAt: payload.createdAt ?? Date.now(),
     };
+    const normalizedReplyTo = normalizeReplyTo(payload.replyTo);
 
     if (normalizedParts) {
         message.parts = normalizedParts;
@@ -335,6 +422,10 @@ export async function appendMessage(chatId, payload) {
 
     if (normalizedSteps) {
         message.steps = normalizedSteps;
+    }
+
+    if (normalizedReplyTo) {
+        message.replyTo = normalizedReplyTo;
     }
 
     await appendLine(getChatFilePath(chatId), message);
@@ -375,6 +466,7 @@ function normalizePersistedMessage(chatId, payload) {
         thought: String(payload.thought ?? ''),
         createdAt: payload.createdAt ?? Date.now(),
     };
+    const normalizedReplyTo = normalizeReplyTo(payload.replyTo);
 
     if (normalizedParts) {
         message.parts = normalizedParts;
@@ -382,6 +474,10 @@ function normalizePersistedMessage(chatId, payload) {
 
     if (normalizedSteps) {
         message.steps = normalizedSteps;
+    }
+
+    if (normalizedReplyTo) {
+        message.replyTo = normalizedReplyTo;
     }
 
     return message;
@@ -506,7 +602,11 @@ export async function updateChatTitle(chatId, newTitle) {
 
     const current = state.chats[chatIdx];
     let cleanTitle = String(newTitle ?? '').trim();
-    if (!cleanTitle) cleanTitle = 'Untitled';
+    if (current.kind === INBOX_CHAT_KIND) {
+        cleanTitle = INBOX_CHAT_TITLE;
+    } else if (!cleanTitle) {
+        cleanTitle = 'Untitled';
+    }
     if (cleanTitle.startsWith('"') && cleanTitle.endsWith('"')) {
         cleanTitle = cleanTitle.slice(1, -1);
     }
@@ -541,4 +641,43 @@ export async function updateChatLastConsolidated(chatId, value) {
     state.chats[chatIdx] = updated;
     await persistIndex();
     return updated;
+}
+
+export async function ensureInboxChat() {
+    await ensureInitialized();
+
+    const existing = state.chats.find((chat) => chat.id === INBOX_CHAT_ID);
+    if (existing) {
+        const normalized = buildChatRecord(existing);
+        const existingFilePath = getChatFilePath(normalized.id);
+        try {
+            await fs.access(existingFilePath);
+        } catch {
+            await fs.writeFile(existingFilePath, '', 'utf8');
+        }
+
+        if (JSON.stringify(existing) !== JSON.stringify(normalized)) {
+            const index = findChatIndex(INBOX_CHAT_ID);
+            state.chats[index] = normalized;
+            state.chats = sortChats(state.chats);
+            await persistIndex();
+            return normalized;
+        }
+
+        return existing;
+    }
+
+    const inboxChat = buildChatRecord({
+        id: INBOX_CHAT_ID,
+        title: INBOX_CHAT_TITLE,
+        agentId: 'orchestrator',
+        kind: INBOX_CHAT_KIND,
+        pinned: true,
+        deletable: false,
+    });
+
+    state.chats = sortChats([inboxChat, ...state.chats]);
+    await fs.writeFile(getChatFilePath(inboxChat.id), '', 'utf8');
+    await persistIndex();
+    return inboxChat;
 }

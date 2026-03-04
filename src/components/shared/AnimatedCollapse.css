@@ -1,0 +1,38 @@
+.animated-collapse {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: translateY(-8px) scaleY(0.985);
+    transform-origin: top center;
+    transition:
+        grid-template-rows var(--animated-collapse-duration, 260ms) cubic-bezier(0.22, 1, 0.36, 1),
+        opacity calc(var(--animated-collapse-duration, 260ms) * 0.82) ease,
+        transform var(--animated-collapse-duration, 260ms) cubic-bezier(0.22, 1, 0.36, 1);
+    will-change: grid-template-rows, opacity, transform;
+}
+
+.animated-collapse.is-open {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0) scaleY(1);
+}
+
+.animated-collapse-inner {
+    min-height: 0;
+    overflow: hidden;
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .animated-collapse {
+        transition: none;
+        transform: none;
+    }
+
+    .animated-collapse.is-open {
+        grid-template-rows: 1fr;
+    }
+
+    .animated-collapse.is-closed {
+        grid-template-rows: 0fr;
+    }
+}

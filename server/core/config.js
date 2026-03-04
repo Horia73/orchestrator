@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { parse as parseDotenv } from 'dotenv';
 import { CONFIG_PATH } from './dataPaths.js';
-import { getSecretEnvValue, isShellEnvKey, syncSecretEnv } from './secretEnv.js';
+import { getSecretEnvValue, isShellEnvKey, syncSecretEnv, upsertSecretEnvValues } from './secretEnv.js';
 
 const DEFAULT_API_PORT = 8787;
 const DEFAULT_CONTEXT_MESSAGES = 120;
@@ -59,6 +59,54 @@ function normalizeContextMessages(value) {
     }
 
     return DEFAULT_CONTEXT_MESSAGES;
+}
+
+function hydrateGeminiApiKeyEnv(configJsonValue) {
+    const shellKey = String(process.env.GEMINI_API_KEY ?? process.env.VITE_GEMINI_API_KEY ?? '').trim();
+    if (shellKey) {
+        process.env.GEMINI_API_KEY = shellKey;
+        return shellKey;
+    }
+
+    const secretKey = String(
+        getSecretEnvValue('GEMINI_API_KEY')
+        ?? getSecretEnvValue('VITE_GEMINI_API_KEY')
+        ?? '',
+    ).trim();
+    if (secretKey) {
+        process.env.GEMINI_API_KEY = secretKey;
+        return secretKey;
+    }
+
+    const configKey = String(configJsonValue ?? '').trim();
+    if (configKey) {
+        process.env.GEMINI_API_KEY = configKey;
+        return configKey;
+    }
+
+    return '';
+}
+
+function migrateSecretsIfNeeded(configJson) {
+    if (!configJson || typeof configJson !== 'object') {
+        return configJson;
+    }
+
+    const geminiApiKey = String(configJson?.geminiApiKey ?? '').trim();
+    if (!geminiApiKey) {
+        hydrateGeminiApiKeyEnv('');
+        return configJson;
+    }
+
+    upsertSecretEnvValues({
+        GEMINI_API_KEY: geminiApiKey,
+    });
+    hydrateGeminiApiKeyEnv(geminiApiKey);
+
+    delete configJson.geminiApiKey;
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(configJson, null, 2) + '\n', 'utf8');
+
+    return configJson;
 }
 
 // Resolve a config value with correct precedence:
@@ -119,7 +167,8 @@ function migrateIfNeeded(configJson) {
 
 loadEnvFiles();
 const rawConfigJson = loadConfigJson();
-const configJson = migrateIfNeeded(rawConfigJson);
+const configJson = migrateSecretsIfNeeded(migrateIfNeeded(rawConfigJson));
+hydrateGeminiApiKeyEnv(configJson?.geminiApiKey);
 
 export const API_PORT = Number(
     resolve(['API_PORT'], configJson?.port, DEFAULT_API_PORT),
@@ -136,9 +185,13 @@ export function getGeminiContextMessages() {
 
 export function getGeminiApiKey() {
     syncSecretEnv();
-    return String(
+    const resolved = String(
         resolve(['GEMINI_API_KEY', 'VITE_GEMINI_API_KEY'], reloadConfigJson()?.geminiApiKey, ''),
     ).trim();
+    if (resolved) {
+        process.env.GEMINI_API_KEY = resolved;
+    }
+    return resolved;
 }
 
 export function getToolsModel() {

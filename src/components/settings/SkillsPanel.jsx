@@ -324,21 +324,22 @@ export function SkillsPanel() {
                     <h2>Skills</h2>
                     <span className="skills-count">{skills.length} total</span>
                 </div>
-                <button className="skill-btn skill-btn--primary" onClick={() => setShowCreate(true)}>
-                    + Create Skill
-                </button>
-            </div>
-
-            <div className="skills-filters">
-                {['all', 'active', 'builtin', 'workspace'].map((f) => (
-                    <button
-                        key={f}
-                        className={`skills-filter-btn ${filter === f ? 'skills-filter-btn--active' : ''}`}
-                        onClick={() => setFilter(f)}
-                    >
-                        {f.charAt(0).toUpperCase() + f.slice(1)} ({counts[f]})
+                <div className="skills-panel-actions">
+                    <div className="skills-filters">
+                        {['all', 'active', 'builtin', 'workspace'].map((f) => (
+                            <button
+                                key={f}
+                                className={`skills-filter-btn ${filter === f ? 'skills-filter-btn--active' : ''}`}
+                                onClick={() => setFilter(f)}
+                            >
+                                {f.charAt(0).toUpperCase() + f.slice(1)} ({counts[f]})
+                            </button>
+                        ))}
+                    </div>
+                    <button className="skill-btn skill-btn--primary" onClick={() => setShowCreate(true)}>
+                        + Create Skill
                     </button>
-                ))}
+                </div>
             </div>
 
             {loading && <div className="skills-loading">Loading skills...</div>}

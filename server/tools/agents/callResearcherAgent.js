@@ -315,10 +315,13 @@ export async function execute({ task, context, depth, file_paths }) {
             nextSuggestedDepth: getNextDepth(currentDepthLevel) || undefined,
             agentThought: finalResult?.thought || '',
             text: finalResult?.text || '',
+            parts: Array.isArray(finalResult?.parts) ? finalResult.parts : [],
+            steps: Array.isArray(finalResult?.steps) ? finalResult.steps : [],
             stopReason: finalStatus === 'stopped' ? (finalResult?.stopReason || 'stopped') : undefined,
             fileCount: filesData.length,
             _usageRecords: accumulatedUsageRecords,
             _usage: {
+                source: 'agent',
                 model: finalResult?.model,
                 status: finalStatus,
                 agentId: RESEARCHER_AGENT_ID,
