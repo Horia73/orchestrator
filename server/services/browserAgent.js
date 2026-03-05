@@ -10,6 +10,7 @@ import {
     BROWSER_RECORDINGS_DIR,
     BROWSER_SESSION_DATA_DIR,
 } from '../core/dataPaths.js';
+import { appendSystemLog } from '../storage/logs.js';
 import {
     buildRemoteDesktopState,
     createLinuxRemoteDesktop,
@@ -31,12 +32,51 @@ const RECORDING_SAMPLE_INTERVAL_MS = 1000;
 const RECORDING_METADATA_FILE = 'metadata.json';
 const RECORDING_OUTPUT_FILE = 'agent-recording.mp4';
 const FFMPEG_BINARY = process.env.FFMPEG_PATH || 'ffmpeg';
+const REMOTE_DESKTOP_LOG_THROTTLE_MS = 5000;
 
 const execFileAsync = promisify(execFile);
 
 const browserSessions = new Map();
 const isolatedSessionIdsByOwner = new Map();
 const archivedBrowserSessions = new Map();
+const recentRemoteDesktopLogAt = new Map();
+
+function shouldLogRemoteDesktopEvent(key, throttleMs = REMOTE_DESKTOP_LOG_THROTTLE_MS) {
+    const normalizedKey = sanitizeText(key);
+    if (!normalizedKey) {
+        return true;
+    }
+
+    const now = Date.now();
+    const previous = Number(recentRemoteDesktopLogAt.get(normalizedKey)) || 0;
+    if (now - previous < throttleMs) {
+        return false;
+    }
+
+    recentRemoteDesktopLogAt.set(normalizedKey, now);
+    return true;
+}
+
+async function writeBrowserSystemLog({
+    level = 'info',
+    eventType = 'browser.event',
+    message = '',
+    data = undefined,
+} = {}) {
+    try {
+        const log = await appendSystemLog({
+            level,
+            source: 'browser',
+            eventType,
+            message: sanitizeText(message) || eventType,
+            data,
+            agentId: BROWSER_AGENT_ID,
+        });
+        broadcastEvent('system.log', { log });
+    } catch {
+        // Never fail browser session flow because log persistence failed.
+    }
+}
 
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
@@ -1154,8 +1194,31 @@ async function createSession({ agentId, chatId, clientId, profileMode }) {
         session.recordingOriginAt = Date.now();
         if (remoteDesktop && remoteDesktop.available) {
             appendSessionLog(session, `🖥️ Remote desktop ready on ${remoteDesktop.display}.`);
+            void writeBrowserSystemLog({
+                level: 'info',
+                eventType: 'browser.remote_desktop.ready',
+                message: `Remote desktop ready on ${remoteDesktop.display}.`,
+                data: {
+                    sessionId,
+                    chatId,
+                    display: remoteDesktop.display,
+                    websocketPath: remoteDesktop.websocketPath,
+                    status: remoteDesktop.status,
+                },
+            });
         } else if (remoteDesktop?.reason) {
             appendSessionLog(session, `🖥️ Remote desktop unavailable: ${remoteDesktop.reason}`);
+            void writeBrowserSystemLog({
+                level: 'warn',
+                eventType: 'browser.remote_desktop.unavailable',
+                message: `Remote desktop unavailable: ${remoteDesktop.reason}`,
+                data: {
+                    sessionId,
+                    chatId,
+                    status: remoteDesktop.status,
+                    reason: remoteDesktop.reason,
+                },
+            });
         }
         const runtimeStatus = await runtime.getStatus();
         session.runtimeStatus = runtimeStatus;
@@ -2092,6 +2155,24 @@ export async function handleBrowserAgentRemoteDesktopUpgrade(req, socket, head) 
 
     const session = getAccessibleSessionForChat(target.sessionId, target.chatId);
     if (!session || session.remoteDesktop?.available !== true) {
+        const status = sanitizeText(session?.remoteDesktop?.status);
+        const reason = sanitizeText(session?.remoteDesktop?.reason);
+        const logKey = `upgrade_rejected:${target.sessionId}:${target.chatId}:${status}:${reason}`;
+        if (shouldLogRemoteDesktopEvent(logKey)) {
+            void writeBrowserSystemLog({
+                level: 'warn',
+                eventType: 'browser.remote_desktop.upgrade_rejected',
+                message: 'Remote desktop websocket upgrade rejected.',
+                data: {
+                    sessionId: target.sessionId,
+                    chatId: target.chatId,
+                    rejectedBecause: !session ? 'session_not_accessible' : 'remote_desktop_unavailable',
+                    remoteDesktopStatus: status || undefined,
+                    remoteDesktopReason: reason || undefined,
+                },
+            });
+        }
+
         try {
             socket.write('HTTP/1.1 404 Not Found\r\n\r\n');
         } catch {
@@ -2105,13 +2186,33 @@ export async function handleBrowserAgentRemoteDesktopUpgrade(req, socket, head) 
         return true;
     }
 
-    await proxyRemoteDesktopUpgrade({
-        req,
-        socket,
-        head,
-        remoteDesktop: session.remoteDesktop,
-    });
-    return true;
+    try {
+        await proxyRemoteDesktopUpgrade({
+            req,
+            socket,
+            head,
+            remoteDesktop: session.remoteDesktop,
+        });
+        return true;
+    } catch (error) {
+        const errorMessage = sanitizeText(error instanceof Error ? error.message : String(error));
+        const logKey = `upgrade_failed:${target.sessionId}:${target.chatId}:${errorMessage}`;
+        if (shouldLogRemoteDesktopEvent(logKey)) {
+            void writeBrowserSystemLog({
+                level: 'error',
+                eventType: 'browser.remote_desktop.upgrade_failed',
+                message: errorMessage || 'Remote desktop websocket bridge failed.',
+                data: {
+                    sessionId: target.sessionId,
+                    chatId: target.chatId,
+                    remoteDesktopStatus: sanitizeText(session.remoteDesktop?.status) || undefined,
+                    remoteDesktopReason: sanitizeText(session.remoteDesktop?.reason) || undefined,
+                    error: errorMessage || undefined,
+                },
+            });
+        }
+        throw error;
+    }
 }
 
 export async function streamBrowserAgentLiveView({ sessionId, chatId, req, res }) {

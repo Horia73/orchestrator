@@ -83,11 +83,40 @@ export function createChatGenerationState() {
         return stoppedCount;
     }
 
+    function requestStopForChat(chatId, reason = 'user_stop') {
+        const normalizedChatId = String(chatId ?? '').trim();
+        if (!normalizedChatId) {
+            return 0;
+        }
+
+        let stoppedCount = 0;
+        for (const generations of activeGenerationsByClient.values()) {
+            if (!generations || generations.size === 0) {
+                continue;
+            }
+
+            for (const generation of generations) {
+                if (generation.chatId !== normalizedChatId) {
+                    continue;
+                }
+
+                if (!generation.stopRequested) {
+                    generation.stopRequested = true;
+                    generation.stopReason = reason;
+                    stoppedCount += 1;
+                }
+            }
+        }
+
+        return stoppedCount;
+    }
+
     return {
         enqueueChatWork,
         registerActiveGeneration,
         unregisterActiveGeneration,
         countActiveGenerationsForClient,
         requestStopForClient,
+        requestStopForChat,
     };
 }

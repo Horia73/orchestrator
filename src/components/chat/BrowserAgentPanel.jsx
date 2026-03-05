@@ -148,6 +148,7 @@ export function BrowserAgentPanel({
     const remoteDesktop = effectivePayload?.remoteDesktop ?? null;
     const remoteDesktopEnabled = remoteDesktop?.enabled === true;
     const remoteDesktopAvailable = liveSessionLikely && remoteDesktop?.available === true;
+    const remoteDesktopUsable = remoteDesktopAvailable && remoteDesktopStatus !== 'error';
     const panelControlMode = liveSessionLikely ? controlMode : 'agent';
     const directToUser = liveSessionLikely && (userAction?.directToUser === true || panelControlMode === 'user');
     const canSteerDirectly = liveSessionLikely && (!hasStructuredUserRequest || directToUser || panelControlMode === 'user');
@@ -158,7 +159,7 @@ export function BrowserAgentPanel({
     const previewStaleForMs = Number(livePreview?.staleForMs);
     const previewStatusLabel = (!sessionAvailable || !sessionLive)
         ? 'Browser not live'
-        : remoteDesktopAvailable
+        : remoteDesktopUsable
             ? (remoteDesktopStatus === 'connected'
                 ? 'Live browser'
                 : remoteDesktopStatus === 'error'
@@ -173,7 +174,7 @@ export function BrowserAgentPanel({
                 : 'Preview reconnecting';
     const addressStatusLabel = !liveSessionLikely
         ? 'Offline'
-        : remoteDesktopAvailable
+        : remoteDesktopUsable
             ? (panelControlMode === 'user'
                 ? 'Interactive'
                 : remoteDesktopStatus === 'connected'
@@ -561,7 +562,7 @@ export function BrowserAgentPanel({
     }, [handleContinue, panelControlMode, runAction, shouldResumeOnRelease]);
 
     useEffect(() => {
-        if (panelControlMode !== 'user' || !liveSessionLikely || remoteDesktopAvailable) {
+        if (panelControlMode !== 'user' || !liveSessionLikely || remoteDesktopUsable) {
             return undefined;
         }
 
@@ -606,7 +607,7 @@ export function BrowserAgentPanel({
         return () => {
             window.removeEventListener('keydown', handleKeyDown);
         };
-    }, [isPending, liveSessionLikely, panelControlMode, remoteDesktopAvailable, runAction]);
+    }, [isPending, liveSessionLikely, panelControlMode, remoteDesktopUsable, runAction]);
 
     const handleTypeIntoPage = useCallback(async () => {
         const text = typingText.trim();
@@ -643,7 +644,7 @@ export function BrowserAgentPanel({
     }, [runAction]);
 
     const handlePreviewClick = useCallback((event) => {
-        if (remoteDesktopAvailable || panelControlMode !== 'user' || !liveSessionLikely || isPending) {
+        if (remoteDesktopUsable || panelControlMode !== 'user' || !liveSessionLikely || isPending) {
             return;
         }
 
@@ -666,7 +667,7 @@ export function BrowserAgentPanel({
         const x = Math.max(0, Math.min(viewport.width - 1, Math.round(relativeX * viewport.width)));
         const y = Math.max(0, Math.min(viewport.height - 1, Math.round(relativeY * viewport.height)));
         runAction('click', { x, y });
-    }, [isPending, liveSessionLikely, panelControlMode, remoteDesktopAvailable, runAction, viewport.height, viewport.width]);
+    }, [isPending, liveSessionLikely, panelControlMode, remoteDesktopUsable, runAction, viewport.height, viewport.width]);
 
     const toggleFullscreen = useCallback(async () => {
         const node = panelRef.current;
@@ -712,7 +713,7 @@ export function BrowserAgentPanel({
                         </button>
                     </div>
                 </div>
-                {remoteDesktopAvailable ? (
+                {remoteDesktopUsable ? (
                     <div className="browser-agent-vnc-status-row">
                         <div className="browser-agent-vnc-status-copy">
                             Full Chrome is running inside a private Linux display.
@@ -773,7 +774,7 @@ export function BrowserAgentPanel({
                     className={`browser-agent-live-stage${panelControlMode === 'user' ? ' is-user-control' : ''}`}
                     onClick={handlePreviewClick}
                 >
-                    {remoteDesktopAvailable
+                    {remoteDesktopUsable
                         ? (
                             <div
                                 ref={vncTargetRef}
@@ -808,12 +809,12 @@ export function BrowserAgentPanel({
                             : playbackImageUrl
                             ? <img ref={imageRef} src={playbackImageUrl} alt="Recorded Browser Agent preview" className="browser-agent-live-image" />
                             : <div className="browser-agent-live-empty">{isRecordingLoading ? 'Loading recorded browser run...' : (sessionAvailable && sessionLive ? 'Live preview unavailable.' : 'Browser session is no longer live.')}</div>}
-                    {panelControlMode === 'user' && liveSessionLikely && remoteDesktopAvailable && (
+                    {panelControlMode === 'user' && liveSessionLikely && remoteDesktopUsable && (
                         <div className="browser-agent-live-overlay">
                             The browser is fully interactive here. Click once to focus it, then use your keyboard and mouse directly.
                         </div>
                     )}
-                    {panelControlMode === 'user' && liveSessionLikely && !remoteDesktopAvailable && (
+                    {panelControlMode === 'user' && liveSessionLikely && !remoteDesktopUsable && (
                         <div className="browser-agent-live-overlay">
                             Click inside the preview to control the page directly.
                         </div>
@@ -885,6 +886,12 @@ export function BrowserAgentPanel({
                         Linux remote desktop is unavailable: {remoteDesktop.reason}
                     </div>
                 )}
+                {liveSessionLikely && remoteDesktopAvailable && remoteDesktopStatus === 'error' && (
+                    <div className="browser-agent-request-note">
+                        Linux remote desktop failed, switched to image preview control.
+                        {remoteDesktopError ? ` ${remoteDesktopError}` : ''}
+                    </div>
+                )}
 
                 {liveSessionLikely && userAction?.required && (
                     <section className={`browser-agent-request browser-agent-request-${questionType}`}>
@@ -900,13 +907,13 @@ export function BrowserAgentPanel({
 
                 {liveSessionLikely && (panelControlMode === 'user' || directToUser || canSteerDirectly) && (
                     <section className="browser-agent-controls">
-                        {panelControlMode === 'user' && remoteDesktopAvailable && (
+                        {panelControlMode === 'user' && remoteDesktopUsable && (
                             <div className="browser-agent-request-note">
                                 Keyboard and mouse are attached directly to the live Chrome window in the preview above.
                                 {remoteDesktopError ? ` ${remoteDesktopError}` : ''}
                             </div>
                         )}
-                        {panelControlMode === 'user' && !remoteDesktopAvailable && (
+                        {panelControlMode === 'user' && !remoteDesktopUsable && (
                             <>
                                 <div className="browser-agent-control-grid">
                                     <button type="button" onClick={() => runAction('scroll_up')} disabled={isPending || !liveSessionLikely}>Scroll Up</button>

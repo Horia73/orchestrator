@@ -106,6 +106,7 @@ const {
     unregisterActiveGeneration,
     countActiveGenerationsForClient,
     requestStopForClient,
+    requestStopForChat,
 } = createChatGenerationState();
 const steeringFollowUpsInFlight = new Set();
 
@@ -572,19 +573,25 @@ async function generateStreamingAssistantTurn({
     let requestStatus = 'completed';
     let toolUsageRecords = [];
 
+    const initialStreamingMessage = {
+        id: aiMessageId,
+        chatId: chat.id,
+        role: 'ai',
+        text: '',
+        thought: '',
+        parts: [],
+        steps: [],
+        createdAt: aiMessageCreatedAt,
+        thinkingStartedAt: aiMessageCreatedAt,
+    };
+    updateStreamingSnapshot(chat.id, {
+        message: initialStreamingMessage,
+    });
+
     broadcastEvent('message.streaming', {
         chatId: chat.id,
         streamState: 'streaming',
-        message: {
-            id: aiMessageId,
-            chatId: chat.id,
-            role: 'ai',
-            text: '',
-            thought: '',
-            parts: [],
-            steps: [],
-            createdAt: aiMessageCreatedAt,
-        },
+        message: initialStreamingMessage,
         originClientId,
     });
 
@@ -608,6 +615,7 @@ async function generateStreamingAssistantTurn({
                     parts: streamedAssistantParts,
                     steps: streamedAssistantSteps,
                     createdAt: aiMessageCreatedAt,
+                    thinkingStartedAt: aiMessageCreatedAt,
                 };
                 updateStreamingSnapshot(chat.id, { message: messageSnapshot });
                 broadcastEvent('message.streaming', {
@@ -1589,7 +1597,13 @@ app.post('/api/chat/stop', (req, res) => {
     const clientId = normalizeClientId(req.body?.clientId);
     const requestedChatId = String(req.body?.chatId ?? '').trim();
     const chatId = requestedChatId || null;
-    const stoppedCount = requestStopForClient(clientId, chatId);
+    const stoppedCountForClient = requestStopForClient(clientId, chatId);
+    const stoppedCount = (
+        stoppedCountForClient > 0
+        || !chatId
+    )
+        ? stoppedCountForClient
+        : requestStopForChat(chatId);
 
     res.json({
         ok: true,

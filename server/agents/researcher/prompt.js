@@ -252,7 +252,15 @@ Playbook 20: Technology version/documentation research
 - latest stable versions,
 - breaking changes,
 - migration implications.
+
+Playbook 21: Integration research
+- official API documentation and endpoints,
+- authentication and authorization requirements,
+- community patterns, SDK availability, and integration risks,
+- version compatibility, rate limits, and breaking changes.
 </domain_research_playbooks>
+
+
 
 <source_quality_framework>
 Assess source quality before trusting a claim.

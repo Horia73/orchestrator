@@ -14,6 +14,11 @@ function extractErrorText(error) {
     }
 }
 
+function extractNumericCode(error) {
+    const code = Number(error?.code ?? error?.status ?? error?.error?.code);
+    return Number.isFinite(code) ? code : null;
+}
+
 function extractWithPatterns(text, patterns) {
     const source = String(text ?? '');
     for (const pattern of patterns) {
@@ -128,6 +133,64 @@ export async function retryOnRateLimit(fn, { maxRetries = 5, onWaiting } = {}) {
 
             if (onWaiting) {
                 await onWaiting(waitMs, extractRateLimitMetadata(error));
+            }
+
+            await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
+    }
+}
+
+export function isTransientServerError(error) {
+    const text = extractErrorText(error);
+    const code = extractNumericCode(error);
+    if (code && [500, 502, 503, 504].includes(code)) {
+        return true;
+    }
+
+    return (
+        /\b500\b/i.test(text)
+        || /\bINTERNAL\b/i.test(text)
+        || /\bUNAVAILABLE\b/i.test(text)
+        || /backend error/i.test(text)
+        || /internal server error/i.test(text)
+        || /service unavailable/i.test(text)
+        || /temporarily unavailable/i.test(text)
+        || /connection reset/i.test(text)
+        || /socket hang up/i.test(text)
+        || /ECONNRESET/i.test(text)
+        || /ETIMEDOUT/i.test(text)
+        || /deadline exceeded/i.test(text)
+    );
+}
+
+function computeTransientRetryDelayMs(attempt = 0) {
+    const baseMs = Math.min(1200 * (2 ** attempt), 12000);
+    const jitterMs = Math.floor(Math.random() * 600);
+    return baseMs + jitterMs;
+}
+
+export async function retryOnTransientServerError(fn, { maxRetries = 3, onWaiting } = {}) {
+    for (let attempt = 0; attempt <= maxRetries; attempt += 1) {
+        try {
+            return await fn();
+        } catch (error) {
+            if (!isTransientServerError(error)) {
+                throw error;
+            }
+
+            if (attempt === maxRetries) {
+                throw error;
+            }
+
+            const waitMs = computeTransientRetryDelayMs(attempt);
+            const retryAttempt = attempt + 1;
+            if (onWaiting) {
+                await onWaiting(waitMs, {
+                    retryAttempt,
+                    totalAttempts: maxRetries + 1,
+                    code: extractNumericCode(error),
+                    text: extractErrorText(error),
+                });
             }
 
             await new Promise((resolve) => setTimeout(resolve, waitMs));

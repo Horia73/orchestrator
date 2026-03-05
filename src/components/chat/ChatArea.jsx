@@ -8,13 +8,13 @@ import {
     findLatestAgentToolCallInMessages,
 } from './agentCallUtils.js';
 
-const USER_TOP_OFFSET = 54;
 const USER_SCROLL_FOCUS_OFFSET = 12;
 const AUTO_SCROLL_SNAP_DISTANCE = 24;
 const SCROLL_AT_BOTTOM_SENTINEL = Number.MAX_SAFE_INTEGER;
 const INPUT_FLIP_DURATION_MS = 260;
 const EXIT_FADE_DURATION_MS = INPUT_FLIP_DURATION_MS;
 const ENTER_FADE_DURATION_MS = 340;
+const DRAFT_SCROLL_KEY = '__draft__';
 const SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.scroll_positions.v1';
 const AGENT_PANEL_STACK_STORAGE_KEY = 'orchestrator.chat.agent_panel_stack.v1';
 const AGENT_PANEL_SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.agent_panel_scroll_positions.v1';
@@ -34,6 +34,26 @@ function normalizeConversationKey(value) {
     if (value === null || value === undefined) return null;
     const normalized = String(value).trim();
     return normalized.length > 0 ? normalized : null;
+}
+
+function getConversationStorageKey(value) {
+    return normalizeConversationKey(value) ?? DRAFT_SCROLL_KEY;
+}
+
+function getMaxScrollTop(container) {
+    if (!container) {
+        return 0;
+    }
+
+    return Math.max(0, container.scrollHeight - container.clientHeight);
+}
+
+function getDistanceToBottom(container) {
+    if (!container) {
+        return 0;
+    }
+
+    return Math.max(0, container.scrollHeight - container.scrollTop - container.clientHeight);
 }
 
 function loadScrollPositions() {
@@ -256,8 +276,9 @@ export function ChatArea({
     const shouldAutoFollowRef = useRef(false);
     const isProgrammaticScrollRef = useRef(false);
     const isJumpingToBottomRef = useRef(false);
-    const isAnimatingEnterRef = useRef(false);
     const previousUserMessageCountRef = useRef(0);
+    const anchoredUserMessageIdRef = useRef('');
+    const anchorLayoutRafRef = useRef(null);
     const spacerRef = useRef(null);
     const inputSlotRef = useRef(null);
     const inputFlipAnimationRef = useRef(null);
@@ -265,10 +286,7 @@ export function ChatArea({
     const previousRenderChatModeRef = useRef(isChatMode);
     const previousChatModeRef = useRef(isChatMode);
     const previousConversationKeyRef = useRef(conversationKey);
-    const baselineConversationKeyRef = useRef(conversationKey);
-    const enterAnchorConversationKeyRef = useRef(conversationKey);
-    const pendingScrollRestoreConversationRef = useRef(normalizeConversationKey(conversationKey));
-    const isInitialScrollRestoreRef = useRef(true);
+    const pendingScrollRestoreConversationRef = useRef(getConversationStorageKey(conversationKey));
     const pendingConversationEnterAnimationRef = useRef(null);
     const scrollPositionsRef = useRef(loadScrollPositions());
     const exitSnapshotScrollTopRef = useRef(0);
@@ -351,10 +369,15 @@ export function ChatArea({
         ),
         [messages],
     );
+    const lastUserMsgId = [...messages].reverse().find((message) => message.role === 'user')?.id;
+    const lastAiMsgId = [...messages].reverse().find((message) => message.role === 'ai')?.id;
 
     const saveConversationScrollPosition = useCallback((rawKey, scrollTop) => {
-        const key = normalizeConversationKey(rawKey);
-        if (!key || !Number.isFinite(scrollTop)) return;
+        if (!Number.isFinite(scrollTop)) {
+            return;
+        }
+
+        const key = getConversationStorageKey(rawKey);
 
         const normalizedTop = Math.max(0, Math.trunc(scrollTop));
         if (scrollPositionsRef.current[key] === normalizedTop) {
@@ -370,8 +393,8 @@ export function ChatArea({
 
     const saveActiveConversationScrollPosition = useCallback((container = scrollRef.current) => {
         if (!container) return;
-        const maxScrollTop = container.scrollHeight - container.clientHeight;
-        const distanceFromBottom = maxScrollTop - container.scrollTop;
+        const maxScrollTop = getMaxScrollTop(container);
+        const distanceFromBottom = Math.max(0, maxScrollTop - container.scrollTop);
         const scrollTop = distanceFromBottom <= AUTO_SCROLL_SNAP_DISTANCE
             ? SCROLL_AT_BOTTOM_SENTINEL
             : container.scrollTop;
@@ -480,8 +503,8 @@ export function ChatArea({
         });
     }, [setActiveAgentCallSelection]);
 
-    function refreshScrollButton(container) {
-        const distanceToBottom = container.scrollHeight - container.scrollTop - container.clientHeight;
+    const refreshScrollButton = useCallback((container) => {
+        const distanceToBottom = getDistanceToBottom(container);
 
         if (isJumpingToBottomRef.current) {
             if (distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE) {
@@ -495,7 +518,86 @@ export function ChatArea({
         const shouldShow = distanceToBottom > AUTO_SCROLL_SNAP_DISTANCE;
         setShowScrollToBottom((prev) => (prev === shouldShow ? prev : shouldShow));
         return distanceToBottom;
-    }
+    }, []);
+
+    const setSpacerHeight = useCallback((value) => {
+        const spacer = spacerRef.current;
+        if (!spacer) {
+            return;
+        }
+
+        const normalized = Math.max(0, Math.ceil(Number(value) || 0));
+        const next = `${normalized}px`;
+        if (spacer.style.height !== next) {
+            spacer.style.height = next;
+        }
+    }, []);
+
+    const clearAnchorMode = useCallback(({ resetScrollPosition = false } = {}) => {
+        anchoredUserMessageIdRef.current = '';
+        setSpacerHeight(0);
+
+        if (resetScrollPosition) {
+            const container = scrollRef.current;
+            if (container) {
+                lastKnownScrollTopRef.current = container.scrollTop;
+                refreshScrollButton(container);
+            }
+        }
+    }, [refreshScrollButton, setSpacerHeight]);
+
+    const applyAnchorLayout = useCallback(({ behavior = 'auto' } = {}) => {
+        if (disableScrollAnchoring) {
+            setSpacerHeight(0);
+            return false;
+        }
+
+        const container = scrollRef.current;
+        const userEl = lastUserMsgRef.current;
+        const anchorMessageId = anchoredUserMessageIdRef.current;
+        if (!container || !userEl || !anchorMessageId) {
+            setSpacerHeight(0);
+            return false;
+        }
+
+        if (!lastUserMsgId || anchorMessageId !== lastUserMsgId) {
+            anchoredUserMessageIdRef.current = '';
+            setSpacerHeight(0);
+            return false;
+        }
+
+        setSpacerHeight(0);
+        const { top: userTop } = getElementOffsets(container, userEl);
+        const targetScrollTop = Math.max(0, userTop - USER_SCROLL_FOCUS_OFFSET);
+        const contentHeightWithoutSpacer = container.scrollHeight;
+        const requiredSpacer = Math.max(
+            0,
+            targetScrollTop + container.clientHeight - contentHeightWithoutSpacer,
+        );
+        setSpacerHeight(requiredSpacer);
+
+        const maxScrollTop = getMaxScrollTop(container);
+        const resolvedTargetTop = Math.min(targetScrollTop, maxScrollTop);
+        isProgrammaticScrollRef.current = true;
+        container.scrollTo({
+            top: resolvedTargetTop,
+            behavior,
+        });
+        lastKnownScrollTopRef.current = resolvedTargetTop;
+        refreshScrollButton(container);
+        saveActiveConversationScrollPosition(container);
+
+        requestAnimationFrame(() => {
+            isProgrammaticScrollRef.current = false;
+        });
+        return true;
+    }, [
+        disableScrollAnchoring,
+        lastUserMsgId,
+        refreshScrollButton,
+        saveActiveConversationScrollPosition,
+        setSpacerHeight,
+    ]);
 
     useLayoutEffect(() => {
         const slot = inputSlotRef.current;
@@ -559,63 +661,69 @@ export function ChatArea({
 
     useLayoutEffect(() => {
         const previousConversationKey = previousConversationKeyRef.current;
-        if (previousConversationKey !== conversationKey) {
-            const hasConcreteConversation = conversationKey !== null && conversationKey !== undefined;
-            const isTransitioningDraftToSaved = (
-                (previousConversationKey === null || previousConversationKey === undefined)
-                && hasConcreteConversation
-                && previousChatModeRef.current
-                && userMessageCount > 0
-            );
+        if (previousConversationKey === conversationKey) {
+            return;
+        }
 
-            const previousKey = normalizeConversationKey(previousConversationKey);
-            if (previousKey && scrollRef.current) {
-                // Use lastKnownScrollTopRef instead of scrollRef.current.scrollTop.
-                // When React clears the div content (switching to uncached conversation),
-                // the browser clamps scrollTop to 0 — the cached ref keeps the real value.
-                // When the user was at/near the bottom, save a sentinel so restore snaps
-                // to the actual bottom (content height may differ slightly on re-render).
+        const container = scrollRef.current;
+        if (container) {
+            const maxScrollTop = getMaxScrollTop(container);
+            const distanceToBottom = Math.max(0, maxScrollTop - container.scrollTop);
+            const shouldPersistBottom = shouldAutoFollowRef.current || distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+            const scrollTopToSave = shouldPersistBottom
+                ? SCROLL_AT_BOTTOM_SENTINEL
+                : Math.max(0, lastKnownScrollTopRef.current || container.scrollTop || 0);
+            saveConversationScrollPosition(previousConversationKey, scrollTopToSave);
+        }
+
+        const hasConcreteConversation = conversationKey !== null && conversationKey !== undefined;
+        const isTransitioningDraftToSaved = (
+            (previousConversationKey === null || previousConversationKey === undefined)
+            && hasConcreteConversation
+            && previousChatModeRef.current
+            && userMessageCount > 0
+        );
+
+        previousConversationKeyRef.current = conversationKey;
+        previousUserMessageCountRef.current = userMessageCount;
+        isJumpingToBottomRef.current = false;
+        setNoSpacerAnim(hasConcreteConversation);
+
+        if (isTransitioningDraftToSaved) {
+            pendingScrollRestoreConversationRef.current = null;
+            if (container) {
+                lastKnownScrollTopRef.current = container.scrollTop;
                 const scrollTopToSave = shouldAutoFollowRef.current
                     ? SCROLL_AT_BOTTOM_SENTINEL
-                    : lastKnownScrollTopRef.current;
-                console.log('[SCROLL SAVE on switch]', { previousKey, scrollTop: scrollTopToSave, wasAtBottom: shouldAutoFollowRef.current });
-                saveConversationScrollPosition(previousKey, scrollTopToSave);
+                    : container.scrollTop;
+                saveConversationScrollPosition(conversationKey, scrollTopToSave);
             }
-            lastKnownScrollTopRef.current = 0;
-
-            previousConversationKeyRef.current = conversationKey;
-            isJumpingToBottomRef.current = false;
-            if (spacerRef.current) {
-                spacerRef.current.style.height = '0px';
-            }
-            pendingScrollRestoreConversationRef.current = (hasConcreteConversation && !isTransitioningDraftToSaved)
-                ? normalizeConversationKey(conversationKey)
-                : null;
-            pendingConversationEnterAnimationRef.current = (hasConcreteConversation && !isTransitioningDraftToSaved)
-                ? conversationKey
-                : null;
-            shouldAutoFollowRef.current = false;
-            if (!isTransitioningDraftToSaved) {
-                applyAgentPanelStack(
-                    hasConcreteConversation
-                        ? (agentPanelStacksRef.current[normalizeConversationKey(conversationKey)] ?? [])
-                        : [],
-                    conversationKey,
-                );
-                setActiveToolPanelSelection(null);
-            }
-
-            // Suprima animatia spacerului (28vh→0) cand nu suntem pe new chat.
-            // Pe new chat (null), lasam animatia sa se declanseze normal la primul mesaj.
-            setNoSpacerAnim(conversationKey !== null && conversationKey !== undefined);
-
-            // Ascunde div-ul de mesaje cand incarcam o conversatie existenta fara mesaje cached.
-            // Se dezactiveaza cand animatia de enter porneste (dupa ce mesajele sosesc).
-            if (hasConcreteConversation && !isTransitioningDraftToSaved) {
-                setIsConversationHidden(messages.length === 0);
-            }
+            return;
         }
-    }, [conversationKey, userMessageCount, saveConversationScrollPosition, messages.length, applyAgentPanelStack]);
+
+        pendingScrollRestoreConversationRef.current = getConversationStorageKey(conversationKey);
+        pendingConversationEnterAnimationRef.current = hasConcreteConversation ? conversationKey : null;
+        shouldAutoFollowRef.current = false;
+        clearAnchorMode();
+        setActiveToolPanelSelection(null);
+        applyAgentPanelStack(
+            hasConcreteConversation
+                ? (agentPanelStacksRef.current[normalizeConversationKey(conversationKey)] ?? [])
+                : [],
+            conversationKey,
+        );
+
+        if (hasConcreteConversation) {
+            setIsConversationHidden(messages.length === 0);
+        }
+    }, [
+        conversationKey,
+        userMessageCount,
+        saveConversationScrollPosition,
+        clearAnchorMode,
+        messages.length,
+        applyAgentPanelStack,
+    ]);
 
     // Declanseaza animatia de enter abia cand mesajele sunt disponibile.
     // Astfel evitam flash-ul cu greeting-ul si lipsa fade-ului dupa refresh.
@@ -637,44 +745,37 @@ export function ChatArea({
 
     useLayoutEffect(() => {
         const pendingConversationKey = pendingScrollRestoreConversationRef.current;
-        if (!pendingConversationKey) return;
-        if (!isChatMode || messages.length === 0) return;
-
-        const activeConversationKey = normalizeConversationKey(conversationKey);
-        if (!activeConversationKey || activeConversationKey !== pendingConversationKey) return;
-
-        const container = scrollRef.current;
-        if (!container) return;
-
-        const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
-        if (!disableScrollAnchoring) {
-            const requiredSpacer = Math.max(0, container.clientHeight - USER_TOP_OFFSET - paddingBottom);
-            if (spacerRef.current) {
-                spacerRef.current.style.height = `${requiredSpacer}px`;
-            }
+        if (!pendingConversationKey || !isChatMode) {
+            return;
         }
 
-        const refreshedMaxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
-        const isInitialRestore = isInitialScrollRestoreRef.current;
-        isInitialScrollRestoreRef.current = false;
+        const hasConcreteConversation = conversationKey !== null && conversationKey !== undefined;
+        if (hasConcreteConversation && messages.length === 0) {
+            return;
+        }
 
+        const activeConversationKey = getConversationStorageKey(conversationKey);
+        if (activeConversationKey !== pendingConversationKey) {
+            return;
+        }
+
+        const container = scrollRef.current;
+        if (!container) {
+            return;
+        }
+
+        clearAnchorMode();
+        const maxScrollTop = getMaxScrollTop(container);
         const savedScrollTop = scrollPositionsRef.current[activeConversationKey];
-        const targetScrollTop = Number.isFinite(savedScrollTop)
-            ? Math.min(Math.max(0, savedScrollTop), refreshedMaxScrollTop)
-            : refreshedMaxScrollTop;
-        shouldAutoFollowRef.current = targetScrollTop >= refreshedMaxScrollTop - AUTO_SCROLL_SNAP_DISTANCE;
+        const shouldRestoreBottom = (
+            savedScrollTop === SCROLL_AT_BOTTOM_SENTINEL
+            || !Number.isFinite(savedScrollTop)
+        );
+        const targetScrollTop = shouldRestoreBottom
+            ? maxScrollTop
+            : Math.min(Math.max(0, savedScrollTop), maxScrollTop);
 
-        console.log('[SCROLL RESTORE]', {
-            key: activeConversationKey,
-            isInitialRestore,
-            savedScrollTop,
-            refreshedMaxScrollTop,
-            targetScrollTop,
-            scrollHeight: container.scrollHeight,
-            clientHeight: container.clientHeight,
-            allSavedPositions: { ...scrollPositionsRef.current },
-        });
-
+        shouldAutoFollowRef.current = shouldRestoreBottom || targetScrollTop >= maxScrollTop - AUTO_SCROLL_SNAP_DISTANCE;
         isProgrammaticScrollRef.current = true;
         container.scrollTop = targetScrollTop;
         lastKnownScrollTopRef.current = targetScrollTop;
@@ -683,7 +784,7 @@ export function ChatArea({
         requestAnimationFrame(() => {
             isProgrammaticScrollRef.current = false;
         });
-    }, [conversationKey, isChatMode, messages.length, saveConversationScrollPosition]);
+    }, [conversationKey, isChatMode, messages.length, clearAnchorMode, refreshScrollButton]);
 
     useLayoutEffect(() => {
         if (previousChatModeRef.current && !isChatMode) {
@@ -721,122 +822,76 @@ export function ChatArea({
         if (exitFadeTimeoutRef.current) clearTimeout(exitFadeTimeoutRef.current);
         if (panelLayoutFreezeTimeoutRef.current) clearTimeout(panelLayoutFreezeTimeoutRef.current);
         if (panelLayoutFreezeRafRef.current !== null) cancelAnimationFrame(panelLayoutFreezeRafRef.current);
+        if (anchorLayoutRafRef.current !== null) cancelAnimationFrame(anchorLayoutRafRef.current);
         inputFlipAnimationRef.current?.cancel();
     }, []);
 
-    // Save scroll position on component unmount only.
-    // Conversation switches are handled by the conv-key-change useLayoutEffect above.
-    // We must NOT use [conversationKey] deps here because the cleanup fires AFTER
-    // the layoutEffect has already reset lastKnownScrollTopRef, causing it to
-    // overwrite the correctly saved position with 0.
-    // Use lastKnownScrollTopRef instead of container.scrollTop — during page refresh
-    // the DOM is torn down and the browser clamps scrollTop to 0.
     useEffect(() => () => {
-        const key = normalizeConversationKey(previousConversationKeyRef.current);
-        if (key) saveConversationScrollPosition(key, lastKnownScrollTopRef.current);
+        const container = scrollRef.current;
+        const maxScrollTop = getMaxScrollTop(container);
+        const distanceToBottom = container
+            ? Math.max(0, maxScrollTop - container.scrollTop)
+            : 0;
+        const shouldPersistBottom = shouldAutoFollowRef.current || distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+        const scrollTopToSave = shouldPersistBottom
+            ? SCROLL_AT_BOTTOM_SENTINEL
+            : Math.max(0, lastKnownScrollTopRef.current || container?.scrollTop || 0);
+        saveConversationScrollPosition(
+            previousConversationKeyRef.current,
+            scrollTopToSave,
+        );
     }, [saveConversationScrollPosition]);
 
-    // Sync baseline only when switching conversations.
-    // If we sync on every count change, we suppress the Enter anchor trigger.
     useEffect(() => {
-        if (baselineConversationKeyRef.current === conversationKey) {
-            return;
-        }
-
-        baselineConversationKeyRef.current = conversationKey;
         previousUserMessageCountRef.current = userMessageCount;
     }, [conversationKey, userMessageCount]);
 
-    // Scroll automat la Enter: ancoram ultimul mesaj user la top.
-    // Trigger-ul este cresterea numarului de mesaje user.
-    // Daca AI-ul inca nu a inceput sa scrie, asteptam pana cand isTyping devine true.
     useEffect(() => {
-        if (disableScrollAnchoring) return;
-
-        // Conversatia s-a schimbat — sincronizam baseline fara animatie.
-        if (enterAnchorConversationKeyRef.current !== conversationKey) {
-            enterAnchorConversationKeyRef.current = conversationKey;
+        if (!isChatMode) {
             previousUserMessageCountRef.current = userMessageCount;
-            shouldAutoFollowRef.current = false;
             return;
         }
 
-        if (!isChatMode || userMessageCount === 0) {
-            previousUserMessageCountRef.current = userMessageCount;
-            shouldAutoFollowRef.current = false;
-            return;
-        }
-
-        const hasNewUserMessage = userMessageCount > previousUserMessageCountRef.current;
-
-        // Daca avem mesaj nou dar AI inca nu raspunde, asteptam urmatorul render/update.
-        if (hasNewUserMessage && !isTyping) {
-            return;
-        }
-
-        // Daca numarul de mesaje a scazut (ex: stergere), actualizam fara sa ancoram.
         if (userMessageCount < previousUserMessageCountRef.current) {
             previousUserMessageCountRef.current = userMessageCount;
             return;
         }
 
-        // Daca nu e un mesaj nou care sa necesite ancora, iesim.
+        const hasNewUserMessage = userMessageCount > previousUserMessageCountRef.current;
         if (!hasNewUserMessage) {
             return;
         }
 
-        // Inregistram faptul ca am procesat acest mesaj.
         previousUserMessageCountRef.current = userMessageCount;
-
         shouldAutoFollowRef.current = false;
-        isProgrammaticScrollRef.current = true;
-        isAnimatingEnterRef.current = true;
+        if (disableScrollAnchoring || !lastUserMsgId) {
+            clearAnchorMode({ resetScrollPosition: true });
+            return;
+        }
 
-        requestAnimationFrame(() => {
-            requestAnimationFrame(() => {
-                const container = scrollRef.current;
-                const userEl = lastUserMsgRef.current;
-                const aiEl = lastAiMsgRef.current;
-                const spacer = spacerRef.current;
-
-                if (!container || !userEl || !spacer) {
-                    isProgrammaticScrollRef.current = false;
-                    isAnimatingEnterRef.current = false;
-                    return;
-                }
-
-                const { top: userTop, bottom: userBottom } = getElementOffsets(container, userEl);
-                const aiBottom = aiEl ? getElementOffsets(container, aiEl).bottom : userBottom;
-                const contentBottom = Math.max(userBottom, aiBottom);
-                const containerHeight = container.clientHeight;
-                const contentBlockHeight = Math.max(0, contentBottom - userTop);
-                const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
-
-                // Setam spacer-ul initial pentru a permite scroll-ul pana la pozitia dorita.
-                const requiredSpacer = Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - paddingBottom);
-                spacer.style.height = `${requiredSpacer}px`;
-
-                container.scrollTo({
-                    top: Math.max(0, userTop - USER_SCROLL_FOCUS_OFFSET),
-                    behavior: 'smooth',
-                });
-
-                // Eliberam starea dupa terminarea animatiei.
-                setTimeout(() => {
-                    isProgrammaticScrollRef.current = false;
-                    isAnimatingEnterRef.current = false;
-                    lastKnownScrollTopRef.current = container.scrollTop;
-                    refreshScrollButton(container);
-                    saveActiveConversationScrollPosition(container);
-                }, 500);
-            });
+        anchoredUserMessageIdRef.current = String(lastUserMsgId);
+        shouldAutoFollowRef.current = false;
+        if (anchorLayoutRafRef.current !== null) {
+            cancelAnimationFrame(anchorLayoutRafRef.current);
+        }
+        anchorLayoutRafRef.current = requestAnimationFrame(() => {
+            anchorLayoutRafRef.current = null;
+            applyAnchorLayout({ behavior: 'auto' });
         });
-    }, [conversationKey, messages, userMessageCount, isChatMode, isTyping, saveActiveConversationScrollPosition]);
+    }, [
+        userMessageCount,
+        isChatMode,
+        disableScrollAnchoring,
+        lastUserMsgId,
+        clearAnchorMode,
+        applyAnchorLayout,
+    ]);
 
     function handleScrollToBottom() {
         const container = scrollRef.current;
         if (!container) return;
 
+        clearAnchorMode();
         shouldAutoFollowRef.current = true;
         isJumpingToBottomRef.current = true;
         setShowScrollToBottom(false);
@@ -856,7 +911,7 @@ export function ChatArea({
                 return;
             }
 
-            const distanceToBottom = activeContainer.scrollHeight - activeContainer.scrollTop - activeContainer.clientHeight;
+            const distanceToBottom = getDistanceToBottom(activeContainer);
             const timedOut = performance.now() - startedAt > 1400;
 
             if (distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE || timedOut) {
@@ -876,104 +931,133 @@ export function ChatArea({
         requestAnimationFrame(releaseProgrammaticMode);
     }
 
-    // Spacer dinamic + follow in timpul stream-ului.
-    useEffect(() => {
-        if (!isChatMode || disableScrollAnchoring) return;
+    useLayoutEffect(() => {
+        if (!isChatMode) {
+            return;
+        }
+
         const container = scrollRef.current;
-        const userEl = lastUserMsgRef.current;
-        const aiEl = lastAiMsgRef.current;
-        const spacer = spacerRef.current;
+        if (!container) {
+            return;
+        }
 
-        if (!container || !userEl || !spacer) return;
+        let firstFrame = null;
+        let secondFrame = null;
+        const syncLayout = () => {
+            if (anchoredUserMessageIdRef.current) {
+                applyAnchorLayout({ behavior: 'auto' });
+                return;
+            }
 
-        const handleLayoutAndScroll = () => {
-            const { top: userTop, bottom: userBottom } = getElementOffsets(container, userEl);
-            const aiBottom = aiEl ? getElementOffsets(container, aiEl).bottom : userBottom;
-            const contentBottom = Math.max(userBottom, aiBottom);
-            const containerHeight = container.clientHeight;
-            const contentBlockHeight = Math.max(0, contentBottom - userTop);
-            const paddingBottom = parseFloat(window.getComputedStyle(container).paddingBottom) || 0;
-
-            // Pastram runway-ul daca:
-            // 1. AI-ul scrie (isTyping).
-            // 2. Suntem in curs de ancorare (isAnimatingEnter).
-            // 3. Suntem in modul "Anchor at Top" (nu facem auto-follow la bottom) 
-            //    si ne uitam la ultimul mesaj (mesajul e scurt, avem nevoie de spacer).
-            const isAnchoredMode = !shouldAutoFollowRef.current;
-            const isViewingLastTurn = container.scrollTop > 0 || contentBlockHeight < containerHeight;
-
-            const shouldUseRunway = isTyping || isAnimatingEnterRef.current || shouldAutoFollowRef.current || (isAnchoredMode && isViewingLastTurn);
-
-            const requiredSpacer = shouldUseRunway
-                ? Math.max(0, containerHeight - USER_TOP_OFFSET - contentBlockHeight - paddingBottom)
-                : 0;
-
-            // Evitam flickers: daca noul spacer e mult mai mic dar nu suntem la bottom, 
-            // incercam sa nu il eliminam brutal daca suntem inca ancorati.
-            spacer.style.height = `${requiredSpacer}px`;
-
-            if (panelLayoutFreezeTopRef.current !== null) {
-                const maxScrollTop = Math.max(0, container.scrollHeight - container.clientHeight);
+            setSpacerHeight(0);
+            if (shouldAutoFollowRef.current) {
                 isProgrammaticScrollRef.current = true;
-                container.scrollTop = Math.min(panelLayoutFreezeTopRef.current, maxScrollTop);
+                container.scrollTop = container.scrollHeight;
                 lastKnownScrollTopRef.current = container.scrollTop;
-
+                refreshScrollButton(container);
+                saveActiveConversationScrollPosition(container);
                 requestAnimationFrame(() => {
                     isProgrammaticScrollRef.current = false;
-                    refreshScrollButton(container);
                 });
                 return;
             }
 
-            if (shouldAutoFollowRef.current && !isAnimatingEnterRef.current) {
+            lastKnownScrollTopRef.current = container.scrollTop;
+            refreshScrollButton(container);
+        };
+
+        firstFrame = requestAnimationFrame(() => {
+            syncLayout();
+            secondFrame = requestAnimationFrame(syncLayout);
+        });
+
+        return () => {
+            if (firstFrame !== null) cancelAnimationFrame(firstFrame);
+            if (secondFrame !== null) cancelAnimationFrame(secondFrame);
+        };
+    }, [
+        isChatMode,
+        messages,
+        isTyping,
+        applyAnchorLayout,
+        refreshScrollButton,
+        saveActiveConversationScrollPosition,
+        setSpacerHeight,
+    ]);
+
+    useEffect(() => {
+        if (!isChatMode || typeof ResizeObserver === 'undefined') {
+            return undefined;
+        }
+
+        const userEl = lastUserMsgRef.current;
+        const aiEl = lastAiMsgRef.current;
+        if (!userEl && !aiEl) {
+            return undefined;
+        }
+
+        const observer = new ResizeObserver(() => {
+            const container = scrollRef.current;
+            if (!container) {
+                return;
+            }
+
+            if (anchoredUserMessageIdRef.current) {
+                applyAnchorLayout({ behavior: 'auto' });
+                return;
+            }
+
+            if (shouldAutoFollowRef.current) {
                 isProgrammaticScrollRef.current = true;
                 container.scrollTop = container.scrollHeight;
                 lastKnownScrollTopRef.current = container.scrollTop;
-
+                refreshScrollButton(container);
+                saveActiveConversationScrollPosition(container);
                 requestAnimationFrame(() => {
                     isProgrammaticScrollRef.current = false;
-                    refreshScrollButton(container);
                 });
                 return;
             }
 
             refreshScrollButton(container);
-        };
+        });
 
-        const observer = new ResizeObserver(handleLayoutAndScroll);
-        observer.observe(userEl);
+        if (userEl) observer.observe(userEl);
         if (aiEl) observer.observe(aiEl);
 
-        handleLayoutAndScroll();
         return () => observer.disconnect();
-    }, [conversationKey, isChatMode, isTyping, messages.length, userMessageCount]);
+    }, [
+        isChatMode,
+        conversationKey,
+        lastUserMsgId,
+        lastAiMsgId,
+        applyAnchorLayout,
+        refreshScrollButton,
+        saveActiveConversationScrollPosition,
+    ]);
 
-    // Cand user da scroll manual, actualizam follow-ul.
     useEffect(() => {
         const container = scrollRef.current;
         if (!isChatMode || !container) return;
 
         const handleManualScroll = () => {
             if (isProgrammaticScrollRef.current) return;
-            // Don't save during conversation transition — the spacer reset triggers
-            // a scroll event with scrollTop=0 that would overwrite the saved position.
             if (pendingScrollRestoreConversationRef.current) return;
 
             lastKnownScrollTopRef.current = container.scrollTop;
             const distanceToBottom = refreshScrollButton(container);
-            // Daca userul a urcat manual mai mult de 24px de bottom, oprim auto-follow-ul.
-            if (distanceToBottom > AUTO_SCROLL_SNAP_DISTANCE) {
-                shouldAutoFollowRef.current = false;
+            const isAtBottom = distanceToBottom <= AUTO_SCROLL_SNAP_DISTANCE;
+            shouldAutoFollowRef.current = isAtBottom;
+            if (!isAtBottom && anchoredUserMessageIdRef.current) {
+                clearAnchorMode();
             }
             saveActiveConversationScrollPosition(container);
         };
 
         container.addEventListener('scroll', handleManualScroll, { passive: true });
         return () => container.removeEventListener('scroll', handleManualScroll);
-    }, [isChatMode, conversationKey, saveActiveConversationScrollPosition]);
+    }, [isChatMode, conversationKey, clearAnchorMode, refreshScrollButton, saveActiveConversationScrollPosition]);
 
-    const lastUserMsgId = [...messages].reverse().find((m) => m.role === 'user')?.id;
-    const lastAiMsgId = [...messages].reverse().find((m) => m.role === 'ai')?.id;
     const lastMessage = messages[messages.length - 1];
     const shouldRenderTypingIndicator = isTyping && (!lastMessage || lastMessage.role !== 'ai');
     const activeAgentCallDetails = useMemo(() => {
@@ -1154,7 +1238,7 @@ export function ChatArea({
                 panelLayoutFreezeTimeoutRef.current = null;
             }
         };
-    }, [isAgentPanelOpen, isToolPanelOpen, isChatMode]);
+    }, [isAgentPanelOpen, isToolPanelOpen, isChatMode, refreshScrollButton]);
 
     useEffect(() => {
         if (!isAgentPanelOpen) {

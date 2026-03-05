@@ -6,7 +6,7 @@ import {
     getGeminiContextMessages,
     reloadConfigJson,
 } from '../core/config.js';
-import { retryOnRateLimit } from '../core/rateLimit.js';
+import { retryOnRateLimit, retryOnTransientServerError } from '../core/rateLimit.js';
 import { CONFIG_PATH } from '../core/dataPaths.js';
 import {
     DEFAULT_AGENT_ID,
@@ -1324,9 +1324,11 @@ export async function generateAssistantReply(
     });
 
     try {
-        const response = await retryOnRateLimit(() => chat.sendMessage({
-            message: latestMessage,
-        }));
+        const response = await retryOnTransientServerError(
+            () => retryOnRateLimit(() => chat.sendMessage({
+                message: latestMessage,
+            })),
+        );
         return finalizeText(sanitizeVisibleText(response?.text));
     } catch (error) {
         const currentLevel = String(agentConfig?.thinkingLevel ?? '').trim().toUpperCase();
@@ -1337,9 +1339,11 @@ export async function generateAssistantReply(
                 toolAccessOverride,
                 systemInstructionOverride,
             });
-            const response = await retryOnRateLimit(() => retrySession.chat.sendMessage({
-                message: retrySession.latestMessage,
-            }));
+            const response = await retryOnTransientServerError(
+                () => retryOnRateLimit(() => retrySession.chat.sendMessage({
+                    message: retrySession.latestMessage,
+                })),
+            );
             return finalizeText(sanitizeVisibleText(response?.text));
         }
         throw error;
@@ -1817,13 +1821,28 @@ export async function generateAssistantReplyStream(
     const rateLimitOnWaiting = async (ms) => {
         await emitUpdate({ force: true, thoughtOverride: `⏳ Rate limit reached. Retrying in ${Math.round(ms / 1000)}s...` });
     };
+    const transientOnWaiting = async (ms, meta = {}) => {
+        const retryAttempt = Number(meta?.retryAttempt) || 1;
+        const totalAttempts = Number(meta?.totalAttempts) || 4;
+        const waitSeconds = Math.max(1, Math.round(ms / 1000));
+        await emitUpdate({
+            force: true,
+            thoughtOverride: `🔌 Attempting reconnect ${retryAttempt}/${totalAttempts} in ${waitSeconds}s...`,
+        });
+    };
+    const openStreamWithRetries = async (openStreamFn) => retryOnTransientServerError(
+        () => retryOnRateLimit(openStreamFn, { onWaiting: rateLimitOnWaiting }),
+        {
+            maxRetries: 3,
+            onWaiting: transientOnWaiting,
+        },
+    );
 
     let activeChat = chat;
     let initialStreamResult;
     try {
-        const initialStream = await retryOnRateLimit(
+        const initialStream = await openStreamWithRetries(
             () => activeChat.sendMessageStream({ message: latestMessage }),
-            { onWaiting: rateLimitOnWaiting },
         );
         initialStreamResult = await processStream(initialStream);
     } catch (error) {
@@ -1839,9 +1858,8 @@ export async function generateAssistantReplyStream(
             });
             activeChat = retrySession.chat;
             usageThinkingLevel = resolveUsageThinkingLevel(model, retrySession.agentConfig?.thinkingLevel);
-            const retryStream = await retryOnRateLimit(
+            const retryStream = await openStreamWithRetries(
                 () => activeChat.sendMessageStream({ message: retrySession.latestMessage }),
-                { onWaiting: rateLimitOnWaiting },
             );
             initialStreamResult = await processStream(retryStream);
         } else {
@@ -1970,9 +1988,8 @@ export async function generateAssistantReplyStream(
         currentStepSawThinking = true;
         currentStepStartMs = Date.now();
         await emitUpdate({ force: true, stepIsThinking: true });
-        const nextStream = await retryOnRateLimit(
+        const nextStream = await openStreamWithRetries(
             () => chat.sendMessageStream({ message: functionResponses }),
-            { onWaiting: rateLimitOnWaiting },
         );
         const nextStreamResult = await processStream(nextStream);
         accumulateUsage(nextStreamResult.usageMetadata);
@@ -2070,11 +2087,13 @@ export async function generateChatTitleWithMetadata({ text, attachments, aiText 
     try {
         const client = getClient();
         const doc = prompt.join('\n\n');
-        const result = await retryOnRateLimit(() => client.models.generateContent({
-            model,
-            contents: doc,
-            config: { thinkingConfig: { thinkingLevel } }
-        }));
+        const result = await retryOnTransientServerError(
+            () => retryOnRateLimit(() => client.models.generateContent({
+                model,
+                contents: doc,
+                config: { thinkingConfig: { thinkingLevel } }
+            })),
+        );
 
         const generatedTitle = result.text?.trim();
         return {
