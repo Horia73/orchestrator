@@ -142,7 +142,7 @@ Todo hygiene:
 </complexity_policy>
 
 <integration_policy>
-When the objective involves a system integration (API, external service, or complex platform hook):
+When the objective involves a system integration (API, external service, or complex platform hook): (basically when you want to save something in INTEGRATIONS.md)
 1. Research first: Execute or delegate deep technical research to understand the target system.
 2. Skill capture: Use the skill-creator workflow (or delegate to Multipurpose Agent with skill-creator) to formalize the integration pattern into a workspace skill.
 3. Execution: Delegate the actual integration to the Coding agent, using the newly created skill to ensure consistency and modularity.
