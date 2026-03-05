@@ -77,9 +77,16 @@ export function Sidebar({
                 title={item.label}
             >
                 <span className="label">{item.label}</span>
-                {item.unreadCount > 0 && (
-                    <span className="unread-badge">{item.unreadCount}</span>
-                )}
+                <span className="recent-meta">
+                    {item.isRunning && (
+                        <span className="running-badge" title="Working">
+                            Working
+                        </span>
+                    )}
+                    {item.unreadCount > 0 && (
+                        <span className="unread-badge">{item.unreadCount}</span>
+                    )}
+                </span>
             </button>
         </div>
     );
@@ -122,6 +129,9 @@ export function Sidebar({
                                 <path strokeLinecap="round" strokeLinejoin="round" d="M2.25 13.5h3.86a2.25 2.25 0 0 1 2.012 1.244l.256.512a2.25 2.25 0 0 0 2.013 1.244h3.218a2.25 2.25 0 0 0 2.013-1.244l.256-.512a2.25 2.25 0 0 1 2.013-1.244h3.859m-19.5.338V18a2.25 2.25 0 0 0 2.25 2.25h15A2.25 2.25 0 0 0 21.75 18v-4.162c0-.224-.034-.447-.1-.661L19.24 5.338a2.25 2.25 0 0 0-2.15-1.588H6.911a2.25 2.25 0 0 0-2.15 1.588L2.35 12.839a2.25 2.25 0 0 0-.1.661Z" />
                             </svg>
                             <span className="nav-label">Inbox</span>
+                            {inboxChat.isRunning && (
+                                <span className="nav-status-dot" title="Working" aria-label="Working" />
+                            )}
                             {inboxChat.unreadCount > 0 && (
                                 <span className="nav-badge">{inboxChat.unreadCount}</span>
                             )}

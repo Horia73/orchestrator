@@ -90,7 +90,6 @@ Call tools as you normally would. The following list provides additional guidanc
     - If generation fails due to unsupported image options, retry with fewer constraints (drop size first, then ratio).
   - Subagent tool:
     - 'spawn_subagent' to run an inline coding/research branch in parallel with sibling spawn calls from the same tool round.
-    - 'subagent_status' can inspect a spawned subagent record by its ID, but normal flow should rely on the inline result from 'spawn_subagent'.
     - NEVER use 'command_status', 'send_command_input', or 'read_terminal' on a 'subagent-*' ID. A subagent is not a shell command.
 </tool_calling>
 

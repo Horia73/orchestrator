@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { APP_LOG_PATH, APP_RUNTIME_PATH, RUNTIME_DATA_DIR } from '../core/dataPaths.js';
 import { reloadConfigJson } from '../core/config.js';
@@ -26,6 +26,64 @@ function toPositiveInteger(value, fallback) {
     }
 
     return fallback;
+}
+
+function normalizeProcessCommandLine(value) {
+    return String(value ?? '')
+        .replaceAll('\u0000', ' ')
+        .replace(/\s+/g, ' ')
+        .trim();
+}
+
+function isLinuxZombieProcess(pid) {
+    if (process.platform !== 'linux') {
+        return false;
+    }
+
+    try {
+        const rawStat = fs.readFileSync(`/proc/${pid}/stat`, 'utf8').trim();
+        const rightParenIndex = rawStat.lastIndexOf(')');
+        if (rightParenIndex < 0 || rightParenIndex >= rawStat.length - 2) {
+            return false;
+        }
+
+        const processState = rawStat.slice(rightParenIndex + 2).split(/\s+/, 2)[0];
+        return processState === 'Z';
+    } catch {
+        return false;
+    }
+}
+
+function getProcessCommandLine(pid) {
+    const normalizedPid = toPositiveInteger(pid, null);
+    if (!normalizedPid) {
+        return '';
+    }
+
+    if (process.platform === 'linux') {
+        try {
+            return normalizeProcessCommandLine(fs.readFileSync(`/proc/${normalizedPid}/cmdline`, 'utf8'));
+        } catch {
+            // Fall through to ps for non-standard /proc availability.
+        }
+    }
+
+    if (process.platform === 'win32') {
+        return '';
+    }
+
+    try {
+        const result = spawnSync('ps', ['-p', String(normalizedPid), '-o', 'args='], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        if (result.status !== 0) {
+            return '';
+        }
+        return normalizeProcessCommandLine(result.stdout);
+    } catch {
+        return '';
+    }
 }
 
 function ensureRuntimeDirectories() {
@@ -111,27 +169,105 @@ export function isProcessAlive(pid) {
 
     try {
         process.kill(normalizedPid, 0);
-        return true;
+        return !isLinuxZombieProcess(normalizedPid);
     } catch (error) {
         return error?.code === 'EPERM';
     }
 }
 
-export async function waitForProcessExit(pid, timeoutMs = DEFAULT_STOP_TIMEOUT_MS) {
+export function isLikelyManagedAppProcess(pid) {
+    if (!isProcessAlive(pid)) {
+        return false;
+    }
+
+    const commandLine = getProcessCommandLine(pid);
+    if (!commandLine) {
+        return true;
+    }
+
+    const normalizedCommand = commandLine.replaceAll('\\', '/').toLowerCase();
+    const projectRoot = PROJECT_ROOT.replaceAll('\\', '/').toLowerCase();
+    return normalizedCommand.includes('server/index.js')
+        && (normalizedCommand.includes(projectRoot) || normalizedCommand.startsWith('node server/index.js'));
+}
+
+export function signalManagedProcess(pid, signal = 'SIGTERM') {
+    const normalizedPid = toPositiveInteger(pid, null);
+    if (!normalizedPid) {
+        return false;
+    }
+
+    const signalsToTry = process.platform === 'win32'
+        ? [normalizedPid]
+        : [-normalizedPid, normalizedPid];
+
+    for (const targetPid of signalsToTry) {
+        try {
+            process.kill(targetPid, signal);
+            return true;
+        } catch (error) {
+            if (error?.code === 'ESRCH') {
+                continue;
+            }
+            if (error?.code === 'EPERM') {
+                return false;
+            }
+        }
+    }
+
+    return false;
+}
+
+export function findLikelyManagedPidByPort(port) {
+    const normalizedPort = toPositiveInteger(port, null);
+    if (!normalizedPort || process.platform === 'win32') {
+        return null;
+    }
+
+    try {
+        const result = spawnSync('lsof', ['-nP', '-iTCP:' + String(normalizedPort), '-sTCP:LISTEN', '-t'], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+        if (result.status !== 0) {
+            return null;
+        }
+
+        const pidValues = String(result.stdout ?? '')
+            .split(/\r?\n/)
+            .map((value) => toPositiveInteger(value.trim(), null))
+            .filter((value) => Number.isInteger(value) && value > 0);
+        for (const pid of pidValues) {
+            if (isLikelyManagedAppProcess(pid)) {
+                return pid;
+            }
+        }
+        return null;
+    } catch {
+        return null;
+    }
+}
+
+export async function waitForProcessExit(
+    pid,
+    timeoutMs = DEFAULT_STOP_TIMEOUT_MS,
+    { isAlive = isProcessAlive } = {},
+) {
     const normalizedPid = toPositiveInteger(pid, null);
     if (!normalizedPid) {
         return true;
     }
 
+    const isAliveCheck = typeof isAlive === 'function' ? isAlive : isProcessAlive;
     const deadline = Date.now() + timeoutMs;
     while (Date.now() < deadline) {
-        if (!isProcessAlive(normalizedPid)) {
+        if (!isAliveCheck(normalizedPid)) {
             return true;
         }
         await sleep(HEALTH_POLL_INTERVAL_MS);
     }
 
-    return !isProcessAlive(normalizedPid);
+    return !isAliveCheck(normalizedPid);
 }
 
 export async function probeAppHealth(port = getConfiguredPort()) {

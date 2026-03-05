@@ -21,7 +21,6 @@ export const ALL_SHARED_TOOL_NAMES = Object.freeze([
     'call_multipurpose_agent',
     'call_researcher_agent',
     'spawn_subagent',
-    'subagent_status',
     'manage_schedule',
     'manage_todo_list',
 ]);

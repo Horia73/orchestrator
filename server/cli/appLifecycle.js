@@ -20,6 +20,9 @@ import {
     writeAppRuntimeState,
     clearAppRuntimeState,
     isProcessAlive,
+    isLikelyManagedAppProcess,
+    signalManagedProcess,
+    findLikelyManagedPidByPort,
     waitForProcessExit,
     probeAppHealth,
     waitForAppHealth,
@@ -62,7 +65,7 @@ function cleanupStaleRuntimeState() {
         return null;
     }
 
-    if (isProcessAlive(runtimeState.pid)) {
+    if (isLikelyManagedAppProcess(runtimeState.pid)) {
         return runtimeState;
     }
 
@@ -90,7 +93,7 @@ export async function startManagedApp({ buildIfMissing = true, forceBuild = fals
         return null;
     }
 
-    if (runtimeState?.pid && isProcessAlive(runtimeState.pid) && !healthyBeforeStart) {
+    if (runtimeState?.pid && isLikelyManagedAppProcess(runtimeState.pid) && !healthyBeforeStart) {
         if (!silent) {
             console.log(c.yellow(`  Found an unhealthy managed process (${runtimeState.pid}); restarting it.`));
         }
@@ -140,47 +143,65 @@ export async function stopManagedApp({ silent = false } = {}) {
     const port = getConfiguredPort();
     const healthy = await probeAppHealth(port);
 
+    const stopProcessByPid = async (pid, { reportExternal = false } = {}) => {
+        if (!isProcessAlive(pid)) {
+            clearAppRuntimeState();
+            if (!silent) {
+                console.log(c.dim('  Cleared stale runtime state.'));
+            }
+            return false;
+        }
+
+        if (!isLikelyManagedAppProcess(pid)) {
+            clearAppRuntimeState();
+            if (!silent) {
+                console.log(c.yellow(`  PID ${pid} is no longer the managed Orchestrator process. Cleared stale runtime state.`));
+            }
+            return false;
+        }
+
+        signalManagedProcess(pid, 'SIGTERM');
+
+        const stoppedGracefully = await waitForProcessExit(pid, undefined, { isAlive: isLikelyManagedAppProcess });
+        if (!stoppedGracefully && isLikelyManagedAppProcess(pid)) {
+            signalManagedProcess(pid, 'SIGKILL');
+            await waitForProcessExit(pid, undefined, { isAlive: isLikelyManagedAppProcess });
+        }
+
+        if (isLikelyManagedAppProcess(pid)) {
+            throw new Error(`Failed to stop managed Orchestrator process ${pid}.`);
+        }
+
+        clearAppRuntimeState();
+
+        if (!silent) {
+            const sourceLabel = reportExternal ? ' (external)' : '';
+            console.log(c.green(`  Stopped Orchestrator background process${pid ? ` ${pid}` : ''}${sourceLabel}.`));
+        }
+
+        return true;
+    };
+
     if (!runtimeState?.pid) {
         if (!silent) {
-            if (healthy) {
-                console.log(c.yellow(`  Orchestrator is still responding at ${getAppUrl(port)}, but it is not managed by this CLI.`));
-            } else {
+            if (!healthy) {
                 console.log(c.dim('  No managed background process is running.'));
+                return false;
             }
+
+            const externalPid = findLikelyManagedPidByPort(port);
+            if (!externalPid) {
+                console.log(c.yellow(`  Orchestrator is still responding at ${getAppUrl(port)}, but it is not managed by this CLI.`));
+                return false;
+            }
+            console.log(c.yellow(`  Found external Orchestrator process on port ${port} (pid ${externalPid}); stopping it.`));
+            return stopProcessByPid(externalPid, { reportExternal: true });
         }
         return false;
     }
 
     const pid = Number(runtimeState.pid);
-    if (!isProcessAlive(pid)) {
-        clearAppRuntimeState();
-        if (!silent) {
-            console.log(c.dim('  Cleared stale runtime state.'));
-        }
-        return false;
-    }
-
-    try {
-        process.kill(pid, 'SIGTERM');
-    } catch (error) {
-        if (error?.code !== 'ESRCH') {
-            throw error;
-        }
-    }
-
-    const stoppedGracefully = await waitForProcessExit(pid);
-    if (!stoppedGracefully && isProcessAlive(pid)) {
-        process.kill(pid, 'SIGKILL');
-        await waitForProcessExit(pid);
-    }
-
-    clearAppRuntimeState();
-
-    if (!silent) {
-        console.log(c.green(`  Stopped Orchestrator background process${pid ? ` ${pid}` : ''}.`));
-    }
-
-    return true;
+    return stopProcessByPid(pid);
 }
 
 export async function restartManagedApp({ buildIfMissing = true, forceBuild = false, silent = false } = {}) {

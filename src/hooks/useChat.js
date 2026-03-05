@@ -83,6 +83,39 @@ function getDraftKey(chatId) {
     return (chatId === null || chatId === undefined) ? DRAFT_CHAT_KEY : String(chatId);
 }
 
+function normalizeChatId(value) {
+    const normalized = String(value ?? '').trim();
+    return normalized || null;
+}
+
+function addPendingChatId(current, chatId) {
+    const normalizedChatId = normalizeChatId(chatId);
+    if (!normalizedChatId || current[normalizedChatId]) {
+        return current;
+    }
+
+    return {
+        ...current,
+        [normalizedChatId]: true,
+    };
+}
+
+function removePendingChatId(current, chatId) {
+    const normalizedChatId = normalizeChatId(chatId);
+    if (!normalizedChatId || !current[normalizedChatId]) {
+        return current;
+    }
+
+    const next = { ...current };
+    delete next[normalizedChatId];
+    return next;
+}
+
+function hasPendingChatId(current, chatId) {
+    const normalizedChatId = normalizeChatId(chatId);
+    return normalizedChatId ? current[normalizedChatId] === true : false;
+}
+
 function isInboxChat(chat) {
     return String(chat?.kind ?? '').trim().toLowerCase() === INBOX_CHAT_KIND;
 }
@@ -484,7 +517,8 @@ export function useChat() {
     const [draftReplyContext, setDraftReplyContext] = useState(null);
     const [inputDraftByKey, setInputDraftByKey] = useState({});
     const [inputAttachmentsByKey, setInputAttachmentsByKey] = useState({});
-    const [pendingKey, setPendingKey] = useState(null);
+    const [pendingChatIds, setPendingChatIds] = useState({});
+    const [isDraftPending, setIsDraftPending] = useState(false);
     const [draftAgentId, setDraftAgentIdState] = useState(() => getStoredDraftAgentId());
     const [isHydrating, setIsHydrating] = useState(true);
     const [agentStreaming, setAgentStreaming] = useState({});
@@ -503,7 +537,7 @@ export function useChat() {
     const activeChatIdRef = useRef(activeChatId);
     const draftMessagesRef = useRef(draftMessages);
     const draftReplyContextRef = useRef(draftReplyContext);
-    const pendingKeyRef = useRef(pendingKey);
+    const isDraftPendingRef = useRef(isDraftPending);
     const loadedChatIdsRef = useRef(new Set());
     const preferredActiveChatIdRef = useRef(getStoredActiveChatId());
     const draftAgentIdRef = useRef(draftAgentId);
@@ -531,8 +565,8 @@ export function useChat() {
     }, [draftReplyContext]);
 
     useEffect(() => {
-        pendingKeyRef.current = pendingKey;
-    }, [pendingKey]);
+        isDraftPendingRef.current = isDraftPending;
+    }, [isDraftPending]);
 
     useEffect(() => {
         draftAgentIdRef.current = draftAgentId;
@@ -658,7 +692,7 @@ export function useChat() {
         });
 
         if (streamingMessage) {
-            setPendingKey(chatId);
+            setPendingChatIds((prev) => addPendingChatId(prev, chatId));
         }
         if (recoveredAgentStreaming) {
             setAgentStreaming((prev) => ({ ...prev, ...recoveredAgentStreaming }));
@@ -676,12 +710,11 @@ export function useChat() {
 
     useEffect(() => {
         const pendingChatId = (
-            typeof pendingKey === 'string'
-            && pendingKey.length > 0
-            && pendingKey !== 'draft'
-            && pendingKey === activeChatId
+            typeof activeChatId === 'string'
+            && activeChatId.length > 0
+            && hasPendingChatId(pendingChatIds, activeChatId)
         )
-            ? pendingKey
+            ? activeChatId
             : null;
         if (!pendingChatId) {
             return undefined;
@@ -709,6 +742,7 @@ export function useChat() {
                 }
 
                 if (streamState.active) {
+                    setPendingChatIds((prev) => addPendingChatId(prev, pendingChatId));
                     if (streamState.message) {
                         setMessagesByChat((prev) => ({
                             ...prev,
@@ -748,7 +782,7 @@ export function useChat() {
                     [pendingChatId]: mergeMessages(prev[pendingChatId] ?? [], refreshedMessages),
                 }));
                 setAgentStreaming((prev) => clearAgentStreamingForMessages(prev, messagesForCleanup));
-                setPendingKey((current) => (current === pendingChatId ? null : current));
+                setPendingChatIds((prev) => removePendingChatId(prev, pendingChatId));
             } catch {
                 if (cancelled) {
                     return;
@@ -766,7 +800,7 @@ export function useChat() {
                 clearTimeout(timeoutId);
             }
         };
-    }, [activeChatId, pendingKey]);
+    }, [activeChatId, pendingChatIds]);
 
     useEffect(() => {
         const source = openChatEvents((event) => {
@@ -777,11 +811,13 @@ export function useChat() {
                 // immediately after pressing Enter on the first message.
                 setChatSummaries((prev) => upsertChatSummary(prev, event.chat));
                 const nextChatId = String(event.chat?.id ?? '').trim();
+                const isKnownChatId = chatSummariesRef.current.some((chat) => chat.id === nextChatId);
                 if (
                     isOwnEvent
                     && nextChatId
+                    && !isKnownChatId
                     && (activeChatIdRef.current === null || activeChatIdRef.current === undefined)
-                    && pendingKeyRef.current === 'draft'
+                    && isDraftPendingRef.current
                 ) {
                     pendingDraftChatIdRef.current = nextChatId;
                     setMessagesByChat((prev) => ({
@@ -790,20 +826,26 @@ export function useChat() {
                     }));
                     setDraftMessages([]);
                     setActiveChatId(nextChatId);
-                    setPendingKey(nextChatId);
+                    setIsDraftPending(false);
+                    setPendingChatIds((prev) => addPendingChatId(prev, nextChatId));
                 }
                 return;
             }
 
             if (event.type === 'message.streaming' && event.chatId && event.message) {
                 const isCompletedStream = isCompletedStreamState(event.streamState);
+                const isKnownChatId = chatSummariesRef.current.some((chat) => chat.id === event.chatId);
+                if (!isCompletedStream) {
+                    setPendingChatIds((prev) => addPendingChatId(prev, event.chatId));
+                }
                 const pendingDraftChatId = pendingDraftChatIdRef.current;
                 if (
                     isOwnEvent
                     && pendingDraftChatId
                     && event.chatId === pendingDraftChatId
                 ) {
-                    setPendingKey(event.chatId);
+                    setIsDraftPending(false);
+                    setPendingChatIds((prev) => addPendingChatId(prev, event.chatId));
                     setActiveChatId((current) => current ?? event.chatId);
                     setMessagesByChat((prev) => ({
                         ...prev,
@@ -812,14 +854,19 @@ export function useChat() {
                     return;
                 }
 
-                if (isOwnEvent && (activeChatIdRef.current === null || activeChatIdRef.current === undefined)) {
-                    setPendingKey('draft');
+                if (
+                    isOwnEvent
+                    && isDraftPendingRef.current
+                    && (activeChatIdRef.current === null || activeChatIdRef.current === undefined)
+                    && !isKnownChatId
+                ) {
+                    if (isCompletedStream && event.message.role === 'ai') {
+                        setIsDraftPending(false);
+                    } else {
+                        setIsDraftPending(true);
+                    }
                     setDraftMessages((prev) => mergeMessages(prev, [event.message]));
                     return;
-                }
-
-                if (activeChatIdRef.current === event.chatId) {
-                    setPendingKey(event.chatId);
                 }
 
                 setMessagesByChat((prev) => {
@@ -903,15 +950,14 @@ export function useChat() {
                 });
 
                 if (isCompletedStream && event.message.role === 'ai') {
-                    setPendingKey((current) => {
-                        if (current === event.chatId) {
-                            return null;
-                        }
-                        if (isOwnEvent && current === 'draft') {
-                            return null;
-                        }
-                        return current;
-                    });
+                    setPendingChatIds((prev) => removePendingChatId(prev, event.chatId));
+                    if (
+                        isOwnEvent
+                        && pendingDraftChatIdRef.current
+                        && event.chatId === pendingDraftChatIdRef.current
+                    ) {
+                        setIsDraftPending(false);
+                    }
                 }
                 return;
             }
@@ -1020,15 +1066,14 @@ export function useChat() {
                 }
 
                 if (event.message.role === 'ai') {
-                    setPendingKey((current) => {
-                        if (current === event.chatId) {
-                            return null;
-                        }
-                        if (isOwnEvent && current === 'draft') {
-                            return null;
-                        }
-                        return current;
-                    });
+                    setPendingChatIds((prev) => removePendingChatId(prev, event.chatId));
+                    if (
+                        isOwnEvent
+                        && pendingDraftChatIdRef.current
+                        && event.chatId === pendingDraftChatIdRef.current
+                    ) {
+                        setIsDraftPending(false);
+                    }
                 }
 
                 setMessagesByChat((prev) => {
@@ -1058,6 +1103,7 @@ export function useChat() {
                     delete next[event.chatId];
                     return next;
                 });
+                setPendingChatIds((prev) => removePendingChatId(prev, event.chatId));
 
                 setActiveChatId((current) => {
                     if (current !== event.chatId) return current;
@@ -1093,7 +1139,7 @@ export function useChat() {
     const clearDraftComposer = useCallback(() => {
         const draftKey = getDraftKey(null);
         setDraftMessages([]);
-        setPendingKey(null);
+        setIsDraftPending(false);
         pendingDraftChatIdRef.current = null;
         setDraftReplyContext(null);
         setInputDraftByKey((prev) => {
@@ -1141,6 +1187,7 @@ export function useChat() {
     const selectChat = useCallback((chatId) => {
         setDraftMessages([]);
         setDraftReplyContext(null);
+        setIsDraftPending(false);
         pendingDraftChatIdRef.current = null;
         setActiveChatId(chatId);
     }, []);
@@ -1177,6 +1224,7 @@ export function useChat() {
             delete next[chatId];
             return next;
         });
+        setPendingChatIds((prev) => removePendingChatId(prev, chatId));
         if (pendingDraftChatIdRef.current === chatId) {
             pendingDraftChatIdRef.current = null;
         }
@@ -1287,7 +1335,7 @@ export function useChat() {
                 replyTo: draftReplyTarget,
             });
             setDraftMessages([optimisticUser]);
-            setPendingKey('draft');
+            setIsDraftPending(true);
 
             try {
                 const responsePayload = await sendChatMessage({
@@ -1323,7 +1371,7 @@ export function useChat() {
                 }
                 appendAiErrorToChat(null, toErrorMessage(error));
             } finally {
-                setPendingKey(null);
+                setIsDraftPending(false);
             }
 
             return;
@@ -1334,7 +1382,7 @@ export function useChat() {
         const optimisticUser = createLocalMessage(clientMessageId, 'user', trimmed, {
             parts: optimisticParts,
         });
-        setPendingKey(chatId);
+        setPendingChatIds((prev) => addPendingChatId(prev, chatId));
 
         setMessagesByChat((prev) => ({
             ...prev,
@@ -1368,7 +1416,7 @@ export function useChat() {
             appendAiErrorToChat(chatId, toErrorMessage(error));
         } finally {
             if (!payload.isSteering) {
-                setPendingKey((current) => (current === chatId ? null : current));
+                setPendingChatIds((prev) => removePendingChatId(prev, chatId));
             }
         }
     }, [appendAiErrorToChat, isHydrating]);
@@ -1434,8 +1482,9 @@ export function useChat() {
             pinned: chat.pinned === true,
             deletable: chat.deletable !== false,
             unreadCount: Math.max(0, (chat.messageCount || 0) - (readCounts[chat.id] || 0)),
+            isRunning: hasPendingChatId(pendingChatIds, chat.id),
         })),
-        [chatSummaries, activeChatId, readCounts],
+        [chatSummaries, activeChatId, readCounts, pendingChatIds],
     );
     const inputDraft = useMemo(
         () => inputDraftByKey[getDraftKey(activeChatId)] ?? '',
@@ -1464,7 +1513,9 @@ export function useChat() {
     const selectedAgentId = isDraftChat
         ? draftAgentId
         : (activeChatAgentId ?? DEFAULT_AGENT_ID);
-    const isTyping = pendingKey !== null && (pendingKey === 'draft' || pendingKey === activeChatId);
+    const isTyping = isDraftChat
+        ? isDraftPending
+        : hasPendingChatId(pendingChatIds, activeChatId);
     const greeting = `${getGreeting()}, Greeny`;
 
     return {

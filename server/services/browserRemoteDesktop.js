@@ -21,6 +21,77 @@ function buildRemoteDesktopWebSocketPath(sessionId) {
     return `/api/browser-agent/sessions/${encodeURIComponent(sanitizeText(sessionId))}/vnc/ws`;
 }
 
+function formatSpawnError(binaryName, error) {
+    const errorCode = sanitizeText(error?.code).toUpperCase();
+    const errorMessage = sanitizeText(error?.message || error);
+
+    if (errorCode === 'ENOENT') {
+        return `${binaryName} is not installed or not available in PATH. Run \`npm run setup\` on Linux, or set the correct binary path in environment variables.`;
+    }
+
+    if (errorCode === 'EACCES') {
+        return `${binaryName} was found but is not executable. Check file permissions and the configured binary path.`;
+    }
+
+    if (errorMessage) {
+        return `${binaryName} failed to start: ${errorMessage}`;
+    }
+
+    return `${binaryName} failed to start.`;
+}
+
+function formatChildEarlyExit(label, code, signal, details = '') {
+    const summary = `${label} exited before it became ready${code !== null ? ` with code ${code}` : ''}${signal ? ` (${signal})` : ''}.`;
+    const cleanDetails = sanitizeText(details);
+    return cleanDetails ? `${summary} ${cleanDetails}` : summary;
+}
+
+function createChildStartupFailureWatcher(child, label, getDetails) {
+    let disposed = false;
+    let rejectPromise = null;
+    const detailsFn = typeof getDetails === 'function' ? getDetails : () => '';
+
+    const cleanup = () => {
+        child.off('error', handleError);
+        child.off('exit', handleExit);
+    };
+
+    const handleError = (error) => {
+        if (disposed) {
+            return;
+        }
+        disposed = true;
+        cleanup();
+        rejectPromise(new Error(formatSpawnError(label, error)));
+    };
+
+    const handleExit = (code, signal) => {
+        if (disposed) {
+            return;
+        }
+        disposed = true;
+        cleanup();
+        rejectPromise(new Error(formatChildEarlyExit(label, code, signal, detailsFn())));
+    };
+
+    const promise = new Promise((_, reject) => {
+        rejectPromise = reject;
+        child.once('error', handleError);
+        child.once('exit', handleExit);
+    });
+
+    return {
+        promise,
+        dispose() {
+            if (disposed) {
+                return;
+            }
+            disposed = true;
+            cleanup();
+        },
+    };
+}
+
 function waitForStreamLine(stream, timeoutMs = REMOTE_DESKTOP_START_TIMEOUT_MS) {
     return new Promise((resolve, reject) => {
         let buffer = '';
@@ -213,9 +284,14 @@ async function spawnXvfb() {
     child.stderr?.on('data', (chunk) => {
         stderrChunks.push(String(chunk ?? ''));
     });
+    const startupFailure = createChildStartupFailureWatcher(child, XVFB_BINARY, () => stderrChunks.join(''));
 
     try {
-        const displayNumberLine = await waitForStreamLine(child.stdout);
+        const displayNumberLine = await Promise.race([
+            waitForStreamLine(child.stdout),
+            startupFailure.promise,
+        ]);
+        startupFailure.dispose();
         const displayNumber = Number(displayNumberLine);
         if (!Number.isFinite(displayNumber)) {
             throw new Error(`Xvfb returned an invalid display number: ${displayNumberLine}`);
@@ -231,12 +307,40 @@ async function spawnXvfb() {
         } catch {
             // ignore shutdown failures
         }
+        startupFailure.dispose();
         await waitForProcessExit(child);
         const stderrText = stderrChunks.join('').trim();
         if (stderrText) {
-            throw new Error(stderrText);
+            const message = sanitizeText(error?.message);
+            if (message && stderrText.includes(message)) {
+                throw new Error(stderrText);
+            }
+            throw new Error(`${message ? `${message} ` : ''}${stderrText}`.trim());
         }
         throw error;
+    }
+}
+
+async function waitForX11vncReady(child, port, stderrChunks) {
+    const startupFailure = createChildStartupFailureWatcher(child, X11VNC_BINARY, () => stderrChunks.join(''));
+
+    try {
+        await Promise.race([
+            waitForTcpPort(port),
+            startupFailure.promise,
+        ]);
+    } catch (error) {
+        const stderrText = sanitizeText(stderrChunks.join(''));
+        if (stderrText) {
+            const message = sanitizeText(error?.message);
+            if (message && stderrText.includes(message)) {
+                throw new Error(stderrText);
+            }
+            throw new Error(`${message ? `${message} ` : ''}${stderrText}`.trim());
+        }
+        throw error;
+    } finally {
+        startupFailure.dispose();
     }
 }
 
@@ -279,8 +383,12 @@ export async function createLinuxRemoteDesktop(sessionId) {
         ], {
             stdio: ['ignore', 'pipe', 'pipe'],
         });
+        const x11vncStderrChunks = [];
+        x11vnc.stderr?.on('data', (chunk) => {
+            x11vncStderrChunks.push(String(chunk ?? ''));
+        });
 
-        await waitForTcpPort(vncPort);
+        await waitForX11vncReady(x11vnc, vncPort, x11vncStderrChunks);
 
         const remoteDesktop = {
             enabled: true,

@@ -23,7 +23,6 @@ import * as callCodingAgent from './agents/callCodingAgent.js';
 import * as callMultipurposeAgent from './agents/callMultipurposeAgent.js';
 import * as callResearcherAgent from './agents/callResearcherAgent.js';
 import * as spawnSubagent from './agents/spawnSubagent.js';
-import * as subagentStatus from './agents/subagentStatus.js';
 import * as manageSchedule from './cron.js';
 import * as manageTodoList from './todo/manageTodoList.js';
 import { ALL_SHARED_TOOL_NAMES } from './sharedToolNames.js';
@@ -51,7 +50,6 @@ const ALL_TOOLS = [
     callMultipurposeAgent,
     callResearcherAgent,
     spawnSubagent,
-    subagentStatus,
     manageSchedule,
     manageTodoList,
 ];

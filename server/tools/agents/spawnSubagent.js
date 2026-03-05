@@ -1,13 +1,11 @@
 import { randomUUID } from 'node:crypto';
 import { executionContext, getExecutionContext } from '../../core/context.js';
 import {
-    MAX_CHILD_SUBAGENTS_PER_OWNER,
     MAX_SUBAGENT_SPAWN_DEPTH,
     normalizeMaxSubagentSpawnDepth,
 } from '../../core/subagentPolicy.js';
 import { mergeContextWithReportingPolicy } from '../../agents/shared/reportingRules.js';
 import {
-    countActiveSubagentsByOwnerId,
     registerSubagent,
     updateSubagent,
 } from './_subagentRegistry.js';
@@ -213,7 +211,7 @@ async function runSubagentInline({
 
 export const declaration = {
     name: 'spawn_subagent',
-    description: `Runs a delegated subagent branch inline as part of the current response. Use this for parallelizable work that should remain inside the same answer, not as a detached background task. You can launch multiple subagents in the same tool round to cover different domains concurrently. A first-level subagent may spawn child subagents once more, but depth cannot exceed ${MAX_SUBAGENT_SPAWN_DEPTH}; some executions may impose a lower depth cap. The standard branch budget is ${MAX_CHILD_SUBAGENTS_PER_OWNER} child subagents per spawning node.`,
+    description: `Runs a delegated subagent branch inline as part of the current response. Use this for parallelizable work that should remain inside the same answer, not as a detached background task. You can launch multiple subagents in the same tool round to cover different domains concurrently. A first-level subagent may spawn child subagents once more, but depth cannot exceed ${MAX_SUBAGENT_SPAWN_DEPTH}; some executions may impose a lower depth cap.`,
     parameters: {
         type: 'OBJECT',
         properties: {
@@ -267,12 +265,6 @@ export async function execute({ task, context, agentId }) {
         messageId: parentMessageId,
         subagentId: parentSubagentId,
     });
-    const existingChildren = countActiveSubagentsByOwnerId(ownerId);
-    if (existingChildren >= MAX_CHILD_SUBAGENTS_PER_OWNER) {
-        return {
-            error: `Subagent branch limit reached for this node (${MAX_CHILD_SUBAGENTS_PER_OWNER}). Finish or reuse existing branches before spawning more.`,
-        };
-    }
 
     const resolvedAgentId = resolveSubagentAgentId({
         requestedAgentId: agentId,

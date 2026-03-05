@@ -687,7 +687,8 @@ export function BrowserAgentPanel({
 
     return (
         <div className="browser-agent-panel" ref={panelRef}>
-            <section className={`browser-agent-live-shell${isFullscreen ? ' is-fullscreen' : ''}`}>
+            <div className="browser-agent-panel-main">
+                <section className={`browser-agent-live-shell${isFullscreen ? ' is-fullscreen' : ''}`}>
                 <div className="browser-agent-live-toolbar">
                     <div className="browser-agent-live-meta">
                         <strong>Live Browser</strong>
@@ -818,182 +819,182 @@ export function BrowserAgentPanel({
                         </div>
                     )}
                 </div>
-            </section>
-
-            {!liveSessionLikely && (recordingVideo || recordingFrameCount > 0) && (
-                <section className="browser-agent-recording">
-                    <div className="browser-agent-recording-meta">
-                        <strong>Recorded Browser Run</strong>
-                        {recordingVideo
-                            ? <span>{recordingVideo.mimeType === 'video/mp4' ? 'MP4' : 'WEBM'}</span>
-                            : <span>Frame {recordingIndex + 1} / {recordingFrameCount}</span>}
-                        {!recordingVideo && recordingTimestampLabel && <span>{recordingTimestampLabel}</span>}
-                    </div>
-                    {recordingVideo && (
-                        <>
-                            <div className="browser-agent-recording-links">
-                                <a href={recordingVideoUrl} target="_blank" rel="noreferrer">Open video</a>
-                                <a href={recordingDownloadUrl}>Download</a>
-                            </div>
-                            <div
-                                className="browser-agent-recording-path"
-                                title={recordingVideo.localPath}
-                            >
-                                {recordingVideo.localPath}
-                            </div>
-                        </>
-                    )}
-                    {!recordingVideo && (
-                        <input
-                            type="range"
-                            min="0"
-                            max={Math.max(recordingFrameCount - 1, 0)}
-                            value={Math.min(recordingIndex, Math.max(recordingFrameCount - 1, 0))}
-                            onChange={(event) => setRecordingIndex(Number(event.target.value) || 0)}
-                            className="browser-agent-recording-slider"
-                        />
-                    )}
-                    <div className="browser-agent-recording-note">
-                        Only Browser Agent activity is recorded. Manual control is not included.
-                    </div>
                 </section>
-            )}
 
-            {sessionAvailable && sessionExpiryLabel && panelControlMode !== 'user' && (
-                <div className="browser-agent-request-note">
-                    Browser stays open temporarily after the task finishes, so you can take control or send a follow-up step.
-                </div>
-            )}
-
-            {(!sessionAvailable || !sessionLive) && (
-                <div className="browser-agent-request-note">
-                    {isRecordingLoading
-                        ? 'This browser session is no longer live. Loading the recorded Browser Agent run.'
-                        : (recordingVideo || recordingFrameCount > 0)
-                            ? 'This browser session is no longer live. Live controls are disabled, but you can review the recorded Browser Agent run below.'
-                            : 'This browser session is no longer live. No Browser Agent recording is available for this session.'}
-                </div>
-            )}
-
-            {previewHealthy === false && sessionAvailable && sessionLive && !remoteDesktopAvailable && (
-                <div className="browser-agent-request-note">
-                    Live preview is currently lagging or stalled.
-                </div>
-            )}
-
-            {liveSessionLikely && !remoteDesktopAvailable && remoteDesktopEnabled && remoteDesktop?.reason && (
-                <div className="browser-agent-request-note">
-                    Linux remote desktop is unavailable: {remoteDesktop.reason}
-                </div>
-            )}
-
-            {liveSessionLikely && userAction?.required && (
-                <section className={`browser-agent-request browser-agent-request-${questionType}`}>
-                    <div className="browser-agent-request-label">{formatQuestionType(questionType)}</div>
-                    <div className="browser-agent-request-text">{userAction.question || 'Browser Agent needs your help.'}</div>
-                    {!directToUser && (
-                        <div className="browser-agent-request-note">
-                            This will be handled through the Orchestrator chat, not directly in the browser panel.
+                {!liveSessionLikely && (recordingVideo || recordingFrameCount > 0) && (
+                    <section className="browser-agent-recording">
+                        <div className="browser-agent-recording-meta">
+                            <strong>Recorded Browser Run</strong>
+                            {recordingVideo
+                                ? <span>{recordingVideo.mimeType === 'video/mp4' ? 'MP4' : 'WEBM'}</span>
+                                : <span>Frame {recordingIndex + 1} / {recordingFrameCount}</span>}
+                            {!recordingVideo && recordingTimestampLabel && <span>{recordingTimestampLabel}</span>}
                         </div>
-                    )}
-                </section>
-            )}
-
-            {liveSessionLikely && (panelControlMode === 'user' || directToUser || canSteerDirectly) && (
-                <section className="browser-agent-controls">
-                    {panelControlMode === 'user' && remoteDesktopAvailable && (
-                        <div className="browser-agent-request-note">
-                            Keyboard and mouse are attached directly to the live Chrome window in the preview above.
-                            {remoteDesktopError ? ` ${remoteDesktopError}` : ''}
+                        {recordingVideo && (
+                            <>
+                                <div className="browser-agent-recording-links">
+                                    <a href={recordingVideoUrl} target="_blank" rel="noreferrer">Open video</a>
+                                    <a href={recordingDownloadUrl}>Download</a>
+                                </div>
+                                <div
+                                    className="browser-agent-recording-path"
+                                    title={recordingVideo.localPath}
+                                >
+                                    {recordingVideo.localPath}
+                                </div>
+                            </>
+                        )}
+                        {!recordingVideo && (
+                            <input
+                                type="range"
+                                min="0"
+                                max={Math.max(recordingFrameCount - 1, 0)}
+                                value={Math.min(recordingIndex, Math.max(recordingFrameCount - 1, 0))}
+                                onChange={(event) => setRecordingIndex(Number(event.target.value) || 0)}
+                                className="browser-agent-recording-slider"
+                            />
+                        )}
+                        <div className="browser-agent-recording-note">
+                            Only Browser Agent activity is recorded. Manual control is not included.
                         </div>
-                    )}
-                    {panelControlMode === 'user' && !remoteDesktopAvailable && (
-                        <>
-                            <div className="browser-agent-control-grid">
-                                <button type="button" onClick={() => runAction('scroll_up')} disabled={isPending || !liveSessionLikely}>Scroll Up</button>
-                                <button type="button" onClick={() => runAction('scroll_down')} disabled={isPending || !liveSessionLikely}>Scroll Down</button>
-                                <button type="button" onClick={() => runAction('go_back')} disabled={isPending || !liveSessionLikely}>Back</button>
-                                <button type="button" onClick={() => runAction('go_forward')} disabled={isPending || !liveSessionLikely}>Forward</button>
-                                <button type="button" onClick={() => runAction('reload')} disabled={isPending || !liveSessionLikely}>Reload</button>
-                                <button type="button" onClick={() => runAction('press_key', { key: 'Enter' })} disabled={isPending || !liveSessionLikely}>Enter</button>
-                                <button type="button" onClick={() => runAction('press_key', { key: 'Tab' })} disabled={isPending || !liveSessionLikely}>Tab</button>
-                                <button type="button" onClick={() => runAction('press_key', { key: 'Escape' })} disabled={isPending || !liveSessionLikely}>Esc</button>
-                            </div>
-                            <div className="browser-agent-input-row">
-                                <input
-                                    type="text"
-                                    value={typingText}
-                                    onChange={(event) => setTypingText(event.target.value)}
-                                    placeholder="Type into the focused field and press Enter"
-                                    disabled={isPending || !liveSessionLikely}
-                                    onKeyDown={(event) => {
-                                        if (event.key === 'Enter' && typingText.trim()) {
-                                            event.preventDefault();
-                                            void handleTypeIntoPage();
-                                        }
-                                    }}
-                                />
-                            </div>
-                            <div className="browser-agent-shortcuts">
-                                Keyboard: Up/Down scroll, Alt+Left/Right history, Cmd/Ctrl+R reload, Enter, Tab, Esc.
-                            </div>
-                        </>
-                    )}
+                    </section>
+                )}
 
-                    <div className="browser-agent-input-row">
-                        <input
-                            type="text"
-                            value={steerText}
-                            onChange={(event) => setSteerText(event.target.value)}
-                            placeholder={
-                                panelControlMode === 'user'
-                                    ? (shouldResumeOnRelease
-                                        ? 'Optional note before resuming'
-                                        : 'Write a follow-up task for Browser Agent')
-                                    : canSteerDirectly
-                                        ? 'Steer Browser Agent'
-                                        : 'Reply through chat with Orchestrator'
-                            }
-                            disabled={isPending || !liveSessionLikely || !canSteerDirectly}
-                            onKeyDown={(event) => {
-                                if (
-                                    event.key === 'Enter'
-                                    && canSteerDirectly
-                                    && (!needsNoteForBottomAction || steerText.trim())
-                                ) {
-                                    event.preventDefault();
-                                    void handleContinue({ requireNote: needsNoteForBottomAction });
+                {sessionAvailable && sessionExpiryLabel && panelControlMode !== 'user' && (
+                    <div className="browser-agent-request-note">
+                        Browser stays open temporarily after the task finishes, so you can take control or send a follow-up step.
+                    </div>
+                )}
+
+                {(!sessionAvailable || !sessionLive) && (isRecordingLoading || recordingVideo || recordingFrameCount > 0) && (
+                    <div className="browser-agent-request-note">
+                        {isRecordingLoading
+                            ? 'This browser session is no longer live. Loading the recorded Browser Agent run.'
+                            : 'This browser session is no longer live. Live controls are disabled, but you can review the recorded Browser Agent run below.'}
+                    </div>
+                )}
+
+                {previewHealthy === false && sessionAvailable && sessionLive && !remoteDesktopAvailable && (
+                    <div className="browser-agent-request-note">
+                        Live preview is currently lagging or stalled.
+                    </div>
+                )}
+
+                {liveSessionLikely && !remoteDesktopAvailable && remoteDesktopEnabled && remoteDesktop?.reason && (
+                    <div className="browser-agent-request-note">
+                        Linux remote desktop is unavailable: {remoteDesktop.reason}
+                    </div>
+                )}
+
+                {liveSessionLikely && userAction?.required && (
+                    <section className={`browser-agent-request browser-agent-request-${questionType}`}>
+                        <div className="browser-agent-request-label">{formatQuestionType(questionType)}</div>
+                        <div className="browser-agent-request-text">{userAction.question || 'Browser Agent needs your help.'}</div>
+                        {!directToUser && (
+                            <div className="browser-agent-request-note">
+                                This will be handled through the Orchestrator chat, not directly in the browser panel.
+                            </div>
+                        )}
+                    </section>
+                )}
+
+                {liveSessionLikely && (panelControlMode === 'user' || directToUser || canSteerDirectly) && (
+                    <section className="browser-agent-controls">
+                        {panelControlMode === 'user' && remoteDesktopAvailable && (
+                            <div className="browser-agent-request-note">
+                                Keyboard and mouse are attached directly to the live Chrome window in the preview above.
+                                {remoteDesktopError ? ` ${remoteDesktopError}` : ''}
+                            </div>
+                        )}
+                        {panelControlMode === 'user' && !remoteDesktopAvailable && (
+                            <>
+                                <div className="browser-agent-control-grid">
+                                    <button type="button" onClick={() => runAction('scroll_up')} disabled={isPending || !liveSessionLikely}>Scroll Up</button>
+                                    <button type="button" onClick={() => runAction('scroll_down')} disabled={isPending || !liveSessionLikely}>Scroll Down</button>
+                                    <button type="button" onClick={() => runAction('go_back')} disabled={isPending || !liveSessionLikely}>Back</button>
+                                    <button type="button" onClick={() => runAction('go_forward')} disabled={isPending || !liveSessionLikely}>Forward</button>
+                                    <button type="button" onClick={() => runAction('reload')} disabled={isPending || !liveSessionLikely}>Reload</button>
+                                    <button type="button" onClick={() => runAction('press_key', { key: 'Enter' })} disabled={isPending || !liveSessionLikely}>Enter</button>
+                                    <button type="button" onClick={() => runAction('press_key', { key: 'Tab' })} disabled={isPending || !liveSessionLikely}>Tab</button>
+                                    <button type="button" onClick={() => runAction('press_key', { key: 'Escape' })} disabled={isPending || !liveSessionLikely}>Esc</button>
+                                </div>
+                                <div className="browser-agent-input-row">
+                                    <input
+                                        type="text"
+                                        value={typingText}
+                                        onChange={(event) => setTypingText(event.target.value)}
+                                        placeholder="Type into the focused field and press Enter"
+                                        disabled={isPending || !liveSessionLikely}
+                                        onKeyDown={(event) => {
+                                            if (event.key === 'Enter' && typingText.trim()) {
+                                                event.preventDefault();
+                                                void handleTypeIntoPage();
+                                            }
+                                        }}
+                                    />
+                                </div>
+                                <div className="browser-agent-shortcuts">
+                                    Keyboard: Up/Down scroll, Alt+Left/Right history, Cmd/Ctrl+R reload, Enter, Tab, Esc.
+                                </div>
+                            </>
+                        )}
+
+                        <div className="browser-agent-input-row">
+                            <input
+                                type="text"
+                                value={steerText}
+                                onChange={(event) => setSteerText(event.target.value)}
+                                placeholder={
+                                    panelControlMode === 'user'
+                                        ? (shouldResumeOnRelease
+                                            ? 'Optional note before resuming'
+                                            : 'Write a follow-up task for Browser Agent')
+                                        : canSteerDirectly
+                                            ? 'Steer Browser Agent'
+                                            : 'Reply through chat with Orchestrator'
                                 }
-                            }}
-                        />
-                        <button
-                            type="button"
-                            onClick={() => {
-                                void handleContinue({ requireNote: needsNoteForBottomAction });
-                            }}
-                            disabled={
-                                isPending
-                                || !liveSessionLikely
-                                || !canSteerDirectly
-                                || (needsNoteForBottomAction && !steerText.trim())
-                            }
-                        >
-                            {getContinueLabel({ controlMode: panelControlMode, questionType, shouldResumeOnRelease })}
-                        </button>
-                    </div>
-                    {!canSteerDirectly && (
-                        <div className="browser-agent-request-note">
-                            This question should be answered in chat through the Orchestrator.
+                                disabled={isPending || !liveSessionLikely || !canSteerDirectly}
+                                onKeyDown={(event) => {
+                                    if (
+                                        event.key === 'Enter'
+                                        && canSteerDirectly
+                                        && (!needsNoteForBottomAction || steerText.trim())
+                                    ) {
+                                        event.preventDefault();
+                                        void handleContinue({ requireNote: needsNoteForBottomAction });
+                                    }
+                                }}
+                            />
+                            <button
+                                type="button"
+                                onClick={() => {
+                                    void handleContinue({ requireNote: needsNoteForBottomAction });
+                                }}
+                                disabled={
+                                    isPending
+                                    || !liveSessionLikely
+                                    || !canSteerDirectly
+                                    || (needsNoteForBottomAction && !steerText.trim())
+                                }
+                            >
+                                {getContinueLabel({ controlMode: panelControlMode, questionType, shouldResumeOnRelease })}
+                            </button>
                         </div>
-                    )}
-                    {errorMessage && <div className="browser-agent-error">{errorMessage}</div>}
-                </section>
-            )}
+                        {!canSteerDirectly && (
+                            <div className="browser-agent-request-note">
+                                This question should be answered in chat through the Orchestrator.
+                            </div>
+                        )}
+                        {errorMessage && <div className="browser-agent-error">{errorMessage}</div>}
+                    </section>
+                )}
+            </div>
 
             <BrowserActivityLog
                 entries={activityLog}
                 title="Activity Log"
                 className="browser-agent-panel-log"
+                autoScroll
             />
         </div>
     );

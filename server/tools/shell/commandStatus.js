@@ -37,7 +37,7 @@ export async function execute({
     const normalizedId = String(CommandId ?? '').trim();
     if (isSubagentId(normalizedId)) {
         return {
-            error: `Subagent IDs are not command IDs: ${normalizedId}. Use subagent_status instead.`,
+            error: `Subagent IDs are not command IDs: ${normalizedId}. Subagents run inline and return their result directly from spawn_subagent.`,
         };
     }
 

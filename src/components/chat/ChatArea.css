@@ -166,6 +166,16 @@
     animation: panel-content-swap 260ms cubic-bezier(0.22, 1, 0.36, 1);
 }
 
+.agent-side-body.browser-agent-body {
+    overflow: hidden;
+}
+
+.agent-side-body.browser-agent-body .agent-side-panel-frame {
+    display: flex;
+    min-height: 0;
+    height: 100%;
+}
+
 .agent-side-body .message-ai {
     padding-right: 0;
 }
@@ -627,8 +637,9 @@
 }
 
 .chat-input-attention-wrap {
-    width: 100%;
-    max-width: none;
+    width: min(100%, var(--chat-input-column-max-width));
+    max-width: var(--chat-input-column-max-width);
+    margin-inline: auto;
     padding: 0 0 10px;
 }
 

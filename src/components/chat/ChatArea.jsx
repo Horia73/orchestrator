@@ -1387,7 +1387,10 @@ export function ChatArea({
                                 <p className="agent-side-call-text">{callSummary}</p>
                             </div>
                         )}
-                        <div className="agent-side-body" ref={agentPanelBodyRef}>
+                        <div
+                            className={`agent-side-body${activeAgentCallDetails?.agentId === 'browser' ? ' browser-agent-body' : ''}`}
+                            ref={agentPanelBodyRef}
+                        >
                             <div className="agent-side-panel-frame" key={activeAgentPanelRenderKey}>
                                 {activeAgentCallDetails?.agentId === 'browser' && activeAgentPanelPayload
                                     ? (

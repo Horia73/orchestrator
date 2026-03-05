@@ -1,8 +1,7 @@
 import { getExecutionContext } from './context.js';
 
 export const MAX_SUBAGENT_SPAWN_DEPTH = 2;
-export const MAX_CHILD_SUBAGENTS_PER_OWNER = 4;
-export const MAX_SUBAGENT_TOOL_CALLS = 15;
+export const MAX_SUBAGENT_TOOL_CALLS = 25;
 
 function normalizeDepth(value) {
     const numeric = Number(value);
@@ -40,7 +39,7 @@ export function getSubagentExecutionProfile() {
         isSubagent,
         isLeafSubagent,
         canSpawnChildren,
-        maxChildSubagents: canSpawnChildren ? MAX_CHILD_SUBAGENTS_PER_OWNER : 0,
+        maxChildSubagents: canSpawnChildren ? null : 0,
         maxToolCalls: isSubagent ? MAX_SUBAGENT_TOOL_CALLS : Infinity,
     };
 }
@@ -53,10 +52,10 @@ export function buildSubagentExecutionPromptBlock() {
             ? 'TERMINAL_SUBAGENT'
             : 'DELEGATING_SUBAGENT';
     const rootSpawnLine = profile.maxSpawnDepth > 0
-        ? `- Root agent mode: use \`spawn_subagent\` only for genuinely parallel branches. Default branch budget is ${MAX_CHILD_SUBAGENTS_PER_OWNER} direct subagents for broad tasks. Spawned branches are INLINE work, not background jobs, so wait for their results before your final answer. Maximum allowed spawn depth for this execution: ${profile.maxSpawnDepth}.`
+        ? `- Root agent mode: use \`spawn_subagent\` for genuinely parallel branches when it improves coverage or speed. Spawned branches are INLINE work, not background jobs, so wait for their results before your final answer. Maximum allowed spawn depth for this execution: ${profile.maxSpawnDepth}.`
         : '- Root agent mode: subagent spawning is disabled for this execution. Solve the task without calling `spawn_subagent`.';
     const delegatingSpawnLine = profile.maxSpawnDepth > profile.spawnDepth
-        ? `- Delegating subagent mode: you are working on one assigned slice of the parent task. Return strong structured findings for that slice. You may spawn up to ${MAX_CHILD_SUBAGENTS_PER_OWNER} narrower child subagents only when it materially improves coverage. Hard limit: at most ${MAX_SUBAGENT_TOOL_CALLS} total tool calls inside this subagent branch.`
+        ? `- Delegating subagent mode: you are working on one assigned slice of the parent task. Return strong structured findings for that slice. You may spawn narrower child subagents only when it materially improves coverage. Hard limit: at most ${MAX_SUBAGENT_TOOL_CALLS} total tool calls inside this subagent branch.`
         : `- Delegating subagent mode: child spawning is disabled at your current depth (${profile.spawnDepth}) because this execution caps spawn depth at ${profile.maxSpawnDepth}. Finish your assigned slice yourself. Hard limit: at most ${MAX_SUBAGENT_TOOL_CALLS} total tool calls inside this subagent branch.`;
 
     return `

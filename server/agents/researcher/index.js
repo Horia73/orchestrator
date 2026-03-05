@@ -43,7 +43,6 @@ export const RESEARCHER_BASE_TOOLS = [
 
 export const RESEARCHER_SUBAGENT_TOOLS = [
     'spawn_subagent',
-    'subagent_status',
 ];
 
 export function getResearcherToolAccess({ allowSubagents = true } = {}) {

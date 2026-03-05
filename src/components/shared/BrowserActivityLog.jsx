@@ -1,3 +1,4 @@
+import { useEffect, useRef } from 'react';
 import './BrowserActivityLog.css';
 
 function normalizeEntry(entry, index) {
@@ -31,12 +32,30 @@ export function BrowserActivityLog({
     title = 'Activity Log',
     emptyLabel = 'No activity yet.',
     showCount = true,
+    autoScroll = false,
     className = '',
 }) {
+    const listRef = useRef(null);
     const normalizedEntries = Array.isArray(entries)
         ? entries.map(normalizeEntry).filter(Boolean)
         : [];
+    const lastEntryId = normalizedEntries.length > 0
+        ? normalizedEntries[normalizedEntries.length - 1].id
+        : '';
     const rootClassName = ['browser-activity-log', className].filter(Boolean).join(' ');
+
+    useEffect(() => {
+        if (!autoScroll) {
+            return;
+        }
+
+        const listNode = listRef.current;
+        if (!listNode) {
+            return;
+        }
+
+        listNode.scrollTop = listNode.scrollHeight;
+    }, [autoScroll, lastEntryId, normalizedEntries.length]);
 
     return (
         <section className={rootClassName}>
@@ -44,7 +63,7 @@ export function BrowserActivityLog({
                 <span>{title}</span>
                 {showCount && <span>{normalizedEntries.length} entries</span>}
             </div>
-            <div className="browser-activity-log-list">
+            <div className="browser-activity-log-list" ref={listRef}>
                 {normalizedEntries.length > 0
                     ? normalizedEntries.map((entry, index) => (
                         <div

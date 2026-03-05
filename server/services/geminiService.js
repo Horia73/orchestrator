@@ -32,6 +32,11 @@ const PARALLEL_TOOL_NAMES = new Set([
     'spawn_subagent',
     'search_web',
     'read_url_content',
+    'call_researcher_agent',
+    'call_coding_agent',
+    'call_multipurpose_agent',
+    'call_browser_agent',
+    'generate_image',
 ]);
 const MAX_INLINE_ATTACHMENT_BYTES = 20 * 1024 * 1024;
 
