@@ -1,9 +1,18 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
+import {
+    installSoftwareUpdate,
+    requestSystemReset,
+    requestSystemRestart,
+} from '../../api/settingsApi.js';
 
 const GITHUB_OWNER = 'Horia73';
 const GITHUB_REPO = 'orchestrator';
 const CHECK_CACHE_KEY = 'orchestrator.updates.last_check';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+function sleep(ms) {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function readCache() {
     try {
@@ -28,7 +37,7 @@ function writeCache(data) {
     try {
         localStorage.setItem(CHECK_CACHE_KEY, JSON.stringify({ ...data, ts: Date.now() }));
     } catch {
-        /* noop */
+        // noop
     }
 }
 
@@ -56,6 +65,28 @@ function buildErrorMessage(error, fallback) {
     return message || fallback;
 }
 
+function getPhaseLabel(actionKind, actionPhase) {
+    if (!actionPhase) return '';
+
+    if (actionKind === 'update') {
+        if (actionPhase === 'pulling') return 'Pulling changes…';
+        if (actionPhase === 'restarting') return 'Restarting server…';
+        if (actionPhase === 'reconnecting') return 'Reconnecting…';
+    }
+
+    if (actionKind === 'restart') {
+        if (actionPhase === 'restarting') return 'Restarting server…';
+        if (actionPhase === 'reconnecting') return 'Reconnecting…';
+    }
+
+    if (actionKind === 'reset') {
+        if (actionPhase === 'resetting') return 'Resetting runtime data…';
+        if (actionPhase === 'reconnecting') return 'Reconnecting…';
+    }
+
+    return 'Working…';
+}
+
 export function UpdatesPanel() {
     const [state, setState] = useState({
         loading: true,
@@ -76,12 +107,13 @@ export function UpdatesPanel() {
         canInstall: false,
         checkedAt: null,
     });
-    const [installing, setInstalling] = useState(false);
-    const [installPhase, setInstallPhase] = useState(null); // 'pulling' | 'restarting' | 'reconnecting'
-    const [installResult, setInstallResult] = useState(null);
-    const reconnectTimer = useRef(null);
+    const [actionKind, setActionKind] = useState('');
+    const [actionPhase, setActionPhase] = useState('');
+    const [actionResult, setActionResult] = useState(null);
+    const [connectionState, setConnectionState] = useState('connecting');
+    const mountedRef = useRef(true);
 
-    const checkForUpdates = useCallback(async (force = false) => {
+    const checkForUpdates = useCallback(async ({ force = false, silent = false } = {}) => {
         if (!force) {
             const cached = readCache();
             if (cached) {
@@ -95,7 +127,9 @@ export function UpdatesPanel() {
             }
         }
 
-        setState((prev) => ({ ...prev, loading: true, error: null }));
+        if (!silent) {
+            setState((prev) => ({ ...prev, loading: true, error: null }));
+        }
 
         try {
             const response = await fetch('/api/update/status', { cache: 'no-store' });
@@ -123,95 +157,223 @@ export function UpdatesPanel() {
             };
 
             writeCache(result);
-            setState({ loading: false, error: null, ...result });
+            if (mountedRef.current) {
+                setState({ loading: false, error: null, ...result });
+            }
         } catch (error) {
-            setState((prev) => ({
-                ...prev,
-                loading: false,
-                error: buildErrorMessage(error, 'Failed to check updates.'),
-            }));
+            if (!mountedRef.current) {
+                return;
+            }
+
+            if (!silent) {
+                setState((prev) => ({
+                    ...prev,
+                    loading: false,
+                    error: buildErrorMessage(error, 'Failed to check updates.'),
+                }));
+            }
         }
+    }, []);
+
+    const waitForReconnect = useCallback(async ({
+        maxAttempts = 30,
+        intervalMs = 2000,
+        successMessage = 'Server restarted successfully.',
+        timeoutMessage = 'Server did not come back in time. Please try again.',
+    } = {}) => {
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+            await sleep(intervalMs);
+            try {
+                const health = await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
+                if (!health.ok) {
+                    continue;
+                }
+
+                if (!mountedRef.current) {
+                    return;
+                }
+
+                setActionPhase('');
+                setActionKind('');
+                setActionResult({ success: true, message: successMessage });
+                localStorage.removeItem(CHECK_CACHE_KEY);
+                await checkForUpdates({ force: true });
+                return;
+            } catch {
+                // keep polling
+            }
+        }
+
+        if (!mountedRef.current) {
+            return;
+        }
+
+        setActionPhase('');
+        setActionKind('');
+        setActionResult({ success: false, message: timeoutMessage });
+    }, [checkForUpdates]);
+
+    useEffect(() => {
+        checkForUpdates().catch(() => undefined);
+    }, [checkForUpdates]);
+
+    useEffect(() => {
+        mountedRef.current = true;
+        return () => {
+            mountedRef.current = false;
+        };
     }, []);
 
     useEffect(() => {
-        checkForUpdates();
-    }, [checkForUpdates]);
+        const source = new EventSource('/api/events');
+        setConnectionState('connecting');
 
-    useEffect(() => () => {
-        if (reconnectTimer.current) {
-            clearInterval(reconnectTimer.current);
-        }
+        source.onopen = () => {
+            if (!mountedRef.current) return;
+            setConnectionState('connected');
+        };
+
+        source.onerror = () => {
+            if (!mountedRef.current) return;
+            setConnectionState('disconnected');
+        };
+
+        return () => {
+            source.close();
+        };
     }, []);
 
+    useEffect(() => {
+        const timer = setInterval(() => {
+            if (actionPhase) {
+                return;
+            }
+            checkForUpdates({ force: true, silent: true }).catch(() => undefined);
+        }, 5000);
+
+        return () => {
+            clearInterval(timer);
+        };
+    }, [actionPhase, checkForUpdates]);
+
     const handleInstall = useCallback(async () => {
-        setInstalling(true);
-        setInstallResult(null);
-        setInstallPhase('pulling');
+        if (!window.confirm('Instalez update-ul și repornesc serverul acum?')) {
+            return;
+        }
+
+        setActionResult(null);
+        setActionKind('update');
+        setActionPhase('pulling');
 
         try {
-            const response = await fetch('/api/update', { method: 'POST' });
-            const payload = await response.json().catch(() => ({}));
-
-            if (!response.ok) {
-                setInstallResult({ success: false, message: payload.error || `Update failed (HTTP ${response.status})` });
-                setInstallPhase(null);
-                return;
-            }
+            const payload = await installSoftwareUpdate();
 
             if (!payload.restarting) {
-                setInstallResult({ success: true, message: payload.message || 'No update applied.' });
-                setInstallPhase(null);
-                await checkForUpdates(true);
+                setActionKind('');
+                setActionPhase('');
+                setActionResult({ success: true, message: payload.message || 'No update applied.' });
+                await checkForUpdates({ force: true });
                 return;
             }
 
-            setInstallPhase('restarting');
-            setInstallResult({ success: true, message: payload.message || 'Update installed. Restarting…' });
+            setActionPhase('restarting');
+            setActionResult({ success: true, message: payload.message || 'Update installed. Restarting…' });
+            await sleep(1200);
+            if (!mountedRef.current) return;
 
-            await new Promise((resolve) => setTimeout(resolve, 2000));
-            setInstallPhase('reconnecting');
-
-            let attempts = 0;
-            reconnectTimer.current = setInterval(async () => {
-                attempts += 1;
-                try {
-                    const health = await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
-                    if (!health.ok) {
-                        return;
-                    }
-                    clearInterval(reconnectTimer.current);
-                    reconnectTimer.current = null;
-                    setInstallPhase(null);
-                    setInstallResult({ success: true, message: 'Update complete! Server restarted successfully.' });
-                    localStorage.removeItem(CHECK_CACHE_KEY);
-                    await checkForUpdates(true);
-                } catch {
-                    if (attempts > 30) {
-                        clearInterval(reconnectTimer.current);
-                        reconnectTimer.current = null;
-                        setInstallPhase(null);
-                        setInstallResult({ success: false, message: 'Server did not come back after 60s. Try restarting manually.' });
-                    }
-                }
-            }, 2000);
+            setActionPhase('reconnecting');
+            await waitForReconnect({
+                maxAttempts: 30,
+                intervalMs: 2000,
+                successMessage: 'Update complete! Server restarted successfully.',
+                timeoutMessage: 'Server did not come back after 60s. Try restarting manually.',
+            });
         } catch (error) {
-            setInstallResult({
+            if (!mountedRef.current) {
+                return;
+            }
+            setActionKind('');
+            setActionPhase('');
+            setActionResult({
                 success: false,
                 message: buildErrorMessage(error, 'Failed to install update.'),
             });
-            setInstallPhase(null);
-        } finally {
-            setInstalling(false);
         }
-    }, [checkForUpdates]);
+    }, [checkForUpdates, waitForReconnect]);
+
+    const handleRestart = useCallback(async () => {
+        if (!window.confirm('Sigur vrei restart server acum?')) {
+            return;
+        }
+
+        setActionResult(null);
+        setActionKind('restart');
+        setActionPhase('restarting');
+
+        try {
+            await requestSystemRestart();
+            if (!mountedRef.current) return;
+
+            setActionPhase('reconnecting');
+            await waitForReconnect({
+                maxAttempts: 40,
+                intervalMs: 1500,
+                successMessage: 'Restart complete. Server is connected again.',
+                timeoutMessage: 'Server did not come back after restart.',
+            });
+        } catch (error) {
+            if (!mountedRef.current) {
+                return;
+            }
+            setActionKind('');
+            setActionPhase('');
+            setActionResult({
+                success: false,
+                message: buildErrorMessage(error, 'Failed to restart server.'),
+            });
+        }
+    }, [waitForReconnect]);
+
+    const handleReset = useCallback(async () => {
+        if (!window.confirm('Reset runtime data și restart acum? Acțiunea recreează ~/.orchestrator.')) {
+            return;
+        }
+
+        setActionResult(null);
+        setActionKind('reset');
+        setActionPhase('resetting');
+
+        try {
+            await requestSystemReset();
+            if (!mountedRef.current) return;
+
+            setActionPhase('reconnecting');
+            await waitForReconnect({
+                maxAttempts: 80,
+                intervalMs: 2000,
+                successMessage: 'Reset complete. Runtime was recreated and server is back online.',
+                timeoutMessage: 'Server did not come back after reset.',
+            });
+        } catch (error) {
+            if (!mountedRef.current) {
+                return;
+            }
+            setActionKind('');
+            setActionPhase('');
+            setActionResult({
+                success: false,
+                message: buildErrorMessage(error, 'Failed to reset runtime.'),
+            });
+        }
+    }, [waitForReconnect]);
 
     const installedLabel = formatVersion(
         state.localVersion,
-        state.localShaShort ? `#${state.localShaShort}` : '…'
+        state.localShaShort ? `#${state.localShaShort}` : '…',
     );
     const latestLabel = formatVersion(
         state.remoteVersion,
-        state.remoteShaShort ? `#${state.remoteShaShort}` : '—'
+        state.remoteShaShort ? `#${state.remoteShaShort}` : '—',
     );
     const hasUpdate = !state.loading && !state.error && state.behind > 0;
     const canAutoInstall = hasUpdate && state.ahead === 0 && state.canInstall;
@@ -222,6 +384,13 @@ export function UpdatesPanel() {
     const compareUrl = state.localSha && state.remoteSha
         ? `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/compare/${state.localSha}...${state.remoteSha}`
         : null;
+    const isBusy = Boolean(actionPhase);
+    const currentPhaseLabel = getPhaseLabel(actionKind, actionPhase);
+    const connectionLabel = connectionState === 'connected'
+        ? 'Connected'
+        : connectionState === 'disconnected'
+            ? 'Disconnected'
+            : 'Connecting';
 
     return (
         <div className="updates-panel">
@@ -232,8 +401,8 @@ export function UpdatesPanel() {
                 </div>
                 <button
                     className="updates-check-btn"
-                    onClick={() => checkForUpdates(true)}
-                    disabled={state.loading || !!installPhase}
+                    onClick={() => checkForUpdates({ force: true })}
+                    disabled={state.loading || isBusy}
                     type="button"
                 >
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ marginRight: 6 }}>
@@ -243,6 +412,22 @@ export function UpdatesPanel() {
                     {state.loading ? 'Checking…' : 'Check now'}
                 </button>
             </div>
+
+            <div className="updates-live-row">
+                <span className={`updates-connection-pill is-${connectionState}`}>
+                    <span className="updates-connection-dot" aria-hidden="true" />
+                    {connectionLabel}
+                </span>
+                <span className="updates-live-meta">Live refresh: 5s</span>
+                {state.checkedAt && <span className="updates-live-meta">Last check: {timeAgo(state.checkedAt)}</span>}
+            </div>
+
+            {currentPhaseLabel && (
+                <div className="updates-action-progress">
+                    <span className="updates-spinner" />
+                    <span>{currentPhaseLabel}</span>
+                </div>
+            )}
 
             <div className="updates-version-cards">
                 <div className={`updates-version-card ${isUpToDate ? 'up-to-date' : ''}`}>
@@ -270,7 +455,7 @@ export function UpdatesPanel() {
                 </div>
             )}
 
-            {!state.loading && isUpToDate && !installPhase && (
+            {!state.loading && isUpToDate && !actionPhase && (
                 <div className="updates-up-to-date">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M20 6L9 17l-5-5" />
@@ -279,7 +464,7 @@ export function UpdatesPanel() {
                 </div>
             )}
 
-            {!state.loading && isAheadOnly && !installPhase && (
+            {!state.loading && isAheadOnly && !actionPhase && (
                 <div className="updates-up-to-date">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M20 6L9 17l-5-5" />
@@ -333,28 +518,15 @@ export function UpdatesPanel() {
                         <button
                             className="updates-install-btn"
                             onClick={handleInstall}
-                            disabled={installing || !!installPhase}
+                            disabled={isBusy}
                             type="button"
                         >
-                            {installPhase === 'pulling' && (
+                            {actionKind === 'update' && actionPhase ? (
                                 <>
                                     <span className="updates-spinner" />
-                                    Pulling changes…
+                                    {getPhaseLabel('update', actionPhase)}
                                 </>
-                            )}
-                            {installPhase === 'restarting' && (
-                                <>
-                                    <span className="updates-spinner" />
-                                    Restarting server…
-                                </>
-                            )}
-                            {installPhase === 'reconnecting' && (
-                                <>
-                                    <span className="updates-spinner" />
-                                    Reconnecting…
-                                </>
-                            )}
-                            {!installPhase && (
+                            ) : (
                                 <>
                                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
                                         <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
@@ -369,9 +541,28 @@ export function UpdatesPanel() {
                 </div>
             )}
 
-            {installResult && !installPhase && (
-                <div className={`updates-install-result ${installResult.success ? 'success' : 'error'}`}>
-                    {installResult.success ? (
+            <div className="updates-maintenance-actions">
+                <button
+                    className="updates-maintenance-btn"
+                    type="button"
+                    onClick={handleRestart}
+                    disabled={isBusy}
+                >
+                    Restart Server
+                </button>
+                <button
+                    className="updates-maintenance-btn danger"
+                    type="button"
+                    onClick={handleReset}
+                    disabled={isBusy}
+                >
+                    Reset Runtime
+                </button>
+            </div>
+
+            {actionResult && !actionPhase && (
+                <div className={`updates-install-result ${actionResult.success ? 'success' : 'error'}`}>
+                    {actionResult.success ? (
                         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                             <path d="M20 6L9 17l-5-5" />
                         </svg>
@@ -380,7 +571,7 @@ export function UpdatesPanel() {
                             <circle cx="12" cy="12" r="10" /><line x1="15" y1="9" x2="9" y2="15" /><line x1="9" y1="9" x2="15" y2="15" />
                         </svg>
                     )}
-                    <span>{installResult.message}</span>
+                    <span>{actionResult.message}</span>
                 </div>
             )}
         </div>

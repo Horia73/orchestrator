@@ -1,8 +1,16 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { BOOT_PROMPT_PATH } from '../core/dataPaths.js';
+import {
+    BOOT_PROMPT_PATH,
+    CONFIG_PATH,
+    IDENTITY_MEMORY_PATH,
+    ORCHESTRATOR_HOME,
+    MEMORY_PATH,
+    SOUL_MEMORY_PATH,
+    USER_MEMORY_PATH,
+} from '../core/dataPaths.js';
 
-const ONBOARDING_VERSION = 2;
+const ONBOARDING_VERSION = 3;
 
 export const DEFAULT_BOOT_PROMPT_CONTENT = `# BOOTSTRAP MODE
 
@@ -31,21 +39,30 @@ Rules:
 - If the user gives multiple fields in one message, accept them.
 - Stay in onboarding mode until all required values are confirmed and saved.
 - Keep tone short, clear, and conversational.
+- Paths must be dynamic and runtime-correct.
+- Do not ask about models/models.json unless the user explicitly requests that topic.
+
+Runtime paths:
+- Runtime home: ${ORCHESTRATOR_HOME}
+- Config file: ${CONFIG_PATH}
+- BOOT file: ${BOOT_PROMPT_PATH}
+- Permanent memory: ${MEMORY_PATH}
 
 Tooling (use tools directly):
-- Read and edit: ~/.orchestrator/config.json
+- Read and edit: ${CONFIG_PATH}
 - Persist values under:
   - ui.aiName
   - ui.userName
   - ui.aiEmoji
   - ui.aiVibe
 - Also update memory identity files:
-  - ~/.orchestrator/data/memory/USER.md
-  - ~/.orchestrator/data/memory/IDENTITY.md
-  - ~/.orchestrator/data/memory/SOUL.md
+  - ${MEMORY_PATH}
+  - ${USER_MEMORY_PATH}
+  - ${IDENTITY_MEMORY_PATH}
+  - ${SOUL_MEMORY_PATH}
 - Keep those memory files short and useful (clear bullets, no fluff).
-- In each file, keep a 1-2 line explainer at the top about what belongs there.
-- After save, delete: ~/.orchestrator/BOOT.md
+- Ensure permanent memory keeps a stable birth date line for the assistant.
+- After save, delete: ${BOOT_PROMPT_PATH}
 
 Exit criteria:
 1) Values are saved in config.json.
@@ -54,8 +71,8 @@ Exit criteria:
 4) You tell the user onboarding is complete and summarize chosen identity.
 
 After onboarding:
-- Offer a short runtime-files tour if useful or if the user asks.
-- Cover at least: config.json, models.json, BOOT.md lifecycle, and memory files.
+- Offer a short runtime-files tour only if the user asks.
+- Keep explanations concise and relevant to what the user asked.
 `;
 
 export function createDefaultBootOnboardingState() {

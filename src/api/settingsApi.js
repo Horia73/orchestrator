@@ -164,3 +164,24 @@ export async function clearSystemLogs() {
     });
     return parseApiResponse(response);
 }
+
+export async function installSoftwareUpdate() {
+    const response = await fetch('/api/update', {
+        method: 'POST',
+    });
+    return parseApiResponse(response);
+}
+
+export async function requestSystemRestart() {
+    const response = await fetch('/api/system/restart', {
+        method: 'POST',
+    });
+    return parseApiResponse(response);
+}
+
+export async function requestSystemReset() {
+    const response = await fetch('/api/system/reset', {
+        method: 'POST',
+    });
+    return parseApiResponse(response);
+}

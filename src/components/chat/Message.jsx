@@ -940,7 +940,7 @@ async function copyTextWithFallback(content) {
             return true;
         }
     } catch {
-        // fall through to legacy copy
+        // fall through to textarea copy fallback
     }
 
     try {
@@ -1342,7 +1342,7 @@ export const Message = forwardRef(function Message({
             if (!hasToolCall && hasStepText && !hasRenderedAttachments(stepParts) && messageHasAttachments) {
                 return true;
             }
-            // Legacy: step text references inline images via markdown.
+            // Older step text may reference inline images via markdown.
             return hasInlineImageMarkdown(step?.text) && !hasRenderedAttachments(stepParts) && messageHasAttachments;
         })
         : [];

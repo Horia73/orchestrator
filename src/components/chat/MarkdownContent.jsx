@@ -137,7 +137,7 @@ async function copyToClipboard(text) {
             return true;
         }
     } catch {
-        // fall through to legacy copy
+        // fall through to textarea copy fallback
     }
 
     try {

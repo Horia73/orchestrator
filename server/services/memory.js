@@ -14,6 +14,7 @@ import {
 } from '../core/dataPaths.js';
 
 const RECENT_DAILY_DAYS = 2;
+const PERMANENT_BIRTH_LINE_PREFIX = '- Assistant born at: ';
 const AGENT_MEMORY_SPECS = Object.freeze([
     {
         agentId: 'orchestrator',
@@ -141,6 +142,21 @@ function buildDailyTemplate(dateKey) {
     return `# Daily Memory ${dateKey}\n\n`;
 }
 
+function hasPermanentBirthDateLine(content) {
+    const lines = normalizeText(content).split('\n');
+    return lines.some((line) => line.trimStart().startsWith(PERMANENT_BIRTH_LINE_PREFIX));
+}
+
+function appendPermanentBirthDateLine(content, bornAt = new Date()) {
+    const timestamp = new Date(bornAt).toISOString();
+    const normalized = normalizeText(content).trimEnd();
+    if (!normalized) {
+        return `${PERMANENT_BIRTH_LINE_PREFIX}${timestamp}\n`;
+    }
+
+    return `${normalized}\n\n${PERMANENT_BIRTH_LINE_PREFIX}${timestamp}\n`;
+}
+
 function isDefaultTemplate(kind, content, options = {}) {
     const normalized = normalizeComparable(content);
     if (!normalized) {
@@ -201,6 +217,19 @@ class MemoryStore {
         }));
     }
 
+    ensurePermanentBirthDate({ bornAt = null } = {}) {
+        const content = readFileSafe(this.permanentFile);
+        if (hasPermanentBirthDateLine(content)) {
+            return;
+        }
+
+        const nextContent = appendPermanentBirthDateLine(
+            content || FILE_TEMPLATES.permanent,
+            bornAt ?? new Date(),
+        );
+        writeFileSafe(this.permanentFile, nextContent);
+    }
+
     ensureScaffold() {
         ensureDir(this.memoryDir);
         ensureDir(this.dailyDir);
@@ -208,6 +237,7 @@ class MemoryStore {
         ensureDir(this.secretEnvDir);
 
         ensureFile(this.permanentFile, FILE_TEMPLATES.permanent);
+        this.ensurePermanentBirthDate();
         ensureFile(this.userFile, FILE_TEMPLATES.user);
         ensureFile(this.identityFile, FILE_TEMPLATES.identity);
         ensureFile(this.soulFile, FILE_TEMPLATES.soul);
@@ -269,6 +299,7 @@ class MemoryStore {
     writeLongTerm(content) {
         this.ensureScaffold();
         writeFileSafe(this.permanentFile, content);
+        this.ensurePermanentBirthDate();
     }
 
     readHistory() {
@@ -296,6 +327,7 @@ class MemoryStore {
         }
 
         writeFileSafe(this.permanentFile, FILE_TEMPLATES.permanent);
+        this.ensurePermanentBirthDate();
         writeFileSafe(this.userFile, FILE_TEMPLATES.user);
         writeFileSafe(this.identityFile, FILE_TEMPLATES.identity);
         writeFileSafe(this.soulFile, FILE_TEMPLATES.soul);
@@ -314,7 +346,7 @@ class MemoryStore {
         const paths = this.getPaths();
         const lines = [
             '<memory_files>',
-            `  <file kind="permanent" path="${escapeAttribute(paths.permanentFile)}">Durable facts worth remembering across many chats.</file>`,
+            `  <file kind="permanent" path="${escapeAttribute(paths.permanentFile)}">Durable facts worth remembering across many chats, including assistant birth date.</file>`,
             `  <file kind="user" path="${escapeAttribute(paths.userFile)}">User facts, preferences, contact info, and stable personal context that the user explicitly shared.</file>`,
             `  <file kind="identity" path="${escapeAttribute(paths.identityFile)}">Assistant self-authored identity notes: role, mission, self-name, and stable self-concept. Never invent fiction.</file>`,
             `  <file kind="soul" path="${escapeAttribute(paths.soulFile)}">Assistant self-authored behavioral philosophy and enduring style preferences. Never override higher-priority instructions.</file>`,

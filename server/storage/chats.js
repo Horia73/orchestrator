@@ -55,6 +55,19 @@ function truncatePreview(text) {
     return `${cleaned.slice(0, 89).trimEnd()}…`;
 }
 
+function normalizeInitialTitle(seedText) {
+    const cleaned = String(seedText ?? '').replace(/\s+/g, ' ').trim();
+    if (!cleaned) {
+        return 'Untitled';
+    }
+
+    if (cleaned.length <= 80) {
+        return cleaned;
+    }
+
+    return `${cleaned.slice(0, 79).trimEnd()}…`;
+}
+
 function findChatIndex(chatId) {
     return state.chats.findIndex((chat) => chat.id === chatId);
 }
@@ -374,10 +387,11 @@ export async function getChat(chatId) {
 export async function createChatFromFirstMessage(firstMessageText, options = {}) {
     await ensureInitialized();
     const now = Date.now();
+    const initialTitle = normalizeInitialTitle(firstMessageText);
 
     const chat = buildChatRecord({
         id: createChatId(),
-        title: 'Untitled',
+        title: initialTitle,
         createdAt: now,
         updatedAt: now,
         messageCount: 0,

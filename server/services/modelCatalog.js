@@ -499,7 +499,7 @@ export async function getModelsForClient() {
         });
 }
 
-function fallbackThinkingConfigFromLegacyLevel(presetId) {
+function fallbackThinkingConfigFromPresetLevel(presetId) {
     const normalized = String(presetId ?? '').trim().toUpperCase();
     if (!THINKING_LEVEL_ORDER.includes(normalized)) {
         return null;
@@ -516,7 +516,7 @@ export function resolveThinkingConfig(modelId, presetId) {
     const normalizedPresetId = String(presetId ?? '').trim().toUpperCase();
 
     if (!entry || !entry.thinkingVerified || !entry.thinkingMode) {
-        return fallbackThinkingConfigFromLegacyLevel(normalizedPresetId);
+        return fallbackThinkingConfigFromPresetLevel(normalizedPresetId);
     }
 
     if (entry.thinkingMode === 'none') {

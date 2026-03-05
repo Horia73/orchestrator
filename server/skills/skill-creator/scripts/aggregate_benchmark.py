@@ -24,7 +24,7 @@ The script supports two directory layouts:
             ├── run-1/grading.json
             └── run-2/grading.json
 
-    Legacy layout (with runs/ subdirectory):
+    Older layout (with runs/ subdirectory):
     <benchmark_dir>/
     └── runs/
         └── eval-N/

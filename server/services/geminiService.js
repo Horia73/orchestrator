@@ -2030,7 +2030,7 @@ export async function listAvailableModels() {
     return listAvailableModelsFromApi();
 }
 
-export async function generateChatTitle({ text, attachments, aiText }) {
+export async function generateChatTitleWithMetadata({ text, attachments, aiText }) {
     const prompt = [];
     if (attachments && attachments.length > 0) {
         prompt.push('User uploaded some attachments/images.');
@@ -2045,9 +2045,9 @@ export async function generateChatTitle({ text, attachments, aiText }) {
 
     prompt.push('Task: Generate a short, conversational and concise title (1-5 words max) for this chat conversation based on the context above. Only output the title. Do not include quotes, markdown bolding, or any explanations.');
 
+    const model = 'gemini-3.1-flash-lite-preview';
     try {
         const client = getClient();
-        const model = 'gemini-3.1-flash-lite-preview';
         const doc = prompt.join('\n\n');
         const result = await retryOnRateLimit(() => client.models.generateContent({
             model,
@@ -2056,9 +2056,24 @@ export async function generateChatTitle({ text, attachments, aiText }) {
         }));
 
         const generatedTitle = result.text?.trim();
-        return generatedTitle || null;
+        return {
+            title: generatedTitle || null,
+            model,
+            usageMetadata: result?.usageMetadata ?? null,
+            error: null,
+        };
     } catch (error) {
         console.warn('Failed to generate chat title:', error?.message ?? error);
-        return null; // Fallback
+        return {
+            title: null,
+            model,
+            usageMetadata: null,
+            error,
+        };
     }
+}
+
+export async function generateChatTitle({ text, attachments, aiText }) {
+    const result = await generateChatTitleWithMetadata({ text, attachments, aiText });
+    return result.title;
 }

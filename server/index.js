@@ -10,7 +10,7 @@ import { CODING_AGENT_ID } from './agents/coding/index.js';
 import { IMAGE_AGENT_ID } from './agents/image/index.js';
 import {
     generateAssistantReplyStream,
-    generateChatTitle,
+    generateChatTitleWithMetadata,
     injectSteeringNote,
     peekSteeringNotes,
     consumeSteeringNotes,
@@ -417,6 +417,114 @@ async function trackToolUsageRecords({
             activityLog: Array.isArray(toolUsage.activityLog) ? toolUsage.activityLog : undefined,
         });
     }
+}
+
+async function generateAndApplyChatTitle({
+    chatId,
+    clientId,
+    originClientId = clientId,
+    usageAgentId = DEFAULT_AGENT_ID,
+    text = '',
+    attachments = [],
+    aiText = '',
+} = {}) {
+    const startedAt = Date.now();
+    const titleSourceText = buildUsageInputText({ text, attachments });
+
+    let titleResult;
+    try {
+        titleResult = await generateChatTitleWithMetadata({ text, attachments, aiText });
+    } catch (error) {
+        const message = formatGeminiError(error);
+        await writeSystemLog({
+            level: 'error',
+            source: 'chat',
+            eventType: 'chat.title_generation_failed',
+            message,
+            agentId: usageAgentId,
+            data: {
+                chatId,
+                clientId,
+            },
+        }).catch(() => undefined);
+        return null;
+    }
+
+    const generatedTitle = String(titleResult?.title ?? '').trim();
+    const model = String(titleResult?.model ?? '').trim() || 'gemini-3.1-flash-lite-preview';
+    const usageMetadata = titleResult?.usageMetadata ?? null;
+    const generationError = titleResult?.error;
+
+    await trackUsageRequest({
+        chatId,
+        clientId,
+        originClientId,
+        status: generationError ? 'error' : 'completed',
+        agentId: usageAgentId,
+        model,
+        inputText: titleSourceText || '[title-generation]',
+        outputText: generatedTitle,
+        createdAt: startedAt,
+        usageMetadata,
+        source: 'title',
+    }).catch(() => undefined);
+
+    if (generationError) {
+        await writeSystemLog({
+            level: 'error',
+            source: 'chat',
+            eventType: 'chat.title_generation_failed',
+            message: formatGeminiError(generationError),
+            agentId: usageAgentId,
+            data: {
+                chatId,
+                clientId,
+                model,
+            },
+        }).catch(() => undefined);
+        return null;
+    }
+
+    if (!generatedTitle) {
+        await writeSystemLog({
+            level: 'warn',
+            source: 'chat',
+            eventType: 'chat.title_generation_empty',
+            message: 'Chat title generation returned an empty title.',
+            agentId: usageAgentId,
+            data: {
+                chatId,
+                clientId,
+                model,
+            },
+        }).catch(() => undefined);
+        return null;
+    }
+
+    const updatedChat = await updateChatTitle(chatId, generatedTitle);
+    if (!updatedChat) {
+        return null;
+    }
+
+    broadcastEvent('chat.upsert', {
+        chat: updatedChat,
+        originClientId,
+    });
+
+    await writeSystemLog({
+        source: 'chat',
+        eventType: 'chat.title_generated',
+        message: 'Chat title generated successfully.',
+        agentId: usageAgentId,
+        data: {
+            chatId,
+            clientId,
+            model,
+            title: generatedTitle,
+        },
+    }).catch(() => undefined);
+
+    return updatedChat;
 }
 
 async function generateStreamingAssistantTurn({
@@ -1007,27 +1115,6 @@ app.delete('/api/memory', (_req, res) => {
     }
 });
 
-/* ---- Legacy archive endpoint kept as a no-op for older clients ---- */
-app.post('/api/chats/:chatId/archive', async (req, res, next) => {
-    try {
-        const { chatId } = req.params;
-        const chat = await getChat(chatId);
-        if (!chat) {
-            res.status(404).json({ error: 'Chat not found.' });
-            return;
-        }
-
-        res.json({
-            ok: true,
-            skipped: true,
-            reason: 'memory is curated explicitly by Orchestrator, not auto-archived',
-            chatId: chat.id,
-        });
-    } catch (error) {
-        next(error);
-    }
-});
-
 /* ---- Skills endpoints ---- */
 app.get('/api/skills', (_req, res) => {
     try {
@@ -1283,6 +1370,27 @@ app.delete('/api/logs', async (_req, res, next) => {
     }
 });
 
+function scheduleApiLifecycleHelper(helperFileName, logPrefix = 'system') {
+    const helperPath = path.join(process.cwd(), 'server', 'cli', helperFileName);
+
+    setTimeout(() => {
+        try {
+            const child = spawn(process.execPath, [helperPath, String(process.pid)], {
+                cwd: process.cwd(),
+                detached: true,
+                stdio: 'ignore',
+                env: {
+                    ...process.env,
+                },
+            });
+            child.unref();
+            process.exit(0);
+        } catch (error) {
+            console.error(`[${logPrefix}] Failed to schedule lifecycle helper: ${error.message}`);
+        }
+    }, 500);
+}
+
 app.post('/api/update', (_req, res) => {
     try {
         const snapshot = getGitUpdateSnapshot({ fetchRemote: true });
@@ -1314,29 +1422,28 @@ app.post('/api/update', (_req, res) => {
         const newVersion = refreshed.localVersion || 'unknown';
 
         res.json({ ok: true, message: `Update to v${newVersion} installed and built. Restarting…`, restarting: true });
-
-        const restartHelperPath = path.join(process.cwd(), 'server', 'cli', 'restartApi.js');
-
-        // Schedule an API-only restart after the response is sent.
-        setTimeout(() => {
-            try {
-                const child = spawn(process.execPath, [restartHelperPath, String(process.pid)], {
-                    cwd: process.cwd(),
-                    detached: true,
-                    stdio: 'ignore',
-                    env: {
-                        ...process.env,
-                    },
-                });
-                child.unref();
-                process.exit(0);
-            } catch (restartError) {
-                console.error(`[update] Failed to schedule restart: ${restartError.message}`);
-            }
-        }, 500);
+        scheduleApiLifecycleHelper('restartApi.js', 'update');
     } catch (error) {
         res.status(500).json({ error: formatCommandError(error, 'Update failed') });
     }
+});
+
+app.post('/api/system/restart', (_req, res) => {
+    res.json({
+        ok: true,
+        restarting: true,
+        message: 'Restart scheduled. Reconnecting…',
+    });
+    scheduleApiLifecycleHelper('restartApi.js', 'system-restart');
+});
+
+app.post('/api/system/reset', (_req, res) => {
+    res.json({
+        ok: true,
+        restarting: true,
+        message: 'Reset scheduled. Runtime data will be recreated.',
+    });
+    scheduleApiLifecycleHelper('resetApi.js', 'system-reset');
 });
 
 app.get('/api/chats', async (_req, res, next) => {
@@ -1735,20 +1842,6 @@ app.post('/api/chat/send', async (req, res, next) => {
 
         const hasAttachments = attachments && attachments.length > 0;
         const bootOnboardingActive = isBootOnboardingActive();
-        if (created && !hasAttachments && inputText && !bootOnboardingActive) {
-            generateChatTitle({ text: inputText }).then(generatedTitle => {
-                if (generatedTitle) {
-                    updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
-                        if (updatedChat) {
-                            broadcastEvent('chat.upsert', {
-                                chat: updatedChat,
-                                originClientId: clientId,
-                            });
-                        }
-                    }).catch(() => undefined);
-                }
-            }).catch(() => undefined);
-        }
 
         const chatAgentId = normalizeAgentId(chat.agentId);
         const userMessageParts = buildUserMessageParts({
@@ -1768,6 +1861,17 @@ app.post('/api/chat/send', async (req, res, next) => {
         const systemInstructionOverride = bootOnboardingActive
             ? readBootPromptInstruction()
             : '';
+
+        if (created && !hasAttachments && inputText && !bootOnboardingActive) {
+            void generateAndApplyChatTitle({
+                chatId: chat.id,
+                clientId,
+                originClientId: clientId,
+                usageAgentId: chatAgentId,
+                text: inputText,
+                attachments,
+            }).catch(() => undefined);
+        }
 
         if (routingDecision.routed) {
             void writeSystemLog({
@@ -1827,17 +1931,13 @@ app.post('/api/chat/send', async (req, res, next) => {
             }).catch(() => undefined);
 
             if (created && hasAttachments) {
-                generateChatTitle({ text: inputText, attachments }).then(generatedTitle => {
-                    if (generatedTitle) {
-                        updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
-                            if (updatedChat) {
-                                broadcastEvent('chat.upsert', {
-                                    chat: updatedChat,
-                                    originClientId: clientId,
-                                });
-                            }
-                        }).catch(() => undefined);
-                    }
+                void generateAndApplyChatTitle({
+                    chatId: chat.id,
+                    clientId,
+                    originClientId: clientId,
+                    usageAgentId: chatAgentId,
+                    text: inputText,
+                    attachments,
                 }).catch(() => undefined);
             }
 
@@ -1891,17 +1991,14 @@ app.post('/api/chat/send', async (req, res, next) => {
             const assistantText = assistantResult.assistantText;
 
             if (created && hasAttachments) {
-                generateChatTitle({ text: inputText, attachments, aiText: assistantText }).then(generatedTitle => {
-                    if (generatedTitle) {
-                        updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
-                            if (updatedChat) {
-                                broadcastEvent('chat.upsert', {
-                                    chat: updatedChat,
-                                    originClientId: clientId,
-                                });
-                            }
-                        }).catch(() => undefined);
-                    }
+                void generateAndApplyChatTitle({
+                    chatId: chat.id,
+                    clientId,
+                    originClientId: clientId,
+                    usageAgentId: chatAgentId,
+                    text: inputText,
+                    attachments,
+                    aiText: assistantText,
                 }).catch(() => undefined);
             }
             scheduleDeferredSteeringFollowUp({

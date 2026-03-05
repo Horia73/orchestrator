@@ -2,7 +2,6 @@
  * Server-side agent settings persistence.
  *
  * Settings are stored in the unified `~/.orchestrator/config.json` under the `agents` key.
- * Falls back to reading from the legacy `settings.json` if the unified config doesn't have agents yet.
  */
 import {
     DEFAULT_AGENT_ID,

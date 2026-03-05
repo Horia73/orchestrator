@@ -20,7 +20,7 @@ A .docx file is a ZIP archive containing XML files.
 
 ### Converting .doc to .docx
 
-Legacy `.doc` files must be converted before editing:
+Older `.doc` files must be converted before editing:
 
 ```bash
 python scripts/office/soffice.py --headless --convert-to docx document.doc
