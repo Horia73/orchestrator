@@ -168,6 +168,7 @@ export async function execute({ task, context, file_paths, attachments }) {
             ok: toolStatus !== 'error',
             status: toolStatus,
             model: result.model,
+            thinkingLevel: result.thinkingLevel,
             agentThought: result.thought || '',
             text: result.text || '',
             parts: Array.isArray(result.parts) ? result.parts : [],
@@ -180,6 +181,7 @@ export async function execute({ task, context, file_paths, attachments }) {
             _usage: {
                 source: 'agent',
                 model: result.model,
+                thinkingLevel: result.thinkingLevel,
                 status: toolStatus,
                 agentId: CODING_AGENT_ID,
                 inputText: taskText,

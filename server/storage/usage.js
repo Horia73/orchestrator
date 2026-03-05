@@ -107,6 +107,24 @@ function normalizeUsageSource(value) {
     return normalized;
 }
 
+function normalizeUsageSourceFilter(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized || normalized === 'all') {
+        return null;
+    }
+
+    return normalized;
+}
+
+function normalizeThinkingLevel(value) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+
+    return normalized.toLowerCase();
+}
+
 function isSyntheticToolUsageRecord(record) {
     const model = toSafeString(record?.model).trim().toLowerCase();
     return model.startsWith('tool:');
@@ -332,6 +350,7 @@ export async function appendUsageRecord(payload = {}) {
 
     const dateKey = normalizeDateKey(payload.dateKey ?? toDateKeyFromTimestamp(createdAt));
     const agentId = normalizeAgentId(payload.agentId);
+    const thinkingLevel = normalizeThinkingLevel(payload.thinkingLevel);
 
     const record = {
         id: toSafeString(payload.id || `request-${randomUUID()}`),
@@ -359,6 +378,10 @@ export async function appendUsageRecord(payload = {}) {
 
     if (agentId) {
         record.agentId = agentId;
+    }
+
+    if (thinkingLevel) {
+        record.thinkingLevel = thinkingLevel;
     }
 
     const parentRequestId = toSafeString(payload.parentRequestId).trim();
@@ -403,6 +426,7 @@ export async function getUsageSnapshotByRange(input = {}) {
     const startDate = startCandidate <= endCandidate ? startCandidate : endCandidate;
     const endDate = startCandidate <= endCandidate ? endCandidate : startCandidate;
     const agentFilter = normalizeAgentFilter(input.agentId);
+    const sourceFilter = normalizeUsageSourceFilter(input.source);
 
     const records = await readUsageRecords();
     const requests = records
@@ -414,6 +438,13 @@ export async function getUsageSnapshotByRange(input = {}) {
             const dateKey = String(record?.dateKey ?? '');
             if (dateKey < startDate || dateKey > endDate) {
                 return false;
+            }
+
+            if (sourceFilter) {
+                const recordSource = normalizeUsageSource(record?.source);
+                if (recordSource !== sourceFilter) {
+                    return false;
+                }
             }
 
             if (!agentFilter) {
@@ -437,6 +468,7 @@ export async function getUsageSnapshotByRange(input = {}) {
         startDate,
         endDate,
         agentId: agentFilter,
+        source: sourceFilter,
         requests,
         ...summary,
     };

@@ -76,6 +76,20 @@ function getEffectiveThinkingLevel(modelId, requestedLevel) {
     return null;
 }
 
+function resolveUsageThinkingLevel(modelId, requestedLevel) {
+    const normalizedRequested = String(requestedLevel ?? '').trim().toUpperCase();
+    if (!normalizedRequested) {
+        return '';
+    }
+
+    if (!THINKING_FALLBACK_CHAIN.includes(normalizedRequested)) {
+        return normalizedRequested.toLowerCase();
+    }
+
+    const effectiveLevel = getEffectiveThinkingLevel(modelId, normalizedRequested);
+    return String(effectiveLevel ?? normalizedRequested).trim().toLowerCase();
+}
+
 function persistUnsupportedLevel(modelId, level) {
     try {
         const current = reloadConfigJson() ?? {};
@@ -1078,6 +1092,7 @@ function normalizeToolUsageRecord(
     const createdAt = Number.isFinite(createdAtValue) && createdAtValue > 0
         ? Math.trunc(createdAtValue)
         : Date.now();
+    const thinkingLevel = String(rawRecord.thinkingLevel ?? '').trim().toLowerCase();
 
     return {
         source: String(rawRecord.source ?? '').trim().toLowerCase() || 'tool',
@@ -1091,6 +1106,7 @@ function normalizeToolUsageRecord(
         activityLog: normalizeToolUsageActivityLog(rawRecord.activityLog),
         createdAt,
         usageMetadata,
+        ...(thinkingLevel ? { thinkingLevel } : {}),
     };
 }
 
@@ -1385,6 +1401,7 @@ export async function generateAssistantReplyStream(
     let toolCallCount = 0;
     let stopReason = '';
     let didAppendToolLimitNotice = false;
+    let usageThinkingLevel = resolveUsageThinkingLevel(model, agentConfig?.thinkingLevel);
     const syntheticToolCallIds = new Map();
     const usageAccumulator = {
         promptTokenCount: 0,
@@ -1778,6 +1795,7 @@ export async function generateAssistantReplyStream(
             stopped: true,
             stopReason: 'user_stop',
             model,
+            thinkingLevel: usageThinkingLevel,
             apiCallCount: 0,
             toolCallCount: 0,
             toolUsageRecords: [],
@@ -1820,6 +1838,7 @@ export async function generateAssistantReplyStream(
                 systemInstructionOverride,
             });
             activeChat = retrySession.chat;
+            usageThinkingLevel = resolveUsageThinkingLevel(model, retrySession.agentConfig?.thinkingLevel);
             const retryStream = await retryOnRateLimit(
                 () => activeChat.sendMessageStream({ message: retrySession.latestMessage }),
                 { onWaiting: rateLimitOnWaiting },
@@ -2019,6 +2038,7 @@ export async function generateAssistantReplyStream(
         stopped,
         stopReason,
         model,
+        thinkingLevel: usageThinkingLevel,
         apiCallCount,
         toolCallCount,
         toolUsageRecords: toolUsageRecordsAccumulator,
@@ -2046,19 +2066,21 @@ export async function generateChatTitleWithMetadata({ text, attachments, aiText 
     prompt.push('Task: Generate a short, conversational and concise title (1-5 words max) for this chat conversation based on the context above. Only output the title. Do not include quotes, markdown bolding, or any explanations.');
 
     const model = 'gemini-3.1-flash-lite-preview';
+    const thinkingLevel = 'minimal';
     try {
         const client = getClient();
         const doc = prompt.join('\n\n');
         const result = await retryOnRateLimit(() => client.models.generateContent({
             model,
             contents: doc,
-            config: { thinkingConfig: { thinkingLevel: 'minimal' } }
+            config: { thinkingConfig: { thinkingLevel } }
         }));
 
         const generatedTitle = result.text?.trim();
         return {
             title: generatedTitle || null,
             model,
+            thinkingLevel,
             usageMetadata: result?.usageMetadata ?? null,
             error: null,
         };
@@ -2067,6 +2089,7 @@ export async function generateChatTitleWithMetadata({ text, attachments, aiText 
         return {
             title: null,
             model,
+            thinkingLevel,
             usageMetadata: null,
             error,
         };

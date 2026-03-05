@@ -2158,6 +2158,17 @@
     background: color-mix(in srgb, #b53b3b 10%, var(--bg-input));
 }
 
+.updates-maintenance-btn.refresh {
+    border-color: color-mix(in srgb, #5479c4 38%, var(--border-input));
+    background: color-mix(in srgb, #5479c4 10%, var(--bg-input));
+    color: #35518f;
+}
+
+.updates-maintenance-btn.refresh:hover:not(:disabled) {
+    border-color: color-mix(in srgb, #5479c4 58%, var(--border-input));
+    background: color-mix(in srgb, #5479c4 16%, var(--bg-input));
+}
+
 .updates-maintenance-note {
     margin: 0;
     font-size: 12px;

@@ -10,7 +10,7 @@ function normalizeDefaultThinkingLevel(value) {
         return normalized;
     }
 
-    return 'MINIMAL';
+    return 'HIGH';
 }
 
 export const ORCHESTRATOR_DEFAULT_MODEL = String(
@@ -18,7 +18,7 @@ export const ORCHESTRATOR_DEFAULT_MODEL = String(
 ).trim() || 'gemini-3-flash-preview';
 
 export const ORCHESTRATOR_DEFAULT_THINKING_LEVEL = normalizeDefaultThinkingLevel(
-    process.env.ORCHESTRATOR_THINKING_LEVEL ?? process.env.GEMINI_THINKING_LEVEL ?? 'MINIMAL',
+    process.env.ORCHESTRATOR_THINKING_LEVEL ?? process.env.GEMINI_THINKING_LEVEL ?? 'HIGH',
 );
 
 export const orchestratorAgent = {

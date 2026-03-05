@@ -1450,6 +1450,11 @@ function buildToolResult(session) {
             )
                 || sanitizeText(process.env.BROWSER_AGENT_MODEL)
                 || DEFAULT_AGENT_CONFIG.llm.model,
+            thinkingLevel: (
+                runtimeStatus?.usage?.lastTask?.thinkingLevel
+                ?? runtimeStatus?.usage?.currentTask?.thinkingLevel
+                ?? sanitizeText(getAgentConfig(BROWSER_AGENT_ID)?.thinkingLevel)
+            ) || undefined,
             status: session.status,
             agentId: BROWSER_AGENT_ID,
             inputText: runtimeStatus?.usage?.lastTask?.goal ?? runtimeStatus?.usage?.currentTask?.goal ?? '',

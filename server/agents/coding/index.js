@@ -10,7 +10,7 @@ function normalizeDefaultThinkingLevel(value) {
         return normalized;
     }
 
-    return 'MEDIUM';
+    return 'HIGH';
 }
 
 export const CODING_AGENT_DEFAULT_MODEL = String(
@@ -22,7 +22,7 @@ export const CODING_AGENT_DEFAULT_MODEL = String(
 export const CODING_AGENT_DEFAULT_THINKING_LEVEL = normalizeDefaultThinkingLevel(
     process.env.CODING_AGENT_THINKING_LEVEL
     ?? process.env.GEMINI_CODING_THINKING_LEVEL
-    ?? 'MEDIUM',
+    ?? 'HIGH',
 );
 
 export const codingAgent = {

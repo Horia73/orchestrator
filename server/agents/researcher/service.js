@@ -146,6 +146,7 @@ export async function generateResearchAdvice({
         return {
             ok: completedOk,
             model: finalResult.model,
+            thinkingLevel: finalResult.thinkingLevel,
             text: finalResult.text,
             thought: finalResult.thought,
             parts: finalResult.parts,

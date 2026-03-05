@@ -266,11 +266,21 @@ function normalizeUsageText(value, fallback = '') {
     return String(fallback ?? '').trim();
 }
 
+function normalizeUsageThinkingLevel(value) {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return '';
+    }
+
+    return normalized.toLowerCase();
+}
+
 async function trackUsageRequest({
     chatId,
     clientId,
     originClientId,
     model,
+    thinkingLevel = '',
     status = 'completed',
     agentId,
     inputText = '',
@@ -286,6 +296,7 @@ async function trackUsageRequest({
     const normalizedStatus = normalizeUsageStatus(status);
     const normalizedSource = normalizeUsageSource(source);
     const normalizedCreatedAt = normalizeUsageCreatedAt(createdAt);
+    const normalizedThinkingLevel = normalizeUsageThinkingLevel(thinkingLevel);
     const usageEstimate = estimateUsageCost({
         model,
         usageMetadata,
@@ -316,6 +327,10 @@ async function trackUsageRequest({
         activityLog,
     };
 
+    if (normalizedThinkingLevel) {
+        usagePayload.thinkingLevel = normalizedThinkingLevel;
+    }
+
     const normalizedParentRequestId = String(parentRequestId ?? '').trim();
     if (normalizedParentRequestId) {
         usagePayload.parentRequestId = normalizedParentRequestId;
@@ -342,9 +357,12 @@ async function trackUsageRequest({
     const logLevel = normalizedStatus === 'error'
         ? 'error'
         : (normalizedStatus === 'stopped' ? 'warn' : 'info');
+    const thinkingSuffix = normalizedThinkingLevel
+        ? ` (thinking=${normalizedThinkingLevel})`
+        : '';
     const logMessage = isToolUsage
-        ? `Tracked tool request (${normalizedStatus}) for ${usageRecord.model}.`
-        : `Tracked request (${normalizedStatus}) for ${usageRecord.model}.`;
+        ? `Tracked tool request (${normalizedStatus}) for ${usageRecord.model}${thinkingSuffix}.`
+        : `Tracked request (${normalizedStatus}) for ${usageRecord.model}${thinkingSuffix}.`;
 
     void writeSystemLog({
         level: logLevel,
@@ -360,6 +378,7 @@ async function trackUsageRequest({
             source: normalizedSource,
             agentId: usageRecord.agentId,
             model: usageRecord.model,
+            thinkingLevel: usageRecord.thinkingLevel || undefined,
             status: normalizedStatus,
             inputTokens: usageRecord.inputTokens,
             outputTokens: usageRecord.outputTokens,
@@ -409,6 +428,7 @@ async function trackToolUsageRecords({
             outputText: normalizeUsageText(toolUsage.outputText),
             createdAt: normalizeUsageCreatedAt(toolUsage.createdAt, fallbackCreatedAt),
             usageMetadata: toolUsageMetadata,
+            thinkingLevel: normalizeUsageThinkingLevel(toolUsage.thinkingLevel),
             originClientId,
             source: normalizeUsageSource(toolUsage.source, 'tool'),
             parentRequestId,
@@ -453,6 +473,7 @@ async function generateAndApplyChatTitle({
     const generatedTitle = String(titleResult?.title ?? '').trim();
     const model = String(titleResult?.model ?? '').trim() || 'gemini-3.1-flash-lite-preview';
     const usageMetadata = titleResult?.usageMetadata ?? null;
+    const thinkingLevel = normalizeUsageThinkingLevel(titleResult?.thinkingLevel);
     const generationError = titleResult?.error;
 
     await trackUsageRequest({
@@ -466,6 +487,7 @@ async function generateAndApplyChatTitle({
         outputText: generatedTitle,
         createdAt: startedAt,
         usageMetadata,
+        thinkingLevel,
         source: 'title',
     }).catch(() => undefined);
 
@@ -546,6 +568,7 @@ async function generateStreamingAssistantTurn({
     let assistantText = '';
     let usageMetadata = null;
     let modelForUsage = getAgentConfig(runtimeAgentId).model;
+    let thinkingLevelForUsage = normalizeUsageThinkingLevel(getAgentConfig(runtimeAgentId).thinkingLevel);
     let requestStatus = 'completed';
     let toolUsageRecords = [];
 
@@ -601,6 +624,7 @@ async function generateStreamingAssistantTurn({
 
         usageMetadata = streamResult.usageMetadata ?? null;
         modelForUsage = String(streamResult.model ?? modelForUsage).trim() || modelForUsage;
+        thinkingLevelForUsage = normalizeUsageThinkingLevel(streamResult.thinkingLevel ?? thinkingLevelForUsage);
         toolUsageRecords = Array.isArray(streamResult.toolUsageRecords)
             ? streamResult.toolUsageRecords
             : [];
@@ -722,6 +746,7 @@ async function generateStreamingAssistantTurn({
         outputText: assistantText,
         createdAt: aiMessageCreatedAt,
         usageMetadata,
+        thinkingLevel: thinkingLevelForUsage,
         originClientId,
         source: 'chat',
     });
@@ -1310,6 +1335,7 @@ app.get('/api/usage', async (req, res, next) => {
         const requestedStartDate = String(req.query?.startDate ?? '').trim();
         const requestedEndDate = String(req.query?.endDate ?? '').trim();
         const agentId = String(req.query?.agentId ?? '').trim();
+        const source = String(req.query?.source ?? '').trim();
         const startDate = requestedStartDate || date;
         const endDate = requestedEndDate || requestedStartDate || date;
         const snapshot = await getUsageSnapshotByRange({
@@ -1317,6 +1343,7 @@ app.get('/api/usage', async (req, res, next) => {
             endDate,
             date,
             agentId,
+            source,
         });
         res.json(snapshot);
     } catch (error) {

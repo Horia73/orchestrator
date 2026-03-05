@@ -14,6 +14,15 @@ function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
+async function probeHealth() {
+    const response = await fetch('/api/health', {
+        cache: 'no-store',
+        signal: AbortSignal.timeout(1500),
+    });
+
+    return response.ok;
+}
+
 function readCache() {
     try {
         const raw = localStorage.getItem(CHECK_CACHE_KEY);
@@ -54,6 +63,17 @@ function timeAgo(dateStr) {
     return new Date(dateStr).toLocaleDateString();
 }
 
+function formatCheckTime(dateStr) {
+    if (!dateStr) return '';
+    const date = new Date(dateStr);
+    if (Number.isNaN(date.getTime())) return '';
+    return date.toLocaleTimeString([], {
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+    });
+}
+
 function formatVersion(version, fallback) {
     const normalized = String(version || '').trim();
     if (!normalized) return fallback;
@@ -81,6 +101,7 @@ function getPhaseLabel(actionKind, actionPhase) {
 
     if (actionKind === 'factoryReset') {
         if (actionPhase === 'resetting') return 'Running factory reset…';
+        if (actionPhase === 'restarting') return 'Restarting server…';
         if (actionPhase === 'reconnecting') return 'Reconnecting…';
     }
 
@@ -245,6 +266,25 @@ export function UpdatesPanel() {
         setActionResult({ success: false, message: timeoutMessage });
     }, [checkForUpdates]);
 
+    const waitForDisconnect = useCallback(async ({
+        maxAttempts = 20,
+        intervalMs = 500,
+    } = {}) => {
+        for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+            await sleep(intervalMs);
+            try {
+                const healthy = await probeHealth();
+                if (!healthy) {
+                    return true;
+                }
+            } catch {
+                return true;
+            }
+        }
+
+        return false;
+    }, []);
+
     useEffect(() => {
         checkForUpdates().catch(() => undefined);
     }, [checkForUpdates]);
@@ -321,7 +361,10 @@ export function UpdatesPanel() {
 
             setActionPhase('restarting');
             setActionResult({ success: true, message: payload.message || 'Update installed. Restarting…' });
-            await sleep(1200);
+            await waitForDisconnect({
+                maxAttempts: 24,
+                intervalMs: 500,
+            });
             if (!mountedRef.current) return;
 
             setActionPhase('reconnecting');
@@ -342,7 +385,7 @@ export function UpdatesPanel() {
                 message: buildErrorMessage(error, 'Failed to install update.'),
             });
         }
-    }, [checkForUpdates, waitForReconnect]);
+    }, [checkForUpdates, waitForDisconnect, waitForReconnect]);
 
     const runRestart = useCallback(async () => {
         setActionResult(null);
@@ -351,6 +394,12 @@ export function UpdatesPanel() {
 
         try {
             await requestSystemRestart();
+            if (!mountedRef.current) return;
+
+            await waitForDisconnect({
+                maxAttempts: 20,
+                intervalMs: 500,
+            });
             if (!mountedRef.current) return;
 
             setActionPhase('reconnecting');
@@ -371,7 +420,7 @@ export function UpdatesPanel() {
                 message: buildErrorMessage(error, 'Failed to restart server.'),
             });
         }
-    }, [waitForReconnect]);
+    }, [waitForDisconnect, waitForReconnect]);
 
     const runFactoryReset = useCallback(async () => {
         setActionResult(null);
@@ -380,6 +429,13 @@ export function UpdatesPanel() {
 
         try {
             await requestSystemReset();
+            if (!mountedRef.current) return;
+
+            setActionPhase('restarting');
+            await waitForDisconnect({
+                maxAttempts: 30,
+                intervalMs: 600,
+            });
             if (!mountedRef.current) return;
 
             setActionPhase('reconnecting');
@@ -400,7 +456,7 @@ export function UpdatesPanel() {
                 message: buildErrorMessage(error, 'Failed to run factory reset.'),
             });
         }
-    }, [waitForReconnect]);
+    }, [waitForDisconnect, waitForReconnect]);
 
     const installedLabel = formatVersion(
         state.localVersion,
@@ -427,6 +483,7 @@ export function UpdatesPanel() {
             ? 'Disconnected'
             : 'Connecting';
     const confirmSpec = getConfirmSpec(confirmAction);
+    const lastCheckTime = formatCheckTime(state.checkedAt);
 
     const openConfirm = useCallback((nextAction) => {
         if (isBusy) {
@@ -461,6 +518,10 @@ export function UpdatesPanel() {
         }
     }, [confirmAction, runFactoryReset, runInstall, runRestart]);
 
+    const handleRefreshApp = useCallback(() => {
+        window.location.reload();
+    }, []);
+
     return (
         <div className="updates-panel">
             <div className="updates-header-row">
@@ -487,8 +548,15 @@ export function UpdatesPanel() {
                     <span className="updates-connection-dot" aria-hidden="true" />
                     {connectionLabel}
                 </span>
-                <span className="updates-live-meta">Live refresh: 5s</span>
-                {state.checkedAt && <span className="updates-live-meta">Last check: {timeAgo(state.checkedAt)}</span>}
+                <span className="updates-live-meta">Auto-check: every 5s</span>
+                {state.checkedAt && (
+                    <span
+                        className="updates-live-meta"
+                        title={new Date(state.checkedAt).toLocaleString()}
+                    >
+                        Last check: {lastCheckTime || '—'}
+                    </span>
+                )}
             </div>
 
             <div className="updates-operations-card">
@@ -512,6 +580,14 @@ export function UpdatesPanel() {
                         disabled={isBusy}
                     >
                         Factory Reset
+                    </button>
+                    <button
+                        className="updates-maintenance-btn refresh"
+                        type="button"
+                        onClick={handleRefreshApp}
+                        disabled={isBusy}
+                    >
+                        Refresh App
                     </button>
                 </div>
                 <p className="updates-maintenance-note">

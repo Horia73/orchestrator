@@ -307,6 +307,7 @@ export async function execute({ task, context, depth, file_paths }) {
             ok: finalStatus !== 'error',
             status: finalStatus,
             model: finalResult?.model,
+            thinkingLevel: finalResult?.thinkingLevel,
             depth: currentDepthLevel,
             requestedDepth: depthLevel,
             depthHistory,
@@ -323,6 +324,7 @@ export async function execute({ task, context, depth, file_paths }) {
             _usage: {
                 source: 'agent',
                 model: finalResult?.model,
+                thinkingLevel: finalResult?.thinkingLevel,
                 status: finalStatus,
                 agentId: RESEARCHER_AGENT_ID,
                 inputText: taskText,

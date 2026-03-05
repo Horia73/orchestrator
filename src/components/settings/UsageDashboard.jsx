@@ -23,6 +23,15 @@ function normalizeModelId(value) {
     return raw;
 }
 
+function normalizeUsageSource(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return 'chat';
+    }
+
+    return normalized;
+}
+
 function isVisibleUsageRequest(request) {
     return !normalizeModelId(request?.model).toLowerCase().startsWith('tool:');
 }
@@ -78,6 +87,27 @@ function truncatePreview(value, maxChars = 72) {
     return `${text.slice(0, maxChars - 1)}…`;
 }
 
+function formatThinkingLevel(value) {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    if (!normalized) {
+        return '-';
+    }
+
+    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized.charAt(0).toUpperCase() + normalized.slice(1);
+    }
+
+    return normalized;
+}
+
+function sourceLabel(value) {
+    const normalized = normalizeUsageSource(value);
+    if (normalized === 'title') return 'Title';
+    if (normalized === 'tool') return 'Tool';
+    if (normalized === 'chat') return 'Chat';
+    return normalized;
+}
+
 function sortRequestsByNewest(requests) {
     return [...requests].sort((a, b) => Number(b.createdAt || 0) - Number(a.createdAt || 0));
 }
@@ -130,6 +160,23 @@ function requestMatchesAgentFilter(request, agentFilter) {
     }
 
     return requestAgentId === agentFilter;
+}
+
+function normalizeSourceFilter(value) {
+    const normalized = normalizeUsageSource(value);
+    if (!normalized || normalized === 'all') {
+        return 'all';
+    }
+
+    return normalized;
+}
+
+function requestMatchesSourceFilter(request, sourceFilter) {
+    if (sourceFilter === 'all') {
+        return true;
+    }
+
+    return normalizeUsageSource(request?.source) === sourceFilter;
 }
 
 function buildAgentFilterOptions(agentDefinitions, hasUnassigned) {
@@ -232,6 +279,7 @@ function getRequestActivityLog(request) {
 export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
     const [range, setRange] = useState(() => getPresetRange('today'));
     const [agentFilter, setAgentFilter] = useState('all');
+    const [sourceFilter, setSourceFilter] = useState('all');
     const [requests, setRequests] = useState([]);
     const [isLoading, setIsLoading] = useState(false);
     const [isClearingUsage, setIsClearingUsage] = useState(false);
@@ -251,6 +299,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                     startDate: range.startDate,
                     endDate: range.endDate,
                     agentId: agentFilter === 'all' ? undefined : agentFilter,
+                    source: sourceFilter === 'all' ? undefined : sourceFilter,
                 });
                 if (cancelled) return;
                 setRequests(sortRequestsByNewest((payload.requests ?? []).filter(isVisibleUsageRequest)));
@@ -271,7 +320,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
         return () => {
             cancelled = true;
         };
-    }, [range.startDate, range.endDate, agentFilter, reloadVersion]);
+    }, [range.startDate, range.endDate, agentFilter, sourceFilter, reloadVersion]);
 
     useEffect(() => {
         const source = new EventSource('/api/events');
@@ -302,6 +351,9 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                 if (!requestMatchesAgentFilter(request, agentFilter)) {
                     return;
                 }
+                if (!requestMatchesSourceFilter(request, sourceFilter)) {
+                    return;
+                }
 
                 setRequests((prev) => mergeRequests(prev, [request]));
             } catch {
@@ -312,7 +364,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
         return () => {
             source.close();
         };
-    }, [range.startDate, range.endDate, agentFilter]);
+    }, [range.startDate, range.endDate, agentFilter, sourceFilter]);
 
     useEffect(() => {
         setExpandedRequestId((current) => {
@@ -367,6 +419,14 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
         return `agent ${agentNameMap.get(agentFilter) ?? agentFilter}`;
     }, [agentFilter, agentNameMap]);
 
+    const selectedSourceLabel = useMemo(() => {
+        if (sourceFilter === 'all') {
+            return 'all sources';
+        }
+
+        return `${sourceLabel(sourceFilter)} source`;
+    }, [sourceFilter]);
+
     const modelNameMap = useMemo(() => {
         const map = new Map();
         for (const model of modelsList ?? []) {
@@ -409,6 +469,10 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
         setAgentFilter(normalizeAgentFilter(value));
     }, []);
 
+    const handleSourceFilterSelect = useCallback((value) => {
+        setSourceFilter(normalizeSourceFilter(value));
+    }, []);
+
     const handleClearUsage = useCallback(async () => {
         const confirmed = window.confirm('Delete all usage records? This cannot be undone.');
         if (!confirmed) {
@@ -436,7 +500,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                 <div>
                     <h2 className="usage-title">Usage</h2>
                     <p className="usage-subtitle">
-                        {`Live API request tracking for ${formatRangeLabel(range.startDate, range.endDate)} (${selectedAgentLabel}).`}
+                        {`Live API request tracking for ${formatRangeLabel(range.startDate, range.endDate)} (${selectedAgentLabel}, ${selectedSourceLabel}).`}
                     </p>
                 </div>
             </div>
@@ -451,6 +515,23 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                             type="button"
                             className={`usage-filter-btn${agentFilter === option.id ? ' active' : ''}${option.isCoding ? ' coding-frame' : ''}`}
                             onClick={() => handleAgentFilterSelect(option.id)}
+                        >
+                            {option.label}
+                        </button>
+                    ))}
+                </div>
+                <div className="usage-agent-filters" role="tablist" aria-label="Filter usage by source">
+                    {[
+                        { id: 'all', label: 'All sources' },
+                        { id: 'chat', label: 'Chat' },
+                        { id: 'title', label: 'Title' },
+                        { id: 'tool', label: 'Tool' },
+                    ].map((option) => (
+                        <button
+                            key={option.id}
+                            type="button"
+                            className={`usage-filter-btn${sourceFilter === option.id ? ' active' : ''}`}
+                            onClick={() => handleSourceFilterSelect(option.id)}
                         >
                             {option.label}
                         </button>
@@ -522,6 +603,8 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                                 <th>Output</th>
                                 <th>Status</th>
                                 <th>Model</th>
+                                <th>Source</th>
+                                <th>Thinking</th>
                                 <th>Created</th>
                                 <th>Input Tokens</th>
                                 <th>Output Tokens</th>
@@ -531,7 +614,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                         <tbody>
                             {requests.length === 0 && !isLoading && !errorMessage && (
                                 <tr>
-                                    <td colSpan={8}>
+                                    <td colSpan={10}>
                                         <div className="usage-empty-row">No requests for this range.</div>
                                     </td>
                                 </tr>
@@ -539,7 +622,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
 
                             {isLoading && (
                                 <tr>
-                                    <td colSpan={8}>
+                                    <td colSpan={10}>
                                         <div className="usage-empty-row">Loading usage…</div>
                                     </td>
                                 </tr>
@@ -547,7 +630,7 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
 
                             {errorMessage && !isLoading && (
                                 <tr>
-                                    <td colSpan={8}>
+                                    <td colSpan={10}>
                                         <div className="usage-empty-row usage-empty-row--error">{errorMessage}</div>
                                     </td>
                                 </tr>
@@ -584,6 +667,8 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
                                                 </span>
                                             </td>
                                             <td title={request.model || ''}>{formatModelName(request.model)}</td>
+                                            <td>{sourceLabel(request.source)}</td>
+                                            <td>{formatThinkingLevel(request.thinkingLevel)}</td>
                                             <td>{formatCreatedAt(request.createdAt)}</td>
                                             <td>{formatNumber(request.inputTokens)}</td>
                                             <td>{formatNumber(request.outputTokens)}</td>
@@ -592,11 +677,13 @@ export function UsageDashboard({ modelsList, agentDefinitions = [] }) {
 
                                         {expanded && (
                                             <tr className="usage-dropdown-row">
-                                                <td colSpan={8}>
+                                                <td colSpan={10}>
                                                     <div className="usage-dropdown-card">
                                                         <div className="usage-details-meta">
                                                             <span>Status: <strong>{statusLabel(request.status)}</strong></span>
                                                             <span>Model: <strong>{formatModelName(request.model)}</strong></span>
+                                                            <span>Source: <strong>{sourceLabel(request.source)}</strong></span>
+                                                            <span>Thinking: <strong>{formatThinkingLevel(request.thinkingLevel)}</strong></span>
                                                             <span>Agent: <strong>{formatRequestAgent(request)}</strong></span>
                                                             <span>Created: <strong>{formatCreatedAt(request.createdAt)}</strong></span>
                                                             <span>Input tokens: <strong>{formatNumber(request.inputTokens)}</strong></span>

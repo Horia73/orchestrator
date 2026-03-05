@@ -93,12 +93,13 @@ export async function saveEditableFile({ path, content, modifiedAt }) {
     return data.file;
 }
 
-export async function fetchUsage({ startDate, endDate, date, agentId } = {}) {
+export async function fetchUsage({ startDate, endDate, date, agentId, source } = {}) {
     const query = new URLSearchParams();
     const normalizedDate = String(date ?? '').trim();
     const normalizedStartDate = String(startDate ?? '').trim();
     const normalizedEndDate = String(endDate ?? '').trim();
     const normalizedAgentId = String(agentId ?? '').trim().toLowerCase();
+    const normalizedSource = String(source ?? '').trim().toLowerCase();
 
     if (normalizedStartDate) {
         query.set('startDate', normalizedStartDate);
@@ -111,6 +112,9 @@ export async function fetchUsage({ startDate, endDate, date, agentId } = {}) {
     }
     if (normalizedAgentId) {
         query.set('agentId', normalizedAgentId);
+    }
+    if (normalizedSource) {
+        query.set('source', normalizedSource);
     }
 
     const queryString = query.toString();
