@@ -143,7 +143,7 @@ Main runtime config. Most important keys:
 - `agents`: per-agent model + thinking settings
 - `ui`: display identity shown in UI (`aiName`, `userName`, `aiEmoji`, `aiVibe`)
 - `cron`: scheduler switch
-- `onboarding`: first-chat BOOT onboarding state machine
+- `onboarding`: first-chat BOOT onboarding metadata
 
 ### 2) `~/.orchestrator/models.json`
 
@@ -152,14 +152,17 @@ It is intentionally local so you can pin, annotate, and review model metadata wi
 
 ### 3) `~/.orchestrator/BOOT.md`
 
-A first-run gate file. While this exists, chat is forced into onboarding mode:
+A first-run gate file. While this exists, the assistant runs in BOOT mode using this file as system instruction override (instead of normal agent prompt).
 
-1. asks AI name
-2. asks user name
-3. asks AI emoji
-4. asks AI vibe
+Typical BOOT mission:
 
-After those are answered, values are saved to `config.json` (`ui`) and `BOOT.md` is deleted automatically.
+- onboard conversationally
+- collect identity fields (`ui.aiName`, `ui.userName`, `ui.aiEmoji`, `ui.aiVibe`)
+- save them in `config.json`
+- write concise onboarding memory in `USER.md`, `IDENTITY.md`, and `SOUL.md`
+- remove `BOOT.md`
+
+The flow is not hardcoded in backend steps; the model drives the conversation and uses tools.
 
 ### 4) `~/.orchestrator/data/chats`
 

@@ -98,6 +98,30 @@ function ConversationLoading() {
   );
 }
 
+function buildEmojiFaviconDataUri(emoji) {
+  const normalizedEmoji = String(emoji ?? '').trim() || '🤖';
+  const svg = `
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64">
+      <text x="50%" y="52%" text-anchor="middle" dominant-baseline="middle" font-size="52">
+        ${normalizedEmoji}
+      </text>
+    </svg>
+  `.trim();
+  return `data:image/svg+xml,${encodeURIComponent(svg)}`;
+}
+
+function applyEmojiFavicon(emoji) {
+  const href = buildEmojiFaviconDataUri(emoji);
+  const existing = document.querySelector("link[rel='icon']");
+  const iconLink = existing || document.createElement('link');
+  iconLink.setAttribute('rel', 'icon');
+  iconLink.setAttribute('type', 'image/svg+xml');
+  iconLink.setAttribute('href', href);
+  if (!existing) {
+    document.head.appendChild(iconLink);
+  }
+}
+
 export default function App() {
   const sidebar = useSidebar();
   const chat = useChat();
@@ -156,6 +180,10 @@ export default function App() {
     const nextTitle = [emoji, name].filter(Boolean).join(' ').trim() || 'AI Chat';
     document.title = nextTitle;
   }, [uiSettings?.aiEmoji, uiSettings?.aiName]);
+
+  useEffect(() => {
+    applyEmojiFavicon(uiSettings?.aiEmoji);
+  }, [uiSettings?.aiEmoji]);
 
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => {

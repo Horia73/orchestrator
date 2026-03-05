@@ -125,6 +125,39 @@ function toPlainText(children) {
     return '';
 }
 
+async function copyToClipboard(text) {
+    const value = String(text ?? '');
+    if (!value.trim()) {
+        return false;
+    }
+
+    try {
+        if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(value);
+            return true;
+        }
+    } catch {
+        // fall through to legacy copy
+    }
+
+    try {
+        const fallback = document.createElement('textarea');
+        fallback.value = value;
+        fallback.setAttribute('readonly', '');
+        fallback.style.position = 'fixed';
+        fallback.style.opacity = '0';
+        fallback.style.pointerEvents = 'none';
+        document.body.appendChild(fallback);
+        fallback.focus();
+        fallback.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(fallback);
+        return copied;
+    } catch {
+        return false;
+    }
+}
+
 function isDiffLanguage(language) {
     return language === 'diff' || language === 'patch';
 }
@@ -314,18 +347,10 @@ function CodeBlock({ className, children }) {
 
     const handleCopy = useCallback(async () => {
         try {
-            if (navigator?.clipboard?.writeText) {
-                await navigator.clipboard.writeText(codeText);
-            } else {
-                const fallback = document.createElement('textarea');
-                fallback.value = codeText;
-                fallback.setAttribute('readonly', '');
-                fallback.style.position = 'fixed';
-                fallback.style.opacity = '0';
-                document.body.appendChild(fallback);
-                fallback.select();
-                document.execCommand('copy');
-                document.body.removeChild(fallback);
+            const copied = await copyToClipboard(codeText);
+            if (!copied) {
+                setCopied(false);
+                return;
             }
 
             setCopied(true);
@@ -404,7 +429,7 @@ export function MarkdownContent({ text, variant = 'ai' }) {
                         <code
                             className="inline-code"
                             title="Click to copy"
-                            onClick={() => navigator.clipboard?.writeText(text)}
+                            onClick={() => { void copyToClipboard(text); }}
                         >
                             {children}
                         </code>

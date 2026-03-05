@@ -148,7 +148,12 @@ function isThinkingLevelError(error) {
 
 // ─── Core helpers ────────────────────────────────────────────────────────────
 
-function buildChatConfigForAgent({ agentId, agentConfig, sharedTools }) {
+function buildChatConfigForAgent({
+    agentId,
+    agentConfig,
+    sharedTools,
+    systemInstructionOverride = '',
+}) {
     const agentDefinition = getAgentDefinition(agentId);
     const modelId = agentConfig.model;
 
@@ -161,11 +166,18 @@ function buildChatConfigForAgent({ agentId, agentConfig, sharedTools }) {
         return resolveCatalogThinkingConfig(modelId, effective);
     };
 
-    return agentDefinition.buildChatConfig({
+    const config = agentDefinition.buildChatConfig({
         agentConfig,
         mapThinkingLevel: wrappedMapThinkingLevel,
         sharedTools,
     });
+
+    const override = String(systemInstructionOverride ?? '').trim();
+    if (override) {
+        config.systemInstruction = override;
+    }
+
+    return config;
 }
 
 function mergeFunctionDeclarationTools(baseTools, extraDeclarations = []) {
@@ -773,7 +785,11 @@ function getClient() {
 
 async function createChatSession(
     historyWithLatestUserTurn,
-    { agentId = DEFAULT_AGENT_ID, toolAccessOverride } = {},
+    {
+        agentId = DEFAULT_AGENT_ID,
+        toolAccessOverride,
+        systemInstructionOverride = '',
+    } = {},
 ) {
     if (!Array.isArray(historyWithLatestUserTurn) || historyWithLatestUserTurn.length === 0) {
         throw new Error('Cannot generate reply without a user message.');
@@ -815,6 +831,7 @@ async function createChatSession(
             agentId: normalizedAgentId,
             agentConfig,
             sharedTools,
+            systemInstructionOverride,
         }),
     });
 
@@ -1278,11 +1295,16 @@ function buildFinalModelParts({ text, thought, mediaParts = [], signatureParts, 
 
 export async function generateAssistantReply(
     historyWithLatestUserTurn,
-    { agentId = DEFAULT_AGENT_ID, toolAccessOverride } = {},
+    {
+        agentId = DEFAULT_AGENT_ID,
+        toolAccessOverride,
+        systemInstructionOverride = '',
+    } = {},
 ) {
     const { chat, latestMessage, model, agentConfig } = await createChatSession(historyWithLatestUserTurn, {
         agentId,
         toolAccessOverride,
+        systemInstructionOverride,
     });
 
     try {
@@ -1297,6 +1319,7 @@ export async function generateAssistantReply(
             const retrySession = await createChatSession(historyWithLatestUserTurn, {
                 agentId,
                 toolAccessOverride,
+                systemInstructionOverride,
             });
             const response = await retryOnRateLimit(() => retrySession.chat.sendMessage({
                 message: retrySession.latestMessage,
@@ -1319,6 +1342,7 @@ export async function generateAssistantReplyStream(
         spawnDepth = 0,
         maxSubagentSpawnDepth,
         toolAccessOverride,
+        systemInstructionOverride = '',
     } = {},
 ) {
     const {
@@ -1330,6 +1354,7 @@ export async function generateAssistantReplyStream(
     } = await createChatSession(historyWithLatestUserTurn, {
         agentId,
         toolAccessOverride,
+        systemInstructionOverride,
     });
     const isStopRequested = typeof shouldStop === 'function'
         ? () => shouldStop() === true
@@ -1792,6 +1817,7 @@ export async function generateAssistantReplyStream(
             const retrySession = await createChatSession(historyWithLatestUserTurn, {
                 agentId,
                 toolAccessOverride,
+                systemInstructionOverride,
             });
             activeChat = retrySession.chat;
             const retryStream = await retryOnRateLimit(

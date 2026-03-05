@@ -48,10 +48,34 @@ const AGENT_MEMORY_SPECS = Object.freeze([
 ]);
 
 const FILE_TEMPLATES = Object.freeze({
-    permanent: '# Permanent Memory\n\n',
-    user: '# User\n\n',
-    identity: '# Identity\n\n',
-    soul: '# Soul\n\n',
+    permanent: [
+        '# Permanent Memory',
+        '',
+        '- Save durable facts that stay useful across many chats and tasks.',
+        '- Keep only high-signal notes you want the assistant to remember long-term.',
+        '',
+    ].join('\n'),
+    user: [
+        '# User',
+        '',
+        '- Save stable user facts and preferences (tone, language, workflow, constraints).',
+        '- Keep only confirmed info from the user, not guesses.',
+        '',
+    ].join('\n'),
+    identity: [
+        '# Identity',
+        '',
+        '- Save assistant identity anchors (name, role, mission, boundaries).',
+        '- Keep this concise so behavior stays consistent across chats.',
+        '',
+    ].join('\n'),
+    soul: [
+        '# Soul',
+        '',
+        '- Save enduring interaction style (vibe, values, communication principles).',
+        '- Keep it human and stable, without conflicting with higher-priority instructions.',
+        '',
+    ].join('\n'),
     integrations: '# Integrations\n\n',
     secretEnv: [
         '# Sensitive values only. Loaded automatically into process.env.',

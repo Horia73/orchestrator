@@ -84,7 +84,7 @@ import {
     performBrowserAgentLiveAction,
     streamBrowserAgentLiveView,
 } from './services/browserAgent.js';
-import { advanceBootOnboarding, isBootOnboardingActive } from './services/bootOnboarding.js';
+import { isBootOnboardingActive, readBootPromptInstruction } from './services/bootOnboarding.js';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -427,6 +427,7 @@ async function generateStreamingAssistantTurn({
     usageAgentId,
     usageInputText,
     historyWithLatestUserTurn,
+    systemInstructionOverride = '',
 } = {}) {
     const aiMessageId = createMessageId();
     const aiMessageCreatedAt = Date.now();
@@ -487,6 +488,7 @@ async function generateStreamingAssistantTurn({
             },
             shouldStop: () => activeGeneration.stopRequested,
             agentId: runtimeAgentId,
+            systemInstructionOverride,
         });
 
         usageMetadata = streamResult.usageMetadata ?? null;
@@ -666,6 +668,9 @@ function scheduleDeferredSteeringFollowUp({ chatId, clientId, originClientId = c
             if (!syntheticPrompt) {
                 return;
             }
+            const systemInstructionOverride = isBootOnboardingActive()
+                ? readBootPromptInstruction()
+                : '';
 
             const history = await getRecentMessages(normalizedChatId, getGeminiContextMessages());
             const historyWithLatestUserTurn = [
@@ -686,6 +691,7 @@ function scheduleDeferredSteeringFollowUp({ chatId, clientId, originClientId = c
                 usageAgentId: chatAgentId,
                 usageInputText: syntheticPrompt,
                 historyWithLatestUserTurn,
+                systemInstructionOverride,
             });
         } catch (error) {
             const message = formatGeminiError(error);
@@ -1759,6 +1765,9 @@ app.post('/api/chat/send', async (req, res, next) => {
             attachments,
         });
         const runtimeAgentId = routingDecision.agentId;
+        const systemInstructionOverride = bootOnboardingActive
+            ? readBootPromptInstruction()
+            : '';
 
         if (routingDecision.routed) {
             void writeSystemLog({
@@ -1775,80 +1784,6 @@ app.post('/api/chat/send', async (req, res, next) => {
                     imageAttachmentCount: routingDecision.imageAttachmentCount,
                 },
             }).catch(() => undefined);
-        }
-
-        if (bootOnboardingActive) {
-            const result = await enqueueChatWork(chat.id, async () => {
-                const appendedUser = await appendMessage(chat.id, {
-                    id: clientMessageId,
-                    role: 'user',
-                    text: inputText,
-                    parts: userMessageParts,
-                    replyTo,
-                });
-                await markUploadsCommitted(
-                    attachments.map((attachment) => attachment.uploadId),
-                    { chatId: chat.id, messageId: appendedUser.message.id },
-                );
-
-                broadcastEvent('message.added', {
-                    chatId: chat.id,
-                    message: appendedUser.message,
-                    originClientId: clientId,
-                });
-
-                broadcastEvent('chat.upsert', {
-                    chat: appendedUser.chat,
-                    originClientId: clientId,
-                });
-
-                const onboardingTurn = advanceBootOnboarding(inputText);
-                const assistantText = String(onboardingTurn?.assistantText ?? '').trim()
-                    || 'Onboarding este activ. Te rog răspunde la întrebările de setup.';
-
-                const appendedAi = await appendMessage(chat.id, {
-                    id: createMessageId(),
-                    role: 'ai',
-                    text: assistantText,
-                });
-
-                broadcastEvent('message.added', {
-                    chatId: chat.id,
-                    message: appendedAi.message,
-                    originClientId: clientId,
-                });
-
-                broadcastEvent('chat.upsert', {
-                    chat: appendedAi.chat,
-                    originClientId: clientId,
-                });
-
-                return {
-                    chat: appendedAi.chat,
-                    userMessage: appendedUser.message,
-                    aiMessage: appendedAi.message,
-                    onboardingCompleted: onboardingTurn?.completed === true,
-                };
-            });
-
-            void writeSystemLog({
-                source: 'chat',
-                eventType: 'chat.boot_onboarding_turn',
-                message: 'Processed BOOT onboarding turn.',
-                data: {
-                    chatId: chat.id,
-                    clientId,
-                    onboardingCompleted: result.onboardingCompleted === true,
-                },
-            }).catch(() => undefined);
-
-            res.json({
-                chat: result.chat,
-                userMessage: result.userMessage,
-                aiMessage: result.aiMessage,
-                created,
-            });
-            return;
         }
 
         const shouldDeferSteeringToActiveGeneration = isSteering
@@ -1949,6 +1884,7 @@ app.post('/api/chat/send', async (req, res, next) => {
                 usageAgentId: chatAgentId,
                 usageInputText,
                 historyWithLatestUserTurn: history,
+                systemInstructionOverride,
             });
             let finalChat = assistantResult.chat;
             const appendedAiMessage = assistantResult.aiMessage;

@@ -181,7 +181,7 @@ export const declaration = {
             },
             new_session: {
                 type: 'BOOLEAN',
-                description: 'If true, force a fresh browser session instead of reusing the current one.',
+                description: 'If true, force a fresh browser session instead of reusing the current one. For the shared persistent orchestrator profile, this also takes over and closes an active session owned by another chat.',
             },
             restart_session: {
                 type: 'BOOLEAN',

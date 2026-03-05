@@ -1,135 +1,71 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { BOOT_PROMPT_PATH } from '../core/dataPaths.js';
-import { reloadConfigJson, updateConfigSection } from '../core/config.js';
-import { readUiSettings, writeUiSettings } from '../storage/settings.js';
 
-const ONBOARDING_VERSION = 1;
-const STEP_AI_NAME = 'ai_name';
-const STEP_USER_NAME = 'user_name';
-const STEP_AI_EMOJI = 'ai_emoji';
-const STEP_AI_VIBE = 'ai_vibe';
-const STEP_COMPLETE = 'complete';
-const ONBOARDING_STEPS = [STEP_AI_NAME, STEP_USER_NAME, STEP_AI_EMOJI, STEP_AI_VIBE];
+const ONBOARDING_VERSION = 2;
 
-export const DEFAULT_BOOT_PROMPT_CONTENT = `# BOOT MODE
+export const DEFAULT_BOOT_PROMPT_CONTENT = `# BOOTSTRAP MODE
 
-First-run onboarding is active.
-The assistant must stay in onboarding mode until these values are collected:
-1. AI name
-2. User name
-3. AI emoji
-4. AI vibe / identity
+You are in first-run onboarding mode.
+This file is your only instruction until it is deleted.
 
-When complete:
-- Save values in ~/.orchestrator/config.json (ui settings).
-- Remove this BOOT.md file.
-- Resume standard assistant behavior.
+Mission:
+- Onboard the user conversationally (natural chat, not rigid scripts).
+- Collect and confirm:
+  - assistant display name
+  - user display name
+  - assistant emoji
+  - assistant vibe / identity
+
+Voice and style:
+- Sound human, warm, and present.
+- Write like a person in chat, not like a policy document.
+- Keep replies short, natural, and adaptive to what the user just said.
+- Use light personality and humor when it fits.
+- Never open with robotic templates like "Step 1/4" unless the user explicitly asks for that format.
+- Mirror the user's language automatically (Romanian with Romanian users, English with English users, etc.).
+
+Rules:
+- Do not use hardcoded numbered questionnaires.
+- Ask naturally, one clarification at a time when needed.
+- If the user gives multiple fields in one message, accept them.
+- Stay in onboarding mode until all required values are confirmed and saved.
+- Keep tone short, clear, and conversational.
+
+Tooling (use tools directly):
+- Read and edit: ~/.orchestrator/config.json
+- Persist values under:
+  - ui.aiName
+  - ui.userName
+  - ui.aiEmoji
+  - ui.aiVibe
+- Also update memory identity files:
+  - ~/.orchestrator/data/memory/USER.md
+  - ~/.orchestrator/data/memory/IDENTITY.md
+  - ~/.orchestrator/data/memory/SOUL.md
+- Keep those memory files short and useful (clear bullets, no fluff).
+- In each file, keep a 1-2 line explainer at the top about what belongs there.
+- After save, delete: ~/.orchestrator/BOOT.md
+
+Exit criteria:
+1) Values are saved in config.json.
+2) USER.md, IDENTITY.md, and SOUL.md are updated.
+3) BOOT.md is removed.
+4) You tell the user onboarding is complete and summarize chosen identity.
+
+After onboarding:
+- Offer a short runtime-files tour if useful or if the user asks.
+- Cover at least: config.json, models.json, BOOT.md lifecycle, and memory files.
 `;
-
-function toTimestamp(value, fallback = Date.now()) {
-    const parsed = Number(value);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-        return Math.trunc(fallback);
-    }
-
-    return Math.trunc(parsed);
-}
-
-function sanitizeName(value, fallback = '') {
-    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
-    if (!normalized) {
-        return fallback;
-    }
-
-    return normalized.slice(0, 64);
-}
-
-function sanitizeEmoji(value, fallback = '') {
-    const normalized = String(value ?? '').trim();
-    if (!normalized) {
-        return fallback;
-    }
-
-    const match = normalized.match(/\p{Extended_Pictographic}/u);
-    return match?.[0] ?? fallback;
-}
-
-function sanitizeVibe(value, fallback = '') {
-    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
-    if (!normalized) {
-        return fallback;
-    }
-
-    return normalized.slice(0, 140);
-}
 
 export function createDefaultBootOnboardingState() {
     const now = Date.now();
     return {
         version: ONBOARDING_VERSION,
         status: 'pending',
-        started: false,
-        step: STEP_AI_NAME,
-        profile: {
-            aiName: '',
-            userName: '',
-            aiEmoji: '',
-            aiVibe: '',
-        },
         createdAt: now,
         updatedAt: now,
     };
-}
-
-function normalizeBootOnboardingState(value) {
-    const base = createDefaultBootOnboardingState();
-    if (!value || typeof value !== 'object') {
-        return base;
-    }
-
-    const status = String(value.status ?? '').trim().toLowerCase() === 'completed'
-        ? 'completed'
-        : 'pending';
-    const rawStep = String(value.step ?? '').trim().toLowerCase();
-    const step = status === 'completed'
-        ? STEP_COMPLETE
-        : (ONBOARDING_STEPS.includes(rawStep) ? rawStep : STEP_AI_NAME);
-    const profileSource = value.profile && typeof value.profile === 'object'
-        ? value.profile
-        : {};
-
-    return {
-        version: ONBOARDING_VERSION,
-        status,
-        started: status === 'completed' ? true : value.started === true,
-        step,
-        profile: {
-            aiName: sanitizeName(profileSource.aiName),
-            userName: sanitizeName(profileSource.userName),
-            aiEmoji: sanitizeEmoji(profileSource.aiEmoji),
-            aiVibe: sanitizeVibe(profileSource.aiVibe),
-        },
-        createdAt: toTimestamp(value.createdAt, base.createdAt),
-        updatedAt: toTimestamp(value.updatedAt, base.updatedAt),
-        ...(status === 'completed'
-            ? { completedAt: toTimestamp(value.completedAt, Date.now()) }
-            : {}),
-    };
-}
-
-export function readBootOnboardingState() {
-    const config = reloadConfigJson();
-    return normalizeBootOnboardingState(config?.onboarding);
-}
-
-export function writeBootOnboardingState(state) {
-    const normalized = normalizeBootOnboardingState({
-        ...state,
-        updatedAt: Date.now(),
-    });
-    updateConfigSection('onboarding', normalized);
-    return normalized;
 }
 
 export function ensureBootPromptFile({ overwrite = false } = {}) {
@@ -150,260 +86,19 @@ export function ensureBootPromptFile({ overwrite = false } = {}) {
 }
 
 export function isBootOnboardingActive() {
-    if (!fs.existsSync(BOOT_PROMPT_PATH)) {
-        return false;
-    }
-
-    const state = readBootOnboardingState();
-    if (state.status === 'completed') {
-        try {
-            fs.rmSync(BOOT_PROMPT_PATH, { force: true });
-        } catch {
-            // ignore cleanup failure
-        }
-        return false;
-    }
-
-    return true;
+    return fs.existsSync(BOOT_PROMPT_PATH);
 }
 
-function buildStepPrompt(step, { reprompt = false } = {}) {
-    if (step === STEP_AI_NAME) {
-        if (reprompt) {
-            return 'Am nevoie de un nume clar pentru AI. Cum vrei să mă cheme?';
-        }
-        return '1/4. Cum vrei să mă cheme AI-ul? (ex: Nova, Atlas, Mira)';
-    }
-
-    if (step === STEP_USER_NAME) {
-        if (reprompt) {
-            return 'Mai am nevoie de un nume pentru tine. Cum vrei să-ți spun?';
-        }
-        return '2/4. Cum vrei să-ți spun eu ție?';
-    }
-
-    if (step === STEP_AI_EMOJI) {
-        if (reprompt) {
-            return 'Am nevoie de un emoji real (ex: 🤖, 🧠, 🦊). Ce alegi?';
-        }
-        return '3/4. Alege un emoji pentru mine.';
-    }
-
-    if (step === STEP_AI_VIBE) {
-        if (reprompt) {
-            return 'Spune-mi un vibe/identitate în câteva cuvinte (ex: calm pragmatic, friendly mentor).';
-        }
-        return '4/4. Ce vibe/identitate vrei să am?';
-    }
-
-    return 'Onboarding finalizat.';
-}
-
-function completeBootOnboarding(state) {
-    const currentUi = readUiSettings();
-    const nextUi = writeUiSettings({
-        ...currentUi,
-        aiName: state.profile.aiName || currentUi.aiName,
-        userName: state.profile.userName || currentUi.userName,
-        aiEmoji: state.profile.aiEmoji || currentUi.aiEmoji,
-        aiVibe: state.profile.aiVibe || currentUi.aiVibe,
-    });
-
-    const completedState = writeBootOnboardingState({
-        ...state,
-        status: 'completed',
-        step: STEP_COMPLETE,
-        started: true,
-        completedAt: Date.now(),
-        profile: {
-            aiName: nextUi.aiName,
-            userName: nextUi.userName,
-            aiEmoji: nextUi.aiEmoji,
-            aiVibe: nextUi.aiVibe,
-        },
-    });
-
-    let bootRemoved = false;
-    try {
-        fs.rmSync(BOOT_PROMPT_PATH, { force: true });
-        bootRemoved = true;
-    } catch {
-        bootRemoved = false;
-    }
-
-    return {
-        state: completedState,
-        uiSettings: nextUi,
-        bootRemoved,
-    };
-}
-
-function withUpdatedState(state, updates) {
-    return writeBootOnboardingState({
-        ...state,
-        ...updates,
-    });
-}
-
-function hasAnswer(text) {
-    return String(text ?? '').trim().length > 0;
-}
-
-function buildIntroPrompt() {
-    return [
-        'Salut. E primul run, deci facem onboarding rapid înainte de instrucțiunile standard.',
-        'Sunt 4 pași și gata.',
-        '',
-        buildStepPrompt(STEP_AI_NAME),
-    ].join('\n');
-}
-
-export function advanceBootOnboarding(userText) {
+export function readBootPromptInstruction() {
     if (!isBootOnboardingActive()) {
-        return {
-            active: false,
-            completed: false,
-            assistantText: '',
-        };
+        return '';
     }
 
-    const answer = String(userText ?? '').trim();
-    const currentState = readBootOnboardingState();
-
-    if (!currentState.started) {
-        withUpdatedState(currentState, {
-            started: true,
-            step: STEP_AI_NAME,
-        });
-        return {
-            active: true,
-            completed: false,
-            assistantText: buildIntroPrompt(),
-        };
+    try {
+        const raw = fs.readFileSync(BOOT_PROMPT_PATH, 'utf8');
+        const normalized = String(raw ?? '').trim();
+        return normalized || DEFAULT_BOOT_PROMPT_CONTENT;
+    } catch {
+        return DEFAULT_BOOT_PROMPT_CONTENT;
     }
-
-    if (currentState.step === STEP_AI_NAME) {
-        const aiName = sanitizeName(answer);
-        if (!hasAnswer(aiName)) {
-            return {
-                active: true,
-                completed: false,
-                assistantText: buildStepPrompt(STEP_AI_NAME, { reprompt: true }),
-            };
-        }
-
-        const nextState = withUpdatedState(currentState, {
-            step: STEP_USER_NAME,
-            profile: {
-                ...currentState.profile,
-                aiName,
-            },
-        });
-
-        return {
-            active: true,
-            completed: false,
-            assistantText: [
-                `Perfect, eu voi fi ${aiName}.`,
-                buildStepPrompt(nextState.step),
-            ].join('\n'),
-        };
-    }
-
-    if (currentState.step === STEP_USER_NAME) {
-        const userName = sanitizeName(answer);
-        if (!hasAnswer(userName)) {
-            return {
-                active: true,
-                completed: false,
-                assistantText: buildStepPrompt(STEP_USER_NAME, { reprompt: true }),
-            };
-        }
-
-        const nextState = withUpdatedState(currentState, {
-            step: STEP_AI_EMOJI,
-            profile: {
-                ...currentState.profile,
-                userName,
-            },
-        });
-
-        return {
-            active: true,
-            completed: false,
-            assistantText: [
-                `Super, îți voi spune ${userName}.`,
-                buildStepPrompt(nextState.step),
-            ].join('\n'),
-        };
-    }
-
-    if (currentState.step === STEP_AI_EMOJI) {
-        const aiEmoji = sanitizeEmoji(answer);
-        if (!hasAnswer(aiEmoji)) {
-            return {
-                active: true,
-                completed: false,
-                assistantText: buildStepPrompt(STEP_AI_EMOJI, { reprompt: true }),
-            };
-        }
-
-        const nextState = withUpdatedState(currentState, {
-            step: STEP_AI_VIBE,
-            profile: {
-                ...currentState.profile,
-                aiEmoji,
-            },
-        });
-
-        return {
-            active: true,
-            completed: false,
-            assistantText: [
-                `Nice, emoji setat: ${aiEmoji}`,
-                buildStepPrompt(nextState.step),
-            ].join('\n'),
-        };
-    }
-
-    if (currentState.step === STEP_AI_VIBE) {
-        const aiVibe = sanitizeVibe(answer);
-        if (!hasAnswer(aiVibe)) {
-            return {
-                active: true,
-                completed: false,
-                assistantText: buildStepPrompt(STEP_AI_VIBE, { reprompt: true }),
-            };
-        }
-
-        const completed = completeBootOnboarding({
-            ...currentState,
-            profile: {
-                ...currentState.profile,
-                aiVibe,
-            },
-        });
-
-        const shutdownLine = completed.bootRemoved
-            ? 'Am salvat în config și am închis BOOT mode.'
-            : 'Am salvat în config, dar nu am reușit să șterg BOOT.md automat.';
-
-        return {
-            active: true,
-            completed: true,
-            assistantText: [
-                'Perfect, onboarding finalizat.',
-                `Identitate: ${completed.uiSettings.aiEmoji} ${completed.uiSettings.aiName} (${completed.uiSettings.aiVibe}).`,
-                `Tu ești: ${completed.uiSettings.userName}.`,
-                shutdownLine,
-                'De acum primesc instrucțiunile standard.',
-            ].join('\n'),
-        };
-    }
-
-    return {
-        active: true,
-        completed: false,
-        assistantText: buildStepPrompt(STEP_AI_NAME, { reprompt: false }),
-    };
 }

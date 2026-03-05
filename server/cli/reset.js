@@ -4,7 +4,14 @@ import { getGeminiApiKey } from '../core/config.js';
 import { upsertSecretEnvValues } from '../core/secretEnv.js';
 import { ensureModelCatalogExists } from '../core/modelCatalogSeed.js';
 import { createDefaultBootOnboardingState, ensureBootPromptFile } from '../services/bootOnboarding.js';
+import { memoryStore } from '../services/memory.js';
 import { restartManagedApp, stopManagedApp } from './appLifecycle.js';
+import {
+    getConfiguredPort,
+    isLikelyManagedAppProcess,
+    probeAppHealth,
+    readAppRuntimeState,
+} from './lifecycleCore.js';
 import {
     c,
     printBanner,
@@ -26,7 +33,24 @@ async function main() {
     const existing = readConfig();
     const existingApiKey = getGeminiApiKey();
 
-    await stopManagedApp({ silent: true });
+    try {
+        await stopManagedApp({ silent: true });
+    } catch (error) {
+        const runtimeState = readAppRuntimeState();
+        const managedPid = Number(runtimeState?.pid);
+        const managedStillAlive = Number.isInteger(managedPid) && managedPid > 0
+            ? isLikelyManagedAppProcess(managedPid)
+            : false;
+        const portHealthy = await probeAppHealth(getConfiguredPort());
+
+        if (!managedStillAlive && !portHealthy) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.log(c.yellow(`  ${message}`));
+            console.log(c.dim('  Continuing reset because no managed app process is active.'));
+        } else {
+            throw error;
+        }
+    }
 
     process.stdout.write(c.dim(`  Removing ${ORCHESTRATOR_HOME}... `));
     fs.rmSync(ORCHESTRATOR_HOME, { recursive: true, force: true });
@@ -34,6 +58,7 @@ async function main() {
 
     process.stdout.write(c.dim('  Recreating runtime data... '));
     ensureDataDirectories();
+    memoryStore.ensureScaffold();
     const catalogResult = ensureModelCatalogExists();
     console.log(c.green('OK'));
     if (catalogResult.created) {

@@ -461,6 +461,10 @@ function shouldKeepSessionOpen(session) {
 }
 
 function shouldCloseSessionImmediately(session) {
+    if (session?.profileMode === 'persistent') {
+        return false;
+    }
+
     return Boolean(
         isLiveSession(session)
         && !shouldKeepSessionOpen(session)
@@ -1219,6 +1223,10 @@ async function resolveSession({
                 await closeSession(livePersistentSession);
             } else if (livePersistentSession.chatId === chatId) {
                 return livePersistentSession;
+            } else if (!newSession) {
+                throw new Error(
+                    `Persistent browser profile is already in use by chat ${livePersistentSession.chatId} (session ${livePersistentSession.sessionId}). Retry with new_session=true to take over that shared profile.`,
+                );
             } else {
                 try {
                     livePersistentSession.runtime?.stopTask?.();
@@ -1425,7 +1433,11 @@ function buildToolResult(session) {
         message: session.status === 'awaiting_user'
             ? 'Browser Agent is waiting for user input.'
             : session.status === 'completed'
-                ? 'Browser Agent completed the requested task.'
+                ? (
+                    session.profileMode === 'persistent'
+                        ? 'Browser Agent completed the requested task and kept the persistent session open.'
+                        : 'Browser Agent completed the requested task.'
+                )
                 : session.status === 'error'
                     ? 'Browser Agent encountered an error.'
                     : 'Browser Agent is still working.',

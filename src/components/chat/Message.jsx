@@ -928,18 +928,54 @@ function ReplyReference({ replyTo, compact = false }) {
     );
 }
 
+async function copyTextWithFallback(content) {
+    const normalized = String(content ?? '');
+    if (!normalized.trim()) {
+        return false;
+    }
+
+    try {
+        if (navigator?.clipboard?.writeText) {
+            await navigator.clipboard.writeText(normalized);
+            return true;
+        }
+    } catch {
+        // fall through to legacy copy
+    }
+
+    try {
+        const fallback = document.createElement('textarea');
+        fallback.value = normalized;
+        fallback.setAttribute('readonly', '');
+        fallback.style.position = 'fixed';
+        fallback.style.opacity = '0';
+        fallback.style.pointerEvents = 'none';
+        document.body.appendChild(fallback);
+        fallback.focus();
+        fallback.select();
+        const copied = document.execCommand('copy');
+        document.body.removeChild(fallback);
+        return copied;
+    } catch {
+        return false;
+    }
+}
+
 function CopyButton({ text }) {
     const [copied, setCopied] = useState(false);
     const timeoutRef = useRef(null);
 
-    const handleCopy = useCallback(() => {
+    const handleCopy = useCallback(async () => {
         const content = String(text ?? '').trim();
         if (!content) return;
-        navigator.clipboard.writeText(content).then(() => {
+        const success = await copyTextWithFallback(content);
+        if (success) {
             setCopied(true);
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
             timeoutRef.current = setTimeout(() => setCopied(false), 2000);
-        }).catch(() => { });
+            return;
+        }
+        setCopied(false);
     }, [text]);
 
     useEffect(() => () => {
