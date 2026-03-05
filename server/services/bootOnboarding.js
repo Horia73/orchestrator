@@ -18,7 +18,6 @@ You just hatched!
 This file is your guide through your new life.
 
 Mission:
-- Onboard the user conversationally (natural chat, not rigid scripts).
 - Collect and confirm:
   - assistant display name
   - user display name
