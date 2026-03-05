@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from 'react';
 import { fetchCommandStatus } from '../../api/chatApi.js';
 import {
     getAgentCallIdentity,
@@ -6,7 +6,6 @@ import {
     getToolCallId,
 } from './agentCallUtils.js';
 import { captureCollapseScrollAnchor, restoreCollapseScrollAnchor } from './scrollAnchor.js';
-import { TerminalPane } from './TerminalPane.jsx';
 import { TodoBoard } from './TodoBoard.jsx';
 import { getTodoToolState, isTodoToolName } from './todoUtils.js';
 import {
@@ -15,6 +14,8 @@ import {
 } from '../shared/icons.jsx';
 import { AnimatedCollapse } from '../shared/AnimatedCollapse.jsx';
 import './ToolBlock.css';
+
+const TerminalPane = lazy(() => import('./TerminalPane.jsx').then((module) => ({ default: module.TerminalPane })));
 
 const COMMAND_TOOL_NAMES = new Set([
     'run_command',
@@ -510,11 +511,13 @@ export function ToolBlock({
                                     <span className="tool-terminal-prompt">$</span>
                                     <span className="tool-terminal-command">{commandLine || '(no command text)'}</span>
                                 </div>
-                                <TerminalPane
-                                    initialOutput={terminalOutput}
-                                    chunks={commandChunks[commandId] ?? []}
-                                    isRunning={isCommandRunning}
-                                />
+                                <Suspense fallback={<div className="tool-terminal-loading">Loading terminal…</div>}>
+                                    <TerminalPane
+                                        initialOutput={terminalOutput}
+                                        chunks={commandChunks[commandId] ?? []}
+                                        isRunning={isCommandRunning}
+                                    />
+                                </Suspense>
                             </div>
                         ) : (
                             <div className="tool-command-details">

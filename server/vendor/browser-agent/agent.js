@@ -9,6 +9,15 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
     const stepDelayMs = options.stepDelayMs ?? 500;
     const actionSettleDelayMs = options.actionSettleDelayMs ?? 300;
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
+    const enableModelAutoEscalation = options.enableModelAutoEscalation ?? true;
+    const escalationModel = String(options.escalationModel ?? 'gemini-3.1-pro-preview').trim() || 'gemini-3.1-pro-preview';
+    const escalationThinkingLevel = String(options.escalationThinkingLevel ?? 'medium').trim() || 'medium';
+    const escalationFailureThreshold = Number.isFinite(Number(options.escalationFailureThreshold))
+        ? Math.max(1, Math.trunc(Number(options.escalationFailureThreshold)))
+        : 3;
+    const deescalationSuccessThreshold = Number.isFinite(Number(options.deescalationSuccessThreshold))
+        ? Math.max(1, Math.trunc(Number(options.deescalationSuccessThreshold)))
+        : 2;
     let currentGoal = null;
     let running = false;
     let shouldStop = false;
@@ -16,7 +25,74 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
     let actionHistory = [];
     let conversationHistory = [];
     let clipboard = null;
+    let availableUploads = [];
+    let baseVisionModel = '';
+    let baseVisionThinkingLevel = '';
+    let modelEscalated = false;
+    let consecutiveActionFailures = 0;
+    let boostedSuccessStreak = 0;
+    let consecutiveVisionErrors = 0;
     initializeDefaultLearnings();
+    const normalizeUploadDescriptors = (uploadFiles = []) => (Array.isArray(uploadFiles) ? uploadFiles : [])
+        .map((entry, index) => {
+        if (!entry || typeof entry !== 'object') {
+            return null;
+        }
+        const absolutePath = String(entry.absolutePath ?? '').trim();
+        if (!absolutePath) {
+            return null;
+        }
+        const uploadId = String(entry.uploadId ?? entry.id ?? '').trim() || `upload-${index + 1}`;
+        const name = String(entry.name ?? '').trim() || absolutePath.split('/').pop() || uploadId;
+        const mimeType = String(entry.mimeType ?? '').trim() || 'application/octet-stream';
+        return {
+            uploadId,
+            name,
+            mimeType,
+            absolutePath,
+        };
+    })
+        .filter(Boolean);
+    const resolveUploadPathsFromAction = (action) => {
+        const requestedRefs = [];
+        if (Array.isArray(action?.files)) {
+            for (const rawRef of action.files) {
+                const normalized = String(rawRef ?? '').trim();
+                if (normalized) {
+                    requestedRefs.push(normalized);
+                }
+            }
+        }
+        if (Array.isArray(action?.filePaths)) {
+            for (const rawRef of action.filePaths) {
+                const normalized = String(rawRef ?? '').trim();
+                if (normalized) {
+                    requestedRefs.push(normalized);
+                }
+            }
+        }
+        const uniqueRequested = [...new Set(requestedRefs.map((ref) => ref.toLowerCase()))];
+        if (uniqueRequested.length === 0) {
+            if (availableUploads.length === 1) {
+                return [availableUploads[0].absolutePath];
+            }
+            return [];
+        }
+        const resolvedPaths = [];
+        for (const upload of availableUploads) {
+            const candidates = [
+                upload.uploadId,
+                upload.name,
+                upload.absolutePath,
+            ]
+                .map((value) => String(value ?? '').trim().toLowerCase())
+                .filter(Boolean);
+            if (candidates.some((candidate) => uniqueRequested.includes(candidate))) {
+                resolvedPaths.push(upload.absolutePath);
+            }
+        }
+        return [...new Set(resolvedPaths)];
+    };
     const pushConversationHistory = (entry) => {
         conversationHistory.push(entry);
         if (conversationHistory.length > maxConversationHistory) {
@@ -30,6 +106,7 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
                 onStatusUpdate('❌ Empty goal. Type your command first.');
                 return;
             }
+            availableUploads = normalizeUploadDescriptors(taskOptions.uploadFiles);
             const preserveContext = taskOptions.preserveContext ?? true;
             const wasRunning = running;
             if (preserveContext && currentGoal && actionHistory.length > 0) {
@@ -69,13 +146,114 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
             shouldStop = false;
             onStatusUpdate('🔄 Starting automation loop...');
             try {
+                const currentVisionConfig = vision.getConfig?.() ?? {};
+                baseVisionModel = String(currentVisionConfig.model ?? '').trim();
+                baseVisionThinkingLevel = String(currentVisionConfig.thinkingLevel ?? '').trim();
+            }
+            catch {
+                baseVisionModel = '';
+                baseVisionThinkingLevel = '';
+            }
+            modelEscalated = false;
+            consecutiveActionFailures = 0;
+            boostedSuccessStreak = 0;
+            consecutiveVisionErrors = 0;
+            const getOpenTabCountSafe = async () => {
+                try {
+                    return await browser.getOpenTabCount();
+                }
+                catch {
+                    return 0;
+                }
+            };
+            const tryEscalateModel = () => {
+                if (!enableModelAutoEscalation || modelEscalated || consecutiveActionFailures < escalationFailureThreshold) {
+                    return;
+                }
+
+                try {
+                    const currentVisionConfig = vision.getConfig?.() ?? {};
+                    const currentModel = String(currentVisionConfig.model ?? '').trim();
+                    if (currentModel === escalationModel) {
+                        modelEscalated = true;
+                        boostedSuccessStreak = 0;
+                        onStatusUpdate(`⬆️ Browser AI escalation active on ${escalationModel}.`);
+                        return;
+                    }
+
+                    onStatusUpdate(`⬆️ Repeated failures detected. Escalating to ${escalationModel} temporarily.`);
+                    vision.updateConfig({
+                        model: escalationModel,
+                        thinkingLevel: escalationThinkingLevel,
+                    });
+                    modelEscalated = true;
+                    boostedSuccessStreak = 0;
+                }
+                catch {
+                    // Ignore escalation issues and continue with current model.
+                }
+            };
+            const restoreBaseModel = (reasonMessage = '') => {
+                if (!modelEscalated) {
+                    return;
+                }
+
+                try {
+                    if (baseVisionModel || baseVisionThinkingLevel) {
+                        const patch = {};
+                        if (baseVisionModel) {
+                            patch.model = baseVisionModel;
+                        }
+                        if (baseVisionThinkingLevel) {
+                            patch.thinkingLevel = baseVisionThinkingLevel;
+                        }
+                        vision.updateConfig(patch);
+                    }
+                }
+                catch {
+                    // Best effort only.
+                }
+
+                modelEscalated = false;
+                consecutiveActionFailures = 0;
+                boostedSuccessStreak = 0;
+                consecutiveVisionErrors = 0;
+                if (reasonMessage) {
+                    onStatusUpdate(reasonMessage);
+                }
+            };
+            const tryDeescalateModel = () => {
+                if (!modelEscalated || boostedSuccessStreak < deescalationSuccessThreshold) {
+                    return;
+                }
+
+                restoreBaseModel(`⬇️ Browser AI stabilized. Restoring default model${baseVisionModel ? ` (${baseVisionModel})` : ''}.`);
+            };
+            try {
                 let iterationCount = 0;
                 while (!shouldStop && currentGoal && iterationCount < maxIterations) {
                     iterationCount++;
+                    const preActionUrl = browser.getPageUrl();
+                    const preActionOpenTabs = await getOpenTabCountSafe();
                     onStatusUpdate('📸 Scanning page...');
                     const screenshot = await browser.screenshot();
                     onStatusUpdate('🤖 AI deciding...');
-                    const action = await vision.analyzeScreenshot(screenshot, currentGoal, actionHistory, conversationHistory, isInterrupt);
+                    const action = await vision.analyzeScreenshot(
+                        screenshot,
+                        currentGoal,
+                        actionHistory,
+                        conversationHistory,
+                        isInterrupt,
+                        {
+                            currentUrl: preActionUrl,
+                            openTabs: preActionOpenTabs,
+                            availableUploads: availableUploads.map((upload) => ({
+                                id: upload.uploadId,
+                                name: upload.name,
+                                mimeType: upload.mimeType,
+                            })),
+                        },
+                    );
                     isInterrupt = false;
                     if (action.memory) {
                         onStatusUpdate(`💡 Saving memory: "${action.memory}"`);
@@ -83,28 +261,51 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
                         addLearning(action.memory, currentUrl || 'general');
                     }
                     if (action.action === 'done') {
+                        restoreBaseModel();
                         onStatusUpdate(`✅ Complete: ${action.reasoning}`);
                         pushConversationHistory(`AGENT: ✅ Completed goal "${currentGoal}". Reason: ${action.reasoning}`);
                         currentGoal = null;
                         break;
                     }
                     if (action.action === 'ask') {
+                        restoreBaseModel();
                         onStatusUpdate(`❓ QUESTION: ${action.reasoning}`);
+                        const askAfterUrl = browser.getPageUrl();
+                        const askAfterTabs = await getOpenTabCountSafe();
                         actionHistory.push({
                             action: 'ask',
                             coordinate: action.coordinate,
                             text: action.text,
                             reasoning: action.reasoning,
-                            success: true
+                            success: true,
+                            beforeUrl: preActionUrl,
+                            afterUrl: askAfterUrl,
+                            beforeTabs: preActionOpenTabs,
+                            afterTabs: askAfterTabs,
+                            tabDelta: askAfterTabs - preActionOpenTabs,
+                            urlChanged: preActionUrl !== askAfterUrl,
                         });
                         break;
                     }
                     if (action.action === 'error') {
+                        consecutiveVisionErrors += 1;
+                        consecutiveActionFailures += 1;
+                        boostedSuccessStreak = 0;
+                        tryEscalateModel();
+
+                        if (modelEscalated && consecutiveVisionErrors <= 2) {
+                            onStatusUpdate(`⚠️ Vision step failed. Retrying with escalated model (${escalationModel})...`);
+                            await sleep(stepDelayMs);
+                            continue;
+                        }
+
+                        restoreBaseModel();
                         onStatusUpdate(`🛑 ${action.reasoning}`);
                         pushConversationHistory(`AGENT: 🛑 Failed. Reason: ${action.reasoning}`);
                         currentGoal = null;
                         break;
                     }
+                    consecutiveVisionErrors = 0;
                     const desc = formatAction(action);
                     onStatusUpdate(`➡️  ${desc}`);
                     const success = await executeAction(browser, action, onStatusUpdate, {
@@ -115,7 +316,12 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
                     }, {
                         actionSettleDelayMs,
                         waitActionDelayMs
+                    }, {
+                        availableUploads,
+                        resolveUploadPathsFromAction,
                     });
+                    const postActionUrl = browser.getPageUrl();
+                    const postActionOpenTabs = await getOpenTabCountSafe();
                     actionHistory.push({
                         action: action.action,
                         coordinate: action.coordinate,
@@ -124,7 +330,26 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
                         clickCount: action.clickCount,
                         reasoning: action.reasoning,
                         success,
+                        beforeUrl: preActionUrl,
+                        afterUrl: postActionUrl,
+                        beforeTabs: preActionOpenTabs,
+                        afterTabs: postActionOpenTabs,
+                        tabDelta: postActionOpenTabs - preActionOpenTabs,
+                        urlChanged: preActionUrl !== postActionUrl,
+                        files: Array.isArray(action?.files) ? action.files : undefined,
                     });
+                    if (success) {
+                        consecutiveActionFailures = 0;
+                        if (modelEscalated) {
+                            boostedSuccessStreak += 1;
+                            tryDeescalateModel();
+                        }
+                    }
+                    else {
+                        consecutiveActionFailures += 1;
+                        boostedSuccessStreak = 0;
+                        tryEscalateModel();
+                    }
                     if (actionHistory.length > 25) {
                         actionHistory = actionHistory.slice(-20);
                     }
@@ -138,6 +363,24 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
                 onStatusUpdate(`❌ Error: ${error instanceof Error ? error.message : 'Unknown'}`);
             }
             finally {
+                if (modelEscalated) {
+                    try {
+                        const patch = {};
+                        if (baseVisionModel) {
+                            patch.model = baseVisionModel;
+                        }
+                        if (baseVisionThinkingLevel) {
+                            patch.thinkingLevel = baseVisionThinkingLevel;
+                        }
+                        if (Object.keys(patch).length > 0) {
+                            vision.updateConfig(patch);
+                        }
+                    }
+                    catch {
+                        // ignore restore errors at shutdown
+                    }
+                    modelEscalated = false;
+                }
                 running = false;
             }
         },
@@ -166,6 +409,9 @@ export function createAgentController(browser, vision, onStatusUpdate, options =
             }
             if (clearInterruptFlag) {
                 isInterrupt = false;
+            }
+            if (clearCurrentGoal) {
+                availableUploads = [];
             }
             onStatusUpdate('🧼 Context reset complete.');
         },
@@ -224,6 +470,11 @@ function formatAction(action) {
             return `Go Back - ${action.reasoning}`;
         case 'goForward':
             return `Go Forward - ${action.reasoning}`;
+        case 'upload': {
+            const files = Array.isArray(action.files) ? action.files.join(', ') : '';
+            const coords = action.coordinate ? ` at [${action.coordinate[0]}, ${action.coordinate[1]}]` : '';
+            return `Upload${coords}${files ? ` files: ${files}` : ''} - ${action.reasoning}`;
+        }
         default:
             return `${action.action} - ${action.reasoning}`;
     }
@@ -237,7 +488,7 @@ function denormalize(coordinate, width, height) {
 function sleep(ms) {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
-async function executeAction(browser, action, onStatusUpdate, clipboardOps, timing) {
+async function executeAction(browser, action, onStatusUpdate, clipboardOps, timing, extras = {}) {
     try {
         switch (action.action) {
             case 'click':
@@ -389,6 +640,37 @@ async function executeAction(browser, action, onStatusUpdate, clipboardOps, timi
                 onStatusUpdate(`📋 Pasting link: "${content}"`);
                 await browser.type(content);
                 return true;
+            }
+            case 'upload': {
+                const resolver = typeof extras.resolveUploadPathsFromAction === 'function'
+                    ? extras.resolveUploadPathsFromAction
+                    : () => [];
+                const resolvedPaths = resolver(action);
+                if (resolvedPaths.length === 0) {
+                    const available = Array.isArray(extras.availableUploads) ? extras.availableUploads : [];
+                    const availableHint = available.length > 0
+                        ? available.map((item) => item.name).join(', ')
+                        : '(none)';
+                    onStatusUpdate(`⚠️ Upload failed: no matching files found. Available uploads: ${availableHint}`);
+                    return false;
+                }
+
+                onStatusUpdate(`📤 Uploading ${resolvedPaths.length} file(s)...`);
+                if (action.coordinate) {
+                    const viewport = await browser.getViewport();
+                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const successAtPoint = await browser.setFilesAtCoordinate(x, y, resolvedPaths);
+                    if (successAtPoint) {
+                        await sleep(timing.actionSettleDelayMs);
+                        return true;
+                    }
+                }
+
+                const successFallback = await browser.setFilesOnFirstInput(resolvedPaths);
+                if (successFallback) {
+                    await sleep(timing.actionSettleDelayMs);
+                }
+                return successFallback;
             }
         }
     }

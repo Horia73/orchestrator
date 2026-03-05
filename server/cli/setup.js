@@ -10,6 +10,7 @@ import { getGeminiApiKey } from '../core/config.js';
 import { upsertSecretEnvValues } from '../core/secretEnv.js';
 import { ensureModelCatalogExists } from '../core/modelCatalogSeed.js';
 import { ensureBrowserRuntimeDependencies } from './runtimeDependencies.js';
+import { createDefaultBootOnboardingState, ensureBootPromptFile } from '../services/bootOnboarding.js';
 
 async function main() {
     printBanner();
@@ -18,6 +19,7 @@ async function main() {
 
     const existing = readConfig();
     const existingApiKey = getGeminiApiKey();
+    const isFirstRun = !existing;
     const prompt = createPrompt();
     let promptClosed = false;
 
@@ -94,11 +96,23 @@ async function main() {
             },
             agents: existing?.agents ?? {},
             cron: existing?.cron ?? { enabled: true },
-            ui: existing?.ui ?? { aiName: 'AI Chat', userName: 'User' },
+            ui: {
+                aiName: String(existing?.ui?.aiName ?? 'AI Chat'),
+                userName: String(existing?.ui?.userName ?? 'User'),
+                aiEmoji: String(existing?.ui?.aiEmoji ?? '🤖'),
+                aiVibe: String(existing?.ui?.aiVibe ?? 'pragmatic helper'),
+            },
+            onboarding: existing?.onboarding ?? createDefaultBootOnboardingState(),
         };
 
         writeConfig(config);
         console.log(c.dim(`  Config written to ${CONFIG_PATH}`));
+        if (isFirstRun || String(config.onboarding?.status ?? '').trim().toLowerCase() !== 'completed') {
+            const bootPrompt = ensureBootPromptFile({ overwrite: false });
+            if (bootPrompt.created) {
+                console.log(c.dim(`  Created ${bootPrompt.path} for first-chat onboarding`));
+            }
+        }
 
         // 6. Install browser runtime requirements
         console.log('');

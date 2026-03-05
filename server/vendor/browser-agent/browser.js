@@ -608,6 +608,103 @@ export async function createBrowserManager(options = {}) {
                 page = newPages[newPages.length - 1];
             }
         },
+        async setFilesAtCoordinate(x, y, filePaths = []) {
+            const normalizedFiles = (Array.isArray(filePaths) ? filePaths : [])
+                .map((filePath) => String(filePath ?? '').trim())
+                .filter(Boolean);
+            if (normalizedFiles.length === 0) {
+                return false;
+            }
+
+            const activePage = await ensureActivePage();
+            const { width: maxX, height: maxY } = await activePage.evaluate(() => ({
+                width: window.innerWidth,
+                height: window.innerHeight,
+            }));
+            const safeX = Math.max(0, Math.min(x, maxX - 1));
+            const safeY = Math.max(0, Math.min(y, maxY - 1));
+
+            try {
+                await humanMouseMove(activePage, safeX, safeY, lastMousePosition?.x, lastMousePosition?.y);
+                await activePage.mouse.move(safeX, safeY);
+                lastMousePosition = { x: safeX, y: safeY };
+                await new Promise((resolve) => setTimeout(resolve, 16));
+
+                const inputHandle = await activePage.evaluateHandle(({ pointX, pointY }) => {
+                    const element = document.elementFromPoint(pointX, pointY);
+                    if (!element) {
+                        return null;
+                    }
+
+                    const asInput = element instanceof HTMLInputElement ? element : null;
+                    if (asInput && asInput.type === 'file') {
+                        return asInput;
+                    }
+
+                    if (typeof element.querySelector === 'function') {
+                        const nested = element.querySelector('input[type="file"]');
+                        if (nested) {
+                            return nested;
+                        }
+                    }
+
+                    if (typeof element.closest === 'function') {
+                        const label = element.closest('label');
+                        if (label && typeof label.querySelector === 'function') {
+                            const nestedFromLabel = label.querySelector('input[type="file"]');
+                            if (nestedFromLabel) {
+                                return nestedFromLabel;
+                            }
+                        }
+
+                        const genericParent = element.closest('[role="button"],button,div,span,a');
+                        if (genericParent && typeof genericParent.querySelector === 'function') {
+                            const nestedFromParent = genericParent.querySelector('input[type="file"]');
+                            if (nestedFromParent) {
+                                return nestedFromParent;
+                            }
+                        }
+                    }
+
+                    return null;
+                }, { pointX: safeX, pointY: safeY });
+
+                const inputElement = inputHandle?.asElement?.() ?? null;
+                if (!inputElement) {
+                    await inputHandle?.dispose?.();
+                    return false;
+                }
+
+                await inputElement.setInputFiles(normalizedFiles);
+                await inputHandle?.dispose?.();
+                return true;
+            } catch (error) {
+                logError('setFilesAtCoordinate failed:', error);
+                return false;
+            }
+        },
+        async setFilesOnFirstInput(filePaths = []) {
+            const normalizedFiles = (Array.isArray(filePaths) ? filePaths : [])
+                .map((filePath) => String(filePath ?? '').trim())
+                .filter(Boolean);
+            if (normalizedFiles.length === 0) {
+                return false;
+            }
+
+            const activePage = await ensureActivePage();
+            try {
+                const inputHandle = await activePage.$('input[type="file"]');
+                if (!inputHandle) {
+                    return false;
+                }
+                await inputHandle.setInputFiles(normalizedFiles);
+                await inputHandle.dispose();
+                return true;
+            } catch (error) {
+                logError('setFilesOnFirstInput failed:', error);
+                return false;
+            }
+        },
         async getHrefAt(x, y) {
             const activePage = await ensureActivePage();
             const { width: maxX, height: maxY } = await activePage.evaluate(() => ({

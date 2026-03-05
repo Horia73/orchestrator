@@ -215,6 +215,9 @@ Rules:
 When browser action is required:
 - Do pre-browser research first if option discovery is still open.
 - Collect mandatory user data before final submission flow.
+- If upload is required (prescription, ID, form, receipt), ask user to attach file(s) in chat first.
+- Pass attachments to call_browser_agent using upload_ids (preferred) or file_paths.
+- Do not start upload steps when no valid file references are available.
 - Pause at irreversible final action for explicit user confirmation.
 - Return proof: confirmation ID/order ID, final total, timestamp if available.
 

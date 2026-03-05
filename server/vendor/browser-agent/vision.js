@@ -62,13 +62,20 @@ export function createVisionService(initialConfig = {}, onUsage) {
                 thinkingLevel: state.thinkingLevel,
             };
         },
-        async analyzeScreenshot(screenshot, goal, actionHistory, conversationHistory = [], isInterrupt = false) {
+        async analyzeScreenshot(
+            screenshot,
+            goal,
+            actionHistory,
+            conversationHistory = [],
+            isInterrupt = false,
+            pageContext = {},
+        ) {
             // Get learnings from memory
             const learnings = getLearnings();
             const systemPrompt = buildSystemPrompt(learnings);
             const actionPrompt = isInterrupt
-                ? buildInterruptPrompt(goal)
-                : buildActionPrompt(goal, actionHistory);
+                ? buildInterruptPrompt(goal, pageContext)
+                : buildActionPrompt(goal, actionHistory, pageContext);
             try {
                 // Add conversation history context
                 const historyContext = conversationHistory.length > 0
@@ -154,7 +161,7 @@ export function createVisionService(initialConfig = {}, onUsage) {
                 if (!action.action) {
                     throw new Error('Missing action field');
                 }
-                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'hover', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'goBack', 'goForward'];
+                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'hover', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'upload', 'done', 'ask', 'goBack', 'goForward'];
                 if (!validActions.includes(action.action)) {
                     throw new Error(`Invalid action: ${action.action}`);
                 }

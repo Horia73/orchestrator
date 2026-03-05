@@ -18,6 +18,7 @@ What `npm run setup` does:
 - on Linux, installs the browser system dependencies Patchright needs and may prompt for `sudo`
 - on Linux, also installs `ffmpeg`, `Xvfb`, and `x11vnc` so Browser Agent recordings and remote desktop work out of the box when the distro package manager is supported
 - writes `~/.orchestrator/config.json`
+- creates `~/.orchestrator/BOOT.md` for first-chat identity onboarding
 - creates the runtime data directories under `~/.orchestrator/data`
 - builds the frontend for production
 - starts the app in the background so your terminal is free when onboarding finishes
@@ -41,6 +42,7 @@ These commands are the intended production lifecycle:
 | `npm restart` | Restarts the managed background process in the background. |
 | `npm run status` | Shows config, URL, build status, PID, and log location. |
 | `npm run setup` | Runs onboarding again, refreshes Browser Agent runtime dependencies, installs Linux Browser Agent extras when applicable, rebuilds production assets, and restarts the app in the background. |
+| `npm run reset` | Stops the app, deletes `~/.orchestrator`, recreates runtime data/config/BOOT onboarding state, and restarts the app. |
 | `npm run serve` | Runs the server in the foreground. Useful for debugging server startup directly. |
 | `npm run dev` | Starts Vite and the API together for development. |
 | `npm run build` | Builds the frontend into `dist/`. |
@@ -116,6 +118,7 @@ Orchestrator stores user data outside the repo so upgrades and rebuilds do not w
 | Path | Purpose |
 | --- | --- |
 | `~/.orchestrator/config.json` | Main app config written by onboarding |
+| `~/.orchestrator/BOOT.md` | First-chat onboarding gate (removed automatically after completion) |
 | `~/.orchestrator/models.json` | Local Gemini model catalog |
 | `~/.orchestrator/data/chats` | Chat metadata and messages |
 | `~/.orchestrator/data/uploads` | Uploaded attachments |
@@ -126,6 +129,50 @@ Orchestrator stores user data outside the repo so upgrades and rebuilds do not w
 | `~/.orchestrator/data/memory` | Persistent memory files |
 | `~/.orchestrator/data/skills` | User-installed workspace skills |
 | `~/.orchestrator/data/runtime/app.json` | Managed background process state |
+
+## Runtime File Tutorial
+
+If you are new to Orchestrator internals, this is the minimum map:
+
+### 1) `~/.orchestrator/config.json`
+
+Main runtime config. Most important keys:
+
+- `port`: API/UI port (default `8787`)
+- `context.messages`: how many chat messages are kept in model context
+- `agents`: per-agent model + thinking settings
+- `ui`: display identity shown in UI (`aiName`, `userName`, `aiEmoji`, `aiVibe`)
+- `cron`: scheduler switch
+- `onboarding`: first-chat BOOT onboarding state machine
+
+### 2) `~/.orchestrator/models.json`
+
+Local model catalog used by Settings and pricing/metadata flows.
+It is intentionally local so you can pin, annotate, and review model metadata without editing source code.
+
+### 3) `~/.orchestrator/BOOT.md`
+
+A first-run gate file. While this exists, chat is forced into onboarding mode:
+
+1. asks AI name
+2. asks user name
+3. asks AI emoji
+4. asks AI vibe
+
+After those are answered, values are saved to `config.json` (`ui`) and `BOOT.md` is deleted automatically.
+
+### 4) `~/.orchestrator/data/chats`
+
+Persistent chat storage:
+
+- `index.json`: chat list/index metadata
+- `messages/*.jsonl`: one JSONL log per chat
+
+### 5) `~/.orchestrator/data/logs` and `~/.orchestrator/data/usage`
+
+- `logs/system.jsonl`: structured app/system logs
+- `logs/app.log`: process stdout/stderr
+- `usage/requests.jsonl`: request usage + cost snapshots
 
 ## Configuration
 

@@ -1,10 +1,7 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
+import { Suspense, lazy, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import './ChatArea.css';
-import { Message } from './Message.jsx';
 import { TypingIndicator } from './TypingIndicator.jsx';
 import { IconArrowDown, IconClose, IconArrowLeft } from '../shared/icons.jsx';
-import { ToolDetailPanel } from './ToolDetailPanel.jsx';
-import { BrowserAgentPanel } from './BrowserAgentPanel.jsx';
 import {
     buildAgentPanelMessage,
     findAgentToolCallInMessages,
@@ -21,6 +18,9 @@ const ENTER_FADE_DURATION_MS = 340;
 const SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.scroll_positions.v1';
 const AGENT_PANEL_STACK_STORAGE_KEY = 'orchestrator.chat.agent_panel_stack.v1';
 const AGENT_PANEL_SCROLL_POSITIONS_STORAGE_KEY = 'orchestrator.chat.agent_panel_scroll_positions.v1';
+const Message = lazy(() => import('./Message.jsx').then((module) => ({ default: module.Message })));
+const ToolDetailPanel = lazy(() => import('./ToolDetailPanel.jsx').then((module) => ({ default: module.ToolDetailPanel })));
+const BrowserAgentPanel = lazy(() => import('./BrowserAgentPanel.jsx').then((module) => ({ default: module.BrowserAgentPanel })));
 
 function getElementOffsets(container, element) {
     const containerRect = container.getBoundingClientRect();
@@ -204,6 +204,26 @@ function buildAgentPanelScrollKey(selection, stack = []) {
     return [baseKey, instanceId].filter(Boolean).join(':');
 }
 
+function MessageFallback({ role = 'ai' }) {
+    if (role === 'user') {
+        return (
+            <div className="message-user">
+                <div className="message-user-stack">
+                    <div className="message-user-bubble">Loading message…</div>
+                </div>
+            </div>
+        );
+    }
+
+    return (
+        <div className="message-ai">
+            <div className="message-ai-content">
+                <div className="message-markdown ai">Loading message…</div>
+            </div>
+        </div>
+    );
+}
+
 function syncInputSlotHeight(slot) {
     if (!slot || !slot.parentElement) {
         return null;
@@ -227,7 +247,6 @@ export function ChatArea({
     commandChunks,
     emptyStateFallback,
     disableScrollAnchoring = false,
-    onDeleteChat,
     children,
 }) {
     const scrollRef = useRef(null);
@@ -1242,36 +1261,38 @@ export function ChatArea({
                                         key={msg.id}
                                         className="chat-message-row"
                                     >
-                                        <Message
-                                            role={msg.role}
-                                            text={msg.text}
-                                            thought={msg.thought}
-                                            parts={msg.parts}
-                                            steps={msg.steps}
-                                            replyTo={msg.replyTo}
-                                            isThinking={
-                                                isTyping
-                                                && msg.id === lastAiMsgId
-                                                && msg.role === 'ai'
-                                                && String(msg.text ?? '').trim().length === 0
-                                            }
-                                            showReplyAction={activeChatKind === 'inbox' && msg.role === 'ai' && !msg.isFakeNotice}
-                                            onReply={activeChatKind === 'inbox' && typeof onReplyFromMessage === 'function' && !msg.isFakeNotice
-                                                ? () => onReplyFromMessage(msg)
-                                                : undefined}
-                                            onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
-                                            onToolPanelToggle={msg.role === 'ai' ? handleToolPanelToggle : undefined}
-                                            agentToggleSource="main"
-                                            activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
-                                            commandChunks={commandChunks}
-                                            ref={
-                                                msg.id === lastUserMsgId
-                                                    ? lastUserMsgRef
-                                                    : msg.id === lastAiMsgId
-                                                        ? lastAiMsgRef
-                                                        : null
-                                            }
-                                        />
+                                        <Suspense fallback={<MessageFallback role={msg.role} />}>
+                                            <Message
+                                                role={msg.role}
+                                                text={msg.text}
+                                                thought={msg.thought}
+                                                parts={msg.parts}
+                                                steps={msg.steps}
+                                                replyTo={msg.replyTo}
+                                                isThinking={
+                                                    isTyping
+                                                    && msg.id === lastAiMsgId
+                                                    && msg.role === 'ai'
+                                                    && String(msg.text ?? '').trim().length === 0
+                                                }
+                                                showReplyAction={activeChatKind === 'inbox' && msg.role === 'ai' && !msg.isFakeNotice}
+                                                onReply={activeChatKind === 'inbox' && typeof onReplyFromMessage === 'function' && !msg.isFakeNotice
+                                                    ? () => onReplyFromMessage(msg)
+                                                    : undefined}
+                                                onAgentCallToggle={msg.role === 'ai' ? handleAgentCallToggle : undefined}
+                                                onToolPanelToggle={msg.role === 'ai' ? handleToolPanelToggle : undefined}
+                                                agentToggleSource="main"
+                                                activeAgentCallId={activeAgentCallSelection?.callId ?? ''}
+                                                commandChunks={commandChunks}
+                                                ref={
+                                                    msg.id === lastUserMsgId
+                                                        ? lastUserMsgRef
+                                                        : msg.id === lastAiMsgId
+                                                            ? lastAiMsgRef
+                                                            : null
+                                                }
+                                            />
+                                        </Suspense>
                                     </div>
                                 );
                             })}
@@ -1288,15 +1309,16 @@ export function ChatArea({
                         aria-hidden="true"
                     >
                         {exitSnapshotMessages.map((msg) => (
-                            <Message
-                                key={`exit-${msg.id}`}
-                                role={msg.role}
-                                text={msg.text}
-                                thought={msg.thought}
-                                parts={msg.parts}
-                                steps={msg.steps}
-                                replyTo={msg.replyTo}
-                            />
+                            <Suspense key={`exit-${msg.id}`} fallback={<MessageFallback role={msg.role} />}>
+                                <Message
+                                    role={msg.role}
+                                    text={msg.text}
+                                    thought={msg.thought}
+                                    parts={msg.parts}
+                                    steps={msg.steps}
+                                    replyTo={msg.replyTo}
+                                />
+                            </Suspense>
                         ))}
                     </div>
                 )}
@@ -1338,10 +1360,12 @@ export function ChatArea({
             </div>
 
             {isToolPanelOpen && activeToolPanelSelection && (
-                <ToolDetailPanel
-                    selection={activeToolPanelSelection}
-                    onClose={() => setActiveToolPanelSelection(null)}
-                />
+                <Suspense fallback={null}>
+                    <ToolDetailPanel
+                        selection={activeToolPanelSelection}
+                        onClose={() => setActiveToolPanelSelection(null)}
+                    />
+                </Suspense>
             )}
 
             {isAgentPanelOpen && activeAgentPanelMessage && (() => {
@@ -1394,26 +1418,30 @@ export function ChatArea({
                             <div className="agent-side-panel-frame" key={activeAgentPanelRenderKey}>
                                 {activeAgentCallDetails?.agentId === 'browser' && activeAgentPanelPayload
                                     ? (
-                                        <BrowserAgentPanel
-                                            chatId={conversationKey}
-                                            clientId={clientId}
-                                            payload={activeAgentPanelPayload}
-                                        />
+                                        <Suspense fallback={<div style={{ padding: '12px' }}>Loading browser panel…</div>}>
+                                            <BrowserAgentPanel
+                                                chatId={conversationKey}
+                                                clientId={clientId}
+                                                payload={activeAgentPanelPayload}
+                                            />
+                                        </Suspense>
                                     )
                                     : (
-                                        <Message
-                                            role="ai"
-                                            text={activeAgentPanelMessage.text}
-                                            thought={activeAgentPanelMessage.thought}
-                                            parts={activeAgentPanelMessage.parts}
-                                            steps={activeAgentPanelMessage.steps}
-                                            thinkingDurationMs={activeAgentPanelMessage.thinkingDurationMs}
-                                            isThinking={activeAgentPanelMessage.isThinking}
-                                            onAgentCallToggle={handleAgentCallToggle}
-                                            agentToggleSource="panel"
-                                            showAllLiveToolCalls
-                                            renderMode={activeAgentCallDetails?.agentId === 'browser' ? 'browser_log' : 'default'}
-                                        />
+                                        <Suspense fallback={<MessageFallback role="ai" />}>
+                                            <Message
+                                                role="ai"
+                                                text={activeAgentPanelMessage.text}
+                                                thought={activeAgentPanelMessage.thought}
+                                                parts={activeAgentPanelMessage.parts}
+                                                steps={activeAgentPanelMessage.steps}
+                                                thinkingDurationMs={activeAgentPanelMessage.thinkingDurationMs}
+                                                isThinking={activeAgentPanelMessage.isThinking}
+                                                onAgentCallToggle={handleAgentCallToggle}
+                                                agentToggleSource="panel"
+                                                showAllLiveToolCalls
+                                                renderMode={activeAgentCallDetails?.agentId === 'browser' ? 'browser_log' : 'default'}
+                                            />
+                                        </Suspense>
                                     )}
                             </div>
                         </div>

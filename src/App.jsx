@@ -1,18 +1,18 @@
-import { useCallback, useRef, useState, useEffect, useMemo } from 'react';
+import { Suspense, lazy, useCallback, useRef, useState, useEffect, useMemo } from 'react';
 import './styles/globals.css';
 import './App.css';
 import { useSidebar } from './hooks/useSidebar.js';
 import { useChat } from './hooks/useChat.js';
 import { Sidebar } from './components/layout/Sidebar.jsx';
 import { TopNavBar } from './components/layout/TopNavBar.jsx';
-import { ChatArea } from './components/chat/ChatArea.jsx';
-import { InboxArea } from './components/chat/InboxArea.jsx';
 import { ChatInput } from './components/chat/ChatInput.jsx';
 import { extractLatestTodoState } from './components/chat/todoUtils.js';
-import { Settings } from './components/settings/Settings.jsx';
 import { fetchAgents, fetchSettings, saveSettings } from './api/settingsApi.js';
 
 const MODEL_CATALOG_PATH = '~/.orchestrator/models.json';
+const ChatArea = lazy(() => import('./components/chat/ChatArea.jsx').then((module) => ({ default: module.ChatArea })));
+const InboxArea = lazy(() => import('./components/chat/InboxArea.jsx').then((module) => ({ default: module.InboxArea })));
+const Settings = lazy(() => import('./components/settings/Settings.jsx').then((module) => ({ default: module.Settings })));
 
 function buildModelCatalogTaskPrompt({ focusModelId = '', missingModelIds = [] } = {}) {
   const normalizedFocusModelId = String(focusModelId ?? '').trim();
@@ -70,6 +70,34 @@ function setSettingsViewInUrl(open) {
   window.history.replaceState({}, '', url);
 }
 
+function AppPanelLoading({ label }) {
+  return (
+    <div className="app">
+      <div className="settings-page">
+        <div className="settings-loading">{label}</div>
+      </div>
+    </div>
+  );
+}
+
+function ConversationLoading() {
+  return (
+    <div
+      style={{
+        flex: 1,
+        minHeight: 0,
+        width: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        padding: '24px',
+      }}
+    >
+      <div className="settings-loading">Loading conversation…</div>
+    </div>
+  );
+}
+
 export default function App() {
   const sidebar = useSidebar();
   const chat = useChat();
@@ -89,7 +117,12 @@ export default function App() {
   // Settings page state
   const [settingsOpen, setSettingsOpen] = useState(() => isSettingsViewFromUrl());
   const [savedSettings, setSavedSettings] = useState(null);
-  const [uiSettings, setUiSettings] = useState({ aiName: 'AI Chat', userName: 'User' });
+  const [uiSettings, setUiSettings] = useState({
+    aiName: 'AI Chat',
+    userName: 'User',
+    aiEmoji: '🤖',
+    aiVibe: 'pragmatic helper',
+  });
   const [agentDefinitions, setAgentDefinitions] = useState([]);
   const [agentsLoaded, setAgentsLoaded] = useState(false);
   const [settingsLoaded, setSettingsLoaded] = useState(false);
@@ -118,10 +151,11 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    if (uiSettings?.aiName) {
-      document.title = uiSettings.aiName;
-    }
-  }, [uiSettings?.aiName]);
+    const name = String(uiSettings?.aiName ?? '').trim();
+    const emoji = String(uiSettings?.aiEmoji ?? '').trim();
+    const nextTitle = [emoji, name].filter(Boolean).join(' ').trim() || 'AI Chat';
+    document.title = nextTitle;
+  }, [uiSettings?.aiEmoji, uiSettings?.aiName]);
 
   const focusInput = useCallback(() => {
     requestAnimationFrame(() => {
@@ -210,25 +244,21 @@ export default function App() {
 
   if (settingsOpen) {
     if (!agentsLoaded || !settingsLoaded) {
-      return (
-        <div className="app">
-          <div className="settings-page">
-            <div className="settings-loading">Loading settings…</div>
-          </div>
-        </div>
-      );
+      return <AppPanelLoading label="Loading settings…" />;
     }
 
     return (
-      <div className="app">
-        <Settings
-          onClose={handleCloseSettings}
-          savedSettings={savedSettings}
-          agentDefinitions={agentDefinitions}
-          onSave={handleSaveSettings}
-          onLaunchModelCatalogTask={handleLaunchModelCatalogTask}
-        />
-      </div>
+      <Suspense fallback={<AppPanelLoading label="Loading settings…" />}>
+        <div className="app">
+          <Settings
+            onClose={handleCloseSettings}
+            savedSettings={savedSettings}
+            agentDefinitions={agentDefinitions}
+            onSave={handleSaveSettings}
+            onLaunchModelCatalogTask={handleLaunchModelCatalogTask}
+          />
+        </div>
+      </Suspense>
     );
   }
 
@@ -270,50 +300,51 @@ export default function App() {
           sidebarOpen={!sidebar.collapsed}
         />
 
-        {chat.isInboxChatActive ? (
-          <InboxArea
-            messages={chat.messages}
-            conversationKey={chat.activeChatId}
-            clientId={chat.clientId}
-            isTyping={chat.isTyping}
-            onReplyFromMessage={handleReplyFromInboxMessage}
-            agentStreaming={chat.agentStreaming}
-            commandChunks={chat.commandChunks}
-            uiSettings={uiSettings}
-          />
-        ) : (
-          <ChatArea
-            greeting={chat.greeting}
-            messages={chat.messages}
-            conversationKey={chat.activeChatId}
-            clientId={chat.clientId}
-            isTyping={chat.isTyping}
-            isChatMode={chat.isChatMode}
-            activeChatKind={chat.activeChatKind}
-            onReplyFromMessage={handleReplyFromInboxMessage}
-            onDeleteChat={() => handleDeleteChat(chat.activeChatId)}
-            agentStreaming={chat.agentStreaming}
-            commandChunks={chat.commandChunks}
-            uiSettings={uiSettings}
-          >
-            <ChatInput
-              ref={chatInputRef}
-              onSend={chat.sendMessage}
-              onStop={chat.stopGeneration}
-              draftValue={chat.inputDraft}
-              onDraftChange={chat.setInputDraft}
-              attachments={chat.inputAttachments}
-              onAttachmentsChange={chat.setInputAttachments}
-              isChatMode={chat.isChatMode}
-              isSending={chat.isTyping}
-              replyPreview={chat.draftReplyContext}
-              onClearReplyPreview={chat.clearDraftReplyContext}
+        <Suspense fallback={<ConversationLoading />}>
+          {chat.isInboxChatActive ? (
+            <InboxArea
+              messages={chat.messages}
+              conversationKey={chat.activeChatId}
+              clientId={chat.clientId}
+              isTyping={chat.isTyping}
+              onReplyFromMessage={handleReplyFromInboxMessage}
+              agentStreaming={chat.agentStreaming}
+              commandChunks={chat.commandChunks}
               uiSettings={uiSettings}
-              todoState={activeTodoState}
-              todoBoardKey={chat.activeChatId ?? 'chat-input-todo'}
             />
-          </ChatArea>
-        )}
+          ) : (
+            <ChatArea
+              greeting={chat.greeting}
+              messages={chat.messages}
+              conversationKey={chat.activeChatId}
+              clientId={chat.clientId}
+              isTyping={chat.isTyping}
+              isChatMode={chat.isChatMode}
+              activeChatKind={chat.activeChatKind}
+              onReplyFromMessage={handleReplyFromInboxMessage}
+              agentStreaming={chat.agentStreaming}
+              commandChunks={chat.commandChunks}
+              uiSettings={uiSettings}
+            >
+              <ChatInput
+                ref={chatInputRef}
+                onSend={chat.sendMessage}
+                onStop={chat.stopGeneration}
+                draftValue={chat.inputDraft}
+                onDraftChange={chat.setInputDraft}
+                attachments={chat.inputAttachments}
+                onAttachmentsChange={chat.setInputAttachments}
+                isChatMode={chat.isChatMode}
+                isSending={chat.isTyping}
+                replyPreview={chat.draftReplyContext}
+                onClearReplyPreview={chat.clearDraftReplyContext}
+                uiSettings={uiSettings}
+                todoState={activeTodoState}
+                todoBoardKey={chat.activeChatId ?? 'chat-input-todo'}
+              />
+            </ChatArea>
+          )}
+        </Suspense>
       </div>
 
     </div>

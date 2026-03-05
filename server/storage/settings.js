@@ -57,26 +57,63 @@ export function getAgentConfig(agentId = DEFAULT_AGENT_ID) {
     return settings[normalizedAgentId] ?? fallback[normalizedAgentId] ?? fallback[DEFAULT_AGENT_ID];
 }
 
+function sanitizeUiName(value, fallback) {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+        return fallback;
+    }
+
+    return normalized.slice(0, 64);
+}
+
+function sanitizeUiEmoji(value, fallback = '🤖') {
+    const normalized = String(value ?? '').trim();
+    if (!normalized) {
+        return fallback;
+    }
+
+    const match = normalized.match(/\p{Extended_Pictographic}/u);
+    return match?.[0] ?? fallback;
+}
+
+function sanitizeUiVibe(value, fallback = 'pragmatic helper') {
+    const normalized = String(value ?? '').replace(/\s+/g, ' ').trim();
+    if (!normalized) {
+        return fallback;
+    }
+
+    return normalized.slice(0, 140);
+}
+
 export function readUiSettings() {
     try {
         const config = reloadConfigJson();
         const uiSection = config?.ui;
         if (uiSection && typeof uiSection === 'object') {
             return {
-                aiName: String(uiSection.aiName ?? 'AI Chat'),
-                userName: String(uiSection.userName ?? 'User'),
+                aiName: sanitizeUiName(uiSection.aiName, 'AI Chat'),
+                userName: sanitizeUiName(uiSection.userName, 'User'),
+                aiEmoji: sanitizeUiEmoji(uiSection.aiEmoji, '🤖'),
+                aiVibe: sanitizeUiVibe(uiSection.aiVibe, 'pragmatic helper'),
             };
         }
     } catch {
         // ignore
     }
-    return { aiName: 'AI Chat', userName: 'User' };
+    return {
+        aiName: 'AI Chat',
+        userName: 'User',
+        aiEmoji: '🤖',
+        aiVibe: 'pragmatic helper',
+    };
 }
 
 export function writeUiSettings(uiSettings) {
     const sanitized = {
-        aiName: String(uiSettings?.aiName ?? 'AI Chat').trim() || 'AI Chat',
-        userName: String(uiSettings?.userName ?? 'User').trim() || 'User',
+        aiName: sanitizeUiName(uiSettings?.aiName, 'AI Chat'),
+        userName: sanitizeUiName(uiSettings?.userName, 'User'),
+        aiEmoji: sanitizeUiEmoji(uiSettings?.aiEmoji, '🤖'),
+        aiVibe: sanitizeUiVibe(uiSettings?.aiVibe, 'pragmatic helper'),
     };
     updateConfigSection('ui', sanitized);
     return sanitized;

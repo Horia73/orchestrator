@@ -2,13 +2,12 @@ import express from 'express';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
-import { randomUUID } from 'node:crypto';
+import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
-import { API_PORT, getGeminiContextMessages } from './core/config.js';
+import { API_PORT, CRON_CONFIG, getGeminiContextMessages } from './core/config.js';
 import { listClientAgentDefinitions, DEFAULT_AGENT_ID } from './agents/index.js';
 import { CODING_AGENT_ID } from './agents/coding/index.js';
 import { IMAGE_AGENT_ID } from './agents/image/index.js';
-import { ORCHESTRATOR_AGENT_ID } from './agents/orchestrator/index.js';
 import {
     generateAssistantReplyStream,
     generateChatTitle,
@@ -23,14 +22,11 @@ import { appendSystemLog, clearLogs, getLogsSnapshot, initLogStorage } from './s
 import { appendUsageRecord, clearUsageRecords, getUsageSnapshotByRange, initUsageStorage } from './storage/usage.js';
 import { listEditableFileSections, readEditableFile, writeEditableFile } from './storage/editableFiles.js';
 import {
-    buildUploadPartDescriptor,
-    createUploadFromBuffer,
     createUploadFromRequestStream,
     deleteUpload,
     getUploadResponseHeaders,
     initUploadStorage,
     markUploadsCommitted,
-    readUploadMetadata,
     resolveUpload,
 } from './storage/uploads.js';
 import {
@@ -48,10 +44,33 @@ import {
     INBOX_CHAT_KIND,
 } from './storage/chats.js';
 import { getAgentConfig, normalizeAgentId, readSettings, writeSettings, readUiSettings, writeUiSettings } from './storage/settings.js';
+import { decodeUploadHeaderValue } from './storage/http/uploadHeaders.js';
 import { memoryStore } from './services/memory.js';
 import { skillsLoader, parseRequires, checkRequirements } from './services/skills.js';
 import { mcpService, writeMcpServers } from './services/mcp.js';
-import { CRON_CONFIG } from './core/config.js';
+import { createChatGenerationState } from './services/chat/generationState.js';
+import {
+    buildUsageInputText,
+    buildUserMessageParts,
+    createMessageId,
+    formatGeminiError,
+    getFirstMessageSeed,
+    normalizeClientId,
+    normalizeIncomingAttachments,
+    normalizeMessageText,
+    normalizeReplyToPayload,
+    resolveRuntimeAgentForMessage,
+} from './services/chat/input.js';
+import { buildBrowserResumeFollowUpNote, buildDeferredSteeringPrompt } from './services/chat/steeringPrompts.js';
+import {
+    formatCommandError,
+    getGitUpdateSnapshot,
+    readLocalPackageVersion,
+    runCommand,
+    runGit,
+} from './services/system/updateManager.js';
+import { renderMissingFrontendHtml } from './core/frontend/fallbackHtml.js';
+import { watchModelsConfig } from './core/watchers/modelsWatcher.js';
 import { cronService } from './services/cron.js';
 import { MODELS_CONFIG_PATH, ORCHESTRATOR_HOME } from './core/dataPaths.js';
 import { ensureModelCatalogExists } from './core/modelCatalogSeed.js';
@@ -65,6 +84,7 @@ import {
     performBrowserAgentLiveAction,
     streamBrowserAgentLiveView,
 } from './services/browserAgent.js';
+import { advanceBootOnboarding, isBootOnboardingActive } from './services/bootOnboarding.js';
 
 const app = express();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -80,95 +100,22 @@ ensureModelCatalogExists();
 
 app.disable('x-powered-by');
 
-const chatQueues = new Map();
-const activeGenerationsByClient = new Map();
+const {
+    enqueueChatWork,
+    registerActiveGeneration,
+    unregisterActiveGeneration,
+    countActiveGenerationsForClient,
+    requestStopForClient,
+} = createChatGenerationState();
 const steeringFollowUpsInFlight = new Set();
 
-function renderMissingFrontendHtml() {
-    return `<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <title>Orchestrator build missing</title>
-    <style>
-      body {
-        margin: 0;
-        min-height: 100vh;
-        display: grid;
-        place-items: center;
-        background: #0f172a;
-        color: #e2e8f0;
-        font: 16px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      }
-      main {
-        width: min(640px, calc(100vw - 48px));
-        padding: 32px;
-        border: 1px solid rgba(148, 163, 184, 0.22);
-        border-radius: 20px;
-        background: rgba(15, 23, 42, 0.88);
-        box-shadow: 0 24px 80px rgba(15, 23, 42, 0.45);
-      }
-      h1 {
-        margin: 0 0 12px;
-        font-size: 28px;
-      }
-      p {
-        margin: 0 0 12px;
-      }
-      code {
-        padding: 2px 6px;
-        border-radius: 6px;
-        background: rgba(148, 163, 184, 0.12);
-      }
-    </style>
-  </head>
-  <body>
-    <main>
-      <h1>Frontend build missing</h1>
-      <p>Build the Vite app before opening Orchestrator in production mode.</p>
-      <p>Run <code>npm run build</code> and restart the server, or use <code>npm run setup</code> for first-time onboarding.</p>
-    </main>
-  </body>
-</html>`;
-}
-
-function watchModelsConfig() {
-    let debounceTimer = null;
-
-    try {
-        fs.watch(ORCHESTRATOR_HOME, { persistent: false }, (_eventType, filename) => {
-            if (String(filename ?? '').trim() !== 'models.json') {
-                return;
-            }
-
-            clearTimeout(debounceTimer);
-            debounceTimer = setTimeout(() => {
-                broadcastEvent('models.updated', {
-                    path: MODELS_CONFIG_PATH,
-                    exists: fs.existsSync(MODELS_CONFIG_PATH),
-                });
-            }, 100);
-        });
-    } catch (error) {
-        console.warn(`[models] Failed to watch ${MODELS_CONFIG_PATH}: ${error.message}`);
-    }
-}
-
-watchModelsConfig();
-
-function decodeUploadHeaderValue(value) {
-    const normalized = String(value ?? '').trim();
-    if (!normalized) {
-        return '';
-    }
-
-    try {
-        return decodeURIComponent(normalized);
-    } catch {
-        return normalized;
-    }
-}
+watchModelsConfig({
+    watchDir: ORCHESTRATOR_HOME,
+    modelsConfigPath: MODELS_CONFIG_PATH,
+    onModelsUpdated: (payload) => {
+        broadcastEvent('models.updated', payload);
+    },
+});
 
 app.post('/api/uploads', async (req, res, next) => {
     try {
@@ -264,405 +211,6 @@ app.get('/api/uploads/:uploadId/content', async (req, res, next) => {
 });
 
 app.use(express.json({ limit: '10mb' }));
-
-
-function createMessageId() {
-    return `msg-${randomUUID()}`;
-}
-
-function formatGeminiError(error) {
-    if (error instanceof Error && error.message) {
-        return `AI error: ${error.message}`;
-    }
-
-    return 'AI error: Request failed.';
-}
-
-function normalizeMessageText(value) {
-    return String(value ?? '').trim();
-}
-
-
-function countImageAttachments(attachments) {
-    if (!Array.isArray(attachments)) {
-        return 0;
-    }
-
-    let count = 0;
-    for (const attachment of attachments) {
-        const mimeType = String(attachment?.mimeType ?? '').trim().toLowerCase();
-        if (mimeType.startsWith('image/')) {
-            count += 1;
-        }
-    }
-
-    return count;
-}
-
-function detectOrchestratorRoute({ attachments }) {
-    const imageAttachmentCount = countImageAttachments(attachments);
-
-    return {
-        agentId: ORCHESTRATOR_AGENT_ID,
-        routed: false,
-        reason: 'general_intent',
-        imageAttachmentCount,
-    };
-}
-
-function resolveRuntimeAgentForMessage({ chatAgentId, text, attachments }) {
-    const normalizedChatAgentId = normalizeAgentId(chatAgentId);
-    if (normalizedChatAgentId !== ORCHESTRATOR_AGENT_ID) {
-        return {
-            agentId: normalizedChatAgentId,
-            routed: false,
-            reason: 'fixed_chat_agent',
-            imageAttachmentCount: countImageAttachments(attachments),
-        };
-    }
-
-    return detectOrchestratorRoute({
-        text,
-        attachments,
-    });
-}
-
-const MAX_MESSAGE_ATTACHMENTS = 16;
-const MAX_ATTACHMENT_BYTES = 1024 * 1024 * 1024;
-const MAX_TOTAL_ATTACHMENT_BYTES = 2 * 1024 * 1024 * 1024;
-
-function normalizeAttachmentMimeType(value) {
-    const normalized = String(value ?? '').trim().toLowerCase();
-    if (!normalized || !normalized.includes('/')) {
-        return 'application/octet-stream';
-    }
-
-    return normalized;
-}
-
-function normalizeAttachmentName(value, index) {
-    const fallback = `attachment-${index + 1}`;
-    const normalized = String(value ?? '').trim();
-    if (!normalized) return fallback;
-    if (normalized.length <= 220) return normalized;
-    return `${normalized.slice(0, 217)}...`;
-}
-
-async function normalizeIncomingAttachments(value) {
-    if (value === undefined || value === null) {
-        return [];
-    }
-
-    if (!Array.isArray(value)) {
-        throw new Error('Attachments must be an array.');
-    }
-
-    if (value.length > MAX_MESSAGE_ATTACHMENTS) {
-        throw new Error(`Too many attachments. Maximum is ${MAX_MESSAGE_ATTACHMENTS}.`);
-    }
-
-    const normalized = [];
-    let totalBytes = 0;
-
-    for (let index = 0; index < value.length; index += 1) {
-        const rawAttachment = value[index];
-        if (!rawAttachment || typeof rawAttachment !== 'object') {
-            continue;
-        }
-
-        let uploadDescriptor = null;
-        const uploadId = String(rawAttachment.uploadId ?? '').trim();
-        if (uploadId) {
-            const metadata = await readUploadMetadata(uploadId);
-            if (!metadata) {
-                throw new Error(`Attachment "${normalizeAttachmentName(rawAttachment.name, index)}" was not found.`);
-            }
-            const descriptor = buildUploadPartDescriptor(metadata);
-            uploadDescriptor = {
-                uploadId: descriptor.uploadId,
-                name: descriptor.displayName,
-                mimeType: descriptor.mimeType,
-                sizeBytes: descriptor.sizeBytes,
-                fileUri: descriptor.fileUri,
-            };
-        } else {
-            const rawDataValue = String(rawAttachment.data ?? '').trim();
-            if (!rawDataValue) {
-                continue;
-            }
-
-            const data = rawDataValue.startsWith('data:')
-                ? rawDataValue.slice(rawDataValue.indexOf(',') + 1).trim()
-                : rawDataValue;
-
-            const bytes = Buffer.from(data, 'base64');
-            if (bytes.length === 0) {
-                throw new Error(`Attachment ${index + 1} is empty or not valid base64.`);
-            }
-
-            const createdUpload = await createUploadFromBuffer({
-                buffer: bytes,
-                name: normalizeAttachmentName(rawAttachment.name, index),
-                mimeType: normalizeAttachmentMimeType(rawAttachment.mimeType ?? rawAttachment.type),
-            });
-
-            const descriptor = buildUploadPartDescriptor(createdUpload.metadata);
-            uploadDescriptor = {
-                uploadId: descriptor.uploadId,
-                name: descriptor.displayName,
-                mimeType: descriptor.mimeType,
-                sizeBytes: descriptor.sizeBytes,
-                fileUri: descriptor.fileUri,
-            };
-        }
-
-        if (uploadDescriptor.sizeBytes > MAX_ATTACHMENT_BYTES) {
-            throw new Error(`Attachment "${uploadDescriptor.name}" is larger than 1 GB.`);
-        }
-
-        totalBytes += uploadDescriptor.sizeBytes;
-        if (totalBytes > MAX_TOTAL_ATTACHMENT_BYTES) {
-            throw new Error('Total attachment size exceeds 2 GB.');
-        }
-
-        normalized.push(uploadDescriptor);
-    }
-
-    return normalized;
-}
-
-function buildUserMessageParts({ text, attachments }) {
-    const normalizedText = String(text ?? '').trim();
-    const normalizedAttachments = Array.isArray(attachments) ? attachments : [];
-    const parts = normalizedAttachments.map((attachment) => ({
-        fileData: {
-            uploadId: attachment.uploadId,
-            fileUri: attachment.fileUri,
-            mimeType: attachment.mimeType,
-            displayName: attachment.name,
-            sizeBytes: attachment.sizeBytes,
-        },
-    }));
-
-    if (normalizedText) {
-        parts.push({ text: normalizedText });
-    }
-
-    return parts.length > 0 ? parts : undefined;
-}
-
-function getFirstMessageSeed({ text, attachments }) {
-    const normalizedText = String(text ?? '').trim();
-    if (normalizedText) {
-        return normalizedText;
-    }
-
-    const firstAttachmentName = String(attachments?.[0]?.name ?? '').trim();
-    if (firstAttachmentName) {
-        return `Attachment: ${firstAttachmentName}`;
-    }
-
-    return 'Attachment';
-}
-
-function buildUsageInputText({ text, attachments }) {
-    const normalizedText = String(text ?? '').trim();
-    const normalizedAttachments = Array.isArray(attachments) ? attachments : [];
-    if (normalizedAttachments.length === 0) {
-        return normalizedText;
-    }
-
-    const label = normalizedAttachments
-        .map((attachment) => String(attachment?.name ?? '').trim())
-        .filter(Boolean)
-        .join(', ');
-
-    if (!normalizedText) {
-        return label ? `[attachments] ${label}` : '[attachments]';
-    }
-
-    if (!label) {
-        return normalizedText;
-    }
-
-    return `${normalizedText}\n\n[attachments] ${label}`;
-}
-
-function normalizeClientId(value) {
-    const normalized = String(value ?? '').trim();
-    return normalized || 'unknown-client';
-}
-
-function normalizeReplyToPayload(value) {
-    if (!value || typeof value !== 'object') {
-        return null;
-    }
-
-    const chatId = String(value.chatId ?? '').trim();
-    const messageId = String(value.messageId ?? '').trim();
-    if (!chatId || !messageId) {
-        return null;
-    }
-
-    const previewText = String(value.previewText ?? '')
-        .replace(/\s+/g, ' ')
-        .trim()
-        .slice(0, 220);
-    const chatTitle = String(value.chatTitle ?? '').trim().slice(0, 80);
-    const role = String(value.role ?? '').trim().toLowerCase() === 'user' ? 'user' : 'ai';
-
-    return {
-        chatId,
-        messageId,
-        role,
-        previewText,
-        ...(chatTitle ? { chatTitle } : {}),
-    };
-}
-
-function enqueueChatWork(chatId, task) {
-    const previous = chatQueues.get(chatId) ?? Promise.resolve();
-    const run = previous
-        .catch(() => undefined)
-        .then(task)
-        .finally(() => {
-            if (chatQueues.get(chatId) === run) {
-                chatQueues.delete(chatId);
-            }
-        });
-
-    chatQueues.set(chatId, run);
-    return run;
-}
-
-function registerActiveGeneration(clientId, chatId) {
-    const generation = {
-        clientId,
-        chatId,
-        stopRequested: false,
-        stopReason: '',
-    };
-
-    const existing = activeGenerationsByClient.get(clientId) ?? new Set();
-    existing.add(generation);
-    activeGenerationsByClient.set(clientId, existing);
-    return generation;
-}
-
-function unregisterActiveGeneration(generation) {
-    if (!generation) return;
-
-    const existing = activeGenerationsByClient.get(generation.clientId);
-    if (!existing) return;
-
-    existing.delete(generation);
-    if (existing.size === 0) {
-        activeGenerationsByClient.delete(generation.clientId);
-    }
-}
-
-function countActiveGenerationsForClient(clientId, chatId) {
-    const existing = activeGenerationsByClient.get(clientId);
-    if (!existing || existing.size === 0) {
-        return 0;
-    }
-
-    let count = 0;
-    for (const generation of existing) {
-        if (chatId && generation.chatId !== chatId) {
-            continue;
-        }
-
-        count += 1;
-    }
-
-    return count;
-}
-
-function requestStopForClient(clientId, chatId, reason = 'user_stop') {
-    const existing = activeGenerationsByClient.get(clientId);
-    if (!existing || existing.size === 0) {
-        return 0;
-    }
-
-    let stoppedCount = 0;
-    for (const generation of existing) {
-        if (chatId && generation.chatId !== chatId) {
-            continue;
-        }
-
-        if (!generation.stopRequested) {
-            generation.stopRequested = true;
-            generation.stopReason = reason;
-            stoppedCount += 1;
-        }
-    }
-
-    return stoppedCount;
-}
-
-function buildDeferredSteeringPrompt(notes) {
-    const normalizedNotes = (Array.isArray(notes) ? notes : [])
-        .map((note) => String(note ?? '').trim())
-        .filter(Boolean);
-    if (normalizedNotes.length === 0) {
-        return '';
-    }
-
-    if (normalizedNotes.length === 1) {
-        return [
-            'A user sent the following steering note during your previous response and it has not been addressed yet.',
-            'Continue from the current conversation state and address it directly.',
-            '',
-            normalizedNotes[0],
-        ].join('\n');
-    }
-
-    return [
-        'A user sent the following steering notes during your previous response and they have not been addressed yet.',
-        'Continue from the current conversation state and address all of them directly without omitting anything.',
-        '',
-        normalizedNotes.map((note, index) => `${index + 1}. ${note}`).join('\n'),
-    ].join('\n');
-}
-
-function buildBrowserResumeFollowUpNote(result) {
-    const status = String(result?.status ?? '').trim().toLowerCase();
-    const questionType = String(result?.questionType ?? '').trim().toLowerCase();
-    const summary = String(result?.text ?? '').trim();
-
-    if (status === 'awaiting_user' && questionType && questionType !== 'captcha') {
-        return [
-            `The Browser Agent resumed after a direct CAPTCHA handoff and is now waiting for ${questionType}.`,
-            'Continue from the current conversation state and handle this yourself in chat.',
-            'Do not tell the user to open the Browser Agent panel again unless a new CAPTCHA or another human-only verification appears.',
-            '',
-            summary,
-        ].join('\n');
-    }
-
-    if (status === 'completed') {
-        return [
-            'The Browser Agent resumed after a direct CAPTCHA handoff and has now completed its task.',
-            'Continue from the current conversation state and use the browser result directly.',
-            'Do not ask the user to reopen the Browser Agent panel unless another CAPTCHA or human-only verification appears.',
-            '',
-            summary,
-        ].join('\n');
-    }
-
-    if (status === 'error' || status === 'stopped') {
-        return [
-            `The Browser Agent resumed after a direct CAPTCHA handoff and ended with status: ${status}.`,
-            'Continue from the current conversation state, explain the outcome, and decide the next best step.',
-            'Do not ask the user to reopen the Browser Agent panel unless another CAPTCHA or human-only verification appears.',
-            '',
-            summary,
-        ].join('\n');
-    }
-
-    return '';
-}
 
 async function writeSystemLog({ level = 'info', source = 'system', eventType, message, data, agentId } = {}) {
     const log = await appendSystemLog({
@@ -1168,14 +716,23 @@ app.get('/api/health', (_req, res) => {
     res.json({ ok: true });
 });
 
-app.get('/api/version', async (_req, res) => {
+app.get('/api/version', (_req, res) => {
+    res.json({ version: readLocalPackageVersion() });
+});
+
+app.get('/api/update/status', (_req, res) => {
     try {
-        const { readFile } = await import('node:fs/promises');
-        const { join } = await import('node:path');
-        const pkg = JSON.parse(await readFile(join(process.cwd(), 'package.json'), 'utf8'));
-        res.json({ version: pkg.version });
-    } catch {
-        res.json({ version: '0.0.0' });
+        const snapshot = getGitUpdateSnapshot({ fetchRemote: true });
+        res.json({
+            ok: true,
+            checkedAt: new Date().toISOString(),
+            ...snapshot,
+        });
+    } catch (error) {
+        res.status(500).json({
+            ok: false,
+            error: formatCommandError(error, 'Failed to read update status.'),
+        });
     }
 });
 
@@ -1720,31 +1277,39 @@ app.delete('/api/logs', async (_req, res, next) => {
     }
 });
 
-app.post('/api/update', async (_req, res) => {
-    const { execSync, spawn } = await import('node:child_process');
-    const { join } = await import('node:path');
+app.post('/api/update', (_req, res) => {
     try {
-        const pullOutput = execSync('git pull origin main', { cwd: process.cwd(), timeout: 30000, stdio: 'pipe' }).toString();
+        const snapshot = getGitUpdateSnapshot({ fetchRemote: true });
 
-        // Check if already up to date
-        if (/already up.to.date/i.test(pullOutput)) {
+        if (snapshot.behind === 0 && snapshot.ahead === 0) {
             return res.json({ ok: true, message: 'Already up to date — no changes pulled.', restarting: false });
         }
 
-        execSync('npm install', { cwd: process.cwd(), timeout: 120000, stdio: 'pipe' });
-        execSync('npm run build', { cwd: process.cwd(), timeout: 120000, stdio: 'pipe' });
+        if (snapshot.behind === 0 && snapshot.ahead > 0) {
+            const commitWord = snapshot.ahead === 1 ? 'commit' : 'commits';
+            return res.json({
+                ok: true,
+                message: `Local branch is ahead of ${snapshot.remoteRef} by ${snapshot.ahead} ${commitWord}. Nothing to pull.`,
+                restarting: false,
+            });
+        }
 
-        // Read new version from updated package.json
-        const { readFileSync } = await import('node:fs');
-        let newVersion = 'unknown';
-        try {
-            const pkg = JSON.parse(readFileSync(join(process.cwd(), 'package.json'), 'utf8'));
-            newVersion = pkg.version;
-        } catch { /* ignore */ }
+        if (snapshot.behind > 0 && snapshot.ahead > 0) {
+            return res.status(409).json({
+                error: `Local branch has diverged from ${snapshot.remoteRef}. Resolve the git history manually before auto-update.`,
+            });
+        }
+
+        runGit(['merge', '--ff-only', snapshot.remoteRef], { timeout: 45000 });
+        runCommand('npm', ['install'], { timeout: 180000 });
+        runCommand('npm', ['run', 'build'], { timeout: 180000 });
+
+        const refreshed = getGitUpdateSnapshot({ fetchRemote: false });
+        const newVersion = refreshed.localVersion || 'unknown';
 
         res.json({ ok: true, message: `Update to v${newVersion} installed and built. Restarting…`, restarting: true });
 
-        const restartHelperPath = join(process.cwd(), 'server', 'cli', 'restartApi.js');
+        const restartHelperPath = path.join(process.cwd(), 'server', 'cli', 'restartApi.js');
 
         // Schedule an API-only restart after the response is sent.
         setTimeout(() => {
@@ -1764,7 +1329,7 @@ app.post('/api/update', async (_req, res) => {
             }
         }, 500);
     } catch (error) {
-        res.status(500).json({ error: error.message || 'Update failed' });
+        res.status(500).json({ error: formatCommandError(error, 'Update failed') });
     }
 });
 
@@ -2163,7 +1728,8 @@ app.post('/api/chat/send', async (req, res, next) => {
         }
 
         const hasAttachments = attachments && attachments.length > 0;
-        if (created && !hasAttachments && inputText) {
+        const bootOnboardingActive = isBootOnboardingActive();
+        if (created && !hasAttachments && inputText && !bootOnboardingActive) {
             generateChatTitle({ text: inputText }).then(generatedTitle => {
                 if (generatedTitle) {
                     updateChatTitle(chat.id, generatedTitle).then(updatedChat => {
@@ -2193,8 +1759,6 @@ app.post('/api/chat/send', async (req, res, next) => {
             attachments,
         });
         const runtimeAgentId = routingDecision.agentId;
-        const shouldDeferSteeringToActiveGeneration = isSteering
-            && countActiveGenerationsForClient(clientId, chat.id) > 0;
 
         if (routingDecision.routed) {
             void writeSystemLog({
@@ -2212,6 +1776,83 @@ app.post('/api/chat/send', async (req, res, next) => {
                 },
             }).catch(() => undefined);
         }
+
+        if (bootOnboardingActive) {
+            const result = await enqueueChatWork(chat.id, async () => {
+                const appendedUser = await appendMessage(chat.id, {
+                    id: clientMessageId,
+                    role: 'user',
+                    text: inputText,
+                    parts: userMessageParts,
+                    replyTo,
+                });
+                await markUploadsCommitted(
+                    attachments.map((attachment) => attachment.uploadId),
+                    { chatId: chat.id, messageId: appendedUser.message.id },
+                );
+
+                broadcastEvent('message.added', {
+                    chatId: chat.id,
+                    message: appendedUser.message,
+                    originClientId: clientId,
+                });
+
+                broadcastEvent('chat.upsert', {
+                    chat: appendedUser.chat,
+                    originClientId: clientId,
+                });
+
+                const onboardingTurn = advanceBootOnboarding(inputText);
+                const assistantText = String(onboardingTurn?.assistantText ?? '').trim()
+                    || 'Onboarding este activ. Te rog răspunde la întrebările de setup.';
+
+                const appendedAi = await appendMessage(chat.id, {
+                    id: createMessageId(),
+                    role: 'ai',
+                    text: assistantText,
+                });
+
+                broadcastEvent('message.added', {
+                    chatId: chat.id,
+                    message: appendedAi.message,
+                    originClientId: clientId,
+                });
+
+                broadcastEvent('chat.upsert', {
+                    chat: appendedAi.chat,
+                    originClientId: clientId,
+                });
+
+                return {
+                    chat: appendedAi.chat,
+                    userMessage: appendedUser.message,
+                    aiMessage: appendedAi.message,
+                    onboardingCompleted: onboardingTurn?.completed === true,
+                };
+            });
+
+            void writeSystemLog({
+                source: 'chat',
+                eventType: 'chat.boot_onboarding_turn',
+                message: 'Processed BOOT onboarding turn.',
+                data: {
+                    chatId: chat.id,
+                    clientId,
+                    onboardingCompleted: result.onboardingCompleted === true,
+                },
+            }).catch(() => undefined);
+
+            res.json({
+                chat: result.chat,
+                userMessage: result.userMessage,
+                aiMessage: result.aiMessage,
+                created,
+            });
+            return;
+        }
+
+        const shouldDeferSteeringToActiveGeneration = isSteering
+            && countActiveGenerationsForClient(clientId, chat.id) > 0;
 
         if (shouldDeferSteeringToActiveGeneration) {
             const appendedUser = await appendMessage(chat.id, {

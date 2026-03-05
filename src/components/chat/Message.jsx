@@ -1,6 +1,5 @@
-import { forwardRef, useRef, useState, useEffect, useCallback, useMemo } from 'react';
+import { Suspense, forwardRef, lazy, useRef, useState, useEffect, useCallback, useMemo } from 'react';
 import { createPortal } from 'react-dom';
-import { MarkdownContent } from './MarkdownContent.jsx';
 import { ThoughtBlock } from './ThoughtBlock.jsx';
 import { ToolCallsGroup } from './ToolCallsGroup.jsx';
 import { EditManagementBlock } from './EditManagementBlock.jsx';
@@ -12,6 +11,18 @@ const EDIT_TOOLS = new Set(['write_to_file', 'replace_file_content', 'multi_repl
 const INLINE_IMAGE_MARKDOWN_REGEX = /!\[([^\]]*)]\(([^)\s]+)(?:\s+"[^"]*")?\)/g;
 const INLINE_IMAGE_MARKDOWN_TEST_REGEX = /!\[[^\]]*]\(([^)\s]+)(?:\s+"[^"]*")?\)/;
 const LIVE_AGENT_STATUSES = new Set(['thinking', 'running', 'working', 'spawned', 'queued', 'awaiting_user', 'awaiting-user', 'question']);
+const LazyMarkdownContent = lazy(() => import('./MarkdownContent.jsx').then((module) => ({ default: module.MarkdownContent })));
+
+function MarkdownContent(props) {
+    const variant = props?.variant === 'user' ? 'user' : 'ai';
+    const text = String(props?.text ?? '');
+
+    return (
+        <Suspense fallback={<div className={`message-markdown ${variant}`}>{text}</div>}>
+            <LazyMarkdownContent {...props} />
+        </Suspense>
+    );
+}
 
 function isToolPartStillRunning(toolPart) {
     if (!toolPart || typeof toolPart !== 'object') {

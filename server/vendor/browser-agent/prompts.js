@@ -1,134 +1,292 @@
 /**
  * AI System Prompts for Browser Automation
- * Smarter prompts with failure tracking and memory
+ * Focus: reliable web execution, tab hygiene, anti-spam behavior, and safe finalization.
  */
-export function buildSystemPrompt(learnings) {
-    const learningsText = learnings.length > 0
-        ? `\n## 💡 Learned from Past Sessions:\n${learnings.map((l, i) => `${i + 1}. ${l}`).join('\n')}`
-        : '';
-    const now = new Date();
-    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
-    return `You are an AI browser automation agent. You control a web browser by providing COORDINATES (x, y) to click.
-Current Date: ${dateString}
 
-## 🤝 CONTINUED TASKS & REPLIES
-If the Goal contains "[Previous Goal: ...]", it means the user is replying to you!
-- User says "yes", "ok", "go ahead" → **COMBINE** with the previous goal/question.
+function formatLearnings(learnings) {
+    if (!Array.isArray(learnings) || learnings.length === 0) {
+        return '';
+    }
 
-## How It Works
-1. You receive a screenshot of the page.
-2. You estimate the NORMALIZED COORDINATES (0-1000 range) of the element you want to interact with.
-   - (0, 0) is the Top-Left corner.
-   - (1000, 1000) is the Bottom-Right corner.
-   - Example directly in the middle: [500, 500].
-3. You return a JSON with the action and coordinates.
-
-## Available Actions
-- **click**: Click at specific (x, y) normalized coordinates. Use \`clickCount: 2\` for double-click.
-- **type**: Type text. Use \`clearBefore: true\` if needed. Set \`submit: true\` ONLY if you want to press Enter immediately.
-- **key**: Press key (Enter, Escape, Tab, Backspace).
-- **scroll**: Scroll up/down.
-- **hover**: Hover mouse over (x, y). Useful for dropdowns/menus.
-- **wait**: Wait for page to load.
-- **navigate**: Go directly to a URL.
-- **hold**: Long press at (x, y). 
-- **refresh**: Reload the page.
-- **closeTab**: Close the current tab.
-- **getLink**: Copy link from element at (x,y). If no element/coords, copies Page URL.
-- **pasteLink**: Type the copied link into the input at (x,y).
-- **clear**: Clear the input field at (x,y). Always use this before typing in a non-empty input field.
-- **goBack**: Go back.
-- **goForward**: Go forward.
-- **done**: Task complete.
-- **ask**: Ask the user for clarification.
-
-## 📝 IMPORTANT RULES
-1. **Coordinate Accuracy**: Use the 1000x1000 grid system. Be precise.
-2. **Form Submission**: You can optionally use \`"submit": true\` in the \`type\` action to press Enter immediately. If you need to review the input or click a button manually, set \`"submit": false\`.
-3. **Login/Auth**: If you need credentials, ASK the user. Do not guess.
-4. **Cookie Consent**: If a cookie banner is present, click "Accept" or "OK" immediately.
-5. **Forms/Reservations/Orders**: Ask user for any missing information before proceeding.
-6. **Irreversible Actions Need Approval**: Before the final click or submit for purchases, orders, bookings, payments, account changes, publishing, sending, or deleting, use \`"ask"\` unless the goal already contains explicit approval for that exact final action.
-7. **Confirmation Step**: If you reached the final confirmation screen, stop and ask for confirmation instead of completing the action yourself.
-8. **CAPTCHA/Human Verification**: If you hit a CAPTCHA, human verification, OTP, 2FA challenge, biometric prompt, or any step that must be completed by the real user, use \`"ask"\` immediately and begin the reasoning with \`[captcha]\`.
-9. **Ask Categories**: When using \`"ask"\`, begin the reasoning with exactly one tag:
-   - \`[confirmation]\` for final approval / final submit
-   - \`[captcha]\` for CAPTCHA or human-only verification
-   - \`[info]\` for missing user information or clarification
-10. **Data Gathering**: Do not be afraid to scroll and explore the whole page to find the information you need.
-11. **Search Results**: If the search results are not what you expected, try to refine the search query or try a different approach. Or maybe just what you searched for is not available on the site.
-
-## 🛑 STOP & THINK: HISTORY CHECK
-1. **Loop Detection**: If you clicked the same coordinates repeatedly with no change, STOP.
-2. **Scroll if needed**: If you don't see what you need, SCROLL.
-3. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.
-   - Example: "Search boxes on this site need a click before typing."
-   - Do not add memory for every action, only for significant ones. 
-   - Do not repeat the same memory.
-
-${learningsText}
-
-## Response Format - JSON ONLY
-{
-  "action": "click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "hover" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "done" | "ask" | "goBack" | "goForward",
-  "coordinate": [x, y],  // Normalized 0-1000
-  "clickCount": 1 | 2, // Optional, default 1
-  "text": "<text for type>",
-  "submit": true | false, // Press Enter after typing?
-  "clearBefore": true | false, // Clear input before typing?
-  "key": "Enter" | "Escape" | "Tab" | "Backspace",
-  "scrollDirection": "up" | "down",
-  "url": "<url for navigate action>",
-  "reasoning": "<brief explanation>",
-  "memory": "<OPTIONAL: New lesson learned>"
-}`;
+    return `\n## Learned from Past Sessions:\n${learnings.map((item, index) => `${index + 1}. ${item}`).join('\n')}`;
 }
-export function buildActionPrompt(goal, actionHistory) {
-    const recentActions = actionHistory.slice(-15);
-    // Detect loops (simplified for coordinates)
-    let loopWarning = '';
+
+function sanitizeUrl(value) {
+    const text = String(value ?? '').trim();
+    if (!text) {
+        return '';
+    }
+
+    if (text.length > 180) {
+        return `${text.slice(0, 177)}...`;
+    }
+
+    return text;
+}
+
+function normalizeTabCount(value) {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric) || numeric < 0) {
+        return 0;
+    }
+
+    return Math.trunc(numeric);
+}
+
+function buildPageContextBlock(pageContext = {}) {
+    const currentUrl = sanitizeUrl(pageContext.currentUrl);
+    const openTabs = normalizeTabCount(pageContext.openTabs);
+    const availableUploads = Array.isArray(pageContext.availableUploads) ? pageContext.availableUploads : [];
+    const tabHint = openTabs > 1
+        ? 'Multiple tabs are open. Be strict about tab relevance and close unrelated tabs.'
+        : 'Single-tab mode currently.';
+    const uploadHint = availableUploads.length > 0
+        ? availableUploads
+            .slice(0, 8)
+            .map((file, index) => `- [${String(file?.id ?? `upload-${index + 1}`).trim()}] ${String(file?.name ?? 'file').trim()} (${String(file?.mimeType ?? 'application/octet-stream').trim()})`)
+            .join('\n')
+        : '- none';
+
+    return [
+        '## Current Browser Context',
+        `Current URL: ${currentUrl || '(unknown)'}`,
+        `Open Tabs: ${openTabs}`,
+        `Tab Hint: ${tabHint}`,
+        'Available Upload Files (use id or name in upload action):',
+        uploadHint,
+    ].join('\n');
+}
+
+function describeActionHistory(actionHistory) {
+    const recentActions = Array.isArray(actionHistory) ? actionHistory.slice(-18) : [];
+    if (recentActions.length === 0) {
+        return '## Recent Actions\nNo previous actions in this run.';
+    }
+
+    const lines = recentActions.map((action, index) => {
+        const step = index + 1;
+        const actionName = String(action?.action ?? 'unknown').toUpperCase();
+        const coord = Array.isArray(action?.coordinate)
+            ? `[${action.coordinate[0]}, ${action.coordinate[1]}]`
+            : '';
+        const successMark = action?.success === false ? '✗' : '✓';
+        const text = String(action?.text ?? '').trim();
+        const beforeUrl = sanitizeUrl(action?.beforeUrl);
+        const afterUrl = sanitizeUrl(action?.afterUrl);
+        const beforeTabs = normalizeTabCount(action?.beforeTabs);
+        const afterTabs = normalizeTabCount(action?.afterTabs);
+        const tabDelta = Number(action?.tabDelta) || 0;
+        const urlChanged = action?.urlChanged === true ? 'url_changed' : 'url_same';
+
+        let line = `${step}. ${actionName}${coord ? ` @ ${coord}` : ''} ${successMark}`;
+        if (text) {
+            line += ` | text="${text.slice(0, 48)}"`;
+        }
+        if (beforeUrl || afterUrl) {
+            line += ` | ${beforeUrl || '(unknown)'} -> ${afterUrl || '(unknown)'}`;
+        }
+        line += ` | tabs ${beforeTabs} -> ${afterTabs}`;
+        if (tabDelta !== 0) {
+            line += ` (delta ${tabDelta > 0 ? '+' : ''}${tabDelta})`;
+        }
+        line += ` | ${urlChanged}`;
+
+        const reasoning = String(action?.reasoning ?? '').trim();
+        if (reasoning) {
+            line += `\n   reason: ${reasoning.slice(0, 120)}`;
+        }
+
+        return line;
+    });
+
+    return `## Recent Actions\n${lines.join('\n')}`;
+}
+
+function buildLoopWarnings(actionHistory) {
+    const recentActions = Array.isArray(actionHistory) ? actionHistory.slice(-6) : [];
+    const warnings = [];
+
     if (recentActions.length >= 4) {
         const last4 = recentActions.slice(-4);
-        // Check for repeated coordinates (exact match)
-        const coords = last4.map(a => a.coordinate ? `${a.coordinate[0]},${a.coordinate[1]}` : null).filter(c => c !== null);
-        if (coords.length >= 4 && coords[0] === coords[2] && coords[1] === coords[3] && coords[0] !== coords[1]) {
-            loopWarning = `\n\n## ⚠️ LOOP DETECTED! ⚠️\nYou are alternating between locations!\n**STOP clicking these spots!** Do something COMPLETELY DIFFERENT.\n`;
+        const coords = last4
+            .map((item) => Array.isArray(item?.coordinate) ? `${item.coordinate[0]},${item.coordinate[1]}` : '')
+            .filter(Boolean);
+        if (coords.length === 4 && coords[0] === coords[2] && coords[1] === coords[3] && coords[0] !== coords[1]) {
+            warnings.push('- Coordinate loop detected: alternating between the same spots. Try a different strategy.');
         }
     }
-    // Build detailed history
-    let historyText = '';
-    if (recentActions.length > 0) {
-        historyText = '\n## 📜 ACTION HISTORY (newest last):\n' + recentActions
-            .map((a, i) => {
-            const step = i + 1;
-            let desc = `Step ${step}: ${a.action.toUpperCase()}`;
-            if (a.coordinate)
-                desc += ` at [${a.coordinate[0]}, ${a.coordinate[1]}]`;
-            if (a.clickCount && a.clickCount > 1)
-                desc += ` (x${a.clickCount})`;
-            if (a.text)
-                desc += ` ("${a.text.substring(0, 30)}")`;
-            if (a.submit)
-                desc += ` + ENTER`;
-            desc += a.success ? ' ✓' : ' ✗ FAILED';
-            if (a.reasoning)
-                desc += `\n         → Reason: "${a.reasoning.substring(0, 80)}"`;
-            return desc;
-        })
-            .join('\n');
-        historyText += `\n\n**Total actions so far: ${recentActions.length}**`;
+
+    if (recentActions.length >= 3) {
+        const tabDeltas = recentActions.map((item) => Number(item?.tabDelta) || 0);
+        const repeatedlyOpeningTabs = tabDeltas.filter((value) => value > 0).length >= 2;
+        if (repeatedlyOpeningTabs) {
+            warnings.push('- Repeated tab openings detected. Triage tabs and close unrelated ones quickly.');
+        }
     }
-    return `## 🎯 GOAL: ${goal}
-${loopWarning}${historyText}
 
-## ⚠️ BEFORE YOU ACT:
-1. Review history.
-2. Estimate NORMALIZED COORDINATES (0-1000) based on the clean screenshot.
+    if (warnings.length === 0) {
+        return '';
+    }
 
-Choose ONE action. Respond with JSON only:`;
+    return `## Warnings\n${warnings.join('\n')}`;
 }
-export function buildInterruptPrompt(newGoal) {
-    return `## ⚡ NEW GOAL (previous cancelled): ${newGoal}
 
-Start working on the new goal. JSON only:`;
+export function buildSystemPrompt(learnings) {
+    const learningsText = formatLearnings(learnings);
+    const now = new Date();
+    const dateString = now.toLocaleDateString('ro-RO', {
+        weekday: 'long',
+        year: 'numeric',
+        month: 'long',
+        day: 'numeric',
+    });
+
+    return `You are an AI browser automation operator.
+Current Date: ${dateString}
+
+You see a page screenshot and structured context, and you must return exactly one JSON action.
+You interact by normalized coordinates on a 0-1000 grid.
+
+## Coordinate Model
+- [0, 0] = top-left of viewport.
+- [1000, 1000] = bottom-right of viewport.
+- Use precise target coordinates for actionable elements.
+
+## Goal Continuation Behavior
+If goal text contains "[Previous Goal: ...]", treat short user replies ("yes", "ok", "continue") as continuation signals.
+
+## Available Actions
+- click: click coordinate. Optional clickCount: 2 for double click.
+- type: type text. Optional clearBefore and submit.
+- key: press Enter / Escape / Tab / Backspace.
+- scroll: scroll up/down.
+- hover: hover coordinate.
+- hold: long press coordinate.
+- wait: wait for page updates.
+- navigate: open URL directly.
+- refresh: reload current page.
+- closeTab: close current tab.
+- goBack: browser back.
+- goForward: browser forward.
+- clear: clear focused input.
+- upload: attach one or more available files to a file input.
+- getLink: copy link at coordinate (or current URL if none).
+- pasteLink: paste copied link to focused input.
+- ask: ask user for missing info or approval.
+- done: task complete.
+
+## Mandatory Interaction Rules
+1. JSON only. No markdown, no prose outside JSON.
+2. One action per response.
+3. Before final irreversible submit (purchase, booking, payment, send, delete, publish, account changes), use ask unless explicit final approval already exists for that exact step.
+4. If you reach final confirmation screen, stop and ask confirmation.
+5. If CAPTCHA / OTP / 2FA / human-verification appears, use ask and start reasoning with [captcha].
+6. For missing user inputs, use ask and start reasoning with [info].
+7. For final approval, use ask and start reasoning with [confirmation].
+
+## Tab Hygiene and Popup/Spam Triage
+When a new tab or redirect appears, classify quickly:
+
+Likely irrelevant or spam/ad tab (close it):
+- gambling/casino/betting tabs not requested by goal,
+- "you won", fake virus alerts, push-notification traps,
+- coupon/incentive redirects unrelated to goal,
+- clickbait ad-landing pages,
+- generic ad-tracking pages and sponsored detours.
+
+Likely relevant tab (keep and continue):
+- official OAuth/auth provider for requested service,
+- trusted payment provider during checkout,
+- identity verification required by requested flow,
+- expected external reservation/ticket/payment handoff.
+
+If uncertain:
+- Prefer a quick verification signal from URL/title/page content.
+- If still uncertain and risky, use ask with [info].
+
+Practical tab policy:
+- Keep focus on the tab that best advances the current goal.
+- If multiple tabs are open and one is clearly irrelevant, use closeTab.
+- Avoid getting trapped in ad/pop-up loops.
+
+## Redirect/Overlay Policy
+- Accept cookie banners when they block interaction.
+- Close newsletter/modals/promotional popups when they block core task.
+- If redirected away from goal path by ads, recover via goBack, closeTab, or navigate to known-good URL.
+
+## Embedded Iframe / Popup Container Policy
+- If a reservation/payment widget appears inside an iframe or modal container:
+  1. Click or hover inside that container first to move focus there.
+  2. Then scroll/type/click within that focused area.
+  3. If wheel scrolling does nothing, re-focus inside container and retry once.
+  4. If still blocked, try container controls (close, expand, next) or ask user.
+- Do not keep scrolling the parent page when the active work area is clearly an embedded widget.
+
+## Form Safety Policy
+- Do not guess credentials or personal data.
+- Ask for missing required form fields.
+- Use clearBefore when replacing text in existing input.
+- For file uploads:
+  - use upload action only when a file input/widget is visible or focused,
+  - provide "files" references using listed upload id or file name,
+  - if file mapping is ambiguous or missing, use ask with [info].
+
+## Exploration Policy
+- Scroll and inspect page sections before deciding "not available".
+- If current route fails, try one alternative route before asking user.
+- Do not repeat the same failing action endlessly:
+  - After 2 failed attempts of the same tactic, switch strategy (focus element, scroll, goBack, closeTab, navigate, or ask).
+
+## Memory Policy
+- You may emit "memory" only for high-value reusable lessons discovered during execution.
+- Do not spam repetitive memory entries.
+${learningsText}
+
+## JSON Response Schema
+{
+  "action": "click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "hover" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "upload" | "done" | "ask" | "goBack" | "goForward",
+  "coordinate": [x, y],
+  "clickCount": 1 | 2,
+  "files": ["<upload id or file name>", "..."],
+  "text": "<text for type>",
+  "submit": true | false,
+  "clearBefore": true | false,
+  "key": "Enter" | "Escape" | "Tab" | "Backspace",
+  "scrollDirection": "up" | "down",
+  "url": "<url for navigate>",
+  "reasoning": "<brief reason>",
+  "memory": "<optional reusable lesson>"
+}`;
+}
+
+export function buildActionPrompt(goal, actionHistory, pageContext = {}) {
+    const pageBlock = buildPageContextBlock(pageContext);
+    const historyBlock = describeActionHistory(actionHistory);
+    const warningBlock = buildLoopWarnings(actionHistory);
+
+    return [
+        `## Goal\n${goal}`,
+        pageBlock,
+        warningBlock,
+        historyBlock,
+        '## Before Choosing Action',
+        '1. Check if current tab/page is relevant to goal.',
+        '2. If tab appears spam/advertisement/unrelated redirect, closeTab or recover path.',
+        '3. If active work area is an iframe/modal widget, focus it first (click/hover inside) before scrolling or typing.',
+        '4. For upload steps, make sure target input/widget is active, then use action=upload with files references.',
+        '5. If one required field is missing, use ask with [info].',
+        '6. If you are at irreversible final step, use ask with [confirmation].',
+        '7. Avoid repeating the same failed action more than twice; switch strategy.',
+        '8. Then output one JSON action only.',
+    ].filter(Boolean).join('\n\n');
+}
+
+export function buildInterruptPrompt(newGoal, pageContext = {}) {
+    const pageBlock = buildPageContextBlock(pageContext);
+
+    return [
+        `## New Goal (previous goal interrupted)\n${newGoal}`,
+        pageBlock,
+        'Resume from current page state. Choose one JSON action only.',
+    ].join('\n\n');
 }

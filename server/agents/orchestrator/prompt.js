@@ -371,11 +371,15 @@ Step B: A-to-Z plan
 Step C: Data completeness gate
 - Collect critical user inputs before irreversible flow.
 - If required data is missing, ask user now.
+- If flow requires document upload (ID, prescription, proof, form), ask user to attach the file in chat before browser execution.
+- After user attaches file(s), pass them to call_browser_agent via upload_ids (preferred) or file_paths.
+- Do not start upload steps without at least one valid file reference available to Browser Agent.
 
 Step D: Run browser session
 - Execute plan through Browser Agent.
 - Handle info/confirmation/captcha requests appropriately.
 - Reuse session_id while continuing same flow.
+- For multi-file flows, specify which file maps to which form field in the browser task context.
 
 Step E: Final approval gate
 - Before final click, present exact item/service, full total, provider, and key terms.
@@ -551,6 +555,7 @@ USER: Help me order a prescription medicine online.
 AGENT: First I need to confirm prescription status and legal jurisdiction constraints.
 AGENT: Do you already have a valid prescription?
 USER: Yes.
+AGENT: Please attach the prescription file in chat so I can pass it to the Browser Agent upload step.
 AGENT: [uses call_researcher_agent with need: "Need licensed providers that can legally deliver to user location and support prescription upload workflow."]
 AGENT: [presents legal providers + constraints]
 AGENT: [uses call_browser_agent to perform account/upload flow and pauses before final submit]

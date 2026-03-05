@@ -1,42 +1,35 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 
-/* ─── Constants ─────────────────────────────────────────────────────── */
-
 const GITHUB_OWNER = 'Horia73';
 const GITHUB_REPO = 'orchestrator';
 const CHECK_CACHE_KEY = 'orchestrator.updates.last_check';
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
-
-/* ─── Helpers ───────────────────────────────────────────────────────── */
-
-function parseVersion(tag) {
-    const cleaned = String(tag ?? '').replace(/^v/i, '').trim();
-    const parts = cleaned.split('.').map(Number);
-    return { raw: cleaned, major: parts[0] || 0, minor: parts[1] || 0, patch: parts[2] || 0 };
-}
-
-function isNewer(remote, local) {
-    const r = parseVersion(remote);
-    const l = parseVersion(local);
-    if (r.major !== l.major) return r.major > l.major;
-    if (r.minor !== l.minor) return r.minor > l.minor;
-    return r.patch > l.patch;
-}
 
 function readCache() {
     try {
         const raw = localStorage.getItem(CHECK_CACHE_KEY);
         if (!raw) return null;
         const cached = JSON.parse(raw);
-        if (Date.now() - cached.ts < CACHE_TTL_MS) return cached;
-    } catch { /* noop */ }
+        if (
+            cached
+            && typeof cached === 'object'
+            && typeof cached.status === 'string'
+            && Date.now() - Number(cached.ts || 0) < CACHE_TTL_MS
+        ) {
+            return cached;
+        }
+    } catch {
+        return null;
+    }
     return null;
 }
 
 function writeCache(data) {
     try {
         localStorage.setItem(CHECK_CACHE_KEY, JSON.stringify({ ...data, ts: Date.now() }));
-    } catch { /* noop */ }
+    } catch {
+        /* noop */
+    }
 }
 
 function timeAgo(dateStr) {
@@ -52,43 +45,52 @@ function timeAgo(dateStr) {
     return new Date(dateStr).toLocaleDateString();
 }
 
-/* ─── Component ─────────────────────────────────────────────────────── */
+function formatVersion(version, fallback) {
+    const normalized = String(version || '').trim();
+    if (!normalized) return fallback;
+    return /^\d/.test(normalized) ? `v${normalized}` : normalized;
+}
+
+function buildErrorMessage(error, fallback) {
+    const message = String(error?.message || '').trim();
+    return message || fallback;
+}
 
 export function UpdatesPanel() {
-    const [currentVersion, setCurrentVersion] = useState(null);
     const [state, setState] = useState({
         loading: true,
         error: null,
-        latestTag: null,
-        releaseUrl: null,
-        releaseNotes: null,
-        publishedAt: null,
+        status: null,
+        branch: null,
+        remoteRef: null,
+        localVersion: null,
+        remoteVersion: null,
+        localSha: null,
+        localShaShort: null,
+        remoteSha: null,
+        remoteShaShort: null,
+        localCommitDate: null,
+        remoteCommitDate: null,
+        ahead: 0,
+        behind: 0,
+        canInstall: false,
+        checkedAt: null,
     });
     const [installing, setInstalling] = useState(false);
-    const [installPhase, setInstallPhase] = useState(null); // 'pulling' | 'installing' | 'restarting' | 'reconnecting'
+    const [installPhase, setInstallPhase] = useState(null); // 'pulling' | 'restarting' | 'reconnecting'
     const [installResult, setInstallResult] = useState(null);
     const reconnectTimer = useRef(null);
-
-    // Fetch current version from server
-    useEffect(() => {
-        fetch('/api/version')
-            .then(r => r.json())
-            .then(d => setCurrentVersion(d.version || '0.0.0'))
-            .catch(() => setCurrentVersion('0.0.0'));
-    }, []);
 
     const checkForUpdates = useCallback(async (force = false) => {
         if (!force) {
             const cached = readCache();
             if (cached) {
-                setState({
+                setState((prev) => ({
+                    ...prev,
                     loading: false,
                     error: null,
-                    latestTag: cached.latestTag,
-                    releaseUrl: cached.releaseUrl,
-                    releaseNotes: cached.releaseNotes,
-                    publishedAt: cached.publishedAt,
-                });
+                    ...cached,
+                }));
                 return;
             }
         }
@@ -96,59 +98,38 @@ export function UpdatesPanel() {
         setState((prev) => ({ ...prev, loading: true, error: null }));
 
         try {
-            let latestTag = null;
-            let releaseUrl = null;
-            let releaseNotes = null;
-            let publishedAt = null;
-
-            const relRes = await fetch(
-                `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/releases/latest`,
-                { headers: { Accept: 'application/vnd.github.v3+json' } }
-            );
-
-            if (relRes.ok) {
-                const rel = await relRes.json();
-                latestTag = rel.tag_name;
-                releaseUrl = rel.html_url;
-                releaseNotes = rel.body || null;
-                publishedAt = rel.published_at || null;
-            } else {
-                // Fallback: fetch latest tag
-                const tagsRes = await fetch(
-                    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/tags?per_page=1`,
-                    { headers: { Accept: 'application/vnd.github.v3+json' } }
-                );
-                if (tagsRes.ok) {
-                    const tags = await tagsRes.json();
-                    if (tags.length > 0) {
-                        latestTag = tags[0].name;
-                        releaseUrl = `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/releases/tag/${tags[0].name}`;
-                    }
-                }
+            const response = await fetch('/api/update/status', { cache: 'no-store' });
+            const payload = await response.json().catch(() => ({}));
+            if (!response.ok || payload?.ok === false) {
+                throw new Error(payload?.error || `Update check failed (HTTP ${response.status})`);
             }
 
-            if (!latestTag) {
-                // No releases or tags — use latest commit
-                const commitRes = await fetch(
-                    `https://api.github.com/repos/${GITHUB_OWNER}/${GITHUB_REPO}/commits?per_page=1`,
-                    { headers: { Accept: 'application/vnd.github.v3+json' } }
-                );
-                if (commitRes.ok) {
-                    const commits = await commitRes.json();
-                    if (commits.length > 0) {
-                        latestTag = commits[0].sha.slice(0, 7);
-                        releaseUrl = commits[0].html_url;
-                        publishedAt = commits[0].commit?.committer?.date || null;
-                        releaseNotes = commits[0].commit?.message || null;
-                    }
-                }
-            }
+            const result = {
+                status: String(payload.status || ''),
+                branch: String(payload.branch || ''),
+                remoteRef: String(payload.remoteRef || ''),
+                localVersion: payload.localVersion || null,
+                remoteVersion: payload.remoteVersion || null,
+                localSha: payload.localSha || null,
+                localShaShort: payload.localShaShort || null,
+                remoteSha: payload.remoteSha || null,
+                remoteShaShort: payload.remoteShaShort || null,
+                localCommitDate: payload.localCommitDate || null,
+                remoteCommitDate: payload.remoteCommitDate || null,
+                ahead: Number(payload.ahead || 0),
+                behind: Number(payload.behind || 0),
+                canInstall: payload.canInstall === true,
+                checkedAt: payload.checkedAt || new Date().toISOString(),
+            };
 
-            const result = { latestTag, releaseUrl, releaseNotes, publishedAt };
             writeCache(result);
             setState({ loading: false, error: null, ...result });
-        } catch (err) {
-            setState((prev) => ({ ...prev, loading: false, error: err.message }));
+        } catch (error) {
+            setState((prev) => ({
+                ...prev,
+                loading: false,
+                error: buildErrorMessage(error, 'Failed to check updates.'),
+            }));
         }
     }, []);
 
@@ -156,9 +137,10 @@ export function UpdatesPanel() {
         checkForUpdates();
     }, [checkForUpdates]);
 
-    // Cleanup reconnect timer
     useEffect(() => () => {
-        if (reconnectTimer.current) clearInterval(reconnectTimer.current);
+        if (reconnectTimer.current) {
+            clearInterval(reconnectTimer.current);
+        }
     }, []);
 
     const handleInstall = useCallback(async () => {
@@ -167,52 +149,43 @@ export function UpdatesPanel() {
         setInstallPhase('pulling');
 
         try {
-            const res = await fetch('/api/update', { method: 'POST' });
-            const data = await res.json().catch(() => ({}));
+            const response = await fetch('/api/update', { method: 'POST' });
+            const payload = await response.json().catch(() => ({}));
 
-            if (!res.ok) {
-                setInstallResult({ success: false, message: data.error || `Update failed (HTTP ${res.status})` });
+            if (!response.ok) {
+                setInstallResult({ success: false, message: payload.error || `Update failed (HTTP ${response.status})` });
                 setInstallPhase(null);
                 return;
             }
 
-            if (!data.restarting) {
-                // Already up to date, no restart
-                setInstallResult({ success: true, message: data.message });
+            if (!payload.restarting) {
+                setInstallResult({ success: true, message: payload.message || 'No update applied.' });
                 setInstallPhase(null);
+                await checkForUpdates(true);
                 return;
             }
 
-            // Server is restarting — wait for it to come back
             setInstallPhase('restarting');
-            setInstallResult({ success: true, message: data.message });
+            setInstallResult({ success: true, message: payload.message || 'Update installed. Restarting…' });
 
-            // Poll /api/health until the server comes back
-            await new Promise(resolve => setTimeout(resolve, 2000));
+            await new Promise((resolve) => setTimeout(resolve, 2000));
             setInstallPhase('reconnecting');
 
             let attempts = 0;
             reconnectTimer.current = setInterval(async () => {
-                attempts++;
+                attempts += 1;
                 try {
                     const health = await fetch('/api/health', { signal: AbortSignal.timeout(2000) });
-                    if (health.ok) {
-                        clearInterval(reconnectTimer.current);
-                        reconnectTimer.current = null;
-                        // Fetch new version
-                        try {
-                            const vRes = await fetch('/api/version');
-                            const vData = await vRes.json();
-                            setCurrentVersion(vData.version || '0.0.0');
-                        } catch { /* ignore */ }
-                        setInstallPhase(null);
-                        setInstallResult({ success: true, message: 'Update complete! Server restarted successfully.' });
-                        // Clear update cache so it re-checks
-                        localStorage.removeItem(CHECK_CACHE_KEY);
-                        checkForUpdates(true);
+                    if (!health.ok) {
+                        return;
                     }
+                    clearInterval(reconnectTimer.current);
+                    reconnectTimer.current = null;
+                    setInstallPhase(null);
+                    setInstallResult({ success: true, message: 'Update complete! Server restarted successfully.' });
+                    localStorage.removeItem(CHECK_CACHE_KEY);
+                    await checkForUpdates(true);
                 } catch {
-                    // Still down
                     if (attempts > 30) {
                         clearInterval(reconnectTimer.current);
                         reconnectTimer.current = null;
@@ -221,25 +194,41 @@ export function UpdatesPanel() {
                     }
                 }
             }, 2000);
-        } catch (err) {
-            setInstallResult({ success: false, message: err.message });
+        } catch (error) {
+            setInstallResult({
+                success: false,
+                message: buildErrorMessage(error, 'Failed to install update.'),
+            });
             setInstallPhase(null);
         } finally {
             setInstalling(false);
         }
     }, [checkForUpdates]);
 
-    const localVersion = currentVersion || '…';
-    const hasUpdate = currentVersion && state.latestTag && isNewer(state.latestTag, localVersion);
-    const isUpToDate = currentVersion && state.latestTag && !hasUpdate && !state.error;
+    const installedLabel = formatVersion(
+        state.localVersion,
+        state.localShaShort ? `#${state.localShaShort}` : '…'
+    );
+    const latestLabel = formatVersion(
+        state.remoteVersion,
+        state.remoteShaShort ? `#${state.remoteShaShort}` : '—'
+    );
+    const hasUpdate = !state.loading && !state.error && state.behind > 0;
+    const canAutoInstall = hasUpdate && state.ahead === 0 && state.canInstall;
+    const isUpToDate = !state.loading && !state.error && state.behind === 0 && state.ahead === 0;
+    const isAheadOnly = !state.loading && !state.error && state.behind === 0 && state.ahead > 0;
+    const isDiverged = !state.loading && !state.error && state.behind > 0 && state.ahead > 0;
+    const remoteLabel = state.remoteRef || `origin/${state.branch || 'main'}`;
+    const compareUrl = state.localSha && state.remoteSha
+        ? `https://github.com/${GITHUB_OWNER}/${GITHUB_REPO}/compare/${state.localSha}...${state.remoteSha}`
+        : null;
 
     return (
         <div className="updates-panel">
-            {/* ── Header ── */}
             <div className="updates-header-row">
                 <div>
                     <h2 className="updates-title">Software Updates</h2>
-                    <p className="updates-subtitle">Keep Orchestrator up to date with the latest features and fixes</p>
+                    <p className="updates-subtitle">Checks your local branch against origin in git</p>
                 </div>
                 <button
                     className="updates-check-btn"
@@ -255,26 +244,23 @@ export function UpdatesPanel() {
                 </button>
             </div>
 
-            {/* ── Version cards ── */}
             <div className="updates-version-cards">
                 <div className={`updates-version-card ${isUpToDate ? 'up-to-date' : ''}`}>
                     <span className="updates-version-label">Installed</span>
-                    <span className="updates-version-value">{localVersion === '…' ? '…' : `v${localVersion}`}</span>
+                    <span className="updates-version-value">{installedLabel}</span>
+                    {state.localShaShort && (
+                        <span className="updates-version-date">#{state.localShaShort}</span>
+                    )}
                 </div>
                 <div className={`updates-version-card ${hasUpdate ? 'has-update' : ''}`}>
-                    <span className="updates-version-label">Latest</span>
-                    <span className="updates-version-value">
-                        {state.loading ? '…' : state.latestTag ? (/^\d/.test(state.latestTag) ? `v${state.latestTag}` : state.latestTag) : '—'}
-                    </span>
-                    {state.publishedAt && (
-                        <span className="updates-version-date">
-                            {timeAgo(state.publishedAt)}
-                        </span>
+                    <span className="updates-version-label">{remoteLabel}</span>
+                    <span className="updates-version-value">{latestLabel}</span>
+                    {state.remoteCommitDate && (
+                        <span className="updates-version-date">{timeAgo(state.remoteCommitDate)}</span>
                     )}
                 </div>
             </div>
 
-            {/* ── Error ── */}
             {state.error && (
                 <div className="updates-error">
                     <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
@@ -284,84 +270,105 @@ export function UpdatesPanel() {
                 </div>
             )}
 
-            {/* ── Up to date ── */}
             {!state.loading && isUpToDate && !installPhase && (
                 <div className="updates-up-to-date">
                     <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M20 6L9 17l-5-5" />
                     </svg>
-                    <span>You're running the latest version</span>
+                    <span>Local branch is synchronized with {remoteLabel}</span>
                 </div>
             )}
 
-            {/* ── Update available ── */}
+            {!state.loading && isAheadOnly && !installPhase && (
+                <div className="updates-up-to-date">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+                        <path d="M20 6L9 17l-5-5" />
+                    </svg>
+                    <span>Local branch is ahead of {remoteLabel} by {state.ahead} commit{state.ahead === 1 ? '' : 's'}</span>
+                </div>
+            )}
+
             {!state.loading && !state.error && hasUpdate && (
                 <div className="updates-available">
                     <div className="updates-available-header">
                         <div className="updates-available-left">
-                            <span className="updates-badge">Update available</span>
+                            <span className="updates-badge">{isDiverged ? 'Branches diverged' : 'Update available'}</span>
                             <span className="updates-upgrade-path">
-                                v{currentVersion} → {/^\d/.test(state.latestTag) ? `v${state.latestTag}` : state.latestTag}
+                                Behind by {state.behind} commit{state.behind === 1 ? '' : 's'}
                             </span>
                         </div>
-                        {state.releaseUrl && (
+                        {compareUrl && (
                             <a
                                 className="updates-release-link"
-                                href={state.releaseUrl}
+                                href={compareUrl}
                                 target="_blank"
                                 rel="noopener noreferrer"
                             >
-                                View on GitHub →
+                                View compare →
                             </a>
                         )}
                     </div>
 
-                    {state.releaseNotes && (
-                        <div className="updates-release-notes">
-                            <h4>What's new</h4>
-                            <pre>{state.releaseNotes}</pre>
+                    <div className="updates-release-notes">
+                        <h4>Git status</h4>
+                        <pre>
+                            {state.localShaShort || 'local'} → {state.remoteShaShort || 'remote'}
+                            {`\n`}
+                            branch: {state.branch || 'main'}
+                            {`\n`}
+                            ahead: {state.ahead} / behind: {state.behind}
+                        </pre>
+                    </div>
+
+                    {!canAutoInstall && isDiverged && (
+                        <div className="updates-error">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                <circle cx="12" cy="12" r="10" /><line x1="12" y1="8" x2="12" y2="12" /><line x1="12" y1="16" x2="12.01" y2="16" />
+                            </svg>
+                            <span>Local and origin have diverged. Resolve git merge/rebase manually, then run update again.</span>
                         </div>
                     )}
 
-                    <button
-                        className="updates-install-btn"
-                        onClick={handleInstall}
-                        disabled={installing || !!installPhase}
-                        type="button"
-                    >
-                        {installPhase === 'pulling' && (
-                            <>
-                                <span className="updates-spinner" />
-                                Pulling changes…
-                            </>
-                        )}
-                        {installPhase === 'restarting' && (
-                            <>
-                                <span className="updates-spinner" />
-                                Restarting server…
-                            </>
-                        )}
-                        {installPhase === 'reconnecting' && (
-                            <>
-                                <span className="updates-spinner" />
-                                Reconnecting…
-                            </>
-                        )}
-                        {!installPhase && (
-                            <>
-                                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                                    <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
-                                    <polyline points="7 10 12 15 17 10" />
-                                    <line x1="12" y1="15" x2="12" y2="3" />
-                                </svg>
-                                Install & Restart
-                            </>
-                        )}
-                    </button>
+                    {canAutoInstall && (
+                        <button
+                            className="updates-install-btn"
+                            onClick={handleInstall}
+                            disabled={installing || !!installPhase}
+                            type="button"
+                        >
+                            {installPhase === 'pulling' && (
+                                <>
+                                    <span className="updates-spinner" />
+                                    Pulling changes…
+                                </>
+                            )}
+                            {installPhase === 'restarting' && (
+                                <>
+                                    <span className="updates-spinner" />
+                                    Restarting server…
+                                </>
+                            )}
+                            {installPhase === 'reconnecting' && (
+                                <>
+                                    <span className="updates-spinner" />
+                                    Reconnecting…
+                                </>
+                            )}
+                            {!installPhase && (
+                                <>
+                                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                                        <polyline points="7 10 12 15 17 10" />
+                                        <line x1="12" y1="15" x2="12" y2="3" />
+                                    </svg>
+                                    Install & Restart
+                                </>
+                            )}
+                        </button>
+                    )}
                 </div>
             )}
 
-            {/* ── Install result ── */}
             {installResult && !installPhase && (
                 <div className={`updates-install-result ${installResult.success ? 'success' : 'error'}`}>
                     {installResult.success ? (
@@ -376,16 +383,6 @@ export function UpdatesPanel() {
                     <span>{installResult.message}</span>
                 </div>
             )}
-
-            {/* ── How to release ── */}
-            <div className="updates-footer">
-                <p className="updates-footer-text">
-                    To publish a new release, create a git tag and push it:
-                </p>
-                <code className="updates-footer-code">
-                    npm version patch && git push && git push --tags
-                </code>
-            </div>
         </div>
     );
 }

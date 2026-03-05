@@ -65,6 +65,11 @@ export function Sidebar({
         () => filteredChats.filter((chat) => chat.kind !== 'inbox'),
         [filteredChats],
     );
+    const logoLabel = useMemo(() => {
+        const name = String(uiSettings?.aiName ?? '').trim() || 'AI Chat';
+        const emoji = String(uiSettings?.aiEmoji ?? '').trim();
+        return [emoji, name].filter(Boolean).join(' ');
+    }, [uiSettings?.aiEmoji, uiSettings?.aiName]);
 
     const renderChatRow = (item) => (
         <div
@@ -106,7 +111,7 @@ export function Sidebar({
             <div className="sidebar-inner">
                 {/* Header — just the logo now, toggle is above */}
                 <div className="sidebar-header">
-                    <span className="logo-text">{uiSettings?.aiName ?? 'AI Chat'}</span>
+                    <span className="logo-text">{logoLabel}</span>
                 </div>
 
                 {/* Nav */}

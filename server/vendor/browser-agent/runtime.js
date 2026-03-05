@@ -135,6 +135,11 @@ export function createAgentRuntime(config, onStatusUpdate = (message) => console
                 stepDelayMs: config.runtime.stepDelayMs,
                 actionSettleDelayMs: config.runtime.actionSettleDelayMs,
                 waitActionDelayMs: config.runtime.waitActionDelayMs,
+                enableModelAutoEscalation: true,
+                escalationModel: 'gemini-3.1-pro-preview',
+                escalationThinkingLevel: 'medium',
+                escalationFailureThreshold: 3,
+                deescalationSuccessThreshold: 2,
             });
             await browser.launch();
             if (config.browser.startupUrl) {
@@ -184,7 +189,10 @@ export function createAgentRuntime(config, onStatusUpdate = (message) => console
                 agent.resetContext();
             }
             const preserveContext = options.preserveContext ?? !cleanContext;
-            agent.setTask(goal, { preserveContext });
+            agent.setTask(goal, {
+                preserveContext,
+                uploadFiles: Array.isArray(options.uploadFiles) ? options.uploadFiles : [],
+            });
             if (!agent.isRunning()) {
                 void agent.start()
                     .then(() => {

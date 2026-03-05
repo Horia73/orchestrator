@@ -1100,6 +1100,7 @@ async function createSession({ agentId, chatId, clientId, profileMode }) {
         completionReason: '',
         errorMessage: '',
         controlMode: 'agent',
+        availableUploadFiles: [],
         currentUrl: '',
         viewport: null,
         remoteDesktop,
@@ -1269,14 +1270,61 @@ async function resolveSession({
     });
 }
 
-function buildTaskPrompt({ task, context }) {
-    const taskText = sanitizeText(task);
-    const contextText = sanitizeText(context);
-    if (!contextText) {
-        return taskText;
+function normalizeBrowserUploadFiles(uploadFiles) {
+    if (!Array.isArray(uploadFiles)) {
+        return [];
     }
 
-    return `${taskText}\n\nContext:\n${contextText}`;
+    return uploadFiles
+        .map((entry, index) => {
+            if (!entry || typeof entry !== 'object') {
+                return null;
+            }
+
+            const absolutePath = sanitizeText(entry.absolutePath);
+            if (!absolutePath) {
+                return null;
+            }
+
+            return {
+                uploadId: sanitizeText(entry.uploadId || entry.id) || `upload-${index + 1}`,
+                name: sanitizeText(entry.name) || path.basename(absolutePath) || `file-${index + 1}`,
+                mimeType: sanitizeText(entry.mimeType) || 'application/octet-stream',
+                absolutePath,
+            };
+        })
+        .filter(Boolean);
+}
+
+function buildUploadContextBlock(uploadFiles) {
+    const normalized = normalizeBrowserUploadFiles(uploadFiles);
+    if (normalized.length === 0) {
+        return '';
+    }
+
+    const lines = normalized
+        .map((file) => `- [${file.uploadId}] ${file.name} (${file.mimeType})`)
+        .join('\n');
+
+    return [
+        'Upload Files Available:',
+        lines,
+        'For upload steps, use action="upload" with files references matching upload id or file name above.',
+    ].join('\n');
+}
+
+function buildTaskPrompt({ task, context, uploadFiles }) {
+    const taskText = sanitizeText(task);
+    const contextText = sanitizeText(context);
+    const uploadText = buildUploadContextBlock(uploadFiles);
+
+    return [
+        taskText,
+        contextText ? `Context:\n${contextText}` : '',
+        uploadText,
+    ]
+        .filter(Boolean)
+        .join('\n\n');
 }
 
 async function refreshSessionState(session) {
@@ -1605,6 +1653,7 @@ async function setSessionControlMode(session, nextMode) {
 export async function runBrowserAgentTask({
     task,
     context,
+    uploadFiles = [],
     sessionId,
     newSession = false,
     restartSession = false,
@@ -1622,7 +1671,12 @@ export async function runBrowserAgentTask({
         throw new Error('Browser Agent requires a chat context.');
     }
 
-    const taskPrompt = buildTaskPrompt({ task, context });
+    const normalizedUploadFiles = normalizeBrowserUploadFiles(uploadFiles);
+    const taskPrompt = buildTaskPrompt({
+        task,
+        context,
+        uploadFiles: normalizedUploadFiles,
+    });
     if (!taskPrompt) {
         throw new Error('task is required.');
     }
@@ -1636,6 +1690,11 @@ export async function runBrowserAgentTask({
     });
 
     session.executionBinding = getCurrentExecutionBinding();
+    if (normalizedUploadFiles.length > 0) {
+        session.availableUploadFiles = normalizedUploadFiles;
+    } else if (!Array.isArray(session.availableUploadFiles)) {
+        session.availableUploadFiles = [];
+    }
     session.lastTaskPrompt = taskPrompt;
     session.question = '';
     session.questionType = '';
@@ -1662,6 +1721,7 @@ export async function runBrowserAgentTask({
     await session.runtime.submitTask(taskPrompt, {
         cleanContext: clearContext,
         preserveContext: !clearContext,
+        uploadFiles: session.availableUploadFiles,
     });
     session.runtimeStatus = {
         ...(session.runtimeStatus && typeof session.runtimeStatus === 'object' ? session.runtimeStatus : {}),

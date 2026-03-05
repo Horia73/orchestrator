@@ -3,6 +3,7 @@ import os from 'node:os';
 import path from 'node:path';
 
 export const ORCHESTRATOR_HOME = path.join(os.homedir(), '.orchestrator');
+export const BOOT_PROMPT_PATH = path.join(ORCHESTRATOR_HOME, 'BOOT.md');
 
 // Agent workspace — agents create and manage projects here.
 export const PROJECTS_DIR = path.join(ORCHESTRATOR_HOME, 'projects');
