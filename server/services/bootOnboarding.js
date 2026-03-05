@@ -26,6 +26,7 @@ Mission:
 
 Rules:
 - Stay in onboarding mode until all required values are confirmed and saved.
+- Make sure to ask for all values.
 
 Runtime paths:
 - Runtime home: ${ORCHESTRATOR_HOME}
