@@ -79,12 +79,43 @@ function getPhaseLabel(actionKind, actionPhase) {
         if (actionPhase === 'reconnecting') return 'Reconnecting…';
     }
 
-    if (actionKind === 'reset') {
-        if (actionPhase === 'resetting') return 'Resetting runtime data…';
+    if (actionKind === 'factoryReset') {
+        if (actionPhase === 'resetting') return 'Running factory reset…';
         if (actionPhase === 'reconnecting') return 'Reconnecting…';
     }
 
     return 'Working…';
+}
+
+function getConfirmSpec(actionKind) {
+    if (actionKind === 'update') {
+        return {
+            title: 'Install update and restart?',
+            description: 'This will pull latest changes and restart the server.',
+            confirmLabel: 'Install & Restart',
+            danger: false,
+        };
+    }
+
+    if (actionKind === 'restart') {
+        return {
+            title: 'Restart server now?',
+            description: 'Active runs may disconnect briefly while the server restarts.',
+            confirmLabel: 'Restart Server',
+            danger: false,
+        };
+    }
+
+    if (actionKind === 'factoryReset') {
+        return {
+            title: 'Run factory reset?',
+            description: 'This recreates ~/.orchestrator and clears runtime data before restarting.',
+            confirmLabel: 'Factory Reset',
+            danger: true,
+        };
+    }
+
+    return null;
 }
 
 export function UpdatesPanel() {
@@ -111,6 +142,7 @@ export function UpdatesPanel() {
     const [actionPhase, setActionPhase] = useState('');
     const [actionResult, setActionResult] = useState(null);
     const [connectionState, setConnectionState] = useState('connecting');
+    const [confirmAction, setConfirmAction] = useState('');
     const mountedRef = useRef(true);
 
     const checkForUpdates = useCallback(async ({ force = false, silent = false } = {}) => {
@@ -256,11 +288,22 @@ export function UpdatesPanel() {
         };
     }, [actionPhase, checkForUpdates]);
 
-    const handleInstall = useCallback(async () => {
-        if (!window.confirm('Instalez update-ul și repornesc serverul acum?')) {
-            return;
+    useEffect(() => {
+        if (!confirmAction) {
+            return undefined;
         }
 
+        const handleKeyDown = (event) => {
+            if (event.key === 'Escape') {
+                setConfirmAction('');
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [confirmAction]);
+
+    const runInstall = useCallback(async () => {
         setActionResult(null);
         setActionKind('update');
         setActionPhase('pulling');
@@ -301,11 +344,7 @@ export function UpdatesPanel() {
         }
     }, [checkForUpdates, waitForReconnect]);
 
-    const handleRestart = useCallback(async () => {
-        if (!window.confirm('Sigur vrei restart server acum?')) {
-            return;
-        }
-
+    const runRestart = useCallback(async () => {
         setActionResult(null);
         setActionKind('restart');
         setActionPhase('restarting');
@@ -334,13 +373,9 @@ export function UpdatesPanel() {
         }
     }, [waitForReconnect]);
 
-    const handleReset = useCallback(async () => {
-        if (!window.confirm('Reset runtime data și restart acum? Acțiunea recreează ~/.orchestrator.')) {
-            return;
-        }
-
+    const runFactoryReset = useCallback(async () => {
         setActionResult(null);
-        setActionKind('reset');
+        setActionKind('factoryReset');
         setActionPhase('resetting');
 
         try {
@@ -351,8 +386,8 @@ export function UpdatesPanel() {
             await waitForReconnect({
                 maxAttempts: 80,
                 intervalMs: 2000,
-                successMessage: 'Reset complete. Runtime was recreated and server is back online.',
-                timeoutMessage: 'Server did not come back after reset.',
+                successMessage: 'Factory reset complete. Runtime was recreated and server is back online.',
+                timeoutMessage: 'Server did not come back after factory reset.',
             });
         } catch (error) {
             if (!mountedRef.current) {
@@ -362,7 +397,7 @@ export function UpdatesPanel() {
             setActionPhase('');
             setActionResult({
                 success: false,
-                message: buildErrorMessage(error, 'Failed to reset runtime.'),
+                message: buildErrorMessage(error, 'Failed to run factory reset.'),
             });
         }
     }, [waitForReconnect]);
@@ -391,6 +426,40 @@ export function UpdatesPanel() {
         : connectionState === 'disconnected'
             ? 'Disconnected'
             : 'Connecting';
+    const confirmSpec = getConfirmSpec(confirmAction);
+
+    const openConfirm = useCallback((nextAction) => {
+        if (isBusy) {
+            return;
+        }
+        setConfirmAction(nextAction);
+    }, [isBusy]);
+
+    const closeConfirm = useCallback(() => {
+        if (isBusy) {
+            return;
+        }
+        setConfirmAction('');
+    }, [isBusy]);
+
+    const handleConfirmAction = useCallback(() => {
+        const selectedAction = confirmAction;
+        setConfirmAction('');
+
+        if (selectedAction === 'update') {
+            void runInstall();
+            return;
+        }
+
+        if (selectedAction === 'restart') {
+            void runRestart();
+            return;
+        }
+
+        if (selectedAction === 'factoryReset') {
+            void runFactoryReset();
+        }
+    }, [confirmAction, runFactoryReset, runInstall, runRestart]);
 
     return (
         <div className="updates-panel">
@@ -420,6 +489,34 @@ export function UpdatesPanel() {
                 </span>
                 <span className="updates-live-meta">Live refresh: 5s</span>
                 {state.checkedAt && <span className="updates-live-meta">Last check: {timeAgo(state.checkedAt)}</span>}
+            </div>
+
+            <div className="updates-operations-card">
+                <div className="updates-operations-header">
+                    <h3>Server Controls</h3>
+                    <p>Restart the server or run a full factory reset.</p>
+                </div>
+                <div className="updates-maintenance-actions">
+                    <button
+                        className="updates-maintenance-btn"
+                        type="button"
+                        onClick={() => openConfirm('restart')}
+                        disabled={isBusy}
+                    >
+                        Restart Server
+                    </button>
+                    <button
+                        className="updates-maintenance-btn danger"
+                        type="button"
+                        onClick={() => openConfirm('factoryReset')}
+                        disabled={isBusy}
+                    >
+                        Factory Reset
+                    </button>
+                </div>
+                <p className="updates-maintenance-note">
+                    Factory reset recreates <code>~/.orchestrator</code>.
+                </p>
             </div>
 
             {currentPhaseLabel && (
@@ -517,7 +614,7 @@ export function UpdatesPanel() {
                     {canAutoInstall && (
                         <button
                             className="updates-install-btn"
-                            onClick={handleInstall}
+                            onClick={() => openConfirm('update')}
                             disabled={isBusy}
                             type="button"
                         >
@@ -541,25 +638,6 @@ export function UpdatesPanel() {
                 </div>
             )}
 
-            <div className="updates-maintenance-actions">
-                <button
-                    className="updates-maintenance-btn"
-                    type="button"
-                    onClick={handleRestart}
-                    disabled={isBusy}
-                >
-                    Restart Server
-                </button>
-                <button
-                    className="updates-maintenance-btn danger"
-                    type="button"
-                    onClick={handleReset}
-                    disabled={isBusy}
-                >
-                    Reset Runtime
-                </button>
-            </div>
-
             {actionResult && !actionPhase && (
                 <div className={`updates-install-result ${actionResult.success ? 'success' : 'error'}`}>
                     {actionResult.success ? (
@@ -572,6 +650,43 @@ export function UpdatesPanel() {
                         </svg>
                     )}
                     <span>{actionResult.message}</span>
+                </div>
+            )}
+
+            {confirmSpec && (
+                <div
+                    className="updates-confirm-overlay"
+                    role="presentation"
+                    onClick={closeConfirm}
+                >
+                    <div
+                        className="updates-confirm-modal"
+                        role="dialog"
+                        aria-modal="true"
+                        aria-labelledby="updates-confirm-title"
+                        onClick={(event) => event.stopPropagation()}
+                    >
+                        <h3 id="updates-confirm-title">{confirmSpec.title}</h3>
+                        <p>{confirmSpec.description}</p>
+                        <div className="updates-confirm-actions">
+                            <button
+                                className="updates-confirm-btn"
+                                type="button"
+                                onClick={closeConfirm}
+                                disabled={isBusy}
+                            >
+                                Cancel
+                            </button>
+                            <button
+                                className={`updates-confirm-btn primary${confirmSpec.danger ? ' danger' : ''}`}
+                                type="button"
+                                onClick={handleConfirmAction}
+                                disabled={isBusy}
+                            >
+                                {confirmSpec.confirmLabel}
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

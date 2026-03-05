@@ -176,10 +176,9 @@ export default function App() {
 
   useEffect(() => {
     const name = String(uiSettings?.aiName ?? '').trim();
-    const emoji = String(uiSettings?.aiEmoji ?? '').trim();
-    const nextTitle = [emoji, name].filter(Boolean).join(' ').trim() || 'AI Chat';
+    const nextTitle = name || 'AI Chat';
     document.title = nextTitle;
-  }, [uiSettings?.aiEmoji, uiSettings?.aiName]);
+  }, [uiSettings?.aiName]);
 
   useEffect(() => {
     applyEmojiFavicon(uiSettings?.aiEmoji);

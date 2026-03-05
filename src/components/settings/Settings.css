@@ -2087,6 +2087,35 @@
     color: #8f3a3a;
 }
 
+.updates-operations-card {
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    padding: 14px 16px;
+    border-radius: 12px;
+    background: var(--bg-sidebar);
+    border: 1px solid var(--border-light);
+}
+
+.updates-operations-header {
+    display: flex;
+    flex-direction: column;
+    gap: 3px;
+}
+
+.updates-operations-header h3 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 700;
+    color: var(--text-secondary);
+}
+
+.updates-operations-header p {
+    margin: 0;
+    font-size: 12.5px;
+    color: var(--text-tertiary);
+}
+
 .updates-maintenance-actions {
     display: flex;
     align-items: center;
@@ -2127,6 +2156,106 @@
 .updates-maintenance-btn.danger:hover:not(:disabled) {
     border-color: color-mix(in srgb, #b53b3b 55%, var(--border-input));
     background: color-mix(in srgb, #b53b3b 10%, var(--bg-input));
+}
+
+.updates-maintenance-note {
+    margin: 0;
+    font-size: 12px;
+    color: var(--text-tertiary);
+}
+
+.updates-maintenance-note code {
+    font-size: 11.5px;
+    color: var(--text-secondary);
+}
+
+.updates-confirm-overlay {
+    position: fixed;
+    inset: 0;
+    z-index: 45;
+    background: color-mix(in srgb, #1f1f1f 38%, transparent);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 20px;
+}
+
+.updates-confirm-modal {
+    width: min(430px, 100%);
+    background: var(--bg-main);
+    border: 1px solid var(--border-light);
+    border-radius: 14px;
+    box-shadow: 0 24px 56px rgba(0, 0, 0, 0.22);
+    padding: 18px 18px 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+}
+
+.updates-confirm-modal h3 {
+    margin: 0;
+    font-size: 18px;
+    color: var(--text-primary);
+    letter-spacing: -0.01em;
+}
+
+.updates-confirm-modal p {
+    margin: 0;
+    font-size: 13px;
+    line-height: 1.45;
+    color: var(--text-secondary);
+}
+
+.updates-confirm-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}
+
+.updates-confirm-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 8px 12px;
+    border-radius: 9px;
+    border: 1px solid var(--border-input);
+    background: var(--bg-input);
+    color: var(--text-secondary);
+    font-size: 12.5px;
+    font-weight: 600;
+    transition: border-color var(--transition-fast), background var(--transition-fast), color var(--transition-fast);
+}
+
+.updates-confirm-btn:hover:not(:disabled) {
+    border-color: #cec9bf;
+    color: var(--text-primary);
+}
+
+.updates-confirm-btn:disabled {
+    opacity: 0.7;
+    cursor: not-allowed;
+}
+
+.updates-confirm-btn.primary {
+    border-color: color-mix(in srgb, var(--accent-orange) 58%, var(--border-input));
+    background: color-mix(in srgb, var(--accent-orange) 16%, var(--bg-input));
+    color: var(--text-primary);
+}
+
+.updates-confirm-btn.primary:hover:not(:disabled) {
+    border-color: var(--accent-orange);
+    background: color-mix(in srgb, var(--accent-orange) 24%, var(--bg-input));
+}
+
+.updates-confirm-btn.primary.danger {
+    border-color: color-mix(in srgb, #b53b3b 46%, var(--border-input));
+    background: color-mix(in srgb, #b53b3b 14%, var(--bg-input));
+    color: #8f3a3a;
+}
+
+.updates-confirm-btn.primary.danger:hover:not(:disabled) {
+    border-color: color-mix(in srgb, #b53b3b 62%, var(--border-input));
+    background: color-mix(in srgb, #b53b3b 20%, var(--bg-input));
 }
 
 .updates-footer {
@@ -2804,6 +2933,19 @@
     }
 
     .updates-maintenance-btn {
+        width: 100%;
+    }
+
+    .updates-confirm-overlay {
+        padding: 14px;
+    }
+
+    .updates-confirm-actions {
+        flex-direction: column-reverse;
+        align-items: stretch;
+    }
+
+    .updates-confirm-btn {
         width: 100%;
     }
 
