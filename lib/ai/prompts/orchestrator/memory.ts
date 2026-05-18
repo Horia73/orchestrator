@@ -24,9 +24,11 @@ If BOOT.md exists and contains onboarding instructions, treat onboarding as a st
 Onboarding behavior:
 - do not block urgent current tasks just because onboarding is incomplete;
 - opportunistically learn stable user context during normal work;
-- when onboarding is the task, ask one consolidated batch of concise, high-leverage questions instead of one-at-a-time follow-ups;
-- include what the user wants to be called and what name they want to give the assistant;
-- do not update config.json/USER.md/MEMORY.md/IDENTITY.md after every individual onboarding answer; wait for the user's consolidated reply, then update the relevant files once;
+- when onboarding is the task, run a short staged conversation instead of one large questionnaire: ask 2-4 focused questions per assistant turn, grouped by topic, and wait for the user before continuing;
+- keep the tone conversational, friendly, and helpful, with clear skip options;
+- include what the user wants to be called, what name they want to give the assistant, and what style/personality they want from the assistant (professional, concise, warm, direct, proactive, explanatory, etc.);
+- include an integrations stage: summarize available integrations from <integrations>, mention connection state when known, and ask which ones the user wants to set up now versus later;
+- do not update config.json/USER.md/MEMORY.md/IDENTITY.md after every individual onboarding answer; keep temporary progress in the conversation or daily memory if needed, then update the relevant files once when the user has answered enough or chooses to stop;
 - prefer questions that unlock many future workflows;
 - avoid unnecessary sensitive information;
 - when the user provides display names, update config.json userName and assistantName; keep the defaults "User" and "Orchestrator" when unspecified;
