@@ -55,6 +55,8 @@ export interface CliSpec {
     generationArgs: (prompt: string) => string[]
 }
 
+type CliEnv = NodeJS.ProcessEnv | Record<string, string | undefined>
+
 export const CLI_SPECS: Record<CliId, CliSpec> = {
     'claude-code': {
         id: 'claude-code',
@@ -140,3 +142,25 @@ export const CLI_SPECS: Record<CliId, CliSpec> = {
 }
 
 export const CLI_IDS: CliId[] = Object.keys(CLI_SPECS) as CliId[]
+
+export function getCliLoginArgs(cli: CliId): string[] {
+    if (cli === 'codex' && shouldUseCodexDeviceAuth(process.env, process.platform)) {
+        return ['login', '--device-auth']
+    }
+    return CLI_SPECS[cli].loginArgs
+}
+
+export function getCliLoginHint(cli: CliId): string {
+    if (cli === 'codex' && shouldUseCodexDeviceAuth(process.env, process.platform)) {
+        return 'Headless/Docker login detected. Codex will use device auth: open the displayed URL on any browser, enter the code, then return here.'
+    }
+    return CLI_SPECS[cli].loginHint
+}
+
+export function shouldUseCodexDeviceAuth(env: CliEnv = process.env, platform = process.platform): boolean {
+    const serviceManager = env.ORCHESTRATOR_SERVICE_MANAGER?.toLowerCase()
+    if (serviceManager === 'docker') return true
+    if (platform === 'linux' && !env.DISPLAY && !env.WAYLAND_DISPLAY) return true
+    if (env.SSH_CONNECTION || env.SSH_CLIENT) return true
+    return false
+}

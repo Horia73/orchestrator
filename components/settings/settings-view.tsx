@@ -154,9 +154,12 @@ function ModelsTab() {
   const [researchPreviewOpen, setResearchPreviewOpen] = React.useState(true)
   const [researchStatusOpen, setResearchStatusOpen] = React.useState(false)
   const [researchStatusMode, setResearchStatusMode] = React.useState(false)
-  const researchableModelCount = data ? countResearchableModels(data.providers) : 0
+  const hasUsableProviders = data ? hasUsableModelProvider(data) : false
+  const researcherReady = data ? isResearcherProviderReady(data) : false
+  const researchUnavailableReason = data ? getResearchUnavailableReason(data) : null
+  const researchableModelCount = data ? countResearchableModels(data.providers, data.providerStatus) : 0
   const currentResearchStatuses = React.useMemo(
-    () => data ? buildModelResearchStatuses(data.providers) : [],
+    () => data ? buildModelResearchStatuses(data.providers, data.providerStatus) : [],
     [data]
   )
   const liveResearchConcurrency = React.useMemo(() => {
@@ -183,6 +186,15 @@ function ModelsTab() {
 
   const handleResearch = async () => {
     if (refreshing || researching) return
+    if (!hasUsableProviders || !researcherReady) {
+      setResearchStatusOpen(false)
+      setResearchStatusMode(false)
+      setLastResearch({
+        ok: false,
+        summary: researchUnavailableReason ?? "Connect a model provider before running research.",
+      })
+      return
+    }
     setResearchPreviewOpen(true)
     setResearchStatusOpen(true)
     if (researchableModelCount === 0) {
@@ -294,9 +306,11 @@ function ModelsTab() {
             className={cn(
               "inline-flex h-8 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/70 transition-colors",
               "hover:bg-muted/60 hover:text-foreground",
-              researching && "opacity-60"
+              (researching || !hasUsableProviders || !researcherReady) && "opacity-60"
             )}
-            title={researchableModelCount > 0
+            title={!hasUsableProviders || !researcherReady
+              ? researchUnavailableReason ?? "Connect a model provider before running research"
+              : researchableModelCount > 0
               ? researching
                 ? `Running up to ${liveResearchConcurrency} model researchers at once`
                 : `Ask the researcher to fill ${researchableModelCount} active incomplete model${researchableModelCount === 1 ? "" : "s"} from official docs`
@@ -304,7 +318,7 @@ function ModelsTab() {
             }
           >
             {researching ? <Loader2 className="size-3.5 animate-spin" /> : <Search className="size-3.5" />}
-            {researching ? `Researching · max ${liveResearchConcurrency}` : formatResearchButtonLabel(researchableModelCount)}
+            {researching ? `Researching · max ${liveResearchConcurrency}` : formatResearchButtonLabel(researchableModelCount, hasUsableProviders && researcherReady)}
           </button>
           {researching && (
             <button
@@ -363,7 +377,7 @@ function ModelsTab() {
         ))}
       </div>
 
-      <ModelRegistrySummary providers={data.providers} />
+      <ModelRegistrySummary providers={data.providers} providerStatus={data.providerStatus} />
 
     </div>
   )
@@ -416,10 +430,43 @@ function ResearchPreviewCollapsed({
   )
 }
 
-function countResearchableModels(providers: Record<string, ProviderDef>): number {
+function hasUsableModelProvider(data: NonNullable<ReturnType<typeof useSettings>["data"]>): boolean {
+  return Object.entries(data.providerStatus).some(([providerId, status]) => providerId !== "browser" && status.available)
+}
+
+function getResearcherProviderId(data: NonNullable<ReturnType<typeof useSettings>["data"]>): string {
+  return data.config.agentOverrides?.researcher?.provider
+    ?? data.agents.find(agent => agent.id === "researcher")?.defaultProvider
+    ?? data.config.activeProvider
+}
+
+function isResearcherProviderReady(data: NonNullable<ReturnType<typeof useSettings>["data"]>): boolean {
+  return data.providerStatus[getResearcherProviderId(data)]?.available ?? false
+}
+
+function getResearchUnavailableReason(data: NonNullable<ReturnType<typeof useSettings>["data"]>): string | null {
+  if (!hasUsableModelProvider(data)) {
+    return "No usable model provider is connected. Add an API key or log in to a CLI provider first."
+  }
+  const providerId = getResearcherProviderId(data)
+  const status = data.providerStatus[providerId]
+  if (!status?.available) {
+    return status?.chatMessage ?? status?.unavailableReason ?? `Researcher provider ${providerId} is not ready.`
+  }
+  return null
+}
+
+function isProviderUsable(providerId: string, providerStatus: NonNullable<ReturnType<typeof useSettings>["data"]>["providerStatus"]): boolean {
+  return providerId !== "browser" && (providerStatus[providerId]?.available ?? false)
+}
+
+function countResearchableModels(
+  providers: Record<string, ProviderDef>,
+  providerStatus: NonNullable<ReturnType<typeof useSettings>["data"]>["providerStatus"]
+): number {
   let count = 0
   for (const [providerId, provider] of Object.entries(providers)) {
-    if (providerId === "browser") continue
+    if (!isProviderUsable(providerId, providerStatus)) continue
     for (const model of Object.values(provider.models)) {
       if (!model.archived && model.dataCompleteness === "incomplete") count += 1
     }
@@ -427,14 +474,18 @@ function countResearchableModels(providers: Record<string, ProviderDef>): number
   return count
 }
 
-function formatResearchButtonLabel(count: number): string {
+function formatResearchButtonLabel(count: number, available: boolean): string {
+  if (!available) return "Research unavailable"
   return `Research model details (${count})`
 }
 
-function buildModelResearchStatuses(providers: Record<string, ProviderDef>): CurrentModelResearchStatus[] {
+function buildModelResearchStatuses(
+  providers: Record<string, ProviderDef>,
+  providerStatus: NonNullable<ReturnType<typeof useSettings>["data"]>["providerStatus"]
+): CurrentModelResearchStatus[] {
   const rows: CurrentModelResearchStatus[] = []
   for (const [providerId, provider] of Object.entries(providers)) {
-    if (providerId === "browser") continue
+    if (!isProviderUsable(providerId, providerStatus)) continue
     for (const [modelId, model] of Object.entries(provider.models)) {
       if (model.archived) continue
       const missing = model.missingFields ?? []
@@ -571,7 +622,13 @@ function ThemeToggle() {
   )
 }
 
-function ModelRegistrySummary({ providers }: { providers: Record<string, ProviderDef> }) {
+function ModelRegistrySummary({
+  providers,
+  providerStatus,
+}: {
+  providers: Record<string, ProviderDef>
+  providerStatus: NonNullable<ReturnType<typeof useSettings>["data"]>["providerStatus"]
+}) {
   const rows = Object.entries(providers)
     .filter(([providerId]) => providerId !== "browser")
     .map(([providerId, provider]) => {
@@ -579,13 +636,14 @@ function ModelRegistrySummary({ providers }: { providers: Record<string, Provide
       const archived = models.filter(model => model.archived).length
       const incomplete = models.filter(model => !model.archived && model.dataCompleteness === "incomplete").length
       const active = models.length - archived
-      return { providerId, providerName: provider.name, active, incomplete, archived, total: models.length }
+      const usable = providerStatus[providerId]?.available ?? false
+      return { providerId, providerName: provider.name, active, incomplete, archived, total: models.length, usable }
     })
 
   const totals = rows.reduce(
     (acc, row) => ({
-      active: acc.active + row.active,
-      incomplete: acc.incomplete + row.incomplete,
+      active: acc.active + (row.usable ? row.active : 0),
+      incomplete: acc.incomplete + (row.usable ? row.incomplete : 0),
       archived: acc.archived + row.archived,
       total: acc.total + row.total,
     }),
@@ -597,10 +655,10 @@ function ModelRegistrySummary({ providers }: { providers: Record<string, Provide
       <div className="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 px-4 py-3.5">
         <div>
           <h2 className="text-[14px] font-semibold text-foreground/85">Model registry</h2>
-          <p className="mt-0.5 text-[12px] text-foreground/50">Active, incomplete, and archived models are tracked separately.</p>
+          <p className="mt-0.5 text-[12px] text-foreground/50">Catalog models are tracked separately from providers that are ready to use.</p>
         </div>
         <div className="flex gap-2 text-[11.5px] tabular-nums">
-          <RegistryPill label="Active" value={totals.active} />
+          <RegistryPill label="Ready" value={totals.active} />
           <RegistryPill label="Incomplete" value={totals.incomplete} tone="amber" />
           <RegistryPill label="Archived" value={totals.archived} tone="muted" />
         </div>
@@ -610,10 +668,12 @@ function ModelRegistrySummary({ providers }: { providers: Record<string, Provide
           <div key={row.providerId} className="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-3 px-4 py-2.5 text-[13px]">
             <div className="min-w-0">
               <p className="truncate font-medium text-foreground/80">{row.providerName}</p>
-              <p className="text-[11.5px] text-foreground/45">{row.providerId}</p>
+              <p className="text-[11.5px] text-foreground/45">
+                {row.providerId} · {row.usable ? "ready" : "not connected"}
+              </p>
             </div>
-            <CountCell label="active" value={row.active} />
-            <CountCell label="incomplete" value={row.incomplete} tone={row.incomplete > 0 ? "amber" : "muted"} />
+            <CountCell label="catalog" value={row.active} tone={row.usable ? "default" : "muted"} />
+            <CountCell label="incomplete" value={row.usable ? row.incomplete : 0} tone={row.usable && row.incomplete > 0 ? "amber" : "muted"} />
             <CountCell label="archived" value={row.archived} tone="muted" />
           </div>
         ))}

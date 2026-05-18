@@ -8,6 +8,7 @@ import { researcher } from '@/lib/ai/agents/researcher'
 import { runTextSubAgent } from '@/lib/ai/agents/runner'
 import type { AgentRunEvent, ToolExecutionContext } from '@/lib/ai/agents/types'
 import { buildModelMetadataResearchPrompt } from '@/lib/ai/prompts/model-metadata-research'
+import { getEffectiveAgentSettings } from '@/lib/config'
 import {
     CapabilitySchema,
     CuratedModelEntrySchema,
@@ -25,6 +26,7 @@ import {
     type ModelDataField,
 } from '@/lib/models/schema'
 import { getEffectiveRegistry, patchCuratedModel } from '@/lib/models/registry'
+import { getProviderReadiness, getProviderReadinessMap } from '@/lib/provider-readiness'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -161,6 +163,18 @@ function clearPersistedJobSnapshot(): void {
     }
 }
 
+function idleResearchResponse(): Response {
+    return Response.json({
+        running: false,
+        runId: null,
+        status: 'idle',
+        startedAt: null,
+        endedAt: null,
+        concurrency: MODEL_RESEARCH_CONCURRENCY,
+        events: [],
+    }, { headers: { 'Cache-Control': 'no-store' } })
+}
+
 function activeResearchJob(): ActiveResearchJob | undefined {
     const job = researchGlobals().__orchestratorModelResearchJob
     return job?.status === 'running' ? job : undefined
@@ -171,11 +185,30 @@ function latestResearchJob(): ActiveResearchJob | undefined {
 }
 
 export async function POST(request: Request) {
+    const registry = getEffectiveRegistry()
+    const readiness = await getResearchRuntimeReadiness(registry)
+    if (!readiness.available) {
+        clearPersistedJobSnapshot()
+        return Response.json({
+            error: readiness.chatMessage ?? readiness.unavailableReason ?? 'Model research requires a usable provider.',
+        }, { status: 409 })
+    }
+
     const job = getOrStartResearchJob()
     return researchStreamResponse(job, request)
 }
 
 export async function GET() {
+    const registry = getEffectiveRegistry()
+    const availableProviders = await availableModelProviderIds(registry)
+    if (availableProviders.size === 0) {
+        const running = activeResearchJob()
+        if (running) running.controller.abort(new Error('No usable model provider is configured.'))
+        researchGlobals().__orchestratorModelResearchLastJob = undefined
+        clearPersistedJobSnapshot()
+        return idleResearchResponse()
+    }
+
     const job = latestResearchJob()
     if (job) {
         return Response.json({
@@ -208,15 +241,7 @@ export async function GET() {
         }, { headers: { 'Cache-Control': 'no-store' } })
     }
 
-    return Response.json({
-        running: false,
-        runId: null,
-        status: 'idle',
-        startedAt: null,
-        endedAt: null,
-        concurrency: MODEL_RESEARCH_CONCURRENCY,
-        events: [],
-    }, { headers: { 'Cache-Control': 'no-store' } })
+    return idleResearchResponse()
 }
 
 export async function DELETE() {
@@ -325,7 +350,11 @@ async function runResearchJob(job: ActiveResearchJob): Promise<void> {
 
     try {
         const registry = getEffectiveRegistry()
-        const targets = activeResearchTargets(registry)
+        const readiness = await getResearchRuntimeReadiness(registry)
+        if (!readiness.available) {
+            throw new Error(readiness.chatMessage ?? readiness.unavailableReason ?? 'Model research requires a usable provider.')
+        }
+        const targets = await activeResearchTargets(registry)
         const concurrency = targets.length === 0 ? 0 : Math.min(MODEL_RESEARCH_CONCURRENCY, targets.length)
         job.concurrency = concurrency
         emitResearchEvent(job, { type: 'ready', runId: job.id, total: targets.length, concurrency })
@@ -441,10 +470,12 @@ async function mapResearchTargets(
     await Promise.all(Array.from({ length: concurrency }, () => worker()))
 }
 
-function activeResearchTargets(registry: ReturnType<typeof getEffectiveRegistry>) {
+async function activeResearchTargets(registry: ReturnType<typeof getEffectiveRegistry>) {
+    const availableProviders = await availableModelProviderIds(registry)
     const targets: ResearchTarget[] = []
     for (const [providerId, provider] of Object.entries(registry)) {
         if (providerId === 'browser') continue
+        if (!availableProviders.has(providerId)) continue
         for (const [modelId, model] of Object.entries(provider.models)) {
             if (model.archived) continue
             if (model.dataCompleteness !== 'incomplete') continue
@@ -457,6 +488,20 @@ function activeResearchTargets(registry: ReturnType<typeof getEffectiveRegistry>
         if (aMissing === bMissing) return a.providerId.localeCompare(b.providerId) || a.model.name.localeCompare(b.model.name)
         return bMissing - aMissing
     })
+}
+
+async function availableModelProviderIds(registry: ReturnType<typeof getEffectiveRegistry>): Promise<Set<string>> {
+    const statuses = await getProviderReadinessMap(registry)
+    return new Set(
+        Object.entries(statuses)
+            .filter(([providerId, status]) => providerId !== 'browser' && status.available)
+            .map(([providerId]) => providerId)
+    )
+}
+
+async function getResearchRuntimeReadiness(registry: ReturnType<typeof getEffectiveRegistry>) {
+    const runtime = getEffectiveAgentSettings(researcher.id)
+    return getProviderReadiness(runtime.provider, registry[runtime.provider])
 }
 
 type ResearchOneModelResult = Awaited<ReturnType<typeof researchOneModel>>

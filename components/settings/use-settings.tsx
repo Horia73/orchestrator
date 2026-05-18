@@ -136,6 +136,10 @@ function sealStaleResearchEvents(events: ModelResearchClientEvent[]): ModelResea
   if (events.length === 0 || events.some(isTerminalResearchEvent)) return events
   return [...events, { type: "stopped", message: "Previous research run is no longer active", at: Date.now() }]
 }
+
+function hasUsableModelProvider(data: SettingsBootstrap): boolean {
+  return Object.entries(data.providerStatus).some(([providerId, status]) => providerId !== "browser" && status.available)
+}
 // Live reconciliation cadence. The research panel itself is already real-time
 // over the SSE stream (transcript + per-model results patch the registry
 // optimistically the instant they arrive); this poll keeps the rest of the
@@ -231,6 +235,26 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       // Local persistence is best-effort; the live stream remains the source of truth.
     }
   }, [researchEvents])
+
+  React.useEffect(() => {
+    if (!data) return
+    if (hasUsableModelProvider(data)) return
+
+    if (researchStreamRef.current) {
+      stopResearchRequestedRef.current = true
+      researchStreamRef.current.abort()
+      researchStreamRef.current = null
+      setResearching(false)
+    }
+    if (researchEvents.length === 0 && currentRunIdRef.current === null) return
+
+    setResearchEvents([])
+    currentRunIdRef.current = null
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(RESEARCH_EVENTS_STORAGE_KEY)
+    }
+    void fetch('/api/models/research', { method: 'DELETE' }).catch(() => {})
+  }, [data, researchEvents.length])
 
   React.useEffect(() => {
     const controller = new AbortController()
@@ -635,7 +659,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   }, [storeResearchEvent])
 
   React.useEffect(() => {
+    if (!data) return
     if (researchRestoredRef.current) return
+    if (!hasUsableModelProvider(data)) return
     researchRestoredRef.current = true
     let cancelled = false
 
@@ -671,7 +697,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       // in dev, and navigating back into Settings).
       researchRestoredRef.current = false
     }
-  }, [applyResearchedModel, attachResearchStream])
+  }, [data, applyResearchedModel, attachResearchStream])
 
   const researchModels = React.useCallback(async (): Promise<ModelResearchClientEvent[]> => {
     return attachResearchStream()

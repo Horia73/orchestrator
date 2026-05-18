@@ -2,7 +2,7 @@ import { type IPty, spawn as ptySpawn } from 'node-pty'
 import { EventEmitter } from 'events'
 import { randomUUID } from 'crypto'
 
-import { CLI_SPECS, type CliId } from './specs'
+import { CLI_SPECS, getCliLoginArgs, type CliId } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 
@@ -80,7 +80,7 @@ export function startSession(args: StartArgs): string {
             binName = spec.installBin
             cliArgs = spec.installArgs
             break
-        case 'login': cliArgs = spec.loginArgs; break
+        case 'login': cliArgs = getCliLoginArgs(args.cli); break
         case 'logout': cliArgs = spec.logoutArgs; break
         case 'status': cliArgs = spec.statusArgs; break
         case 'generate': cliArgs = args.extraArgs ?? []; break
