@@ -334,6 +334,36 @@ try {
   /* column already exists */
 }
 
+// Cleanup: v1.0.6-v1.0.7 model research could create Codex app-server logs
+// by passing an unsupported MCP override. Remove those noisy, non-user logs
+// once the fixed build starts.
+try {
+  db.exec(`
+    DELETE FROM tool_logs
+    WHERE requestId IN (
+      SELECT id FROM request_logs
+      WHERE conversationId LIKE 'model_research_%'
+        AND agentId = 'researcher'
+        AND provider = 'codex'
+        AND (
+          errorMessage LIKE '%mcp_servers.playwright%'
+          OR errorMessage = 'codex app-server exited with code 1'
+        )
+    );
+
+    DELETE FROM request_logs
+    WHERE conversationId LIKE 'model_research_%'
+      AND agentId = 'researcher'
+      AND provider = 'codex'
+      AND (
+        errorMessage LIKE '%mcp_servers.playwright%'
+        OR errorMessage = 'codex app-server exited with code 1'
+      );
+  `)
+} catch {
+  /* best-effort cleanup only */
+}
+
 // Types matching the database rows
 interface ConversationRow {
   id: string

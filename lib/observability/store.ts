@@ -151,6 +151,7 @@ const updateCompleteStmt = db.prepare(`
         totalTokens = @totalTokens,
         modalityBreakdown = @modalityBreakdown,
         interactionId = @interactionId,
+        errorMessage = NULL,
         outputText = COALESCE(@outputText, outputText)
     WHERE id = @id
 `)

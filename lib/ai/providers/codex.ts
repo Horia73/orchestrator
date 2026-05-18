@@ -732,10 +732,6 @@ function buildAppServerArgs(nativeCoderRun: boolean, builtins: ProviderBuiltin[]
         out.push('-c', 'features.apps=false')
         out.push('-c', 'apps._default.enabled=false')
         out.push('-c', allowWebSearch ? 'web_search="live"' : 'web_search="disabled"')
-        // User MCP config is still loaded by app-server. Disable the known
-        // project-level Playwright server in orchestrated runs; dynamic tools
-        // below are the intended tool surface for this provider path.
-        out.push('-c', 'mcp_servers.playwright.enabled=false')
     }
     return out
 }
