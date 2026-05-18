@@ -152,6 +152,17 @@ export function getIntegrationStatusSnapshot(origin?: string): IntegrationStatus
 
 /** Merge externally-computed statuses into the cache (called by the UI status route). */
 export function recordIntegrationStatuses(raw: RawStatuses): void {
-    cached = snapshotFromStatuses(raw)
+    const previous = cached ?? emptySnapshot()
+    cached = {
+        'gmail': hasOwn(raw, 'gmail') ? entry(raw.gmail, raw.gmail?.accountEmail) : previous.gmail,
+        'google-calendar': hasOwn(raw, 'googleCalendar') ? entry(raw.googleCalendar, raw.googleCalendar?.accountEmail) : previous['google-calendar'],
+        'google-drive': hasOwn(raw, 'googleDrive') ? entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName) : previous['google-drive'],
+        'whatsapp': hasOwn(raw, 'whatsapp') ? entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName) : previous.whatsapp,
+        'home-assistant': hasOwn(raw, 'homeAssistant') ? entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl) : previous['home-assistant'],
+    }
     fetchedAt = Date.now()
+}
+
+function hasOwn<T extends object>(obj: T, key: PropertyKey): boolean {
+    return Object.prototype.hasOwnProperty.call(obj, key)
 }

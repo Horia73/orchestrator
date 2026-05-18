@@ -7,6 +7,7 @@ import {
     getHomeAssistantIntegrationStatus,
     saveHomeAssistantActionPolicy,
 } from '@/lib/integrations/home-assistant'
+import { recordIntegrationStatuses } from '@/lib/integrations/status-snapshot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -43,6 +44,7 @@ export async function PUT(request: Request) {
     try {
         const actionMode = saveHomeAssistantActionPolicy(parsed.data)
         const homeAssistant = await getHomeAssistantIntegrationStatus(true)
+        recordIntegrationStatuses({ homeAssistant })
         return NextResponse.json({ success: true, actionMode, homeAssistant })
     } catch (err) {
         return NextResponse.json(

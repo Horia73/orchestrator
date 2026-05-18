@@ -33,6 +33,7 @@ import {
     homeAssistantWebSocketRead,
     saveHomeAssistantConfig,
 } from '@/lib/integrations/home-assistant'
+import { recordIntegrationStatuses } from '@/lib/integrations/status-snapshot'
 import { booleanArg, clamp, numberArg, stringArg } from './helpers'
 
 export const homeAssistantStatusTool: ToolDef = {
@@ -658,7 +659,9 @@ export const homeAssistantTools: ToolDef[] = [
 ]
 
 export async function executeHomeAssistantStatus(): Promise<ToolResult> {
-    return { success: true, data: await getHomeAssistantIntegrationStatus(true) }
+    const data = await getHomeAssistantIntegrationStatus(true)
+    recordIntegrationStatuses({ homeAssistant: data })
+    return { success: true, data }
 }
 
 export async function executeHomeAssistantConfigure(args: Record<string, unknown>): Promise<ToolResult> {
@@ -667,6 +670,7 @@ export async function executeHomeAssistantConfigure(args: Record<string, unknown
         token: stringArg(args, ['token', 'access_token', 'accessToken']),
         rawEnv: stringArg(args, ['raw_env', 'rawEnv']),
     })
+    recordIntegrationStatuses({ homeAssistant: data })
     return {
         success: true,
         data: {

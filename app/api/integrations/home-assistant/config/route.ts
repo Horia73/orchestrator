@@ -3,6 +3,7 @@ import { z } from 'zod'
 
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { saveHomeAssistantConfig } from '@/lib/integrations/home-assistant'
+import { recordIntegrationStatuses } from '@/lib/integrations/status-snapshot'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -31,6 +32,7 @@ export async function PUT(request: Request) {
 
     try {
         const homeAssistant = await saveHomeAssistantConfig(parsed.data)
+        recordIntegrationStatuses({ homeAssistant })
         return NextResponse.json({
             success: true,
             verified: homeAssistant.connected,

@@ -13,7 +13,7 @@ import { executeTodoWrite } from './todo-write'
 import { executeSetEnv } from './set-env'
 import { getActivatedIntegrations } from '@/lib/integrations/activation-store'
 import { getIntegrationManifest, operationalIntegrationFor } from '@/lib/integrations/manifest'
-import { getIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
+import { getIntegrationStatusSnapshot, refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
 import { executeActivateIntegrationTools } from './integrations'
 import {
     executeGmailArchive,
@@ -382,7 +382,10 @@ async function executeRunActivatedIntegrationTool(
         return { success: false, error: `Unknown integration for tool: ${toolId}` }
     }
 
-    const state = getIntegrationStatusSnapshot(ctx.appOrigin)[entry.statusKind]?.state
+    let state = getIntegrationStatusSnapshot(ctx.appOrigin)[entry.statusKind]?.state
+    if (state !== 'connected') {
+        state = (await refreshIntegrationStatusSnapshot(ctx.appOrigin))[entry.statusKind]?.state
+    }
     if (state !== 'connected') {
         return { success: false, error: `${entry.label} is not connected; current state is ${state ?? 'unknown'}.` }
     }

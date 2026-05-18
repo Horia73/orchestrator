@@ -4,7 +4,7 @@ import {
     describeActivatedIntegration,
 } from '@/lib/integrations/exposure'
 import { getIntegrationManifest } from '@/lib/integrations/manifest'
-import { getIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
+import { refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
 import { activateIntegrations } from '@/lib/integrations/activation-store'
 
 // ---------------------------------------------------------------------------
@@ -91,7 +91,7 @@ export async function executeActivateIntegrationTools(
         }
     }
 
-    const snapshot = getIntegrationStatusSnapshot(ctx?.appOrigin)
+    const snapshot = await refreshIntegrationStatusSnapshot(ctx?.appOrigin)
     const activatedNow: string[] = []
     const skipped: string[] = []
     const report: string[] = []
