@@ -1,0 +1,423 @@
+/**
+ * Gemini Vision Service
+ * Uses smarter prompts with memory and history
+ */
+
+import { GoogleGenAI, type GenerateContentConfig } from '@google/genai';
+import { ActionTrace, BrowserFrameSnapshot } from './browser';
+import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
+import { getMemories } from './memory';
+
+export interface AgentAction {
+    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'error' | 'escalate' | 'yield_control';
+    sub_objective?: string; // Goal string when escalating task to advanced reasoning model
+    coordinate?: [number, number]; // [x, y]
+    coordinateEnd?: [number, number]; // [x, y] — end point for drag action
+    text?: string;
+    submit?: boolean;
+    clearBefore?: boolean; // If true, select all and delete before typing
+    clickCount?: number; // Allowed to be any number, default 1
+    key?: 'Enter' | 'Escape' | 'Tab' | 'Backspace';
+    scrollDirection?: 'up' | 'down' | 'left' | 'right';
+    scrollAmount?: number;
+    url?: string;
+    tabIndex?: number;
+    reasoning: string;
+    memory?: string; // What we learned from this step (e.g. "To clear input, click then Ctrl+A+Backspace")
+    durationMs?: number; // Duration in milliseconds for wait, hold, drag, and recordVideo actions
+}
+
+export interface VisionConfig {
+    model: string;
+    thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
+}
+
+export interface VisionUsage {
+    model: string;
+    promptTokens: number;
+    outputTokens: number;
+    thoughtsTokens: number;
+    totalTokens: number;
+}
+
+export interface VisionService {
+    analyzeScreenshot(
+        frame: BrowserFrameSnapshot,
+        goal: string,
+        actionHistory: ActionHistoryItem[],
+        conversationHistory: string[],
+        recentTrace?: ActionTrace | null,
+        supplementalFrames?: BrowserFrameSnapshot[],
+        isInterrupt?: boolean,
+        openTabs?: TabInfo[],
+        isAdvancedMode?: boolean
+    ): Promise<AgentAction[]>;
+    reflectOnIterationLimit(
+        frame: BrowserFrameSnapshot,
+        goal: string,
+        actionHistory: ActionHistoryItem[],
+        conversationHistory: string[],
+        recentTrace?: ActionTrace | null,
+        supplementalFrames?: BrowserFrameSnapshot[],
+        openTabs?: TabInfo[]
+    ): Promise<IterationLimitReview | null>;
+    updateConfig(patch: Partial<VisionConfig>): void;
+    getConfig(): VisionConfig;
+}
+
+function sanitizeThinkingLevel(value: unknown): VisionConfig['thinkingLevel'] | '' {
+    const normalized = String(value || '').trim().toLowerCase();
+    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized;
+    }
+    return '';
+}
+
+function buildThinkingConfig(explicitLevel?: unknown): { thinkingLevel: VisionConfig['thinkingLevel'] } {
+    const thinkingLevel = sanitizeThinkingLevel(explicitLevel);
+    return {
+        thinkingLevel: thinkingLevel || 'minimal',
+    };
+}
+
+function isThinkingCompatError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /thinking/i.test(message) && /(not supported|invalid)/i.test(message);
+}
+
+function extractUsage(rawUsage: unknown): Omit<VisionUsage, 'model'> {
+    const usage = rawUsage && typeof rawUsage === 'object'
+        ? rawUsage as Record<string, unknown>
+        : {};
+    const promptTokens = Number(usage.promptTokenCount) || 0;
+    const outputTokens = Number(usage.candidatesTokenCount) || 0;
+    const thoughtsTokens = Number(usage.thoughtsTokenCount) || 0;
+    const totalTokens = Number(usage.totalTokenCount) || (promptTokens + outputTokens + thoughtsTokens);
+    return {
+        promptTokens,
+        outputTokens,
+        thoughtsTokens,
+        totalTokens,
+    };
+}
+
+function getUsageMetadata(response: unknown): unknown {
+    if (!response || typeof response !== 'object') return undefined;
+    return (response as { usageMetadata?: unknown }).usageMetadata;
+}
+
+function buildVisionParts(
+    systemPrompt: string,
+    historyContext: string,
+    actionPrompt: string,
+    frame: BrowserFrameSnapshot,
+    recentTrace: ActionTrace | null | undefined,
+    supplementalFrames: BrowserFrameSnapshot[] = [],
+): Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> {
+    const orderedFrames = recentTrace?.frames?.length
+        ? [...recentTrace.frames, ...supplementalFrames, frame]
+        : [...supplementalFrames, frame];
+    const hasOverviewFrame = orderedFrames.some((candidate) => candidate.captureMode === 'overview');
+
+    const visualContextLines = recentTrace?.frames?.length
+        ? [
+            '\n## 🎞️ VISUAL INPUT',
+            `You are receiving ${orderedFrames.length} frames ordered oldest to newest.`,
+            `- Frames 1-${recentTrace.frames.length} show the recent ${recentTrace.action} sampled roughly every ${recentTrace.intervalMs}ms.`,
+            '- Later frames may include supplemental overview captures for orientation.',
+            '- The final frame is always the current viewport and is the ONLY frame you may use for output coordinates.',
+            '- Use earlier frames to understand motion, page layout, transient UI changes, loaders, progress, or where content sits on the full page.',
+        ]
+        : [
+            '\n## 🖼️ VISUAL INPUT',
+            orderedFrames.length > 1
+                ? `You are receiving ${orderedFrames.length} frames ordered oldest to newest.`
+                : 'You are receiving one current frame of the page.',
+            '- The final frame is always the current viewport and is the ONLY frame you may use for output coordinates.',
+        ];
+
+    if (hasOverviewFrame) {
+        visualContextLines.push('- Frames marked `Capture: overview` show the full page for orientation only. Use them to decide where to scroll, not where to click.');
+    }
+
+    const traceContext = `${visualContextLines.join('\n')}\n`;
+
+    const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
+        { text: systemPrompt + historyContext + traceContext },
+    ];
+
+    orderedFrames.forEach((currentFrame, index) => {
+        const label = 'label' in currentFrame
+            ? currentFrame.label
+            : index === orderedFrames.length - 1 && orderedFrames.length > 1
+                ? 'current-frame'
+                : 'page-frame';
+        parts.push({
+            text: `Frame ${index + 1}/${orderedFrames.length}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nViewport: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\nPage: ${currentFrame.page.width}x${currentFrame.page.height}\nScroll: ${currentFrame.page.scrollX}, ${currentFrame.page.scrollY}\nTimestamp: ${currentFrame.timestamp}`,
+        });
+        parts.push({
+            inlineData: {
+                mimeType: 'image/jpeg',
+                data: currentFrame.imageBase64,
+            },
+        });
+    });
+
+    parts.push({ text: actionPrompt });
+    return parts;
+}
+
+function extractJsonText(text: string): string {
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
+    if (jsonMatch) {
+        return jsonMatch[1].trim();
+    }
+
+    const firstBracket = text.indexOf('[');
+    const firstBrace = text.indexOf('{');
+
+    if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
+        const lastBracket = text.lastIndexOf(']');
+        if (lastBracket > firstBracket) {
+            return text.substring(firstBracket, lastBracket + 1);
+        }
+    } else if (firstBrace !== -1) {
+        const lastBrace = text.lastIndexOf('}');
+        if (lastBrace > firstBrace) {
+            return text.substring(firstBrace, lastBrace + 1);
+        }
+    }
+
+    return text;
+}
+
+function normalizeStringArray(value: unknown): string[] {
+    if (!Array.isArray(value)) {
+        return [];
+    }
+
+    return value
+        .map((item) => String(item || '').trim())
+        .filter(Boolean)
+        .slice(0, 5);
+}
+
+export function createVisionService(
+    initialConfig: Partial<VisionConfig> = {},
+    onUsage?: (usage: VisionUsage) => void
+): VisionService {
+    const apiKey = process.env.GEMINI_API_KEY;
+
+    if (!apiKey) {
+        throw new Error(
+            'GEMINI_API_KEY environment variable is required.\n' +
+            'Get your key from: https://aistudio.google.com/apikey'
+        );
+    }
+
+    const ai = new GoogleGenAI({ apiKey });
+    const state: VisionConfig = {
+        model: initialConfig.model || 'gemini-3-flash-preview',
+        thinkingLevel: sanitizeThinkingLevel(initialConfig.thinkingLevel) || 'minimal',
+    };
+
+    const service: VisionService = {
+        updateConfig(patch: Partial<VisionConfig>) {
+            if (!patch || typeof patch !== 'object') return;
+
+            if (typeof patch.model === 'string' && patch.model.trim()) {
+                state.model = patch.model.trim();
+            }
+            if (typeof patch.thinkingLevel === 'string' && patch.thinkingLevel.trim()) {
+                state.thinkingLevel = sanitizeThinkingLevel(patch.thinkingLevel) || state.thinkingLevel;
+            }
+        },
+
+        getConfig(): VisionConfig {
+            return {
+                model: state.model,
+                thinkingLevel: state.thinkingLevel,
+            };
+        },
+
+        async analyzeScreenshot(
+            frame: BrowserFrameSnapshot,
+            goal: string,
+            actionHistory: ActionHistoryItem[],
+            conversationHistory: string[] = [],
+            recentTrace: ActionTrace | null = null,
+            supplementalFrames: BrowserFrameSnapshot[] = [],
+            isInterrupt = false,
+            openTabs: TabInfo[] = [],
+            isAdvancedMode: boolean = false
+        ): Promise<AgentAction[]> {
+            // Get reusable memories (semantic + procedural)
+            const memories = getMemories(frame.url, goal);
+            const systemPrompt = buildSystemPrompt(memories, isAdvancedMode);
+
+            const actionPrompt = isInterrupt
+                ? buildInterruptPrompt(goal)
+                : buildActionPrompt(goal, actionHistory, openTabs);
+
+            try {
+                // Add conversation history context
+                const historyContext = conversationHistory.length > 0
+                    ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
+                    : '';
+                const requestParts = buildVisionParts(systemPrompt, historyContext, actionPrompt, frame, recentTrace, supplementalFrames);
+
+                const requestConfig = { thinkingConfig: buildThinkingConfig(state.thinkingLevel) } as unknown as GenerateContentConfig;
+
+                let response;
+                try {
+                    response = await ai.models.generateContent({
+                        model: state.model,
+                        config: requestConfig,
+                        contents: [
+                            {
+                                role: 'user',
+                                parts: requestParts,
+                            },
+                        ],
+                    });
+                } catch (error) {
+                    if (!isThinkingCompatError(error)) {
+                        throw error;
+                    }
+
+                    const fallbackConfig = {} satisfies GenerateContentConfig;
+
+                    response = await ai.models.generateContent({
+                        model: state.model,
+                        config: fallbackConfig,
+                        contents: [
+                            {
+                                role: 'user',
+                                parts: requestParts,
+                            },
+                        ],
+                    });
+                }
+
+                const usage = extractUsage(getUsageMetadata(response));
+                if (typeof onUsage === 'function') {
+                    onUsage({
+                        model: state.model,
+                        ...usage,
+                    });
+                }
+
+                const text = response.text?.trim() || '';
+                const jsonText = extractJsonText(text);
+
+                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'escalate', 'yield_control'];
+
+                let actions: AgentAction[];
+                try {
+                    const parsed = JSON.parse(jsonText);
+                    actions = Array.isArray(parsed) ? parsed : [parsed];
+                } catch {
+                    // Fallback: try to extract a single object
+                    const cleanJson = jsonText.replace(/^[^{]*({[\s\S]*})[^}]*$/, '$1');
+                    actions = [JSON.parse(cleanJson) as AgentAction];
+                }
+
+                // Validate all actions
+                for (const action of actions) {
+                    if (!action.action) {
+                        throw new Error('Missing action field');
+                    }
+                    if (!validActions.includes(action.action)) {
+                        throw new Error(`Invalid action: ${action.action}`);
+                    }
+                }
+
+                return actions;
+            } catch (error) {
+                console.error('Vision API error:', error);
+                return [{
+                    action: 'error',
+                    reasoning: `API Error: ${error instanceof Error ? error.message : 'Unknown'}`,
+                }];
+            }
+        },
+
+        async reflectOnIterationLimit(
+            frame: BrowserFrameSnapshot,
+            goal: string,
+            actionHistory: ActionHistoryItem[],
+            conversationHistory: string[] = [],
+            recentTrace: ActionTrace | null = null,
+            supplementalFrames: BrowserFrameSnapshot[] = [],
+            openTabs: TabInfo[] = []
+        ): Promise<IterationLimitReview | null> {
+            try {
+                const reviewPrompt = buildIterationLimitReviewPrompt(goal, actionHistory, openTabs);
+                const historyContext = conversationHistory.length > 0
+                    ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
+                    : '';
+                const requestParts = buildVisionParts('', historyContext, reviewPrompt, frame, recentTrace, supplementalFrames);
+
+                const requestConfig = { thinkingConfig: buildThinkingConfig(state.thinkingLevel) } as unknown as GenerateContentConfig;
+
+                let response;
+                try {
+                    response = await ai.models.generateContent({
+                        model: state.model,
+                        config: requestConfig,
+                        contents: [
+                            {
+                                role: 'user',
+                                parts: requestParts,
+                            },
+                        ],
+                    });
+                } catch (error) {
+                    if (!isThinkingCompatError(error)) {
+                        throw error;
+                    }
+
+                    response = await ai.models.generateContent({
+                        model: state.model,
+                        config: {},
+                        contents: [
+                            {
+                                role: 'user',
+                                parts: requestParts,
+                            },
+                        ],
+                    });
+                }
+
+                const usage = extractUsage(getUsageMetadata(response));
+                if (typeof onUsage === 'function') {
+                    onUsage({
+                        model: state.model,
+                        ...usage,
+                    });
+                }
+
+                const text = response.text?.trim() || '';
+                const jsonText = extractJsonText(text);
+                const parsed = JSON.parse(jsonText) as Partial<IterationLimitReview>;
+
+                return {
+                    whyNotFinished: String(parsed.whyNotFinished || '').trim(),
+                    stuckPoint: String(parsed.stuckPoint || '').trim(),
+                    whySelfRecoveryFailed: String(parsed.whySelfRecoveryFailed || '').trim(),
+                    humanAssessment: String(parsed.humanAssessment || '').trim(),
+                    missingToolsOrCapabilities: normalizeStringArray(parsed.missingToolsOrCapabilities),
+                    hardParts: normalizeStringArray(parsed.hardParts),
+                    easyParts: normalizeStringArray(parsed.easyParts),
+                    futureStrategy: normalizeStringArray(parsed.futureStrategy),
+                    questionsForUser: normalizeStringArray(parsed.questionsForUser),
+                };
+            } catch (error) {
+                console.error('Vision iteration-limit reflection error:', error);
+                return null;
+            }
+        },
+    };
+
+    return service;
+}

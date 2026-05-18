@@ -1,0 +1,32 @@
+services:
+  orchestrator:
+    build:
+      context: .
+    image: orchestrator:local
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      NODE_ENV: production
+      ORCHESTRATOR_SERVICE_MANAGER: docker
+      ORCHESTRATOR_HOST: 0.0.0.0
+      ORCHESTRATOR_PORT: "3000"
+      PORT: "3000"
+      PATCHRIGHT_BROWSERS_PATH: /ms-playwright
+      PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
+      BROWSER_AGENT_LIVE_VIEW: "1"
+      BROWSER_AGENT_VNC_WS_HOST: 0.0.0.0
+      BROWSER_AGENT_VNC_WS_PORT: "6080"
+      BROWSER_AGENT_VNC_WS_PUBLIC_URL: ${BROWSER_AGENT_VNC_WS_PUBLIC_URL:-ws://127.0.0.1:6080}
+      WHATSAPP_CHROME_EXECUTABLE_PATH: /usr/bin/chromium
+      PUPPETEER_EXECUTABLE_PATH: /usr/bin/chromium
+    ports:
+      - "127.0.0.1:${ORCHESTRATOR_PORT:-3000}:3000"
+      - "127.0.0.1:${BROWSER_AGENT_VNC_WS_PORT:-6080}:6080"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - orchestrator-data:/app/.orchestrator
+
+volumes:
+  orchestrator-data:

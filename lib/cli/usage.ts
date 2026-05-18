@@ -1,0 +1,576 @@
+/**
+ * CLI subscription quota readers.
+ *
+ * Both Claude Code and Codex CLI enforce a 5-hour rolling window and a
+ * 7-day window on top of any per-request rate limiting.
+ *
+ *   - claude-code → spawn the CLI in a PTY, type `/usage`, scrape the rendered
+ *     TUI panel. There is no public `--usage --json` flag and the
+ *     undocumented OAuth usage endpoint is heavily rate-limited from third
+ *     parties, so we mirror what a human would do.
+ *
+ *   - codex → chatgpt.com/backend-api/wham/usage with the OAuth token from
+ *     ~/.codex/auth.json (this is the endpoint codex's own `/status` panel
+ *     polls every 60s; see codex-rs/backend-client/src/client.rs::
+ *     get_rate_limits).
+ */
+import { readFileSync, existsSync } from 'fs'
+import { homedir } from 'os'
+import { join } from 'path'
+import { spawn as ptySpawn } from 'node-pty'
+
+import { resolveBin, augmentedEnv } from './resolve-bin'
+
+export interface CliQuotaWindow {
+    /** Percent of the window used, 0–100. */
+    usedPercent: number
+    /** Unix epoch seconds at which this window resets. */
+    resetsAt: number
+}
+
+export interface CliQuotaSnapshot {
+    cliId: 'claude-code' | 'codex'
+    /** True when we successfully read a fresh snapshot. */
+    available: boolean
+    /** When `available` is false, a human-readable reason. */
+    error?: string
+    /** Rolling 5-hour window. */
+    fiveHour?: CliQuotaWindow
+    /** Rolling 7-day window (all models). */
+    weekly?: CliQuotaWindow
+    /** Sonnet-specific 7-day window — Claude Code only. */
+    weeklySonnet?: CliQuotaWindow
+    /** Where this snapshot came from, surfaced for the UI's "source" line. */
+    source: 'api' | 'log' | 'tui' | 'none'
+    /** Unix ms when the snapshot was captured. */
+    fetchedAt: number
+    /**
+     * Unix ms of the underlying data point itself. For the API path this
+     * matches fetchedAt; for the log path it's when the row was written, which
+     * may be hours behind if the CLI hasn't been used recently.
+     */
+    dataTimestamp?: number
+}
+
+// ---------------------------------------------------------------------------
+// Claude Code — scrape the /usage TUI panel
+// ---------------------------------------------------------------------------
+
+const CLAUDE_CREDENTIALS_PATH = join(homedir(), '.claude', '.credentials.json')
+const CLAUDE_USAGE_TIMEOUT_MS = 30_000
+const CLAUDE_USAGE_RETRY_DELAY_MS = 500
+
+interface ClaudeUsageRaw {
+    /** Cleaned-up plain text of the /usage panel. */
+    text: string
+    /** Raw PTY bytes (after ANSI strip) for debugging. */
+    raw: string
+}
+
+/**
+ * Drive `claude` in a PTY: wait for the prompt, send `/usage`, capture the
+ * rendered panel, then Ctrl+C out. Returns the cleaned panel text.
+ */
+async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: string }> {
+    const claudeBin = resolveBin('claude')
+
+    // Run from a directory claude has already trusted — the orchestrator's own
+    // cwd (process.cwd()) is being used interactively right now, so it's the
+    // safest choice. If we ran from /tmp claude would block on a trust prompt.
+    const cwd = process.cwd()
+
+    return new Promise(resolve => {
+        let pty: ReturnType<typeof ptySpawn>
+        try {
+            pty = ptySpawn(claudeBin, [], {
+                name: 'xterm-256color',
+                cols: 140,
+                rows: 50,
+                cwd,
+                env: augmentedEnv() as { [key: string]: string },
+            })
+        } catch (err) {
+            resolve({ error: `Failed to spawn claude: ${err instanceof Error ? err.message : 'unknown error'}` })
+            return
+        }
+
+        let buf = ''
+        let lastDataAt = Date.now()
+        let phase: 'wait-prompt' | 'wait-panel' | 'quitting' | 'done' = 'wait-prompt'
+        const startedAt = Date.now()
+
+        pty.onData(d => {
+            buf += d
+            lastDataAt = Date.now()
+        })
+
+        const finish = (result: ClaudeUsageRaw | { error: string }) => {
+            if (phase === 'done') return
+            phase = 'done'
+            clearInterval(tick)
+            try { pty.kill() } catch { /* ignore */ }
+            resolve(result)
+        }
+
+        pty.onExit(() => {
+            if (phase === 'done') return
+            const cleaned = stripAnsi(buf)
+            // If we got the panel before exit, treat as success.
+            if (/Current\s*session/i.test(cleaned) || /Current\s*week/i.test(cleaned)) {
+                finish({ text: cleaned, raw: cleaned })
+            } else {
+                finish({ error: 'claude exited before rendering /usage panel.' })
+            }
+        })
+
+        const tick = setInterval(() => {
+            const idleMs = Date.now() - lastDataAt
+            const elapsed = Date.now() - startedAt
+            const cleanedSoFar = stripAnsi(buf)
+
+            // Abort if we see a trust prompt — we can't safely accept it
+            // unattended from a different cwd context.
+            if (phase === 'wait-prompt' && cleanedSoFar.includes('trust this folder')) {
+                finish({ error: `claude needs to trust ${cwd} first — open claude interactively here once.` })
+                return
+            }
+
+            if (
+                phase === 'wait-prompt'
+                && ((idleMs > 1200 && cleanedSoFar.trim().length > 0) || elapsed > 5000)
+            ) {
+                phase = 'wait-panel'
+                pty.write('/usage')
+                // Small gap so claude's slash-command suggestion UI lands first,
+                // then Enter commits the command.
+                setTimeout(() => { if (phase === 'wait-panel') pty.write('\r') }, 250)
+                return
+            }
+
+            if (phase === 'wait-panel') {
+                // Panel is ready when we see both anchor strings AND the output
+                // has been idle for a beat (some data trickles in as "Refreshing…"
+                // sections settle).
+                const hasSession = /Current\s*session/i.test(cleanedSoFar)
+                const hasWeek = /Current\s*week/i.test(cleanedSoFar)
+                if (hasSession && hasWeek && idleMs > 1200) {
+                    finish({ text: cleanedSoFar, raw: cleanedSoFar })
+                    return
+                }
+            }
+
+            if (elapsed > CLAUDE_USAGE_TIMEOUT_MS) {
+                finish({ error: 'Timed out waiting for /usage panel.' })
+            }
+        }, 250)
+    })
+}
+
+/**
+ * Strip the noisy parts of the PTY stream: ANSI CSI escapes, OSC sequences,
+ * and other control bytes that survived (carriage returns, bells…). What
+ * remains is more or less the human-visible text, though glyphs may run
+ * together because the TUI uses absolute cursor positioning.
+ */
+function stripAnsi(s: string): string {
+    return s
+        // CSI (cursor moves, colours, modes)
+        .replace(/\x1B\[[?]?[0-9;]*[a-zA-Z@`~]/g, '')
+        // OSC (window title, etc) — terminated by BEL or ST
+        .replace(/\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)/g, '')
+        // Single-shift and charset selectors
+        .replace(/\x1B[()*+][0-9A-Za-z]/g, '')
+        .replace(/\x1B[=>]/g, '')
+        // Stray control bytes (keep \n and \r)
+        .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
+}
+
+/**
+ * Parse the cleaned /usage panel text. Markers are stable across renders;
+ * percentages and reset strings are deterministic enough to anchor on labels.
+ *
+ * The TUI sometimes mangles parenthesized labels (e.g. "Sonnet only" renders
+ * as "Sonet nly") because of absolute-positioning gaps between glyphs, so we
+ * match `Current week (...)` loosely and classify by inner-text contents.
+ */
+function parseClaudeUsageText(text: string): {
+    fiveHour?: CliQuotaWindow
+    weekly?: CliQuotaWindow
+    weeklySonnet?: CliQuotaWindow
+} {
+    // Replace runs of progress-bar glyphs (█▌▏ etc.) and whitespace with a
+    // single space so the regex anchors don't need to skip them.
+    const norm = text.replace(/[█▉▊▋▌▍▎▏░]+/g, ' ').replace(/\s+/g, ' ')
+
+    const fiveHour = extractWindow(
+        norm,
+        /Current\s*session[^%]*?(\d{1,3})%\s*u\w*d[^R]*?Resets\s*([^\n]+?)(?=\s*Current\s*week|\s*What|\s*Extra\s*usage|$)/i
+    )
+
+    let weekly: CliQuotaWindow | undefined
+    let weeklySonnet: CliQuotaWindow | undefined
+    const weekRe = /Current\s*week\s*\(([^)]+)\)[^%]*?(\d{1,3})%\s*u\w*d[^R]*?Resets\s*([^\n]+?)(?=\s*Current\s*week|\s*What|\s*Last|\s*Extra\s*usage|$)/gi
+    let m: RegExpExecArray | null
+    while ((m = weekRe.exec(norm)) !== null) {
+        const inner = m[1].toLowerCase()
+        const win: CliQuotaWindow = {
+            usedPercent: Number(m[2]),
+            resetsAt: parseClaudeResetText(m[3].trim()),
+        }
+        if (!Number.isFinite(win.usedPercent)) continue
+        // Mangled or not, "Sonnet only" reliably contains an 's', 'n', 't'
+        // sequence; "all models" contains "all" or "models". Use both.
+        if (inner.includes('son') || inner.includes('only')) weeklySonnet = win
+        else weekly = win
+    }
+
+    return { fiveHour, weekly, weeklySonnet }
+}
+
+function extractWindow(text: string, re: RegExp): CliQuotaWindow | undefined {
+    const m = text.match(re)
+    if (!m) return undefined
+    const pct = Number(m[1])
+    if (!Number.isFinite(pct)) return undefined
+    const resetText = m[2].trim()
+    const resetsAt = parseClaudeResetText(resetText)
+    return { usedPercent: pct, resetsAt }
+}
+
+/**
+ * Translate claude's friendly reset strings into a unix epoch (seconds).
+ * Accepts a few shapes:
+ *   - "2:40am (Europe/Bucharest)"           — next occurrence today/tomorrow
+ *   - "May 15 at 7pm (Europe/Bucharest)"    — explicit date, this/next year
+ *   - "Jun 1 (Europe/Bucharest)"            — date only, treat as midnight
+ *
+ * We compute in the IANA timezone claude printed; falls back to local time if
+ * parsing fails.
+ */
+function parseClaudeResetText(input: string): number {
+    const tzMatch = input.match(/\(([^)]+)\)\s*$/)
+    const tz = tzMatch ? tzMatch[1].trim() : undefined
+    const stripped = input
+        .replace(/\([^)]+\)\s*$/, '')
+        .trim()
+        .replace(/([A-Za-z])(\d)/g, '$1 $2')
+        .replace(/(\d)\s*at\s*(\d)/gi, '$1 at $2')
+
+    // Variant A: "May 15 at 7pm" or "May 15 at 7:30pm"
+    const dateTimeRe = /^([A-Za-z]{3,9})\s+(\d{1,2})(?:\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i
+    const m1 = stripped.match(dateTimeRe)
+    if (m1) {
+        const month = monthIndex(m1[1])
+        const day = Number(m1[2])
+        const hour = m1[3] ? to24Hour(Number(m1[3]), m1[5]) : 0
+        const minute = m1[4] ? Number(m1[4]) : 0
+        if (month >= 0) return assembleEpoch({ month, day, hour, minute }, tz)
+    }
+
+    // Variant B: just a time of day like "2:40am" or "7pm"
+    const timeRe = /^(\d{1,2})(?::(\d{2}))?\s*(am|pm)$/i
+    const m2 = stripped.match(timeRe)
+    if (m2) {
+        const hour = to24Hour(Number(m2[1]), m2[3])
+        const minute = m2[2] ? Number(m2[2]) : 0
+        return assembleEpoch({ hour, minute }, tz, true)
+    }
+
+    return 0
+}
+
+function monthIndex(name: string): number {
+    const months = ['jan', 'feb', 'mar', 'apr', 'may', 'jun', 'jul', 'aug', 'sep', 'oct', 'nov', 'dec']
+    return months.indexOf(name.slice(0, 3).toLowerCase())
+}
+
+function to24Hour(h: number, ampm: string | undefined): number {
+    if (!ampm) return h
+    const isPm = ampm.toLowerCase() === 'pm'
+    if (isPm && h !== 12) return h + 12
+    if (!isPm && h === 12) return 0
+    return h
+}
+
+/**
+ * Build a unix epoch from (month?, day?, hour, minute) in the given IANA tz.
+ * If only hour/minute are provided, the next future occurrence (today or
+ * tomorrow) is returned.
+ *
+ * We use Intl.DateTimeFormat with timeZone to find the UTC offset of the
+ * target tz at the target wall-clock, then iterate to converge — DST makes
+ * a single-pass calculation fragile.
+ */
+function assembleEpoch(
+    parts: { month?: number; day?: number; hour: number; minute: number },
+    tz: string | undefined,
+    timeOnly = false
+): number {
+    const now = new Date()
+    const zone = tz || Intl.DateTimeFormat().resolvedOptions().timeZone
+
+    // Year defaults to the current year in that tz, but if the resulting
+    // moment is in the past for a date-bearing input, bump to next year.
+    let year = nowYearInTz(zone, now)
+    let month = parts.month ?? nowMonthInTz(zone, now)
+    let day = parts.day ?? nowDayInTz(zone, now)
+
+    let epoch = wallClockToEpoch(year, month, day, parts.hour, parts.minute, zone)
+
+    if (timeOnly && epoch <= Math.floor(now.getTime() / 1000)) {
+        // Push by one day for time-only inputs in the past
+        const next = new Date(epoch * 1000 + 24 * 3600 * 1000)
+        year = nowYearInTz(zone, next)
+        month = nowMonthInTz(zone, next)
+        day = nowDayInTz(zone, next)
+        epoch = wallClockToEpoch(year, month, day, parts.hour, parts.minute, zone)
+    } else if (!timeOnly && epoch <= Math.floor(now.getTime() / 1000)) {
+        // For date-bearing inputs without an explicit year, roll into next year
+        year += 1
+        epoch = wallClockToEpoch(year, month, day, parts.hour, parts.minute, zone)
+    }
+    return epoch
+}
+
+function wallClockToEpoch(y: number, m: number, d: number, h: number, min: number, tz: string): number {
+    // Build a "guess" assuming UTC, then compute the offset that tz applies at
+    // that instant, then correct. One iteration is enough except across DST
+    // gaps; a second pass cleans those up.
+    const guess = Date.UTC(y, m, d, h, min, 0)
+    const offsetMs = tzOffsetMsAt(guess, tz)
+    let epochMs = guess - offsetMs
+    const offsetMs2 = tzOffsetMsAt(epochMs, tz)
+    if (offsetMs2 !== offsetMs) epochMs = guess - offsetMs2
+    return Math.floor(epochMs / 1000)
+}
+
+function tzOffsetMsAt(epochMs: number, tz: string): number {
+    // Format the instant in the target tz, then re-parse as UTC to derive
+    // offset. This is the canonical workaround for missing Temporal API.
+    const fmt = new Intl.DateTimeFormat('en-US', {
+        timeZone: tz,
+        year: 'numeric', month: '2-digit', day: '2-digit',
+        hour: '2-digit', minute: '2-digit', second: '2-digit',
+        hour12: false,
+    })
+    const parts = fmt.formatToParts(new Date(epochMs))
+    const get = (t: string) => Number(parts.find(p => p.type === t)?.value ?? 0)
+    const asUtc = Date.UTC(get('year'), get('month') - 1, get('day'), get('hour') % 24, get('minute'), get('second'))
+    return asUtc - epochMs
+}
+
+function nowYearInTz(tz: string, when: Date): number {
+    return Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, year: 'numeric' }).format(when))
+}
+function nowMonthInTz(tz: string, when: Date): number {
+    return Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, month: 'numeric' }).format(when)) - 1
+}
+function nowDayInTz(tz: string, when: Date): number {
+    return Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, day: 'numeric' }).format(when))
+}
+
+async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
+    const fetchedAt = Date.now()
+    if (!existsSync(CLAUDE_CREDENTIALS_PATH)) {
+        return {
+            cliId: 'claude-code',
+            available: false,
+            error: 'Not logged in (no ~/.claude/.credentials.json).',
+            source: 'none',
+            fetchedAt,
+        }
+    }
+
+    let captured = await captureClaudeUsagePanel()
+    if ('error' in captured && captured.error.includes('Timed out')) {
+        await sleep(CLAUDE_USAGE_RETRY_DELAY_MS)
+        captured = await captureClaudeUsagePanel()
+    }
+    if ('error' in captured) {
+        return {
+            cliId: 'claude-code',
+            available: false,
+            error: captured.error,
+            source: 'tui',
+            fetchedAt,
+        }
+    }
+
+    const parsed = parseClaudeUsageText(captured.text)
+    if (!parsed.fiveHour && !parsed.weekly) {
+        return {
+            cliId: 'claude-code',
+            available: false,
+            error: 'Couldn\'t parse the /usage panel — claude\'s output may have changed.',
+            source: 'tui',
+            fetchedAt,
+        }
+    }
+    return {
+        cliId: 'claude-code',
+        available: true,
+        fiveHour: parsed.fiveHour,
+        weekly: parsed.weekly,
+        weeklySonnet: parsed.weeklySonnet,
+        source: 'tui',
+        fetchedAt,
+        dataTimestamp: fetchedAt,
+    }
+}
+
+function sleep(ms: number): Promise<void> {
+    return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+// ---------------------------------------------------------------------------
+// Codex — chatgpt.com/backend-api/wham/usage (same endpoint codex /status polls)
+// ---------------------------------------------------------------------------
+
+const CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json')
+const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+
+interface CodexAuthFile {
+    tokens?: {
+        access_token?: string
+        account_id?: string
+    }
+}
+
+interface CodexUsageWindow {
+    used_percent?: number
+    limit_window_seconds?: number
+    reset_after_seconds?: number
+    reset_at?: number
+}
+
+interface CodexUsageResponse {
+    rate_limit?: {
+        primary_window?: CodexUsageWindow
+        secondary_window?: CodexUsageWindow
+    }
+}
+
+function readCodexAuth(): { token: string; accountId: string } | null {
+    if (!existsSync(CODEX_AUTH_PATH)) return null
+    try {
+        const raw = readFileSync(CODEX_AUTH_PATH, 'utf-8')
+        const parsed = JSON.parse(raw) as CodexAuthFile
+        const token = parsed.tokens?.access_token
+        const accountId = parsed.tokens?.account_id
+        if (!token || !accountId) return null
+        return { token, accountId }
+    } catch {
+        return null
+    }
+}
+
+function codexWindow(w: CodexUsageWindow | undefined): CliQuotaWindow | undefined {
+    if (!w || typeof w.used_percent !== 'number') return undefined
+    // Prefer absolute reset_at; fall back to wall-clock-now + reset_after.
+    let resetsAt = typeof w.reset_at === 'number' ? w.reset_at : 0
+    if (!resetsAt && typeof w.reset_after_seconds === 'number') {
+        resetsAt = Math.floor(Date.now() / 1000) + w.reset_after_seconds
+    }
+    return { usedPercent: w.used_percent, resetsAt }
+}
+
+async function getCodexQuota(): Promise<CliQuotaSnapshot> {
+    const fetchedAt = Date.now()
+    const auth = readCodexAuth()
+    if (!auth) {
+        return {
+            cliId: 'codex',
+            available: false,
+            error: 'Not logged in (no ~/.codex/auth.json).',
+            source: 'none',
+            fetchedAt,
+        }
+    }
+
+    try {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 8000)
+        const res = await fetch(CODEX_USAGE_URL, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${auth.token}`,
+                // Both casings are used by codex CLI in different versions —
+                // the server is case-insensitive, but spelling matters.
+                'chatgpt-account-id': auth.accountId,
+                // Cloudflare gates this endpoint to the codex client UA. The
+                // `Originator` header is what the CLI sends; the version in
+                // User-Agent is loose, the server doesn't pin it.
+                Originator: 'codex_cli_rs',
+                'User-Agent': 'codex_cli_rs/0.0.0',
+                Accept: 'application/json',
+            },
+            signal: controller.signal,
+        }).finally(() => clearTimeout(timer))
+
+        if (res.status === 401 || res.status === 403) {
+            return {
+                cliId: 'codex',
+                available: false,
+                error: 'OAuth token expired — run `codex login` (or any codex command) to refresh.',
+                source: 'api',
+                fetchedAt,
+            }
+        }
+        if (!res.ok) {
+            return {
+                cliId: 'codex',
+                available: false,
+                error: `Usage endpoint returned HTTP ${res.status}.`,
+                source: 'api',
+                fetchedAt,
+            }
+        }
+
+        const json = (await res.json()) as CodexUsageResponse
+        const fiveHour = codexWindow(json.rate_limit?.primary_window)
+        const weekly = codexWindow(json.rate_limit?.secondary_window)
+
+        if (!fiveHour && !weekly) {
+            return {
+                cliId: 'codex',
+                available: false,
+                error: 'Endpoint returned no rate-limit windows.',
+                source: 'api',
+                fetchedAt,
+            }
+        }
+
+        return {
+            cliId: 'codex',
+            available: true,
+            fiveHour,
+            weekly,
+            source: 'api',
+            fetchedAt,
+            dataTimestamp: fetchedAt,
+        }
+    } catch (err) {
+        return {
+            cliId: 'codex',
+            available: false,
+            error: err instanceof Error ? err.message : 'Network error.',
+            source: 'api',
+            fetchedAt,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Combined snapshot
+// ---------------------------------------------------------------------------
+
+export async function getAllCliQuotas(): Promise<Record<string, CliQuotaSnapshot>> {
+    const [claudeCode, codex] = await Promise.all([
+        getClaudeCodeQuota(),
+        getCodexQuota(),
+    ])
+    return {
+        'claude-code': claudeCode,
+        'codex': codex,
+    }
+}

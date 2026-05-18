@@ -1,0 +1,224 @@
+{
+    "version": 1,
+    "providers": {
+        "google": {
+            "name": "Google",
+            "apiKeyEnv": "GEMINI_API_KEY",
+            "listEndpoint": "https://generativelanguage.googleapis.com/v1beta/models",
+            "models": {
+                "gemini-3.1-flash-image-preview": {
+                    "name": "Nano Banana 2 (Gemini 3.1 Flash Image Preview)",
+                    "kinds": ["image"],
+                    "contextWindow": 131072,
+                    "maxOutputTokens": 32768,
+                    "pricing": null,
+                    "capabilities": ["image", "google_search"],
+                    "features": [
+                        {
+                            "id": "web_search",
+                            "label": "Web search",
+                            "type": "enum",
+                            "defaultValue": "auto",
+                            "providerParam": "google_search",
+                            "description": "Controls whether image generation may use Google Search grounding.",
+                            "options": [
+                                { "value": "auto", "label": "Auto" },
+                                { "value": "on", "label": "On" },
+                                { "value": "off", "label": "Off" }
+                            ]
+                        }
+                    ],
+                    "thinkingLevels": ["minimal", "high"],
+                    "defaultThinkingLevel": "minimal",
+                    "intelligenceTier": "balanced",
+                    "notes": "Google Nano Banana 2. Supports text/image to image, search grounding, 512/1K/2K/4K, and SynthID watermarking."
+                },
+                "veo-3.1-generate-preview": {
+                    "name": "Veo 3.1 Preview",
+                    "kinds": ["video"],
+                    "pricing": null,
+                    "capabilities": ["video"],
+                    "intelligenceTier": "frontier",
+                    "notes": "Google Veo 3.1 video generation with audio. Supports 16:9 and 9:16; 720p, 1080p, and 4k where available."
+                },
+                "gemini-3.1-flash-tts-preview": {
+                    "name": "Gemini 3.1 Flash TTS Preview",
+                    "kinds": ["speech"],
+                    "contextWindow": 32000,
+                    "pricing": null,
+                    "capabilities": ["audio"],
+                    "intelligenceTier": "balanced",
+                    "notes": "Gemini native TTS. Text input, audio output, single and two-speaker configs."
+                },
+                "lyria-3-pro-preview": {
+                    "name": "Lyria 3 Pro Preview",
+                    "kinds": ["music"],
+                    "pricing": null,
+                    "capabilities": ["audio"],
+                    "intelligenceTier": "frontier",
+                    "notes": "Google Lyria 3 Pro full-length music generation. Supports structure, lyrics, and MP3/WAV output."
+                }
+            }
+        },
+        "anthropic": {
+            "name": "Anthropic",
+            "apiKeyEnv": "ANTHROPIC_API_KEY",
+            "listEndpoint": "https://api.anthropic.com/v1/models",
+            "models": {}
+        },
+        "openai": {
+            "name": "OpenAI",
+            "apiKeyEnv": "OPENAI_API_KEY",
+            "listEndpoint": "https://api.openai.com/v1/models",
+            "models": {
+                "gpt-image-2": {
+                    "name": "GPT Image 2",
+                    "kinds": ["image"],
+                    "pricing": null,
+                    "capabilities": ["image"],
+                    "intelligenceTier": "frontier",
+                    "notes": "OpenAI state-of-the-art image generation/editing model. Provider is selected explicitly in agent settings."
+                }
+            }
+        },
+        "claude-code": {
+            "name": "Claude Code (CLI)",
+            "apiKeyEnv": "CLAUDE_CODE_NO_API_KEY_REQUIRED",
+            "models": {
+                "default": {
+                    "name": "Default (Opus 4.7)",
+                    "kinds": ["text"],
+                    "contextWindow": 200000,
+                    "maxOutputTokens": 64000,
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh", "max"],
+                    "defaultThinkingLevel": "xhigh",
+                    "intelligenceTier": "frontier",
+                    "notes": "Recommended. Opus 4.7 picked automatically; effort defaults to xhigh."
+                },
+                "sonnet": {
+                    "name": "Sonnet 4.6",
+                    "kinds": ["text"],
+                    "contextWindow": 200000,
+                    "maxOutputTokens": 64000,
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh", "max"],
+                    "defaultThinkingLevel": "high",
+                    "intelligenceTier": "balanced",
+                    "notes": "Best for everyday tasks. claude --model sonnet."
+                },
+                "sonnet[1m]": {
+                    "name": "Sonnet 4.6 (1M context)",
+                    "kinds": ["text"],
+                    "contextWindow": 1000000,
+                    "maxOutputTokens": 64000,
+                    "pricing": {
+                        "kind": "tokens",
+                        "inputPerMillion": 3,
+                        "outputPerMillion": 15
+                    },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh", "max"],
+                    "defaultThinkingLevel": "high",
+                    "intelligenceTier": "balanced",
+                    "notes": "1M context window. Billed as extra usage at $3 / $15 per Mtok beyond the subscription."
+                },
+                "haiku": {
+                    "name": "Haiku 4.5",
+                    "kinds": ["text"],
+                    "contextWindow": 200000,
+                    "maxOutputTokens": 32000,
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high"],
+                    "defaultThinkingLevel": "medium",
+                    "intelligenceTier": "fast",
+                    "notes": "Fastest for quick answers. claude --model haiku."
+                },
+                "opus[1m]": {
+                    "name": "Opus 4.7 (1M context)",
+                    "kinds": ["text"],
+                    "contextWindow": 1000000,
+                    "maxOutputTokens": 64000,
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh", "max"],
+                    "defaultThinkingLevel": "xhigh",
+                    "intelligenceTier": "frontier",
+                    "notes": "Opus with 1M context. claude --model 'opus[1m]'."
+                }
+            }
+        },
+        "codex": {
+            "name": "Codex CLI",
+            "apiKeyEnv": "CODEX_NO_API_KEY_REQUIRED",
+            "models": {
+                "default": {
+                    "name": "Default",
+                    "kinds": ["text"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh"],
+                    "defaultThinkingLevel": "high",
+                    "intelligenceTier": "frontier",
+                    "notes": "Lets codex pick from ~/.codex/config.toml."
+                },
+                "gpt-5.5": {
+                    "name": "GPT-5.5",
+                    "kinds": ["text"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh"],
+                    "defaultThinkingLevel": "high",
+                    "intelligenceTier": "frontier",
+                    "notes": "codex -m gpt-5.5"
+                },
+                "gpt-5.4": {
+                    "name": "GPT-5.4",
+                    "kinds": ["text"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh"],
+                    "defaultThinkingLevel": "high",
+                    "intelligenceTier": "balanced",
+                    "notes": "codex -m gpt-5.4"
+                },
+                "gpt-5.4-mini": {
+                    "name": "GPT-5.4 Mini",
+                    "kinds": ["text"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high"],
+                    "defaultThinkingLevel": "medium",
+                    "intelligenceTier": "fast",
+                    "notes": "codex -m gpt-5.4-mini"
+                },
+                "gpt-5.3-codex": {
+                    "name": "GPT-5.3 Codex",
+                    "kinds": ["text"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text", "function_calling"],
+                    "thinkingLevels": ["low", "medium", "high", "xhigh"],
+                    "defaultThinkingLevel": "high",
+                    "intelligenceTier": "balanced",
+                    "notes": "codex -m gpt-5.3-codex"
+                }
+            }
+        },
+        "browser": {
+            "name": "Browser agent",
+            "apiKeyEnv": "BROWSER_AGENT_NO_API_KEY_REQUIRED",
+            "models": {
+                "default": {
+                    "name": "Browser agent (Chromium + Xvfb)",
+                    "kinds": ["text"],
+                    "pricing": { "kind": "subscription" },
+                    "capabilities": ["text"],
+                    "notes": "Drives a real browser on the deploy host with a persistent local profile. Requires configured Google/Gemini browser-agent models."
+                }
+            }
+        }
+    }
+}

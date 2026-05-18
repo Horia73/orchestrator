@@ -1,0 +1,626 @@
+"use client"
+
+import * as React from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
+import {
+    AlertCircle,
+    CheckCircle2,
+    ChevronRight,
+    Loader2,
+    RefreshCcw,
+    Trash2,
+    Search,
+    Radio,
+    XCircle,
+    Ban,
+} from "lucide-react"
+
+import { cn } from "@/lib/utils"
+import type { RequestLogRow, RequestStatus } from "@/lib/observability/schema"
+import { useLogs, useRequestDetail, type LogsFilters } from "./use-logs"
+
+const STATUS_LABELS: Record<RequestStatus, string> = {
+    streaming: "Streaming",
+    ok: "OK",
+    error: "Error",
+    aborted: "Aborted",
+}
+
+const RANGE_OPTIONS: Array<{ value: NonNullable<LogsFilters["range"]>; label: string }> = [
+    { value: "1h", label: "Last hour" },
+    { value: "24h", label: "Last 24h" },
+    { value: "7d", label: "Last 7 days" },
+    { value: "30d", label: "Last 30 days" },
+    { value: "all", label: "All time" },
+]
+
+const STATUS_OPTIONS: Array<{ value: RequestStatus | ""; label: string }> = [
+    { value: "", label: "Any status" },
+    { value: "ok", label: "OK" },
+    { value: "error", label: "Error" },
+    { value: "aborted", label: "Aborted" },
+    { value: "streaming", label: "Streaming" },
+]
+
+const ROW_HEIGHT = 56
+const EXPANDED_ROW_HEIGHT = 560
+
+export function LogsTab() {
+    const {
+        rows,
+        total,
+        filters,
+        setFilters,
+        filterOptions,
+        loading,
+        error,
+        hasMore,
+        loadMore,
+        refresh,
+        clearAll,
+        liveTail,
+        setLiveTail,
+    } = useLogs()
+    const [expanded, setExpanded] = React.useState<string | null>(null)
+    const [confirmingClear, setConfirmingClear] = React.useState(false)
+
+    return (
+        <div className="flex flex-col gap-4">
+            <FilterBar
+                filters={filters}
+                setFilters={setFilters}
+                filterOptions={filterOptions}
+                liveTail={liveTail}
+                setLiveTail={setLiveTail}
+                onRefresh={refresh}
+                onClear={() => setConfirmingClear(true)}
+            />
+
+            <div className="flex items-baseline justify-between gap-3">
+                <p className="text-[12.5px] text-foreground/55 tabular-nums">
+                    {loading && rows.length === 0 ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "request" : "requests"}`}
+                    {liveTail && <span className="ml-2 inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-500"><span className="size-1.5 animate-pulse rounded-full bg-emerald-500" /> live</span>}
+                </p>
+            </div>
+
+            {error && <ErrorBanner message={error} />}
+
+            <LogsTable
+                rows={rows}
+                expanded={expanded}
+                setExpanded={setExpanded}
+                loading={loading}
+                hasMore={hasMore}
+                onLoadMore={loadMore}
+            />
+
+            {confirmingClear && (
+                <ConfirmDialog
+                    title="Clear all logs?"
+                    description={`This will permanently delete ${total.toLocaleString()} request log${total === 1 ? "" : "s"} and their tool calls. This action cannot be undone.`}
+                    confirmLabel="Clear all"
+                    onConfirm={async () => {
+                        await clearAll()
+                        setConfirmingClear(false)
+                    }}
+                    onCancel={() => setConfirmingClear(false)}
+                />
+            )}
+        </div>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Filter bar
+// ---------------------------------------------------------------------------
+
+function FilterBar({
+    filters,
+    setFilters,
+    filterOptions,
+    liveTail,
+    setLiveTail,
+    onRefresh,
+    onClear,
+}: {
+    filters: LogsFilters
+    setFilters: (next: LogsFilters | ((prev: LogsFilters) => LogsFilters)) => void
+    filterOptions: { agents: string[]; providers: string[]; models: Array<{ provider: string; model: string }> }
+    liveTail: boolean
+    setLiveTail: (next: boolean) => void
+    onRefresh: () => void
+    onClear: () => void
+}) {
+    const [searchValue, setSearchValue] = React.useState(filters.q ?? "")
+
+    // Debounce free-text search.
+    React.useEffect(() => {
+        const t = setTimeout(() => {
+            setFilters(prev => ({ ...prev, q: searchValue || undefined }))
+        }, 250)
+        return () => clearTimeout(t)
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [searchValue])
+
+    return (
+        <div className="flex flex-wrap items-center gap-2">
+            <div className="relative w-full sm:w-auto">
+                <Search className="pointer-events-none absolute left-2.5 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
+                <input
+                    value={searchValue}
+                    onChange={e => setSearchValue(e.target.value)}
+                    placeholder="Search error / id…"
+                    className={cn(
+                        "h-8 w-full rounded-lg border border-border bg-background pl-8 pr-2.5 text-[13px] text-foreground outline-none sm:w-56",
+                        "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+                        "placeholder:text-foreground/40"
+                    )}
+                />
+            </div>
+
+            <Select
+                value={filters.range}
+                onChange={v => setFilters(prev => ({ ...prev, range: v as LogsFilters["range"] }))}
+                options={RANGE_OPTIONS}
+            />
+            <Select
+                value={filters.status ?? ""}
+                onChange={v => setFilters(prev => ({ ...prev, status: (v || undefined) as LogsFilters["status"] }))}
+                options={STATUS_OPTIONS}
+            />
+            {filterOptions.agents.length > 0 && (
+                <Select
+                    value={filters.agent ?? ""}
+                    onChange={v => setFilters(prev => ({ ...prev, agent: v || undefined }))}
+                    options={[{ value: "", label: "Any agent" }, ...filterOptions.agents.map(a => ({ value: a, label: a }))]}
+                />
+            )}
+            {filterOptions.providers.length > 0 && (
+                <Select
+                    value={filters.provider ?? ""}
+                    onChange={v => setFilters(prev => ({ ...prev, provider: v || undefined, model: undefined }))}
+                    options={[{ value: "", label: "Any provider" }, ...filterOptions.providers.map(p => ({ value: p, label: p }))]}
+                />
+            )}
+
+            <div className="ml-0 flex items-center gap-1.5 sm:ml-auto">
+                <button
+                    onClick={() => setLiveTail(!liveTail)}
+                    title={liveTail ? "Stop live tail" : "Start live tail"}
+                    className={cn(
+                        "inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors",
+                        liveTail
+                            ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+                            : "border-border bg-background text-foreground/70 hover:bg-muted/60"
+                    )}
+                >
+                    <Radio className="size-3.5" />
+                    Live
+                </button>
+                <button
+                    onClick={onRefresh}
+                    title="Refresh"
+                    className="inline-flex size-8 items-center justify-center rounded-lg border border-border bg-background text-foreground/60 transition-colors hover:bg-muted/60 hover:text-foreground"
+                >
+                    <RefreshCcw className="size-3.5" />
+                </button>
+                <button
+                    onClick={onClear}
+                    title="Clear all logs"
+                    className="inline-flex size-8 items-center justify-center rounded-lg border border-border bg-background text-foreground/60 transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
+                >
+                    <Trash2 className="size-3.5" />
+                </button>
+            </div>
+        </div>
+    )
+}
+
+function Select({ value, onChange, options }: {
+    value: string
+    onChange: (next: string) => void
+    options: Array<{ value: string; label: string }>
+}) {
+    return (
+        <select
+            value={value}
+            onChange={e => onChange(e.target.value)}
+            className={cn(
+                "h-8 min-w-[calc(50%-0.25rem)] flex-1 rounded-lg border border-border bg-background px-2 text-[13px] font-medium text-foreground outline-none sm:min-w-0 sm:flex-none",
+                "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
+                "hover:bg-muted/60 transition-colors"
+            )}
+        >
+            {options.map(o => (
+                <option key={o.value} value={o.value}>{o.label}</option>
+            ))}
+        </select>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Virtualized table
+// ---------------------------------------------------------------------------
+
+function LogsTable({
+    rows,
+    expanded,
+    setExpanded,
+    loading,
+    hasMore,
+    onLoadMore,
+}: {
+    rows: RequestLogRow[]
+    expanded: string | null
+    setExpanded: (id: string | null) => void
+    loading: boolean
+    hasMore: boolean
+    onLoadMore: () => void
+}) {
+    const parentRef = React.useRef<HTMLDivElement>(null)
+
+    const virtualizer = useVirtualizer({
+        count: rows.length,
+        getScrollElement: () => parentRef.current,
+        estimateSize: idx => (rows[idx]?.id === expanded ? EXPANDED_ROW_HEIGHT : ROW_HEIGHT),
+        overscan: 6,
+        getItemKey: idx => rows[idx]?.id ?? idx,
+    })
+
+    React.useEffect(() => {
+        virtualizer.measure()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [expanded])
+
+    // Trigger load-more when the last row enters the viewport.
+    const items = virtualizer.getVirtualItems()
+    React.useEffect(() => {
+        if (!hasMore || loading || items.length === 0) return
+        const last = items[items.length - 1]
+        if (last && last.index >= rows.length - 5) onLoadMore()
+        // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [items, hasMore, loading, rows.length])
+
+    if (rows.length === 0 && !loading) {
+        return (
+            <div className="rounded-2xl border border-dashed border-border/70 bg-muted/30 px-5 py-12 text-center text-[14px] text-foreground/55">
+                No requests logged yet.
+            </div>
+        )
+    }
+
+    return (
+        <div className="overflow-hidden rounded-2xl border border-border/70 bg-card">
+            <div className="hidden grid-cols-[24px_140px_120px_minmax(0,1fr)_90px_90px_120px_24px] gap-3 border-b border-border/70 bg-muted/40 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-foreground/55 md:grid">
+                <span />
+                <span>When</span>
+                <span>Agent</span>
+                <span>Model</span>
+                <span className="text-right">Tokens</span>
+                <span className="text-right">Duration</span>
+                <span>Status</span>
+                <span />
+            </div>
+
+            <div ref={parentRef} className="h-[min(640px,calc(100dvh-260px))] min-h-[420px] overflow-auto md:h-[640px] md:min-h-0">
+                <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
+                    {items.map(v => {
+                        const row = rows[v.index]
+                        if (!row) return null
+                        const isExpanded = row.id === expanded
+                        return (
+                            <div
+                                key={v.key}
+                                data-index={v.index}
+                                ref={virtualizer.measureElement}
+                                style={{
+                                    position: "absolute",
+                                    top: 0,
+                                    left: 0,
+                                    right: 0,
+                                    transform: `translateY(${v.start}px)`,
+                                }}
+                            >
+                                <LogRow
+                                    row={row}
+                                    expanded={isExpanded}
+                                    onToggle={() => setExpanded(isExpanded ? null : row.id)}
+                                />
+                            </div>
+                        )
+                    })}
+                </div>
+
+                {loading && rows.length === 0 && (
+                    <div className="flex items-center justify-center gap-2 py-8 text-[13px] text-foreground/55">
+                        <Loader2 className="size-4 animate-spin" /> Loading…
+                    </div>
+                )}
+                {hasMore && rows.length > 0 && (
+                    <div className="flex items-center justify-center py-3 text-[12px] text-foreground/45">
+                        {loading ? <Loader2 className="size-3.5 animate-spin" /> : "Loading more on scroll…"}
+                    </div>
+                )}
+            </div>
+        </div>
+    )
+}
+
+function LogRow({ row, expanded, onToggle }: {
+    row: RequestLogRow
+    expanded: boolean
+    onToggle: () => void
+}) {
+    return (
+        <div className={cn("border-b border-border/50", expanded && "bg-muted/30")}>
+            <button
+                onClick={onToggle}
+                className="flex w-full flex-col gap-2 px-3 py-3 text-left text-[13px] transition-colors hover:bg-muted/50 md:hidden"
+            >
+                <div className="flex min-w-0 items-start justify-between gap-3">
+                    <div className="min-w-0">
+                        <div className="flex min-w-0 items-center gap-1.5">
+                            <ChevronRight className={cn("size-3.5 shrink-0 text-foreground/40 transition-transform", expanded && "rotate-90")} />
+                            <ProviderDot providerId={row.provider} />
+                            <span className="truncate font-medium text-foreground">{row.model}</span>
+                        </div>
+                        <div className="mt-0.5 truncate text-[11.5px] text-foreground/45">{row.agentId}</div>
+                    </div>
+                    <StatusPill status={row.status} />
+                </div>
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] tabular-nums text-foreground/55">
+                    <span>{formatTime(row.startedAt)}</span>
+                    <span>{relativeTime(row.startedAt)}</span>
+                    <span>{formatTokens(row.totalTokens)} tokens</span>
+                    <span>{formatDuration(row.durationMs)}</span>
+                </div>
+            </button>
+            <button
+                onClick={onToggle}
+                className={cn(
+                    "hidden h-[56px] w-full grid-cols-[24px_140px_120px_minmax(0,1fr)_90px_90px_120px_24px] items-center gap-3 px-3 py-2 text-left text-[13px] transition-colors md:grid",
+                    "hover:bg-muted/50"
+                )}
+            >
+                <ChevronRight className={cn("size-3.5 text-foreground/40 transition-transform", expanded && "rotate-90")} />
+                <div className="min-w-0">
+                    <div className="truncate text-foreground tabular-nums">{formatTime(row.startedAt)}</div>
+                    <div className="truncate text-[11.5px] text-foreground/45 tabular-nums">{relativeTime(row.startedAt)}</div>
+                </div>
+                <div className="truncate text-foreground/80">{row.agentId}</div>
+                <div className="flex min-w-0 items-center gap-1.5">
+                    <ProviderDot providerId={row.provider} />
+                    <span className="truncate text-foreground">{row.model}</span>
+                </div>
+                <div className="text-right tabular-nums text-foreground/70">{formatTokens(row.totalTokens)}</div>
+                <div className="text-right tabular-nums text-foreground/70">{formatDuration(row.durationMs)}</div>
+                <StatusPill status={row.status} />
+                <div />
+            </button>
+
+            {expanded && <ExpandedDetail requestId={row.id} row={row} />}
+        </div>
+    )
+}
+
+function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLogRow }) {
+    const { data, loading, error } = useRequestDetail(requestId)
+
+    return (
+        <div className="flex flex-col gap-4 border-t border-border/50 px-3 py-3 md:px-4 md:py-4">
+            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+                <TextPreview label="Input" text={row.inputText} />
+                <TextPreview label="Output" text={row.outputText} />
+            </div>
+
+            <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
+            <div className="flex flex-col gap-3">
+                <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Tokens</h4>
+                <div className="grid grid-cols-2 gap-2">
+                    <Stat label="Input" value={row.inputTokens} />
+                    <Stat label="Output" value={row.outputTokens} />
+                    <Stat label="Thinking" value={row.thinkingTokens} />
+                    <Stat label="Cached" value={row.cachedTokens} highlight={row.cachedTokens !== null && row.cachedTokens > 0} />
+                    <Stat label="Tool use" value={row.toolUseTokens} />
+                    <Stat label="Total" value={row.totalTokens} />
+                </div>
+
+                {row.modalityBreakdown && (
+                    <div className="mt-1">
+                        <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50">Modality</h4>
+                        <div className="space-y-1 text-[12px] tabular-nums text-foreground/70">
+                            {row.modalityBreakdown.input?.map(m => (
+                                <div key={"in-" + m.modality}>input {m.modality}: {m.tokens.toLocaleString()}</div>
+                            ))}
+                            {row.modalityBreakdown.output?.map(m => (
+                                <div key={"out-" + m.modality}>output {m.modality}: {m.tokens.toLocaleString()}</div>
+                            ))}
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <div className="flex flex-col gap-3">
+                <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Request</h4>
+                <dl className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12.5px] sm:grid-cols-[120px_minmax(0,1fr)]">
+                    <Row label="ID" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.id}</code>} />
+                    <Row label="Conversation" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.conversationId}</code>} />
+                    <Row label="Provider" value={`${row.provider}`} />
+                    <Row label="Thinking" value={row.thinkingLevel} />
+                    <Row label="Mode" value={row.statefulMode ? "Stateful" : "Stateless"} />
+                    {row.interactionId && <Row label="Interaction" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.interactionId}</code>} />}
+                    {row.errorMessage && <Row label="Error" value={<span className="text-destructive">{row.errorMessage}</span>} />}
+                </dl>
+
+                <h4 className="mt-1 text-[11px] font-medium uppercase tracking-wider text-foreground/50">
+                    Tool calls {data ? `(${data.toolLogs.length})` : row.toolCallCount > 0 ? `(${row.toolCallCount})` : ""}
+                </h4>
+                {loading ? (
+                    <p className="text-[12.5px] text-foreground/50">Loading…</p>
+                ) : error ? (
+                    <p className="text-[12.5px] text-destructive">{error}</p>
+                ) : data && data.toolLogs.length > 0 ? (
+                    <ul className="space-y-1 text-[12.5px]">
+                        {data.toolLogs.map(t => (
+                            <li key={t.id} className="flex items-center gap-2">
+                                {t.success ? (
+                                    <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
+                                ) : (
+                                    <XCircle className="size-3.5 shrink-0 text-destructive" />
+                                )}
+                                <span className="font-medium">{t.toolName}</span>
+                                {t.durationMs !== null && (
+                                    <span className="ml-auto tabular-nums text-foreground/50">{t.durationMs} ms</span>
+                                )}
+                            </li>
+                        ))}
+                    </ul>
+                ) : (
+                    <p className="text-[12.5px] text-foreground/50">No tool calls.</p>
+                )}
+            </div>
+            </div>
+        </div>
+    )
+}
+
+function TextPreview({ label, text }: { label: string; text: string | null }) {
+    return (
+        <div className="flex flex-col gap-1.5">
+            <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">{label}</h4>
+            {text ? (
+                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-muted/30 p-2.5 text-[12px] font-mono leading-relaxed text-foreground/85">
+                    {text}
+                </pre>
+            ) : (
+                <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-2.5 py-2 text-[12px] text-foreground/45">
+                    No {label.toLowerCase()} recorded.
+                </div>
+            )}
+        </div>
+    )
+}
+
+function Stat({ label, value, highlight }: { label: string; value: number | null; highlight?: boolean }) {
+    return (
+        <div className={cn("rounded-lg border border-border/60 bg-background px-2.5 py-1.5", highlight && "border-amber-500/40 bg-amber-500/5")}>
+            <div className="text-[10.5px] uppercase tracking-wider text-foreground/50">{label}</div>
+            <div className="text-[13px] font-semibold tabular-nums text-foreground">{value !== null ? value.toLocaleString() : "—"}</div>
+        </div>
+    )
+}
+
+function Row({ label, value }: { label: string; value: React.ReactNode }) {
+    return (
+        <>
+            <dt className="text-foreground/50">{label}</dt>
+            <dd className="min-w-0 break-words text-foreground/85">{value}</dd>
+        </>
+    )
+}
+
+function StatusPill({ status }: { status: RequestStatus }) {
+    const cls = status === "ok"
+        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
+        : status === "error"
+            ? "bg-destructive/10 text-destructive"
+            : status === "aborted"
+                ? "bg-amber-500/10 text-amber-700 dark:text-amber-400"
+                : "bg-blue-500/10 text-blue-700 dark:text-blue-400"
+    const Icon = status === "ok" ? CheckCircle2 : status === "error" ? XCircle : status === "aborted" ? Ban : Loader2
+    return (
+        <span className={cn("inline-flex w-fit items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium", cls)}>
+            <Icon className={cn("size-3", status === "streaming" && "animate-spin")} />
+            {STATUS_LABELS[status]}
+        </span>
+    )
+}
+
+function ProviderDot({ providerId }: { providerId: string }) {
+    const color =
+        providerId === "google" ? "bg-blue-500"
+            : providerId === "anthropic" ? "bg-orange-500"
+                : providerId === "openai" ? "bg-emerald-500"
+                    : "bg-foreground/40"
+    return <span className={cn("inline-block size-1.5 shrink-0 rounded-full", color)} aria-hidden />
+}
+
+function ConfirmDialog({ title, description, confirmLabel, onConfirm, onCancel }: {
+    title: string
+    description: string
+    confirmLabel: string
+    onConfirm: () => void | Promise<void>
+    onCancel: () => void
+}) {
+    const [busy, setBusy] = React.useState(false)
+    return (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/30 backdrop-blur-sm" onClick={onCancel}>
+            <div
+                className="w-[min(calc(100vw-2rem),400px)] rounded-2xl border border-border/70 bg-card p-5 shadow-xl"
+                onClick={e => e.stopPropagation()}
+            >
+                <h3 className="text-[16px] font-semibold text-foreground">{title}</h3>
+                <p className="mt-1.5 text-[13.5px] text-foreground/65">{description}</p>
+                <div className="mt-4 flex justify-end gap-2">
+                    <button
+                        onClick={onCancel}
+                        className="h-8 rounded-lg border border-border bg-background px-3 text-[13px] font-medium text-foreground/70 transition-colors hover:bg-muted/60"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        disabled={busy}
+                        onClick={async () => {
+                            setBusy(true)
+                            try { await onConfirm() } finally { setBusy(false) }
+                        }}
+                        className="h-8 rounded-lg bg-destructive px-3 text-[13px] font-medium text-destructive-foreground transition-opacity hover:opacity-90 disabled:opacity-50"
+                    >
+                        {busy ? "Working…" : confirmLabel}
+                    </button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+function ErrorBanner({ message }: { message: string }) {
+    return (
+        <div className="flex items-start gap-2.5 rounded-2xl border border-destructive/30 bg-destructive/5 px-4 py-3 text-[13px] text-destructive">
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            <p>{message}</p>
+        </div>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatTokens(n: number | null): string {
+    if (n === null || n === 0) return "—"
+    if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`
+    if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`
+    return n.toLocaleString()
+}
+
+function formatDuration(ms: number | null): string {
+    if (ms === null) return "—"
+    if (ms < 1000) return `${ms} ms`
+    if (ms < 60_000) return `${(ms / 1000).toFixed(1)}s`
+    const m = Math.floor(ms / 60_000)
+    const s = Math.floor((ms % 60_000) / 1000)
+    return `${m}m ${s}s`
+}
+
+function formatTime(ms: number): string {
+    return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" })
+}
+
+function relativeTime(ms: number): string {
+    const diff = Date.now() - ms
+    if (diff < 60_000) return `${Math.max(1, Math.floor(diff / 1000))}s ago`
+    if (diff < 3_600_000) return `${Math.floor(diff / 60_000)}m ago`
+    if (diff < 86_400_000) return `${Math.floor(diff / 3_600_000)}h ago`
+    return `${Math.floor(diff / 86_400_000)}d ago`
+}

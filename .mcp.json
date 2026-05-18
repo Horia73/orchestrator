@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "orchestrator": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["tsx", "mcp-server/server.ts"]
+    }
+  }
+}
