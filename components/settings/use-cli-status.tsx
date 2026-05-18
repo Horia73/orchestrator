@@ -6,6 +6,8 @@ export interface CliStatusEntry {
     name: string
     description: string
     bin: string
+    installHint: string
+    installDocsUrl?: string
     loginHint: string
     installed: boolean
     loggedIn: boolean

@@ -21,7 +21,7 @@ import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const MAX_BUFFER_BYTES = 512 * 1024
 
-export type SessionMode = 'login' | 'logout' | 'status' | 'generate' | 'free'
+export type SessionMode = 'install' | 'login' | 'logout' | 'status' | 'generate' | 'free'
 
 export interface SessionEvent {
     type: 'data' | 'exit' | 'error'
@@ -74,7 +74,12 @@ export function startSession(args: StartArgs): string {
     const spec = CLI_SPECS[args.cli]
 
     let cliArgs: string[]
+    let binName = spec.bin
     switch (args.mode) {
+        case 'install':
+            binName = spec.installBin
+            cliArgs = spec.installArgs
+            break
         case 'login': cliArgs = spec.loginArgs; break
         case 'logout': cliArgs = spec.logoutArgs; break
         case 'status': cliArgs = spec.statusArgs; break
@@ -88,7 +93,7 @@ export function startSession(args: StartArgs): string {
     // Resolve the binary explicitly — Next.js may inherit a sparse PATH
     // that misses ~/.local/bin or ~/.npm-global/bin. resolveBin walks the
     // common install locations so spawn never fails with posix_spawnp.
-    const binPath = resolveBin(spec.bin)
+    const binPath = resolveBin(binName)
 
     // FORCE_COLOR + a full xterm-256color TERM gives the CLI permission to
     // render colours and use cursor addressing — both important for the

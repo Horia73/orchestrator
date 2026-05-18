@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server'
-import { getEnvValue, getRuntimeConfig } from '@/lib/config'
+import { getRuntimeConfig } from '@/lib/config'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 import { getAllAgents } from '@/lib/ai'
+import { getProviderReadinessMap } from '@/lib/provider-readiness'
 
 /**
  * Single round-trip bootstrap for the settings page.
@@ -24,18 +25,7 @@ export async function GET() {
         canCallAgents: a.canCallAgents ?? [],
     }))
 
-    const providerStatus: Record<string, { apiKeyConfigured: boolean; apiKeyMasked: string | null }> = {}
-    for (const [providerId, provider] of Object.entries(registry)) {
-        const key = getEnvValue(provider.apiKeyEnv)
-        if (key && key.length > 8) {
-            providerStatus[providerId] = {
-                apiKeyConfigured: true,
-                apiKeyMasked: key.slice(0, 4) + '...' + key.slice(-4),
-            }
-        } else {
-            providerStatus[providerId] = { apiKeyConfigured: false, apiKeyMasked: null }
-        }
-    }
+    const providerStatus = await getProviderReadinessMap(registry)
 
     return NextResponse.json({
         config,

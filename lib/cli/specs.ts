@@ -31,6 +31,15 @@ export interface CliSpec {
     bin: string
     description: string
     /**
+     * Non-interactive install command launched from the Settings UI when the
+     * binary is missing. Kept declarative so the terminal runner can execute it
+     * without knowing package-manager details.
+     */
+    installBin: string
+    installArgs: string[]
+    installHint: string
+    installDocsUrl?: string
+    /**
      * Hint shown above the mini-terminal during login. Most CLIs auto-open the
      * browser; the hint tells the user what to expect.
      */
@@ -52,6 +61,10 @@ export const CLI_SPECS: Record<CliId, CliSpec> = {
         name: 'Claude Code',
         bin: 'claude',
         description: 'Anthropic Claude Code subscription. Used as the primary coding agent.',
+        installBin: 'npm',
+        installArgs: ['install', '-g', '@anthropic-ai/claude-code'],
+        installHint: 'Installs Claude Code with npm. Anthropic recommends running this without sudo; Node.js 18+ is required.',
+        installDocsUrl: 'https://docs.claude.com/en/docs/claude-code/setup',
         loginHint: 'Browser will open for Anthropic OAuth. Complete sign-in there, then close this window.',
         loginArgs: ['auth', 'login'],
         logoutArgs: ['auth', 'logout'],
@@ -95,6 +108,10 @@ export const CLI_SPECS: Record<CliId, CliSpec> = {
         name: 'Codex CLI',
         bin: 'codex',
         description: 'OpenAI Codex CLI subscription. Used alongside Claude Code for coding tasks.',
+        installBin: 'npm',
+        installArgs: ['install', '-g', '@openai/codex'],
+        installHint: 'Installs the OpenAI Codex CLI with npm. Node.js 22 is recommended for this app.',
+        installDocsUrl: 'https://help.openai.com/en/articles/11096431',
         loginHint: 'Browser will open for OpenAI OAuth. Complete sign-in there, then close this window.',
         loginArgs: ['login'],
         logoutArgs: ['logout'],

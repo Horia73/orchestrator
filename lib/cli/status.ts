@@ -4,6 +4,9 @@ import { CLI_IDS, CLI_SPECS, type CliId, type CliStatus } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
 
 const STATUS_TIMEOUT_MS = 8000
+const STATUS_CACHE_TTL_MS = 15_000
+
+let cachedStatuses: { at: number; data: Record<CliId, CliStatus> } | null = null
 
 /**
  * Return whether `bin` is reachable on PATH. We don't use `which`/`where`
@@ -70,7 +73,15 @@ async function runStatus(id: CliId): Promise<CliStatus> {
 }
 
 /** Status snapshot for all configured CLIs. Used by /api/cli/status. */
-export async function getAllCliStatuses(): Promise<Record<CliId, CliStatus>> {
+export async function getAllCliStatuses(options?: {
+    force?: boolean
+    ttlMs?: number
+}): Promise<Record<CliId, CliStatus>> {
+    const ttlMs = options?.ttlMs ?? STATUS_CACHE_TTL_MS
+    if (!options?.force && cachedStatuses && Date.now() - cachedStatuses.at < ttlMs) {
+        return cachedStatuses.data
+    }
+
     const entries = await Promise.all(
         CLI_IDS.map(async id => [id, await runStatus(id)] as const)
     )
@@ -78,5 +89,6 @@ export async function getAllCliStatuses(): Promise<Record<CliId, CliStatus>> {
     for (const [id, status] of entries) {
         result[id] = status
     }
+    cachedStatuses = { at: Date.now(), data: result }
     return result
 }

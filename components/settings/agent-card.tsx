@@ -7,7 +7,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/com
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
 import type { BrowserAgentModelSettings, BrowserAgentModelSlot, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
-import { useSettings, type AgentInfo, type SettingsBootstrap } from "./use-settings"
+import { useSettings, type AgentInfo, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
 import { ModelPicker, type ModelPickerOption } from "./model-picker"
 
 type SaveStatus =
@@ -82,7 +82,8 @@ export function AgentCard({ agentId }: { agentId: string }) {
 
   const providerDef = data.providers[effectiveProvider]
   const modelDef = providerDef?.models[effectiveModel]
-  const providerKeyOk = data.providerStatus?.[effectiveProvider]?.apiKeyConfigured ?? false
+  const providerStatus = data.providerStatus?.[effectiveProvider]
+  const providerReady = providerStatus?.available ?? false
 
   // Thinking is a model capability, not an agent-kind capability. Planned
   // execution agents still expose it when their selected model supports it.
@@ -213,12 +214,10 @@ export function AgentCard({ agentId }: { agentId: string }) {
 
         {/* Warnings rendered AFTER picker + thinking so the controls line up
             across cards regardless of how many warnings are active. */}
-        {!providerKeyOk && providerDef && providerDef.apiKeyEnv && !providerDef.apiKeyEnv.includes("NO_API_KEY") && (
+        {!providerReady && providerDef && (
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[12px] text-amber-700 dark:text-amber-400">
             <KeyRound className="mt-0.5 size-3.5 shrink-0" />
-            <p>
-              Missing <code className="rounded bg-amber-500/10 px-1 py-0.5 text-[11px]">{providerDef.apiKeyEnv}</code> in environment.
-            </p>
+            <p>{formatProviderUnavailable(providerStatus, providerDef.apiKeyEnv)}</p>
           </div>
         )}
 
@@ -268,8 +267,8 @@ function BrowserAgentCard({
   ])
   const missingProvider = [...selectedProviders].find(providerId => {
     const provider = data.providers[providerId]
-    if (!provider || provider.apiKeyEnv?.includes("NO_API_KEY")) return false
-    return !(data.providerStatus?.[providerId]?.apiKeyConfigured ?? false)
+    if (!provider) return false
+    return !(data.providerStatus?.[providerId]?.available ?? false)
   })
   const missingProviderDef = missingProvider ? data.providers[missingProvider] : undefined
 
@@ -310,7 +309,7 @@ function BrowserAgentCard({
           <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[12px] text-amber-700 dark:text-amber-400">
             <KeyRound className="mt-0.5 size-3.5 shrink-0" />
             <p>
-              Missing <code className="rounded bg-amber-500/10 px-1 py-0.5 text-[11px]">{missingProviderDef.apiKeyEnv}</code> in environment.
+              {formatProviderUnavailable(data.providerStatus?.[missingProvider!], missingProviderDef.apiKeyEnv)}
             </p>
           </div>
         )}
@@ -389,6 +388,27 @@ function BrowserModelSlotControls({
 
 function isBrowserCompatibleModel(option: ModelPickerOption): boolean {
   return option.providerId === "google" && (option.model.kinds.includes("text") || option.model.capabilities.includes("text"))
+}
+
+function formatProviderUnavailable(status: ProviderStatus | undefined, apiKeyEnv: string): React.ReactNode {
+  if (status?.authKind === "cli") {
+    return status.cliInstalled === false
+      ? `${status.cliName ?? "CLI"} is not installed. Install it in Settings > Auth.`
+      : `${status.cliName ?? "CLI"} is not logged in. Log in from Settings > Auth.`
+  }
+  if (status?.authKind === "api-key" || !apiKeyEnv.includes("NO_API_KEY")) {
+    return (
+      <>
+        Missing <code className="rounded bg-amber-500/10 px-1 py-0.5 text-[11px]">{apiKeyEnv}</code> in environment.
+      </>
+    )
+  }
+  if (status?.unavailableReason) return status.unavailableReason
+  return (
+    <>
+      Missing <code className="rounded bg-amber-500/10 px-1 py-0.5 text-[11px]">{apiKeyEnv}</code> in environment.
+    </>
+  )
 }
 
 function availableBrowserThinkingLevelsForModel(modelDef: ModelDef | undefined): ThinkingLevel[] {

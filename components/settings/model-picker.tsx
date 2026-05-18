@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/command"
 import { cn } from "@/lib/utils"
 import type { ProviderDef, ModelDef, ModelPricing } from "@/lib/config"
-import { useSettings } from "./use-settings"
+import { useSettings, type SettingsBootstrap } from "./use-settings"
 
 export interface ModelPickerProps {
   /** Current value as "providerId:modelId" */
@@ -62,11 +62,13 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
 
   if (!data) return null
 
-  // ALL models from ALL providers (except the hidden browser provider).
-  // Per product direction: pickers don't filter by agent kind — every agent
-  // sees every model. The user archives what's irrelevant.
+  // ALL usable models from ALL providers (except the hidden browser provider).
+  // A provider only becomes usable after its API key is configured or its CLI
+  // is installed and logged in. This keeps seeded models out of the picker
+  // until the runtime can actually run them.
   const allModels = flattenModels(data.providers)
     .filter(m => !HIDDEN_PROVIDERS.has(m.providerId))
+    .filter(m => isProviderAvailable(m.providerId, data))
     .filter(m => !filterModel || filterModel(m))
 
   // Split archived from active. Archived only show when the user expands the
@@ -156,7 +158,7 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
                 <span className="truncate">{current.model.name}</span>
               </>
             ) : (
-              <span className="text-foreground/50">Select a model…</span>
+              <span className="text-foreground/50">No model loaded</span>
             )}
           </span>
           <ChevronDown className="size-4 shrink-0 text-foreground/45 transition-transform group-data-[state=open]/picker:rotate-180" />
@@ -207,7 +209,11 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
             />
           </div>
           <CommandList>
-            <CommandEmpty>No models match “{query}”.</CommandEmpty>
+            <CommandEmpty>
+              {activeModels.length === 0 && archivedModels.length === 0
+                ? "No usable models. Add an API key or log in to a CLI provider."
+                : `No models match “${query}”.`}
+            </CommandEmpty>
 
             {favoriteModels.length > 0 && (
               <>
@@ -302,7 +308,7 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
 
           <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 text-[11px] text-foreground/45">
             <span>
-              {activeModels.length} models · {favorites.length} favorited
+              {activeModels.length} models · {favoriteModels.length} favorited
               {archivedModels.length > 0 && ` · ${archivedModels.length} archived`}
             </span>
             <button
@@ -552,6 +558,13 @@ function flattenModels(providers: Record<string, ProviderDef>): FlatModel[] {
     }
   }
   return out
+}
+
+function isProviderAvailable(providerId: string, data: SettingsBootstrap): boolean {
+  const status = data.providerStatus?.[providerId]
+  if (typeof status?.available === "boolean") return status.available
+  const provider = data.providers[providerId]
+  return Boolean(provider?.apiKeyEnv?.includes("NO_API_KEY") || status?.apiKeyConfigured)
 }
 
 function groupByProvider(models: FlatModel[]): Record<string, FlatModel[]> {

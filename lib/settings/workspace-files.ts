@@ -312,7 +312,9 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
 ]
 
 export function listWorkspaceFiles(): WorkspaceFileSummary[] {
-    return WORKSPACE_FILE_DEFINITIONS.map(def => summarizeFile(def))
+    return WORKSPACE_FILE_DEFINITIONS
+        .map(def => summarizeFile(def))
+        .filter(summary => shouldListFile(summary))
 }
 
 const WORKSPACE_INIT_MARKER = '.workspace-initialized'
@@ -449,6 +451,7 @@ export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
     if (!def) return null
 
     const summary = summarizeFile(def)
+    if (!shouldListFile(summary)) return null
     let content = def.dynamic === 'daily' ? buildDailyMemoryTemplate() : (def.defaultContent ?? '')
 
     if (def.source === 'virtual') {
@@ -486,6 +489,14 @@ export function writeWorkspaceFile(id: string, content: string): WorkspaceFilePa
     }
 
     return getWorkspaceFile(id)
+}
+
+function shouldListFile(summary: WorkspaceFileSummary): boolean {
+    // BOOT.md is an active onboarding script, not a reusable template. It
+    // should be visible only while the real file exists. Fresh installs seed it
+    // in ensureWorkspaceTemplates(); completed onboarding deletes it.
+    if (summary.id === 'boot') return summary.exists
+    return true
 }
 
 function getDefinition(id: string): WorkspaceFileDefinition | undefined {

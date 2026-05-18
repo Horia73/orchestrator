@@ -4,7 +4,7 @@ import { CLI_SPECS } from '@/lib/cli/specs'
 
 /** GET /api/cli/status — installed + loggedIn for each CLI. */
 export async function GET() {
-    const statuses = await getAllCliStatuses()
+    const statuses = await getAllCliStatuses({ force: true })
     // Include spec metadata so the UI can render names/descriptions without
     // duplicating the registry on the client side.
     const enriched = Object.fromEntries(
@@ -15,6 +15,8 @@ export async function GET() {
                 name: CLI_SPECS[id as keyof typeof CLI_SPECS].name,
                 description: CLI_SPECS[id as keyof typeof CLI_SPECS].description,
                 bin: CLI_SPECS[id as keyof typeof CLI_SPECS].bin,
+                installHint: CLI_SPECS[id as keyof typeof CLI_SPECS].installHint,
+                installDocsUrl: CLI_SPECS[id as keyof typeof CLI_SPECS].installDocsUrl,
                 loginHint: CLI_SPECS[id as keyof typeof CLI_SPECS].loginHint,
             },
         ])

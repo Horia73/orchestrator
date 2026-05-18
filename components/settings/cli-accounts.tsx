@@ -4,6 +4,7 @@ import * as React from "react"
 import {
     AlertCircle,
     CheckCircle2,
+    Download,
     Loader2,
     LogIn,
     LogOut,
@@ -20,7 +21,7 @@ import { useCliStatus, type CliStatusEntry } from "./use-cli-status"
 interface ModalState {
     cliId: string
     cliName: string
-    mode: "login" | "logout" | "free"
+    mode: "install" | "login" | "logout" | "free"
     hint: string
 }
 
@@ -79,6 +80,12 @@ export function CliAccountsSection() {
                         key={id}
                         id={id}
                         entry={entry}
+                        onInstall={() => setModal({
+                            cliId: id,
+                            cliName: entry.name,
+                            mode: "install",
+                            hint: entry.installHint,
+                        })}
                         onLogin={() => setModal({
                             cliId: id,
                             cliName: entry.name,
@@ -108,9 +115,10 @@ export function CliAccountsSection() {
     )
 }
 
-function CliCard({ id, entry, onLogin, onLogout }: {
+function CliCard({ id, entry, onInstall, onLogin, onLogout }: {
     id: string
     entry: CliStatusEntry
+    onInstall: () => void
     onLogin: () => void
     onLogout: () => void
 }) {
@@ -149,9 +157,25 @@ function CliCard({ id, entry, onLogin, onLogout }: {
 
                 <div className="flex flex-wrap gap-2 pt-1">
                     {!entry.installed ? (
-                        <p className="text-[12.5px] text-foreground/55">
-                            Install the CLI to use this provider.
-                        </p>
+                        <>
+                            <button
+                                onClick={onInstall}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-2.5 text-[12.5px] font-medium text-background transition-opacity hover:opacity-90"
+                            >
+                                <Download className="size-3.5" />
+                                Install
+                            </button>
+                            {entry.installDocsUrl && (
+                                <a
+                                    href={entry.installDocsUrl}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex h-8 items-center rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/65 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    Docs
+                                </a>
+                            )}
+                        </>
                     ) : entry.loggedIn ? (
                         <button
                             onClick={onLogout}

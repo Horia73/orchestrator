@@ -104,6 +104,20 @@ function compactNotificationBody(value: string): string {
     .slice(0, 180)
 }
 
+class ChatFetchError extends Error {
+  chatMessage?: string
+
+  constructor(message: string, chatMessage?: string) {
+    super(message)
+    this.name = "ChatFetchError"
+    this.chatMessage = chatMessage
+  }
+}
+
+function errorMessageFromUnknown(error: unknown): string {
+  return error instanceof Error ? error.message : String(error)
+}
+
 async function showChatCompletionNotification(
   conversationId: string,
   conversation: Conversation | undefined,
@@ -1125,7 +1139,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             const err = await response
               .json()
               .catch(() => ({ error: "Unknown error" }))
-            throw new Error(err.error || `HTTP ${response.status}`)
+            throw new ChatFetchError(
+              err.error || `HTTP ${response.status}`,
+              typeof err.chatMessage === "string" ? err.chatMessage : undefined
+            )
           }
 
           const reader = response.body?.getReader()
@@ -1777,6 +1794,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         .catch((err) => {
           if (err.name === "AbortError") return
           console.error("Chat fetch error:", err)
+          streamDoneRef.current = true
+          const messageText =
+            err instanceof ChatFetchError && err.chatMessage
+              ? err.chatMessage
+              : `I couldn't start the model runtime: ${errorMessageFromUnknown(err)}`
+          const finalMsg: Message = {
+            id: assistantMsgId,
+            role: "assistant",
+            content: messageText,
+            status: "error",
+            contentSegments: [{ phase: 0, content: messageText }],
+            timestamp: Date.now(),
+          }
+          dispatch({
+            type: "ADD_ASSISTANT_MESSAGE",
+            conversationId: finalConvId,
+            message: finalMsg,
+          })
+          handleAssistantFinished(finalConvId, finalMsg)
         })
         .finally(() => {
           streamingRef.current = false

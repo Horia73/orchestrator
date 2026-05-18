@@ -17,8 +17,15 @@ export interface AgentInfo {
 }
 
 export interface ProviderStatus {
+  available: boolean
+  authKind: "api-key" | "cli" | "none"
   apiKeyConfigured: boolean
   apiKeyMasked: string | null
+  cliInstalled?: boolean
+  cliLoggedIn?: boolean
+  cliName?: string
+  unavailableReason: string | null
+  chatMessage: string | null
 }
 
 export interface SettingsBootstrap {

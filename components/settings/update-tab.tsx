@@ -12,12 +12,14 @@ import {
   RefreshCcw,
   RotateCw,
   Trash2,
+  X,
 } from "lucide-react"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
-import { useConfirm } from "@/components/ui/confirm-dialog"
 
 interface ActiveRunInfo {
   conversationId: string
@@ -115,9 +117,10 @@ export function UpdateTab() {
   const [checking, setChecking] = React.useState(false)
   const [updating, setUpdating] = React.useState(false)
   const [resetting, setResetting] = React.useState(false)
+  const [resetModalOpen, setResetModalOpen] = React.useState(false)
+  const [resetConfirmText, setResetConfirmText] = React.useState("")
   const [error, setError] = React.useState<string | null>(null)
   const [resetMessage, setResetMessage] = React.useState<string | null>(null)
-  const { confirm, dialog } = useConfirm()
 
   const loadStatus = React.useCallback(async (refresh = false) => {
     const res = await fetch(`/api/update/status${refresh ? "?refresh=1" : ""}`, { cache: "no-store" })
@@ -187,13 +190,7 @@ export function UpdateTab() {
   }
 
   const handleFactoryReset = async () => {
-    const ok = await confirm({
-      title: "Factory reset Orchestrator?",
-      message: "This clears conversations, inbox, scheduled tasks, watchlist, uploads, artifacts, and workspace memory. Env secrets are preserved.",
-      confirmLabel: "Factory reset",
-      destructive: true,
-    })
-    if (!ok) return
+    if (resetConfirmText.trim().toLowerCase() !== "delete") return
 
     setResetting(true)
     setResetMessage(null)
@@ -207,12 +204,18 @@ export function UpdateTab() {
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(json?.error || `Factory reset failed (${res.status})`)
       setResetMessage("Factory reset complete. Reloading initial workspace.")
+      setResetModalOpen(false)
       window.setTimeout(() => window.location.assign("/"), 800)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Factory reset failed.")
     } finally {
       setResetting(false)
     }
+  }
+
+  const openFactoryReset = () => {
+    setResetConfirmText("")
+    setResetModalOpen(true)
   }
 
   if (loading) {
@@ -233,7 +236,16 @@ export function UpdateTab() {
 
   return (
     <div className="flex flex-col gap-4">
-      {dialog}
+      <FactoryResetModal
+        open={resetModalOpen}
+        value={resetConfirmText}
+        resetting={resetting}
+        onChange={setResetConfirmText}
+        onClose={() => {
+          if (!resetting) setResetModalOpen(false)
+        }}
+        onConfirm={handleFactoryReset}
+      />
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <h2 className="text-[15px] font-semibold text-foreground/85">Updates</h2>
@@ -367,9 +379,7 @@ export function UpdateTab() {
             <DetailRow label="Published" value={formatDate(status?.latest?.publishedAt)} />
             {status?.latest?.fallback && <DetailRow label="Source" value="Installed fallback" />}
             {status?.latest?.body ? (
-              <pre className="max-h-44 overflow-auto whitespace-pre-wrap rounded-xl border border-border/60 bg-muted/25 p-3 text-[12px] leading-relaxed text-foreground/65">
-                {status.latest.body}
-              </pre>
+              <ReleaseNotesMarkdown content={status.latest.body} />
             ) : (
               <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-8 text-center text-[12.5px] text-foreground/45">
                 No release notes.
@@ -398,32 +408,164 @@ export function UpdateTab() {
         </Card>
       ) : null}
 
-      <Card className="rounded-xl border-destructive/25">
-        <CardHeader className="flex-row items-start justify-between gap-3">
-          <div>
-            <CardTitle className="text-[15px] text-destructive">Factory Reset</CardTitle>
-            <p className="mt-1 text-[12.5px] text-foreground/55">
-              Return the app data to first-run state while keeping installation env secrets.
-            </p>
+      {resetMessage && (
+        <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-700 dark:text-emerald-400">
+          {resetMessage}
+        </div>
+      )}
+
+      <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
+        <div>
+          <h3 className="text-[13px] font-medium text-foreground/70">Danger zone</h3>
+          <p className="mt-0.5 text-[12.5px] text-foreground/45">
+            Return app data to first-run state while keeping installation env secrets.
+          </p>
+        </div>
+        <Button
+          variant="outline"
+          size="sm"
+          onClick={openFactoryReset}
+          disabled={resetting}
+          className="border-destructive/25 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
+        >
+          {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+          Factory reset
+        </Button>
+      </div>
+    </div>
+  )
+}
+
+function ReleaseNotesMarkdown({ content }: { content: string }) {
+  return (
+    <div className="max-h-56 overflow-auto rounded-xl border border-border/60 bg-muted/20 px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground/70">
+      <ReactMarkdown
+        remarkPlugins={[remarkGfm]}
+        components={{
+          h1: ({ children }) => <h3 className="mb-2 text-[15px] font-semibold text-foreground">{children}</h3>,
+          h2: ({ children }) => <h4 className="mb-1.5 mt-3 text-[14px] font-semibold text-foreground/85 first:mt-0">{children}</h4>,
+          h3: ({ children }) => <h5 className="mb-1 mt-2.5 text-[13px] font-semibold text-foreground/80 first:mt-0">{children}</h5>,
+          p: ({ children }) => <p className="my-1.5">{children}</p>,
+          ul: ({ children }) => <ul className="my-2 list-disc space-y-1 pl-5">{children}</ul>,
+          ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
+          li: ({ children }) => <li className="pl-0.5">{children}</li>,
+          a: ({ href, children }) => (
+            <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+              {children}
+            </a>
+          ),
+          code: ({ children }) => (
+            <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11.5px] text-foreground/80">
+              {children}
+            </code>
+          ),
+          pre: ({ children }) => (
+            <pre className="my-2 overflow-auto rounded-lg border border-border/60 bg-background p-2.5 text-[11.5px]">
+              {children}
+            </pre>
+          ),
+        }}
+      >
+        {content}
+      </ReactMarkdown>
+    </div>
+  )
+}
+
+function FactoryResetModal({
+  open,
+  value,
+  resetting,
+  onChange,
+  onClose,
+  onConfirm,
+}: {
+  open: boolean
+  value: string
+  resetting: boolean
+  onChange: (value: string) => void
+  onClose: () => void
+  onConfirm: () => void
+}) {
+  const inputRef = React.useRef<HTMLInputElement>(null)
+  const canConfirm = value.trim().toLowerCase() === "delete"
+
+  React.useEffect(() => {
+    if (!open) return
+    const frame = window.requestAnimationFrame(() => inputRef.current?.focus())
+    return () => window.cancelAnimationFrame(frame)
+  }, [open])
+
+  if (!open) return null
+
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/35 px-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className="w-full max-w-md rounded-2xl border border-border/70 bg-card p-5 shadow-2xl"
+        onClick={event => event.stopPropagation()}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-3">
+            <span className="flex size-9 shrink-0 items-center justify-center rounded-xl bg-destructive/10 text-destructive">
+              <Trash2 className="size-4" />
+            </span>
+            <div>
+              <h3 className="text-[16px] font-semibold text-foreground">Factory reset Orchestrator?</h3>
+              <p className="mt-1 text-[12.5px] leading-relaxed text-foreground/55">
+                This clears conversations, inbox, schedules, watchlist, uploads, artifacts, and workspace memory. Env secrets stay in place.
+              </p>
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            disabled={resetting}
+            className="flex size-7 items-center justify-center rounded-md text-foreground/45 transition-colors hover:bg-muted/70 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            aria-label="Close"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <div className="mt-4 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-[12.5px] leading-relaxed text-destructive">
+          This action cannot be undone from the UI.
+        </div>
+
+        <label className="mt-4 block">
+          <span className="text-[12px] font-medium uppercase tracking-wider text-foreground/50">
+            Type delete to confirm
+          </span>
+          <input
+            ref={inputRef}
+            value={value}
+            onChange={event => onChange(event.target.value)}
+            disabled={resetting}
+            autoCapitalize="none"
+            autoComplete="off"
+            spellCheck={false}
+            className="mt-1.5 h-10 w-full rounded-lg border border-border bg-background px-3 font-mono text-[13px] text-foreground outline-none transition-shadow focus-visible:ring-3 focus-visible:ring-ring/40 disabled:opacity-60"
+            placeholder="delete"
+          />
+        </label>
+
+        <div className="mt-5 flex items-center justify-end gap-2">
+          <Button variant="outline" size="sm" onClick={onClose} disabled={resetting}>
+            Cancel
+          </Button>
           <Button
             variant="destructive"
             size="sm"
-            onClick={handleFactoryReset}
-            disabled={resetting}
+            onClick={onConfirm}
+            disabled={!canConfirm || resetting}
           >
             {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-            Reset
+            Factory reset
           </Button>
-        </CardHeader>
-        {resetMessage && (
-          <CardContent>
-            <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-700 dark:text-emerald-400">
-              {resetMessage}
-            </div>
-          </CardContent>
-        )}
-      </Card>
+        </div>
+      </div>
     </div>
   )
 }

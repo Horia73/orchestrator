@@ -1,5 +1,5 @@
-import { getConfig, getApiKey, PROVIDERS, isFileSupportedByProvider, getEffectiveAgentSettings } from '@/lib/config'
-import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
+import { getConfig, getApiKey, isFileSupportedByProvider, getEffectiveAgentSettings } from '@/lib/config'
+import { getProvider } from '@/lib/ai/providers'
 import { addMessage, updateConversationContextUsage, updateInteractionId, getInteractionId, getConversation, createConversation } from '@/lib/db'
 import type { Attachment, ContextCompactionReasoningEntry, ContextUsageSnapshot, Conversation, Message } from '@/lib/types'
 import type { AgentRunEvent, MessageAttachment, ToolStreamDelta } from '@/lib/ai/agents/types'
@@ -27,6 +27,7 @@ import { resolveExistingUploadPath } from '@/lib/uploads'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { generateTitle } from '@/lib/utils-chat'
+import { getProviderReadiness } from '@/lib/provider-readiness'
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
@@ -257,19 +258,10 @@ export async function POST(request: Request) {
             model: orchestrator.model ?? resolvedOrchestratorSettings.model,
             thinkingLevel: orchestrator.thinkingLevel ?? resolvedOrchestratorSettings.thinkingLevel,
         }
-    const providerCaps = getProviderCapabilities(agentSettings.provider)
     const apiKey = getApiKey(agentSettings.provider)
     const registry = getEffectiveRegistry()
+    const providerDef = registry[agentSettings.provider]
     const modelContextWindow = registry[agentSettings.provider]?.models[agentSettings.model]?.contextWindow ?? null
-
-    // Only enforce API key for providers that actually need one. CLI-backed
-    // providers (claude-code, codex, browser) authenticate locally — no key.
-    if (providerCaps?.requiresApiKey !== false && !apiKey) {
-        return new Response(
-            JSON.stringify({ error: `API key not configured. Set ${PROVIDERS[agentSettings.provider]?.apiKeyEnv} in .env.local` }),
-            { status: 401, headers: { 'Content-Type': 'application/json' } }
-        )
-    }
 
     let body: { conversationId: string; messageId: string; messages: Message[] }
     try {
@@ -281,6 +273,59 @@ export async function POST(request: Request) {
     const { conversationId, messageId, messages } = body
     if (!conversationId || !messageId || !messages?.length) {
         return new Response(JSON.stringify({ error: 'Missing conversationId, messageId, or messages' }), { status: 400 })
+    }
+
+    // Ensure conversation exists (race condition: frontend fires POST /api/conversations
+    // in parallel, but /api/chat may arrive first). Do this before runtime
+    // validation so setup failures still persist as normal assistant messages.
+    const existing = getConversation(conversationId)
+    if (!existing) {
+        const firstUserMsg = messages.find(m => m.role === 'user') ?? messages[0]
+        const conv: Conversation = {
+            id: conversationId,
+            title: generateTitle(firstUserMsg?.content ?? '', firstUserMsg?.attachments),
+            messages: messages.map(m => ({ ...m })),
+            createdAt: Date.now(),
+        }
+        createConversation(conv)
+    }
+
+    const setupErrorResponse = (payload: { error: string; chatMessage: string; code: string }, status: number) => {
+        addMessage(conversationId, {
+            id: messageId,
+            role: 'assistant',
+            content: payload.chatMessage,
+            status: 'error',
+            contentSegments: [{ phase: 0, content: payload.chatMessage }],
+            timestamp: Date.now(),
+        })
+        return new Response(JSON.stringify(payload), {
+            status,
+            headers: { 'Content-Type': 'application/json' },
+        })
+    }
+
+    const readiness = await getProviderReadiness(agentSettings.provider, providerDef)
+    if (!readiness.available) {
+        return setupErrorResponse(
+            {
+                error: readiness.unavailableReason ?? 'No model loaded.',
+                chatMessage: readiness.chatMessage ?? 'No model loaded. Configure a provider in Settings, then try again.',
+                code: 'provider_unavailable',
+            },
+            401
+        )
+    }
+
+    if (!providerDef?.models[agentSettings.model]) {
+        return setupErrorResponse(
+            {
+                error: `Model ${agentSettings.model} is not available for ${providerDef?.name ?? agentSettings.provider}.`,
+                chatMessage: 'No model loaded. Choose a valid model in Settings, then try again.',
+                code: 'model_unavailable',
+            },
+            400
+        )
     }
 
     const provider = getProvider(agentSettings.provider, apiKey ?? '')
@@ -337,20 +382,6 @@ export async function POST(request: Request) {
 
     // Look up prior session — provider decides whether to actually resume.
     const prevSession = getInteractionId(conversationId, agentSettings.provider)
-
-    // Ensure conversation exists (race condition: frontend fires POST /api/conversations
-    // in parallel, but /api/chat may arrive first)
-    const existing = getConversation(conversationId)
-    if (!existing) {
-        const firstUserMsg = messages.find(m => m.role === 'user') ?? messages[0]
-        const conv: Conversation = {
-            id: conversationId,
-            title: generateTitle(firstUserMsg?.content ?? '', firstUserMsg?.attachments),
-            messages: messages.map(m => ({ ...m })),
-            createdAt: Date.now(),
-        }
-        createConversation(conv)
-    }
 
     // Create placeholder assistant message in DB
     const assistantMsg: Message = {

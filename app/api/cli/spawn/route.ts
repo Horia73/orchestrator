@@ -7,7 +7,7 @@ import { startSession, describeSession } from '@/lib/cli/sessions'
 
 const SpawnBodySchema = z.object({
     cli: z.enum(CLI_IDS as [CliId, ...CliId[]]),
-    mode: z.enum(['login', 'logout', 'status', 'free']),
+    mode: z.enum(['install', 'login', 'logout', 'status', 'free']),
 })
 
 /** POST /api/cli/spawn — start a CLI session, returns sessionId. */

@@ -8,6 +8,7 @@ import { getToolsForAgent, getToolsForBuiltins, resolveProviderToolSurface } fro
 import { getConfig, getEffectiveAgentSettings } from '@/lib/config'
 import { filterIntegrationToolExposure } from '@/lib/integrations/exposure'
 import { getEffectiveRegistry } from '@/lib/models/registry'
+import { getProviderReadiness } from '@/lib/provider-readiness'
 
 type ProviderCaps = NonNullable<ReturnType<typeof getProviderCapabilities>>
 
@@ -74,8 +75,10 @@ export async function GET(request: Request) {
     const providerDef = registry[settings.provider]
     const modelDef = providerDef?.models[settings.model] ?? null
     const providerCaps = getProviderCapabilities(settings.provider)
+    const readiness = await getProviderReadiness(settings.provider, providerDef)
+    const availableModel = readiness.available ? modelDef : null
 
-    const systemPromptTokens = providerCaps
+    const systemPromptTokens = providerCaps && availableModel
         ? estimateSystemPromptTokens(new URL(request.url).origin, providerCaps)
         : null
 
@@ -90,16 +93,20 @@ export async function GET(request: Request) {
                 name: providerDef?.name ?? settings.provider,
                 requiresApiKey: providerCaps?.requiresApiKey !== false,
             },
-            model: modelDef ? {
+            model: availableModel ? {
                 id: settings.model,
-                name: modelDef.name,
-                contextWindow: modelDef.contextWindow,
-                maxOutputTokens: modelDef.maxOutputTokens,
-                pricingKind: modelDef.pricing?.kind ?? 'unknown',
-                dataCompleteness: modelDef.dataCompleteness,
+                name: availableModel.name,
+                contextWindow: availableModel.contextWindow,
+                maxOutputTokens: availableModel.maxOutputTokens,
+                pricingKind: availableModel.pricing?.kind ?? 'unknown',
+                dataCompleteness: availableModel.dataCompleteness,
             } : null,
             thinkingLevel: settings.thinkingLevel,
             source: settings.source,
+            available: Boolean(availableModel),
+            unavailableReason: !modelDef
+                ? `Model ${settings.model} is not available for ${providerDef?.name ?? settings.provider}.`
+                : readiness.unavailableReason,
         },
         systemPromptTokens,
     }, {

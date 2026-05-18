@@ -37,6 +37,8 @@ interface ChatStatusResponse {
         } | null
         thinkingLevel: string
         source: ChatStatusSource
+        available: boolean
+        unavailableReason: string | null
     }
     /** Estimated orchestrator system prompt size, in tokens. Null when unavailable. */
     systemPromptTokens?: number | null
@@ -95,7 +97,7 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
     const activeCliId = isCliProvider(status.data?.chat.provider.id)
         ? status.data.chat.provider.id
         : null
-    const quotas = useLazyCliUsage(open && activeCliId !== null)
+    const quotas = useLazyCliUsage(open && activeCliId !== null && Boolean(status.data?.chat.available))
     const systemPromptTokens = status.data?.systemPromptTokens ?? null
     const contextEstimate = React.useMemo(
         () => estimateContextTokens(messages, draftValue, attachments, systemPromptTokens),
@@ -112,6 +114,8 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
     const contextPct = contextDisplay.pct
     const chat = status.data?.chat
     const model = chat?.model
+    const modelReady = Boolean(model && chat?.available)
+    const unavailableReason = chat?.unavailableReason ?? "Configure a provider in Settings before sending messages."
 
     return (
         <Popover open={open} onOpenChange={setOpen}>
@@ -127,7 +131,7 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
                         </button>
                     </PopoverTrigger>
                 </TooltipTrigger>
-                <TooltipContent side="top">Status</TooltipContent>
+                <TooltipContent side="top">{modelReady ? "Status" : "No model loaded"}</TooltipContent>
             </Tooltip>
 
             <PopoverContent
@@ -149,19 +153,21 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
             >
                 <div className="flex items-center justify-between gap-3 border-b border-border/70 px-4 py-3">
                     <div className="min-w-0">
-                        <div className="truncate text-[15px] font-semibold text-foreground" title={model?.name ?? undefined}>
-                            {model?.name ?? "Chat status"}
+                        <div className="truncate text-[15px] font-semibold text-foreground" title={modelReady ? model?.name : undefined}>
+                            {modelReady ? model?.name : "No model loaded"}
                         </div>
                         <div className="mt-0.5 truncate text-[12.5px] text-foreground/50">
-                            {chat
+                            {modelReady && chat
                                 ? `${chat.provider.name} / ${model?.id ?? "unknown"} · ${formatSource(chat.source)}`
-                                : status.loading ? "Loading model" : "Orchestrator"}
+                                : status.loading ? "Loading model" : unavailableReason}
                         </div>
                     </div>
                     {status.loading ? (
                         <Loader2 className="size-4 shrink-0 animate-spin text-muted-foreground" />
                     ) : status.error ? (
                         <AlertCircle className="size-4 shrink-0 text-destructive" />
+                    ) : !modelReady ? (
+                        <AlertCircle className="size-4 shrink-0 text-amber-600 dark:text-amber-400" />
                     ) : (
                         <CheckCircle2 className="size-4 shrink-0 text-emerald-600 dark:text-emerald-400" />
                     )}
@@ -170,6 +176,8 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
                 <div className="px-4 py-3">
                     {status.error ? (
                         <InlineNotice tone="danger">{status.error}</InlineNotice>
+                    ) : !modelReady ? (
+                        <InlineNotice tone="danger">{unavailableReason}</InlineNotice>
                     ) : (
                         <>
                             <MetricRow
