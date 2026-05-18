@@ -203,9 +203,15 @@ BROWSER_AGENT_VNC_WS_PUBLIC_URL=ws://127.0.0.1:6080
 ```
 
 Set `ORCHESTRATOR_PUBLIC_URL` when users open the app through a LAN hostname,
-reverse proxy, or tunnel, for example `http://orchestrator.lan`. OAuth
-redirects use this URL, or auto-detect it from `Host` / `X-Forwarded-*`
-headers when the app is opened through the same address.
+reverse proxy, or tunnel, for example `http://orchestrator.lan`. Google OAuth
+is stricter than normal app routing: Authorized redirect URIs must be either
+`localhost` for a local/SSH-tunnel setup, or an HTTPS URL on a real public
+domain. Names such as `.lan`, `.local`, and private IPs are fine for opening
+Orchestrator, but Google rejects them as OAuth redirect URIs. When the app URL
+is not Google-compatible, Orchestrator falls back to `http://localhost:3000/...`
+for OAuth so users can connect through an SSH tunnel, or you can set
+`GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI` / `GMAIL_OAUTH_REDIRECT_URI` to a public
+HTTPS callback.
 
 Keep `6080` bound to `127.0.0.1` unless it is protected by the same private access layer as the main app.
 

@@ -9,6 +9,7 @@ import {
 } from "lucide-react"
 import { codeToHtml } from "shiki"
 import { cn } from "@/lib/utils"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 
 // ---------------------------------------------------------------------------
@@ -267,11 +268,10 @@ function ToolbarButton({ onClick, icon, label, title }: ToolbarButtonProps) {
 
 function CopyButton({ text }: { text: string }) {
     const [copied, setCopied] = React.useState(false)
-    const handle = React.useCallback(() => {
-        navigator.clipboard.writeText(text).then(() => {
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1500)
-        })
+    const handle = React.useCallback(async () => {
+        if (!await copyTextToClipboard(text)) return
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1500)
     }, [text])
     return (
         <ToolbarButton

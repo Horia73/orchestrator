@@ -8,6 +8,7 @@ import type { Options as RemarkMathOptions } from "remark-math"
 import rehypeKatex from "rehype-katex"
 import { Copy, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import type { Components } from "react-markdown"
 import { codeToHtml } from "shiki"
 
@@ -88,7 +89,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     const [hovered, setHovered] = React.useState(false)
 
     const handleCopy = React.useCallback(async () => {
-        await navigator.clipboard.writeText(code)
+        if (!await copyTextToClipboard(code)) return
         setCopied(true)
         window.setTimeout(() => setCopied(false), 1500)
     }, [code])

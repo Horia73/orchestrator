@@ -26,6 +26,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { Button } from "@/components/ui/button"
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { CliAccountsSection } from "@/components/settings/cli-accounts"
@@ -85,6 +86,41 @@ type BusyAction =
     | "homeassistant-action-mode"
     | null
 
+type NoticeTone = "success" | "error" | "warning"
+
+function shouldWarnAboutLocalhostRedirect(redirectUri: string): boolean {
+    if (typeof window === "undefined") return false
+    const redirectUrl = parseUrl(redirectUri)
+    if (!redirectUrl || !isLoopbackHostname(redirectUrl.hostname)) return false
+    return !isLoopbackHostname(window.location.hostname)
+}
+
+function localhostRedirectNotice(redirectUri: string): { tone: NoticeTone; text: string } {
+    const redirectUrl = parseUrl(redirectUri)
+    const port = redirectUrl?.port || "3000"
+    return {
+        tone: "warning",
+        text: `Google will return to ${redirectUri}. That works directly if Orchestrator is running on this same browser machine. If Orchestrator is on a different headless server, open it through a local tunnel first: ssh -L ${port}:127.0.0.1:3000 user@server, then use http://localhost:${port}/settings.`,
+    }
+}
+
+function parseUrl(value: string): URL | null {
+    try {
+        return new URL(value)
+    } catch {
+        return null
+    }
+}
+
+function isLoopbackHostname(hostname: string): boolean {
+    const host = hostname.trim().replace(/^\[|\]$/g, "").replace(/\.$/, "").toLowerCase()
+    return host === "localhost"
+        || host.endsWith(".localhost")
+        || host === "::1"
+        || host === "0:0:0:0:0:0:0:1"
+        || /^127(?:\.\d{1,3}){3}$/.test(host)
+}
+
 const GOOGLE_PROJECTS_URL = "https://console.cloud.google.com/projectselector2/home/dashboard"
 const GOOGLE_AUTH_BRANDING_URL = "https://console.cloud.google.com/auth/branding"
 const GOOGLE_AUTH_AUDIENCE_URL = "https://console.cloud.google.com/auth/audience"
@@ -111,7 +147,7 @@ export function AuthTab() {
 function ConnectedServicesSection() {
     const { data, loading, error, refresh } = useIntegrationsStatus()
     const [busy, setBusy] = React.useState<BusyAction>(null)
-    const [feedback, setFeedback] = React.useState<{ ok: boolean; text: string } | null>(null)
+    const [feedback, setFeedback] = React.useState<{ tone: NoticeTone; text: string } | null>(null)
     const popupRef = React.useRef<Window | null>(null)
 
     React.useEffect(() => {
@@ -126,7 +162,7 @@ function ConnectedServicesSection() {
                     ? "Google Workspace"
                     : "Gmail"
             setFeedback({
-                ok: event.data.ok === true,
+                tone: event.data.ok === true ? "success" : "error",
                 text: event.data.message || (event.data.ok ? `${label} connected.` : `${label} authorization failed.`),
             })
             void refresh()
@@ -159,8 +195,11 @@ function ConnectedServicesSection() {
         setFeedback(null)
         try {
             const res = await fetch("/api/integrations/gmail/oauth/start", { method: "POST" })
-            const json = await res.json().catch(() => ({})) as { authUrl?: string; error?: string }
+            const json = await res.json().catch(() => ({})) as { authUrl?: string; redirectUri?: string; error?: string }
             if (!res.ok || !json.authUrl) throw new Error(json.error || `OAuth start failed (${res.status})`)
+            if (json.redirectUri && shouldWarnAboutLocalhostRedirect(json.redirectUri)) {
+                setFeedback(localhostRedirectNotice(json.redirectUri))
+            }
 
             const popup = window.open(
                 json.authUrl,
@@ -175,7 +214,7 @@ function ConnectedServicesSection() {
             popup.focus()
         } catch (err) {
             setBusy(null)
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not start Gmail OAuth." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not start Gmail OAuth." })
         }
     }
 
@@ -188,10 +227,10 @@ function ConnectedServicesSection() {
             const res = await fetch("/api/integrations/gmail/disconnect", { method: "POST" })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Disconnect failed (${res.status})`)
-            setFeedback({ ok: true, text: "Gmail disconnected." })
+            setFeedback({ tone: "success", text: "Gmail disconnected." })
             await refresh()
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not disconnect Gmail." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not disconnect Gmail." })
         } finally {
             setBusy(null)
         }
@@ -208,11 +247,11 @@ function ConnectedServicesSection() {
             })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Save failed (${res.status})`)
-            setFeedback({ ok: true, text: "Gmail OAuth config saved." })
+            setFeedback({ tone: "success", text: "Gmail OAuth config saved." })
             await refresh()
             return true
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not save Gmail OAuth config." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not save Gmail OAuth config." })
             return false
         } finally {
             setBusy(null)
@@ -224,8 +263,11 @@ function ConnectedServicesSection() {
         setFeedback(null)
         try {
             const res = await fetch("/api/integrations/google-calendar/oauth/start", { method: "POST" })
-            const json = await res.json().catch(() => ({})) as { authUrl?: string; error?: string }
+            const json = await res.json().catch(() => ({})) as { authUrl?: string; redirectUri?: string; error?: string }
             if (!res.ok || !json.authUrl) throw new Error(json.error || `OAuth start failed (${res.status})`)
+            if (json.redirectUri && shouldWarnAboutLocalhostRedirect(json.redirectUri)) {
+                setFeedback(localhostRedirectNotice(json.redirectUri))
+            }
 
             const popup = window.open(
                 json.authUrl,
@@ -240,7 +282,7 @@ function ConnectedServicesSection() {
             popup.focus()
         } catch (err) {
             setBusy(null)
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not start Google Calendar OAuth." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not start Google Calendar OAuth." })
         }
     }
 
@@ -253,10 +295,10 @@ function ConnectedServicesSection() {
             const res = await fetch("/api/integrations/google-calendar/disconnect", { method: "POST" })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Disconnect failed (${res.status})`)
-            setFeedback({ ok: true, text: "Google Calendar disconnected." })
+            setFeedback({ tone: "success", text: "Google Calendar disconnected." })
             await refresh()
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not disconnect Google Calendar." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not disconnect Google Calendar." })
         } finally {
             setBusy(null)
         }
@@ -273,11 +315,11 @@ function ConnectedServicesSection() {
             })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Save failed (${res.status})`)
-            setFeedback({ ok: true, text: "Google Workspace OAuth config saved." })
+            setFeedback({ tone: "success", text: "Google Workspace OAuth config saved." })
             await refresh()
             return true
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not save Google Calendar OAuth config." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not save Google Calendar OAuth config." })
             return false
         } finally {
             setBusy(null)
@@ -289,8 +331,11 @@ function ConnectedServicesSection() {
         setFeedback(null)
         try {
             const res = await fetch("/api/integrations/google-drive/oauth/start", { method: "POST" })
-            const json = await res.json().catch(() => ({})) as { authUrl?: string; error?: string }
+            const json = await res.json().catch(() => ({})) as { authUrl?: string; redirectUri?: string; error?: string }
             if (!res.ok || !json.authUrl) throw new Error(json.error || `OAuth start failed (${res.status})`)
+            if (json.redirectUri && shouldWarnAboutLocalhostRedirect(json.redirectUri)) {
+                setFeedback(localhostRedirectNotice(json.redirectUri))
+            }
 
             const popup = window.open(
                 json.authUrl,
@@ -305,7 +350,7 @@ function ConnectedServicesSection() {
             popup.focus()
         } catch (err) {
             setBusy(null)
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not start Google Workspace OAuth." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not start Google Workspace OAuth." })
         }
     }
 
@@ -318,10 +363,10 @@ function ConnectedServicesSection() {
             const res = await fetch("/api/integrations/google-drive/disconnect", { method: "POST" })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Disconnect failed (${res.status})`)
-            setFeedback({ ok: true, text: "Google Workspace disconnected." })
+            setFeedback({ tone: "success", text: "Google Workspace disconnected." })
             await refresh()
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not disconnect Google Workspace." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not disconnect Google Workspace." })
         } finally {
             setBusy(null)
         }
@@ -338,11 +383,11 @@ function ConnectedServicesSection() {
             })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Save failed (${res.status})`)
-            setFeedback({ ok: true, text: "Google Workspace OAuth config saved." })
+            setFeedback({ tone: "success", text: "Google Workspace OAuth config saved." })
             await refresh()
             return true
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not save Google Workspace OAuth config." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not save Google Workspace OAuth config." })
             return false
         } finally {
             setBusy(null)
@@ -358,7 +403,7 @@ function ConnectedServicesSection() {
             if (!res.ok || !json.status) throw new Error(json.error || `WhatsApp start failed (${res.status})`)
 
             setFeedback({
-                ok: true,
+                tone: "success",
                 text: json.status.connected
                     ? "WhatsApp connected."
                     : json.status.qrAvailable
@@ -367,7 +412,7 @@ function ConnectedServicesSection() {
             })
             await refresh()
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not start WhatsApp." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not start WhatsApp." })
         } finally {
             setBusy(null)
         }
@@ -382,10 +427,10 @@ function ConnectedServicesSection() {
             const res = await fetch("/api/integrations/whatsapp/disconnect", { method: "POST" })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Disconnect failed (${res.status})`)
-            setFeedback({ ok: true, text: "WhatsApp disconnected." })
+            setFeedback({ tone: "success", text: "WhatsApp disconnected." })
             await refresh()
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not disconnect WhatsApp." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not disconnect WhatsApp." })
         } finally {
             setBusy(null)
         }
@@ -406,7 +451,7 @@ function ConnectedServicesSection() {
             }
             if (!res.ok) throw new Error(json.error || `Save failed (${res.status})`)
             setFeedback({
-                ok: json.homeAssistant?.connected === true,
+                tone: json.homeAssistant?.connected === true ? "success" : "warning",
                 text: json.homeAssistant?.connected
                     ? "Home Assistant config saved and verified."
                     : "Home Assistant config saved, but the API could not be verified yet.",
@@ -414,7 +459,7 @@ function ConnectedServicesSection() {
             await refresh()
             return true
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not save Home Assistant config." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not save Home Assistant config." })
             return false
         } finally {
             setBusy(null)
@@ -430,10 +475,10 @@ function ConnectedServicesSection() {
             const res = await fetch("/api/integrations/home-assistant/disconnect", { method: "POST" })
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Disconnect failed (${res.status})`)
-            setFeedback({ ok: true, text: "Home Assistant config removed." })
+            setFeedback({ tone: "success", text: "Home Assistant config removed." })
             await refresh()
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not remove Home Assistant config." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not remove Home Assistant config." })
         } finally {
             setBusy(null)
         }
@@ -455,7 +500,7 @@ function ConnectedServicesSection() {
             const json = await res.json().catch(() => ({})) as { error?: string }
             if (!res.ok) throw new Error(json.error || `Action mode update failed (${res.status})`)
             setFeedback({
-                ok: true,
+                tone: "success",
                 text: enabled
                     ? "Home Assistant action mode enabled."
                     : "Home Assistant action mode disabled.",
@@ -463,7 +508,7 @@ function ConnectedServicesSection() {
             await refresh()
             return true
         } catch (err) {
-            setFeedback({ ok: false, text: err instanceof Error ? err.message : "Could not update Home Assistant action mode." })
+            setFeedback({ tone: "error", text: err instanceof Error ? err.message : "Could not update Home Assistant action mode." })
             return false
         } finally {
             setBusy(null)
@@ -489,7 +534,7 @@ function ConnectedServicesSection() {
                 <InlineNotice tone="error" text={error} />
             )}
             {feedback && (
-                <InlineNotice tone={feedback.ok ? "success" : "error"} text={feedback.text} />
+                <InlineNotice tone={feedback.tone} text={feedback.text} />
             )}
 
             <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
@@ -1087,6 +1132,7 @@ function GmailSetupGuide({ redirectUri }: { redirectUri: string }) {
                     <li>Add this exact authorized redirect URI:</li>
                 </ol>
                 <CopyableCode value={redirectUri} openable />
+                <OAuthRedirectNote redirectUri={redirectUri} />
                 <p>Download the OAuth client JSON or copy the client ID and secret, save them here, then use Connect and approve Google consent.</p>
             </div>
         </details>
@@ -1109,6 +1155,7 @@ function GoogleCalendarSetupGuide({ redirectUri }: { redirectUri: string }) {
                     <li>Add this exact authorized redirect URI:</li>
                 </ol>
                 <CopyableCode value={redirectUri} openable />
+                <OAuthRedirectNote redirectUri={redirectUri} />
                 <p>Download the OAuth client JSON or copy the client ID and secret, save them here, then use Connect. Calendar changes sync with iOS only when saved on the Google calendar.</p>
             </div>
         </details>
@@ -1131,6 +1178,7 @@ function GoogleWorkspaceSetupGuide({ redirectUri }: { redirectUri: string }) {
                     <li>Add this exact authorized redirect URI:</li>
                 </ol>
                 <CopyableCode value={redirectUri} openable />
+                <OAuthRedirectNote redirectUri={redirectUri} />
                 <p>Download the OAuth client JSON or copy the client ID and secret, save them here, then use Connect and approve Google consent.</p>
             </div>
         </details>
@@ -1148,6 +1196,26 @@ function GuideLink({ href, children }: { href: string; children: React.ReactNode
             {children}
             <ExternalLink className="size-3" />
         </a>
+    )
+}
+
+function OAuthRedirectNote({ redirectUri }: { redirectUri: string }) {
+    const parsed = parseUrl(redirectUri)
+    const isLoopback = parsed ? isLoopbackHostname(parsed.hostname) : false
+    const port = parsed?.port || "3000"
+
+    if (isLoopback) {
+        return (
+            <p>
+                This localhost callback works directly when Orchestrator is running on the same machine as this browser. If Orchestrator is on a different headless server, open it through a matching local tunnel first, for example <code className="rounded bg-muted px-1 py-0.5 font-mono">ssh -L {port}:127.0.0.1:3000 user@server</code>, then browse to <code className="rounded bg-muted px-1 py-0.5 font-mono">http://localhost:{port}/settings</code>. For no tunnel, use a real HTTPS domain and put that exact callback in the redirect URI field.
+            </p>
+        )
+    }
+
+    return (
+        <p>
+            Google accepts localhost redirects for local/tunneled setup, or HTTPS redirects on a real public domain. LAN names like <code className="rounded bg-muted px-1 py-0.5 font-mono">.lan</code>, <code className="rounded bg-muted px-1 py-0.5 font-mono">.local</code>, and private IPs are fine for opening Orchestrator, but not as Google OAuth redirect URIs.
+        </p>
     )
 }
 
@@ -1658,13 +1726,9 @@ function ConfigInput({
 function CopyableCode({ value, openable = false }: { value: string; openable?: boolean }) {
     const [copied, setCopied] = React.useState(false)
     const copy = async () => {
-        try {
-            await navigator.clipboard.writeText(value)
-            setCopied(true)
-            window.setTimeout(() => setCopied(false), 1200)
-        } catch {
-            setCopied(false)
-        }
+        if (!await copyTextToClipboard(value)) return
+        setCopied(true)
+        window.setTimeout(() => setCopied(false), 1200)
     }
 
     return (
@@ -1699,14 +1763,17 @@ function CopyableCode({ value, openable = false }: { value: string; openable?: b
     )
 }
 
-function InlineNotice({ tone, text }: { tone: "success" | "error"; text: string }) {
+function InlineNotice({ tone, text }: { tone: NoticeTone; text: string }) {
     const success = tone === "success"
+    const warning = tone === "warning"
     return (
         <div
             className={cn(
                 "flex items-start gap-2 rounded-xl border px-3 py-2 text-[12.5px]",
                 success
                     ? "border-emerald-500/25 bg-emerald-500/5 text-emerald-700 dark:text-emerald-400"
+                    : warning
+                    ? "border-amber-500/30 bg-amber-500/5 text-amber-700 dark:text-amber-400"
                     : "border-destructive/30 bg-destructive/5 text-destructive"
             )}
         >

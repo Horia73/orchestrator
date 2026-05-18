@@ -4,6 +4,7 @@ import * as React from "react"
 import { Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Monitor, RefreshCw } from "lucide-react"
 import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { ArtifactCard, type ArtifactPayload } from "@/components/artifact-panel"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { AttachmentCard } from "@/components/attachment-card"
@@ -791,7 +792,7 @@ export function MessageBubble({ message, isLatestAssistantMessage, onArtifactCli
     const { byMessage } = useConversationArtifacts()
 
     const handleCopy = React.useCallback(async () => {
-        await navigator.clipboard.writeText(message.content)
+        if (!await copyTextToClipboard(message.content)) return
         setCopied(true)
         window.setTimeout(() => setCopied(false), 1500)
     }, [message.content])

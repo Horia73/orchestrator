@@ -15,6 +15,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { ArtifactBody } from "./artifact-inline"
 import { CodeRenderer } from "./renderers/code-renderer"
@@ -101,11 +102,9 @@ export function ArtifactPanel({
 
     const [copied, setCopied] = React.useState(false)
     const handleCopy = async () => {
-        try {
-            await navigator.clipboard.writeText(artifact.content)
-            setCopied(true)
-            setTimeout(() => setCopied(false), 1500)
-        } catch { /* no clipboard */ }
+        if (!await copyTextToClipboard(artifact.content)) return
+        setCopied(true)
+        setTimeout(() => setCopied(false), 1500)
     }
     const handleDownload = () => {
         const blob = new Blob([artifact.content], { type: artifact.type || 'text/plain' })

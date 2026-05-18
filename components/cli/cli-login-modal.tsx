@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { Copy, ExternalLink, Terminal as TerminalIcon, X } from "lucide-react"
+import { copyTextToClipboard } from "@/lib/clipboard"
 
 import { cn } from "@/lib/utils"
 import { CliTerminal } from "./cli-terminal"
@@ -83,11 +84,9 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
     }, [])
 
     const copy = async (url: string) => {
-        try {
-            await navigator.clipboard.writeText(url)
-            setCopiedUrl(url)
-            setTimeout(() => setCopiedUrl(prev => (prev === url ? null : prev)), 1200)
-        } catch { /* no clipboard permission */ }
+        if (!await copyTextToClipboard(url)) return
+        setCopiedUrl(url)
+        setTimeout(() => setCopiedUrl(prev => (prev === url ? null : prev)), 1200)
     }
 
     return (
