@@ -28,6 +28,7 @@ import { getEffectiveRegistry } from '@/lib/models/registry'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { generateTitle } from '@/lib/utils-chat'
 import { getProviderReadiness } from '@/lib/provider-readiness'
+import { resolveRequestOrigin } from '@/lib/app-origin'
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
@@ -229,7 +230,7 @@ function appendPromptContext(content: string, context: string): string {
 }
 
 export async function POST(request: Request) {
-    const requestOrigin = new URL(request.url).origin
+    const requestOrigin = resolveRequestOrigin(request)
 
     if (isUpdateMaintenanceActive()) {
         return new Response(

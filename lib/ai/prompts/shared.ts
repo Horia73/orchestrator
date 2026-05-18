@@ -350,6 +350,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`local_time: ${nowDate.toLocaleString('en-CA', { timeZone: tz, hour12: false })} (resolve the user's relative dates/times against this)`)
     const appOrigin = cleanOrigin(
         ctx.extra?.appOrigin
+        ?? process.env.ORCHESTRATOR_PUBLIC_URL
         ?? process.env.ORCHESTRATOR_APP_URL
         ?? process.env.NEXT_PUBLIC_APP_URL
         ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '')

@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomBytes } from 'crypto'
 
+import { resolveOAuthRedirectUri } from '@/lib/app-origin'
 import { getEnvValue, PRIVATE_STATE_DIR, WORKSPACE_ENV_PATH } from '@/lib/config'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -255,7 +256,7 @@ export function getGmailOAuthConfig(origin: string): OAuthConfig {
     return {
         clientId: clientId.value,
         clientSecret: clientSecret.value,
-        redirectUri: redirectUri.value || new URL('/api/integrations/gmail/oauth/callback', origin).toString(),
+        redirectUri: resolveOAuthRedirectUri(redirectUri.value, origin, '/api/integrations/gmail/oauth/callback'),
         missing,
         envKeys: {
             clientId: clientId.key,

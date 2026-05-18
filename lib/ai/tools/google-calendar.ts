@@ -1,4 +1,5 @@
-import type { ToolDef, ToolParameter, ToolResult } from '@/lib/ai/agents/types'
+import { resolveAppOrigin } from '@/lib/app-origin'
+import type { ToolDef, ToolExecutionContext, ToolParameter, ToolResult } from '@/lib/ai/agents/types'
 import {
     type GoogleCalendarEventInput,
     type GoogleCalendarReminderInput,
@@ -263,12 +264,12 @@ export const googleCalendarTools: ToolDef[] = [
     googleCalendarMoveEventTool,
 ]
 
-export async function executeGoogleCalendarStatus(): Promise<ToolResult> {
-    return { success: true, data: await getGoogleCalendarIntegrationStatus(DEFAULT_ORIGIN, true) }
+export async function executeGoogleCalendarStatus(_args?: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    return { success: true, data: await getGoogleCalendarIntegrationStatus(toolOrigin(ctx), true) }
 }
 
-export async function executeGoogleCalendarConfigure(args: Record<string, unknown>): Promise<ToolResult> {
-    const data = await saveGoogleCalendarOAuthConfig(DEFAULT_ORIGIN, {
+export async function executeGoogleCalendarConfigure(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    const data = await saveGoogleCalendarOAuthConfig(toolOrigin(ctx), {
         clientId: stringArg(args, ['client_id', 'clientId']),
         clientSecret: stringArg(args, ['client_secret', 'clientSecret']),
         redirectUri: stringArg(args, ['redirect_uri', 'redirectUri']),
@@ -277,8 +278,12 @@ export async function executeGoogleCalendarConfigure(args: Record<string, unknow
     return { success: true, data }
 }
 
-export async function executeGoogleCalendarStartOAuth(): Promise<ToolResult> {
-    return { success: true, data: startGoogleCalendarOAuth(DEFAULT_ORIGIN) }
+export async function executeGoogleCalendarStartOAuth(_args?: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    return { success: true, data: startGoogleCalendarOAuth(toolOrigin(ctx)) }
+}
+
+function toolOrigin(ctx?: ToolExecutionContext): string {
+    return resolveAppOrigin(ctx?.appOrigin ?? DEFAULT_ORIGIN)
 }
 
 export async function executeGoogleCalendarListCalendars(args: Record<string, unknown>): Promise<ToolResult> {

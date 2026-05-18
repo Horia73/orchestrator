@@ -195,11 +195,17 @@ macOS runs Patchright in a local headful browser window. Linux/Docker uses Xvnc 
 Default Docker live-view settings:
 
 ```text
+ORCHESTRATOR_PUBLIC_URL=
 BROWSER_AGENT_LIVE_VIEW=1
 BROWSER_AGENT_VNC_WS_HOST=0.0.0.0
 BROWSER_AGENT_VNC_WS_PORT=6080
 BROWSER_AGENT_VNC_WS_PUBLIC_URL=ws://127.0.0.1:6080
 ```
+
+Set `ORCHESTRATOR_PUBLIC_URL` when users open the app through a LAN hostname,
+reverse proxy, or tunnel, for example `http://orchestrator.lan`. OAuth
+redirects use this URL, or auto-detect it from `Host` / `X-Forwarded-*`
+headers when the app is opened through the same address.
 
 Keep `6080` bound to `127.0.0.1` unless it is protected by the same private access layer as the main app.
 

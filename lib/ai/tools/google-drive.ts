@@ -1,7 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 
-import type { ToolDef, ToolParameter, ToolResult } from '@/lib/ai/agents/types'
+import { resolveAppOrigin } from '@/lib/app-origin'
+import type { ToolDef, ToolExecutionContext, ToolParameter, ToolResult } from '@/lib/ai/agents/types'
 import {
     type GoogleDriveGoogleFileInput,
     type GoogleDriveListFilesOptions,
@@ -344,12 +345,12 @@ export const googleDriveTools: ToolDef[] = [
     googleDriveDeletePermissionTool,
 ]
 
-export async function executeGoogleDriveStatus(): Promise<ToolResult> {
-    return { success: true, data: await getGoogleDriveIntegrationStatus(DEFAULT_ORIGIN, true) }
+export async function executeGoogleDriveStatus(_args?: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    return { success: true, data: await getGoogleDriveIntegrationStatus(toolOrigin(ctx), true) }
 }
 
-export async function executeGoogleDriveConfigure(args: Record<string, unknown>): Promise<ToolResult> {
-    const data = await saveGoogleDriveOAuthConfig(DEFAULT_ORIGIN, {
+export async function executeGoogleDriveConfigure(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    const data = await saveGoogleDriveOAuthConfig(toolOrigin(ctx), {
         clientId: stringArg(args, ['client_id', 'clientId']),
         clientSecret: stringArg(args, ['client_secret', 'clientSecret']),
         redirectUri: stringArg(args, ['redirect_uri', 'redirectUri']),
@@ -358,8 +359,12 @@ export async function executeGoogleDriveConfigure(args: Record<string, unknown>)
     return { success: true, data }
 }
 
-export async function executeGoogleDriveStartOAuth(): Promise<ToolResult> {
-    return { success: true, data: startGoogleDriveOAuth(DEFAULT_ORIGIN) }
+export async function executeGoogleDriveStartOAuth(_args?: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    return { success: true, data: startGoogleDriveOAuth(toolOrigin(ctx)) }
+}
+
+function toolOrigin(ctx?: ToolExecutionContext): string {
+    return resolveAppOrigin(ctx?.appOrigin ?? DEFAULT_ORIGIN)
 }
 
 export async function executeGoogleDriveAbout(): Promise<ToolResult> {

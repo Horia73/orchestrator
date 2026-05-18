@@ -1,12 +1,13 @@
 import { NextResponse } from 'next/server'
 
+import { resolveRequestOrigin } from '@/lib/app-origin'
 import { completeGoogleCalendarOAuth } from '@/lib/integrations/google-calendar'
 import { completeGoogleDriveOAuth } from '@/lib/integrations/google-drive'
 import { getGoogleOAuthStateProvider } from '@/lib/integrations/google-oauth'
 
 export async function GET(request: Request) {
     const url = new URL(request.url)
-    const origin = url.origin
+    const origin = resolveRequestOrigin(request)
     const code = url.searchParams.get('code')
     const state = url.searchParams.get('state')
     const oauthError = url.searchParams.get('error')

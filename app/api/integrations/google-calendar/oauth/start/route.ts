@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 
+import { resolveRequestOrigin } from '@/lib/app-origin'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { startGoogleCalendarOAuth } from '@/lib/integrations/google-calendar'
 
@@ -8,7 +9,7 @@ export async function POST(request: Request) {
     if (guard) return guard
 
     try {
-        const origin = new URL(request.url).origin
+        const origin = resolveRequestOrigin(request)
         return NextResponse.json(startGoogleCalendarOAuth(origin))
     } catch (err) {
         return NextResponse.json(

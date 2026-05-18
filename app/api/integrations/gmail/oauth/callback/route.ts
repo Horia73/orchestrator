@@ -1,10 +1,11 @@
 import { NextResponse } from 'next/server'
 
+import { resolveRequestOrigin } from '@/lib/app-origin'
 import { completeGmailOAuth } from '@/lib/integrations/gmail'
 
 export async function GET(request: Request) {
     const url = new URL(request.url)
-    const origin = url.origin
+    const origin = resolveRequestOrigin(request)
     const code = url.searchParams.get('code')
     const state = url.searchParams.get('state')
     const oauthError = url.searchParams.get('error')

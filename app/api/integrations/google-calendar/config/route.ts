@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { z } from 'zod'
 
+import { resolveRequestOrigin } from '@/lib/app-origin'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { saveGoogleCalendarOAuthConfig } from '@/lib/integrations/google-calendar'
 
@@ -28,7 +29,7 @@ export async function PUT(request: Request) {
     }
 
     try {
-        const origin = new URL(request.url).origin
+        const origin = resolveRequestOrigin(request)
         const googleCalendar = await saveGoogleCalendarOAuthConfig(origin, parsed.data)
         return NextResponse.json({ success: true, googleCalendar })
     } catch (err) {

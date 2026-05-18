@@ -8,6 +8,7 @@ ORCH_HOME="${ORCHESTRATOR_HOME:-$HOME/.orchestrator}"
 APP_DIR="${ORCHESTRATOR_APP_DIR:-$ORCH_HOME/app}"
 PORT="${ORCHESTRATOR_PORT:-3000}"
 HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
+PUBLIC_URL="${ORCHESTRATOR_PUBLIC_URL:-}"
 VNC_PORT="${ORCHESTRATOR_VNC_PORT:-${BROWSER_AGENT_VNC_WS_PORT:-6080}}"
 UPDATE_BRIDGE_PORT="${ORCHESTRATOR_UPDATE_BRIDGE_PORT:-38733}"
 UPDATE_BRIDGE_BIND="${ORCHESTRATOR_UPDATE_BRIDGE_BIND:-0.0.0.0}"
@@ -312,6 +313,9 @@ ensure_docker_env_file() {
 
   upsert_env_value "$env_file" ORCHESTRATOR_HOST "$HOST"
   upsert_env_value "$env_file" ORCHESTRATOR_PORT "$PORT"
+  if [ -n "$PUBLIC_URL" ]; then
+    upsert_env_value "$env_file" ORCHESTRATOR_PUBLIC_URL "$PUBLIC_URL"
+  fi
   upsert_env_value "$env_file" ORCHESTRATOR_SERVICE_MANAGER "docker"
   upsert_env_value "$env_file" ORCHESTRATOR_DOCKER_UPDATE_URL "http://host.docker.internal:$UPDATE_BRIDGE_PORT/update"
   upsert_env_value "$env_file" ORCHESTRATOR_DOCKER_UPDATE_TOKEN "$(cat "$UPDATE_BRIDGE_TOKEN_FILE")"
@@ -432,6 +436,7 @@ Environment=NODE_ENV=production
 Environment=PORT=$PORT
 Environment=ORCHESTRATOR_PORT=$PORT
 Environment=ORCHESTRATOR_HOST=$HOST
+Environment=ORCHESTRATOR_PUBLIC_URL=$PUBLIC_URL
 Environment=HOSTNAME=$HOST
 Environment=NPM_CONFIG_PREFIX=$NPM_GLOBAL_PREFIX
 Environment=PATH=$path_value
@@ -485,6 +490,8 @@ install_launchd_service() {
     <string>$PORT</string>
     <key>ORCHESTRATOR_HOST</key>
     <string>$HOST</string>
+    <key>ORCHESTRATOR_PUBLIC_URL</key>
+    <string>$PUBLIC_URL</string>
     <key>HOSTNAME</key>
     <string>$HOST</string>
     <key>NPM_CONFIG_PREFIX</key>

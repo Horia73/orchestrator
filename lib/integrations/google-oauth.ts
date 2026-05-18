@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomBytes } from 'crypto'
 
+import { resolveOAuthRedirectUri } from '@/lib/app-origin'
 import { getEnvValue, PRIVATE_STATE_DIR, WORKSPACE_ENV_PATH } from '@/lib/config'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
@@ -105,7 +106,7 @@ export function getGoogleOAuthConfig(origin: string, provider: GoogleOAuthProvid
     return {
         clientId: clientId.value,
         clientSecret: clientSecret.value,
-        redirectUri: redirectUri.value || new URL(provider.redirectPath, origin).toString(),
+        redirectUri: resolveOAuthRedirectUri(redirectUri.value, origin, provider.redirectPath),
         missing,
         envKeys: {
             clientId: clientId.key,

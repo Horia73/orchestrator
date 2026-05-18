@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 
+import { resolveRequestOrigin } from '@/lib/app-origin'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { getGmailIntegrationStatus } from '@/lib/integrations/gmail'
 import { getGoogleCalendarIntegrationStatus } from '@/lib/integrations/google-calendar'
@@ -15,7 +16,7 @@ export async function GET(request: Request) {
     const guard = guardSensitiveRequest(request)
     if (guard) return guard
 
-    const origin = new URL(request.url).origin
+    const origin = resolveRequestOrigin(request)
     const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant] = await Promise.all([
         getGmailIntegrationStatus(origin, true),
         getGoogleCalendarIntegrationStatus(origin, true),

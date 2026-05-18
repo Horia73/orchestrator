@@ -9,6 +9,7 @@ import { getConfig, getEffectiveAgentSettings } from '@/lib/config'
 import { filterIntegrationToolExposure } from '@/lib/integrations/exposure'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 import { getProviderReadiness } from '@/lib/provider-readiness'
+import { resolveRequestOrigin } from '@/lib/app-origin'
 
 type ProviderCaps = NonNullable<ReturnType<typeof getProviderCapabilities>>
 
@@ -69,6 +70,7 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
 
 /** GET /api/chat/status - compact status payload for the chat input popover. */
 export async function GET(request: Request) {
+    const origin = resolveRequestOrigin(request)
     const settings = resolveChatAgentSettings()
     const config = getConfig()
     const registry = getEffectiveRegistry()
@@ -79,7 +81,7 @@ export async function GET(request: Request) {
     const availableModel = readiness.available ? modelDef : null
 
     const systemPromptTokens = providerCaps && availableModel
-        ? estimateSystemPromptTokens(new URL(request.url).origin, providerCaps)
+        ? estimateSystemPromptTokens(origin, providerCaps)
         : null
 
     return NextResponse.json({
