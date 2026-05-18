@@ -2,6 +2,7 @@ import { spawn } from 'child_process'
 
 import { CLI_IDS, CLI_SPECS, type CliId, type CliStatus } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
+import { codexCliEnv } from './codex-env'
 
 const STATUS_TIMEOUT_MS = 8000
 const STATUS_CACHE_TTL_MS = 15_000
@@ -26,6 +27,10 @@ async function isInstalled(bin: string): Promise<boolean> {
     })
 }
 
+function envForCli(id: CliId): NodeJS.ProcessEnv {
+    return id === 'codex' ? codexCliEnv() : augmentedEnv()
+}
+
 /**
  * Run the configured `statusArgs` for a CLI and parse the output. Times out
  * after STATUS_TIMEOUT_MS to avoid blocking the settings page if a CLI hangs.
@@ -41,7 +46,7 @@ async function runStatus(id: CliId): Promise<CliStatus> {
         const resolvedBin = resolveBin(spec.bin)
         const proc = spawn(resolvedBin, spec.statusArgs, {
             stdio: ['ignore', 'pipe', 'pipe'],
-            env: augmentedEnv(),
+            env: envForCli(id),
         })
         let stdout = ''
         let stderr = ''

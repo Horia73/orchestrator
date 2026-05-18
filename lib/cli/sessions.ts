@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 
 import { CLI_SPECS, getCliLoginArgs, type CliId } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
+import { codexCliEnv } from './codex-env'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 
 // ---------------------------------------------------------------------------
@@ -101,12 +102,16 @@ export function startSession(args: StartArgs): string {
     //
     // Default cwd to the same workspace used by agent runs so the terminal
     // and automated provider paths agree about where the model starts.
+    const env = args.cli === 'codex' && args.mode !== 'install'
+        ? codexCliEnv({ FORCE_COLOR: '1', TERM: 'xterm-256color' })
+        : augmentedEnv({ FORCE_COLOR: '1', TERM: 'xterm-256color' })
+
     const pty = ptySpawn(binPath, cliArgs, {
         name: 'xterm-256color',
         cols,
         rows,
         cwd: args.cwd ?? AGENT_WORKSPACE_DIR,
-        env: augmentedEnv({ FORCE_COLOR: '1', TERM: 'xterm-256color' }) as { [key: string]: string },
+        env: env as { [key: string]: string },
     })
 
     const id = randomUUID()

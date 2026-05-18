@@ -10,7 +10,8 @@ import type {
 } from '@/lib/ai/agents/types'
 import type { ContextUsageSnapshot, TokenUsageBreakdown } from '@/lib/types'
 import { CLI_SPECS } from '@/lib/cli/specs'
-import { resolveBin, augmentedEnv } from '@/lib/cli/resolve-bin'
+import { resolveBin } from '@/lib/cli/resolve-bin'
+import { codexCliEnv } from '@/lib/cli/codex-env'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 
@@ -144,7 +145,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         try {
             proc = spawn(resolved, procArgs, {
                 stdio: ['pipe', 'pipe', 'pipe'],
-                env: augmentedEnv(),
+                env: codexCliEnv(),
                 cwd: AGENT_WORKSPACE_DIR,
             })
         } catch (err) {
