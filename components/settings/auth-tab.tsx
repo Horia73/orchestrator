@@ -36,6 +36,7 @@ import {
     type GoogleCalendarIntegrationStatusEntry,
     type GoogleDriveIntegrationStatusEntry,
     type HomeAssistantIntegrationStatusEntry,
+    type RuntimeAccessInfo,
     type WhatsAppIntegrationStatusEntry,
 } from "@/components/settings/use-integrations-status"
 
@@ -95,12 +96,11 @@ function shouldWarnAboutLocalhostRedirect(redirectUri: string): boolean {
     return !isLoopbackHostname(window.location.hostname)
 }
 
-function localhostRedirectNotice(redirectUri: string): { tone: NoticeTone; text: string } {
-    const redirectUrl = parseUrl(redirectUri)
-    const port = redirectUrl?.port || "3000"
+function localhostRedirectNotice(redirectUri: string, runtime?: RuntimeAccessInfo): { tone: NoticeTone; text: string } {
+    const tunnel = buildTunnelHelp(redirectUri, runtime)
     return {
         tone: "warning",
-        text: `Google will return to ${redirectUri}. That works directly if Orchestrator is running on this same browser machine. If Orchestrator is on a different headless server, open it through a local tunnel first: ssh -L ${port}:127.0.0.1:3000 user@server, then use http://localhost:${port}/settings.`,
+        text: `Google will return to ${redirectUri}. That works directly if Orchestrator is running on this same browser machine. If Orchestrator is on a different headless server, run ${tunnel.command}, keep that terminal open until the integration says Connected, use ${tunnel.openUrl}, then stop the tunnel with Ctrl+C.`,
     }
 }
 
@@ -119,6 +119,21 @@ function isLoopbackHostname(hostname: string): boolean {
         || host === "::1"
         || host === "0:0:0:0:0:0:0:1"
         || /^127(?:\.\d{1,3}){3}$/.test(host)
+}
+
+function buildTunnelHelp(redirectUri: string, runtime?: RuntimeAccessInfo): { command: string; openUrl: string } {
+    const redirectUrl = parseUrl(redirectUri)
+    const localPort = redirectUrl?.port || runtime?.tunnel.localPort || "3000"
+    const remotePort = runtime?.tunnel.remotePort || "3000"
+    const currentHost = typeof window === "undefined" ? "" : window.location.hostname
+    const host = runtime?.sshHostCandidates[0]
+        || (currentHost && !isLoopbackHostname(currentHost) ? currentHost : "")
+        || "server"
+    const user = runtime?.sshUser || "user"
+    return {
+        command: `ssh -N -L ${localPort}:127.0.0.1:${remotePort} ${user}@${host}`,
+        openUrl: `http://localhost:${localPort}/settings`,
+    }
 }
 
 const GOOGLE_PROJECTS_URL = "https://console.cloud.google.com/projectselector2/home/dashboard"
@@ -198,7 +213,7 @@ function ConnectedServicesSection() {
             const json = await res.json().catch(() => ({})) as { authUrl?: string; redirectUri?: string; error?: string }
             if (!res.ok || !json.authUrl) throw new Error(json.error || `OAuth start failed (${res.status})`)
             if (json.redirectUri && shouldWarnAboutLocalhostRedirect(json.redirectUri)) {
-                setFeedback(localhostRedirectNotice(json.redirectUri))
+                setFeedback(localhostRedirectNotice(json.redirectUri, data?.runtime))
             }
 
             const popup = window.open(
@@ -266,7 +281,7 @@ function ConnectedServicesSection() {
             const json = await res.json().catch(() => ({})) as { authUrl?: string; redirectUri?: string; error?: string }
             if (!res.ok || !json.authUrl) throw new Error(json.error || `OAuth start failed (${res.status})`)
             if (json.redirectUri && shouldWarnAboutLocalhostRedirect(json.redirectUri)) {
-                setFeedback(localhostRedirectNotice(json.redirectUri))
+                setFeedback(localhostRedirectNotice(json.redirectUri, data?.runtime))
             }
 
             const popup = window.open(
@@ -334,7 +349,7 @@ function ConnectedServicesSection() {
             const json = await res.json().catch(() => ({})) as { authUrl?: string; redirectUri?: string; error?: string }
             if (!res.ok || !json.authUrl) throw new Error(json.error || `OAuth start failed (${res.status})`)
             if (json.redirectUri && shouldWarnAboutLocalhostRedirect(json.redirectUri)) {
-                setFeedback(localhostRedirectNotice(json.redirectUri))
+                setFeedback(localhostRedirectNotice(json.redirectUri, data?.runtime))
             }
 
             const popup = window.open(
@@ -544,6 +559,7 @@ function ConnectedServicesSection() {
                     <>
                         <GmailCard
                             entry={data.gmail}
+                            runtime={data.runtime}
                             busy={busy}
                             onConnect={connectGmail}
                             onDisconnect={disconnectGmail}
@@ -557,6 +573,7 @@ function ConnectedServicesSection() {
                         />
                         <GoogleCalendarCard
                             entry={data.googleCalendar}
+                            runtime={data.runtime}
                             busy={busy}
                             onConnect={connectGoogleCalendar}
                             onDisconnect={disconnectGoogleCalendar}
@@ -564,6 +581,7 @@ function ConnectedServicesSection() {
                         />
                         <GoogleWorkspaceCard
                             entry={data.googleDrive}
+                            runtime={data.runtime}
                             busy={busy}
                             onConnect={connectGoogleDrive}
                             onDisconnect={disconnectGoogleDrive}
@@ -585,12 +603,14 @@ function ConnectedServicesSection() {
 
 function GmailCard({
     entry,
+    runtime,
     busy,
     onConnect,
     onDisconnect,
     onSaveConfig,
 }: {
     entry: GmailIntegrationStatusEntry
+    runtime?: RuntimeAccessInfo
     busy: BusyAction
     onConnect: () => void
     onDisconnect: () => void
@@ -654,7 +674,7 @@ function GmailCard({
                 {!entry.configured && (
                     <GmailConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />
                 )}
-                <GmailSetupGuide redirectUri={entry.redirectUri} />
+                <GmailSetupGuide redirectUri={entry.redirectUri} runtime={runtime} />
                 {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -686,12 +706,14 @@ function GmailCard({
 
 function GoogleCalendarCard({
     entry,
+    runtime,
     busy,
     onConnect,
     onDisconnect,
     onSaveConfig,
 }: {
     entry: GoogleCalendarIntegrationStatusEntry
+    runtime?: RuntimeAccessInfo
     busy: BusyAction
     onConnect: () => void
     onDisconnect: () => void
@@ -766,7 +788,7 @@ function GoogleCalendarCard({
                 {!entry.configured && (
                     <GoogleWorkspaceConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />
                 )}
-                <GoogleCalendarSetupGuide redirectUri={entry.redirectUri} />
+                <GoogleCalendarSetupGuide redirectUri={entry.redirectUri} runtime={runtime} />
                 {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -798,12 +820,14 @@ function GoogleCalendarCard({
 
 function GoogleWorkspaceCard({
     entry,
+    runtime,
     busy,
     onConnect,
     onDisconnect,
     onSaveConfig,
 }: {
     entry: GoogleDriveIntegrationStatusEntry
+    runtime?: RuntimeAccessInfo
     busy: BusyAction
     onConnect: () => void
     onDisconnect: () => void
@@ -877,7 +901,7 @@ function GoogleWorkspaceCard({
                 {!entry.configured && (
                     <GoogleWorkspaceConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />
                 )}
-                <GoogleWorkspaceSetupGuide redirectUri={entry.redirectUri} />
+                <GoogleWorkspaceSetupGuide redirectUri={entry.redirectUri} runtime={runtime} />
                 {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
                 <div className="flex flex-wrap gap-2 pt-1">
@@ -1116,7 +1140,7 @@ function HomeAssistantCard({
     )
 }
 
-function GmailSetupGuide({ redirectUri }: { redirectUri: string }) {
+function GmailSetupGuide({ redirectUri, runtime }: { redirectUri: string; runtime?: RuntimeAccessInfo }) {
     return (
         <details className="group rounded-xl border border-border/70 bg-background/60 px-3 py-2.5">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[12.5px] font-medium text-foreground/75">
@@ -1132,14 +1156,14 @@ function GmailSetupGuide({ redirectUri }: { redirectUri: string }) {
                     <li>Add this exact authorized redirect URI:</li>
                 </ol>
                 <CopyableCode value={redirectUri} openable />
-                <OAuthRedirectNote redirectUri={redirectUri} />
+                <OAuthRedirectNote redirectUri={redirectUri} runtime={runtime} />
                 <p>Download the OAuth client JSON or copy the client ID and secret, save them here, then use Connect and approve Google consent.</p>
             </div>
         </details>
     )
 }
 
-function GoogleCalendarSetupGuide({ redirectUri }: { redirectUri: string }) {
+function GoogleCalendarSetupGuide({ redirectUri, runtime }: { redirectUri: string; runtime?: RuntimeAccessInfo }) {
     return (
         <details className="group rounded-xl border border-border/70 bg-background/60 px-3 py-2.5">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[12.5px] font-medium text-foreground/75">
@@ -1155,14 +1179,14 @@ function GoogleCalendarSetupGuide({ redirectUri }: { redirectUri: string }) {
                     <li>Add this exact authorized redirect URI:</li>
                 </ol>
                 <CopyableCode value={redirectUri} openable />
-                <OAuthRedirectNote redirectUri={redirectUri} />
+                <OAuthRedirectNote redirectUri={redirectUri} runtime={runtime} />
                 <p>Download the OAuth client JSON or copy the client ID and secret, save them here, then use Connect. Calendar changes sync with iOS only when saved on the Google calendar.</p>
             </div>
         </details>
     )
 }
 
-function GoogleWorkspaceSetupGuide({ redirectUri }: { redirectUri: string }) {
+function GoogleWorkspaceSetupGuide({ redirectUri, runtime }: { redirectUri: string; runtime?: RuntimeAccessInfo }) {
     return (
         <details className="group rounded-xl border border-border/70 bg-background/60 px-3 py-2.5">
             <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[12.5px] font-medium text-foreground/75">
@@ -1178,7 +1202,7 @@ function GoogleWorkspaceSetupGuide({ redirectUri }: { redirectUri: string }) {
                     <li>Add this exact authorized redirect URI:</li>
                 </ol>
                 <CopyableCode value={redirectUri} openable />
-                <OAuthRedirectNote redirectUri={redirectUri} />
+                <OAuthRedirectNote redirectUri={redirectUri} runtime={runtime} />
                 <p>Download the OAuth client JSON or copy the client ID and secret, save them here, then use Connect and approve Google consent.</p>
             </div>
         </details>
@@ -1199,15 +1223,18 @@ function GuideLink({ href, children }: { href: string; children: React.ReactNode
     )
 }
 
-function OAuthRedirectNote({ redirectUri }: { redirectUri: string }) {
+function OAuthRedirectNote({ redirectUri, runtime }: { redirectUri: string; runtime?: RuntimeAccessInfo }) {
     const parsed = parseUrl(redirectUri)
     const isLoopback = parsed ? isLoopbackHostname(parsed.hostname) : false
-    const port = parsed?.port || "3000"
+    const tunnel = buildTunnelHelp(redirectUri, runtime)
+    const hostCandidates = runtime?.sshHostCandidates.length
+        ? ` Detected SSH host candidates: ${runtime.sshHostCandidates.slice(0, 3).join(", ")}.`
+        : ""
 
     if (isLoopback) {
         return (
             <p>
-                This localhost callback works directly when Orchestrator is running on the same machine as this browser. If Orchestrator is on a different headless server, open it through a matching local tunnel first, for example <code className="rounded bg-muted px-1 py-0.5 font-mono">ssh -L {port}:127.0.0.1:3000 user@server</code>, then browse to <code className="rounded bg-muted px-1 py-0.5 font-mono">http://localhost:{port}/settings</code>. For no tunnel, use a real HTTPS domain and put that exact callback in the redirect URI field.
+                This localhost callback works directly when Orchestrator is running on the same machine as this browser. If Orchestrator is on a different headless server, run <code className="rounded bg-muted px-1 py-0.5 font-mono">{tunnel.command}</code>, keep that terminal open until this card says Connected, browse to <code className="rounded bg-muted px-1 py-0.5 font-mono">{tunnel.openUrl}</code>, then stop the tunnel with <code className="rounded bg-muted px-1 py-0.5 font-mono">Ctrl+C</code>.{hostCandidates} For no tunnel, use a real HTTPS domain and put that exact callback in the redirect URI field.
             </p>
         )
     }

@@ -61,6 +61,17 @@ resolve_install_mode() {
   esac
 }
 
+detect_lan_ip() {
+  if command -v ip >/dev/null 2>&1; then
+    ip route get 1.1.1.1 2>/dev/null | awk '{ for (i = 1; i <= NF; i++) if ($i == "src") { print $(i + 1); exit } }'
+    return
+  fi
+  if command -v hostname >/dev/null 2>&1; then
+    hostname -I 2>/dev/null | awk '{ print $1 }'
+    return
+  fi
+}
+
 install_git_if_missing() {
   if command -v git >/dev/null 2>&1; then
     return
@@ -299,8 +310,10 @@ upsert_env_value() {
 }
 
 ensure_docker_env_file() {
-  local env_file
+  local env_file ssh_user lan_ip
   env_file="$APP_DIR/.env"
+  ssh_user="${ORCHESTRATOR_SSH_USER:-$(id -un 2>/dev/null || true)}"
+  lan_ip="${ORCHESTRATOR_HOST_LAN_IP:-$(detect_lan_ip || true)}"
   if [ ! -f "$env_file" ]; then
     if [ -f "$APP_DIR/.env.example" ]; then
       log "Creating $env_file from .env.example"
@@ -315,6 +328,15 @@ ensure_docker_env_file() {
   upsert_env_value "$env_file" ORCHESTRATOR_PORT "$PORT"
   if [ -n "$PUBLIC_URL" ]; then
     upsert_env_value "$env_file" ORCHESTRATOR_PUBLIC_URL "$PUBLIC_URL"
+  fi
+  if [ -n "${ORCHESTRATOR_SSH_HOST:-}" ]; then
+    upsert_env_value "$env_file" ORCHESTRATOR_SSH_HOST "$ORCHESTRATOR_SSH_HOST"
+  fi
+  if [ -n "$ssh_user" ]; then
+    upsert_env_value "$env_file" ORCHESTRATOR_SSH_USER "$ssh_user"
+  fi
+  if [ -n "$lan_ip" ]; then
+    upsert_env_value "$env_file" ORCHESTRATOR_HOST_LAN_IP "$lan_ip"
   fi
   upsert_env_value "$env_file" ORCHESTRATOR_SERVICE_MANAGER "docker"
   upsert_env_value "$env_file" ORCHESTRATOR_DOCKER_UPDATE_URL "http://host.docker.internal:$UPDATE_BRIDGE_PORT/update"
@@ -415,11 +437,14 @@ EOF
 }
 
 install_systemd_service() {
-  local node_bin npm_bin node_dir service_dir service_file path_value
+  local node_bin npm_bin node_dir service_dir service_file path_value ssh_user lan_ip ssh_host
   node_bin="$(command -v node)"
   npm_bin="$(command -v npm)"
   node_dir="$(dirname "$node_bin")"
   path_value="$node_dir:$NPM_GLOBAL_PREFIX/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+  ssh_user="${ORCHESTRATOR_SSH_USER:-$(id -un 2>/dev/null || true)}"
+  lan_ip="${ORCHESTRATOR_HOST_LAN_IP:-$(detect_lan_ip || true)}"
+  ssh_host="${ORCHESTRATOR_SSH_HOST:-}"
   service_dir="$HOME/.config/systemd/user"
   service_file="$service_dir/$SERVICE_NAME.service"
 
@@ -437,6 +462,9 @@ Environment=PORT=$PORT
 Environment=ORCHESTRATOR_PORT=$PORT
 Environment=ORCHESTRATOR_HOST=$HOST
 Environment=ORCHESTRATOR_PUBLIC_URL=$PUBLIC_URL
+Environment=ORCHESTRATOR_SSH_USER=$ssh_user
+Environment=ORCHESTRATOR_SSH_HOST=$ssh_host
+Environment=ORCHESTRATOR_HOST_LAN_IP=$lan_ip
 Environment=HOSTNAME=$HOST
 Environment=NPM_CONFIG_PREFIX=$NPM_GLOBAL_PREFIX
 Environment=PATH=$path_value
@@ -458,11 +486,14 @@ EOF
 }
 
 install_launchd_service() {
-  local node_bin npm_bin node_dir plist path_value
+  local node_bin npm_bin node_dir plist path_value ssh_user lan_ip ssh_host
   node_bin="$(command -v node)"
   npm_bin="$(command -v npm)"
   node_dir="$(dirname "$node_bin")"
   path_value="$node_dir:$NPM_GLOBAL_PREFIX/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+  ssh_user="${ORCHESTRATOR_SSH_USER:-$(id -un 2>/dev/null || true)}"
+  lan_ip="${ORCHESTRATOR_HOST_LAN_IP:-$(detect_lan_ip || true)}"
+  ssh_host="${ORCHESTRATOR_SSH_HOST:-}"
   plist="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 
   mkdir -p "$HOME/Library/LaunchAgents"
@@ -492,6 +523,12 @@ install_launchd_service() {
     <string>$HOST</string>
     <key>ORCHESTRATOR_PUBLIC_URL</key>
     <string>$PUBLIC_URL</string>
+    <key>ORCHESTRATOR_SSH_USER</key>
+    <string>$ssh_user</string>
+    <key>ORCHESTRATOR_SSH_HOST</key>
+    <string>$ssh_host</string>
+    <key>ORCHESTRATOR_HOST_LAN_IP</key>
+    <string>$lan_ip</string>
     <key>HOSTNAME</key>
     <string>$HOST</string>
     <key>NPM_CONFIG_PREFIX</key>

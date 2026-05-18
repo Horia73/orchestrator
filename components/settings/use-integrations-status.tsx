@@ -127,6 +127,28 @@ export interface HomeAssistantIntegrationStatusEntry {
     }
 }
 
+export interface RuntimeAccessInfo {
+    appOrigin: string
+    appHost: string | null
+    appPort: string
+    publicUrl: string | null
+    serverHostname: string
+    sshUser: string | null
+    envHostLanIp: string | null
+    runtimeIPv4: string[]
+    resolvedAppHostIPv4: string[]
+    sshHostCandidates: string[]
+    tunnel: {
+        localPort: string
+        remotePort: string
+        remoteHost: string
+        command: string
+        openUrl: string
+        keepOpen: string
+        stop: string
+    }
+}
+
 export type IntegrationStatusEntry =
     | GmailIntegrationStatusEntry
     | GoogleCalendarIntegrationStatusEntry
@@ -140,6 +162,7 @@ export interface IntegrationsStatus {
     googleDrive: GoogleDriveIntegrationStatusEntry
     whatsapp: WhatsAppIntegrationStatusEntry
     homeAssistant: HomeAssistantIntegrationStatusEntry
+    runtime?: RuntimeAccessInfo
 }
 
 export function useIntegrationsStatus() {

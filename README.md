@@ -213,6 +213,19 @@ for OAuth so users can connect through an SSH tunnel, or you can set
 `GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI` / `GMAIL_OAUTH_REDIRECT_URI` to a public
 HTTPS callback.
 
+For headless Linux where the browser is on another machine, keep the app
+reachable through the LAN name/IP for normal use, but do Google OAuth through a
+local tunnel:
+
+```bash
+ssh -N -L 3000:127.0.0.1:3000 user@orchestrator.lan
+```
+
+Then open `http://localhost:3000/settings`, run Connect, wait until the
+integration card says Connected, and stop the tunnel with `Ctrl+C`. If the LAN
+IP changes, prefer a stable LAN DNS name such as `orchestrator.lan`; the app
+also reports current SSH host candidates in the integration status payload.
+
 Keep `6080` bound to `127.0.0.1` unless it is protected by the same private access layer as the main app.
 
 ## Updates

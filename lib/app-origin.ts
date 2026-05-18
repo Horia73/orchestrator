@@ -8,7 +8,7 @@ const PUBLIC_ORIGIN_ENV_KEYS = [
 ]
 
 export function resolveRequestOrigin(request: Request): string {
-    return resolveAppOrigin(originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url))
+    return resolveOriginPreferLoopback(originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url))
 }
 
 export function resolveAppOrigin(candidate?: string | null): string {
@@ -21,7 +21,7 @@ export function resolveAppOrigin(candidate?: string | null): string {
 }
 
 export function resolveOAuthRedirectUri(configured: string | null | undefined, origin: string, callbackPath: string): string {
-    const appOrigin = resolveAppOrigin(origin)
+    const appOrigin = resolveOriginPreferLoopback(origin)
     const fallbackOrigin = isOAuthCompatibleOrigin(appOrigin)
         ? appOrigin
         : loopbackOriginFor(appOrigin)
@@ -106,6 +106,20 @@ function normalizeOrigin(value: string | null | undefined, allowWildcardLoopback
 
 function firstHeaderValue(value: string | null): string | null {
     return value?.split(',')[0]?.trim() || null
+}
+
+function resolveOriginPreferLoopback(candidate?: string | null): string {
+    const origin = normalizeOrigin(candidate, true)
+    if (origin && isLoopbackOrigin(origin)) return origin
+    return resolveAppOrigin(candidate)
+}
+
+function isLoopbackOrigin(origin: string): boolean {
+    try {
+        return isLoopbackHost(new URL(origin).hostname)
+    } catch {
+        return false
+    }
 }
 
 function loopbackOriginFor(origin: string): string {

@@ -8,6 +8,7 @@ import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates } from '@/lib/sett
 import { buildIntegrationRunbooksContext } from '@/lib/integrations/runbooks'
 import { buildIntegrationsContextBlock } from '@/lib/integrations/exposure'
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
+import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 
 // ---------------------------------------------------------------------------
 // Artifact authoring guidance.
@@ -358,6 +359,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     if (appOrigin) {
         lines.push(`app_origin: ${appOrigin}`)
         lines.push(`app_api_base: ${appOrigin}/api`)
+        lines.push(...buildRuntimeAccessContext(appOrigin))
     } else {
         lines.push('app_origin: unknown (if an integration runbook needs local API calls, infer the reachable Orchestrator URL from the request/environment or ask only for that URL)')
     }
