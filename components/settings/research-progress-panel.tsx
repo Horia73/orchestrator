@@ -81,10 +81,18 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
     return () => window.clearInterval(timer)
   }, [hasRunTimeline])
 
+  const firstRunKey = timeline.runs[0]?.key ?? null
+  const runKeySignature = timeline.runs.map(run => run.key).join("\n")
+
   React.useEffect(() => {
-    if (!researching) return
-    setSelectedKey(null)
-  }, [researching, timeline.activeRun?.key])
+    if (!hasRunTimeline) {
+      if (selectedKey !== null) setSelectedKey(null)
+      return
+    }
+    if (timeline.runs.length === 0) return
+    if (selectedKey && timeline.runs.some(run => run.key === selectedKey)) return
+    setSelectedKey(firstRunKey)
+  }, [firstRunKey, hasRunTimeline, runKeySignature, selectedKey, timeline.runs])
 
   React.useEffect(() => {
     if (hasRunTimeline || modelStatuses.length === 0) return
@@ -94,8 +102,8 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
   }, [hasRunTimeline, modelStatuses, selectedStatusKey])
 
   const selectedRun = selectedKey
-    ? timeline.runs.find(run => run.key === selectedKey) ?? timeline.activeRun
-    : timeline.activeRun
+    ? timeline.runs.find(run => run.key === selectedKey) ?? timeline.runs[0]
+    : timeline.runs[0] ?? timeline.activeRun
   const selectedStatus = selectedStatusKey
     ? modelStatuses.find(model => model.key === selectedStatusKey) ?? modelStatuses[0]
     : modelStatuses.find(model => model.status === "incomplete") ?? modelStatuses[0]
@@ -114,6 +122,7 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
     0
   )
   const progressTotal = Math.max(knownTotal, timeline.runs.length, runningRunCount + finishedRunCount)
+  const queuedRunCount = Math.max(progressTotal - runningRunCount - finishedRunCount, 0)
   const selectedIndex = selectedRun ? Math.min(Math.max(selectedRun.index, 1), Math.max(progressTotal, 1)) : 0
   const lastRunEventAt = Math.max(...timeline.runs.map(run => run.lastEventAt ?? 0), 0)
   const staleElapsedMs = lastRunEventAt > 0 ? now - lastRunEventAt : null
@@ -127,13 +136,14 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
   const runAppearsStale = unfinishedRunTimeline && !runAppearsActive
   const staleRun = runAppearsStale ? timeline.runs.find(run => run.status === "running") ?? selectedRun : undefined
   const staleRunName = staleRun?.name ?? "the selected model"
+  const liveProgressHeadline = `${runningRunCount}/${maxConcurrency} running · ${queuedRunCount} queued · ${finishedRunCount}/${progressTotal} finished`
 
   const headline = runAppearsStale
     ? staleElapsedMs === null
       ? `No live stream is active for ${staleRunName}`
       : `No live updates for ${formatDuration(staleElapsedMs)} on ${staleRunName}`
-    : hasRunTimeline && runningRunCount > 1
-    ? `${runningRunCount} running · ${finishedRunCount}/${progressTotal} finished · max ${maxConcurrency} at once`
+    : hasRunTimeline && hasRunningRun
+    ? liveProgressHeadline
     : hasRunTimeline && selectedRun
     ? `${selectedIndex}/${Math.max(progressTotal, 1)}: ${selectedRun.name}`
     : hasRunTimeline && timeline.stopped
@@ -289,11 +299,11 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
 }
 
 function ResearchRunPreview({ run, now }: { run: ResearchRun; now: number }) {
-  const transcript = run.agent ? normalizeAgentTranscript(run.agent) : { content: "", contentSegments: [] as ContentSegment[] }
   const isRunning = run.status === "running"
   const idleMs = isRunning && run.lastEventAt ? now - run.lastEventAt : null
   const isIdle = idleMs !== null && idleMs > IDLE_NOTICE_AFTER_MS
   const isStale = isRunning && (!run.lastEventAt || (idleMs !== null && idleMs > RUN_STALE_AFTER_MS))
+  const reasoning = run.agent?.reasoning ?? []
 
   return (
     <div className="flex min-w-0 flex-col gap-3">
@@ -336,14 +346,14 @@ function ResearchRunPreview({ run, now }: { run: ResearchRun; now: number }) {
             Transcript
           </div>
           <StreamingBubble
-            reasoning={run.agent.reasoning ?? []}
-            content={transcript.content}
-            contentSegments={transcript.contentSegments}
-            streamingMode={isRunning ? inferStreamingMode(run.agent) : null}
-            showCursor={isRunning}
+            reasoning={reasoning}
+            content=""
+            contentSegments={[]}
+            streamingMode={isRunning ? "reasoning" : null}
+            showCursor={isRunning && reasoning.length === 0}
             thinkingDone={run.agent.status !== "running"}
             thinkingSeconds={run.agent.status === "running" ? elapsedSeconds(run.agent.startedAt) : undefined}
-            searchToolDisplay="expanded"
+            searchToolDisplay="compact"
             thoughtAutoOpen={false}
             thoughtAutoExpandTools={false}
             liveCollapsedTitle
@@ -768,48 +778,6 @@ function updateAgentTool(
       item.type === "tool_call" && item.toolCallId === toolCallId ? updater(item) : item
     ),
   }
-}
-
-// The researcher's *answer* is a machine JSON payload (status/fields/sources).
-// We never want to dump that — raw or half-streamed — into the transcript;
-// the green result block already conveys the outcome. Strip fenced blocks and
-// the JSON blob, keeping only any human-readable narrative. (The separate
-// `reasoning` array — the model's thinking and tool calls — is untouched and
-// still shows what the researcher is doing.)
-function stripResearchJson(content: string): string {
-  let s = content
-    .replace(/```[\s\S]*?```/g, "")          // closed code fences
-    .replace(/```[a-zA-Z]*[\s\S]*$/g, "")     // an open (still streaming) fence and everything after it
-  const firstBrace = s.search(/[{[]/)
-  if (firstBrace !== -1) {
-    const tail = s.slice(firstBrace).trim()
-    if (/^[{[]/.test(tail) || /"(status|fields|sources|unresolved|pricing|contextWindow|capabilities|kinds)"\s*:/.test(tail)) {
-      // Everything from the first brace on is the (possibly partial) payload —
-      // and any trailing notes after it are noise here too.
-      s = s.slice(0, firstBrace)
-    }
-  }
-  return s.trim()
-}
-
-function normalizeAgentTranscript(agent: AgentCallReasoningEntry): { content: string; contentSegments: ContentSegment[] } {
-  const cleaned = stripResearchJson(agent.content)
-  const segments = (agent.contentSegments ?? [])
-    .map(seg => ({ ...seg, content: stripResearchJson(seg.content) }))
-    .filter(seg => seg.content.trim().length > 0)
-  return {
-    content: cleaned,
-    contentSegments: segments.length > 0
-      ? segments
-      : (cleaned ? [{ phase: 0, content: cleaned }] : []),
-  }
-}
-
-function inferStreamingMode(agent: AgentCallReasoningEntry): "reasoning" | "content" {
-  const lastReasoning = agent.reasoning?.at(-1)
-  if (lastReasoning?.type === "tool_call" && lastReasoning.status === "running") return "reasoning"
-  if (agent.content.length > 0) return "content"
-  return "reasoning"
 }
 
 function elapsedSeconds(startedAt: number): number {
