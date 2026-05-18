@@ -1,4 +1,4 @@
-import { existsSync } from 'fs'
+import { existsSync, mkdirSync } from 'fs'
 import { homedir } from 'os'
 import { join, isAbsolute } from 'path'
 import { execFileSync } from 'child_process'
@@ -46,8 +46,13 @@ export function resolveBin(name: string): string {
 
     // Fall back to user/system locations.
     const home = homedir()
-    for (const rel of FALLBACK_DIRS) {
-        const candidate = join(/* turbopackIgnore: true */ home, rel, name)
+    const npmPrefix = npmGlobalPrefix(home)
+    const userDirs = [
+        join(/* turbopackIgnore: true */ npmPrefix, 'bin'),
+        ...FALLBACK_DIRS.map(rel => join(/* turbopackIgnore: true */ home, rel)),
+    ]
+    for (const dir of userDirs) {
+        const candidate = join(/* turbopackIgnore: true */ dir, name)
         if (existsSync(/* turbopackIgnore: true */ candidate)) {
             cache.set(name, candidate)
             return candidate
@@ -73,14 +78,31 @@ export function resolveBin(name: string): string {
  */
 export function augmentedEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
     const home = homedir()
+    const npmPrefix = npmGlobalPrefix(home)
+    const npmBin = join(/* turbopackIgnore: true */ npmPrefix, 'bin')
+    try {
+        mkdirSync(npmBin, { recursive: true })
+    } catch {
+        // Let npm surface the real permissions error if the home directory is not writable.
+    }
     const dirs = [
+        npmBin,
         join(/* turbopackIgnore: true */ home, '.local/bin'),
-        join(/* turbopackIgnore: true */ home, '.npm-global/bin'),
         ...FALLBACK_GLOBALS,
     ]
     const currentPath = process.env.PATH ?? ''
     const merged = [currentPath, ...dirs.filter(d => !currentPath.includes(d))].filter(Boolean).join(':')
 
-    const env: NodeJS.ProcessEnv = { ...process.env, ...extra, PATH: merged }
+    const env: NodeJS.ProcessEnv = {
+        ...process.env,
+        NPM_CONFIG_PREFIX: npmPrefix,
+        ...extra,
+        PATH: merged,
+    }
     return env
+}
+
+function npmGlobalPrefix(home: string): string {
+    const configured = process.env.NPM_CONFIG_PREFIX?.trim()
+    return configured || join(/* turbopackIgnore: true */ home, '.npm-global')
 }

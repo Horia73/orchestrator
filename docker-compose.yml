@@ -12,6 +12,7 @@ services:
       ORCHESTRATOR_HOST: 0.0.0.0
       ORCHESTRATOR_PORT: "3000"
       PORT: "3000"
+      NPM_CONFIG_PREFIX: /home/node/.npm-global
       PATCHRIGHT_BROWSERS_PATH: /ms-playwright
       PLAYWRIGHT_BROWSERS_PATH: /ms-playwright
       BROWSER_AGENT_LIVE_VIEW: "1"
@@ -27,6 +28,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - orchestrator-data:/app/.orchestrator
+      - orchestrator-node-home:/home/node
 
 volumes:
   orchestrator-data:
+  orchestrator-node-home:

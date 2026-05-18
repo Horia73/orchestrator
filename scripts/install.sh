@@ -13,6 +13,7 @@ UPDATE_BRIDGE_PORT="${ORCHESTRATOR_UPDATE_BRIDGE_PORT:-38733}"
 UPDATE_BRIDGE_BIND="${ORCHESTRATOR_UPDATE_BRIDGE_BIND:-0.0.0.0}"
 UPDATE_BRIDGE_TOKEN_FILE="${ORCHESTRATOR_UPDATE_TOKEN_FILE:-$ORCH_HOME/update-bridge-token}"
 BIN_DIR="${ORCHESTRATOR_BIN_DIR:-$HOME/.local/bin}"
+NPM_GLOBAL_PREFIX="${ORCHESTRATOR_NPM_GLOBAL_PREFIX:-$HOME/.npm-global}"
 LOG_DIR="$ORCH_HOME/logs"
 SERVICE_NAME="orchestrator"
 UPDATE_BRIDGE_SERVICE_NAME="orchestrator-docker-update"
@@ -35,6 +36,10 @@ run_sudo() {
   else
     fail "Missing sudo. Install $1 manually and rerun."
   fi
+}
+
+ensure_user_npm_global_prefix() {
+  mkdir -p "$NPM_GLOBAL_PREFIX/bin"
 }
 
 resolve_install_mode() {
@@ -410,7 +415,7 @@ install_systemd_service() {
   node_bin="$(command -v node)"
   npm_bin="$(command -v npm)"
   node_dir="$(dirname "$node_bin")"
-  path_value="$node_dir:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+  path_value="$node_dir:$NPM_GLOBAL_PREFIX/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
   service_dir="$HOME/.config/systemd/user"
   service_file="$service_dir/$SERVICE_NAME.service"
 
@@ -428,6 +433,7 @@ Environment=PORT=$PORT
 Environment=ORCHESTRATOR_PORT=$PORT
 Environment=ORCHESTRATOR_HOST=$HOST
 Environment=HOSTNAME=$HOST
+Environment=NPM_CONFIG_PREFIX=$NPM_GLOBAL_PREFIX
 Environment=PATH=$path_value
 Environment=ORCHESTRATOR_SERVICE_MANAGER=systemd
 Environment=ORCHESTRATOR_UPDATE_REPO_OWNER=Horia73
@@ -451,7 +457,7 @@ install_launchd_service() {
   node_bin="$(command -v node)"
   npm_bin="$(command -v npm)"
   node_dir="$(dirname "$node_bin")"
-  path_value="$node_dir:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+  path_value="$node_dir:$NPM_GLOBAL_PREFIX/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
   plist="$HOME/Library/LaunchAgents/$LAUNCHD_LABEL.plist"
 
   mkdir -p "$HOME/Library/LaunchAgents"
@@ -481,6 +487,8 @@ install_launchd_service() {
     <string>$HOST</string>
     <key>HOSTNAME</key>
     <string>$HOST</string>
+    <key>NPM_CONFIG_PREFIX</key>
+    <string>$NPM_GLOBAL_PREFIX</string>
     <key>PATH</key>
     <string>$path_value</string>
     <key>ORCHESTRATOR_SERVICE_MANAGER</key>
@@ -683,6 +691,7 @@ install_native_stack() {
   install_git_if_missing
   install_linux_native_dependencies
   ensure_node
+  ensure_user_npm_global_prefix
   checkout_app
   build_app
 
