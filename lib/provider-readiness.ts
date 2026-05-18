@@ -1,4 +1,4 @@
-import { getEnvValue } from '@/lib/config'
+import { getProviderApiKeyInfo } from '@/lib/config'
 import { getAllCliStatuses } from '@/lib/cli/status'
 import { CLI_SPECS, type CliId } from '@/lib/cli/specs'
 import type { EffectiveProviderEntry } from '@/lib/models/schema'
@@ -84,7 +84,8 @@ export async function getProviderReadiness(
         }
     }
 
-    const key = getEnvValue(provider.apiKeyEnv)
+    const keyInfo = getProviderApiKeyInfo(providerId, provider)
+    const key = keyInfo?.value ?? null
     const available = Boolean(key && key.length > 0)
     return {
         available,

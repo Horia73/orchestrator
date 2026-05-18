@@ -31,6 +31,13 @@ export const PRIVATE_STATE_DIR = path.join(DB_DIR, 'private');
 const LEGACY_CONFIG_PATH = path.join(DB_DIR, 'config.json');
 const CONFIG_PATH = path.join(WORKSPACE_DIR, 'config.json');
 export const WORKSPACE_ENV_PATH = path.join(WORKSPACE_DIR, '.env.local');
+const PROJECT_ENV_PATHS = [
+    path.join(PROJECT_DIR, '.env.local'),
+    path.join(PROJECT_DIR, '.env'),
+];
+const PROVIDER_API_KEY_ALIASES: Record<string, string[]> = {
+    google: ['GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'],
+}
 
 /** Directory where uploaded files are stored */
 export const UPLOADS_DIR = path.join(DB_DIR, 'uploads');
@@ -313,7 +320,7 @@ export function getRuntimeConfig(): RuntimeConfig {
     let apiKeyMasked: string | null = null;
 
     if (providerDef) {
-        const key = getEnvValue(providerDef.apiKeyEnv);
+        const key = getProviderApiKeyInfo(config.activeProvider, providerDef)?.value ?? null;
         if (key && key.length > 8) {
             apiKeyConfigured = true;
             apiKeyMasked = key.slice(0, 4) + "..." + key.slice(-4);
@@ -339,31 +346,67 @@ export function updateConfig(newConfig: Partial<AppConfig>): AppConfig {
 /** Get the API key for the active provider from environment */
 export function getApiKey(providerName?: string): string | null {
     const config = getConfig();
-    const provider = getEffectiveProvider(providerName ?? config.activeProvider);
+    const providerId = providerName ?? config.activeProvider;
+    const provider = getEffectiveProvider(providerId);
     if (!provider) return null;
-    return getEnvValue(provider.apiKeyEnv);
+    return getProviderApiKeyInfo(providerId, provider)?.value ?? null;
+}
+
+export function getProviderApiKeyInfo(
+    providerId: string,
+    provider: EffectiveProviderEntry
+): { envName: string; value: string } | null {
+    return getFirstEnvValue(getProviderApiKeyEnvNames(providerId, provider.apiKeyEnv))
+}
+
+export function getProviderApiKeyEnvNames(providerId: string, primaryEnvName: string): string[] {
+    return uniqueStrings([
+        primaryEnvName,
+        ...(PROVIDER_API_KEY_ALIASES[providerId] ?? []),
+    ])
 }
 
 export function getEnvValue(name: string): string | null {
-    return process.env[name] ?? readWorkspaceEnvValue(name)
+    return getFirstEnvValue([name])?.value ?? null
 }
 
-function readWorkspaceEnvValue(name: string): string | null {
+function getFirstEnvValue(names: string[]): { envName: string; value: string } | null {
+    for (const name of names) {
+        const value = process.env[name]
+        if (hasEnvValue(value)) return { envName: name, value }
+    }
+
+    for (const filePath of [WORKSPACE_ENV_PATH, ...PROJECT_ENV_PATHS]) {
+        const values = readEnvFileValues(filePath, names)
+        for (const name of names) {
+            const value = values[name]
+            if (hasEnvValue(value)) return { envName: name, value }
+        }
+    }
+
+    return null
+}
+
+function readEnvFileValues(filePath: string, names: string[]): Record<string, string> {
+    const wanted = new Set(names)
+    const out: Record<string, string> = {}
     try {
-        if (!fs.existsSync(WORKSPACE_ENV_PATH)) return null
-        const lines = fs.readFileSync(WORKSPACE_ENV_PATH, 'utf-8').split(/\r?\n/)
+        if (!fs.existsSync(filePath)) return out
+        const lines = fs.readFileSync(filePath, 'utf-8').split(/\r?\n/)
         for (const line of lines) {
             const trimmed = line.trim()
             if (!trimmed || trimmed.startsWith('#')) continue
-            const idx = trimmed.indexOf('=')
+            const normalized = trimmed.startsWith('export ') ? trimmed.slice('export '.length).trim() : trimmed
+            const idx = normalized.indexOf('=')
             if (idx <= 0) continue
-            if (trimmed.slice(0, idx).trim() !== name) continue
-            return stripEnvQuotes(trimmed.slice(idx + 1).trim())
+            const key = normalized.slice(0, idx).trim()
+            if (!wanted.has(key)) continue
+            out[key] = stripEnvQuotes(normalized.slice(idx + 1).trim())
         }
     } catch {
-        return null
+        return out
     }
-    return null
+    return out
 }
 
 function stripEnvQuotes(value: string): string {
@@ -371,6 +414,14 @@ function stripEnvQuotes(value: string): string {
         return value.slice(1, -1)
     }
     return value
+}
+
+function hasEnvValue(value: string | undefined | null): value is string {
+    return typeof value === 'string' && value.trim().length > 0
+}
+
+function uniqueStrings(values: string[]): string[] {
+    return [...new Set(values.filter(Boolean))]
 }
 
 // ---------------------------------------------------------------------------

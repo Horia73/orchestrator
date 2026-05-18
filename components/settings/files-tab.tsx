@@ -794,6 +794,18 @@ function EnvEntryRow({
           readOnly={readOnly}
           aria-invalid={invalid}
           onChange={event => onChange({ ...row, key: normalizeEnvKeyInput(event.target.value) })}
+          onPaste={event => {
+            const parsed = parsePastedEnvEntry(event.clipboardData.getData("text"))
+            if (!parsed) return
+            event.preventDefault()
+            onChange({
+              ...row,
+              key: normalizeEnvKeyInput(parsed.key),
+              value: parsed.value,
+              quote: parsed.quote,
+              exportPrefix: parsed.exportPrefix,
+            })
+          }}
           className={cn(fieldClassName(readOnly), "font-mono text-[12.5px] aria-invalid:border-destructive/60 aria-invalid:ring-destructive/15")}
           placeholder="VARIABLE_NAME"
           autoComplete="off"
@@ -808,6 +820,18 @@ function EnvEntryRow({
             type={revealed ? "text" : "password"}
             readOnly={readOnly}
             onChange={event => onChange({ ...row, value: event.target.value })}
+            onPaste={event => {
+              const parsed = parsePastedEnvEntry(event.clipboardData.getData("text"))
+              if (!parsed) return
+              event.preventDefault()
+              onChange({
+                ...row,
+                key: normalizeEnvKeyInput(parsed.key),
+                value: parsed.value,
+                quote: parsed.quote,
+                exportPrefix: parsed.exportPrefix,
+              })
+            }}
             className={cn(fieldClassName(readOnly), "rounded-r-none border-r-0 font-mono text-[12.5px]")}
             placeholder="value"
             spellCheck={false}
@@ -1308,6 +1332,11 @@ function parseEnvEntryLine(line: string, index: number): Extract<EnvLine, { kind
   }
 }
 
+function parsePastedEnvEntry(text: string): Extract<EnvLine, { kind: "entry" }> | null {
+  const line = text.replace(/\r\n/g, "\n").split("\n").find(candidate => parseEnvEntryLine(candidate, 0) !== null)
+  return line ? parseEnvEntryLine(line, 0) : null
+}
+
 function parseEnvLabelLine(line: string): string | null {
   const match = line.match(/^\s*#\s*@label\s+(.+?)\s*$/)
   return match ? match[1].trim() : null
@@ -1362,7 +1391,9 @@ function countEnvKeys(entries: Array<Extract<EnvLine, { kind: "entry" }>>): Map<
 }
 
 function normalizeEnvKeyInput(value: string): string {
-  return value.replace(/[^A-Za-z0-9_]/g, "_").replace(/^[^A-Za-z_]+/, "")
+  const withoutExport = value.replace(/^\s*export\s+/, "")
+  const beforeEquals = withoutExport.includes("=") ? withoutExport.slice(0, withoutExport.indexOf("=")) : withoutExport
+  return beforeEquals.trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^[^A-Za-z_]+/, "")
 }
 
 function normalizeEnvLabelInput(value: string): string {
