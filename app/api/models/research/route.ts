@@ -149,6 +149,10 @@ function readPersistedJobSnapshot(): ResearchJobSnapshot | null {
         if (!fs.existsSync(RESEARCH_SNAPSHOT_PATH)) return null
         const parsed = JSON.parse(fs.readFileSync(RESEARCH_SNAPSHOT_PATH, 'utf-8')) as ResearchJobSnapshot
         if (!parsed || !Array.isArray(parsed.events)) return null
+        if (containsLegacyCodexMcpTransportError(parsed.events)) {
+            clearPersistedJobSnapshot()
+            return null
+        }
         return parsed
     } catch {
         return null
@@ -449,6 +453,20 @@ function emitResearchEvent(job: ActiveResearchJob, event: ResearchEvent): void {
 
 function isTerminalResearchEvent(event: ResearchEvent): boolean {
     return event.type === 'done' || event.type === 'stopped' || event.type === 'error'
+}
+
+function containsLegacyCodexMcpTransportError(events: ResearchEvent[]): boolean {
+    return events.some(event => {
+        if (event.type === 'error') return isLegacyCodexMcpTransportError(event.message)
+        if (event.type === 'model_result') return isLegacyCodexMcpTransportError(event.error)
+        return false
+    })
+}
+
+function isLegacyCodexMcpTransportError(value: unknown): boolean {
+    return typeof value === 'string'
+        && value.includes('invalid transport')
+        && value.includes('mcp_servers.playwright')
 }
 
 async function mapResearchTargets(

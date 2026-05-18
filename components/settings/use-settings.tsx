@@ -189,10 +189,26 @@ function readStoredResearchEvents(): ModelResearchClientEvent[] {
     const raw = window.localStorage.getItem(RESEARCH_EVENTS_STORAGE_KEY)
     if (!raw) return []
     const parsed = JSON.parse(raw)
-    return Array.isArray(parsed) ? capResearchEvents(parsed as ModelResearchClientEvent[]) : []
+    if (!Array.isArray(parsed)) return []
+    const events = parsed as ModelResearchClientEvent[]
+    if (containsLegacyCodexMcpTransportError(events)) {
+      window.localStorage.removeItem(RESEARCH_EVENTS_STORAGE_KEY)
+      return []
+    }
+    return capResearchEvents(events)
   } catch {
     return []
   }
+}
+
+function containsLegacyCodexMcpTransportError(events: ModelResearchClientEvent[]): boolean {
+  return events.some(event => {
+    if (event.type !== "error" && event.type !== "model_result") return false
+    const message = event.type === "error" ? event.message : event.error
+    return typeof message === "string"
+      && message.includes("invalid transport")
+      && message.includes("mcp_servers.playwright")
+  })
 }
 
 async function fetchSettingsBootstrap(signal?: AbortSignal): Promise<SettingsBootstrap> {
@@ -670,6 +686,15 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       if (!res?.ok || cancelled) return
       const snapshot = (await res.json().catch(() => null)) as ModelResearchStatusSnapshot | null
       if (!snapshot || cancelled) return
+      if (Array.isArray(snapshot.events) && containsLegacyCodexMcpTransportError(snapshot.events)) {
+        setResearchEvents([])
+        currentRunIdRef.current = null
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(RESEARCH_EVENTS_STORAGE_KEY)
+        }
+        void fetch('/api/models/research', { method: 'DELETE' }).catch(() => {})
+        return
+      }
       if (snapshot.runId) currentRunIdRef.current = snapshot.runId
       if (Array.isArray(snapshot.events) && snapshot.events.length > 0) {
         const events = capResearchEvents(snapshot.events.map(event => ({ ...event, at: event.at ?? Date.now() })))
