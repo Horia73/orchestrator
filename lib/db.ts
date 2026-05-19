@@ -397,6 +397,18 @@ interface MessageRow {
   timestamp: number
 }
 
+export interface MessagePageCursor {
+  timestamp: number
+  id: string
+}
+
+export interface ConversationMessagesPage {
+  messages: Message[]
+  total: number
+  hasMore: boolean
+  nextCursor: MessagePageCursor | null
+}
+
 function parseJsonField<T>(value: string | null): T | undefined {
   if (!value) return undefined
   try {
@@ -593,6 +605,55 @@ export function getConversation(id: string): Conversation | null {
     updatedAt: row.updatedAt,
     messages,
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
+  }
+}
+
+export function getConversationMessagesPage(
+  id: string,
+  options: { limit?: number; before?: MessagePageCursor | null } = {}
+): ConversationMessagesPage {
+  const limit = Math.max(1, Math.min(options.limit ?? 80, 200))
+  const before = options.before
+  const totalRow = db
+    .prepare("SELECT COUNT(*) AS count FROM messages WHERE conversationId = ?")
+    .get(id) as { count: number } | undefined
+
+  const rows = db
+    .prepare(
+      `
+        SELECT *
+        FROM messages
+        WHERE conversationId = @id
+          ${
+            before
+              ? `AND (
+                  timestamp < @beforeTimestamp
+                  OR (timestamp = @beforeTimestamp AND id < @beforeId)
+                )`
+              : ""
+          }
+        ORDER BY timestamp DESC, id DESC
+        LIMIT @limitPlusOne
+      `
+    )
+    .all({
+      id,
+      beforeTimestamp: before?.timestamp ?? null,
+      beforeId: before?.id ?? null,
+      limitPlusOne: limit + 1,
+    }) as MessageRow[]
+
+  const pageRows = rows.slice(0, limit)
+  const oldestRow = pageRows[pageRows.length - 1]
+
+  return {
+    messages: pageRows.reverse().map(messageFromRow),
+    total: totalRow?.count ?? 0,
+    hasMore: rows.length > limit,
+    nextCursor:
+      rows.length > limit && oldestRow
+        ? { timestamp: oldestRow.timestamp, id: oldestRow.id }
+        : null,
   }
 }
 

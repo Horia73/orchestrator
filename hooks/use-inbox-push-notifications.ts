@@ -13,9 +13,17 @@ export type PushStatus =
 export type PushUnsupportedReason =
   | "not-browser"
   | "insecure-context"
+  | "ios-pwa-required"
   | "notification-api"
   | "service-worker"
   | "push-manager"
+
+export interface PushRefreshResult {
+  status: PushStatus
+  permission: NotificationPermission
+  unsupportedReason: PushUnsupportedReason | null
+  error: string | null
+}
 
 const SYNC_RECORD_KEY = "orchestrator:push-subscription-sync"
 const SYNC_TTL_MS = 12 * 60 * 60 * 1000
@@ -35,10 +43,27 @@ function getPushUnsupportedReason(): PushUnsupportedReason | null {
     return "not-browser"
   }
   if (!window.isSecureContext) return "insecure-context"
+  if (isAppleMobileDevice() && !isStandaloneApp()) return "ios-pwa-required"
   if (!("Notification" in window)) return "notification-api"
   if (!("serviceWorker" in navigator)) return "service-worker"
   if (!("PushManager" in window)) return "push-manager"
   return null
+}
+
+function isAppleMobileDevice(): boolean {
+  const ua = navigator.userAgent
+  const platform = navigator.platform
+  return (
+    /iPad|iPhone|iPod/.test(ua) ||
+    (platform === "MacIntel" && navigator.maxTouchPoints > 1)
+  )
+}
+
+function isStandaloneApp(): boolean {
+  const nav = navigator as Navigator & { standalone?: boolean }
+  return Boolean(
+    nav.standalone || window.matchMedia("(display-mode: standalone)").matches
+  )
 }
 
 async function registerServiceWorker(): Promise<ServiceWorkerRegistration> {
@@ -149,34 +174,62 @@ export function useInboxPushNotifications() {
   const [busy, setBusy] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  const refresh = React.useCallback(async () => {
-    if (typeof window === "undefined") return
-    const reason = getPushUnsupportedReason()
-    setUnsupportedReason(reason)
-    if (reason) {
-      setStatus("unsupported")
-      setError(null)
-      return
-    }
+  const refresh =
+    React.useCallback(async (): Promise<PushRefreshResult | null> => {
+      if (typeof window === "undefined") return null
+      const reason = getPushUnsupportedReason()
+      setUnsupportedReason(reason)
+      if (reason) {
+        const currentPermission =
+          "Notification" in window ? Notification.permission : "default"
+        setStatus("unsupported")
+        setError(null)
+        setPermission(currentPermission)
+        return {
+          status: "unsupported",
+          permission: currentPermission,
+          unsupportedReason: reason,
+          error: null,
+        }
+      }
 
-    setPermission(Notification.permission)
-    if (Notification.permission === "denied") {
-      setStatus("blocked")
-      setError(null)
-      return
-    }
+      setPermission(Notification.permission)
+      if (Notification.permission === "denied") {
+        setStatus("blocked")
+        setError(null)
+        return {
+          status: "blocked",
+          permission: "denied",
+          unsupportedReason: null,
+          error: null,
+        }
+      }
 
-    try {
-      const registration = await registerServiceWorker()
-      const subscription = await registration.pushManager.getSubscription()
-      if (subscription) await syncSubscriptionIfNeeded(subscription)
-      setStatus(subscription ? "enabled" : "ready")
-      setError(null)
-    } catch (err) {
-      setStatus("error")
-      setError(err instanceof Error ? err.message : "Push setup failed")
-    }
-  }, [])
+      try {
+        const registration = await registerServiceWorker()
+        const subscription = await registration.pushManager.getSubscription()
+        if (subscription) await syncSubscriptionIfNeeded(subscription)
+        const nextStatus: PushStatus = subscription ? "enabled" : "ready"
+        setStatus(nextStatus)
+        setError(null)
+        return {
+          status: nextStatus,
+          permission: Notification.permission,
+          unsupportedReason: null,
+          error: null,
+        }
+      } catch (err) {
+        const message = err instanceof Error ? err.message : "Push setup failed"
+        setStatus("error")
+        setError(message)
+        return {
+          status: "error",
+          permission: Notification.permission,
+          unsupportedReason: null,
+          error: message,
+        }
+      }
+    }, [])
 
   React.useEffect(() => {
     void refresh()

@@ -5,7 +5,6 @@ import Link from "next/link"
 import {
   ArrowLeft,
   CalendarClock,
-  ChevronDown,
   ExternalLink,
   ListFilter,
   Loader2,
@@ -82,6 +81,20 @@ function useNow(intervalMs = 1000): number {
     return () => window.clearInterval(i)
   }, [intervalMs])
   return now
+}
+
+function useMediaQuery(query: string): boolean {
+  const [matches, setMatches] = React.useState(false)
+
+  React.useEffect(() => {
+    const media = window.matchMedia(query)
+    const update = () => setMatches(media.matches)
+    update()
+    media.addEventListener("change", update)
+    return () => media.removeEventListener("change", update)
+  }, [query])
+
+  return matches
 }
 
 const STATUS_STYLE: Record<string, string> = {
@@ -323,6 +336,155 @@ function PastRunsLoading() {
   )
 }
 
+function RunListButton({
+  run,
+  selected,
+  onSelect,
+}: {
+  run: TaskRunRecord
+  selected: boolean
+  onSelect: () => void
+}) {
+  const primary = run.error || run.summary || "(no output)"
+
+  return (
+    <button
+      type="button"
+      onClick={onSelect}
+      className={cn(
+        "flex w-full items-start gap-3 rounded-md px-3 py-2.5 text-left transition-colors",
+        selected
+          ? "bg-[#f0ede6] text-foreground dark:bg-muted"
+          : "hover:bg-[#f0ede6]/65 dark:hover:bg-muted/65"
+      )}
+    >
+      <span
+        className={cn(
+          "mt-1.5 size-2 shrink-0 rounded-full",
+          run.status === "error" ? "bg-[#802020]" : "bg-emerald-500"
+        )}
+      />
+      <span className="min-w-0 flex-1">
+        <span className="flex items-center gap-2 text-[12px] text-foreground/55">
+          <span className="truncate">
+            {new Date(run.startedAt).toLocaleString()}
+          </span>
+          <span className="shrink-0 text-foreground/35">
+            {formatRunDuration(run)}
+          </span>
+        </span>
+        <span className="mt-0.5 block truncate text-[13px] text-foreground/75">
+          {primary}
+        </span>
+        <span className="mt-1 flex items-center gap-1.5 text-[11px] text-foreground/40">
+          <span>{run.trigger}</span>
+          <span>·</span>
+          <span>{run.surfaced ? "Inbox" : "silent"}</span>
+        </span>
+      </span>
+    </button>
+  )
+}
+
+function RunDetailPane({
+  run,
+  onBack,
+}: {
+  run: TaskRunRecord | null
+  onBack: () => void
+}) {
+  if (!run) {
+    return (
+      <div className="hidden min-h-0 flex-1 items-center justify-center p-6 text-center text-[13px] text-foreground/45 md:flex">
+        Select a run to inspect its output.
+      </div>
+    )
+  }
+
+  const output = run.error || run.summary || "(no output)"
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex shrink-0 items-center gap-3 border-b border-border/60 px-4 py-3">
+        <button
+          type="button"
+          onClick={onBack}
+          className="rounded-md p-1.5 text-foreground/55 hover:bg-[#f0ede6] md:hidden dark:hover:bg-muted"
+          aria-label="Back to run list"
+        >
+          <ArrowLeft className="size-4" />
+        </button>
+        <div className="min-w-0 flex-1">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="truncate text-[14px] font-medium">
+              {new Date(run.startedAt).toLocaleString()}
+            </span>
+            <StatusPill status={run.status} />
+          </div>
+          <div className="mt-0.5 truncate text-[12px] text-foreground/45">
+            {run.trigger} · {formatRunDuration(run)} ·{" "}
+            {run.surfaced ? "sent to Inbox" : "silent run"}
+          </div>
+        </div>
+        {run.conversationId && (
+          <Link
+            href={`/inbox?item=${encodeURIComponent(run.conversationId)}`}
+            className="hidden shrink-0 items-center gap-1.5 rounded-md border border-border/60 px-2 py-1 text-[12px] text-foreground/60 hover:bg-[#f0ede6] hover:text-foreground sm:inline-flex dark:hover:bg-muted"
+          >
+            <ExternalLink className="size-3" />
+            Inbox
+          </Link>
+        )}
+      </div>
+      <div className="min-h-0 flex-1 overflow-y-auto p-4">
+        <dl className="mb-4 grid grid-cols-2 gap-3 text-[12px] md:grid-cols-4">
+          <div>
+            <dt className="text-foreground/40">Started</dt>
+            <dd className="mt-0.5 text-foreground/70">
+              {new Date(run.startedAt).toLocaleString()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-foreground/40">Ended</dt>
+            <dd className="mt-0.5 text-foreground/70">
+              {new Date(run.endedAt).toLocaleString()}
+            </dd>
+          </div>
+          <div>
+            <dt className="text-foreground/40">Trigger</dt>
+            <dd className="mt-0.5 text-foreground/70">{run.trigger}</dd>
+          </div>
+          <div>
+            <dt className="text-foreground/40">Output</dt>
+            <dd className="mt-0.5 text-foreground/70">
+              {run.surfaced ? "Inbox" : "silent"}
+            </dd>
+          </div>
+        </dl>
+        <div
+          className={cn(
+            "rounded-md border p-3 text-[13px] leading-relaxed whitespace-pre-wrap",
+            run.status === "error"
+              ? "border-red-200 bg-red-50 text-[#802020] dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
+              : "border-border/70 bg-background text-foreground/75"
+          )}
+        >
+          {output}
+        </div>
+        {run.conversationId && (
+          <Link
+            href={`/inbox?item=${encodeURIComponent(run.conversationId)}`}
+            className="mt-4 inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2.5 py-1.5 text-[12px] text-foreground/60 hover:bg-[#f0ede6] hover:text-foreground sm:hidden dark:hover:bg-muted"
+          >
+            <ExternalLink className="size-3" />
+            Open Inbox item
+          </Link>
+        )}
+      </div>
+    </div>
+  )
+}
+
 function PastRuns({ taskId }: { taskId: string }) {
   const { fetchRuns } = useScheduling()
   const [history, setHistory] = React.useState<RunHistoryState>(() =>
@@ -330,8 +492,9 @@ function PastRuns({ taskId }: { taskId: string }) {
   )
   const [filters, setFilters] =
     React.useState<RunFilterState>(DEFAULT_RUN_FILTERS)
-  const [openId, setOpenId] = React.useState<string | null>(null)
+  const [selectedRunId, setSelectedRunId] = React.useState<string | null>(null)
   const [reloadKey, setReloadKey] = React.useState(0)
+  const isWideRunsViewport = useMediaQuery("(min-width: 768px)")
   const apiFilters = React.useMemo(() => runFiltersToApi(filters), [filters])
   const activeFilters = countActiveRunFilters(filters)
 
@@ -379,7 +542,7 @@ function PastRuns({ taskId }: { taskId: string }) {
       }
     }
 
-    setOpenId(null)
+    setSelectedRunId(null)
     setHistory(emptyRunHistory())
     void loadLatest("initial")
     const i = window.setInterval(() => {
@@ -390,6 +553,15 @@ function PastRuns({ taskId }: { taskId: string }) {
       window.clearInterval(i)
     }
   }, [taskId, fetchRuns, apiFilters, reloadKey])
+
+  React.useEffect(() => {
+    setSelectedRunId((current) => {
+      if (current && history.runs.some((run) => run.id === current)) {
+        return current
+      }
+      return isWideRunsViewport ? (history.runs[0]?.id ?? null) : null
+    })
+  }, [history.runs, isWideRunsViewport])
 
   const loadMore = async () => {
     if (!history.nextCursor || history.loadingMore) return
@@ -426,6 +598,9 @@ function PastRuns({ taskId }: { taskId: string }) {
   }
 
   const { runs } = history
+  const selectedRun =
+    runs.find((run) => run.id === selectedRunId) ??
+    (isWideRunsViewport ? (runs[0] ?? null) : null)
 
   let content: React.ReactNode
   if (history.loadingInitial && runs.length === 0) {
@@ -451,92 +626,58 @@ function PastRuns({ taskId }: { taskId: string }) {
     )
   } else {
     content = (
-      <>
-        <ul className="divide-y divide-border/50">
-          {runs.map((r) => {
-            const isOpen = openId === r.id
-            return (
-              <li key={r.id} className="px-1 py-3">
-                <div className="flex items-start gap-3">
-                  <span
-                    className={cn(
-                      "mt-1.5 size-2 shrink-0 rounded-full",
-                      r.status === "error" ? "bg-[#802020]" : "bg-emerald-500"
-                    )}
-                  />
-                  <div className="min-w-0 flex-1">
-                    <button
-                      type="button"
-                      className="w-full text-left"
-                      onClick={() => setOpenId(isOpen ? null : r.id)}
-                    >
-                      <div className="flex flex-wrap items-center gap-x-2 gap-y-1 text-[13px]">
-                        <span className="text-foreground/75">
-                          {new Date(r.startedAt).toLocaleString()}
-                        </span>
-                        <span className="text-foreground/35">·</span>
-                        <span className="text-foreground/50">{r.trigger}</span>
-                        <span className="text-foreground/35">·</span>
-                        <span className="text-foreground/50">
-                          {formatRunDuration(r)}
-                        </span>
-                        <span
-                          className={cn(
-                            "rounded px-1.5 py-0.5 text-[11px]",
-                            r.surfaced
-                              ? "bg-[#f0ede6] text-foreground/70 dark:bg-muted"
-                              : "text-foreground/40"
-                          )}
-                        >
-                          {r.surfaced ? "→ Inbox" : "silent"}
-                        </span>
-                        <ChevronDown
-                          className={cn(
-                            "ml-auto size-3.5 shrink-0 text-foreground/35 transition-transform",
-                            isOpen && "rotate-180"
-                          )}
-                        />
-                      </div>
-                      <p
-                        className={cn(
-                          "mt-0.5 text-[13px] text-foreground/55",
-                          isOpen ? "whitespace-pre-wrap" : "truncate"
-                        )}
-                      >
-                        {r.error ? r.error : r.summary || "(no output)"}
-                      </p>
-                    </button>
-                    {isOpen && r.conversationId && (
-                      <Link
-                        href={`/inbox?item=${encodeURIComponent(r.conversationId)}`}
-                        className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border/60 px-2 py-1 text-[12px] text-foreground/60 hover:bg-[#f0ede6] hover:text-foreground dark:hover:bg-muted"
-                      >
-                        <ExternalLink className="size-3" />
-                        Open Inbox item
-                      </Link>
-                    )}
-                  </div>
-                </div>
-              </li>
-            )
-          })}
-        </ul>
-        {history.hasMore && (
-          <div className="pt-4">
-            <button
-              type="button"
-              disabled={history.loadingMore}
-              onClick={() => void loadMore()}
-              className="flex w-full items-center justify-center gap-2 rounded-md border border-border/70 px-3 py-2 text-[13px] text-foreground/60 hover:bg-[#f0ede6] hover:text-foreground disabled:opacity-50 dark:hover:bg-muted"
-            >
-              {history.loadingMore && (
-                <Loader2 className="size-3.5 animate-spin" />
-              )}
-              Load older runs
-            </button>
+      <div className="grid h-[calc(100dvh-260px)] max-h-[680px] min-h-[440px] overflow-hidden rounded-lg border border-border/60 bg-background md:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+        <div
+          className={cn(
+            "min-h-0 flex-col border-border/60 md:flex md:border-r",
+            selectedRunId ? "hidden md:flex" : "flex"
+          )}
+        >
+          <div className="flex shrink-0 items-center justify-between border-b border-border/60 px-3 py-2 text-[12px] text-foreground/45">
+            <span>Run list</span>
+            <span>{runs.length}</span>
           </div>
-        )}
-      </>
+          <div className="min-h-0 flex-1 overflow-y-auto p-1.5">
+            <ul className="space-y-1">
+              {runs.map((run) => (
+                <li key={run.id}>
+                  <RunListButton
+                    run={run}
+                    selected={selectedRun?.id === run.id}
+                    onSelect={() => setSelectedRunId(run.id)}
+                  />
+                </li>
+              ))}
+            </ul>
+            {history.hasMore && (
+              <div className="p-2">
+                <button
+                  type="button"
+                  disabled={history.loadingMore}
+                  onClick={() => void loadMore()}
+                  className="flex w-full items-center justify-center gap-2 rounded-md border border-border/70 px-3 py-2 text-[13px] text-foreground/60 hover:bg-[#f0ede6] hover:text-foreground disabled:opacity-50 dark:hover:bg-muted"
+                >
+                  {history.loadingMore && (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  )}
+                  Load older runs
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+        <div
+          className={cn(
+            "min-h-0",
+            selectedRunId || isWideRunsViewport ? "flex" : "hidden md:flex"
+          )}
+        >
+          <RunDetailPane
+            run={selectedRun}
+            onBack={() => setSelectedRunId(null)}
+          />
+        </div>
+      </div>
     )
   }
 

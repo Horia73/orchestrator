@@ -8,7 +8,7 @@
   },
   "scripts": {
     "predev": "lsof -ti :3000 | xargs kill -9 2>/dev/null; rm -f .next/dev/lock; true",
-    "dev": "next dev --turbopack",
+    "dev": "next dev --turbopack -H 127.0.0.1",
     "build": "next build",
     "start": "node scripts/start.mjs",
     "lint": "eslint",

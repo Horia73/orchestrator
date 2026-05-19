@@ -59,6 +59,7 @@ export default function Page() {
             )
           ) : null
         ) : state.activeConversationId &&
+          activeConversationStatus !== "partial" &&
           activeConversationStatus !== "full" ? (
           activeConversationStatus === "error" ? (
             <div className="flex flex-1 items-center justify-center px-4 text-center">

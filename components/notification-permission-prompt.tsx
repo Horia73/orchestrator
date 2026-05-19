@@ -11,11 +11,15 @@ import {
 } from "@/hooks/use-inbox-push-notifications"
 import { cn } from "@/lib/utils"
 
-const SNOOZE_KEY = "orchestrator:notification-prompt-snoozed"
-const SNOOZE_MS = 24 * 60 * 60 * 1000
+const HTTPS_LAN_HOSTS = new Set(["orchestrator.lan"])
 
 type PlatformKind = "ios" | "mac" | "mobile" | "desktop"
 type PromptKind = "ready" | "blocked" | "unsupported" | "error"
+
+interface BrowserLocationInfo {
+  origin: string
+  secureUpgradeUrl: string | null
+}
 
 function detectPlatform(): PlatformKind {
   const ua = navigator.userAgent
@@ -29,31 +33,21 @@ function detectPlatform(): PlatformKind {
   return "desktop"
 }
 
-function readSnooze(): { kind: PromptKind; until: number } | null {
-  try {
-    const parsed = JSON.parse(localStorage.getItem(SNOOZE_KEY) ?? "null")
-    if (
-      parsed &&
-      typeof parsed.kind === "string" &&
-      typeof parsed.until === "number"
-    ) {
-      return parsed
-    }
-  } catch {
-    // Storage is optional; show the prompt if we cannot read the snooze state.
+function getBrowserLocationInfo(): BrowserLocationInfo {
+  if (typeof window === "undefined") {
+    return { origin: "", secureUpgradeUrl: null }
   }
-  return null
-}
 
-function writeSnooze(kind: PromptKind) {
-  try {
-    localStorage.setItem(
-      SNOOZE_KEY,
-      JSON.stringify({ kind, until: Date.now() + SNOOZE_MS })
-    )
-  } catch {
-    // Best-effort only.
+  const url = new URL(window.location.href)
+  const shouldUpgrade =
+    url.protocol === "http:" && HTTPS_LAN_HOSTS.has(url.hostname.toLowerCase())
+  if (!shouldUpgrade) {
+    return { origin: window.location.origin, secureUpgradeUrl: null }
   }
+
+  url.protocol = "https:"
+  url.port = ""
+  return { origin: window.location.origin, secureUpgradeUrl: url.toString() }
 }
 
 function promptKindFromStatus(status: PushStatus): PromptKind | null {
@@ -66,13 +60,22 @@ function promptKindFromStatus(status: PushStatus): PromptKind | null {
 
 function unsupportedMessage(
   reason: PushUnsupportedReason | null,
-  platform: PlatformKind
+  platform: PlatformKind,
+  locationInfo: BrowserLocationInfo
 ): string {
   if (reason === "insecure-context") {
-    return "Open the secure HTTPS app URL to enable push notifications on this device."
+    if (locationInfo.secureUpgradeUrl) {
+      return "This LAN URL is using HTTP. Open the HTTPS Orchestrator URL to enable push notifications."
+    }
+    return `This page is using an insecure URL${
+      locationInfo.origin ? ` (${locationInfo.origin})` : ""
+    }. Open Orchestrator over HTTPS to enable push notifications.`
+  }
+  if (reason === "ios-pwa-required") {
+    return "On iPhone or iPad, open the HTTPS URL in Safari, add Orchestrator to the Home Screen, then enable notifications from the Home Screen app."
   }
   if (platform === "ios") {
-    return "Install Orchestrator to the Home Screen, then reopen it to enable mobile push notifications."
+    return "Open Orchestrator from the Home Screen app to enable mobile push notifications."
   }
   if (reason === "push-manager") {
     return "This browser cannot receive Web Push for this app. Use a current browser with push support."
@@ -89,8 +92,10 @@ function promptCopy(args: {
   permission: NotificationPermission
   unsupportedReason: PushUnsupportedReason | null
   error: string | null
+  locationInfo: BrowserLocationInfo
 }): { title: string; body: string; action: string | null } {
-  const { kind, platform, permission, unsupportedReason, error } = args
+  const { kind, platform, permission, unsupportedReason, error, locationInfo } =
+    args
 
   if (kind === "blocked") {
     const macBody =
@@ -108,7 +113,7 @@ function promptCopy(args: {
   if (kind === "unsupported") {
     return {
       title: "Notifications unavailable",
-      body: unsupportedMessage(unsupportedReason, platform),
+      body: unsupportedMessage(unsupportedReason, platform, locationInfo),
       action: "Check",
     }
   }
@@ -150,11 +155,24 @@ export function NotificationPermissionPrompt() {
   } = useInboxPushNotifications()
   const [mounted, setMounted] = React.useState(false)
   const [platform, setPlatform] = React.useState<PlatformKind>("desktop")
+  const [locationInfo, setLocationInfo] = React.useState<BrowserLocationInfo>({
+    origin: "",
+    secureUpgradeUrl: null,
+  })
   const [dismissedKind, setDismissedKind] = React.useState<PromptKind | null>(
     null
   )
+  const [checking, setChecking] = React.useState(false)
+  const [checkMessage, setCheckMessage] = React.useState<string | null>(null)
 
   React.useEffect(() => {
+    const nextLocationInfo = getBrowserLocationInfo()
+    if (nextLocationInfo.secureUpgradeUrl) {
+      window.location.replace(nextLocationInfo.secureUpgradeUrl)
+      return
+    }
+
+    setLocationInfo(nextLocationInfo)
     setMounted(true)
     setPlatform(detectPlatform())
   }, [])
@@ -162,14 +180,12 @@ export function NotificationPermissionPrompt() {
   const kind = promptKindFromStatus(status)
 
   React.useEffect(() => {
-    if (!mounted || !kind) return
-    const snooze = readSnooze()
-    if (snooze?.kind === kind && snooze.until > Date.now()) {
-      setDismissedKind(kind)
-    } else if (dismissedKind === kind) {
+    if (!kind || dismissedKind === kind) return
+    if (dismissedKind) {
       setDismissedKind(null)
+      setCheckMessage(null)
     }
-  }, [dismissedKind, kind, mounted])
+  }, [dismissedKind, kind])
 
   if (!mounted || !kind || dismissedKind === kind) return null
 
@@ -179,14 +195,49 @@ export function NotificationPermissionPrompt() {
     permission,
     unsupportedReason,
     error,
+    locationInfo,
   })
   const hasEnableAction = kind === "ready" || kind === "error"
-  const onPrimaryAction = () => {
-    if (hasEnableAction) void enable()
-    else void refresh()
+  const onPrimaryAction = async () => {
+    setCheckMessage(null)
+    if (hasEnableAction) {
+      void enable()
+      return
+    }
+
+    const nextLocationInfo = getBrowserLocationInfo()
+    setLocationInfo(nextLocationInfo)
+    if (nextLocationInfo.secureUpgradeUrl) {
+      window.location.replace(nextLocationInfo.secureUpgradeUrl)
+      return
+    }
+
+    setChecking(true)
+    const result = await refresh()
+    setChecking(false)
+    if (result?.status === "ready" || result?.status === "enabled") return
+
+    const checkedReason = result?.unsupportedReason ?? unsupportedReason
+    if (checkedReason === "insecure-context") {
+      setCheckMessage(
+        "Still using HTTP. Open Orchestrator through the HTTPS reverse proxy."
+      )
+    } else if (checkedReason === "ios-pwa-required") {
+      setCheckMessage(
+        "Still in the browser tab. Open it from the Home Screen app, then check again."
+      )
+    } else if (result?.status === "blocked" || kind === "blocked") {
+      setCheckMessage("Still blocked. Change browser or system settings first.")
+    } else if (result?.status === "error") {
+      setCheckMessage(result.error ?? "Push setup still needs attention.")
+    } else {
+      setCheckMessage(
+        "Checked again. The current browser state did not change."
+      )
+    }
   }
   const onDismiss = () => {
-    writeSnooze(kind)
+    setCheckMessage(null)
     setDismissedKind(kind)
   }
 
@@ -211,6 +262,11 @@ export function NotificationPermissionPrompt() {
               <p className="mt-1 text-[12px] leading-relaxed text-foreground/60">
                 {copy.body}
               </p>
+              {checkMessage && (
+                <p className="mt-2 text-[12px] leading-relaxed font-medium text-foreground/70">
+                  {checkMessage}
+                </p>
+              )}
             </div>
             <button
               type="button"
@@ -227,10 +283,10 @@ export function NotificationPermissionPrompt() {
                 type="button"
                 size="sm"
                 onClick={onPrimaryAction}
-                disabled={busy}
+                disabled={busy || checking}
                 className="h-8"
               >
-                {busy ? (
+                {busy || checking ? (
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : kind === "ready" || kind === "error" ? (
                   <BellRing className="size-3.5" />

@@ -2,7 +2,8 @@
 
 import * as React from "react"
 import { flushSync } from "react-dom"
-import { ArrowDown, ChevronDown } from "lucide-react"
+import { useVirtualizer } from "@tanstack/react-virtual"
+import { ArrowDown, ChevronDown, Loader2 } from "lucide-react"
 import {
   ArtifactPanel,
   artifactKey,
@@ -22,6 +23,7 @@ import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
   Attachment,
+  Message,
   ReasoningEntry,
 } from "@/lib/types"
 
@@ -34,8 +36,16 @@ const ARTIFACT_PANEL_MIN_CHAT_WIDTH = 360
 const ARTIFACT_PANEL_RESIZE_STEP = 40
 const ARTIFACT_PANEL_RESIZER_WIDTH = 10
 const ARTIFACT_PANEL_WIDTH_STORAGE_PREFIX = "chat:artifact-panel-width"
+const OLDER_MESSAGES_SCROLL_THRESHOLD = 420
+const MESSAGE_ROW_ESTIMATE = 180
+const MESSAGE_ROW_GAP = 24
 
 type ArtifactState = ArtifactPayload
+
+type ChatVirtualRow =
+  | { kind: "older"; key: string }
+  | { kind: "message"; key: string; message: Message; index: number }
+  | { kind: "streaming"; key: string }
 
 /** Old persisted artifact shape (no `kind`). Migrate to current union. */
 function migrateLegacyArtifact(stored: unknown): ArtifactState | null {
@@ -366,7 +376,7 @@ function AgentRunPane({
 }
 
 export function ChatView() {
-  const { state } = useChatStore()
+  const { state, loadOlderMessages } = useChatStore()
   const layoutContainerRef = React.useRef<HTMLDivElement>(null)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const inputContainerRef = React.useRef<HTMLDivElement>(null)
@@ -377,6 +387,14 @@ export function ChatView() {
   const sidebarWasOpenRef = React.useRef(true)
   const conversationIdRef = React.useRef<string | null>(null)
   const artifactResizeKeyRef = React.useRef<string | null>(null)
+  const olderLoadRequestedRef = React.useRef(false)
+  const requestOlderMessagesRef = React.useRef<() => void>(() => {})
+  const olderLoadAnchorRef = React.useRef<{
+    conversationId: string
+    messageCount: number
+    scrollHeight: number
+    scrollTop: number
+  } | null>(null)
 
   // minHeight approach: streaming bubble / last AI message gets minHeight to push
   // user message to the top and give AI room to respond.
@@ -456,6 +474,15 @@ export function ChatView() {
   )
   const conversationId = activeConversation?.id ?? null
   const messageCount = activeConversation?.messages.length ?? 0
+  const messagePage = conversationId
+    ? state.conversationMessagePages[conversationId]
+    : undefined
+  const hasOlderMessages = Boolean(messagePage?.hasMore)
+  const isLoadingOlderMessages = Boolean(messagePage?.isLoadingOlder)
+  const olderMessagesError = messagePage?.error
+  const totalMessageCount =
+    messagePage?.total ?? activeConversation?.messageCount ?? messageCount
+  const loadedMessageCount = messagePage?.loadedCount ?? messageCount
   const latestAssistantMessageId = React.useMemo(() => {
     const messages = activeConversation?.messages ?? []
     for (let i = messages.length - 1; i >= 0; i--) {
@@ -556,6 +583,42 @@ export function ChatView() {
     setShowScrollBtn(visible)
   }, [])
 
+  const requestOlderMessages = React.useCallback(() => {
+    if (
+      !conversationId ||
+      !hasOlderMessages ||
+      isLoadingOlderMessages ||
+      olderLoadRequestedRef.current
+    ) {
+      return
+    }
+
+    const element = scrollContainerRef.current
+    if (element) {
+      olderLoadAnchorRef.current = {
+        conversationId,
+        messageCount,
+        scrollHeight: element.scrollHeight,
+        scrollTop: element.scrollTop,
+      }
+    }
+
+    olderLoadRequestedRef.current = true
+    void loadOlderMessages(conversationId).finally(() => {
+      olderLoadRequestedRef.current = false
+    })
+  }, [
+    conversationId,
+    hasOlderMessages,
+    isLoadingOlderMessages,
+    loadOlderMessages,
+    messageCount,
+  ])
+
+  React.useEffect(() => {
+    requestOlderMessagesRef.current = requestOlderMessages
+  }, [requestOlderMessages])
+
   const flushPendingScrollSave = React.useCallback(() => {
     const pending = pendingScrollSaveRef.current
     if (!pending) return
@@ -597,6 +660,10 @@ export function ChatView() {
   const syncScrollState = React.useCallback(() => {
     const element = scrollContainerRef.current
     if (!element) return
+
+    if (element.scrollTop <= OLDER_MESSAGES_SCROLL_THRESHOLD) {
+      requestOlderMessagesRef.current()
+    }
 
     if (activeIdRef.current && !ignoreSyncRef.current) {
       // Guard against the browser triggering passive layout-shift scroll events
@@ -642,6 +709,28 @@ export function ChatView() {
       window.removeEventListener("stop-chat-autoscroll", stopAutoscroll)
     }
   }, [syncScrollState, conversationId])
+
+  React.useLayoutEffect(() => {
+    const anchor = olderLoadAnchorRef.current
+    if (!anchor) return
+    if (!conversationId || anchor.conversationId !== conversationId) {
+      olderLoadAnchorRef.current = null
+      return
+    }
+    if (isLoadingOlderMessages && messageCount <= anchor.messageCount) return
+
+    const element = scrollContainerRef.current
+    olderLoadAnchorRef.current = null
+    if (!element || messageCount <= anchor.messageCount) return
+
+    const frame = window.requestAnimationFrame(() => {
+      const delta = element.scrollHeight - anchor.scrollHeight
+      element.scrollTop = Math.max(0, anchor.scrollTop + delta)
+      syncScrollState()
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [conversationId, isLoadingOlderMessages, messageCount, syncScrollState])
 
   React.useEffect(() => {
     const element = inputContainerRef.current
@@ -766,10 +855,13 @@ export function ChatView() {
         timeoutId = window.setTimeout(finishRestore, 500)
       }
     } else {
-      timeoutId = window.setTimeout(finishRestore, 500)
+      timeoutId = window.setTimeout(() => {
+        scrollToBottom("auto")
+        finishRestore()
+      }, 500)
     }
     return releaseRestoreResources
-  }, [conversationId, setScrollButtonVisible, syncScrollState])
+  }, [conversationId, scrollToBottom, setScrollButtonVisible, syncScrollState])
 
   React.useEffect(() => {
     const streamingStarted = !wasStreamingRef.current && state.isStreaming
@@ -1290,6 +1382,46 @@ export function ChatView() {
     state.activeConversationId === activeConversation.id
   )
 
+  const chatRows = React.useMemo<ChatVirtualRow[]>(() => {
+    const rows: ChatVirtualRow[] = []
+    if (hasOlderMessages || isLoadingOlderMessages || olderMessagesError) {
+      rows.push({ kind: "older", key: "older-messages" })
+    }
+    activeConversation?.messages.forEach((message, index) => {
+      rows.push({
+        kind: "message",
+        key: message.id,
+        message,
+        index,
+      })
+    })
+    if (showStreamingBubble) {
+      rows.push({
+        kind: "streaming",
+        key: `streaming:${state.streamingMessageId ?? conversationId ?? "active"}`,
+      })
+    }
+    return rows
+  }, [
+    activeConversation?.messages,
+    conversationId,
+    hasOlderMessages,
+    isLoadingOlderMessages,
+    olderMessagesError,
+    showStreamingBubble,
+    state.streamingMessageId,
+  ])
+
+  // eslint-disable-next-line react-hooks/incompatible-library -- Required to keep long chat DOM bounded on mobile.
+  const rowVirtualizer = useVirtualizer({
+    count: chatRows.length,
+    getScrollElement: () => scrollContainerRef.current,
+    estimateSize: (index) =>
+      chatRows[index]?.kind === "older" ? 58 : MESSAGE_ROW_ESTIMATE,
+    getItemKey: (index) => chatRows[index]?.key ?? index,
+    overscan: isMobile ? 6 : 10,
+  })
+
   if (!activeConversation) return null
 
   return (
@@ -1333,56 +1465,99 @@ export function ChatView() {
           >
             <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
               <div className="flex-1 pt-4 pb-10">
-                <div className="mx-auto max-w-[700px] space-y-6 px-2">
-                  {activeConversation.messages.map((message, index) => (
-                    <div
-                      key={message.id}
-                      id={`message-${message.id}`}
-                      className="scroll-mt-6"
-                      style={
-                        message.id === minHeightMsgId &&
-                        index === activeConversation.messages.length - 1
-                          ? { minHeight }
-                          : undefined
-                      }
-                    >
-                      <MessageBubble
-                        message={message}
-                        isLatestAssistantMessage={
-                          message.id === latestAssistantMessageId
-                        }
-                        onArtifactClick={handleArtifactClick}
-                        onArtifactExpand={handleArtifactExpand}
-                        onAttachmentClick={setPreviewAttachment}
-                        onAgentOpen={handleAgentOpen}
-                      />
-                    </div>
-                  ))}
+                <div className="mx-auto max-w-[700px] px-2">
+                  <div
+                    className="relative w-full"
+                    style={{ height: rowVirtualizer.getTotalSize() }}
+                  >
+                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                      const row = chatRows[virtualRow.index]
+                      if (!row) return null
 
-                  {showStreamingBubble && (
-                    <div
-                      style={
-                        minHeight > 0 && minHeightMsgId === null
-                          ? { minHeight }
-                          : undefined
-                      }
-                    >
-                      <StreamingBubble
-                        reasoning={state.streamingReasoning}
-                        content={state.streamingContent}
-                        contentSegments={state.streamingContentSegments}
-                        streamingMode={state.streamingMode}
-                        showCursor={showInitialStreamingCursor}
-                        onArtifactClick={handleArtifactClick}
-                        onArtifactExpand={handleArtifactExpand}
-                        onAgentOpen={handleAgentOpen}
-                        onAttachmentClick={setPreviewAttachment}
-                        messageId={state.streamingMessageId ?? undefined}
-                        thinkingSeconds={state.thinkingSeconds}
-                        thinkingDone={state.thinkingDone}
-                      />
-                    </div>
-                  )}
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          data-index={virtualRow.index}
+                          ref={rowVirtualizer.measureElement}
+                          className="absolute top-0 left-0 w-full"
+                          style={{
+                            transform: `translateY(${virtualRow.start}px)`,
+                            paddingBottom: MESSAGE_ROW_GAP,
+                          }}
+                        >
+                          {row.kind === "older" ? (
+                            <div className="flex justify-center py-1">
+                              <button
+                                type="button"
+                                onClick={requestOlderMessages}
+                                disabled={isLoadingOlderMessages}
+                                className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-[13px] text-muted-foreground shadow-sm transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-default disabled:opacity-70"
+                              >
+                                {isLoadingOlderMessages && (
+                                  <Loader2 className="size-3.5 animate-spin" />
+                                )}
+                                <span>
+                                  {isLoadingOlderMessages
+                                    ? "Loading older messages"
+                                    : olderMessagesError
+                                      ? "Retry older messages"
+                                      : `Load older messages (${loadedMessageCount}/${totalMessageCount})`}
+                                </span>
+                              </button>
+                            </div>
+                          ) : row.kind === "message" ? (
+                            <div
+                              id={`message-${row.message.id}`}
+                              className="scroll-mt-6"
+                              style={
+                                row.message.id === minHeightMsgId &&
+                                row.index ===
+                                  activeConversation.messages.length - 1
+                                  ? { minHeight }
+                                  : undefined
+                              }
+                            >
+                              <MessageBubble
+                                message={row.message}
+                                isLatestAssistantMessage={
+                                  row.message.id === latestAssistantMessageId
+                                }
+                                onArtifactClick={handleArtifactClick}
+                                onArtifactExpand={handleArtifactExpand}
+                                onAttachmentClick={setPreviewAttachment}
+                                onAgentOpen={handleAgentOpen}
+                              />
+                            </div>
+                          ) : (
+                            <div
+                              style={
+                                minHeight > 0 && minHeightMsgId === null
+                                  ? { minHeight }
+                                  : undefined
+                              }
+                            >
+                              <StreamingBubble
+                                reasoning={state.streamingReasoning}
+                                content={state.streamingContent}
+                                contentSegments={state.streamingContentSegments}
+                                streamingMode={state.streamingMode}
+                                showCursor={showInitialStreamingCursor}
+                                onArtifactClick={handleArtifactClick}
+                                onArtifactExpand={handleArtifactExpand}
+                                onAgentOpen={handleAgentOpen}
+                                onAttachmentClick={setPreviewAttachment}
+                                messageId={
+                                  state.streamingMessageId ?? undefined
+                                }
+                                thinkingSeconds={state.thinkingSeconds}
+                                thinkingDone={state.thinkingDone}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
 

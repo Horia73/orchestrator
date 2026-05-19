@@ -73,7 +73,49 @@ const stoppedStreamState = {
   streamingMessageId: null as string | null,
 }
 
+const INITIAL_MESSAGE_PAGE_SIZE = 80
+const OLDER_MESSAGE_PAGE_SIZE = 80
 const CHAT_UNREAD_IDS_KEY = "chat:unread-ids"
+
+type ConversationLoadState =
+  | "summary"
+  | "loading"
+  | "partial"
+  | "full"
+  | "error"
+
+interface ConversationMessagePageState {
+  total: number
+  loadedCount: number
+  hasMore: boolean
+  nextCursor: string | null
+  isLoadingOlder: boolean
+  error?: string
+}
+
+interface MessagePageResponse {
+  messages: Message[]
+  total: number
+  hasMore: boolean
+  nextCursor: string | null
+}
+
+function sortMessagesByTimeline(messages: Message[]): Message[] {
+  return [...messages].sort((a, b) => {
+    const timeDelta = a.timestamp - b.timestamp
+    return timeDelta !== 0 ? timeDelta : a.id.localeCompare(b.id)
+  })
+}
+
+function mergeMessagesById(
+  existingMessages: Message[],
+  incomingMessages: Message[]
+): Message[] {
+  const byId = new Map<string, Message>()
+  for (const message of existingMessages) byId.set(message.id, message)
+  for (const message of incomingMessages) byId.set(message.id, message)
+  return sortMessagesByTimeline(Array.from(byId.values()))
+}
 
 function readUnreadConversationIds(): Set<string> {
   if (typeof window === "undefined") return new Set()
@@ -166,11 +208,9 @@ async function showChatCompletionNotification(
 interface ChatState {
   conversations: Conversation[]
   isLoading: boolean
-  conversationLoadState: Record<
-    string,
-    "summary" | "loading" | "full" | "error"
-  >
+  conversationLoadState: Record<string, ConversationLoadState>
   conversationLoadErrors: Record<string, string | undefined>
+  conversationMessagePages: Record<string, ConversationMessagePageState>
   activeConversationId: string | null
   isStreaming: boolean
   streamingContent: string
@@ -197,6 +237,17 @@ type ChatAction =
   | { type: "LOAD_CONVERSATION_START"; id: string }
   | { type: "LOAD_CONVERSATION_SUCCESS"; conversation: Conversation }
   | { type: "LOAD_CONVERSATION_ERROR"; id: string; error: string }
+  | {
+      type: "LOAD_MESSAGE_PAGE_SUCCESS"
+      id: string
+      messages: Message[]
+      total: number
+      hasMore: boolean
+      nextCursor: string | null
+      mode: "replace" | "prepend"
+    }
+  | { type: "LOAD_OLDER_MESSAGES_START"; id: string }
+  | { type: "LOAD_OLDER_MESSAGES_ERROR"; id: string; error: string }
   | { type: "NEW_CHAT" }
   | { type: "SELECT_CONVERSATION"; id: string }
   | { type: "DELETE_CONVERSATION"; id: string }
@@ -312,15 +363,27 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       )
       const conversationLoadState = { ...state.conversationLoadState }
       const conversationLoadErrors = { ...state.conversationLoadErrors }
+      const conversationMessagePages = { ...state.conversationMessagePages }
       for (const conversation of action.conversations) {
         const previousStatus = conversationLoadState[conversation.id]
         conversationLoadState[conversation.id] =
           action.full || previousStatus === "full"
             ? "full"
-            : previousStatus === "loading"
-              ? "loading"
-              : "summary"
+            : previousStatus === "partial"
+              ? "partial"
+              : previousStatus === "loading"
+                ? "loading"
+                : "summary"
         conversationLoadErrors[conversation.id] = undefined
+        conversationMessagePages[conversation.id] ??= {
+          total: conversation.messageCount ?? conversation.messages.length,
+          loadedCount: conversation.messages.length,
+          hasMore:
+            (conversation.messageCount ?? conversation.messages.length) >
+            conversation.messages.length,
+          nextCursor: null,
+          isLoadingOlder: false,
+        }
       }
       const savedId =
         typeof window !== "undefined"
@@ -332,6 +395,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         conversations: merged,
         conversationLoadState,
         conversationLoadErrors,
+        conversationMessagePages,
         activeConversationId: validSavedId,
         isLoading: false,
       }
@@ -381,6 +445,99 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         conversationLoadErrors: {
           ...state.conversationLoadErrors,
           [action.conversation.id]: undefined,
+        },
+        conversationMessagePages: {
+          ...state.conversationMessagePages,
+          [action.conversation.id]: {
+            total: action.conversation.messages.length,
+            loadedCount: action.conversation.messages.length,
+            hasMore: false,
+            nextCursor: null,
+            isLoadingOlder: false,
+          },
+        },
+      }
+    }
+    case "LOAD_MESSAGE_PAGE_SUCCESS": {
+      const existingConversation = state.conversations.find(
+        (conversation) => conversation.id === action.id
+      )
+      const mergedMessages = mergeMessagesById(
+        existingConversation?.messages ?? [],
+        action.messages
+      )
+      const nextLoadState: ConversationLoadState = action.hasMore
+        ? "partial"
+        : "full"
+
+      return {
+        ...state,
+        conversations: state.conversations.map((conversation) =>
+          conversation.id === action.id
+            ? {
+                ...conversation,
+                messages: mergedMessages,
+                messageCount: action.total,
+                lastMessagePreview:
+                  mergedMessages.at(-1)?.content ??
+                  conversation.lastMessagePreview,
+                lastMessageAt:
+                  mergedMessages.at(-1)?.timestamp ??
+                  conversation.lastMessageAt,
+              }
+            : conversation
+        ),
+        conversationLoadState: {
+          ...state.conversationLoadState,
+          [action.id]: nextLoadState,
+        },
+        conversationLoadErrors: {
+          ...state.conversationLoadErrors,
+          [action.id]: undefined,
+        },
+        conversationMessagePages: {
+          ...state.conversationMessagePages,
+          [action.id]: {
+            total: action.total,
+            loadedCount: mergedMessages.length,
+            hasMore: action.hasMore,
+            nextCursor: action.nextCursor,
+            isLoadingOlder: false,
+          },
+        },
+      }
+    }
+    case "LOAD_OLDER_MESSAGES_START": {
+      const page = state.conversationMessagePages[action.id]
+      return {
+        ...state,
+        conversationMessagePages: {
+          ...state.conversationMessagePages,
+          [action.id]: {
+            total: page?.total ?? 0,
+            loadedCount: page?.loadedCount ?? 0,
+            hasMore: page?.hasMore ?? true,
+            nextCursor: page?.nextCursor ?? null,
+            isLoadingOlder: true,
+            error: undefined,
+          },
+        },
+      }
+    }
+    case "LOAD_OLDER_MESSAGES_ERROR": {
+      const page = state.conversationMessagePages[action.id]
+      return {
+        ...state,
+        conversationMessagePages: {
+          ...state.conversationMessagePages,
+          [action.id]: {
+            total: page?.total ?? 0,
+            loadedCount: page?.loadedCount ?? 0,
+            hasMore: page?.hasMore ?? true,
+            nextCursor: page?.nextCursor ?? null,
+            isLoadingOlder: false,
+            error: action.error,
+          },
         },
       }
     }
@@ -433,6 +590,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ([id]) => id !== action.id
           )
         ),
+        conversationMessagePages: Object.fromEntries(
+          Object.entries(state.conversationMessagePages).filter(
+            ([id]) => id !== action.id
+          )
+        ),
         activeConversationId: nextActiveId,
         ...(state.activeConversationId === action.id ? stoppedStreamState : {}),
       }
@@ -453,6 +615,16 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...state.conversationLoadErrors,
           [action.conversation.id]: undefined,
         },
+        conversationMessagePages: {
+          ...state.conversationMessagePages,
+          [action.conversation.id]: {
+            total: action.conversation.messages.length,
+            loadedCount: action.conversation.messages.length,
+            hasMore: false,
+            nextCursor: null,
+            isLoadingOlder: false,
+          },
+        },
         activeConversationId: action.conversation.id,
       }
     }
@@ -470,9 +642,26 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
           ...state.conversationLoadErrors,
           [action.conversation.id]: undefined,
         },
+        conversationMessagePages: {
+          ...state.conversationMessagePages,
+          [action.conversation.id]: {
+            total: action.conversation.messages.length,
+            loadedCount: action.conversation.messages.length,
+            hasMore: false,
+            nextCursor: null,
+            isLoadingOlder: false,
+          },
+        },
       }
     }
     case "ADD_USER_MESSAGE": {
+      const existingConversation = state.conversations.find(
+        (conversation) => conversation.id === action.conversationId
+      )
+      const isNewMessage = !existingConversation?.messages.some(
+        (message) => message.id === action.message.id
+      )
+      const page = state.conversationMessagePages[action.conversationId]
       return {
         ...state,
         conversations: state.conversations.map((conv) =>
@@ -495,6 +684,17 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
               }
             : conv
         ),
+        conversationMessagePages:
+          page && isNewMessage
+            ? {
+                ...state.conversationMessagePages,
+                [action.conversationId]: {
+                  ...page,
+                  total: page.total + 1,
+                  loadedCount: page.loadedCount + 1,
+                },
+              }
+            : state.conversationMessagePages,
       }
     }
     case "SET_STREAMING":
@@ -782,6 +982,13 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         thinkingSeconds: action.seconds,
       }
     case "ADD_ASSISTANT_MESSAGE": {
+      const existingConversation = state.conversations.find(
+        (conversation) => conversation.id === action.conversationId
+      )
+      const isNewMessage = !existingConversation?.messages.some(
+        (message) => message.id === action.message.id
+      )
+      const page = state.conversationMessagePages[action.conversationId]
       const nextState = {
         ...state,
         conversations: state.conversations.map((conv) =>
@@ -804,6 +1011,17 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
               }
             : conv
         ),
+        conversationMessagePages:
+          page && isNewMessage
+            ? {
+                ...state.conversationMessagePages,
+                [action.conversationId]: {
+                  ...page,
+                  total: page.total + 1,
+                  loadedCount: page.loadedCount + 1,
+                },
+              }
+            : state.conversationMessagePages,
       }
       if (action.stopStreaming === false) return nextState
       return {
@@ -821,6 +1039,7 @@ interface ChatContextType {
   unreadConversationIds: Set<string>
   newChat: () => void
   selectConversation: (id: string) => void
+  loadOlderMessages: (id: string) => Promise<void>
   deleteConversation: (id: string) => void
   sendMessage: (
     content: string,
@@ -838,6 +1057,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     isLoading: true,
     conversationLoadState: {},
     conversationLoadErrors: {},
+    conversationMessagePages: {},
     activeConversationId: null,
     ...stoppedStreamState,
   })
@@ -1014,7 +1234,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     if (!conversationId) return
     const stableConversationId = conversationId
     const status = state.conversationLoadState[conversationId]
-    if (status === "full" || status === "loading" || status === "error") return
+    if (
+      status === "partial" ||
+      status === "full" ||
+      status === "loading" ||
+      status === "error"
+    )
+      return
 
     const controller = new AbortController()
     dispatch({ type: "LOAD_CONVERSATION_START", id: stableConversationId })
@@ -1022,13 +1248,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     async function loadConversation() {
       try {
         const res = await fetch(
-          `/api/conversations/${encodeURIComponent(stableConversationId)}`,
+          `/api/conversations/${encodeURIComponent(stableConversationId)}/messages?limit=${INITIAL_MESSAGE_PAGE_SIZE}`,
           { cache: "no-store", signal: controller.signal }
         )
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const conversation = (await res.json()) as Conversation
+        const page = (await res.json()) as MessagePageResponse
         if (controller.signal.aborted) return
-        dispatch({ type: "LOAD_CONVERSATION_SUCCESS", conversation })
+        dispatch({
+          type: "LOAD_MESSAGE_PAGE_SUCCESS",
+          id: stableConversationId,
+          messages: page.messages,
+          total: page.total,
+          hasMore: page.hasMore,
+          nextCursor: page.nextCursor,
+          mode: "replace",
+        })
       } catch (err) {
         if (
           controller.signal.aborted ||
@@ -1209,6 +1443,39 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "SELECT_CONVERSATION", id })
     },
     [markConversationRead, stopStreaming]
+  )
+
+  const loadOlderMessages = React.useCallback(
+    async (id: string) => {
+      const page = state.conversationMessagePages[id]
+      if (!page?.hasMore || page.isLoadingOlder || !page.nextCursor) return
+
+      dispatch({ type: "LOAD_OLDER_MESSAGES_START", id })
+      try {
+        const res = await fetch(
+          `/api/conversations/${encodeURIComponent(id)}/messages?limit=${OLDER_MESSAGE_PAGE_SIZE}&before=${encodeURIComponent(page.nextCursor)}`,
+          { cache: "no-store" }
+        )
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const nextPage = (await res.json()) as MessagePageResponse
+        dispatch({
+          type: "LOAD_MESSAGE_PAGE_SUCCESS",
+          id,
+          messages: nextPage.messages,
+          total: nextPage.total,
+          hasMore: nextPage.hasMore,
+          nextCursor: nextPage.nextCursor,
+          mode: "prepend",
+        })
+      } catch (err) {
+        dispatch({
+          type: "LOAD_OLDER_MESSAGES_ERROR",
+          id,
+          error: err instanceof Error ? err.message : "Failed to load history",
+        })
+      }
+    },
+    [state.conversationMessagePages]
   )
 
   const deleteConversation = React.useCallback(
@@ -2033,6 +2300,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       unreadConversationIds,
       newChat,
       selectConversation,
+      loadOlderMessages,
       deleteConversation,
       sendMessage,
       stopStreaming,
@@ -2042,6 +2310,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       unreadConversationIds,
       newChat,
       selectConversation,
+      loadOlderMessages,
       deleteConversation,
       sendMessage,
       stopStreaming,
