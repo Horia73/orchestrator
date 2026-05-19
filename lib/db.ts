@@ -42,7 +42,10 @@ db.exec(`
         lastInteractionProvider TEXT,
         lastInteractionId TEXT,
         lastInteractionAt INTEGER,
-        contextUsage TEXT
+        contextUsage TEXT,
+        messageCount INTEGER NOT NULL DEFAULT 0,
+        lastMessagePreview TEXT,
+        lastMessageAt INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -62,6 +65,7 @@ db.exec(`
 
     CREATE INDEX IF NOT EXISTS idx_messages_conversationId ON messages(conversationId);
     CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp ON messages(conversationId, timestamp DESC);
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp_id ON messages(conversationId, timestamp DESC, id DESC);
 
     CREATE TABLE IF NOT EXISTS request_logs (
         id TEXT PRIMARY KEY,
@@ -232,6 +236,30 @@ try {
 } catch {
   /* column already exists */
 }
+try {
+  db.exec(
+    `ALTER TABLE conversations ADD COLUMN messageCount INTEGER NOT NULL DEFAULT 0`
+  )
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(`ALTER TABLE conversations ADD COLUMN lastMessagePreview TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(`ALTER TABLE conversations ADD COLUMN lastMessageAt INTEGER`)
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(
+    `CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp_id ON messages(conversationId, timestamp DESC, id DESC)`
+  )
+} catch {
+  /* index already exists */
+}
 // Migration: Inbox / scheduled-run conversation tagging.
 // origin: 'user' (or NULL = legacy user chat) vs 'inbox' (a scheduled run).
 try {
@@ -319,6 +347,36 @@ try {
   /* index already exists */
 }
 
+try {
+  db.exec(`
+    UPDATE conversations
+    SET
+      messageCount = (
+        SELECT COUNT(*)
+        FROM messages
+        WHERE messages.conversationId = conversations.id
+      ),
+      lastMessagePreview = (
+        SELECT content
+        FROM messages
+        WHERE messages.conversationId = conversations.id
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+      ),
+      lastMessageAt = (
+        SELECT timestamp
+        FROM messages
+        WHERE messages.conversationId = conversations.id
+        ORDER BY timestamp DESC, id DESC
+        LIMIT 1
+      )
+    WHERE lastMessageAt IS NULL
+      OR messageCount = 0
+  `)
+} catch {
+  /* best-effort summary backfill */
+}
+
 // Migrations: input/output text for log detail panel.
 try {
   db.exec(`ALTER TABLE request_logs ADD COLUMN inputText TEXT`)
@@ -373,12 +431,12 @@ interface ConversationRow {
   createdAt: number
   updatedAt: number
   contextUsage: string | null
+  messageCount: number
+  lastMessagePreview: string | null
+  lastMessageAt: number | null
 }
 
 interface ConversationSummaryRow extends ConversationRow {
-  messageCount: number
-  lastMessageContent: string | null
-  lastMessageAt: number | null
   searchMatchContent?: string | null
 }
 
@@ -533,25 +591,9 @@ export function getConversationSummaries(search?: string): Conversation[] {
           c.createdAt,
           c.updatedAt,
           c.contextUsage,
-          (
-            SELECT COUNT(*)
-            FROM messages cm
-            WHERE cm.conversationId = c.id
-          ) AS messageCount,
-          (
-            SELECT lm.content
-            FROM messages lm
-            WHERE lm.conversationId = c.id
-            ORDER BY lm.timestamp DESC
-            LIMIT 1
-          ) AS lastMessageContent,
-          (
-            SELECT lm.timestamp
-            FROM messages lm
-            WHERE lm.conversationId = c.id
-            ORDER BY lm.timestamp DESC
-            LIMIT 1
-          ) AS lastMessageAt
+          c.messageCount,
+          c.lastMessagePreview,
+          c.lastMessageAt
           ${
             like
               ? `, (
@@ -579,7 +621,7 @@ export function getConversationSummaries(search?: string): Conversation[] {
     messages: [],
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
     messageCount: row.messageCount,
-    lastMessagePreview: compactPreview(row.lastMessageContent),
+    lastMessagePreview: compactPreview(row.lastMessagePreview),
     lastMessageAt: row.lastMessageAt ?? undefined,
     searchMatchPreview: compactPreview(row.searchMatchContent),
   }))
@@ -614,9 +656,9 @@ export function getConversationMessagesPage(
 ): ConversationMessagesPage {
   const limit = Math.max(1, Math.min(options.limit ?? 80, 200))
   const before = options.before
-  const totalRow = db
-    .prepare("SELECT COUNT(*) AS count FROM messages WHERE conversationId = ?")
-    .get(id) as { count: number } | undefined
+  const conversationRow = db
+    .prepare("SELECT messageCount FROM conversations WHERE id = ?")
+    .get(id) as { messageCount: number | null } | undefined
 
   const rows = db
     .prepare(
@@ -648,7 +690,7 @@ export function getConversationMessagesPage(
 
   return {
     messages: pageRows.reverse().map(messageFromRow),
-    total: totalRow?.count ?? 0,
+    total: conversationRow?.messageCount ?? 0,
     hasMore: rows.length > limit,
     nextCursor:
       rows.length > limit && oldestRow
@@ -658,17 +700,53 @@ export function getConversationMessagesPage(
 }
 
 export function createConversation(conversation: Conversation) {
+  const latestMessage = conversation.messages.reduce<Message | null>(
+    (latest, message) =>
+      !latest || message.timestamp > latest.timestamp ? message : latest,
+    null
+  )
+
   // Idempotent: the chat route and POST /api/conversations both call this in
   // the same flight, and SQLite UNIQUE conflicts would otherwise abort one of
   // them. INSERT OR IGNORE preserves whichever winner inserted first.
   const insertConv = db.prepare(`
-        INSERT OR IGNORE INTO conversations (id, title, createdAt, updatedAt)
-        VALUES (@id, @title, @createdAt, @updatedAt)
+        INSERT OR IGNORE INTO conversations (
+          id, title, createdAt, updatedAt, messageCount, lastMessagePreview, lastMessageAt
+        )
+        VALUES (
+          @id, @title, @createdAt, @updatedAt, @messageCount, @lastMessagePreview, @lastMessageAt
+        )
     `)
 
   const insertMsg = db.prepare(`
         INSERT OR IGNORE INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, timestamp)
         VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @timestamp)
+    `)
+
+  const refreshConversationSummary = db.prepare(`
+        UPDATE conversations
+        SET
+          updatedAt = @updatedAt,
+          messageCount = (
+            SELECT COUNT(*)
+            FROM messages
+            WHERE conversationId = @id
+          ),
+          lastMessagePreview = (
+            SELECT content
+            FROM messages
+            WHERE conversationId = @id
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+          ),
+          lastMessageAt = (
+            SELECT timestamp
+            FROM messages
+            WHERE conversationId = @id
+            ORDER BY timestamp DESC, id DESC
+            LIMIT 1
+          )
+        WHERE id = @id
     `)
 
   const transaction = db.transaction((conv: Conversation): boolean => {
@@ -677,6 +755,9 @@ export function createConversation(conversation: Conversation) {
       title: conv.title,
       createdAt: conv.createdAt,
       updatedAt: Date.now(),
+      messageCount: conv.messages.length,
+      lastMessagePreview: compactPreview(latestMessage?.content),
+      lastMessageAt: latestMessage?.timestamp ?? null,
     })
 
     for (const msg of conv.messages) {
@@ -697,6 +778,11 @@ export function createConversation(conversation: Conversation) {
         timestamp: msg.timestamp,
       })
     }
+
+    refreshConversationSummary.run({
+      id: conv.id,
+      updatedAt: Date.now(),
+    })
 
     return convResult.changes > 0
   })
@@ -719,6 +805,9 @@ export function createConversation(conversation: Conversation) {
 }
 
 export function addMessage(conversationId: string, message: Message) {
+  const existingMessage = db
+    .prepare("SELECT id FROM messages WHERE id = ?")
+    .get(message.id) as { id: string } | undefined
   const insertMsg = db.prepare(`
         INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, timestamp)
         VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @timestamp)
@@ -734,7 +823,21 @@ export function addMessage(conversationId: string, message: Message) {
     `)
 
   const updateConv = db.prepare(`
-        UPDATE conversations SET updatedAt = @updatedAt WHERE id = @id
+        UPDATE conversations
+        SET
+          updatedAt = @updatedAt,
+          messageCount = messageCount + @messageDelta,
+          lastMessagePreview = CASE
+            WHEN lastMessageAt IS NULL OR lastMessageAt <= @messageTimestamp
+              THEN @lastMessagePreview
+            ELSE lastMessagePreview
+          END,
+          lastMessageAt = CASE
+            WHEN lastMessageAt IS NULL OR lastMessageAt <= @messageTimestamp
+              THEN @messageTimestamp
+            ELSE lastMessageAt
+          END
+        WHERE id = @id
     `)
 
   const transaction = db.transaction((convId: string, msg: Message) => {
@@ -758,6 +861,9 @@ export function addMessage(conversationId: string, message: Message) {
     updateConv.run({
       id: convId,
       updatedAt: Date.now(),
+      messageDelta: existingMessage ? 0 : 1,
+      lastMessagePreview: compactPreview(msg.content),
+      messageTimestamp: msg.timestamp,
     })
   })
 

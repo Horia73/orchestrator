@@ -73,8 +73,8 @@ const stoppedStreamState = {
   streamingMessageId: null as string | null,
 }
 
-const INITIAL_MESSAGE_PAGE_SIZE = 80
-const OLDER_MESSAGE_PAGE_SIZE = 80
+const INITIAL_MESSAGE_PAGE_SIZE = 32
+const OLDER_MESSAGE_PAGE_SIZE = 64
 const CHAT_UNREAD_IDS_KEY = "chat:unread-ids"
 
 type ConversationLoadState =
@@ -1039,6 +1039,7 @@ interface ChatContextType {
   unreadConversationIds: Set<string>
   newChat: () => void
   selectConversation: (id: string) => void
+  prefetchConversationMessages: (id: string) => Promise<void>
   loadOlderMessages: (id: string) => Promise<void>
   deleteConversation: (id: string) => void
   sendMessage: (
@@ -1071,6 +1072,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const streamDoneRef = React.useRef(false)
   const activeConversationIdRef = React.useRef<string | null>(null)
   const conversationsRef = React.useRef<Conversation[]>([])
+  const conversationLoadStateRef = React.useRef<
+    Record<string, ConversationLoadState>
+  >({})
+  const initialMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(
+    new Map()
+  )
 
   React.useEffect(() => {
     activeConversationIdRef.current = state.activeConversationId
@@ -1079,6 +1086,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     conversationsRef.current = state.conversations
   }, [state.conversations])
+
+  React.useEffect(() => {
+    conversationLoadStateRef.current = state.conversationLoadState
+  }, [state.conversationLoadState])
 
   const updateUnreadConversationIds = React.useCallback(
     (updater: (current: Set<string>) => Set<string>) => {
@@ -1229,11 +1240,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
-  React.useEffect(() => {
-    const conversationId = state.activeConversationId
-    if (!conversationId) return
-    const stableConversationId = conversationId
-    const status = state.conversationLoadState[conversationId]
+  const loadInitialMessages = React.useCallback(async (conversationId: string) => {
+    const status = conversationLoadStateRef.current[conversationId]
     if (
       status === "partial" ||
       status === "full" ||
@@ -1242,21 +1250,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     )
       return
 
-    const controller = new AbortController()
-    dispatch({ type: "LOAD_CONVERSATION_START", id: stableConversationId })
+    const existingLoad = initialMessageLoadsRef.current.get(conversationId)
+    if (existingLoad) return existingLoad
 
-    async function loadConversation() {
+    const load = (async () => {
+      dispatch({ type: "LOAD_CONVERSATION_START", id: conversationId })
       try {
         const res = await fetch(
-          `/api/conversations/${encodeURIComponent(stableConversationId)}/messages?limit=${INITIAL_MESSAGE_PAGE_SIZE}`,
-          { cache: "no-store", signal: controller.signal }
+          `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${INITIAL_MESSAGE_PAGE_SIZE}`,
+          { cache: "no-store" }
         )
         if (!res.ok) throw new Error(`HTTP ${res.status}`)
         const page = (await res.json()) as MessagePageResponse
-        if (controller.signal.aborted) return
         dispatch({
           type: "LOAD_MESSAGE_PAGE_SUCCESS",
-          id: stableConversationId,
+          id: conversationId,
           messages: page.messages,
           total: page.total,
           hasMore: page.hasMore,
@@ -1264,27 +1272,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           mode: "replace",
         })
       } catch (err) {
-        if (
-          controller.signal.aborted ||
-          (err instanceof DOMException && err.name === "AbortError")
-        ) {
-          return
-        }
         dispatch({
           type: "LOAD_CONVERSATION_ERROR",
-          id: stableConversationId,
+          id: conversationId,
           error: err instanceof Error ? err.message : "Failed to load chat",
         })
+      } finally {
+        initialMessageLoadsRef.current.delete(conversationId)
       }
-    }
+    })()
 
-    void loadConversation()
-    return () => controller.abort()
-    // Run only when the selected conversation changes. Including the load-state
-    // object here makes this effect abort its own request after dispatching
-    // LOAD_CONVERSATION_START in React StrictMode.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [state.activeConversationId])
+    initialMessageLoadsRef.current.set(conversationId, load)
+    return load
+  }, [])
+
+  React.useEffect(() => {
+    const conversationId = state.activeConversationId
+    if (!conversationId) return
+    void loadInitialMessages(conversationId)
+  }, [loadInitialMessages, state.activeConversationId])
 
   const checkServerStreaming = React.useCallback(
     async (conversationId: string): Promise<boolean> => {
@@ -1440,9 +1446,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     (id: string) => {
       stopStreaming()
       markConversationRead(id)
+      void loadInitialMessages(id)
       dispatch({ type: "SELECT_CONVERSATION", id })
     },
-    [markConversationRead, stopStreaming]
+    [loadInitialMessages, markConversationRead, stopStreaming]
   )
 
   const loadOlderMessages = React.useCallback(
@@ -2300,6 +2307,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       unreadConversationIds,
       newChat,
       selectConversation,
+      prefetchConversationMessages: loadInitialMessages,
       loadOlderMessages,
       deleteConversation,
       sendMessage,
@@ -2310,6 +2318,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       unreadConversationIds,
       newChat,
       selectConversation,
+      loadInitialMessages,
       loadOlderMessages,
       deleteConversation,
       sendMessage,

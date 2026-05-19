@@ -129,6 +129,7 @@ export function AppSidebar() {
     unreadConversationIds,
     newChat,
     selectConversation,
+    prefetchConversationMessages,
     deleteConversation,
   } = useChatStore()
   const {
@@ -435,6 +436,15 @@ export function AppSidebar() {
                               !isOnInbox
                             }
                             onClick={() => handleSelectConversation(conv.id)}
+                            onFocus={() => {
+                              void prefetchConversationMessages(conv.id)
+                            }}
+                            onPointerEnter={() => {
+                              void prefetchConversationMessages(conv.id)
+                            }}
+                            onTouchStart={() => {
+                              void prefetchConversationMessages(conv.id)
+                            }}
                             className={`text-[15px] text-foreground/75 group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
                           >
                             {unread && (

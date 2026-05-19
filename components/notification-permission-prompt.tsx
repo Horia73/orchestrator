@@ -89,6 +89,11 @@ function unsupportedMessage(
   return "This browser cannot receive push notifications for this app."
 }
 
+function isCertificateTrustError(error: string | null): boolean {
+  if (!error) return false
+  return /certificate|ssl/i.test(error)
+}
+
 function promptCopy(args: {
   kind: PromptKind
   platform: PlatformKind
@@ -126,6 +131,14 @@ function promptCopy(args: {
   }
 
   if (kind === "error") {
+    if (isCertificateTrustError(error)) {
+      return {
+        title: "Certificate trust required",
+        body: "Install and trust the Orchestrator LAN certificate on this device, then reopen the HTTPS app to enable push notifications.",
+        action: "Setup HTTPS",
+      }
+    }
+
     return {
       title: "Notifications need attention",
       body: error ?? "Push setup did not finish. Try again.",
@@ -206,10 +219,15 @@ function NotificationPermissionPromptInner() {
     error,
     locationInfo,
   })
-  const hasEnableAction = kind === "ready" || kind === "error"
+  const certificateTrustError = isCertificateTrustError(error)
+  const hasEnableAction =
+    kind === "ready" || (kind === "error" && !certificateTrustError)
   const onPrimaryAction = async () => {
     setCheckMessage(null)
-    if (kind === "unsupported" && unsupportedReason === "insecure-context") {
+    if (
+      (kind === "unsupported" && unsupportedReason === "insecure-context") ||
+      (kind === "error" && certificateTrustError)
+    ) {
       const nextLocationInfo = getBrowserLocationInfo()
       setLocationInfo(nextLocationInfo)
       window.location.assign(nextLocationInfo.certSetupUrl ?? "/cert-setup")
@@ -300,9 +318,11 @@ function NotificationPermissionPromptInner() {
               >
                 {busy || checking ? (
                   <Loader2 className="size-3.5 animate-spin" />
-                ) : kind === "ready" || kind === "error" ? (
+                ) : kind === "ready" ||
+                  (kind === "error" && !certificateTrustError) ? (
                   <BellRing className="size-3.5" />
-                ) : unsupportedReason === "insecure-context" ? (
+                ) : unsupportedReason === "insecure-context" ||
+                  certificateTrustError ? (
                   <ShieldCheck className="size-3.5" />
                 ) : (
                   <RefreshCw className="size-3.5" />

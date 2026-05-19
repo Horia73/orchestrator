@@ -50,7 +50,7 @@ RUN apt-get update \
 
 COPY --from=builder --chown=node:node /app /app
 
-RUN npx patchright install --with-deps chromium \
+RUN npx patchright install chromium \
   && mkdir -p /app/.orchestrator /ms-playwright /home/node/.npm-global /home/node/.npm \
   && chown -R node:node /app/.orchestrator /ms-playwright /home/node
 

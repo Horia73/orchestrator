@@ -39,11 +39,13 @@ const ARTIFACT_PANEL_WIDTH_STORAGE_PREFIX = "chat:artifact-panel-width"
 const OLDER_MESSAGES_SCROLL_THRESHOLD = 420
 const MESSAGE_ROW_ESTIMATE = 180
 const MESSAGE_ROW_GAP = 24
+const SCROLL_BOTTOM_SENTINEL = "bottom"
 
 type ArtifactState = ArtifactPayload
 
 type ChatVirtualRow =
   | { kind: "older"; key: string }
+  | { kind: "initial-loading"; key: string }
   | { kind: "message"; key: string; message: Message; index: number }
   | { kind: "streaming"; key: string }
 
@@ -389,6 +391,8 @@ export function ChatView() {
   const artifactResizeKeyRef = React.useRef<string | null>(null)
   const olderLoadRequestedRef = React.useRef(false)
   const requestOlderMessagesRef = React.useRef<() => void>(() => {})
+  const restoredScrollConversationRef = React.useRef<string | null>(null)
+  const bottomSettleFrameIdRef = React.useRef<number | null>(null)
   const olderLoadAnchorRef = React.useRef<{
     conversationId: string
     messageCount: number
@@ -461,6 +465,7 @@ export function ChatView() {
     return false
   })
   const [showScrollBtn, setShowScrollBtn] = React.useState(false)
+  const [isRestoringScroll, setIsRestoringScroll] = React.useState(false)
   const showScrollBtnRef = React.useRef(false)
   const [inputOffset, setInputOffset] = React.useState(88)
   const [artifactPanelWidth, setArtifactPanelWidth] = React.useState(
@@ -477,6 +482,11 @@ export function ChatView() {
   const messagePage = conversationId
     ? state.conversationMessagePages[conversationId]
     : undefined
+  const isInitialMessagesLoading = Boolean(
+    conversationId &&
+      state.conversationLoadState[conversationId] === "loading" &&
+      messageCount === 0
+  )
   const hasOlderMessages = Boolean(messagePage?.hasMore)
   const isLoadingOlderMessages = Boolean(messagePage?.isLoadingOlder)
   const olderMessagesError = messagePage?.error
@@ -570,7 +580,7 @@ export function ChatView() {
   const activeIdRef = React.useRef(state.activeConversationId)
   const pendingScrollSaveRef = React.useRef<{
     conversationId: string
-    scrollTop: number
+    value: string
   } | null>(null)
   const scrollSaveTimeoutRef = React.useRef<number | null>(null)
   React.useEffect(() => {
@@ -623,19 +633,16 @@ export function ChatView() {
     const pending = pendingScrollSaveRef.current
     if (!pending) return
     pendingScrollSaveRef.current = null
-    localStorage.setItem(
-      `scroll:chat:${pending.conversationId}`,
-      pending.scrollTop.toString()
-    )
+    localStorage.setItem(`scroll:chat:${pending.conversationId}`, pending.value)
   }, [])
 
   const scheduleScrollSave = React.useCallback(
-    (scrollTop: number) => {
+    (value: string) => {
       const conversationId = activeIdRef.current
       if (!conversationId) return
       pendingScrollSaveRef.current = {
         conversationId,
-        scrollTop: Math.round(scrollTop),
+        value,
       }
       if (scrollSaveTimeoutRef.current !== null) return
       scrollSaveTimeoutRef.current = window.setTimeout(() => {
@@ -661,21 +668,28 @@ export function ChatView() {
     const element = scrollContainerRef.current
     if (!element) return
 
-    if (element.scrollTop <= OLDER_MESSAGES_SCROLL_THRESHOLD) {
+    if (
+      !ignoreSyncRef.current &&
+      element.scrollTop <= OLDER_MESSAGES_SCROLL_THRESHOLD
+    ) {
       requestOlderMessagesRef.current()
-    }
-
-    if (activeIdRef.current && !ignoreSyncRef.current) {
-      // Guard against the browser triggering passive layout-shift scroll events
-      // when the container height is tiny or still rendering, which was poisoning the cache with `0`.
-      if (element.scrollHeight > element.clientHeight) {
-        scheduleScrollSave(element.scrollTop)
-      }
     }
 
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight
     const isPinnedToBottom = distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
+
+    if (activeIdRef.current && !ignoreSyncRef.current) {
+      // Guard against the browser triggering passive layout-shift scroll events
+      // when the container height is tiny or still rendering, which was poisoning the cache with `0`.
+      if (element.scrollHeight > element.clientHeight) {
+        scheduleScrollSave(
+          isPinnedToBottom
+            ? SCROLL_BOTTOM_SENTINEL
+            : Math.round(element.scrollTop).toString()
+        )
+      }
+    }
 
     if (
       !isPinnedToBottom &&
@@ -770,98 +784,87 @@ export function ChatView() {
     conversationId,
   ])
 
-  // Handle scroll restoration ONCE on mount
+  // Restore exactly once per conversation without visible animated scrolling.
   React.useLayoutEffect(() => {
     if (!conversationId) return
+    if (restoredScrollConversationRef.current === conversationId) return
+    if (messageCount === 0) return
+
     ignoreSyncRef.current = true
+    setIsRestoringScroll(true)
+    setScrollButtonVisible(false)
     const savedScroll = localStorage.getItem(`scroll:chat:${conversationId}`)
-    let showButtonFrameId: number | null = null
-    let intervalId: number | null = null
-    let timeoutId: number | null = null
-    let resizeObserver: ResizeObserver | null = null
-    let scrollElement: HTMLDivElement | null = null
-    let released = false
-    let userScrolled = false
+    const parsedSavedScroll = savedScroll ? Number.parseInt(savedScroll, 10) : NaN
+    const shouldPinBottom =
+      savedScroll === SCROLL_BOTTOM_SENTINEL || !Number.isFinite(parsedSavedScroll)
 
-    const cancelSnap = () => {
-      userScrolled = true
-      ignoreSyncRef.current = false
+    if (bottomSettleFrameIdRef.current !== null) {
+      window.cancelAnimationFrame(bottomSettleFrameIdRef.current)
+      bottomSettleFrameIdRef.current = null
     }
 
-    const releaseRestoreResources = () => {
-      if (released) return
-      released = true
-      if (showButtonFrameId !== null)
-        window.cancelAnimationFrame(showButtonFrameId)
-      if (intervalId !== null) window.clearInterval(intervalId)
-      if (timeoutId !== null) window.clearTimeout(timeoutId)
-      resizeObserver?.disconnect()
-      if (scrollElement) {
-        scrollElement.removeEventListener("wheel", cancelSnap)
-        scrollElement.removeEventListener("touchmove", cancelSnap)
-        scrollElement.removeEventListener("pointerdown", cancelSnap)
+    let cancelled = false
+    const settleBottom = (remainingFrames: number) => {
+      if (cancelled) return
+      const element = scrollContainerRef.current
+      if (element) {
+        element.scrollTop = Math.max(
+          0,
+          element.scrollHeight - element.clientHeight
+        )
       }
+      if (remainingFrames <= 0) {
+        bottomSettleFrameIdRef.current = null
+        setIsRestoringScroll(false)
+        syncScrollState()
+        return
+      }
+      bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
+        settleBottom(remainingFrames - 1)
+      )
     }
 
-    const finishRestore = () => {
-      if (released) return
-      releaseRestoreResources()
+    const frameId = window.requestAnimationFrame(() => {
+      const element = scrollContainerRef.current
+      if (!element) {
+        ignoreSyncRef.current = false
+        setIsRestoringScroll(false)
+        return
+      }
+
+      const maxScrollTop = Math.max(
+        0,
+        element.scrollHeight - element.clientHeight
+      )
+      const targetScrollTop = shouldPinBottom
+        ? maxScrollTop
+        : Number.isFinite(parsedSavedScroll)
+          ? Math.min(Math.max(0, parsedSavedScroll), maxScrollTop)
+          : maxScrollTop
+
+      element.scrollTop = targetScrollTop
+      if (shouldPinBottom) {
+        bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
+          settleBottom(3)
+        )
+      }
+      restoredScrollConversationRef.current = conversationId
       ignoreSyncRef.current = false
+      if (!shouldPinBottom) setIsRestoringScroll(false)
       syncScrollState()
-    }
+    })
 
-    if (savedScroll) {
-      const parsed = parseInt(savedScroll, 10)
-      const applyScroll = () => {
-        if (!released && scrollContainerRef.current) {
-          scrollContainerRef.current.scrollTop = parsed
-        }
+    return () => {
+      cancelled = true
+      window.cancelAnimationFrame(frameId)
+      if (bottomSettleFrameIdRef.current !== null) {
+        window.cancelAnimationFrame(bottomSettleFrameIdRef.current)
+        bottomSettleFrameIdRef.current = null
       }
-      applyScroll()
-      const el = scrollContainerRef.current
-      if (el) {
-        scrollElement = el
-
-        el.addEventListener("wheel", cancelSnap, { passive: true })
-        el.addEventListener("touchmove", cancelSnap, { passive: true })
-        el.addEventListener("pointerdown", cancelSnap, { passive: true })
-
-        // After first scroll restore settles, show button if not at bottom.
-        // This bypasses syncScrollState (which is gated by ignoreSyncRef for 1500ms).
-        showButtonFrameId = window.requestAnimationFrame(() => {
-          showButtonFrameId = null
-          if (released) return
-          const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-          if (dist > STICKY_BOTTOM_THRESHOLD) setScrollButtonVisible(true)
-        })
-
-        let lastHeight = el.scrollHeight
-        intervalId = window.setInterval(() => {
-          if (!userScrolled) applyScroll()
-        }, 15)
-
-        resizeObserver = new ResizeObserver(() => {
-          if (userScrolled) return
-          if (el.scrollHeight !== lastHeight) {
-            lastHeight = el.scrollHeight
-            applyScroll()
-          }
-        })
-        if (el.firstElementChild) {
-          resizeObserver.observe(el.firstElementChild)
-        }
-        timeoutId = window.setTimeout(finishRestore, 1500)
-      } else {
-        timeoutId = window.setTimeout(finishRestore, 500)
-      }
-    } else {
-      timeoutId = window.setTimeout(() => {
-        scrollToBottom("auto")
-        finishRestore()
-      }, 500)
+      ignoreSyncRef.current = false
+      setIsRestoringScroll(false)
     }
-    return releaseRestoreResources
-  }, [conversationId, scrollToBottom, setScrollButtonVisible, syncScrollState])
+  }, [conversationId, messageCount, setScrollButtonVisible, syncScrollState])
 
   React.useEffect(() => {
     const streamingStarted = !wasStreamingRef.current && state.isStreaming
@@ -1384,6 +1387,10 @@ export function ChatView() {
 
   const chatRows = React.useMemo<ChatVirtualRow[]>(() => {
     const rows: ChatVirtualRow[] = []
+    if (isInitialMessagesLoading) {
+      rows.push({ kind: "initial-loading", key: "initial-loading" })
+      return rows
+    }
     if (hasOlderMessages || isLoadingOlderMessages || olderMessagesError) {
       rows.push({ kind: "older", key: "older-messages" })
     }
@@ -1406,6 +1413,7 @@ export function ChatView() {
     activeConversation?.messages,
     conversationId,
     hasOlderMessages,
+    isInitialMessagesLoading,
     isLoadingOlderMessages,
     olderMessagesError,
     showStreamingBubble,
@@ -1417,7 +1425,10 @@ export function ChatView() {
     count: chatRows.length,
     getScrollElement: () => scrollContainerRef.current,
     estimateSize: (index) =>
-      chatRows[index]?.kind === "older" ? 58 : MESSAGE_ROW_ESTIMATE,
+      chatRows[index]?.kind === "older" ||
+      chatRows[index]?.kind === "initial-loading"
+        ? 58
+        : MESSAGE_ROW_ESTIMATE,
     getItemKey: (index) => chatRows[index]?.key ?? index,
     overscan: isMobile ? 6 : 10,
   })
@@ -1464,7 +1475,13 @@ export function ChatView() {
             }}
           >
             <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
-              <div className="flex-1 pt-4 pb-10">
+              <div
+                className={cn(
+                  "flex-1 pt-4 pb-10 transition-opacity duration-75",
+                  isRestoringScroll && "opacity-0"
+                )}
+                aria-busy={isRestoringScroll}
+              >
                 <div className="mx-auto max-w-[700px] px-2">
                   <div
                     className="relative w-full"
@@ -1504,6 +1521,13 @@ export function ChatView() {
                                       : `Load older messages (${loadedMessageCount}/${totalMessageCount})`}
                                 </span>
                               </button>
+                            </div>
+                          ) : row.kind === "initial-loading" ? (
+                            <div className="flex justify-center py-1">
+                              <div className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-[13px] text-muted-foreground shadow-sm">
+                                <Loader2 className="size-3.5 animate-spin" />
+                                <span>Loading messages</span>
+                              </div>
                             </div>
                           ) : row.kind === "message" ? (
                             <div
