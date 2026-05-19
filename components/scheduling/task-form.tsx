@@ -12,7 +12,8 @@ const SYSTEM_TZ = (() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } catch { return "UTC" }
 })()
 
-type ActionType = "agent" | "tool"
+type ActionType = "agent" | "tool" | "monitor"
+type MonitorKind = Extract<NewTaskPayload["action"], { kind: "monitor" }>["monitorKind"]
 type SchedKind = "in" | "once" | "dailyAt" | "weeklyAt" | "every" | "cron"
 type Unit = "m" | "h" | "d"
 const UNIT_MS: Record<Unit, number> = { m: 60_000, h: 3_600_000, d: 86_400_000 }
@@ -31,12 +32,25 @@ const SCHED_OPTS = [
     { value: "every", label: "Every (interval)" },
     { value: "cron", label: "Cron expression" },
 ]
+const MONITOR_INFO: Record<MonitorKind, { label: string; checks: string; execution: string; output: string }> = {
+    markets: {
+        label: "Markets monitor",
+        checks: "Enabled watchlist instruments, price alerts, and notable move thresholds.",
+        execution: "Runs the markets heartbeat cheap pass without a model. If a threshold crosses, it wakes the orchestrator once to research the cause.",
+        output: "Silent checks are recorded in Past runs. Noteworthy crossings are sent to Inbox.",
+    },
+}
 
 function toLocalInput(ms: number): string {
     const d = new Date(ms - new Date(ms).getTimezoneOffset() * 60_000)
     return d.toISOString().slice(0, 16)
 }
 function pad(n: number): string { return n.toString().padStart(2, "0") }
+function intervalToForm(ms: number): { amount: number; unit: Unit } {
+    if (ms % UNIT_MS.d === 0) return { amount: ms / UNIT_MS.d, unit: "d" }
+    if (ms % UNIT_MS.h === 0) return { amount: ms / UNIT_MS.h, unit: "h" }
+    return { amount: Math.max(1, Math.round(ms / UNIT_MS.m)), unit: "m" }
+}
 
 interface FormState {
     title: string
@@ -46,6 +60,7 @@ interface FormState {
     toolId: string
     toolSummary: string
     toolArgs: string
+    monitorKind: MonitorKind
     schedKind: SchedKind
     onceLocal: string
     inAmount: number
@@ -62,7 +77,7 @@ interface FormState {
 function initialState(task?: ScheduledTask): FormState {
     const base: FormState = {
         title: "", actionType: "agent", agentId: "orchestrator", agentPrompt: "",
-        toolId: "", toolSummary: "", toolArgs: "{}",
+        toolId: "", toolSummary: "", toolArgs: "{}", monitorKind: "markets",
         schedKind: "in", onceLocal: toLocalInput(Date.now() + 3_600_000),
         inAmount: 7, inUnit: "h", timeHM: "09:00", weekdays: [1, 2, 3, 4, 5],
         everyAmount: 1, everyUnit: "h", cronExpr: "0 9 * * *", timezone: SYSTEM_TZ, enabled: true,
@@ -74,11 +89,15 @@ function initialState(task?: ScheduledTask): FormState {
     } else if (task.action.kind === "tool") {
         next.actionType = "tool"; next.toolId = task.action.toolId
         next.toolSummary = task.action.summary; next.toolArgs = JSON.stringify(task.action.args ?? {}, null, 2)
+    } else if (task.action.kind === "monitor") {
+        next.actionType = "monitor"; next.monitorKind = task.action.monitorKind
     }
-    // 'monitor' tasks are system-managed and not edited through this form.
     const s = task.schedule
     if (s.kind === "once") { next.schedKind = "once"; next.onceLocal = toLocalInput(s.fireAt) }
-    else if (s.kind === "every") { next.schedKind = "every"; next.everyAmount = Math.max(1, Math.round(s.everyMs / 3_600_000)); next.everyUnit = "h" }
+    else if (s.kind === "every") {
+        const every = intervalToForm(s.everyMs)
+        next.schedKind = "every"; next.everyAmount = every.amount; next.everyUnit = every.unit
+    }
     else if (s.kind === "dailyAt") { next.schedKind = "dailyAt"; next.timeHM = `${pad(s.hour)}:${pad(s.minute)}`; next.timezone = s.timezone }
     else if (s.kind === "weeklyAt") { next.schedKind = "weeklyAt"; next.weekdays = s.weekdays; next.timeHM = `${pad(s.hour)}:${pad(s.minute)}`; next.timezone = s.timezone }
     else if (s.kind === "cron") { next.schedKind = "cron"; next.cronExpr = s.expression; next.timezone = s.timezone }
@@ -91,7 +110,7 @@ function buildPayload(f: FormState): NewTaskPayload | { error: string } {
     if (f.actionType === "agent") {
         if (!f.agentPrompt.trim()) return { error: "Prompt is required for an agent task." }
         action = { kind: "agent", agentId: f.agentId.trim() || "orchestrator", prompt: f.agentPrompt.trim() }
-    } else {
+    } else if (f.actionType === "tool") {
         if (!f.toolId.trim()) return { error: "Tool id is required for a tool task." }
         let args: Record<string, unknown> = {}
         try {
@@ -100,6 +119,8 @@ function buildPayload(f: FormState): NewTaskPayload | { error: string } {
             else return { error: "Tool args must be a JSON object." }
         } catch { return { error: "Tool args is not valid JSON." } }
         action = { kind: "tool", toolId: f.toolId.trim(), args, summary: f.toolSummary.trim() || `Run ${f.toolId.trim()}` }
+    } else {
+        action = { kind: "monitor", monitorKind: f.monitorKind }
     }
 
     let schedule: NewTaskPayload["schedule"]
@@ -144,19 +165,28 @@ export function TaskForm({
     const [error, setError] = React.useState<string | null>(null)
     const [saving, setSaving] = React.useState(false)
     const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF(prev => ({ ...prev, [k]: v }))
+    const taskId = task?.id ?? null
+    const seededTaskId = React.useRef<string | null>(taskId)
 
-    // Re-seed when switching which task is edited.
-    React.useEffect(() => { setF(initialState(task)); setError(null) }, [task])
+    React.useEffect(() => {
+        if (seededTaskId.current === taskId) return
+        seededTaskId.current = taskId
+        setF(initialState(task))
+        setError(null)
+        setSaving(false)
+    }, [task, taskId])
 
     const submit = async () => {
         const built = buildPayload(f)
         if ("error" in built) { setError(built.error); return }
         setSaving(true); setError(null)
         try { await onSubmit(built) }
-        catch (err) { setError(err instanceof Error ? err.message : "Failed to save task"); setSaving(false) }
+        catch (err) { setError(err instanceof Error ? err.message : "Failed to save task") }
+        finally { setSaving(false) }
     }
 
     const needsTz = f.schedKind === "dailyAt" || f.schedKind === "weeklyAt" || f.schedKind === "cron"
+    const actionOptions: ActionType[] = f.actionType === "monitor" ? ["monitor"] : ["agent", "tool"]
 
     return (
         <div className="space-y-5">
@@ -169,15 +199,18 @@ export function TaskForm({
             <div>
                 <label className={labelCls}>Action</label>
                 <div className="mb-3 flex gap-2">
-                    {(["agent", "tool"] as ActionType[]).map(t => (
-                        <button key={t} type="button" onClick={() => set("actionType", t)}
+                    {actionOptions.map(t => (
+                        <button key={t} type="button" onClick={() => t !== "monitor" && set("actionType", t)}
+                            disabled={t === "monitor"}
                             className={cn("rounded-md px-3 py-1.5 text-[13px] ring-1 ring-border/70",
                                 f.actionType === t ? "bg-[#f0ede6] text-foreground dark:bg-muted" : "text-foreground/60 hover:text-foreground")}>
-                            {t === "agent" ? "Agent (wake a model)" : "Tool (deterministic)"}
+                            {t === "agent" ? "Agent (wake a model)" : t === "tool" ? "Tool (deterministic)" : "Monitor (system)"}
                         </button>
                     ))}
                 </div>
-                {f.actionType === "agent" ? (
+                {f.actionType === "monitor" ? (
+                    <MonitorActionDetails monitorKind={f.monitorKind} />
+                ) : f.actionType === "agent" ? (
                     <div className="space-y-3">
                         <textarea className={cn(fieldCls, "h-48 py-2 leading-relaxed")} value={f.agentPrompt}
                             placeholder="What should the agent do when this fires? For a monitor, say: do the check, and call notify_inbox only if <criteria>; otherwise stay silent."
@@ -267,6 +300,33 @@ export function TaskForm({
                 <Button variant="ghost" onClick={onCancel} disabled={saving}>Cancel</Button>
                 <Button onClick={submit} disabled={saving}>{saving ? "Saving…" : task ? "Save changes" : "Create task"}</Button>
             </div>
+        </div>
+    )
+}
+
+function MonitorActionDetails({ monitorKind }: { monitorKind: MonitorKind }) {
+    const info = MONITOR_INFO[monitorKind]
+    return (
+        <div className="grid gap-3 rounded-md border border-border/70 bg-muted/25 p-3 text-[13px]">
+            <div>
+                <label className={labelCls}>Monitor id</label>
+                <div className={cn(fieldCls, "flex items-center font-mono text-[13px] text-foreground/75")}>
+                    monitor:{monitorKind}
+                </div>
+            </div>
+            <InfoRow label="Handler" value={info.label} />
+            <InfoRow label="Checks" value={info.checks} />
+            <InfoRow label="Execution" value={info.execution} />
+            <InfoRow label="Output" value={info.output} />
+        </div>
+    )
+}
+
+function InfoRow({ label, value }: { label: string; value: string }) {
+    return (
+        <div>
+            <div className={labelCls}>{label}</div>
+            <div className="text-[13px] leading-relaxed text-foreground/70">{value}</div>
         </div>
     )
 }
