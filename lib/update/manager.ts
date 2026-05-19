@@ -225,6 +225,9 @@ async function fetchLatestRelease(force = false): Promise<LatestReleaseInfo | nu
         return memory.latest
     }
 
+    memory.latestCheckedAt = now
+    let githubError: string | null = null
+
     try {
         const token =
             getEnvValue('ORCHESTRATOR_UPDATE_GITHUB_TOKEN') ||
@@ -240,8 +243,6 @@ async function fetchLatestRelease(force = false): Promise<LatestReleaseInfo | nu
             cache: 'no-store',
             headers,
         })
-
-        memory.latestCheckedAt = now
 
         if (res.status === 404) {
             memory.latest = null
@@ -274,9 +275,101 @@ async function fetchLatestRelease(force = false): Promise<LatestReleaseInfo | nu
         memory.latestError = null
         return memory.latest
     } catch (err) {
-        memory.latestCheckedAt = now
-        memory.latestError = err instanceof Error ? err.message : 'Failed to check GitHub Releases.'
+        githubError = err instanceof Error ? err.message : 'Failed to check GitHub Releases.'
+    }
+
+    const tagFallback = latestReleaseFromGitTags(githubError)
+    if (tagFallback) {
+        memory.latest = tagFallback
+        memory.latestError = githubError
+            ? `${githubError}; detected latest public tag with git fallback. Release notes may be unavailable until GitHub API access recovers.`
+            : null
         return memory.latest
+    }
+
+    try {
+        const packageFallback = await latestReleaseFromRawPackage(githubError)
+        if (packageFallback) {
+            memory.latest = packageFallback
+            memory.latestError = githubError
+                ? `${githubError}; detected latest version from raw package metadata. Release notes may be unavailable until GitHub API access recovers.`
+                : null
+            return memory.latest
+        }
+    } catch {
+        // Preserve the GitHub error below; raw package lookup is only a last-resort fallback.
+    }
+
+    memory.latestError = githubError || 'Failed to check GitHub Releases.'
+    return memory.latest
+}
+
+function latestReleaseFromGitTags(githubError: string | null): LatestReleaseInfo | null {
+    try {
+        const output = execFileSync('git', [
+            'ls-remote',
+            '--tags',
+            '--refs',
+            `https://github.com/${REPO}.git`,
+            'v*',
+        ], {
+            encoding: 'utf-8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+            timeout: 10_000,
+        })
+        const candidates = output
+            .split('\n')
+            .map(line => line.match(/refs\/tags\/(v?\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)$/)?.[1] ?? null)
+            .filter((tag): tag is string => Boolean(tag && normalizeVersion(tag)))
+            .sort((a, b) => compareVersions(b, a))
+
+        const tag = candidates[0]
+        const version = normalizeVersion(tag)
+        if (!tag || !version) return null
+
+        return {
+            version,
+            tag,
+            name: tag,
+            htmlUrl: `https://github.com/${REPO}/releases/tag/${tag}`,
+            publishedAt: null,
+            body: [
+                githubError
+                    ? `GitHub release metadata lookup failed: ${githubError}`
+                    : 'GitHub release metadata lookup is unavailable.',
+                '',
+                `Detected latest public tag \`${tag}\` from git refs. Open the release page for full notes if this fallback is active.`,
+            ].join('\n'),
+        }
+    } catch {
+        return null
+    }
+}
+
+async function latestReleaseFromRawPackage(githubError: string | null): Promise<LatestReleaseInfo | null> {
+    const res = await fetch(`https://raw.githubusercontent.com/${REPO}/master/package.json`, {
+        cache: 'no-store',
+        headers: { 'User-Agent': 'orchestrator-updater' },
+    })
+    if (!res.ok) return null
+
+    const json = await res.json() as { version?: unknown }
+    const version = normalizeVersion(typeof json.version === 'string' ? json.version : null)
+    if (!version) return null
+    const tag = `v${version}`
+    return {
+        version,
+        tag,
+        name: tag,
+        htmlUrl: `https://github.com/${REPO}/releases/tag/${tag}`,
+        publishedAt: null,
+        body: [
+            githubError
+                ? `GitHub release metadata lookup failed: ${githubError}`
+                : 'GitHub release metadata lookup is unavailable.',
+            '',
+            `Detected latest version \`${tag}\` from raw package metadata. Open the release page for full notes if this fallback is active.`,
+        ].join('\n'),
     }
 }
 
