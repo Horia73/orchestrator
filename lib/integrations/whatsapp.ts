@@ -2,6 +2,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { execFileSync } from 'child_process'
+import { createRequire } from 'module'
 
 import { PRIVATE_STATE_DIR, getEnvValue } from '@/lib/config'
 
@@ -16,6 +17,7 @@ const READY_HEALTH_TIMEOUT_MS = 5_000
 const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
 const AUTO_RESUME_COOLDOWN_MS = 30_000
 const DEFAULT_WHATSAPP_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
+const nodeRequire = createRequire(import.meta.url)
 
 export type WhatsAppPhase =
     | 'idle'
@@ -159,15 +161,33 @@ interface MutableWhatsAppState {
     qrUpdatedAt: number | null
     accountName: string | null
     phoneNumber: string | null
+    lastAuthenticatedAt: number | null
     lastReadyAt: number | null
     lastSyncAt: number | null
     lastError: string | null
     browserExecutablePath: string | null
 }
 
+interface WhatsAppPageProbe {
+    socketState: string | null
+    hasSynced: boolean | null
+    hasWWebJS: boolean
+    hasDebugVersion: boolean
+    webVersion: string | null
+}
+
+type WhatsAppPuppeteerPage = {
+    evaluate<T>(fn: string | ((...args: unknown[]) => T | Promise<T>), ...args: unknown[]): Promise<T>
+}
+
+type WhatsAppClientInternals = Client & {
+    pupPage?: WhatsAppPuppeteerPage | null
+}
+
 class WhatsAppManager {
     private client: Client | null = null
     private initializePromise: Promise<void> | null = null
+    private statusResumePromise: Promise<void> | null = null
     private lastAutoResumeAt = 0
     private state: MutableWhatsAppState = {
         phase: 'idle',
@@ -176,6 +196,7 @@ class WhatsAppManager {
         qrUpdatedAt: null,
         accountName: null,
         phoneNumber: null,
+        lastAuthenticatedAt: null,
         lastReadyAt: null,
         lastSyncAt: null,
         lastError: null,
@@ -183,8 +204,8 @@ class WhatsAppManager {
     }
 
     async getStatus(origin?: string): Promise<WhatsAppIntegrationStatus> {
-        await this.resumeStoredSessionForStatus()
-        return this.status(origin)
+        this.resumeStoredSessionForStatus()
+        return this.status(origin, { checkHealth: false })
     }
 
     async start(origin?: string): Promise<WhatsAppStartResult> {
@@ -557,6 +578,7 @@ class WhatsAppManager {
 
         client.on('authenticated', () => {
             this.state.phase = 'authenticated'
+            this.state.lastAuthenticatedAt = Date.now()
             this.state.lastSyncAt = Date.now()
             this.clearQr()
         })
@@ -564,6 +586,7 @@ class WhatsAppManager {
         client.on('ready', () => {
             this.state.phase = 'ready'
             this.state.lastError = null
+            this.state.lastAuthenticatedAt = null
             this.state.lastReadyAt = Date.now()
             this.state.lastSyncAt = Date.now()
             this.clearQr()
@@ -628,11 +651,9 @@ class WhatsAppManager {
         }
     }
 
-    private async resumeStoredSessionForStatus(): Promise<void> {
+    private resumeStoredSessionForStatus(): void {
         if (this.client || this.initializePromise) {
-            if (this.state.phase === 'starting' || this.state.phase === 'authenticated') {
-                await this.waitForReady(STATUS_READY_WAIT_TIMEOUT_MS)
-            }
+            if (this.state.phase === 'starting' || this.state.phase === 'authenticated') this.scheduleStatusReadyProbe()
             return
         }
 
@@ -641,15 +662,33 @@ class WhatsAppManager {
         const now = Date.now()
         if (this.state.phase === 'error' && now - this.lastAutoResumeAt < AUTO_RESUME_COOLDOWN_MS) return
         this.lastAutoResumeAt = now
+        this.scheduleStatusReadyProbe()
+    }
 
+    private scheduleStatusReadyProbe(): void {
+        if (this.statusResumePromise) return
         try {
-            await this.ensureStarted()
+            this.statusResumePromise = this.resumeStoredSessionInBackground()
+                .catch(() => undefined)
+                .finally(() => {
+                    this.statusResumePromise = null
+                })
+        } catch {
+            this.statusResumePromise = null
+        }
+    }
+
+    private async resumeStoredSessionInBackground(): Promise<void> {
+        try {
+            await withTimeout(this.ensureStarted(), STATUS_READY_WAIT_TIMEOUT_MS, 'WhatsApp background resume timed out.')
             await this.waitForQrOrReady(STATUS_READY_WAIT_TIMEOUT_MS)
             if (this.state.phase === 'authenticated' || this.state.phase === 'starting') {
                 await this.waitForReady(STATUS_READY_WAIT_TIMEOUT_MS)
+                await withTimeout(this.promoteAuthenticatedClientIfUsable(), READY_HEALTH_TIMEOUT_MS, 'WhatsApp readiness probe timed out.')
             }
-        } catch {
-            // status() below reports the stored session plus the concrete lastError.
+        } catch (err) {
+            this.state.lastError = formatClientError(err)
+            this.state.lastSyncAt = Date.now()
         }
     }
 
@@ -659,6 +698,7 @@ class WhatsAppManager {
         if (this.client && this.state.phase === 'ready') return this.client
 
         if (this.client && (this.state.phase === 'authenticated' || this.state.phase === 'starting')) {
+            if (await this.promoteAuthenticatedClientIfUsable()) return this.client
             throw new Error('WhatsApp Web is still linking/syncing after QR scan. Keep WhatsApp on your phone and the Orchestrator WhatsApp session open, then retry when syncing finishes.')
         }
 
@@ -713,6 +753,10 @@ class WhatsAppManager {
     }
 
     private async isReadyClientHealthy(): Promise<boolean> {
+        if (this.state.phase === 'authenticated' || this.state.phase === 'starting') {
+            await this.promoteAuthenticatedClientIfUsable()
+        }
+
         const client = this.client
         if (!client || this.state.phase !== 'ready') return false
 
@@ -738,6 +782,44 @@ class WhatsAppManager {
         }
     }
 
+    private async promoteAuthenticatedClientIfUsable(): Promise<boolean> {
+        const client = this.client
+        if (!client || this.state.phase === 'ready') return this.state.phase === 'ready'
+        if (this.state.phase !== 'authenticated' && this.state.phase !== 'starting') return false
+
+        const page = (client as WhatsAppClientInternals).pupPage
+        if (!page) return false
+
+        let probe = await probeWhatsAppPage(page)
+        if (probe.socketState !== 'CONNECTED') {
+            if (this.state.phase === 'authenticated' && this.state.lastAuthenticatedAt && Date.now() - this.state.lastAuthenticatedAt > READY_WAIT_TIMEOUT_MS) {
+                this.state.lastError = `WhatsApp authenticated but socket is ${probe.socketState || 'unknown'}; keep WhatsApp open on your phone and reconnect if this does not recover.`
+            }
+            return false
+        }
+
+        if (!probe.hasWWebJS) {
+            await injectWWebJsUtilities(page)
+            probe = await waitForWWebJs(page, 8_000)
+        }
+
+        if (!probe.hasWWebJS) {
+            if (this.state.phase === 'authenticated' && this.state.lastAuthenticatedAt && Date.now() - this.state.lastAuthenticatedAt > READY_WAIT_TIMEOUT_MS) {
+                this.state.lastError = `WhatsApp authenticated and socket is CONNECTED, but whatsapp-web.js did not finish injecting its runtime helpers${probe.webVersion ? ` for WhatsApp Web ${probe.webVersion}` : ''}. Try reconnecting; if it repeats, run WhatsApp headful/non-headless for QR linking.`
+            }
+            return false
+        }
+
+        this.state.phase = 'ready'
+        this.state.lastError = null
+        this.state.lastAuthenticatedAt = null
+        this.state.lastReadyAt = Date.now()
+        this.state.lastSyncAt = Date.now()
+        this.clearQr()
+        this.captureAccountInfo(client)
+        return true
+    }
+
     private async getChat(client: Client, chatId: string): Promise<Chat> {
         const normalized = normalizeChatId(chatId)
         try {
@@ -751,11 +833,13 @@ class WhatsAppManager {
         }
     }
 
-    private async status(origin?: string): Promise<WhatsAppIntegrationStatus> {
+    private async status(origin?: string, options: { checkHealth?: boolean } = {}): Promise<WhatsAppIntegrationStatus> {
         const browserExecutablePath = this.state.browserExecutablePath ?? resolveBrowserExecutablePath()
         this.state.browserExecutablePath = browserExecutablePath
         const qrUpdatedAt = this.state.qrUpdatedAt
-        const connected = await this.isReadyClientHealthy()
+        const connected = options.checkHealth === false
+            ? Boolean(this.client && this.state.phase === 'ready')
+            : await this.isReadyClientHealthy()
         const qrImageUrl = origin && this.state.qrText
             ? `${origin}/api/integrations/whatsapp/qr?ts=${qrUpdatedAt ?? Date.now()}`
             : null
@@ -953,6 +1037,73 @@ function clamp(value: number, min: number, max: number): number {
 
 function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+async function probeWhatsAppPage(page: WhatsAppPuppeteerPage): Promise<WhatsAppPageProbe> {
+    try {
+        return await page.evaluate(() => {
+            const waWindow = window as typeof window & {
+                require?: (name: string) => unknown
+                WWebJS?: unknown
+                Debug?: { VERSION?: string }
+                AuthStore?: { AppState?: { state?: string; hasSynced?: boolean } }
+            }
+            let socket: { state?: string; hasSynced?: boolean } | null = null
+            try {
+                const socketModule = waWindow.require?.('WAWebSocketModel') as { Socket?: { state?: string; hasSynced?: boolean } } | undefined
+                socket = socketModule?.Socket ?? null
+            } catch {
+                socket = waWindow.AuthStore?.AppState ?? null
+            }
+
+            return {
+                socketState: typeof socket?.state === 'string' ? socket.state : null,
+                hasSynced: typeof socket?.hasSynced === 'boolean' ? socket.hasSynced : null,
+                hasWWebJS: typeof waWindow.WWebJS !== 'undefined',
+                hasDebugVersion: typeof waWindow.Debug?.VERSION === 'string',
+                webVersion: typeof waWindow.Debug?.VERSION === 'string' ? waWindow.Debug.VERSION : null,
+            }
+        })
+    } catch {
+        return {
+            socketState: null,
+            hasSynced: null,
+            hasWWebJS: false,
+            hasDebugVersion: false,
+            webVersion: null,
+        }
+    }
+}
+
+async function injectWWebJsUtilities(page: WhatsAppPuppeteerPage): Promise<void> {
+    const loadUtils = loadWWebJsUtilities()
+    if (!loadUtils) return
+    try {
+        await page.evaluate(loadUtils as (...args: unknown[]) => unknown)
+    } catch {
+        // A later status check will surface the still-not-ready state.
+    }
+}
+
+async function waitForWWebJs(page: WhatsAppPuppeteerPage, timeoutMs: number): Promise<WhatsAppPageProbe> {
+    const startedAt = Date.now()
+    let probe = await probeWhatsAppPage(page)
+    while (!probe.hasWWebJS && Date.now() - startedAt < timeoutMs) {
+        await sleep(250)
+        probe = await probeWhatsAppPage(page)
+    }
+    return probe
+}
+
+function loadWWebJsUtilities(): (() => void) | null {
+    try {
+        const mod = nodeRequire('whatsapp-web.js/src/util/Injected/Utils.js') as {
+            LoadUtils?: () => void
+        }
+        return typeof mod.LoadUtils === 'function' ? mod.LoadUtils : null
+    } catch {
+        return null
+    }
 }
 
 async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: string): Promise<T> {
