@@ -19,7 +19,8 @@ interface InlineToolCallViewProps {
 
 type ParsedData = Record<string, unknown> | null
 
-const LARGE_PANEL_MAX_HEIGHT = "min(520px,calc(100vh-220px))"
+const TOOL_CALL_PANEL_HEIGHT_CLASS = "max-h-[min(230px,calc(100vh-360px))]"
+const TOOL_CALL_TERMINAL_HEIGHT_CLASS = "h-[min(230px,calc(100vh-360px))]"
 
 export function InlineToolCallView({ entry, searchDisplay = "expanded" }: InlineToolCallViewProps) {
     const status = entry.status ?? (entry.content ? (entry.success === false ? "error" : "ok") : "running")
@@ -51,7 +52,9 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
         }
         return (
             <div className="relative z-10 ml-7 grid max-w-[min(760px,calc(100vw-180px))] content-start items-start gap-1.5 py-1 text-left">
-                <SearchPreview data={data} rawText={entry.content} args={entry.args} />
+                <div className={cn("overflow-auto pr-1", TOOL_CALL_PANEL_HEIGHT_CLASS)}>
+                    <SearchPreview data={data} rawText={entry.content} args={entry.args} />
+                </div>
             </div>
         )
     }
@@ -82,8 +85,7 @@ function ToolFrame({
     return (
         <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] overflow-hidden rounded-md border border-border bg-background text-left shadow-sm">
             <div
-                className={cn("min-h-[92px] overflow-auto bg-background", bodyClassName)}
-                style={{ maxHeight: LARGE_PANEL_MAX_HEIGHT }}
+                className={cn("min-h-[92px] overflow-auto bg-background", TOOL_CALL_PANEL_HEIGHT_CLASS, bodyClassName)}
             >
                 {children}
             </div>
@@ -245,7 +247,8 @@ function LiveTerminal({ entry, data, hasCommandLine = false }: { entry: ToolCall
         <div
             ref={containerRef}
             className={cn(
-                "h-[min(460px,calc(100vh-260px))] min-h-[220px] px-2 pb-2",
+                TOOL_CALL_TERMINAL_HEIGHT_CLASS,
+                "min-h-[160px] px-2 pb-2",
                 hasCommandLine ? "pt-0" : "pt-2"
             )}
         />

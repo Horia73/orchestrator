@@ -43,7 +43,7 @@ function formatMessageTimestampFull(timestamp: number) {
 // ThoughtBlock helpers
 // ---------------------------------------------------------------------------
 
-const COLLAPSED_HEIGHT = 160
+const COLLAPSED_HEIGHT = 320
 const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
 
 function getThoughtTitle(content: string): string {
@@ -152,7 +152,7 @@ function useAvailableHeight(
             const blockRect = block.getBoundingClientRect()
             const inputRect = input.getBoundingClientRect()
             const available = Math.floor(inputRect.top - blockRect.top - COLLAPSED_BOTTOM_GAP)
-            setHeight(Math.max(96, available))
+            setHeight(Math.max(COLLAPSED_HEIGHT, available))
         }
 
         compute()
@@ -181,7 +181,7 @@ function ThoughtBlock({
     messageStatus,
     searchToolDisplay = "expanded",
     thoughtAutoOpen = true,
-    thoughtAutoExpandTools = true,
+    thoughtAutoExpandTools = false,
     liveCollapsedTitle = false,
 }: {
     reasoning: ReasoningEntry[]
@@ -232,6 +232,7 @@ function ThoughtBlock({
 
     // State: open/expanded, persisted via localStorage keyed by messageId
     const storageKey = messageId ? `thought:${messageId}` : null
+    const expandedStorageKey = storageKey ? `${storageKey}:expanded:v2` : null
 
     const [isOpen, setIsOpen] = React.useState(() => {
         if (storageKey) {
@@ -243,12 +244,12 @@ function ThoughtBlock({
 
     const userToggledExpandedRef = React.useRef(false)
     const [hasStoredExpanded] = React.useState(() => {
-        if (!storageKey) return false
-        return localStorage.getItem(`${storageKey}:expanded`) !== null
+        if (!expandedStorageKey) return false
+        return localStorage.getItem(expandedStorageKey) !== null
     })
     const [isExpanded, setIsExpanded] = React.useState(() => {
-        if (storageKey) {
-            const saved = localStorage.getItem(`${storageKey}:expanded`)
+        if (expandedStorageKey) {
+            const saved = localStorage.getItem(expandedStorageKey)
             if (saved !== null) return saved === 'true'
         }
         return shouldDefaultExpand
@@ -262,13 +263,13 @@ function ThoughtBlock({
     const updateExpanded = React.useCallback((v: boolean) => {
         userToggledExpandedRef.current = true
         setIsExpanded(v)
-        if (storageKey) localStorage.setItem(`${storageKey}:expanded`, String(v))
-    }, [storageKey])
+        if (expandedStorageKey) localStorage.setItem(expandedStorageKey, String(v))
+    }, [expandedStorageKey])
 
     const autoExpand = React.useCallback(() => {
         setIsExpanded(true)
-        if (storageKey) localStorage.setItem(`${storageKey}:expanded`, "true")
-    }, [storageKey])
+        if (expandedStorageKey) localStorage.setItem(expandedStorageKey, "true")
+    }, [expandedStorageKey])
 
     React.useEffect(() => {
         if (!shouldDefaultExpand || hasStoredExpanded || userToggledExpandedRef.current) return
@@ -1018,7 +1019,7 @@ interface StreamingBubbleProps {
     messageId?: string
 }
 
-export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, showCursor = true, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = true, liveCollapsedTitle = false }: StreamingBubbleProps) {
+export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, showCursor = true, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
     const reasoningGroups = React.useMemo(() => groupReasoningByPhase(reasoning), [reasoning])
     const timeline = React.useMemo(() => buildInterleavedTimeline(reasoningGroups, contentSegments), [reasoningGroups, contentSegments])
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null

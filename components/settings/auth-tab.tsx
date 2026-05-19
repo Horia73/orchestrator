@@ -423,7 +423,9 @@ function ConnectedServicesSection() {
                     ? "WhatsApp connected."
                     : json.status.qrAvailable
                         ? "Scan the WhatsApp QR code with your phone."
-                        : "WhatsApp is starting. The QR code will appear here when ready.",
+                        : json.status.phase === "authenticated" || json.status.phase === "starting"
+                            ? "WhatsApp is linking. It will switch to Connected as soon as WhatsApp Web is ready."
+                            : "WhatsApp is starting. The QR code will appear here when ready.",
             })
             await refresh()
         } catch (err) {

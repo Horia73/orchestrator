@@ -11,8 +11,10 @@ const AUTH_BASE_DIR = path.join(PRIVATE_STATE_DIR, 'whatsapp-web')
 const AUTH_CLIENT_ID = 'orchestrator'
 const QR_TTL_MS = 60_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
-const READY_WAIT_TIMEOUT_MS = 25_000
+const READY_WAIT_TIMEOUT_MS = 60_000
 const READY_HEALTH_TIMEOUT_MS = 5_000
+const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
+const AUTO_RESUME_COOLDOWN_MS = 30_000
 
 export type WhatsAppPhase =
     | 'idle'
@@ -124,6 +126,7 @@ interface MutableWhatsAppState {
 class WhatsAppManager {
     private client: Client | null = null
     private initializePromise: Promise<void> | null = null
+    private lastAutoResumeAt = 0
     private state: MutableWhatsAppState = {
         phase: 'idle',
         qrText: null,
@@ -138,23 +141,20 @@ class WhatsAppManager {
     }
 
     async getStatus(origin?: string): Promise<WhatsAppIntegrationStatus> {
+        await this.resumeStoredSessionForStatus()
         return this.status(origin)
     }
 
     async start(origin?: string): Promise<WhatsAppStartResult> {
         await this.ensureStarted()
         await this.waitForQrOrReady()
-        if (this.state.phase === 'authenticated' || this.state.phase === 'starting') {
-            await this.resetBrokenClient(new Error('WhatsApp Web did not become ready after startup.'), 'WhatsApp startup stalled')
-            await this.ensureStarted()
-            await this.waitForQrOrReady()
-        }
+        if (this.state.phase === 'authenticated' || this.state.phase === 'starting') await this.waitForReady()
         const status = await this.status(origin)
         return {
             status,
-            qrMarkdown: status.qrImageUrl
-                ? `![WhatsApp QR](${status.qrImageUrl})`
-                : status.qrDataUrl ? `![WhatsApp QR](${status.qrDataUrl})` : null,
+            qrMarkdown: status.qrDataUrl
+                ? `![WhatsApp QR](${status.qrDataUrl})`
+                : status.qrImageUrl ? `![WhatsApp QR](${status.qrImageUrl})` : null,
         }
     }
 
@@ -328,6 +328,8 @@ class WhatsAppManager {
 
     private async initialize(): Promise<void> {
         ensurePrivateDir(AUTH_BASE_DIR)
+        const sessionPath = authSessionPath()
+        cleanupStaleBrowserProfileLocks(sessionPath)
 
         const executablePath = resolveBrowserExecutablePath()
         this.state.browserExecutablePath = executablePath
@@ -382,12 +384,15 @@ class WhatsAppManager {
                 if (this.client === client) this.client = null
 
                 if (attempt === 0 && isBrowserProfileInUseError(err)) {
-                    const killed = killBrowserProcessesUsingPath(path.join(AUTH_BASE_DIR, `session-${AUTH_CLIENT_ID}`))
+                    const killed = killBrowserProcessesUsingPath(sessionPath)
+                    if (killed > 0) await sleep(1_000)
+                    const removedLocks = cleanupStaleBrowserProfileLocks(sessionPath)
                     this.state.phase = 'starting'
                     this.state.lastError = killed > 0
                         ? `Closed ${killed} stale WhatsApp browser process${killed === 1 ? '' : 'es'}; retrying.`
-                        : 'WhatsApp browser profile looked busy; retrying startup once.'
-                    await sleep(1_000)
+                        : removedLocks > 0
+                            ? `Removed ${removedLocks} stale WhatsApp browser profile lock${removedLocks === 1 ? '' : 's'}; retrying.`
+                            : 'WhatsApp browser profile looked busy; retrying startup once.'
                     continue
                 }
 
@@ -404,6 +409,7 @@ class WhatsAppManager {
         client.on('authenticated', () => {
             this.state.phase = 'authenticated'
             this.state.lastSyncAt = Date.now()
+            this.clearQr()
         })
 
         client.on('ready', () => {
@@ -470,6 +476,31 @@ class WhatsAppManager {
             if (this.state.phase === 'qr' || this.state.phase === 'ready') return
             if (this.state.phase === 'error' || this.state.phase === 'auth_failure') return
             await sleep(250)
+        }
+    }
+
+    private async resumeStoredSessionForStatus(): Promise<void> {
+        if (this.client || this.initializePromise) {
+            if (this.state.phase === 'starting' || this.state.phase === 'authenticated') {
+                await this.waitForReady(STATUS_READY_WAIT_TIMEOUT_MS)
+            }
+            return
+        }
+
+        if (!hasStoredSession() || this.state.phase === 'auth_failure') return
+
+        const now = Date.now()
+        if (this.state.phase === 'error' && now - this.lastAutoResumeAt < AUTO_RESUME_COOLDOWN_MS) return
+        this.lastAutoResumeAt = now
+
+        try {
+            await this.ensureStarted()
+            await this.waitForQrOrReady(STATUS_READY_WAIT_TIMEOUT_MS)
+            if (this.state.phase === 'authenticated' || this.state.phase === 'starting') {
+                await this.waitForReady(STATUS_READY_WAIT_TIMEOUT_MS)
+            }
+        } catch {
+            // status() below reports the stored session plus the concrete lastError.
         }
     }
 
@@ -773,10 +804,45 @@ function isRecoverableClientError(err: unknown): boolean {
 
 function isBrowserProfileInUseError(err: unknown): boolean {
     const message = formatClientError(err).toLowerCase()
-    return message.includes('browser is already running') || message.includes('userdatadir')
+    return message.includes('browser is already running')
+        || message.includes('userdatadir')
+        || message.includes('processsingleton')
+        || message.includes('singletonlock')
+        || message.includes('singleton lock')
 }
 
 function killBrowserProcessesUsingPath(profilePath: string): number {
+    const processes = browserProcessesUsingPath(profilePath)
+    let killed = 0
+    for (const processInfo of processes) {
+        try {
+            process.kill(processInfo.pid, 'SIGTERM')
+            killed += 1
+        } catch {
+            // The process may have exited between ps and kill.
+        }
+    }
+    return killed
+}
+
+function cleanupStaleBrowserProfileLocks(profilePath: string): number {
+    if (!profilePath || browserProcessesUsingPath(profilePath).length > 0) return 0
+
+    let removed = 0
+    for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+        const filePath = path.join(profilePath, name)
+        try {
+            fs.lstatSync(filePath)
+            fs.rmSync(filePath, { force: true, recursive: false })
+            removed += 1
+        } catch {
+            // If the file disappeared or is not removable, Chromium will report it on launch.
+        }
+    }
+    return removed
+}
+
+function browserProcessesUsingPath(profilePath: string): Array<{ pid: number; command: string }> {
     let output: string
     try {
         output = execFileSync('ps', ['-axo', 'pid=,command='], {
@@ -784,10 +850,10 @@ function killBrowserProcessesUsingPath(profilePath: string): number {
             stdio: ['ignore', 'pipe', 'ignore'],
         })
     } catch {
-        return 0
+        return []
     }
 
-    let killed = 0
+    const processes: Array<{ pid: number; command: string }> = []
     for (const line of output.split('\n')) {
         if (!line.includes(profilePath)) continue
         const match = line.match(/^\s*(\d+)\s+(.+)$/)
@@ -796,14 +862,13 @@ function killBrowserProcessesUsingPath(profilePath: string): number {
         const command = match[2]
         if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue
         if (!/chrome|chromium|brave|edge/i.test(command)) continue
-        try {
-            process.kill(pid, 'SIGTERM')
-            killed += 1
-        } catch {
-            // The process may have exited between ps and kill.
-        }
+        processes.push({ pid, command })
     }
-    return killed
+    return processes
+}
+
+function authSessionPath(): string {
+    return path.join(AUTH_BASE_DIR, `session-${AUTH_CLIENT_ID}`)
 }
 
 function formatClientError(err: unknown): string {

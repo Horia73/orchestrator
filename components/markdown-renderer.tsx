@@ -122,6 +122,31 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
     )
 }
 
+function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+    const [failed, setFailed] = React.useState(false)
+    const imageSrc = typeof src === "string" ? src : undefined
+    const isWhatsAppQr = typeof imageSrc === "string" && imageSrc.includes("/api/integrations/whatsapp/qr")
+
+    if (!imageSrc) return null
+    if (failed) {
+        return (
+            <span className="my-2 inline-flex rounded-md border border-border/70 bg-muted/40 px-2 py-1 text-[12px] text-muted-foreground">
+                {isWhatsAppQr ? "WhatsApp QR expired" : alt || "Image unavailable"}
+            </span>
+        )
+    }
+
+    return (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img
+            src={imageSrc}
+            alt={alt || ""}
+            className="max-w-full rounded-lg my-2"
+            onError={() => setFailed(true)}
+        />
+    )
+}
+
 // ---------------------------------------------------------------------------
 // Custom react-markdown components
 // ---------------------------------------------------------------------------
@@ -215,10 +240,7 @@ const baseComponents: Components = {
     td: ({ children }) => (
         <td className="px-3 py-2">{children}</td>
     ),
-    img: ({ src, alt }) => (
-        // eslint-disable-next-line @next/next/no-img-element
-        <img src={src} alt={alt || ""} className="max-w-full rounded-lg my-2" />
-    ),
+    img: ({ src, alt }) => <MarkdownImage src={src} alt={alt} />,
 }
 
 const contextComponents: Components = {
