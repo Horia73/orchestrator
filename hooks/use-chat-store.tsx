@@ -8,6 +8,7 @@ import type {
   ContextUsageSnapshot,
   Conversation,
   Message,
+  ReasoningEntry,
   ToolStreamDelta,
 } from "@/lib/types"
 import { generateId, generateTitle } from "@/lib/utils-chat"
@@ -66,6 +67,34 @@ function appendAgentContent(
     contentSegments.push({ phase: 0, content: chunk })
   }
   return { ...entry, content: entry.content + chunk, contentSegments }
+}
+
+function markReasoningStopped(
+  reasoning: ReasoningEntry[] | undefined,
+  timestamp: number
+): ReasoningEntry[] | undefined {
+  if (!reasoning?.length) return reasoning
+  return reasoning.map((entry) => {
+    if (entry.type === "agent_call") {
+      return {
+        ...entry,
+        status: entry.status === "running" ? "aborted" : entry.status,
+        endedAt:
+          entry.status === "running" ? (entry.endedAt ?? timestamp) : entry.endedAt,
+        reasoning: markReasoningStopped(entry.reasoning, timestamp),
+      }
+    }
+    if (entry.type === "tool_call" && entry.status === "running") {
+      return {
+        ...entry,
+        status: "error",
+        success: false,
+        endedAt: entry.endedAt ?? timestamp,
+        content: entry.content || "Stopped",
+      }
+    }
+    return entry
+  })
 }
 
 const stoppedStreamState = {
@@ -341,6 +370,11 @@ type ChatAction =
       conversationId: string
       message: Message
       stopStreaming?: boolean
+    }
+  | {
+      type: "STOP_STREAMING_WITH_PARTIAL"
+      conversationId: string
+      timestamp: number
     }
   | { type: "ADD_SYNCED_CONVERSATION"; conversation: Conversation }
 
@@ -1073,6 +1107,112 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...stoppedStreamState,
       }
     }
+    case "STOP_STREAMING_WITH_PARTIAL": {
+      const stream = state.activeChatStreams[action.conversationId]
+      const streamingMessageId = state.streamingMessageId ?? stream?.messageId
+      const activeChatStreams = { ...state.activeChatStreams }
+      delete activeChatStreams[action.conversationId]
+
+      const hasStreamingPayload =
+        state.streamingContent.length > 0 ||
+        state.streamingContentSegments.some(
+          (segment) => segment.content.length > 0
+        ) ||
+        state.streamingReasoning.length > 0
+
+      const existingConversation = state.conversations.find(
+        (conversation) => conversation.id === action.conversationId
+      )
+      const existingMessage = existingConversation?.messages.find(
+        (message) => message.id === streamingMessageId
+      )
+      const existingAssistantMessage =
+        existingMessage?.role === "assistant" ? existingMessage : undefined
+      const stoppedStreamingReasoning =
+        markReasoningStopped(state.streamingReasoning, action.timestamp) ??
+        []
+      const stoppedExistingReasoning = markReasoningStopped(
+        existingAssistantMessage?.reasoning,
+        action.timestamp
+      )
+
+      if (
+        !streamingMessageId ||
+        (!hasStreamingPayload && !existingAssistantMessage)
+      ) {
+        return {
+          ...state,
+          activeChatStreams,
+          ...stoppedStreamState,
+        }
+      }
+
+      const partialMessage: Message = hasStreamingPayload
+        ? {
+            ...existingAssistantMessage,
+            id: streamingMessageId,
+            role: "assistant",
+            content: state.streamingContent,
+            status: "aborted",
+            contentSegments: state.streamingContentSegments,
+            reasoning: stoppedStreamingReasoning,
+            thinkingDuration: state.thinkingDone
+              ? state.thinkingSeconds
+              : (existingAssistantMessage?.thinkingDuration ?? 0),
+            timestamp:
+              existingAssistantMessage?.timestamp ??
+              stream?.startedAt ??
+              action.timestamp,
+          }
+        : {
+            ...existingAssistantMessage!,
+            status: "aborted",
+            reasoning: stoppedExistingReasoning,
+            thinkingDuration: existingAssistantMessage!.thinkingDuration ?? 0,
+          }
+      const isNewMessage = !existingConversation?.messages.some(
+        (message) => message.id === partialMessage.id
+      )
+      const page = state.conversationMessagePages[action.conversationId]
+
+      return {
+        ...state,
+        activeChatStreams,
+        conversations: state.conversations.map((conv) =>
+          conv.id === action.conversationId
+            ? {
+                ...conv,
+                updatedAt: partialMessage.timestamp,
+                messageCount:
+                  (conv.messageCount ?? conv.messages.length) +
+                  (conv.messages.some((m) => m.id === partialMessage.id)
+                    ? 0
+                    : 1),
+                lastMessagePreview:
+                  partialMessage.content || conv.lastMessagePreview,
+                lastMessageAt: partialMessage.timestamp,
+                messages: conv.messages.some((m) => m.id === partialMessage.id)
+                  ? conv.messages.map((m) =>
+                      m.id === partialMessage.id ? partialMessage : m
+                    )
+                  : [...conv.messages, partialMessage],
+              }
+            : conv
+        ),
+        conversationMessagePages:
+          page && isNewMessage
+            ? {
+                ...state.conversationMessagePages,
+                [action.conversationId]: {
+                  ...page,
+                  total: page.total + 1,
+                  loadedCount: page.loadedCount + 1,
+                },
+              }
+            : state.conversationMessagePages,
+        ...stoppedStreamState,
+      }
+    }
     default:
       return state
   }
@@ -1222,9 +1362,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const stopStreaming = React.useCallback(() => {
     const conversationId = activeConversationIdRef.current
+    if (conversationId) {
+      streamDoneRef.current = true
+      dispatch({
+        type: "STOP_STREAMING_WITH_PARTIAL",
+        conversationId,
+        timestamp: Date.now(),
+      })
+    } else {
+      dispatch({ type: "SET_STREAMING", isStreaming: false })
+    }
     cleanupStream()
-    dispatch({ type: "SET_STREAMING", isStreaming: false })
-    if (conversationId) dispatch({ type: "CHAT_STREAM_ENDED", conversationId })
     if (conversationId) {
       fetch("/api/chat/stop", {
         method: "POST",
@@ -1404,7 +1552,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         streamingRef.current
       )
         return
-      dispatch({ type: "SET_STREAMING", isStreaming: Boolean(stream) })
+      dispatch({
+        type: "SET_STREAMING",
+        isStreaming: Boolean(stream),
+        messageId: stream?.messageId,
+      })
       if (stream) dispatch({ type: "CHAT_STREAM_STARTED", stream })
     })
 
@@ -1426,8 +1578,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           streamingRef.current
         )
           return
-        if (stream) dispatch({ type: "CHAT_STREAM_STARTED", stream })
-        else {
+        if (stream) {
+          dispatch({
+            type: "SET_STREAMING",
+            isStreaming: true,
+            messageId: stream.messageId,
+          })
+          dispatch({ type: "CHAT_STREAM_STARTED", stream })
+        } else {
           dispatch({ type: "SET_STREAMING", isStreaming: false })
           dispatch({ type: "CHAT_STREAM_ENDED", conversationId })
         }

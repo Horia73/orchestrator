@@ -20,6 +20,7 @@ import type {
 } from '@/lib/ai/agents/types'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { getToolsForBuiltins } from '@/lib/ai/tools/registry'
+import { latestUserMessageWithPortableHistory } from './history'
 
 const MAX_TOOL_ROUNDS = 25
 const FILES_API_POLL_INTERVAL_MS = 1000
@@ -241,11 +242,16 @@ export class GoogleProvider implements AIProvider {
                 input = ''
             }
         } else {
-            // Stateless: full history — resolve all messages (some may need Files API upload)
-            input = await Promise.all(options.messages.map(async m => ({
-                role: m.role === 'assistant' ? 'model' : 'user',
-                content: await this.buildMessageContent(m),
-            })))
+            const portableUserMessage = latestUserMessageWithPortableHistory(options.messages, false)
+            if (portableUserMessage && options.messages.length > 1) {
+                input = await this.buildMessageContent(portableUserMessage)
+            } else {
+                // Stateless first turn — resolve the message normally (may need Files API upload).
+                input = await Promise.all(options.messages.map(async m => ({
+                    role: m.role === 'assistant' ? 'model' : 'user',
+                    content: await this.buildMessageContent(m),
+                })))
+            }
         }
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

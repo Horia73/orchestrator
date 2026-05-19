@@ -507,8 +507,14 @@ export async function POST(request: Request) {
     extra: { appOrigin: requestOrigin },
   })
 
-  // Look up prior session — provider decides whether to actually resume.
-  const prevSession = getInteractionId(conversationId, agentSettings.provider)
+  // Look up prior session for this exact provider/model. If the user switched
+  // provider or model, we start a fresh provider session and send portable
+  // history instead of handing the new runtime an opaque old session id.
+  const prevSession = getInteractionId(
+    conversationId,
+    agentSettings.provider,
+    agentSettings.model
+  )
 
   // Create placeholder assistant message in DB
   const assistantMsg: Message = {
@@ -1241,6 +1247,7 @@ export async function POST(request: Request) {
                 updateInteractionId(
                   conversationId,
                   agentSettings.provider,
+                  agentSettings.model,
                   meta.sessionId
                 )
               }

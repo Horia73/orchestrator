@@ -84,7 +84,7 @@ export default function Page() {
             </div>
           </div>
         ) : state.activeConversationId ? (
-          <ChatView key={state.activeConversationId} />
+          <ChatView />
         ) : (
           <HomeView />
         )}

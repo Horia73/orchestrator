@@ -136,8 +136,12 @@ function hasLiveBrowserAgent(reasoning: ReasoningEntry[]): boolean {
             return false
         }
         if (entry.status === "running") return true
-        return /\bSession status:\s*awaiting_user\b/i.test(entry.content)
+        return isBrowserAgentAwaitingUser(entry)
     })
+}
+
+function isBrowserAgentAwaitingUser(entry: AgentCallReasoningEntry): boolean {
+    return /\bSession status:\s*awaiting_user\b/i.test(entry.content)
 }
 
 const MESSAGE_SELECTION_GUTTER_PX = 64
@@ -901,13 +905,19 @@ function BrowserAgentCallBlock({
     onOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment) => void
 }) {
+    const awaitingUser = isBrowserAgentAwaitingUser(entry)
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
             <div className="ml-7 grid w-[calc(100%_-_1.75rem)] max-w-[760px] gap-2">
-                <BrowserAgentLiveView active={entry.status === "running"} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
-                {entry.content.trim().length > 0 && (
-                    <div className="min-w-0 max-w-full overflow-x-auto rounded-[8px] border bg-muted/30 px-3 py-2 text-[13px] leading-relaxed">
-                        <MarkdownRenderer content={entry.content} />
+                <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                {awaitingUser && (
+                    <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">
+                        Browser is waiting for user input or confirmation.
+                    </div>
+                )}
+                {entry.status === "error" && entry.error && (
+                    <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-[13px] text-destructive">
+                        {entry.error}
                     </div>
                 )}
                 {!!entry.attachments?.length && (

@@ -18,6 +18,7 @@ import { resolveBin, augmentedEnv } from '@/lib/cli/resolve-bin'
 import { createBinding, clearBinding } from '@/lib/cli/mcp-bindings'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
+import { latestUserPromptWithPortableHistory } from './history'
 
 /**
  * Claude Code CLI provider — wraps the `claude` binary, no API key required.
@@ -79,11 +80,10 @@ export class ClaudeCodeProvider implements AIProvider {
 
     async stream(options: ProviderSendOptions, cb: StreamCallbacks): Promise<void> {
         // -p mode is single-turn: Claude Code receives ONE user message and
-        // produces ONE assistant turn. Conversation history is preserved on
-        // its side via `--resume <session-id>`. We pass only the latest user
-        // message — everything earlier already lives in the resumed session.
-        const lastUser = [...options.messages].reverse().find(m => m.role === 'user')
-        const prompt = lastUser?.content ?? ''
+        // produces ONE assistant turn. When resuming, earlier turns live in the
+        // resumed session; after a provider/model switch, we embed prior chat
+        // history in this one prompt so the fresh session can continue.
+        const prompt = latestUserPromptWithPortableHistory(options.messages, Boolean(options.prevSession?.id))
         if (!prompt.trim()) {
             cb.onError('claude-code: empty prompt')
             cb.onDone({})

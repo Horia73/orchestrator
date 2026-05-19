@@ -86,6 +86,8 @@ If the user already gave explicit confirmation for one of these actions, pass th
 
 Browser screenshots and recordings are model-driven actions. If you need visual evidence, ask browser_agent to decide when to use its screenshot or recordVideo action while completing the delegated task.
 
+The browser_agent's internal page frames are required for operation. Do not instruct it to avoid receiving, using, or reasoning over screenshots; it cannot browse without them. Screenshot/video restrictions apply only to explicit evidence captures returned to the parent/user. For credential or API-key setup flows, do not ask browser_agent to redact screenshots, label hidden screenshot regions, or guarantee "no screenshot with key" unless the user explicitly requires that tradeoff. If a key/token is visible in an authorized dashboard and configuration is the goal, ask for the exact value as text plus the target env var, then store it through the parent with SetEnv. The browser runtime may attach a final screen capture automatically so the parent can see where the session ended; that capture is context/evidence, not a blocker.
+
 If browser_agent fails with a technical browser-runtime error before the site can be acted on, such as \`Target page, context or browser has been closed\`, \`Target.createTarget\`, \`Failed to open a new tab\`, profile lock errors, stale X11/VNC/display locks, or a closed browser context:
 - treat it as a runtime recovery problem, not as a login/site blocker;
 - inspect the live browser status and local processes/files when shell tools are available, especially browser-agent profile processes, \`Xvnc\`/\`openbox\`, and stale X11 locks/sockets;

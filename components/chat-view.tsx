@@ -90,6 +90,55 @@ function migrateLegacyArtifact(stored: unknown): ArtifactState | null {
   return null
 }
 
+// Per-conversation view state that the mount initializers below seed from
+// localStorage. Extracted so the conversation-switch reset effect can replay
+// the exact same logic without a component remount.
+function readSavedMinHeightState(conversationId: string | null): {
+  minHeight: number
+  minHeightMsgId: string | null
+} {
+  if (typeof window === "undefined" || !conversationId)
+    return { minHeight: 0, minHeightMsgId: null }
+  const saved = localStorage.getItem(`chat:minHeight:${conversationId}`)
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved)
+      const savedViewportHeight =
+        typeof parsed.viewportHeight === "number" ? parsed.viewportHeight : 0
+      if (
+        savedViewportHeight > 0 &&
+        Math.abs(savedViewportHeight - window.innerHeight) > 96
+      ) {
+        return { minHeight: 0, minHeightMsgId: null }
+      }
+      return {
+        minHeight: parsed.minHeight || 0,
+        minHeightMsgId: parsed.minHeightMsgId || null,
+      }
+    } catch {}
+  }
+  return { minHeight: 0, minHeightMsgId: null }
+}
+
+function readSavedArtifactState(conversationId: string | null): {
+  artifact: ArtifactState | null
+  artifactOpen: boolean
+} {
+  if (typeof window === "undefined" || !conversationId)
+    return { artifact: null, artifactOpen: false }
+  const saved = localStorage.getItem(`chat:artifact:${conversationId}`)
+  if (saved) {
+    try {
+      const parsed = JSON.parse(saved)
+      return {
+        artifact: migrateLegacyArtifact(parsed.artifact),
+        artifactOpen: Boolean(parsed.artifactOpen),
+      }
+    } catch {}
+  }
+  return { artifact: null, artifactOpen: false }
+}
+
 function hashStorageKey(value: string): string {
   let hash = 5381
   for (let i = 0; i < value.length; i++) {
@@ -421,10 +470,55 @@ function BrowserAgentOutputTerminal({ run }: { run: AgentCallReasoningEntry }) {
 function browserAgentTerminalText(run: AgentCallReasoningEntry): string {
   const segmentedContent = run.contentSegments?.map((segment) => segment.content).join("") ?? ""
   const content = run.content || segmentedContent
-  if (content) return content.endsWith("\n") ? content : `${content}\n`
+  const liveText = browserAgentReasoningTerminalText(run.reasoning)
+  if (run.status === "running" && liveText) return normalizeTerminalText(liveText)
+  if (liveText && content) {
+    return normalizeTerminalText(
+      joinTerminalSections([liveText, stripBrowserAgentTerminalTranscript(content)])
+    )
+  }
+  if (content) {
+    return normalizeTerminalText(stripBrowserAgentTerminalTranscript(content) || content)
+  }
+  if (liveText) return normalizeTerminalText(liveText)
   if (run.error) return `Error: ${run.error}\n`
   if (run.status === "running") return "Browser agent is running...\n"
   return "No output yet.\n"
+}
+
+function browserAgentReasoningTerminalText(reasoning?: ReasoningEntry[]): string {
+  if (!reasoning?.length) return ""
+  return reasoning.map(reasoningEntryTerminalText).filter(Boolean).join("")
+}
+
+function reasoningEntryTerminalText(entry: ReasoningEntry): string {
+  if (entry.type === "thought") return entry.content
+  if (entry.type === "tool_call") {
+    const streamed = entry.deltas?.map((delta) => delta.text).join("") ?? ""
+    if (streamed) return streamed
+    if (entry.content) return `${entry.title}\n${entry.content}\n`
+    if (entry.status === "running") return `${entry.title}...\n`
+    return ""
+  }
+  if (entry.type === "agent_call") {
+    return browserAgentReasoningTerminalText(entry.reasoning)
+  }
+  return ""
+}
+
+function stripBrowserAgentTerminalTranscript(content: string): string {
+  return content.replace(/\nTerminal output:\n```text\n[\s\S]*?\n```\n?/g, "\n").trimEnd()
+}
+
+function joinTerminalSections(sections: string[]): string {
+  return sections
+    .map((section) => section.trimEnd())
+    .filter(Boolean)
+    .join("\n\n")
+}
+
+function normalizeTerminalText(text: string): string {
+  return text.endsWith("\n") ? text : `${text}\n`
 }
 
 export function ChatView() {
@@ -462,51 +556,11 @@ export function ChatView() {
 
   // minHeight approach: streaming bubble / last AI message gets minHeight to push
   // user message to the top and give AI room to respond.
-  const [minHeight, setMinHeight] = React.useState(() => {
-    if (typeof window === "undefined") return 0
-    const saved = localStorage.getItem(
-      `chat:minHeight:${state.activeConversationId}`
-    )
-    if (saved) {
-      try {
-        const parsed = JSON.parse(saved)
-        const savedViewportHeight =
-          typeof parsed.viewportHeight === "number" ? parsed.viewportHeight : 0
-        if (
-          savedViewportHeight > 0 &&
-          Math.abs(savedViewportHeight - window.innerHeight) > 96
-        ) {
-          return 0
-        }
-        return parsed.minHeight || 0
-      } catch {}
-    }
-    return 0
-  })
+  const [minHeight, setMinHeight] = React.useState(
+    () => readSavedMinHeightState(state.activeConversationId).minHeight
+  )
   const [minHeightMsgId, setMinHeightMsgId] = React.useState<string | null>(
-    () => {
-      if (typeof window === "undefined") return null
-      const saved = localStorage.getItem(
-        `chat:minHeight:${state.activeConversationId}`
-      )
-      if (saved) {
-        try {
-          const parsed = JSON.parse(saved)
-          const savedViewportHeight =
-            typeof parsed.viewportHeight === "number"
-              ? parsed.viewportHeight
-              : 0
-          if (
-            savedViewportHeight > 0 &&
-            Math.abs(savedViewportHeight - window.innerHeight) > 96
-          ) {
-            return null
-          }
-          return parsed.minHeightMsgId || null
-        } catch {}
-      }
-      return null
-    }
+    () => readSavedMinHeightState(state.activeConversationId).minHeightMsgId
   )
   // null  → streaming bubble holds the minHeight
   // string → committed AI message with that id holds it
@@ -520,30 +574,13 @@ export function ChatView() {
     minHeightActiveRef.current = minHeight > 0
   }, [minHeight])
 
-  const [artifact, setArtifact] = React.useState<ArtifactState | null>(() => {
-    if (typeof window === "undefined") return null
-    const saved = localStorage.getItem(
-      `chat:artifact:${state.activeConversationId}`
-    )
-    if (saved) {
-      try {
-        return migrateLegacyArtifact(JSON.parse(saved).artifact)
-      } catch {}
-    }
-    return null
-  })
-  const [artifactOpen, setArtifactOpen] = React.useState(() => {
-    if (typeof window === "undefined") return false
-    const saved = localStorage.getItem(
-      `chat:artifact:${state.activeConversationId}`
-    )
-    if (saved) {
-      try {
-        return JSON.parse(saved).artifactOpen
-      } catch {}
-    }
-    return false
-  })
+  const [artifact, setArtifact] = React.useState<ArtifactState | null>(
+    () => readSavedArtifactState(state.activeConversationId).artifact
+  )
+  const [artifactOpen, setArtifactOpen] = React.useState(
+    () => readSavedArtifactState(state.activeConversationId).artifactOpen
+  )
+  const [genArtifact, setGenArtifact] = React.useState<ArtifactRow | null>(null)
   const [showScrollBtn, setShowScrollBtn] = React.useState(false)
   const [isRestoringScroll, setIsRestoringScroll] = React.useState(false)
   const [isScrollJumpFading, setIsScrollJumpFading] = React.useState(false)
@@ -649,13 +686,74 @@ export function ChatView() {
     () => agentRuns.find((run) => run.runId === activeAgentRunId) ?? null,
     [agentRuns, activeAgentRunId]
   )
+  const [cachedActiveAgentRun, setCachedActiveAgentRun] = React.useState<{
+    conversationId: string | null
+    run: AgentCallReasoningEntry
+  } | null>(null)
+  const activePanelAgentRun =
+    activeAgentRun ??
+    (activeAgentRunId &&
+    cachedActiveAgentRun?.conversationId === conversationId &&
+    cachedActiveAgentRun.run.runId === activeAgentRunId
+      ? cachedActiveAgentRun.run
+      : null)
   const activeChildAgentRun = React.useMemo(
     () =>
-      activeAgentRun
-        ? agentRuns.find((run) => run.parentRunId === activeAgentRun.runId)
+      activePanelAgentRun
+        ? agentRuns.find((run) => run.parentRunId === activePanelAgentRun.runId)
         : undefined,
-    [agentRuns, activeAgentRun]
+    [agentRuns, activePanelAgentRun]
   )
+
+  React.useEffect(() => {
+    if (activeAgentRun) {
+      setCachedActiveAgentRun((current) =>
+        current?.conversationId === conversationId &&
+        current.run === activeAgentRun
+          ? current
+          : { conversationId, run: activeAgentRun }
+      )
+    } else if (!activeAgentRunId) {
+      setCachedActiveAgentRun(null)
+    }
+  }, [activeAgentRun, activeAgentRunId, conversationId])
+
+  // ChatView is intentionally NOT remounted on conversation switch (no `key`
+  // in page.tsx) — remounting re-parses every message's markdown and re-imports
+  // Shiki, which costs ~5s on mobile. Most per-conversation state already
+  // resets via effects/refs keyed on conversationId (scroll restore, artifact
+  // panel width, the gen-artifact fetch). This effect closes the remaining gap:
+  // state that the mount initializers seed and nothing else re-derives on a
+  // switch. It runs before paint (layout effect) and before the scroll-restore
+  // layout effect below, so geometry is correct when restore reads it. Skips
+  // the first mount — the useState initializers already handled that.
+  const resetPrevConversationIdRef = React.useRef(conversationId)
+  React.useLayoutEffect(() => {
+    if (resetPrevConversationIdRef.current === conversationId) return
+    resetPrevConversationIdRef.current = conversationId
+    if (!conversationId) return
+
+    const savedMinHeight = readSavedMinHeightState(conversationId)
+    setMinHeight(savedMinHeight.minHeight)
+    setMinHeightMsgId(savedMinHeight.minHeightMsgId)
+
+    const savedArtifact = readSavedArtifactState(conversationId)
+    setArtifact(savedArtifact.artifact)
+    setArtifactOpen(savedArtifact.artifactOpen)
+    // The conversation-keyed fetch effect re-populates this if the new chat
+    // has a saved gen-artifact; clearing first prevents the previous chat's
+    // panel from lingering when the new one has none.
+    setGenArtifact(null)
+    setActiveAgentRunId(null)
+    setPreviewAttachment(null)
+
+    // Mirror a fresh mount for the transient scroll bookkeeping the
+    // scroll-restore effect expects clean for a new conversation.
+    restoreOlderAttemptRef.current = null
+    olderLoadAnchorRef.current = null
+    olderLoadRequestedRef.current = false
+    wasStreamingRef.current = false
+  }, [conversationId])
 
   const scrollToBottom = React.useCallback(
     (
@@ -1615,8 +1713,6 @@ export function ChatView() {
   // user clicks "↗ Expand" on an inline ArtifactInline card OR the model
   // chooses `display="panel"`, we surface the new ArtifactPanel here.
   // Sidebar collapses just like the legacy flow.
-  const [genArtifact, setGenArtifact] = React.useState<ArtifactRow | null>(null)
-
   const restoreSidebar = React.useCallback(() => {
     if (sidebarWasOpenRef.current) {
       setSidebarOpen(true)
@@ -1640,7 +1736,7 @@ export function ChatView() {
       }
 
       const panelAlreadyOpen =
-        artifactOpen || Boolean(genArtifact) || Boolean(activeAgentRun)
+        artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
       if (!panelAlreadyOpen) {
         sidebarWasOpenRef.current = sidebarOpen
       }
@@ -1657,7 +1753,7 @@ export function ChatView() {
       setSidebarOpen(false)
     },
     [
-      activeAgentRun,
+      activePanelAgentRun,
       artifact,
       artifactOpen,
       genArtifact,
@@ -1697,7 +1793,7 @@ export function ChatView() {
         return
       }
       const panelAlreadyOpen =
-        artifactOpen || Boolean(genArtifact) || Boolean(activeAgentRun)
+        artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
       if (!panelAlreadyOpen) {
         sidebarWasOpenRef.current = sidebarOpen
       }
@@ -1707,7 +1803,7 @@ export function ChatView() {
       setSidebarOpen(false)
     },
     [
-      activeAgentRun,
+      activePanelAgentRun,
       artifactOpen,
       setSidebarOpen,
       sidebarOpen,
@@ -1719,7 +1815,7 @@ export function ChatView() {
   const handleAgentOpen = React.useCallback(
     (run: AgentCallReasoningEntry) => {
       const panelAlreadyOpen =
-        artifactOpen || Boolean(genArtifact) || Boolean(activeAgentRun)
+        artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
       if (!panelAlreadyOpen) {
         sidebarWasOpenRef.current = sidebarOpen
       }
@@ -1728,7 +1824,7 @@ export function ChatView() {
       setGenArtifact(null)
       setSidebarOpen(false)
     },
-    [activeAgentRun, artifactOpen, genArtifact, setSidebarOpen, sidebarOpen]
+    [activePanelAgentRun, artifactOpen, genArtifact, setSidebarOpen, sidebarOpen]
   )
 
   const handleAgentClose = React.useCallback(() => {
@@ -1737,13 +1833,13 @@ export function ChatView() {
   }, [restoreSidebar])
 
   const hasArtifact =
-    (artifactOpen && !!artifact) || !!genArtifact || !!activeAgentRun
+    (artifactOpen && !!artifact) || !!genArtifact || !!activePanelAgentRun
   const activeArtifactResizeKey = React.useMemo(() => {
-    if (activeAgentRun) return `agent:${activeAgentRun.runId}`
+    if (activePanelAgentRun) return `agent:${activePanelAgentRun.runId}`
     if (genArtifact) return `generated:${genArtifact.identifier}`
     if (artifactOpen && artifact) return `legacy:${artifactKey(artifact)}`
     return null
-  }, [activeAgentRun, artifact, artifactOpen, genArtifact])
+  }, [activePanelAgentRun, artifact, artifactOpen, genArtifact])
   const isAwaitingInitialScrollRestore = Boolean(
     conversationId &&
       messageCount > 0 &&
@@ -2168,26 +2264,29 @@ export function ChatView() {
                         <div
                           ref={streamingBubbleContainerRef}
                           className="-ml-16 w-[calc(100%+4rem)] pl-16"
+                          aria-hidden={!state.isStreaming}
                           style={
                             minHeight > 0 && minHeightMsgId === null
                               ? { minHeight }
                               : undefined
                           }
                         >
-                          <StreamingBubble
-                            reasoning={state.streamingReasoning}
-                            content={state.streamingContent}
-                            contentSegments={state.streamingContentSegments}
-                            streamingMode={state.streamingMode}
-                            showCursor={showInitialStreamingCursor}
-                            onArtifactClick={handleArtifactClick}
-                            onArtifactExpand={handleArtifactExpand}
-                            onAgentOpen={handleAgentOpen}
-                            onAttachmentClick={setPreviewAttachment}
-                            messageId={state.streamingMessageId ?? undefined}
-                            thinkingSeconds={state.thinkingSeconds}
-                            thinkingDone={state.thinkingDone}
-                          />
+                          {state.isStreaming && (
+                            <StreamingBubble
+                              reasoning={state.streamingReasoning}
+                              content={state.streamingContent}
+                              contentSegments={state.streamingContentSegments}
+                              streamingMode={state.streamingMode}
+                              showCursor={showInitialStreamingCursor}
+                              onArtifactClick={handleArtifactClick}
+                              onArtifactExpand={handleArtifactExpand}
+                              onAgentOpen={handleAgentOpen}
+                              onAttachmentClick={setPreviewAttachment}
+                              messageId={state.streamingMessageId ?? undefined}
+                              thinkingSeconds={state.thinkingSeconds}
+                              thinkingDone={state.thinkingDone}
+                            />
+                          )}
                         </div>
                       )}
                     </>
@@ -2218,7 +2317,7 @@ export function ChatView() {
               <TodoBar
                 messages={activeConversation.messages}
                 streamingReasoning={
-                  showStreamingBubble ? state.streamingReasoning : []
+                  state.isStreaming ? state.streamingReasoning : []
                 }
               />
               <ChatInput variant="chat" />
@@ -2279,9 +2378,9 @@ export function ChatView() {
                 : "pointer-events-none translate-x-4 opacity-0"
             )}
           >
-            {activeAgentRun ? (
+            {activePanelAgentRun ? (
               <AgentWorkspacePanel
-                run={activeAgentRun}
+                run={activePanelAgentRun}
                 childRun={activeChildAgentRun}
                 onClose={handleAgentClose}
                 onAttachmentClick={setPreviewAttachment}
@@ -2310,9 +2409,9 @@ export function ChatView() {
             aria-label="Artifact panel"
             className="fixed inset-0 z-50 bg-background md:hidden"
           >
-            {activeAgentRun ? (
+            {activePanelAgentRun ? (
               <AgentWorkspacePanel
-                run={activeAgentRun}
+                run={activePanelAgentRun}
                 childRun={activeChildAgentRun}
                 onClose={handleAgentClose}
                 onAttachmentClick={setPreviewAttachment}

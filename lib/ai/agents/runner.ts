@@ -73,7 +73,7 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId } = args
     const runtime = resolveAgentRuntimeSettings(target)
-    const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider) : null
+    const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
     if (agentThreadId) touchAgentThreadRuntime(agentThreadId, runtime.provider, runtime.model)
 
     if (!runtime.provider || !runtime.model) {
@@ -338,7 +338,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                     outputText: accContent || null,
                 })
                 if (agentThreadId && meta.sessionId) {
-                    updateAgentThreadInteractionId(agentThreadId, runtime.provider, meta.sessionId)
+                    updateAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model, meta.sessionId)
                 }
             },
             onError(err) {

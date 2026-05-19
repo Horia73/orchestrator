@@ -40,6 +40,7 @@ db.exec(`
         createdAt INTEGER NOT NULL,
         updatedAt INTEGER NOT NULL,
         lastInteractionProvider TEXT,
+        lastInteractionModel TEXT,
         lastInteractionId TEXT,
         lastInteractionAt INTEGER,
         contextUsage TEXT,
@@ -121,6 +122,7 @@ db.exec(`
         provider TEXT,
         model TEXT,
         lastInteractionProvider TEXT,
+        lastInteractionModel TEXT,
         lastInteractionId TEXT,
         lastInteractionAt INTEGER,
         status TEXT NOT NULL DEFAULT 'active',
@@ -228,7 +230,17 @@ try {
   /* column already exists */
 }
 try {
+  db.exec(`ALTER TABLE conversations ADD COLUMN lastInteractionModel TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
   db.exec(`ALTER TABLE conversations ADD COLUMN lastInteractionAt INTEGER`)
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(`ALTER TABLE agent_threads ADD COLUMN lastInteractionModel TEXT`)
 } catch {
   /* column already exists */
 }
@@ -526,6 +538,7 @@ export interface AgentThread {
   provider: string | null
   model: string | null
   lastInteractionProvider: string | null
+  lastInteractionModel: string | null
   lastInteractionId: string | null
   lastInteractionAt: number | null
   status: AgentThreadStatus
@@ -894,12 +907,14 @@ export function addMessage(conversationId: string, message: Message) {
 export function updateInteractionId(
   conversationId: string,
   provider: string,
+  model: string,
   interactionId: string
 ) {
   db.prepare(
     `
         UPDATE conversations
         SET lastInteractionProvider = @provider,
+            lastInteractionModel = @model,
             lastInteractionId = @interactionId,
             lastInteractionAt = @now,
             updatedAt = @now
@@ -908,6 +923,7 @@ export function updateInteractionId(
   ).run({
     conversationId,
     provider,
+    model,
     interactionId,
     now: Date.now(),
   })
@@ -966,15 +982,17 @@ export function updateConversationContextUsage(
 
 export function getInteractionId(
   conversationId: string,
-  provider: string
+  provider: string,
+  model: string
 ): { id: string; at: number } | null {
   const row = db
     .prepare(
-      "SELECT lastInteractionProvider, lastInteractionId, lastInteractionAt FROM conversations WHERE id = ?"
+      "SELECT lastInteractionProvider, lastInteractionModel, lastInteractionId, lastInteractionAt FROM conversations WHERE id = ?"
     )
     .get(conversationId) as
     | {
         lastInteractionProvider: string | null
+        lastInteractionModel: string | null
         lastInteractionId: string | null
         lastInteractionAt: number | null
       }
@@ -982,30 +1000,59 @@ export function getInteractionId(
 
   if (!row?.lastInteractionId || !row.lastInteractionAt) return null
   if (row.lastInteractionProvider) {
-    return row.lastInteractionProvider === provider
+    if (row.lastInteractionProvider !== provider) return null
+    if (row.lastInteractionModel) {
+      return row.lastInteractionModel === model
+        ? { id: row.lastInteractionId, at: row.lastInteractionAt }
+        : null
+    }
+
+    return interactionLogMatches({
+      conversationId,
+      interactionId: row.lastInteractionId,
+      provider,
+      model,
+    })
       ? { id: row.lastInteractionId, at: row.lastInteractionAt }
       : null
   }
 
   // Backward compatibility for rows created before interaction ids were
-  // provider-scoped. Use the request log that produced the same interaction
-  // id; if we cannot prove the provider matches, do not resume.
+  // provider/model-scoped. Use the request log that produced the same
+  // interaction id; if we cannot prove both match, do not resume.
+  if (
+    !interactionLogMatches({
+      conversationId,
+      interactionId: row.lastInteractionId,
+      provider,
+      model,
+    })
+  )
+    return null
+  return { id: row.lastInteractionId, at: row.lastInteractionAt }
+}
+
+function interactionLogMatches(args: {
+  conversationId: string
+  interactionId: string
+  provider: string
+  model: string
+}): boolean {
   const legacy = db
     .prepare(
       `
-        SELECT provider
+        SELECT provider, model
         FROM request_logs
         WHERE conversationId = ? AND interactionId = ?
         ORDER BY endedAt DESC, startedAt DESC
         LIMIT 1
     `
     )
-    .get(conversationId, row.lastInteractionId) as
-    | { provider: string }
+    .get(args.conversationId, args.interactionId) as
+    | { provider: string; model: string }
     | undefined
 
-  if (legacy?.provider !== provider) return null
-  return { id: row.lastInteractionId, at: row.lastInteractionAt }
+  return legacy?.provider === args.provider && legacy.model === args.model
 }
 
 function normalizeAgentThread(row: AgentThread): AgentThread {
@@ -1016,6 +1063,7 @@ function normalizeAgentThread(row: AgentThread): AgentThread {
     provider: row.provider ?? null,
     model: row.model ?? null,
     lastInteractionProvider: row.lastInteractionProvider ?? null,
+    lastInteractionModel: row.lastInteractionModel ?? null,
     lastInteractionId: row.lastInteractionId ?? null,
     lastInteractionAt: row.lastInteractionAt ?? null,
     status: row.status === "archived" ? "archived" : "active",
@@ -1248,12 +1296,14 @@ export function touchAgentThreadRuntime(
 export function updateAgentThreadInteractionId(
   threadId: string,
   provider: string,
+  model: string,
   interactionId: string
 ) {
   db.prepare(
     `
         UPDATE agent_threads
         SET lastInteractionProvider = @provider,
+            lastInteractionModel = @model,
             lastInteractionId = @interactionId,
             lastInteractionAt = @now,
             updatedAt = @now
@@ -1262,6 +1312,7 @@ export function updateAgentThreadInteractionId(
   ).run({
     threadId,
     provider,
+    model,
     interactionId,
     now: Date.now(),
   })
@@ -1269,12 +1320,13 @@ export function updateAgentThreadInteractionId(
 
 export function getAgentThreadInteractionId(
   threadId: string,
-  provider: string
+  provider: string,
+  model: string
 ): { id: string; at: number } | null {
   const row = db
     .prepare(
       `
-        SELECT lastInteractionProvider, lastInteractionId, lastInteractionAt
+        SELECT lastInteractionProvider, lastInteractionModel, lastInteractionId, lastInteractionAt
         FROM agent_threads
         WHERE id = ?
     `
@@ -1282,6 +1334,7 @@ export function getAgentThreadInteractionId(
     .get(threadId) as
     | {
         lastInteractionProvider: string | null
+        lastInteractionModel: string | null
         lastInteractionId: string | null
         lastInteractionAt: number | null
       }
@@ -1290,7 +1343,44 @@ export function getAgentThreadInteractionId(
   if (!row?.lastInteractionId || !row.lastInteractionAt) return null
   if (row.lastInteractionProvider && row.lastInteractionProvider !== provider)
     return null
+  if (row.lastInteractionModel) {
+    return row.lastInteractionModel === model
+      ? { id: row.lastInteractionId, at: row.lastInteractionAt }
+      : null
+  }
+  if (
+    !agentThreadInteractionLogMatches({
+      threadId,
+      interactionId: row.lastInteractionId,
+      provider,
+      model,
+    })
+  )
+    return null
   return { id: row.lastInteractionId, at: row.lastInteractionAt }
+}
+
+function agentThreadInteractionLogMatches(args: {
+  threadId: string
+  interactionId: string
+  provider: string
+  model: string
+}): boolean {
+  const legacy = db
+    .prepare(
+      `
+        SELECT provider, model
+        FROM request_logs
+        WHERE agentThreadId = ? AND interactionId = ?
+        ORDER BY endedAt DESC, startedAt DESC
+        LIMIT 1
+    `
+    )
+    .get(args.threadId, args.interactionId) as
+    | { provider: string; model: string }
+    | undefined
+
+  return legacy?.provider === args.provider && legacy.model === args.model
 }
 
 function cleanAgentThreadTitle(title: string | null | undefined): string {

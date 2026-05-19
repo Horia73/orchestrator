@@ -158,6 +158,25 @@ class BrowserSessionManager {
         this.scheduleCleanup()
     }
 
+    async captureSessionScreenshot(sessionId: string, filenameBase = 'browser-final-screen'): Promise<BrowserEvidenceCapture | null> {
+        const session = this.sessions.get(sessionId)
+        if (!session) return null
+
+        const frame = await session.pageSession.captureAgentFrame()
+        session.lastUsedAt = Date.now()
+        return {
+            kind: 'screenshot',
+            mimeType: 'image/jpeg',
+            data: Buffer.from(frame.imageBase64, 'base64'),
+            filenameBase,
+            timestamp: frame.timestamp,
+            url: frame.url,
+            captureMode: frame.captureMode,
+            viewport: frame.viewport,
+            page: frame.page,
+        }
+    }
+
     async closeSession(sessionId: string): Promise<boolean> {
         const session = this.sessions.get(sessionId)
         if (!session) return false

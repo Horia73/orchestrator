@@ -9,8 +9,10 @@ import type {
 } from '@/lib/ai/agents/types'
 import { saveGeneratedAsset } from '@/lib/ai/media-assets'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
+import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ThinkingLevel } from '@/lib/config'
+import { latestUserPromptWithPortableHistory } from './history'
 
 const TASK_POLL_INTERVAL_MS = 500
 const TASK_TIMEOUT_MS = 10 * 60 * 1000
@@ -36,7 +38,7 @@ export class BrowserProvider implements AIProvider {
     }
 
     async stream(options: ProviderSendOptions, callbacks: StreamCallbacks): Promise<void> {
-        const goal = latestUserMessage(options).trim()
+        const goal = latestUserPromptWithPortableHistory(options.messages, Boolean(options.prevSession?.id)).trim()
         if (!goal) {
             callbacks.onError('Browser agent requires a non-empty task prompt.')
             throw new Error('Browser agent requires a non-empty task prompt.')
@@ -60,6 +62,20 @@ export class BrowserProvider implements AIProvider {
             return true
         }
         const evidenceAssets: GeneratedMediaAsset[] = []
+        const saveEvidenceCapture = (capture: BrowserEvidenceCapture, labelOverride?: string) => {
+            const asset = saveGeneratedAsset(capture.data, capture.mimeType, capture.filenameBase)
+            evidenceAssets.push(asset)
+            const label = labelOverride ?? (
+                capture.kind === 'video'
+                    ? `Browser video (${Math.round(capture.durationMs / 1000)}s)`
+                    : 'Browser screenshot'
+            )
+            callbacks.onContent(`${label}: [${asset.attachment.filename}](${asset.url})\n`)
+            const message = `Saved ${label.toLowerCase()} (${asset.attachment.filename}).`
+            recordStatus(message)
+            callbacks.onThinking(`${message}\n`)
+            return asset
+        }
         const sessionManager = getBrowserSessionManager()
         const runtimeConfig = buildBrowserRuntimeConfig()
         const lease = await sessionManager.acquire({
@@ -71,15 +87,7 @@ export class BrowserProvider implements AIProvider {
                 callbacks.onThinking(`${message}\n`)
             },
             onEvidence(capture) {
-                const asset = saveGeneratedAsset(capture.data, capture.mimeType, capture.filenameBase)
-                evidenceAssets.push(asset)
-                const label = capture.kind === 'video'
-                    ? `Browser video (${Math.round(capture.durationMs / 1000)}s)`
-                    : 'Browser screenshot'
-                callbacks.onContent(`${label}: [${asset.attachment.filename}](${asset.url})\n`)
-                const message = `Saved ${label.toLowerCase()} (${asset.attachment.filename}).`
-                recordStatus(message)
-                callbacks.onThinking(`${message}\n`)
+                saveEvidenceCapture(capture)
             },
         })
         const runtime = lease.runtime
@@ -127,6 +135,11 @@ export class BrowserProvider implements AIProvider {
 
             const managedStatus = sessionManager.markFromRuntimeStatus(lease.id, finalStatus)
             statusMarked = true
+            const finalCapture = await sessionManager.captureSessionScreenshot(lease.id)
+                .catch(() => null)
+            if (finalCapture) {
+                saveEvidenceCapture(finalCapture, 'Browser final screen')
+            }
             const finalMessage = formatBrowserRunOutput(
                 finalStatus.lastStatusMessage || lastStatusMessage,
                 finalStatus.currentUrl,
@@ -185,14 +198,6 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
             advancedThinkingLevel: mapAdvancedThinkingLevel(pro.thinkingLevel),
         },
     }
-}
-
-function latestUserMessage(options: ProviderSendOptions): string {
-    for (let i = options.messages.length - 1; i >= 0; i--) {
-        const message = options.messages[i]
-        if (message.role === 'user' && typeof message.content === 'string') return message.content
-    }
-    return ''
 }
 
 function mapThinkingLevel(level: ThinkingLevel | undefined): BrowserThinkingLevel {

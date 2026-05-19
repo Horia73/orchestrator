@@ -14,6 +14,7 @@ import { resolveBin } from '@/lib/cli/resolve-bin'
 import { codexCliEnv } from '@/lib/cli/codex-env'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { latestUserPromptWithPortableHistory } from './history'
 
 /**
  * Codex provider backed by `codex app-server`.
@@ -50,8 +51,8 @@ export class CodexProvider implements AIProvider {
     }
 
     async stream(options: ProviderSendOptions, cb: StreamCallbacks): Promise<void> {
-        const lastUser = [...options.messages].reverse().find(m => m.role === 'user')
-        const userPrompt = lastUser?.content ?? ''
+        const prevSessionId = decodeAppServerSessionId(options.prevSession?.id)
+        const userPrompt = latestUserPromptWithPortableHistory(options.messages, Boolean(prevSessionId))
         if (!userPrompt.trim()) {
             cb.onError('codex: empty prompt')
             cb.onDone({})
@@ -73,7 +74,7 @@ export class CodexProvider implements AIProvider {
             tools,
             builtins: options.builtins ?? [],
             toolContext: options.toolContext,
-            prevSessionId: decodeAppServerSessionId(options.prevSession?.id),
+            prevSessionId,
             nativeCoderRun: isNativeCoderRun,
             signal: options.signal,
             callbacks: cb,
