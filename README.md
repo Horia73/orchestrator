@@ -184,6 +184,7 @@ Important variables:
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`: Google Workspace and Gmail OAuth.
 - `HOME_ASSISTANT_URL` / `HOME_ASSISTANT_TOKEN`: Home Assistant integration.
 - `WHATSAPP_CHROME_EXECUTABLE_PATH`: browser executable override for WhatsApp.
+- `WHATSAPP_USER_AGENT`: optional WhatsApp Web browser user-agent override.
 - `BROWSER_AGENT_LIVE_VIEW`: enables live browser view on Linux/Docker.
 
 For native installs, runtime workspace state and editable app files live under `.orchestrator/` in the checkout. For managed installs, that is usually `~/.orchestrator/app/.orchestrator`.

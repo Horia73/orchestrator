@@ -991,7 +991,7 @@ function WhatsAppCard({
                         {entry.browserExecutablePath ? shortPath(entry.browserExecutablePath) : "Chrome/Chromium not found"}
                     </span>
                     <span className="text-foreground/55">Mode</span>
-                    <span className="text-foreground/75">Read-only tools only</span>
+                    <span className="text-foreground/75">Reads plus confirmed writes</span>
                 </div>
 
                 {qrSrc && (
@@ -1321,8 +1321,8 @@ function WhatsAppSetupGuide() {
             <div className="mt-2 grid gap-2 border-t border-border/60 pt-2 text-[12px] leading-relaxed text-foreground/60">
                 <p>Use Connect to start a local WhatsApp Web session. A QR code appears in this card.</p>
                 <p>On your phone, open WhatsApp, go to Settings or Menu, choose Linked devices, then Link a device.</p>
-                <p>Scan the QR code. Orchestrator stores the browser session locally and exposes read-only chat tools to the main agent.</p>
-                <p>This uses your own WhatsApp Web session. No send, delete, archive, or mark-read tool is enabled.</p>
+                <p>Scan the QR code. Orchestrator stores the browser session locally and exposes WhatsApp tools to the main agent.</p>
+                <p>Messages, photos, files, and delete-for-everyone actions require explicit confirmation before they run.</p>
             </div>
         </details>
     )

@@ -154,6 +154,9 @@ export const WHATSAPP_TOOL_IDS: string[] = [
     'WhatsAppUnreadSummary',
     'WhatsAppReadChat',
     'WhatsAppSearchMessages',
+    'WhatsAppSendMessage',
+    'WhatsAppSendMedia',
+    'WhatsAppDeleteMessageForEveryone',
 ]
 
 export const HOME_ASSISTANT_TOOL_IDS: string[] = [

@@ -161,9 +161,12 @@ import {
 } from './home-assistant'
 import {
     executeWhatsAppConnect,
+    executeWhatsAppDeleteMessageForEveryone,
     executeWhatsAppListChats,
     executeWhatsAppReadChat,
     executeWhatsAppSearchMessages,
+    executeWhatsAppSendMedia,
+    executeWhatsAppSendMessage,
     executeWhatsAppStatus,
     executeWhatsAppUnreadSummary,
 } from './whatsapp'
@@ -340,6 +343,9 @@ const executors: Record<string, ToolExecutor> = {
     WhatsAppUnreadSummary: executeWhatsAppUnreadSummary,
     WhatsAppReadChat: executeWhatsAppReadChat,
     WhatsAppSearchMessages: executeWhatsAppSearchMessages,
+    WhatsAppSendMessage: executeWhatsAppSendMessage,
+    WhatsAppSendMedia: executeWhatsAppSendMedia,
+    WhatsAppDeleteMessageForEveryone: executeWhatsAppDeleteMessageForEveryone,
     schedule_task: executeScheduleTask,
     list_tasks: executeListTasks,
     cancel_task: executeCancelTask,

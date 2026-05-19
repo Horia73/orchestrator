@@ -19,8 +19,12 @@ interface InlineToolCallViewProps {
 
 type ParsedData = Record<string, unknown> | null
 
-const TOOL_CALL_PANEL_HEIGHT_CLASS = "max-h-[min(230px,calc(100vh-360px))]"
-const TOOL_CALL_TERMINAL_HEIGHT_CLASS = "h-[min(230px,calc(100vh-360px))]"
+const TOOL_CALL_PANEL_HEIGHT = "min(230px, calc(100vh - 360px))"
+const TOOL_CALL_PANEL_MIN_HEIGHT = "160px"
+const TOOL_CALL_PANEL_STYLE: React.CSSProperties = {
+    height: TOOL_CALL_PANEL_HEIGHT,
+    minHeight: TOOL_CALL_PANEL_MIN_HEIGHT,
+}
 
 export function InlineToolCallView({ entry, searchDisplay = "expanded" }: InlineToolCallViewProps) {
     const status = entry.status ?? (entry.content ? (entry.success === false ? "error" : "ok") : "running")
@@ -29,15 +33,12 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
     if (isHiddenToolCall(entry)) return null
 
     if (entry.toolName === "Bash" || entry.toolName === "shell") {
-        const command = stringArg(entry.args, "command")
         return (
-            <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm">
-                {command && (
-                    <div className="whitespace-pre-wrap break-words px-3 pt-2 pb-1 font-mono text-[12px] leading-5 text-zinc-400">
-                        $ {command}
-                    </div>
-                )}
-                <LiveTerminal entry={entry} data={data} hasCommandLine={Boolean(command)} />
+            <div
+                className="relative z-10 ml-7 flex max-w-[min(760px,calc(100vw-180px))] flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm"
+                style={TOOL_CALL_PANEL_STYLE}
+            >
+                <LiveTerminal entry={entry} data={data} />
             </div>
         )
     }
@@ -52,7 +53,7 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
         }
         return (
             <div className="relative z-10 ml-7 grid max-w-[min(760px,calc(100vw-180px))] content-start items-start gap-1.5 py-1 text-left">
-                <div className={cn("overflow-auto pr-1", TOOL_CALL_PANEL_HEIGHT_CLASS)}>
+                <div className="overflow-auto pr-1" style={TOOL_CALL_PANEL_STYLE}>
                     <SearchPreview data={data} rawText={entry.content} args={entry.args} />
                 </div>
             </div>
@@ -85,7 +86,8 @@ function ToolFrame({
     return (
         <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] overflow-hidden rounded-md border border-border bg-background text-left shadow-sm">
             <div
-                className={cn("min-h-[92px] overflow-auto bg-background", TOOL_CALL_PANEL_HEIGHT_CLASS, bodyClassName)}
+                className={cn("overflow-auto bg-background", bodyClassName)}
+                style={TOOL_CALL_PANEL_STYLE}
             >
                 {children}
             </div>
@@ -161,7 +163,7 @@ function CompactSearchPreview({ entry, status, data }: { entry: ToolCallReasonin
     )
 }
 
-function LiveTerminal({ entry, data, hasCommandLine = false }: { entry: ToolCallReasoningEntry; data: ParsedData; hasCommandLine?: boolean }) {
+function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: ParsedData }) {
     const containerRef = React.useRef<HTMLDivElement>(null)
     const termRef = React.useRef<Terminal | null>(null)
     const fitRef = React.useRef<FitAddon | null>(null)
@@ -246,11 +248,7 @@ function LiveTerminal({ entry, data, hasCommandLine = false }: { entry: ToolCall
     return (
         <div
             ref={containerRef}
-            className={cn(
-                TOOL_CALL_TERMINAL_HEIGHT_CLASS,
-                "min-h-[160px] px-2 pb-2",
-                hasCommandLine ? "pt-0" : "pt-2"
-            )}
+            className="min-h-0 flex-1 px-2 py-2"
         />
     )
 }
@@ -1486,11 +1484,47 @@ function parseToolData(content: string): ParsedData {
 
 function terminalText(entry: ToolCallReasoningEntry, data: ParsedData): string {
     const streamed = (entry.deltas ?? []).map(delta => delta.text).join("")
-    if (streamed) return streamed
+    const command = stringArg(entry.args, "command")
+    const commandPrefix = command && !terminalTextContainsCommand(streamed, command)
+        ? `\x1b[2m$ ${command}\x1b[0m\r\n`
+        : ""
     const output = stringField(data, "output") || stringField(data, "stdout")
     const stderr = stringField(data, "stderr")
+    const exitCode = numberField(data, "exitCode") ?? numberField(data, "exit_code")
     const fallback = data ? "" : entry.content.replace(/^Error:\s*/, "")
-    return `${output || fallback}${stderr ? `\r\n\x1b[31m${stderr}\x1b[0m` : ""}`
+    const finalText = `${output || fallback}${stderr ? `\r\n\x1b[31m${stderr}\x1b[0m` : ""}`
+    const exitText = typeof exitCode === "number" && exitCode !== 0 ? `\r\n\x1b[2m(exit ${exitCode})\x1b[0m` : ""
+    const tail = `${finalText}${exitText}`
+    if (!streamed) return `${commandPrefix}${tail}`
+    if (!tail.trim()) return `${commandPrefix}${streamed}`
+    if (terminalTextIncludes(streamed, tail)) return `${commandPrefix}${streamed}`
+    const appendedTail = finalText.trim() && terminalTextIncludes(streamed, finalText)
+        ? exitText
+        : tail
+    if (!appendedTail.trim() || terminalTextIncludes(streamed, appendedTail)) {
+        return `${commandPrefix}${streamed}`
+    }
+    return `${commandPrefix}${streamed}${streamed.endsWith("\n") || streamed.endsWith("\r") ? "" : "\r\n"}${appendedTail}`
+}
+
+function terminalTextContainsCommand(text: string, command: string): boolean {
+    if (!text || !command) return false
+    const normalized = normalizeTerminalText(text)
+    return normalized.includes(`$ ${command}`) || normalized.includes(command)
+}
+
+function terminalTextIncludes(haystack: string, needle: string): boolean {
+    const normalizedHaystack = normalizeTerminalText(haystack)
+    const normalizedNeedle = normalizeTerminalText(needle).trim()
+    if (!normalizedNeedle) return true
+    return normalizedHaystack.includes(normalizedNeedle)
+}
+
+function normalizeTerminalText(text: string): string {
+    return text
+        .replace(/\x1b\[[0-?]*[ -/]*[@-~]/g, "")
+        .replace(/\r\n/g, "\n")
+        .replace(/\r/g, "\n")
 }
 
 function stringArg(args: Record<string, unknown> | undefined, key: string): string {

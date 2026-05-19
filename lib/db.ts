@@ -197,6 +197,7 @@ db.exec(`
         error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(taskId, startedAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task_started_id ON scheduled_task_runs(taskId, startedAt DESC, id DESC);
 
     CREATE TABLE IF NOT EXISTS push_subscriptions (
         id TEXT PRIMARY KEY,

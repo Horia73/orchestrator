@@ -102,7 +102,7 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     {
         id: 'whatsapp',
         label: 'WhatsApp',
-        capability: 'WhatsApp (read-only): list chats, read a chat, search messages. No sending.',
+        capability: 'WhatsApp: list/read/search recent chats, send confirmed messages/media, and delete confirmed messages for everyone.',
         runbookId: 'whatsapp',
         statusKind: 'whatsapp',
         setupToolIds: WHATSAPP_SETUP,

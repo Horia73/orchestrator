@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Monitor, RefreshCw } from "lucide-react"
+import { Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, RefreshCw } from "lucide-react"
 import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
@@ -43,7 +43,7 @@ function formatMessageTimestampFull(timestamp: number) {
 // ThoughtBlock helpers
 // ---------------------------------------------------------------------------
 
-const COLLAPSED_HEIGHT = 320
+const COLLAPSED_HEIGHT = 460
 const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
 
 function getThoughtTitle(content: string): string {
@@ -201,9 +201,12 @@ function ThoughtBlock({
 }) {
     const latestEntry = reasoning[reasoning.length - 1]
     const latestTitle = getEntryTitle(latestEntry)
-    const shouldDefaultExpand = thoughtAutoExpandTools && reasoning.some(entry =>
-        entry.type === "tool_call" && shouldExpandToolCallByDefault(entry)
+    const hasBrowserAgent = reasoning.some(entry =>
+        entry.type === "agent_call" && entry.agentId === "browser_agent"
     )
+    const shouldDefaultExpand = hasBrowserAgent || (thoughtAutoExpandTools && reasoning.some(entry =>
+        entry.type === "tool_call" && shouldExpandToolCallByDefault(entry)
+    ))
     const secs = Math.round(thinkingSeconds ?? 0)
     const persistedSecs = Math.round(thinkingDuration ?? 0)
     const summarySeconds = persistedSecs > 0 ? persistedSecs : secs
@@ -232,14 +235,15 @@ function ThoughtBlock({
 
     // State: open/expanded, persisted via localStorage keyed by messageId
     const storageKey = messageId ? `thought:${messageId}` : null
-    const expandedStorageKey = storageKey ? `${storageKey}:expanded:v2` : null
+    const openStorageKey = storageKey ? `${storageKey}:open${hasBrowserAgent ? ":browser:v1" : ""}` : null
+    const expandedStorageKey = storageKey ? `${storageKey}:expanded:${hasBrowserAgent ? "browser:v1" : "v2"}` : null
 
     const [isOpen, setIsOpen] = React.useState(() => {
-        if (storageKey) {
-            const saved = localStorage.getItem(`${storageKey}:open`)
+        if (openStorageKey) {
+            const saved = localStorage.getItem(openStorageKey)
             if (saved !== null) return saved === 'true'
         }
-        return thoughtAutoOpen ? isLiveStreaming : false
+        return hasBrowserAgent || (thoughtAutoOpen ? isLiveStreaming : false)
     })
 
     const userToggledExpandedRef = React.useRef(false)
@@ -257,8 +261,8 @@ function ThoughtBlock({
 
     const updateOpen = React.useCallback((v: boolean) => {
         setIsOpen(v)
-        if (storageKey) localStorage.setItem(`${storageKey}:open`, String(v))
-    }, [storageKey])
+        if (openStorageKey) localStorage.setItem(openStorageKey, String(v))
+    }, [openStorageKey])
 
     const updateExpanded = React.useCallback((v: boolean) => {
         userToggledExpandedRef.current = true
@@ -275,6 +279,12 @@ function ThoughtBlock({
         if (!shouldDefaultExpand || hasStoredExpanded || userToggledExpandedRef.current) return
         autoExpand()
     }, [autoExpand, hasStoredExpanded, shouldDefaultExpand])
+
+    React.useEffect(() => {
+        if (!hasBrowserAgent) return
+        updateOpen(true)
+        autoExpand()
+    }, [autoExpand, hasBrowserAgent, updateOpen])
 
     // Content measurement
     const blockRef = React.useRef<HTMLDivElement>(null)
@@ -475,7 +485,9 @@ function ThoughtBlock({
                                             <div className="h-4" />
                                         )}
                                     </div>
-                                    {!isExpanded && isCollapsible && isLiveStreaming && <div className="h-7" />}
+                                    {!isExpanded && isCollapsible && (
+                                        <div className={isLiveStreaming ? "h-10" : "h-20"} />
+                                    )}
                                 </div>
 
                                 {isCollapsible && !isExpanded && (
@@ -647,21 +659,8 @@ function BrowserAgentCallBlock({
     onOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment) => void
 }) {
-    const statusText = formatAgentStatus(entry.status)
-
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
-            <div className="flex w-max max-w-full items-start gap-3 text-left">
-                <Monitor className="mt-[3px] size-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
-                <span className="min-w-0">
-                    <span className="block truncate text-[14px] font-medium tracking-tight text-muted-foreground group-hover:text-foreground transition-colors">
-                        {entry.title || entry.agentName}
-                    </span>
-                    <span className="block truncate text-[11px] text-muted-foreground/75">
-                        {statusText}{entry.agentThreadId ? ` · ${entry.agentThreadId}` : ""}
-                    </span>
-                </span>
-            </div>
             <div className="ml-7 grid max-w-[min(760px,calc(100vw-180px))] gap-2">
                 <BrowserAgentLiveView active={entry.status === "running"} />
                 {!!entry.attachments?.length && (

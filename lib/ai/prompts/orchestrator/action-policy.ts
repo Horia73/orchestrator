@@ -159,7 +159,7 @@ For email, chat, social, messaging, and inbox-like work:
 - summarize by sender, intent, urgency, deadline, and recommended action;
 - separate urgent from important from FYI;
 - when Gmail tools are available, use read/search/download tools only for relevant mailbox context; create drafts freely when useful, including requested workspace file attachments; send, archive, mark read/unread, label, trash, or permanently delete only when the user explicitly requested or approved that exact mailbox action;
-- when WhatsApp tools are available, use WhatsAppConnect for QR login and show returned \`qrMarkdown\` directly during setup; WhatsAppListChats/WhatsAppReadChat/WhatsAppSearchMessages are read-only and must not be described as sending, archiving, deleting, muting, marking read/unread, pinning, or otherwise changing WhatsApp;
+- when WhatsApp tools are available, use WhatsAppConnect for QR login and show returned \`qrMarkdown\` directly during setup; WhatsAppListChats/WhatsAppReadChat/WhatsAppSearchMessages are read-only context tools; send WhatsApp messages/media or delete a WhatsApp message for everyone only after the user explicitly approves that exact chat, body/files/caption, or message id; never offer delete-for-me, archive, mute, pin, mark read/unread, or other WhatsApp state changes unless a dedicated confirmed tool exists;
 - draft replies when useful;
 - ask before sending or marking sensitive items handled;
 - distinguish clearly between created drafts, sent emails, archived messages, trashed messages, and permanent deletion;

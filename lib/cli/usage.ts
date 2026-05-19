@@ -116,7 +116,7 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
             if (phase === 'done') return
             const cleaned = stripAnsi(buf)
             // If we got the panel before exit, treat as success.
-            if (/Current\s*session/i.test(cleaned) || /Current\s*week/i.test(cleaned)) {
+            if (hasClaudeUsageQuota(cleaned)) {
                 finish({ text: cleaned, raw: cleaned })
             } else {
                 finish({ error: 'claude exited before rendering /usage panel.' })
@@ -148,12 +148,10 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
             }
 
             if (phase === 'wait-panel') {
-                // Panel is ready when we see both anchor strings AND the output
-                // has been idle for a beat (some data trickles in as "Refreshing…"
-                // sections settle).
-                const hasSession = /Current\s*session/i.test(cleanedSoFar)
-                const hasWeek = /Current\s*week/i.test(cleanedSoFar)
-                if (hasSession && hasWeek && idleMs > 1200) {
+                // Panel is ready when at least one quota window parses AND the
+                // output has been idle for a beat (some data trickles in as
+                // "Refreshing..." sections settle).
+                if (hasClaudeUsageQuota(cleanedSoFar) && idleMs > 1200) {
                     finish({ text: cleanedSoFar, raw: cleanedSoFar })
                     return
                 }
@@ -185,6 +183,11 @@ function stripAnsi(s: string): string {
         .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '')
 }
 
+function hasClaudeUsageQuota(text: string): boolean {
+    const parsed = parseClaudeUsageText(text)
+    return Boolean(parsed.fiveHour || parsed.weekly || parsed.weeklySonnet)
+}
+
 /**
  * Parse the cleaned /usage panel text. Markers are stable across renders;
  * percentages and reset strings are deterministic enough to anchor on labels.
@@ -201,15 +204,24 @@ function parseClaudeUsageText(text: string): {
     // Replace runs of progress-bar glyphs (█▌▏ etc.) and whitespace with a
     // single space so the regex anchors don't need to skip them.
     const norm = text.replace(/[█▉▊▋▌▍▎▏░]+/g, ' ').replace(/\s+/g, ' ')
+    const currentLabel = 'Curr[a-z]*\\s*session'
+    const weekLabel = 'Curr[a-z]*\\s*week'
+    // Claude 2.1 can render "Current session" as "Curretsession" and
+    // "Resets" as "Reses" after ANSI/cursor-position stripping.
+    const resetLabel = 'Res(?:ets?|es)'
+    const usedLabel = '(\\d{1,3})%\\s*u\\w*d'
+    const stopLabel = `(?:${weekLabel}|What|Last|Extra\\s*usage)`
+    const bodyBeforeReset = `(?:(?!\\s*${stopLabel}).)*?`
+    const untilNextSection = `(?=\\s*${stopLabel}|$)`
 
     const fiveHour = extractWindow(
         norm,
-        /Current\s*session[^%]*?(\d{1,3})%\s*u\w*d[^R]*?Resets\s*([^\n]+?)(?=\s*Current\s*week|\s*What|\s*Extra\s*usage|$)/i
+        new RegExp(`${currentLabel}[^%]*?${usedLabel}${bodyBeforeReset}${resetLabel}\\s*(.+?)${untilNextSection}`, 'i')
     )
 
     let weekly: CliQuotaWindow | undefined
     let weeklySonnet: CliQuotaWindow | undefined
-    const weekRe = /Current\s*week\s*\(([^)]+)\)[^%]*?(\d{1,3})%\s*u\w*d[^R]*?Resets\s*([^\n]+?)(?=\s*Current\s*week|\s*What|\s*Last|\s*Extra\s*usage|$)/gi
+    const weekRe = new RegExp(`${weekLabel}\\s*\\(([^)]+)\\)[^%]*?${usedLabel}${bodyBeforeReset}${resetLabel}\\s*(.+?)${untilNextSection}`, 'gi')
     let m: RegExpExecArray | null
     while ((m = weekRe.exec(norm)) !== null) {
         const inner = m[1].toLowerCase()
@@ -217,7 +229,7 @@ function parseClaudeUsageText(text: string): {
             usedPercent: Number(m[2]),
             resetsAt: parseClaudeResetText(m[3].trim()),
         }
-        if (!Number.isFinite(win.usedPercent)) continue
+        if (!Number.isFinite(win.usedPercent) || win.resetsAt <= 0) continue
         // Mangled or not, "Sonnet only" reliably contains an 's', 'n', 't'
         // sequence; "all models" contains "all" or "models". Use both.
         if (inner.includes('son') || inner.includes('only')) weeklySonnet = win
@@ -234,6 +246,7 @@ function extractWindow(text: string, re: RegExp): CliQuotaWindow | undefined {
     if (!Number.isFinite(pct)) return undefined
     const resetText = m[2].trim()
     const resetsAt = parseClaudeResetText(resetText)
+    if (resetsAt <= 0) return undefined
     return { usedPercent: pct, resetsAt }
 }
 

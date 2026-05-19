@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Monitor, MousePointer2, Pause, Play, WifiOff } from "lucide-react"
+import { Loader2, Maximize2, Minimize2, Monitor, MousePointer2, Play, WifiOff } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -36,11 +36,13 @@ interface BrowserAgentLiveViewProps {
 }
 
 export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewProps) {
+    const shellRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
     const rfbRef = React.useRef<import("@novnc/novnc").default | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
     const [busy, setBusy] = React.useState(false)
+    const [fullscreen, setFullscreen] = React.useState(false)
 
     const refresh = React.useCallback(async () => {
         const res = await fetch("/api/browser-agent/live", { cache: "no-store" })
@@ -81,7 +83,7 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
                 rfb.viewOnly = true
                 rfb.scaleViewport = true
                 rfb.resizeSession = false
-                rfb.background = "#0c0c0e"
+                rfb.background = "#ffffff"
                 rfb.qualityLevel = 8
                 rfb.compressionLevel = 2
                 rfb.addEventListener("connect", () => setConnection("connected"))
@@ -105,6 +107,15 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
         rfbRef.current.viewOnly = state.controlMode !== "user"
     }, [state])
 
+    React.useEffect(() => {
+        const updateFullscreen = () => {
+            setFullscreen(document.fullscreenElement === shellRef.current)
+        }
+        updateFullscreen()
+        document.addEventListener("fullscreenchange", updateFullscreen)
+        return () => document.removeEventListener("fullscreenchange", updateFullscreen)
+    }, [])
+
     const setControl = async (mode: LiveControlMode) => {
         setBusy(true)
         try {
@@ -116,6 +127,18 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
             if (res.ok) setState(await res.json() as BrowserAgentLiveState)
         } finally {
             setBusy(false)
+        }
+    }
+
+    const toggleFullscreen = async () => {
+        try {
+            if (document.fullscreenElement === shellRef.current) {
+                await document.exitFullscreen()
+                return
+            }
+            await shellRef.current?.requestFullscreen()
+        } catch {
+            // Fullscreen is best-effort and may be blocked by the host shell.
         }
     }
 
@@ -147,29 +170,39 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
     }
 
     const userControl = state.controlMode === "user"
+    const viewportWidth = state.width && state.width > 0 ? state.width : 16
+    const viewportHeight = state.height && state.height > 0 ? state.height : 9
 
     return (
-        <div className="overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] shadow-sm">
-            <div className="flex min-w-0 items-center gap-2 border-b border-zinc-800/80 bg-zinc-950 px-3 py-2">
-                <Monitor className="size-4 shrink-0 text-zinc-400" />
-                <div className="min-w-0 flex-1">
-                    <div className="truncate text-[12px] font-medium text-zinc-200">
-                        Live Chromium {state.display ? `on ${state.display}` : ""}
-                    </div>
-                    <div className="truncate text-[11px] text-zinc-500">
-                        {connection}{state.paused ? " · agent paused" : ""}{state.sessions[0]?.currentUrl ? ` · ${state.sessions[0].currentUrl}` : ""}
-                    </div>
-                </div>
+        <div
+            ref={shellRef}
+            className={cn(
+                "grid gap-2 bg-background",
+                fullscreen && "h-screen grid-rows-[minmax(0,1fr)_auto] p-3"
+            )}
+        >
+            <div
+                className={cn(
+                    "min-h-0 overflow-hidden rounded-md border border-border/70 bg-white shadow-sm",
+                    fullscreen ? "h-full" : "w-full"
+                )}
+                style={fullscreen ? undefined : { aspectRatio: `${viewportWidth} / ${viewportHeight}` }}
+                aria-label={`${connection} browser live view`}
+            >
+                <div ref={targetRef} className="size-full bg-white" />
+            </div>
+            <div className="flex flex-wrap justify-end gap-2">
                 <button
                     type="button"
                     disabled={busy}
                     onClick={() => setControl(userControl ? "agent" : "user")}
                     className={cn(
-                        "inline-flex shrink-0 items-center gap-1.5 rounded border px-2 py-1 text-[12px] transition-colors disabled:opacity-60",
+                        "inline-flex shrink-0 items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-[12px] font-medium transition-colors disabled:opacity-60",
                         userControl
-                            ? "border-amber-400/30 bg-amber-400/10 text-amber-200 hover:bg-amber-400/15"
-                            : "border-zinc-700 bg-zinc-900 text-zinc-300 hover:bg-zinc-800"
+                            ? "border-amber-500/30 bg-amber-500/10 text-amber-700 hover:bg-amber-500/15 dark:text-amber-300"
+                            : "border-border bg-background text-foreground/80 hover:bg-muted hover:text-foreground"
                     )}
+                    aria-label={userControl ? "Return browser control to agent" : "Take browser control"}
                 >
                     {busy ? (
                         <Loader2 className="size-3.5 animate-spin" />
@@ -180,14 +213,16 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
                     )}
                     {userControl ? "Return to agent" : "Take control"}
                 </button>
+                <button
+                    type="button"
+                    onClick={toggleFullscreen}
+                    className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground"
+                    aria-label={fullscreen ? "Exit browser full screen" : "Open browser full screen"}
+                >
+                    {fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
+                    {fullscreen ? "Exit full screen" : "Full screen"}
+                </button>
             </div>
-            {userControl && (
-                <div className="flex items-center gap-2 border-b border-amber-400/20 bg-amber-400/10 px-3 py-1.5 text-[11px] text-amber-200">
-                    <Pause className="size-3.5" />
-                    Human control is active. The browser agent is paused until control is returned.
-                </div>
-            )}
-            <div ref={targetRef} className="h-[min(460px,calc(100vh-260px))] min-h-[260px] bg-[#0c0c0e]" />
         </div>
     )
 }

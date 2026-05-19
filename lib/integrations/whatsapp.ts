@@ -5,16 +5,17 @@ import { execFileSync } from 'child_process'
 
 import { PRIVATE_STATE_DIR, getEnvValue } from '@/lib/config'
 
-import type { Chat, Client, Message } from 'whatsapp-web.js'
+import type { Chat, Client, Message, MessageSendOptions } from 'whatsapp-web.js'
 
 const AUTH_BASE_DIR = path.join(PRIVATE_STATE_DIR, 'whatsapp-web')
 const AUTH_CLIENT_ID = 'orchestrator'
 const QR_TTL_MS = 60_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
-const READY_WAIT_TIMEOUT_MS = 60_000
+const READY_WAIT_TIMEOUT_MS = 120_000
 const READY_HEALTH_TIMEOUT_MS = 5_000
 const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
 const AUTO_RESUME_COOLDOWN_MS = 30_000
+const DEFAULT_WHATSAPP_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
 
 export type WhatsAppPhase =
     | 'idle'
@@ -108,6 +109,47 @@ export interface WhatsAppSearchResult {
     scannedMessages: number
     results: WhatsAppMessageSummary[]
     truncated: boolean
+}
+
+export interface WhatsAppOutgoingAttachment {
+    filename: string
+    mimeType: string
+    bytes: Buffer
+    sendAsDocument: boolean
+}
+
+export interface WhatsAppAttachmentSummary {
+    filename: string
+    mimeType: string
+    size: number
+    sendAsDocument: boolean
+}
+
+export interface WhatsAppSendOptions {
+    quotedMessageId?: string
+    linkPreview?: boolean
+}
+
+export interface WhatsAppSendMessageResult {
+    status: 'sent'
+    chat: WhatsAppChatSummary
+    message: WhatsAppMessageSummary
+}
+
+export interface WhatsAppSendMediaResult {
+    status: 'sent'
+    chat: WhatsAppChatSummary
+    messages: WhatsAppMessageSummary[]
+    attachments: WhatsAppAttachmentSummary[]
+    caption: string | null
+}
+
+export interface WhatsAppDeleteMessageResult {
+    status: 'deleted_for_everyone'
+    messageId: string
+    chatId: string | null
+    deletedFor: 'everyone'
+    clearMedia: true
 }
 
 interface MutableWhatsAppState {
@@ -311,6 +353,100 @@ class WhatsAppManager {
         })
     }
 
+    async sendMessage(chatId: string, body: string, options: WhatsAppSendOptions = {}): Promise<WhatsAppSendMessageResult> {
+        if (!body.trim()) throw new Error('WhatsApp message body is required.')
+
+        return this.runReadyOperation('send message', async client => {
+            const chat = await this.getChat(client, chatId)
+            ensureChatWritable(chat)
+            const message = await withTimeout(
+                client.sendMessage(chat.id._serialized, body, sendOptions(options)),
+                DEFAULT_OPERATION_TIMEOUT_MS,
+                'WhatsApp message send timed out.'
+            )
+            if (!message) throw new Error('WhatsApp did not return a sent message.')
+            return {
+                status: 'sent',
+                chat: chatSummary(chat),
+                message: messageSummary(message, chat),
+            }
+        })
+    }
+
+    async sendMedia(
+        chatId: string,
+        attachments: WhatsAppOutgoingAttachment[],
+        caption?: string,
+        options: WhatsAppSendOptions = {}
+    ): Promise<WhatsAppSendMediaResult> {
+        if (attachments.length === 0) throw new Error('At least one WhatsApp attachment is required.')
+        const cleanCaption = caption && caption.trim() ? caption : ''
+
+        return this.runReadyOperation('send media', async client => {
+            const chat = await this.getChat(client, chatId)
+            ensureChatWritable(chat)
+
+            const whatsappWeb = await import('whatsapp-web.js')
+            const MediaCtor = whatsappWeb.MessageMedia
+            const messages: WhatsAppMessageSummary[] = []
+            for (const [index, attachment] of attachments.entries()) {
+                const media = new MediaCtor(
+                    attachment.mimeType,
+                    attachment.bytes.toString('base64'),
+                    attachment.filename,
+                    attachment.bytes.byteLength
+                )
+                const messageOptions: MessageSendOptions = {
+                    ...sendOptions(options),
+                    sendMediaAsDocument: attachment.sendAsDocument,
+                    caption: index === 0 && cleanCaption ? cleanCaption : undefined,
+                }
+                const message = await withTimeout(
+                    client.sendMessage(chat.id._serialized, media, messageOptions),
+                    DEFAULT_OPERATION_TIMEOUT_MS,
+                    `WhatsApp media send timed out for ${attachment.filename}.`
+                )
+                if (!message) throw new Error(`WhatsApp did not return a sent message for ${attachment.filename}.`)
+                messages.push(messageSummary(message, chat))
+            }
+
+            return {
+                status: 'sent',
+                chat: chatSummary(chat),
+                messages,
+                attachments: attachments.map(attachmentSummary),
+                caption: cleanCaption || null,
+            }
+        })
+    }
+
+    async deleteMessageForEveryone(messageId: string): Promise<WhatsAppDeleteMessageResult> {
+        const normalized = messageId.trim()
+        if (!normalized) throw new Error('WhatsApp message_id is required.')
+
+        return this.runReadyOperation('delete message for everyone', async client => {
+            const message = await withTimeout(
+                client.getMessageById(normalized),
+                DEFAULT_OPERATION_TIMEOUT_MS,
+                `WhatsApp message lookup timed out for ${normalized}.`
+            )
+            if (!message) throw new Error(`Could not find WhatsApp message ${normalized}.`)
+            const summary = messageSummary(message)
+            await withTimeout(
+                message.delete(true, true),
+                DEFAULT_OPERATION_TIMEOUT_MS,
+                `WhatsApp delete-for-everyone timed out for ${normalized}.`
+            )
+            return {
+                status: 'deleted_for_everyone',
+                messageId: normalized,
+                chatId: summary.chatId || null,
+                deletedFor: 'everyone',
+                clearMedia: true,
+            }
+        })
+    }
+
     private async ensureStarted(): Promise<void> {
         if (
             this.client &&
@@ -352,17 +488,30 @@ class WhatsAppManager {
                     clientId: AUTH_CLIENT_ID,
                     dataPath: AUTH_BASE_DIR,
                 }),
+                authTimeoutMs: 120_000,
                 takeoverOnConflict: false,
+                userAgent: resolveWhatsAppUserAgent(),
+                deviceName: 'Orchestrator',
+                browserName: 'Chrome',
                 qrMaxRetries: 0,
                 puppeteer: {
                     executablePath,
                     headless: true,
+                    defaultViewport: {
+                        width: 1280,
+                        height: 900,
+                    },
                     args: [
                         '--no-sandbox',
                         '--disable-setuid-sandbox',
                         '--disable-dev-shm-usage',
                         '--disable-extensions',
                         '--disable-gpu',
+                        '--disable-background-timer-throttling',
+                        '--disable-backgrounding-occluded-windows',
+                        '--disable-renderer-backgrounding',
+                        '--no-first-run',
+                        '--window-size=1280,900',
                     ],
                 },
             })
@@ -505,22 +654,12 @@ class WhatsAppManager {
     }
 
     private async requireReadyClient(): Promise<Client> {
-        for (let attempt = 0; attempt < 2; attempt += 1) {
-            await this.ensureStarted()
-            await this.waitForReady()
-            if (this.client && this.state.phase === 'ready') return this.client
-            if (
-                attempt === 0 &&
-                this.client &&
-                (this.state.phase === 'authenticated' || this.state.phase === 'starting')
-            ) {
-                await this.resetBrokenClient(
-                    new Error('WhatsApp Web did not become ready after authentication.'),
-                    'WhatsApp startup stalled'
-                )
-                continue
-            }
-            break
+        await this.ensureStarted()
+        await this.waitForReady()
+        if (this.client && this.state.phase === 'ready') return this.client
+
+        if (this.client && (this.state.phase === 'authenticated' || this.state.phase === 'starting')) {
+            throw new Error('WhatsApp Web is still linking/syncing after QR scan. Keep WhatsApp on your phone and the Orchestrator WhatsApp session open, then retry when syncing finishes.')
         }
 
         throw new Error('WhatsApp is not connected. Use WhatsAppConnect and scan the QR code first.')
@@ -624,7 +763,7 @@ class WhatsAppManager {
         return {
             id: 'whatsapp',
             name: 'WhatsApp',
-            description: 'Read-only WhatsApp Web session using your own linked device. No send, delete, archive, or mark-read tools are exposed.',
+            description: 'Local WhatsApp Web session using your own linked device. Read tools are available; sending media/messages and deleting messages for everyone require explicit confirmation.',
             configured: Boolean(browserExecutablePath),
             connected,
             accountName: this.state.accountName,
@@ -642,7 +781,7 @@ class WhatsAppManager {
             browserExecutablePath,
             missingConfig: browserExecutablePath ? [] : ['WHATSAPP_CHROME_EXECUTABLE_PATH or local Chrome/Chromium'],
             needsReconnect: !connected,
-            capabilities: ['status', 'qr_login', 'list_chats', 'unread_summary', 'read_chat', 'search_recent_messages'],
+            capabilities: ['status', 'qr_login', 'list_chats', 'unread_summary', 'read_chat', 'search_recent_messages', 'send_message', 'send_media', 'delete_message_for_everyone'],
         }
     }
 }
@@ -692,6 +831,23 @@ export function whatsappSearchMessages(args: {
     perChatLimit: number
 }): Promise<WhatsAppSearchResult> {
     return manager().searchMessages(args)
+}
+
+export function whatsappSendMessage(chatId: string, body: string, options?: WhatsAppSendOptions): Promise<WhatsAppSendMessageResult> {
+    return manager().sendMessage(chatId, body, options)
+}
+
+export function whatsappSendMedia(
+    chatId: string,
+    attachments: WhatsAppOutgoingAttachment[],
+    caption?: string,
+    options?: WhatsAppSendOptions
+): Promise<WhatsAppSendMediaResult> {
+    return manager().sendMedia(chatId, attachments, caption, options)
+}
+
+export function whatsappDeleteMessageForEveryone(messageId: string): Promise<WhatsAppDeleteMessageResult> {
+    return manager().deleteMessageForEveryone(messageId)
 }
 
 function chatSummary(chat: Chat): WhatsAppChatSummary {
@@ -762,6 +918,32 @@ function unixSeconds(value: number | undefined): number | null {
 
 function clip(value: string, maxChars: number): string {
     return value.length > maxChars ? `${value.slice(0, maxChars)}...` : value
+}
+
+function attachmentSummary(attachment: WhatsAppOutgoingAttachment): WhatsAppAttachmentSummary {
+    return {
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        size: attachment.bytes.byteLength,
+        sendAsDocument: attachment.sendAsDocument,
+    }
+}
+
+function ensureChatWritable(chat: Chat): void {
+    if (chat.isReadOnly) {
+        throw new Error(`WhatsApp chat ${chat.name || chat.id._serialized} is read-only and cannot receive messages.`)
+    }
+}
+
+function sendOptions(options: WhatsAppSendOptions): MessageSendOptions {
+    const out: MessageSendOptions = {
+        sendSeen: false,
+        waitUntilMsgSent: true,
+    }
+    const quotedMessageId = options.quotedMessageId?.trim()
+    if (quotedMessageId) out.quotedMessageId = quotedMessageId
+    if (typeof options.linkPreview === 'boolean') out.linkPreview = options.linkPreview
+    return out
 }
 
 function clamp(value: number, min: number, max: number): number {
@@ -912,6 +1094,10 @@ function resolveBrowserExecutablePath(): string | null {
     ]
 
     return candidates.find(fileExists) ?? null
+}
+
+function resolveWhatsAppUserAgent(): string {
+    return getEnvValue('WHATSAPP_USER_AGENT') || DEFAULT_WHATSAPP_USER_AGENT
 }
 
 function puppeteerCacheExecutables(): string[] {
