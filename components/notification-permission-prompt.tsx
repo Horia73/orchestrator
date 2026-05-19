@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { BellRing, Loader2, RefreshCw, X } from "lucide-react"
+import { usePathname } from "next/navigation"
+import { BellRing, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -11,14 +12,14 @@ import {
 } from "@/hooks/use-inbox-push-notifications"
 import { cn } from "@/lib/utils"
 
-const HTTPS_LAN_HOSTS = new Set(["orchestrator.lan"])
+const CERT_SETUP_HOSTS = new Set(["orchestrator.lan"])
 
 type PlatformKind = "ios" | "mac" | "mobile" | "desktop"
 type PromptKind = "ready" | "blocked" | "unsupported" | "error"
 
 interface BrowserLocationInfo {
   origin: string
-  secureUpgradeUrl: string | null
+  certSetupUrl: string | null
 }
 
 function detectPlatform(): PlatformKind {
@@ -35,19 +36,21 @@ function detectPlatform(): PlatformKind {
 
 function getBrowserLocationInfo(): BrowserLocationInfo {
   if (typeof window === "undefined") {
-    return { origin: "", secureUpgradeUrl: null }
+    return { origin: "", certSetupUrl: null }
   }
 
   const url = new URL(window.location.href)
-  const shouldUpgrade =
-    url.protocol === "http:" && HTTPS_LAN_HOSTS.has(url.hostname.toLowerCase())
-  if (!shouldUpgrade) {
-    return { origin: window.location.origin, secureUpgradeUrl: null }
+  const hasLanSetup = CERT_SETUP_HOSTS.has(url.hostname.toLowerCase())
+  if (!hasLanSetup) {
+    return { origin: window.location.origin, certSetupUrl: null }
   }
 
-  url.protocol = "https:"
+  url.protocol = "http:"
   url.port = ""
-  return { origin: window.location.origin, secureUpgradeUrl: url.toString() }
+  url.pathname = "/cert-setup"
+  url.search = ""
+  url.hash = ""
+  return { origin: window.location.origin, certSetupUrl: url.toString() }
 }
 
 function promptKindFromStatus(status: PushStatus): PromptKind | null {
@@ -64,8 +67,8 @@ function unsupportedMessage(
   locationInfo: BrowserLocationInfo
 ): string {
   if (reason === "insecure-context") {
-    if (locationInfo.secureUpgradeUrl) {
-      return "This LAN URL is using HTTP. Open the HTTPS Orchestrator URL to enable push notifications."
+    if (locationInfo.certSetupUrl) {
+      return "Install the Orchestrator LAN certificate on this device, then open the HTTPS app to enable push notifications."
     }
     return `This page is using an insecure URL${
       locationInfo.origin ? ` (${locationInfo.origin})` : ""
@@ -112,9 +115,13 @@ function promptCopy(args: {
 
   if (kind === "unsupported") {
     return {
-      title: "Notifications unavailable",
+      title:
+        unsupportedReason === "insecure-context"
+          ? "HTTPS setup required"
+          : "Notifications unavailable",
       body: unsupportedMessage(unsupportedReason, platform, locationInfo),
-      action: "Check",
+      action:
+        unsupportedReason === "insecure-context" ? "Setup HTTPS" : "Check",
     }
   }
 
@@ -144,6 +151,13 @@ function promptCopy(args: {
 }
 
 export function NotificationPermissionPrompt() {
+  const pathname = usePathname()
+  if (pathname === "/cert-setup") return null
+
+  return <NotificationPermissionPromptInner />
+}
+
+function NotificationPermissionPromptInner() {
   const {
     status,
     permission,
@@ -157,7 +171,7 @@ export function NotificationPermissionPrompt() {
   const [platform, setPlatform] = React.useState<PlatformKind>("desktop")
   const [locationInfo, setLocationInfo] = React.useState<BrowserLocationInfo>({
     origin: "",
-    secureUpgradeUrl: null,
+    certSetupUrl: null,
   })
   const [dismissedKind, setDismissedKind] = React.useState<PromptKind | null>(
     null
@@ -167,11 +181,6 @@ export function NotificationPermissionPrompt() {
 
   React.useEffect(() => {
     const nextLocationInfo = getBrowserLocationInfo()
-    if (nextLocationInfo.secureUpgradeUrl) {
-      window.location.replace(nextLocationInfo.secureUpgradeUrl)
-      return
-    }
-
     setLocationInfo(nextLocationInfo)
     setMounted(true)
     setPlatform(detectPlatform())
@@ -200,6 +209,13 @@ export function NotificationPermissionPrompt() {
   const hasEnableAction = kind === "ready" || kind === "error"
   const onPrimaryAction = async () => {
     setCheckMessage(null)
+    if (kind === "unsupported" && unsupportedReason === "insecure-context") {
+      const nextLocationInfo = getBrowserLocationInfo()
+      setLocationInfo(nextLocationInfo)
+      window.location.assign(nextLocationInfo.certSetupUrl ?? "/cert-setup")
+      return
+    }
+
     if (hasEnableAction) {
       void enable()
       return
@@ -207,10 +223,6 @@ export function NotificationPermissionPrompt() {
 
     const nextLocationInfo = getBrowserLocationInfo()
     setLocationInfo(nextLocationInfo)
-    if (nextLocationInfo.secureUpgradeUrl) {
-      window.location.replace(nextLocationInfo.secureUpgradeUrl)
-      return
-    }
 
     setChecking(true)
     const result = await refresh()
@@ -290,6 +302,8 @@ export function NotificationPermissionPrompt() {
                   <Loader2 className="size-3.5 animate-spin" />
                 ) : kind === "ready" || kind === "error" ? (
                   <BellRing className="size-3.5" />
+                ) : unsupportedReason === "insecure-context" ? (
+                  <ShieldCheck className="size-3.5" />
                 ) : (
                   <RefreshCw className="size-3.5" />
                 )}
