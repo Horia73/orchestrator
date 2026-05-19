@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 
 import db, { createConversation, deleteConversation } from "@/lib/db"
+import { emitAppEvent } from "@/lib/events"
 import type { Message } from "@/lib/types"
 
 import {
@@ -21,6 +22,21 @@ import { assertSchedulable, computeNextRunAt } from "./compute"
 // Recurring tasks auto-pause after this many consecutive failures so a bad
 // prompt or broken integration cannot loop forever (cost / runaway guard).
 const MAX_CONSECUTIVE_FAILURES = 5
+
+function emitScheduledTaskChanged(taskId: string, reason: string) {
+  emitAppEvent({ type: "scheduled_tasks.changed", taskId, reason })
+}
+
+function emitTaskRunsChanged(taskId: string, runId?: string) {
+  emitAppEvent({ type: "task_runs.changed", taskId, runId })
+}
+
+function emitInboxChanged(
+  conversationId: string,
+  action: "created" | "read" | "deleted" | "changed"
+) {
+  emitAppEvent({ type: "inbox.changed", conversationId, action })
+}
 
 // ---------------------------------------------------------------------------
 // scheduled_tasks CRUD
@@ -129,6 +145,7 @@ export function createScheduledTask(
 
   const created = getScheduledTask(id)
   if (!created) throw new Error(`Failed to create scheduled task ${id}`)
+  emitScheduledTaskChanged(id, "created")
   return created
 }
 
@@ -187,12 +204,16 @@ export function updateScheduledTask(
     updatedAt: now,
   })
 
-  return getScheduledTask(id)
+  const updatedTask = getScheduledTask(id)
+  if (updatedTask) emitScheduledTaskChanged(id, "updated")
+  return updatedTask
 }
 
 export function deleteScheduledTask(id: string): boolean {
   const res = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?").run(id)
-  return res.changes > 0
+  const deleted = res.changes > 0
+  if (deleted) emitScheduledTaskChanged(id, "deleted")
+  return deleted
 }
 
 // ---------------------------------------------------------------------------
@@ -253,7 +274,9 @@ export function claimForRun(id: string, nowMs: number): ClaimedTask | null {
 
     return { task, isOnce }
   })
-  return tx()
+  const claimed = tx()
+  if (claimed) emitScheduledTaskChanged(id, "running")
+  return claimed
 }
 
 /** One-shot whose time passed while the server was down: do NOT run it. */
@@ -266,7 +289,9 @@ export function markMissed(id: string, nowMs: number): ScheduledTask | null {
         WHERE id = @id
     `
   ).run({ id, now: nowMs })
-  return getScheduledTask(id)
+  const task = getScheduledTask(id)
+  if (task) emitScheduledTaskChanged(id, "missed")
+  return task
 }
 
 export function finishRun(
@@ -320,6 +345,7 @@ export function finishRun(
     conversationId: result.conversationId,
     consecutiveFailures,
   })
+  emitScheduledTaskChanged(id, "finished")
 }
 
 /** Record a manual "Run now" without consuming/disarming the schedule. */
@@ -351,6 +377,7 @@ export function recordManualRun(
     conversationId: result.conversationId,
     consecutiveFailures: result.ok ? 0 : current.consecutiveFailures + 1,
   })
+  emitScheduledTaskChanged(id, "manual-run-recorded")
 }
 
 /** Park a task whose schedule can no longer be computed (e.g. corrupt cron). */
@@ -367,6 +394,7 @@ export function markTaskError(
         WHERE id = @id
     `
   ).run({ id, message, now: nowMs })
+  emitScheduledTaskChanged(id, "error")
 }
 
 /**
@@ -394,6 +422,7 @@ export function recoverStuckRunning(nowMs: number): ScheduledTask[] {
                 WHERE id = @id
             `
       ).run({ id: task.id, next, now: nowMs })
+      emitScheduledTaskChanged(task.id, "recovered")
     }
   }
   return missed
@@ -507,6 +536,7 @@ export function recordTaskRun(run: {
     summary: run.summary,
     error: run.error ?? null,
   })
+  emitTaskRunsChanged(run.taskId, id)
 }
 
 export function listTaskRunsPage(
@@ -592,7 +622,7 @@ export function listTaskRuns(
 // Per-task private state — a recurring task's own memory (last-seen watermark,
 // rolling baselines for adaptive cadence, last observed price, …). Injected
 // into the run as <task_state> and rewritten by the agent via set_task_state.
-// This replaces the old "write it to HEARTBEAT.md" anti-pattern: it is scoped
+// This replaces the old "write monitor state to a shared file" anti-pattern: it is scoped
 // to the task, structured, and never leaks into unrelated context.
 // ---------------------------------------------------------------------------
 
@@ -634,8 +664,8 @@ export function setTaskState(id: string, state: unknown): void {
 // ---------------------------------------------------------------------------
 
 const insertInboxMessage = db.prepare(`
-    INSERT INTO messages (id, conversationId, role, content, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, timestamp)
-    VALUES (@id, @conversationId, @role, @content, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @timestamp)
+    INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, replyActions, timestamp)
+    VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
 `)
 
 export function createInboxConversation(args: {
@@ -667,6 +697,7 @@ export function createInboxConversation(args: {
         conversationId,
         role: msg.role,
         content: msg.content,
+        status: msg.status ?? null,
         contentSegments: msg.contentSegments
           ? JSON.stringify(msg.contentSegments)
           : null,
@@ -675,11 +706,13 @@ export function createInboxConversation(args: {
         thinkingDuration: msg.thinkingDuration ?? null,
         toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
         attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
+        replyActions: msg.replyActions ? JSON.stringify(msg.replyActions) : null,
         timestamp: msg.timestamp,
       })
     }
   })
   tx()
+  emitInboxChanged(conversationId, "created")
   return conversationId
 }
 
@@ -779,12 +812,14 @@ export function getInboxConversation(
     id: string
     role: "user" | "assistant"
     content: string
+    status: Message["status"] | null
     contentSegments: string | null
     reasoning: string | null
     thinking: string | null
     thinkingDuration: number | null
     toolCalls: string | null
     attachments: string | null
+    replyActions: string | null
     timestamp: number
   }>
 
@@ -798,21 +833,85 @@ export function getInboxConversation(
       id: m.id,
       role: m.role,
       content: m.content,
+      status: m.status ?? undefined,
       contentSegments: parseJson<Message["contentSegments"]>(m.contentSegments),
       reasoning: parseJson<Message["reasoning"]>(m.reasoning),
       thinking: m.thinking || undefined,
       thinkingDuration: m.thinkingDuration ?? undefined,
       toolCalls: parseJson<Message["toolCalls"]>(m.toolCalls),
       attachments: parseJson<Message["attachments"]>(m.attachments),
+      replyActions: parseJson<Message["replyActions"]>(m.replyActions),
       timestamp: m.timestamp,
     })),
   }
 }
 
+export function appendInboxMessage(
+  conversationId: string,
+  message: Message
+): boolean {
+  const row = db
+    .prepare(
+      "SELECT id FROM conversations WHERE id = ? AND origin = 'inbox'"
+    )
+    .get(conversationId)
+  if (!row) return false
+
+  const existingMessage = db
+    .prepare("SELECT id FROM messages WHERE id = ?")
+    .get(message.id) as { id: string } | undefined
+
+  const tx = db.transaction(() => {
+    insertInboxMessage.run({
+      id: message.id,
+      conversationId,
+      role: message.role,
+      content: message.content,
+      status: message.status ?? null,
+      contentSegments: message.contentSegments
+        ? JSON.stringify(message.contentSegments)
+        : null,
+      reasoning: message.reasoning ? JSON.stringify(message.reasoning) : null,
+      thinking: message.thinking || null,
+      thinkingDuration: message.thinkingDuration ?? null,
+      toolCalls: message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+      attachments: message.attachments ? JSON.stringify(message.attachments) : null,
+      replyActions: message.replyActions
+        ? JSON.stringify(message.replyActions)
+        : null,
+      timestamp: message.timestamp,
+    })
+
+    db.prepare(
+      `
+        UPDATE conversations
+        SET updatedAt = @updatedAt,
+            messageCount = messageCount + @messageDelta,
+            lastMessagePreview = @lastMessagePreview,
+            lastMessageAt = @lastMessageAt,
+            readAt = @readAt
+        WHERE id = @id AND origin = 'inbox'
+      `
+    ).run({
+      id: conversationId,
+      updatedAt: Date.now(),
+      messageDelta: existingMessage ? 0 : 1,
+      lastMessagePreview: message.content.slice(0, 240),
+      lastMessageAt: message.timestamp,
+      readAt: message.role === "user" ? Date.now() : null,
+    })
+  })
+
+  tx()
+  emitInboxChanged(conversationId, "changed")
+  return true
+}
+
 export function markInboxRead(id: string): void {
-  db.prepare(
+  const res = db.prepare(
     "UPDATE conversations SET readAt = @now WHERE id = @id AND origin = 'inbox' AND readAt IS NULL"
   ).run({ id, now: Date.now() })
+  if (res.changes > 0) emitInboxChanged(id, "read")
 }
 
 export function deleteInboxConversation(id: string): boolean {
@@ -821,6 +920,7 @@ export function deleteInboxConversation(id: string): boolean {
     .get(id)
   if (!row) return false
   deleteConversation(id) // FK-cascades messages; emits a harmless delete event
+  emitInboxChanged(id, "deleted")
   return true
 }
 

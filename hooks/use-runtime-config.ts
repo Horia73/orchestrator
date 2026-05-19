@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useAppEvent } from "@/hooks/use-app-events"
 
 export interface RuntimeNameConfig {
   assistantName: string
@@ -57,6 +58,10 @@ export function refreshRuntimeConfig() {
 export function useRuntimeConfig(): RuntimeNameConfig {
   const [config, setConfig] = React.useState<RuntimeNameConfig>(() => cachedConfig ?? DEFAULT_CONFIG)
 
+  useAppEvent(["config.updated"], () => {
+    refreshRuntimeConfig()
+  })
+
   React.useEffect(() => {
     const listener = () => setConfig(cachedConfig ?? DEFAULT_CONFIG)
     listeners.add(listener)
@@ -66,7 +71,6 @@ export function useRuntimeConfig(): RuntimeNameConfig {
       if (!controller.signal.aborted) setConfig(cachedConfig ?? DEFAULT_CONFIG)
     })
 
-    const interval = window.setInterval(() => refreshRuntimeConfig(), 3000)
     const onFocus = () => refreshRuntimeConfig()
     const onVisibility = () => {
       if (document.visibilityState === "visible") refreshRuntimeConfig()
@@ -78,7 +82,6 @@ export function useRuntimeConfig(): RuntimeNameConfig {
     return () => {
       controller.abort()
       listeners.delete(listener)
-      window.clearInterval(interval)
       window.removeEventListener("focus", onFocus)
       document.removeEventListener("visibilitychange", onVisibility)
       window.removeEventListener("orchestrator:config-updated", onFocus)

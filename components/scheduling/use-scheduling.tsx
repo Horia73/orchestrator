@@ -7,10 +7,10 @@ import type {
   ScheduleSpec,
 } from "@/lib/scheduling/schema"
 import type { TaskRunRecord } from "@/lib/scheduling/store"
+import { useAppEvent } from "@/hooks/use-app-events"
 
 export type { TaskRunRecord }
 
-const POLL_MS = 4000
 const RUN_HISTORY_PAGE_SIZE = 50
 
 export interface TaskRunPage {
@@ -89,6 +89,10 @@ export function SchedulingProvider({
     }
   }, [])
 
+  useAppEvent(["scheduled_tasks.changed"], () => {
+    if (document.visibilityState === "visible") void refresh()
+  })
+
   React.useEffect(() => {
     let cancelled = false
     setLoading(true)
@@ -99,11 +103,9 @@ export function SchedulingProvider({
     const onTick = () => {
       if (document.visibilityState === "visible") void refresh()
     }
-    const interval = window.setInterval(onTick, POLL_MS)
     document.addEventListener("visibilitychange", onTick)
     return () => {
       cancelled = true
-      window.clearInterval(interval)
       document.removeEventListener("visibilitychange", onTick)
     }
   }, [refresh])

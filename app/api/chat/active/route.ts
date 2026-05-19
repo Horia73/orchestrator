@@ -1,14 +1,25 @@
-import { getActiveChatStream } from '@/lib/chat-streams'
+import { getActiveChatStream, listActiveChatStreams } from '@/lib/chat-streams'
 
 export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const conversationId = searchParams.get('conversationId')
 
     if (!conversationId) {
-        return new Response(JSON.stringify({ error: 'Missing conversationId' }), {
-            status: 400,
-            headers: { 'Content-Type': 'application/json' },
-        })
+        const streams = listActiveChatStreams()
+
+        return new Response(
+            JSON.stringify({
+                active: streams.length > 0,
+                streams,
+                conversationIds: streams.map(stream => stream.conversationId),
+            }),
+            {
+                headers: {
+                    'Content-Type': 'application/json',
+                    'Cache-Control': 'no-store',
+                },
+            }
+        )
     }
 
     const active = getActiveChatStream(conversationId)

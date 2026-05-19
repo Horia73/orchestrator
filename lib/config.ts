@@ -14,6 +14,7 @@ import {
     getEffectiveModel,
     effectiveModelExists,
 } from '@/lib/models/registry';
+import { emitAppEvent } from '@/lib/events';
 
 /** Project root for this orchestrator instance. */
 export const PROJECT_DIR = /* turbopackIgnore: true */ process.cwd();
@@ -340,6 +341,8 @@ export function updateConfig(newConfig: Partial<AppConfig>): AppConfig {
     const current = getConfig();
     const updated = { ...current, ...newConfig, updatedAt: Date.now() };
     fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2), 'utf-8');
+    emitAppEvent({ type: 'config.updated' });
+    emitAppEvent({ type: 'settings.changed', reason: 'config' });
     return updated;
 }
 

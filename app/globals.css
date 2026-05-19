@@ -262,4 +262,23 @@ button:not(:disabled),
     background: color-mix(in oklch, var(--foreground) 50%, transparent);
     border-radius: 6px;
   }
+
+  .chat-scroll-container {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
+  .chat-scroll-container::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 6px;
+    transition: background-color 180ms ease;
+  }
+
+  .chat-scroll-container[data-scrollbar-visible="true"] {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 50%, transparent) transparent;
+  }
+
+  .chat-scroll-container[data-scrollbar-visible="true"]::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 50%, transparent);
+  }
 }

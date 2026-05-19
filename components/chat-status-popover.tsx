@@ -75,6 +75,7 @@ interface ChatStatusPopoverProps {
     draftValue: string
     attachments: DraftAttachment[]
     contextUsage?: ContextUsageSnapshot
+    side?: React.ComponentProps<typeof PopoverContent>["side"]
 }
 
 // Fallback base context when the status endpoint can't measure the real
@@ -90,7 +91,7 @@ function isCliProvider(providerId: string | undefined): providerId is CliProvide
     return providerId === "claude-code" || providerId === "codex"
 }
 
-export function ChatStatusPopover({ messages, draftValue, attachments, contextUsage }: ChatStatusPopoverProps) {
+export function ChatStatusPopover({ messages, draftValue, attachments, contextUsage, side = "top" }: ChatStatusPopoverProps) {
     const [open, setOpen] = React.useState(false)
     const isMobile = useIsMobile()
     const status = useChatStatus()
@@ -138,7 +139,7 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
             </Tooltip>
 
             <PopoverContent
-                side="top"
+                side={side}
                 align={isMobile ? "center" : "end"}
                 sideOffset={isMobile ? 8 : 10}
                 collisionPadding={isMobile ? 12 : undefined}

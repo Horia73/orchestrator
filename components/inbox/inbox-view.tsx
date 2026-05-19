@@ -8,6 +8,7 @@ import {
   Inbox as InboxIcon,
   Loader2,
   Reply,
+  Send,
   Trash2,
 } from "lucide-react"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
@@ -16,7 +17,7 @@ import { useConfirm } from "@/components/ui/confirm-dialog"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
 import { cn } from "@/lib/utils"
-import type { ReasoningEntry } from "@/lib/types"
+import type { InboxReplyAction, ReasoningEntry } from "@/lib/types"
 import { InboxProvider, useInbox } from "./use-inbox"
 
 function timeAgo(ms: number): string {
@@ -60,6 +61,50 @@ function TraceSummary({ reasoning }: { reasoning: ReasoningEntry[] }) {
         ))}
       </ul>
     </details>
+  )
+}
+
+function QuickReplyActions({
+  actions,
+  disabled,
+  busyActionId,
+  onSelect,
+}: {
+  actions?: InboxReplyAction[]
+  disabled: boolean
+  busyActionId: string | null
+  onSelect: (action: InboxReplyAction) => void
+}) {
+  if (!actions?.length) return null
+  return (
+    <div className="mt-3 flex flex-wrap gap-2">
+      {actions.map((action) => {
+        const destructive = action.style === "destructive"
+        const primary = action.style === "primary"
+        const busy = busyActionId === action.id
+        return (
+          <button
+            key={action.id}
+            type="button"
+            onClick={() => onSelect(action)}
+            disabled={disabled}
+            className={cn(
+              "min-h-8 max-w-full rounded-md px-3 py-1.5 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-60",
+              primary
+                ? "bg-foreground text-background hover:opacity-90"
+                : destructive
+                  ? "border border-red-200 bg-red-50 text-[#802020] hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200"
+                  : "border border-border/70 bg-muted/35 text-foreground/75 hover:bg-muted"
+            )}
+            title={action.value}
+          >
+            <span className="block truncate">
+              {busy ? "Sending..." : action.label}
+            </span>
+          </button>
+        )
+      })}
+    </div>
   )
 }
 
@@ -113,12 +158,16 @@ function InboxViewInner() {
     clear,
     remove,
     reply,
+    respond,
   } = useInbox()
   const { selectConversation } = useChatStore()
   const router = useRouter()
   const searchParams = useSearchParams()
   const { confirm, dialog } = useConfirm()
   const [replying, setReplying] = React.useState(false)
+  const [responding, setResponding] = React.useState(false)
+  const [busyActionId, setBusyActionId] = React.useState<string | null>(null)
+  const [draft, setDraft] = React.useState("")
 
   React.useEffect(() => {
     const id = searchParams.get("item")
@@ -134,6 +183,26 @@ function InboxViewInner() {
       router.push("/")
     }
   }
+
+  const onRespond = async (
+    id: string,
+    content: string,
+    actionId?: string
+  ) => {
+    if (!content.trim() || responding) return
+    setResponding(true)
+    setBusyActionId(actionId ?? null)
+    const ok = await respond(id, content)
+    setResponding(false)
+    setBusyActionId(null)
+    if (ok && !actionId) setDraft("")
+  }
+
+  React.useEffect(() => {
+    setDraft("")
+    setBusyActionId(null)
+    setResponding(false)
+  }, [selectedId])
 
   return (
     <div className="flex h-full min-h-0">
@@ -153,7 +222,7 @@ function InboxViewInner() {
                 <InboxIcon className="size-5 text-foreground/60" /> Inbox
               </h1>
               <p className="mt-0.5 text-[12px] text-foreground/50">
-                Scheduled run results · read-only
+                Scheduled run results · reply inline
               </p>
             </div>
           </div>
@@ -260,7 +329,7 @@ function InboxViewInner() {
                   className="flex items-center gap-1.5 rounded-md bg-foreground px-3 py-1.5 text-[13px] text-background hover:opacity-90 disabled:opacity-60"
                 >
                   <Reply className="size-3.5" />{" "}
-                  {replying ? "Opening…" : "Reply in chat"}
+                  {replying ? "Opening…" : "Open in chat"}
                 </button>
                 <button
                   onClick={async () => {
@@ -290,21 +359,54 @@ function InboxViewInner() {
                     </div>
                     <div className="rounded-xl border border-border/50 bg-background px-4 py-3 text-[14px] leading-relaxed">
                       <MarkdownRenderer content={m.content} />
+                      {m.role === "assistant" && (
+                        <QuickReplyActions
+                          actions={m.replyActions}
+                          disabled={responding}
+                          busyActionId={busyActionId}
+                          onSelect={(action) =>
+                            void onRespond(detail.id, action.value, action.id)
+                          }
+                        />
+                      )}
                       {m.reasoning && m.reasoning.length > 0 && (
                         <TraceSummary reasoning={m.reasoning} />
                       )}
                     </div>
-                    {m.role === "assistant" && (
-                      <button
-                        onClick={() => void onReply(detail.id)}
-                        disabled={replying}
-                        className="mt-1.5 flex items-center gap-1 text-[12px] text-foreground/45 hover:text-foreground disabled:opacity-60"
-                      >
-                        <Reply className="size-3" /> Reply
-                      </button>
-                    )}
                   </div>
                 ))}
+                <form
+                  className="rounded-xl border border-border/60 bg-muted/20 p-3"
+                  onSubmit={(event) => {
+                    event.preventDefault()
+                    void onRespond(detail.id, draft)
+                  }}
+                >
+                  <textarea
+                    value={draft}
+                    onChange={(event) => setDraft(event.target.value)}
+                    disabled={responding}
+                    placeholder="Reply in this inbox item..."
+                    className="min-h-20 w-full resize-none rounded-md border border-border/60 bg-background px-3 py-2 text-[14px] leading-relaxed outline-none focus:ring-2 focus:ring-foreground/15 disabled:opacity-60"
+                  />
+                  <div className="mt-2 flex items-center justify-between gap-3">
+                    <p className="min-w-0 text-[12px] text-foreground/45">
+                      Replies stay in this Inbox thread.
+                    </p>
+                    <button
+                      type="submit"
+                      disabled={responding || !draft.trim()}
+                      className="flex h-9 shrink-0 items-center gap-1.5 rounded-md bg-foreground px-3 text-[13px] font-medium text-background hover:opacity-90 disabled:pointer-events-none disabled:opacity-50"
+                    >
+                      {responding && !busyActionId ? (
+                        <Loader2 className="size-3.5 animate-spin" />
+                      ) : (
+                        <Send className="size-3.5" />
+                      )}
+                      Send
+                    </button>
+                  </div>
+                </form>
               </div>
             </div>
           </>

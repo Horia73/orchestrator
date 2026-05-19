@@ -28,6 +28,7 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { cn } from "@/lib/utils"
 import type { ScheduledTask, ScheduleSpec } from "@/lib/scheduling/schema"
+import { useAppEvent } from "@/hooks/use-app-events"
 import {
   SchedulingProvider,
   useScheduling,
@@ -497,6 +498,14 @@ function PastRuns({ taskId }: { taskId: string }) {
   const isWideRunsViewport = useMediaQuery("(min-width: 768px)")
   const apiFilters = React.useMemo(() => runFiltersToApi(filters), [filters])
   const activeFilters = countActiveRunFilters(filters)
+  const loadLatestRef = React.useRef<((mode: "initial" | "poll") => void) | null>(
+    null
+  )
+
+  useAppEvent(["task_runs.changed", "scheduled_tasks.changed"], (event) => {
+    if ("taskId" in event && event.taskId && event.taskId !== taskId) return
+    if (document.visibilityState === "visible") loadLatestRef.current?.("poll")
+  })
 
   React.useEffect(() => {
     let cancelled = false
@@ -541,16 +550,21 @@ function PastRuns({ taskId }: { taskId: string }) {
         }))
       }
     }
+    loadLatestRef.current = (mode) => {
+      void loadLatest(mode)
+    }
 
     setSelectedRunId(null)
     setHistory(emptyRunHistory())
     void loadLatest("initial")
-    const i = window.setInterval(() => {
+    const onVisibilityChange = () => {
       if (document.visibilityState === "visible") void loadLatest("poll")
-    }, 5000)
+    }
+    document.addEventListener("visibilitychange", onVisibilityChange)
     return () => {
       cancelled = true
-      window.clearInterval(i)
+      if (loadLatestRef.current) loadLatestRef.current = null
+      document.removeEventListener("visibilitychange", onVisibilityChange)
     }
   }, [taskId, fetchRuns, apiFilters, reloadKey])
 

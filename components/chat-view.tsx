@@ -1,8 +1,6 @@
 "use client"
 
 import * as React from "react"
-import { flushSync } from "react-dom"
-import { useVirtualizer } from "@tanstack/react-virtual"
 import { ArrowDown, ChevronDown, Loader2 } from "lucide-react"
 import {
   ArtifactPanel,
@@ -13,6 +11,7 @@ import { ChatInput } from "@/components/chat-input"
 import { AttachmentCard } from "@/components/attachment-card"
 import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
+import { TerminalOutput } from "@/components/tool-call-view"
 import { FilePreviewModal } from "@/components/file-preview-modal"
 import { ArtifactPanel as AntArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
@@ -23,7 +22,6 @@ import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
   Attachment,
-  Message,
   ReasoningEntry,
 } from "@/lib/types"
 
@@ -36,18 +34,38 @@ const ARTIFACT_PANEL_MIN_CHAT_WIDTH = 360
 const ARTIFACT_PANEL_RESIZE_STEP = 40
 const ARTIFACT_PANEL_RESIZER_WIDTH = 10
 const ARTIFACT_PANEL_WIDTH_STORAGE_PREFIX = "chat:artifact-panel-width"
-const OLDER_MESSAGES_SCROLL_THRESHOLD = 420
-const MESSAGE_ROW_ESTIMATE = 180
-const MESSAGE_ROW_GAP = 24
+const BROWSER_AGENT_TERMINAL_STYLE: React.CSSProperties = {
+  height: "min(460px, calc(100vh - 260px))",
+  minHeight: "320px",
+}
 const SCROLL_BOTTOM_SENTINEL = "bottom"
+const SCROLL_ANCHOR_STORAGE_PREFIX = "scroll-anchor:chat"
+const SCROLL_RESTORE_STORAGE_PREFIX = "scroll-restore:chat"
+const SCROLL_RESTORE_TOP_OFFSET = 16
+const MESSAGE_ANCHOR_TOP_OFFSET = 32
+const MESSAGE_ANCHOR_SCROLL_DURATION_MS = 420
+const SCROLL_BUTTON_FADE_DISTANCE_PX = 2700
+const MAX_RESTORE_OLDER_PAGES = 64
+const MESSAGE_VERTICAL_GAP = 24
+const TAIL_SPACER_UPDATE_THRESHOLD_PX = 4
+
+type SavedScrollRestore = {
+  messageId: string
+  offset: number
+  scrollTop: number
+  distanceFromBottom: number
+  savedAt: number
+}
+
+function getElementContentHeight(element: HTMLElement): number {
+  const firstChild = element.firstElementChild
+  if (firstChild instanceof HTMLElement) {
+    return Math.ceil(firstChild.getBoundingClientRect().height)
+  }
+  return Math.ceil(element.getBoundingClientRect().height)
+}
 
 type ArtifactState = ArtifactPayload
-
-type ChatVirtualRow =
-  | { kind: "older"; key: string }
-  | { kind: "initial-loading"; key: string }
-  | { kind: "message"; key: string; message: Message; index: number }
-  | { kind: "streaming"; key: string }
 
 /** Old persisted artifact shape (no `kind`). Migrate to current union. */
 function migrateLegacyArtifact(stored: unknown): ArtifactState | null {
@@ -137,10 +155,6 @@ function collectAgentRuns(
     }
   }
   return out
-}
-
-function hasBrowserAgentRun(reasoning?: ReasoningEntry[]): boolean {
-  return collectAgentRuns(reasoning).some((run) => run.agentId === "browser_agent")
 }
 
 type SelectedAgentTool = {
@@ -325,6 +339,8 @@ function AgentRunPane({
   onSelectedArtifactClose?: () => void
   onAttachmentClick?: (attachment: Attachment) => void
 }) {
+  const isBrowserAgent = run.agentId === "browser_agent"
+
   return (
     <div className="min-h-0 overflow-auto px-4 py-4">
       {compact && (
@@ -351,26 +367,30 @@ function AgentRunPane({
           ))}
         </div>
       )}
-      {run.error && (
+      {run.error && !isBrowserAgent && (
         <div className="mb-3 rounded-md border border-destructive/30 bg-destructive/10 p-3 text-[13px] text-destructive">
           {run.error}
         </div>
       )}
-      <StreamingBubble
-        reasoning={run.reasoning ?? []}
-        content={run.content}
-        contentSegments={
-          run.contentSegments ??
-          (run.content ? [{ phase: 0, content: run.content }] : [])
-        }
-        streamingMode={run.status === "running" ? "reasoning" : null}
-        showCursor={
-          run.status === "running" && !run.content && !run.reasoning?.length
-        }
-        onArtifactClick={onArtifactClick}
-        onAttachmentClick={onAttachmentClick}
-      />
-      {selectedArtifact && (
+      {isBrowserAgent ? (
+        <BrowserAgentOutputTerminal run={run} />
+      ) : (
+        <StreamingBubble
+          reasoning={run.reasoning ?? []}
+          content={run.content}
+          contentSegments={
+            run.contentSegments ??
+            (run.content ? [{ phase: 0, content: run.content }] : [])
+          }
+          streamingMode={run.status === "running" ? "reasoning" : null}
+          showCursor={
+            run.status === "running" && !run.content && !run.reasoning?.length
+          }
+          onArtifactClick={onArtifactClick}
+          onAttachmentClick={onAttachmentClick}
+        />
+      )}
+      {selectedArtifact && !isBrowserAgent && (
         <AgentToolResultPreview
           artifact={selectedArtifact}
           variant="inline"
@@ -381,11 +401,36 @@ function AgentRunPane({
   )
 }
 
+function BrowserAgentOutputTerminal({ run }: { run: AgentCallReasoningEntry }) {
+  return (
+    <div
+      className="overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm"
+      style={BROWSER_AGENT_TERMINAL_STYLE}
+    >
+      <TerminalOutput
+        text={browserAgentTerminalText(run)}
+        cursorBlink={run.status === "running"}
+        resetKey={run.runId}
+      />
+    </div>
+  )
+}
+
+function browserAgentTerminalText(run: AgentCallReasoningEntry): string {
+  const segmentedContent = run.contentSegments?.map((segment) => segment.content).join("") ?? ""
+  const content = run.content || segmentedContent
+  if (content) return content.endsWith("\n") ? content : `${content}\n`
+  if (run.error) return `Error: ${run.error}\n`
+  if (run.status === "running") return "Browser agent is running...\n"
+  return "No output yet.\n"
+}
+
 export function ChatView() {
   const { state, loadOlderMessages } = useChatStore()
   const layoutContainerRef = React.useRef<HTMLDivElement>(null)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const inputContainerRef = React.useRef<HTMLDivElement>(null)
+  const streamingBubbleContainerRef = React.useRef<HTMLDivElement>(null)
   const wasStreamingRef = React.useRef(false)
   const autoScrollEnabledRef = React.useRef(false)
   const suppressBtnRef = React.useRef(false) // Brief suppression after streaming starts (prevents flash from minHeight)
@@ -394,9 +439,16 @@ export function ChatView() {
   const conversationIdRef = React.useRef<string | null>(null)
   const artifactResizeKeyRef = React.useRef<string | null>(null)
   const olderLoadRequestedRef = React.useRef(false)
-  const requestOlderMessagesRef = React.useRef<() => void>(() => {})
   const restoredScrollConversationRef = React.useRef<string | null>(null)
   const bottomSettleFrameIdRef = React.useRef<number | null>(null)
+  const messageTopAnchorFrameIdRef = React.useRef<number | null>(null)
+  const messageTopAnchorReleaseTimeoutRef = React.useRef<number | null>(null)
+  const messageTopAnchorMessageIdRef = React.useRef<string | null>(null)
+  const messageTopAnchorStartedAtRef = React.useRef(0)
+  const restoreOlderAttemptRef = React.useRef<{
+    conversationId: string
+    attempts: number
+  } | null>(null)
   const olderLoadAnchorRef = React.useRef<{
     conversationId: string
     messageCount: number
@@ -413,7 +465,16 @@ export function ChatView() {
     )
     if (saved) {
       try {
-        return JSON.parse(saved).minHeight || 0
+        const parsed = JSON.parse(saved)
+        const savedViewportHeight =
+          typeof parsed.viewportHeight === "number" ? parsed.viewportHeight : 0
+        if (
+          savedViewportHeight > 0 &&
+          Math.abs(savedViewportHeight - window.innerHeight) > 96
+        ) {
+          return 0
+        }
+        return parsed.minHeight || 0
       } catch {}
     }
     return 0
@@ -426,7 +487,18 @@ export function ChatView() {
       )
       if (saved) {
         try {
-          return JSON.parse(saved).minHeightMsgId || null
+          const parsed = JSON.parse(saved)
+          const savedViewportHeight =
+            typeof parsed.viewportHeight === "number"
+              ? parsed.viewportHeight
+              : 0
+          if (
+            savedViewportHeight > 0 &&
+            Math.abs(savedViewportHeight - window.innerHeight) > 96
+          ) {
+            return null
+          }
+          return parsed.minHeightMsgId || null
         } catch {}
       }
       return null
@@ -470,7 +542,17 @@ export function ChatView() {
   })
   const [showScrollBtn, setShowScrollBtn] = React.useState(false)
   const [isRestoringScroll, setIsRestoringScroll] = React.useState(false)
+  const [isScrollJumpFading, setIsScrollJumpFading] = React.useState(false)
+  const [isScrollbarVisible, setIsScrollbarVisible] = React.useState(false)
+  const [isScrollbarSuppressed, setIsScrollbarSuppressed] =
+    React.useState(false)
   const showScrollBtnRef = React.useRef(false)
+  const scrollbarVisibleRef = React.useRef(false)
+  const scrollbarSuppressedRef = React.useRef(false)
+  const scrollbarFadeTimeoutRef = React.useRef<number | null>(null)
+  const scrollJumpFadeTimeoutRef = React.useRef<number | null>(null)
+  const scrollJumpFadeReleaseTimeoutRef = React.useRef<number | null>(null)
+  const scrollButtonLockedUntilStreamingEndRef = React.useRef(false)
   const [inputOffset, setInputOffset] = React.useState(88)
   const [artifactPanelWidth, setArtifactPanelWidth] = React.useState(
     ARTIFACT_PANEL_DEFAULT_WIDTH
@@ -537,6 +619,13 @@ export function ChatView() {
   }, [activeConversation?.messages])
   const showInitialStreamingCursor =
     state.isStreaming && !hasStreamingPayload && !hasInProgressAssistantProgress
+  // Keep streaming bubble alive until the committed message is ready to take
+  // over the tail spacer (prevents layout flash on streaming end).
+  const showStreamingBubble = Boolean(
+    activeConversation &&
+      (state.isStreaming || (minHeight > 0 && minHeightMsgId === null)) &&
+      state.activeConversationId === activeConversation.id
+  )
 
   const agentRuns = React.useMemo(() => {
     const runs: AgentCallReasoningEntry[] = []
@@ -548,10 +637,6 @@ export function ChatView() {
     for (const run of runs) byId.set(run.runId, run)
     return Array.from(byId.values())
   }, [activeConversation?.messages, state.streamingReasoning])
-  const streamingHasBrowserAgent = React.useMemo(
-    () => hasBrowserAgentRun(state.streamingReasoning),
-    [state.streamingReasoning]
-  )
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(
     null
   )
@@ -568,7 +653,10 @@ export function ChatView() {
   )
 
   const scrollToBottom = React.useCallback(
-    (behavior: ScrollBehavior = "smooth") => {
+    (
+      behavior: ScrollBehavior = "smooth",
+      options?: { settle?: boolean }
+    ) => {
       const element = scrollContainerRef.current
       if (!element) return
       const setToBottom = () => {
@@ -583,13 +671,61 @@ export function ChatView() {
         return
       }
       const target = element.scrollHeight - element.clientHeight
+      const distance = Math.abs(target - element.scrollTop)
       try {
         element.scrollTo({ top: target, behavior: "smooth" })
       } catch {
         element.scrollTop = target
       }
+      const shouldSettle =
+        options?.settle ?? distance > SCROLL_BUTTON_FADE_DISTANCE_PX
+      if (shouldSettle) {
+        window.setTimeout(() => {
+          const remaining =
+            element.scrollHeight - element.scrollTop - element.clientHeight
+          if (remaining > 2) setToBottom()
+        }, MESSAGE_ANCHOR_SCROLL_DURATION_MS)
+      }
     },
     []
+  )
+
+  const getTailResponseMinHeight = React.useCallback(
+    (userMessageId: string, responseElement?: HTMLElement | null) => {
+      const scrollElement = scrollContainerRef.current
+      const userElement = document.getElementById(`message-${userMessageId}`)
+      if (!scrollElement || !userElement) return 0
+
+      const userRect = userElement.getBoundingClientRect()
+      const responseRect = responseElement?.getBoundingClientRect()
+      const gapAfterUser = responseRect
+        ? Math.max(0, Math.round(responseRect.top - userRect.bottom))
+        : MESSAGE_VERTICAL_GAP
+      const bottomPadding = inputOffset + 24
+      const neededAfterUser =
+        scrollElement.clientHeight -
+        MESSAGE_ANCHOR_TOP_OFFSET -
+        Math.ceil(userRect.height) -
+        gapAfterUser -
+        bottomPadding
+
+      return Math.max(0, Math.ceil(neededAfterUser))
+    },
+    [inputOffset]
+  )
+
+  const getCommittedTailSpacer = React.useCallback(
+    (userMessageId: string, responseElement: HTMLElement) => {
+      const minResponseHeight = getTailResponseMinHeight(
+        userMessageId,
+        responseElement
+      )
+      return Math.max(
+        0,
+        minResponseHeight - getElementContentHeight(responseElement)
+      )
+    },
+    [getTailResponseMinHeight]
   )
 
   const activeIdRef = React.useRef(state.activeConversationId)
@@ -606,6 +742,43 @@ export function ChatView() {
     if (showScrollBtnRef.current === visible) return
     showScrollBtnRef.current = visible
     setShowScrollBtn(visible)
+  }, [])
+
+  const setProgrammaticScrollbarSuppressed = React.useCallback(
+    (suppressed: boolean) => {
+      if (scrollbarSuppressedRef.current === suppressed) return
+      scrollbarSuppressedRef.current = suppressed
+      setIsScrollbarSuppressed(suppressed)
+
+      if (suppressed) {
+        if (scrollbarFadeTimeoutRef.current !== null) {
+          window.clearTimeout(scrollbarFadeTimeoutRef.current)
+          scrollbarFadeTimeoutRef.current = null
+        }
+        scrollbarVisibleRef.current = false
+        setIsScrollbarVisible(false)
+      }
+    },
+    []
+  )
+
+  const revealScrollbar = React.useCallback(() => {
+    if (scrollbarSuppressedRef.current) return
+
+    if (!scrollbarVisibleRef.current) {
+      scrollbarVisibleRef.current = true
+      setIsScrollbarVisible(true)
+    }
+
+    if (scrollbarFadeTimeoutRef.current !== null) {
+      window.clearTimeout(scrollbarFadeTimeoutRef.current)
+    }
+
+    scrollbarFadeTimeoutRef.current = window.setTimeout(() => {
+      scrollbarVisibleRef.current = false
+      scrollbarFadeTimeoutRef.current = null
+      setIsScrollbarVisible(false)
+    }, 900)
   }, [])
 
   const requestOlderMessages = React.useCallback(() => {
@@ -640,9 +813,27 @@ export function ChatView() {
     messageCount,
   ])
 
-  React.useEffect(() => {
-    requestOlderMessagesRef.current = requestOlderMessages
-  }, [requestOlderMessages])
+  const requestOlderMessagesForRestore = React.useCallback(() => {
+    if (
+      !conversationId ||
+      !hasOlderMessages ||
+      isLoadingOlderMessages ||
+      olderLoadRequestedRef.current
+    ) {
+      return false
+    }
+
+    olderLoadRequestedRef.current = true
+    void loadOlderMessages(conversationId).finally(() => {
+      olderLoadRequestedRef.current = false
+    })
+    return true
+  }, [
+    conversationId,
+    hasOlderMessages,
+    isLoadingOlderMessages,
+    loadOlderMessages,
+  ])
 
   const flushPendingScrollSave = React.useCallback(() => {
     const pending = pendingScrollSaveRef.current
@@ -655,6 +846,7 @@ export function ChatView() {
     (value: string) => {
       const conversationId = activeIdRef.current
       if (!conversationId) return
+      localStorage.setItem(`scroll:chat:${conversationId}`, value)
       pendingScrollSaveRef.current = {
         conversationId,
         value,
@@ -668,27 +860,119 @@ export function ChatView() {
     [flushPendingScrollSave]
   )
 
+  const saveScrollAnchor = React.useCallback(() => {
+    const conversationId = activeIdRef.current
+    const element = scrollContainerRef.current
+    if (!conversationId || !element) return false
+    if (element.scrollHeight <= element.clientHeight) return false
+
+    const elementRect = element.getBoundingClientRect()
+    const messageElements = Array.from(
+      element.querySelectorAll<HTMLElement>('[id^="message-"]')
+    )
+    if (messageElements.length === 0) return false
+
+    const anchorElement =
+      messageElements.find((messageElement) => {
+        const rect = messageElement.getBoundingClientRect()
+        return rect.bottom >= elementRect.top + SCROLL_RESTORE_TOP_OFFSET
+      }) ?? messageElements.at(-1)
+
+    if (!anchorElement?.id.startsWith("message-")) return false
+    const anchorRect = anchorElement.getBoundingClientRect()
+    const distanceFromBottom = Math.max(
+      0,
+      element.scrollHeight - element.scrollTop - element.clientHeight
+    )
+    const payload: SavedScrollRestore = {
+      messageId: anchorElement.id.slice("message-".length),
+      offset: Math.round(anchorRect.top - elementRect.top),
+      scrollTop: Math.round(element.scrollTop),
+      distanceFromBottom: Math.round(distanceFromBottom),
+      savedAt: Date.now(),
+    }
+    localStorage.setItem(
+      `${SCROLL_ANCHOR_STORAGE_PREFIX}:${conversationId}`,
+      JSON.stringify(payload)
+    )
+    localStorage.setItem(
+      `${SCROLL_RESTORE_STORAGE_PREFIX}:${conversationId}`,
+      JSON.stringify(payload)
+    )
+    return true
+  }, [])
+
   React.useEffect(
-    () => () => {
-      if (scrollSaveTimeoutRef.current !== null) {
-        window.clearTimeout(scrollSaveTimeoutRef.current)
-        scrollSaveTimeoutRef.current = null
+    () => {
+      const flushCurrentScroll = () => {
+        const conversationId = activeIdRef.current
+        const element = scrollContainerRef.current
+        if (!conversationId || !element) return
+        if (
+          element.scrollHeight <= element.clientHeight ||
+          !element.querySelector('[id^="message-"]')
+        ) {
+          return
+        }
+        const didSaveAnchor = saveScrollAnchor()
+        if (!didSaveAnchor) return
+        const distanceFromBottom =
+          element.scrollHeight - element.scrollTop - element.clientHeight
+        localStorage.setItem(
+          `scroll:chat:${conversationId}`,
+          distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
+            ? SCROLL_BOTTOM_SENTINEL
+            : Math.round(element.scrollTop).toString()
+        )
       }
-      flushPendingScrollSave()
+
+      window.addEventListener("pagehide", flushCurrentScroll)
+      window.addEventListener("beforeunload", flushCurrentScroll)
+
+      return () => {
+        window.removeEventListener("pagehide", flushCurrentScroll)
+        window.removeEventListener("beforeunload", flushCurrentScroll)
+
+        if (scrollSaveTimeoutRef.current !== null) {
+          window.clearTimeout(scrollSaveTimeoutRef.current)
+          scrollSaveTimeoutRef.current = null
+        }
+        if (messageTopAnchorFrameIdRef.current !== null) {
+          window.cancelAnimationFrame(messageTopAnchorFrameIdRef.current)
+          messageTopAnchorFrameIdRef.current = null
+        }
+        if (messageTopAnchorReleaseTimeoutRef.current !== null) {
+          window.clearTimeout(messageTopAnchorReleaseTimeoutRef.current)
+          messageTopAnchorReleaseTimeoutRef.current = null
+        }
+        messageTopAnchorMessageIdRef.current = null
+        messageTopAnchorStartedAtRef.current = 0
+        if (scrollJumpFadeTimeoutRef.current !== null) {
+          window.clearTimeout(scrollJumpFadeTimeoutRef.current)
+          scrollJumpFadeTimeoutRef.current = null
+        }
+        if (scrollJumpFadeReleaseTimeoutRef.current !== null) {
+          window.clearTimeout(scrollJumpFadeReleaseTimeoutRef.current)
+          scrollJumpFadeReleaseTimeoutRef.current = null
+        }
+        if (scrollbarFadeTimeoutRef.current !== null) {
+          window.clearTimeout(scrollbarFadeTimeoutRef.current)
+          scrollbarFadeTimeoutRef.current = null
+        }
+        scrollbarVisibleRef.current = false
+        scrollbarSuppressedRef.current = false
+        scrollButtonLockedUntilStreamingEndRef.current = false
+        flushPendingScrollSave()
+      }
     },
-    [flushPendingScrollSave]
+    [flushPendingScrollSave, saveScrollAnchor]
   )
 
   const syncScrollState = React.useCallback(() => {
     const element = scrollContainerRef.current
     if (!element) return
 
-    if (
-      !ignoreSyncRef.current &&
-      element.scrollTop <= OLDER_MESSAGES_SCROLL_THRESHOLD
-    ) {
-      requestOlderMessagesRef.current()
-    }
+    revealScrollbar()
 
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight
@@ -698,6 +982,7 @@ export function ChatView() {
       // Guard against the browser triggering passive layout-shift scroll events
       // when the container height is tiny or still rendering, which was poisoning the cache with `0`.
       if (element.scrollHeight > element.clientHeight) {
+        saveScrollAnchor()
         scheduleScrollSave(
           isPinnedToBottom
             ? SCROLL_BOTTOM_SENTINEL
@@ -718,7 +1003,109 @@ export function ChatView() {
     if (!ignoreSyncRef.current && !suppressBtnRef.current) {
       setScrollButtonVisible(!autoScrollEnabledRef.current && !isPinnedToBottom)
     }
-  }, [scheduleScrollSave, setScrollButtonVisible])
+  }, [revealScrollbar, saveScrollAnchor, scheduleScrollSave, setScrollButtonVisible])
+
+  const scrollMessageToTop = React.useCallback((messageId: string, behavior: ScrollBehavior = "auto") => {
+    const element = scrollContainerRef.current
+    const messageElement = document.getElementById(`message-${messageId}`)
+    if (!element || !messageElement) return false
+
+    const elementRect = element.getBoundingClientRect()
+    const messageRect = messageElement.getBoundingClientRect()
+    const messageTop = messageRect.top - elementRect.top + element.scrollTop
+    const targetScrollTop = Math.max(0, messageTop - MESSAGE_ANCHOR_TOP_OFFSET)
+    const maxScrollTop = Math.max(0, element.scrollHeight - element.clientHeight)
+    if (maxScrollTop + 4 < targetScrollTop) return false
+
+    const nextTop = Math.min(targetScrollTop, maxScrollTop)
+    if (behavior === "smooth") {
+      try {
+        element.scrollTo({ top: nextTop, behavior: "smooth" })
+      } catch {
+        element.scrollTop = nextTop
+      }
+      return true
+    }
+
+    element.scrollTop = nextTop
+    return true
+  }, [])
+
+  const scheduleMessageTopAnchor = React.useCallback(
+    (messageId: string) => {
+      const releaseAnchor = (delay: number) => {
+        if (messageTopAnchorReleaseTimeoutRef.current !== null) {
+          window.clearTimeout(messageTopAnchorReleaseTimeoutRef.current)
+        }
+        messageTopAnchorReleaseTimeoutRef.current = window.setTimeout(() => {
+          messageTopAnchorReleaseTimeoutRef.current = null
+          scrollMessageToTop(messageId, "auto")
+          if (messageTopAnchorMessageIdRef.current === messageId) {
+            messageTopAnchorMessageIdRef.current = null
+            messageTopAnchorStartedAtRef.current = 0
+          }
+          ignoreSyncRef.current = false
+          syncScrollState()
+        }, delay)
+      }
+
+      const isSameAnchorPending =
+        messageTopAnchorMessageIdRef.current === messageId &&
+        (messageTopAnchorFrameIdRef.current !== null ||
+          messageTopAnchorReleaseTimeoutRef.current !== null)
+
+      if (isSameAnchorPending) {
+        ignoreSyncRef.current = true
+        if (messageTopAnchorReleaseTimeoutRef.current !== null) {
+          const elapsed =
+            messageTopAnchorStartedAtRef.current > 0
+              ? performance.now() - messageTopAnchorStartedAtRef.current
+              : 0
+          releaseAnchor(
+            Math.max(80, MESSAGE_ANCHOR_SCROLL_DURATION_MS - elapsed)
+          )
+        }
+        return
+      }
+
+      if (messageTopAnchorFrameIdRef.current !== null) {
+        window.cancelAnimationFrame(messageTopAnchorFrameIdRef.current)
+        messageTopAnchorFrameIdRef.current = null
+      }
+      if (messageTopAnchorReleaseTimeoutRef.current !== null) {
+        window.clearTimeout(messageTopAnchorReleaseTimeoutRef.current)
+          messageTopAnchorReleaseTimeoutRef.current = null
+      }
+
+      ignoreSyncRef.current = true
+      messageTopAnchorMessageIdRef.current = messageId
+      messageTopAnchorStartedAtRef.current = 0
+      let attempts = 0
+      let animationStarted = false
+      const run = () => {
+        const didStart = scrollMessageToTop(
+          messageId,
+          animationStarted ? "auto" : "smooth"
+        )
+
+        if (!didStart && attempts < 120) {
+          attempts += 1
+          messageTopAnchorFrameIdRef.current = window.requestAnimationFrame(run)
+          return
+        }
+
+        animationStarted = true
+        if (messageTopAnchorStartedAtRef.current === 0) {
+          messageTopAnchorStartedAtRef.current = performance.now()
+        }
+        messageTopAnchorFrameIdRef.current = null
+        releaseAnchor(MESSAGE_ANCHOR_SCROLL_DURATION_MS)
+      }
+
+      messageTopAnchorFrameIdRef.current = window.requestAnimationFrame(run)
+    },
+    [scrollMessageToTop, syncScrollState]
+  )
 
   React.useEffect(() => {
     const element = scrollContainerRef.current
@@ -774,21 +1161,70 @@ export function ChatView() {
     return () => observer.disconnect()
   }, [])
 
-  // Transfer minHeight from streaming bubble to committed AI message without a
-  // visual flash: keep the streaming bubble alive until the committed message is
-  // ready to take over, then swap atomically before the browser paints.
-  // 1. Streaming bubble to AI message transition
+  React.useLayoutEffect(() => {
+    if (!conversationId || !state.isStreaming || minHeightMsgId !== null) return
+    const messages = activeConversation?.messages ?? []
+    const lastMsg = messages[messages.length - 1]
+    if (lastMsg?.role !== "user") return
+
+    const nextMinHeight = getTailResponseMinHeight(
+      lastMsg.id,
+      streamingBubbleContainerRef.current
+    )
+    minHeightActiveRef.current = nextMinHeight > 0
+    if (Math.abs(nextMinHeight - minHeight) <= TAIL_SPACER_UPDATE_THRESHOLD_PX) {
+      return
+    }
+
+    setMinHeight(nextMinHeight)
+    localStorage.setItem(
+      `chat:minHeight:${conversationId}`,
+      JSON.stringify({
+        minHeight: nextMinHeight,
+        minHeightMsgId: null,
+        viewportHeight: window.innerHeight,
+      })
+    )
+  }, [
+    activeConversation?.messages,
+    conversationId,
+    getTailResponseMinHeight,
+    minHeight,
+    minHeightMsgId,
+    state.isStreaming,
+    state.streamingContent,
+    state.streamingContentSegments,
+    state.streamingReasoning,
+  ])
+
+  // Transfer the streaming spacer to the committed assistant message before
+  // paint, so the scrollbar does not briefly resize at stream end.
   React.useLayoutEffect(() => {
     if (state.isStreaming || minHeight === 0 || minHeightMsgId !== null) return
     const messages = activeConversation?.messages ?? []
     const lastMsg = messages[messages.length - 1]
-    if (lastMsg?.role === "assistant") {
+    const previousMsg = messages[messages.length - 2]
+    if (lastMsg?.role === "assistant" && previousMsg?.role === "user") {
+      const assistantElement = document.getElementById(`message-${lastMsg.id}`)
+      const nextSpacer =
+        assistantElement instanceof HTMLElement
+          ? getCommittedTailSpacer(previousMsg.id, assistantElement)
+          : 0
+
       setMinHeightMsgId(lastMsg.id)
+      setMinHeight(nextSpacer)
       if (conversationId) {
         localStorage.setItem(
           `chat:minHeight:${conversationId}`,
-          JSON.stringify({ minHeight, minHeightMsgId: lastMsg.id })
+          JSON.stringify({
+            minHeight: nextSpacer,
+            minHeightMsgId: lastMsg.id,
+            viewportHeight: window.innerHeight,
+          })
         )
+      }
+      if (restoredScrollConversationRef.current === conversationId) {
+        scheduleMessageTopAnchor(previousMsg.id)
       }
     }
   }, [
@@ -797,6 +1233,64 @@ export function ChatView() {
     minHeight,
     minHeightMsgId,
     conversationId,
+    getCommittedTailSpacer,
+    scheduleMessageTopAnchor,
+  ])
+
+  React.useLayoutEffect(() => {
+    if (!conversationId || state.isStreaming || showStreamingBubble) return
+    const messages = activeConversation?.messages ?? []
+    const lastMsg = messages[messages.length - 1]
+    const previousMsg = messages[messages.length - 2]
+
+    const clearTailSpacer = () => {
+      if (minHeight !== 0) setMinHeight(0)
+      if (minHeightMsgId !== null) setMinHeightMsgId(null)
+      localStorage.removeItem(`chat:minHeight:${conversationId}`)
+    }
+
+    if (
+      !lastMsg ||
+      lastMsg.role !== "assistant" ||
+      !previousMsg ||
+      previousMsg.role !== "user"
+    ) {
+      clearTailSpacer()
+      return
+    }
+
+    const assistantElement = document.getElementById(`message-${lastMsg.id}`)
+    if (!(assistantElement instanceof HTMLElement)) return
+
+    const nextSpacer = getCommittedTailSpacer(previousMsg.id, assistantElement)
+
+    if (
+      lastMsg.id !== minHeightMsgId ||
+      Math.abs(nextSpacer - minHeight) > 8
+    ) {
+      setMinHeightMsgId(lastMsg.id)
+      setMinHeight(nextSpacer)
+      localStorage.setItem(
+        `chat:minHeight:${conversationId}`,
+        JSON.stringify({
+          minHeight: nextSpacer,
+          minHeightMsgId: lastMsg.id,
+          viewportHeight: window.innerHeight,
+        })
+      )
+      if (restoredScrollConversationRef.current === conversationId) {
+        scheduleMessageTopAnchor(previousMsg.id)
+      }
+    }
+  }, [
+    activeConversation?.messages,
+    conversationId,
+    getCommittedTailSpacer,
+    minHeight,
+    minHeightMsgId,
+    scheduleMessageTopAnchor,
+    showStreamingBubble,
+    state.isStreaming,
   ])
 
   // Restore exactly once per conversation without visible animated scrolling.
@@ -812,6 +1306,54 @@ export function ChatView() {
     const parsedSavedScroll = savedScroll ? Number.parseInt(savedScroll, 10) : NaN
     const shouldPinBottom =
       savedScroll === SCROLL_BOTTOM_SENTINEL || !Number.isFinite(parsedSavedScroll)
+    const savedAnchorRaw =
+      localStorage.getItem(`${SCROLL_RESTORE_STORAGE_PREFIX}:${conversationId}`) ??
+      localStorage.getItem(`${SCROLL_ANCHOR_STORAGE_PREFIX}:${conversationId}`)
+    let savedAnchor: SavedScrollRestore | null = null
+    if (savedAnchorRaw) {
+      try {
+        const parsed = JSON.parse(savedAnchorRaw)
+        if (
+          parsed &&
+          typeof parsed.messageId === "string" &&
+          typeof parsed.offset === "number" &&
+          typeof parsed.scrollTop === "number"
+        ) {
+          savedAnchor = {
+            messageId: parsed.messageId,
+            offset: parsed.offset,
+            scrollTop: parsed.scrollTop,
+            distanceFromBottom:
+              typeof parsed.distanceFromBottom === "number"
+                ? parsed.distanceFromBottom
+                : Number.POSITIVE_INFINITY,
+            savedAt:
+              typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+          }
+        }
+      } catch {}
+    }
+
+    const shouldRestoreBottom =
+      shouldPinBottom && (!savedAnchor || savedAnchor.distanceFromBottom <= STICKY_BOTTOM_THRESHOLD)
+
+    if (savedAnchor && !document.getElementById(`message-${savedAnchor.messageId}`)) {
+      const previousAttempt = restoreOlderAttemptRef.current
+      const attempts =
+        previousAttempt?.conversationId === conversationId
+          ? previousAttempt.attempts
+          : 0
+
+      if (isLoadingOlderMessages || olderLoadRequestedRef.current) return
+      if (hasOlderMessages && attempts < MAX_RESTORE_OLDER_PAGES) {
+        restoreOlderAttemptRef.current = {
+          conversationId,
+          attempts: attempts + 1,
+        }
+        requestOlderMessagesForRestore()
+        return
+      }
+    }
 
     if (bottomSettleFrameIdRef.current !== null) {
       window.cancelAnimationFrame(bottomSettleFrameIdRef.current)
@@ -831,6 +1373,7 @@ export function ChatView() {
       if (remainingFrames <= 0) {
         bottomSettleFrameIdRef.current = null
         setIsRestoringScroll(false)
+        saveScrollAnchor()
         syncScrollState()
         return
       }
@@ -851,21 +1394,40 @@ export function ChatView() {
         0,
         element.scrollHeight - element.clientHeight
       )
-      const targetScrollTop = shouldPinBottom
+      const anchorElement = savedAnchor
+        ? document.getElementById(`message-${savedAnchor.messageId}`)
+        : null
+      const anchorScrollTop =
+        anchorElement
+          ? Math.max(
+              0,
+              anchorElement.getBoundingClientRect().top -
+                element.getBoundingClientRect().top +
+                element.scrollTop -
+                (savedAnchor?.offset ?? 0)
+            )
+          : null
+      const targetScrollTop = shouldRestoreBottom
         ? maxScrollTop
+        : anchorScrollTop != null
+          ? Math.min(anchorScrollTop, maxScrollTop)
+        : savedAnchor
+          ? Math.min(Math.max(0, savedAnchor.scrollTop), maxScrollTop)
         : Number.isFinite(parsedSavedScroll)
           ? Math.min(Math.max(0, parsedSavedScroll), maxScrollTop)
           : maxScrollTop
 
       element.scrollTop = targetScrollTop
-      if (shouldPinBottom) {
+      if (shouldRestoreBottom) {
         bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
           settleBottom(3)
         )
       }
       restoredScrollConversationRef.current = conversationId
+      restoreOlderAttemptRef.current = null
       ignoreSyncRef.current = false
       if (!shouldPinBottom) setIsRestoringScroll(false)
+      saveScrollAnchor()
       syncScrollState()
     })
 
@@ -879,7 +1441,16 @@ export function ChatView() {
       ignoreSyncRef.current = false
       setIsRestoringScroll(false)
     }
-  }, [conversationId, messageCount, setScrollButtonVisible, syncScrollState])
+  }, [
+    conversationId,
+    hasOlderMessages,
+    isLoadingOlderMessages,
+    messageCount,
+    requestOlderMessagesForRestore,
+    saveScrollAnchor,
+    setScrollButtonVisible,
+    syncScrollState,
+  ])
 
   React.useEffect(() => {
     const streamingStarted = !wasStreamingRef.current && state.isStreaming
@@ -893,54 +1464,33 @@ export function ChatView() {
       setTimeout(() => {
         suppressBtnRef.current = false
       }, 300)
-      if (streamingHasBrowserAgent) {
-        autoScrollEnabledRef.current = false
-        followStreamingRef.current = false
-        setMinHeight(0)
-        setMinHeightMsgId(null)
-        if (conversationId)
-          localStorage.removeItem(`chat:minHeight:${conversationId}`)
-      } else if (messageCount > 1) {
-        const containerHeight = scrollContainerRef.current?.clientHeight || 600
-        const inputHeight =
-          inputContainerRef.current?.getBoundingClientRect().height || 0
-        const messages = activeConversation?.messages || []
-        const lastMsg = messages[messages.length - 1]
-        const lastMsgEl = lastMsg
-          ? document.getElementById(`message-${lastMsg.id}`)
-          : null
-        const lastMsgHeight = lastMsgEl?.getBoundingClientRect().height || 0
+      const messages = activeConversation?.messages || []
+      const lastMsg = messages[messages.length - 1]
 
-        const neededSpace = Math.max(
-          0,
-          containerHeight - lastMsgHeight - inputHeight - 100
+      if (lastMsg?.role === "user") {
+        const neededSpace = getTailResponseMinHeight(
+          lastMsg.id,
+          streamingBubbleContainerRef.current
         )
 
-        minHeightActiveRef.current = true
+        minHeightActiveRef.current = neededSpace > 0
         setMinHeightMsgId(null) // streaming bubble takes over
         setMinHeight(neededSpace)
 
         if (conversationId) {
           localStorage.setItem(
             `chat:minHeight:${conversationId}`,
-            JSON.stringify({ minHeight: neededSpace, minHeightMsgId: null })
+            JSON.stringify({
+              minHeight: neededSpace,
+              minHeightMsgId: null,
+              viewportHeight: window.innerHeight,
+            })
           )
         }
 
         autoScrollEnabledRef.current = false
-
-        window.requestAnimationFrame(() => {
-          if (lastMsg) {
-            const el = document.getElementById(`message-${lastMsg.id}`)
-            if (el) {
-              ignoreSyncRef.current = true
-              el.scrollIntoView({ behavior: "smooth", block: "start" })
-              setTimeout(() => {
-                ignoreSyncRef.current = false
-              }, 600)
-            }
-          }
-        })
+        followStreamingRef.current = false
+        scheduleMessageTopAnchor(lastMsg.id)
       } else {
         // Keep manual-follow behavior: do not auto-follow streaming unless
         // the user explicitly taps the scroll button.
@@ -959,14 +1509,20 @@ export function ChatView() {
         state.isStreaming &&
         !ignoreSyncRef.current
       ) {
-        scrollToBottom("auto")
+        scrollToBottom("smooth")
       } else if (autoScrollEnabledRef.current && !minHeightActiveRef.current) {
         scrollToBottom(state.isStreaming ? "auto" : "smooth")
       }
 
       if (streamingFinished) {
         if (followStreamingRef.current) {
-          scrollToBottom("auto")
+          scrollToBottom("smooth")
+        }
+        if (scrollButtonLockedUntilStreamingEndRef.current) {
+          scrollButtonLockedUntilStreamingEndRef.current = false
+          suppressBtnRef.current = false
+          setProgrammaticScrollbarSuppressed(false)
+          setScrollButtonVisible(false)
         }
         autoScrollEnabledRef.current = false
         followStreamingRef.current = false
@@ -979,13 +1535,15 @@ export function ChatView() {
   }, [
     artifactOpen,
     conversationId,
+    getTailResponseMinHeight,
     messageCount,
+    scheduleMessageTopAnchor,
     scrollToBottom,
     state.isStreaming,
     state.streamingContent,
     state.streamingReasoning,
-    streamingHasBrowserAgent,
     syncScrollState,
+    setProgrammaticScrollbarSuppressed,
     setScrollButtonVisible,
     activeConversation?.messages,
   ])
@@ -1370,91 +1928,58 @@ export function ChatView() {
   ])
 
   const handleScrollButtonClick = React.useCallback(() => {
+    const element = scrollContainerRef.current
+    const distanceFromBottom = element
+      ? element.scrollHeight - element.scrollTop - element.clientHeight
+      : Number.POSITIVE_INFINITY
+    const shouldFadeJump = distanceFromBottom > SCROLL_BUTTON_FADE_DISTANCE_PX
+
     setScrollButtonVisible(false)
-    if (state.isStreaming) {
-      followStreamingRef.current = true
-      autoScrollEnabledRef.current = true
-      ignoreSyncRef.current = true
-      scrollToBottom("auto")
-      // Re-enable syncScrollState cancellation after the jump settles.
-      setTimeout(() => {
-        ignoreSyncRef.current = false
-      }, 120)
-    } else {
-      // Clearing the fake space before the jump keeps the final target exact.
-      if (minHeightActiveRef.current) {
-        flushSync(() => {
-          minHeightActiveRef.current = false
-          setMinHeight(0)
-          setMinHeightMsgId(null)
-        })
-        if (conversationId)
-          localStorage.removeItem(`chat:minHeight:${conversationId}`)
+    setProgrammaticScrollbarSuppressed(true)
+    suppressBtnRef.current = true
+    ignoreSyncRef.current = true
+    scrollButtonLockedUntilStreamingEndRef.current = state.isStreaming
+
+    if (scrollJumpFadeTimeoutRef.current !== null) {
+      window.clearTimeout(scrollJumpFadeTimeoutRef.current)
+    }
+    if (scrollJumpFadeReleaseTimeoutRef.current !== null) {
+      window.clearTimeout(scrollJumpFadeReleaseTimeoutRef.current)
+    }
+
+    const startScroll = () => {
+      if (state.isStreaming) {
+        followStreamingRef.current = true
+        autoScrollEnabledRef.current = true
       }
-      scrollToBottom("auto")
+
+      scrollToBottom("smooth", { settle: shouldFadeJump })
+
+      scrollJumpFadeReleaseTimeoutRef.current = window.setTimeout(() => {
+        ignoreSyncRef.current = false
+        if (!scrollButtonLockedUntilStreamingEndRef.current) {
+          suppressBtnRef.current = false
+          setProgrammaticScrollbarSuppressed(false)
+        }
+        setIsScrollJumpFading(false)
+        syncScrollState()
+      }, MESSAGE_ANCHOR_SCROLL_DURATION_MS)
+    }
+
+    if (shouldFadeJump) {
+      setIsScrollJumpFading(true)
+      scrollJumpFadeTimeoutRef.current = window.setTimeout(startScroll, 120)
+    } else {
+      setIsScrollJumpFading(false)
+      startScroll()
     }
   }, [
     scrollToBottom,
     setScrollButtonVisible,
+    setProgrammaticScrollbarSuppressed,
     state.isStreaming,
-    conversationId,
+    syncScrollState,
   ])
-
-  // Keep streaming bubble alive until the committed message is ready to take
-  // over minHeight (prevents layout flash on streaming end).
-  const showStreamingBubble = Boolean(
-    activeConversation &&
-    (state.isStreaming || (minHeight > 0 && minHeightMsgId === null)) &&
-    state.activeConversationId === activeConversation.id
-  )
-
-  const chatRows = React.useMemo<ChatVirtualRow[]>(() => {
-    const rows: ChatVirtualRow[] = []
-    if (isInitialMessagesLoading) {
-      rows.push({ kind: "initial-loading", key: "initial-loading" })
-      return rows
-    }
-    if (hasOlderMessages || isLoadingOlderMessages || olderMessagesError) {
-      rows.push({ kind: "older", key: "older-messages" })
-    }
-    activeConversation?.messages.forEach((message, index) => {
-      rows.push({
-        kind: "message",
-        key: message.id,
-        message,
-        index,
-      })
-    })
-    if (showStreamingBubble) {
-      rows.push({
-        kind: "streaming",
-        key: `streaming:${state.streamingMessageId ?? conversationId ?? "active"}`,
-      })
-    }
-    return rows
-  }, [
-    activeConversation?.messages,
-    conversationId,
-    hasOlderMessages,
-    isInitialMessagesLoading,
-    isLoadingOlderMessages,
-    olderMessagesError,
-    showStreamingBubble,
-    state.streamingMessageId,
-  ])
-
-  // eslint-disable-next-line react-hooks/incompatible-library -- Required to keep long chat DOM bounded on mobile.
-  const rowVirtualizer = useVirtualizer({
-    count: chatRows.length,
-    getScrollElement: () => scrollContainerRef.current,
-    estimateSize: (index) =>
-      chatRows[index]?.kind === "older" ||
-      chatRows[index]?.kind === "initial-loading"
-        ? 58
-        : MESSAGE_ROW_ESTIMATE,
-    getItemKey: (index) => chatRows[index]?.key ?? index,
-    overscan: isMobile ? 6 : 10,
-  })
 
   if (!activeConversation) return null
 
@@ -1489,7 +2014,13 @@ export function ChatView() {
           <div
             ref={scrollContainerRef}
             data-chat-scroll-container="true"
-            className="min-h-0 flex-1 overflow-y-scroll"
+            data-scrollbar-visible={
+              isScrollbarVisible && !isScrollbarSuppressed ? "true" : "false"
+            }
+            data-scrollbar-suppressed={
+              isScrollbarSuppressed ? "true" : "false"
+            }
+            className="chat-scroll-container min-h-0 flex-1 overflow-y-scroll"
             style={{
               WebkitOverflowScrolling: "touch",
               overscrollBehaviorY: "contain",
@@ -1500,111 +2031,93 @@ export function ChatView() {
             <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
               <div
                 className={cn(
-                  "flex-1 pt-4 pb-10 transition-opacity duration-75",
-                  isRestoringScroll && "opacity-0"
+                  "flex-1 pt-8 transition-opacity duration-150",
+                  (isRestoringScroll || isScrollJumpFading) &&
+                    "pointer-events-none opacity-0"
                 )}
+                style={{ paddingBottom: inputOffset + 24 }}
                 aria-busy={isRestoringScroll}
               >
-                <div className="mx-auto max-w-[700px] select-none px-2">
-                  <div
-                    className="relative w-full"
-                    style={{ height: rowVirtualizer.getTotalSize() }}
-                  >
-                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                      const row = chatRows[virtualRow.index]
-                      if (!row) return null
-
-                      return (
-                        <div
-                          key={virtualRow.key}
-                          data-index={virtualRow.index}
-                          ref={rowVirtualizer.measureElement}
-                          className="absolute top-0 left-0 w-full"
-                          style={{
-                            transform: `translateY(${virtualRow.start}px)`,
-                            paddingBottom: MESSAGE_ROW_GAP,
-                          }}
-                        >
-                          {row.kind === "older" ? (
-                            <div className="flex justify-center py-1">
-                              <button
-                                type="button"
-                                onClick={requestOlderMessages}
-                                disabled={isLoadingOlderMessages}
-                                className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-[13px] text-muted-foreground shadow-sm transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-default disabled:opacity-70"
-                              >
-                                {isLoadingOlderMessages && (
-                                  <Loader2 className="size-3.5 animate-spin" />
-                                )}
-                                <span>
-                                  {isLoadingOlderMessages
-                                    ? "Loading older messages"
-                                    : olderMessagesError
-                                      ? "Retry older messages"
-                                      : `Load older messages (${loadedMessageCount}/${totalMessageCount})`}
-                                </span>
-                              </button>
-                            </div>
-                          ) : row.kind === "initial-loading" ? (
-                            <div className="flex justify-center py-1">
-                              <div className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-[13px] text-muted-foreground shadow-sm">
-                                <Loader2 className="size-3.5 animate-spin" />
-                                <span>Loading messages</span>
-                              </div>
-                            </div>
-                          ) : row.kind === "message" ? (
-                            <div
-                              id={`message-${row.message.id}`}
-                              className="scroll-mt-6"
-                              style={
-                                row.message.id === minHeightMsgId &&
-                                row.index ===
-                                  activeConversation.messages.length - 1
-                                  ? { minHeight }
-                                  : undefined
-                              }
-                            >
-                              <MessageBubble
-                                message={row.message}
-                                isLatestAssistantMessage={
-                                  row.message.id === latestAssistantMessageId
-                                }
-                                onArtifactClick={handleArtifactClick}
-                                onArtifactExpand={handleArtifactExpand}
-                                onAttachmentClick={setPreviewAttachment}
-                                onAgentOpen={handleAgentOpen}
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              style={
-                                minHeight > 0 && minHeightMsgId === null
-                                  ? { minHeight }
-                                  : undefined
-                              }
-                            >
-                              <StreamingBubble
-                                reasoning={state.streamingReasoning}
-                                content={state.streamingContent}
-                                contentSegments={state.streamingContentSegments}
-                                streamingMode={state.streamingMode}
-                                showCursor={showInitialStreamingCursor}
-                                onArtifactClick={handleArtifactClick}
-                                onArtifactExpand={handleArtifactExpand}
-                                onAgentOpen={handleAgentOpen}
-                                onAttachmentClick={setPreviewAttachment}
-                                messageId={
-                                  state.streamingMessageId ?? undefined
-                                }
-                                thinkingSeconds={state.thinkingSeconds}
-                                thinkingDone={state.thinkingDone}
-                              />
-                            </div>
-                          )}
+                <div className="mx-auto max-w-[700px] space-y-6 select-none px-2">
+                  {isInitialMessagesLoading ? null : (
+                    <>
+                      {(hasOlderMessages ||
+                        isLoadingOlderMessages ||
+                        olderMessagesError) && (
+                        <div className="flex justify-center py-1">
+                          <button
+                            type="button"
+                            onClick={requestOlderMessages}
+                            disabled={isLoadingOlderMessages}
+                            className="inline-flex h-8 items-center gap-2 rounded-md border border-border bg-background px-3 text-[13px] text-muted-foreground shadow-sm transition-colors hover:bg-muted/40 hover:text-foreground disabled:cursor-default disabled:opacity-70"
+                          >
+                            {isLoadingOlderMessages && (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            )}
+                            <span>
+                              {isLoadingOlderMessages
+                                ? "Loading older messages"
+                                : olderMessagesError
+                                  ? "Retry older messages"
+                                  : `Load older messages (${loadedMessageCount}/${totalMessageCount})`}
+                            </span>
+                          </button>
                         </div>
-                      )
-                    })}
-                  </div>
+                      )}
+
+                      {activeConversation.messages.map((message, index) => (
+                        <div
+                          key={message.id}
+                          id={`message-${message.id}`}
+                          className="scroll-mt-6 -ml-16 w-[calc(100%+4rem)] pl-16"
+                          style={
+                            message.id === minHeightMsgId &&
+                            index === activeConversation.messages.length - 1
+                              ? { paddingBottom: minHeight }
+                              : undefined
+                          }
+                        >
+                          <MessageBubble
+                            message={message}
+                            isLatestAssistantMessage={
+                              message.id === latestAssistantMessageId
+                            }
+                            onArtifactClick={handleArtifactClick}
+                            onArtifactExpand={handleArtifactExpand}
+                            onAttachmentClick={setPreviewAttachment}
+                            onAgentOpen={handleAgentOpen}
+                          />
+                        </div>
+                      ))}
+
+                      {showStreamingBubble && (
+                        <div
+                          ref={streamingBubbleContainerRef}
+                          className="-ml-16 w-[calc(100%+4rem)] pl-16"
+                          style={
+                            minHeight > 0 && minHeightMsgId === null
+                              ? { minHeight }
+                              : undefined
+                          }
+                        >
+                          <StreamingBubble
+                            reasoning={state.streamingReasoning}
+                            content={state.streamingContent}
+                            contentSegments={state.streamingContentSegments}
+                            streamingMode={state.streamingMode}
+                            showCursor={showInitialStreamingCursor}
+                            onArtifactClick={handleArtifactClick}
+                            onArtifactExpand={handleArtifactExpand}
+                            onAgentOpen={handleAgentOpen}
+                            onAttachmentClick={setPreviewAttachment}
+                            messageId={state.streamingMessageId ?? undefined}
+                            thinkingSeconds={state.thinkingSeconds}
+                            thinkingDone={state.thinkingDone}
+                          />
+                        </div>
+                      )}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -1613,9 +2126,10 @@ export function ChatView() {
           <div
             ref={inputContainerRef}
             data-chat-input-container="true"
-            className="relative z-10 shrink-0 bg-background px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
+            className="pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
+            style={{ right: isMobile ? 0 : 14 }}
           >
-            <div className="mx-auto w-full max-w-[780px]">
+            <div className="pointer-events-auto mx-auto w-full max-w-[780px]">
               <TodoBar
                 messages={activeConversation.messages}
                 streamingReasoning={

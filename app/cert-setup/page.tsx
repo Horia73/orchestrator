@@ -146,7 +146,7 @@ export default function CertSetupPage() {
           <InfoTile
             icon={<BellRing className="size-4" />}
             title="Prompt behavior"
-            text="If you tap Not now on the notification prompt, it stays hidden only for that page load and returns after reload."
+            text="If you tap Not now on the notification prompt, it stays hidden for 24 hours and returns if notifications still need setup."
           />
         </section>
       </section>

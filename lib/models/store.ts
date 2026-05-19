@@ -3,6 +3,7 @@ import fs from 'fs'
 import { randomUUID } from 'crypto'
 
 import seedJson from './seed.json'
+import { emitAppEvent } from '@/lib/events'
 import {
     SeedRegistrySchema,
     LiveRegistrySchema,
@@ -131,6 +132,7 @@ export function writeLiveRegistry(registry: LiveRegistry) {
     // Validate before write — catches bugs early, the file on disk stays valid.
     const validated = LiveRegistrySchema.parse(registry)
     writeJsonAtomic(LIVE_PATH, validated)
+    emitAppEvent({ type: 'settings.changed', reason: 'models' })
 }
 
 // ---------------------------------------------------------------------------
@@ -175,6 +177,7 @@ export function readCuratedRegistry(): CuratedRegistry {
 export function writeCuratedRegistry(registry: CuratedRegistry) {
     const validated = CuratedRegistrySchema.parse(registry)
     writeJsonAtomic(CURATED_PATH, validated)
+    emitAppEvent({ type: 'settings.changed', reason: 'models' })
 }
 
 // ---------------------------------------------------------------------------

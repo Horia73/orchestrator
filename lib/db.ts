@@ -59,6 +59,7 @@ db.exec(`
         thinking TEXT,
         thinkingDuration INTEGER,
         toolCalls TEXT,
+        replyActions TEXT,
         timestamp INTEGER NOT NULL,
         FOREIGN KEY (conversationId) REFERENCES conversations (id) ON DELETE CASCADE
     );
@@ -321,6 +322,11 @@ try {
   /* column already exists */
 }
 try {
+  db.exec(`ALTER TABLE messages ADD COLUMN replyActions TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
   db.exec(`ALTER TABLE artifacts ADD COLUMN filePath TEXT`)
 } catch {
   /* column already exists */
@@ -452,6 +458,7 @@ interface MessageRow {
   thinkingDuration: number | null
   toolCalls: string | null
   attachments: string | null
+  replyActions: string | null
   timestamp: number
 }
 
@@ -490,6 +497,9 @@ function messageFromRow(msgRow: MessageRow): Message {
     thinkingDuration: msgRow.thinkingDuration ?? undefined,
     toolCalls: parseJsonField<Message["toolCalls"]>(msgRow.toolCalls),
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
+    replyActions: parseJsonField<Message["replyActions"]>(
+      msgRow.replyActions
+    ),
     timestamp: msgRow.timestamp,
   }
 }
@@ -719,8 +729,8 @@ export function createConversation(conversation: Conversation) {
     `)
 
   const insertMsg = db.prepare(`
-        INSERT OR IGNORE INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, timestamp)
-        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @timestamp)
+        INSERT OR IGNORE INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, replyActions, timestamp)
+        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
     `)
 
   const refreshConversationSummary = db.prepare(`
@@ -775,6 +785,7 @@ export function createConversation(conversation: Conversation) {
         thinkingDuration: msg.thinkingDuration ?? null,
         toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
         attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
+        replyActions: msg.replyActions ? JSON.stringify(msg.replyActions) : null,
         timestamp: msg.timestamp,
       })
     }
@@ -809,8 +820,8 @@ export function addMessage(conversationId: string, message: Message) {
     .prepare("SELECT id FROM messages WHERE id = ?")
     .get(message.id) as { id: string } | undefined
   const insertMsg = db.prepare(`
-        INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, timestamp)
-        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @timestamp)
+        INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, replyActions, timestamp)
+        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
         ON CONFLICT(id) DO UPDATE SET
             content = excluded.content,
             status = excluded.status,
@@ -819,7 +830,8 @@ export function addMessage(conversationId: string, message: Message) {
             thinking = excluded.thinking,
             thinkingDuration = excluded.thinkingDuration,
             toolCalls = excluded.toolCalls,
-            attachments = excluded.attachments
+            attachments = excluded.attachments,
+            replyActions = excluded.replyActions
     `)
 
   const updateConv = db.prepare(`
@@ -855,6 +867,7 @@ export function addMessage(conversationId: string, message: Message) {
       thinkingDuration: msg.thinkingDuration ?? null,
       toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
       attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
+      replyActions: msg.replyActions ? JSON.stringify(msg.replyActions) : null,
       timestamp: msg.timestamp,
     })
 

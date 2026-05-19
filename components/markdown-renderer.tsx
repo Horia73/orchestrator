@@ -171,22 +171,22 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
 
 const baseComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="mt-5 mb-2 text-[22px] font-semibold tracking-tight">
+    <h1 className="-ml-16 mt-5 mb-2 pl-16 text-[22px] font-semibold tracking-tight">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="mt-5 mb-2 text-[18px] font-semibold tracking-tight">
+    <h2 className="-ml-16 mt-5 mb-2 pl-16 text-[18px] font-semibold tracking-tight">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="mt-4 mb-1.5 text-[16px] font-semibold">{children}</h3>
+    <h3 className="-ml-16 mt-4 mb-1.5 pl-16 text-[16px] font-semibold">{children}</h3>
   ),
   h4: ({ children }) => (
-    <h4 className="mt-3 mb-1 text-[15px] font-semibold">{children}</h4>
+    <h4 className="-ml-16 mt-3 mb-1 pl-16 text-[15px] font-semibold">{children}</h4>
   ),
-  p: ({ children }) => <p className="-ml-2 my-2 pl-2 leading-relaxed">{children}</p>,
+  p: ({ children }) => <p className="-ml-16 my-2 pl-16 leading-relaxed">{children}</p>,
   strong: ({ children }) => (
     <strong className="font-semibold">{children}</strong>
   ),
@@ -195,7 +195,7 @@ const baseComponents: Components = {
     <del className="text-muted-foreground">{children}</del>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground italic">
+    <blockquote className="-ml-16 my-2 border-l-2 border-border pl-[calc(4rem+0.75rem)] text-muted-foreground italic">
       {children}
     </blockquote>
   ),
@@ -263,14 +263,14 @@ const baseComponents: Components = {
 const contextComponents: Components = {
   ...baseComponents,
   ul: ({ children }) => (
-    <ul className="my-2 list-disc space-y-1 pl-6 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6">
+    <ul className="-ml-16 my-2 list-disc space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6">
       {children}
     </ul>
   ),
   ol: ({ children, start }) => (
     <ol
       start={start}
-      className="my-2 list-decimal space-y-1 pl-6 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6"
+      className="-ml-16 my-2 list-decimal space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6"
     >
       {children}
     </ol>

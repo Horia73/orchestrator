@@ -24,6 +24,7 @@ export const scheduleTaskTool: ToolDef = {
         'Schedule work to run later, once or recurring. Decide the action TYPE now:',
         '"tool" — a deterministic deferred action whose intent is fully known now (e.g. turn a light on/off, call a known integration tool). It runs with NO model at fire time: cheap, instant, reliable. Resolve the exact tool id + args yourself before scheduling.',
         '"agent" — work that needs fresh reasoning, data, or judgement at fire time (e.g. summarize today\'s email, check a status and message me). The agent (default: you, the orchestrator) is woken with the prompt.',
+        'For recurring agent monitors with no user-specified cadence, default to every 15m and include adaptive pacing instructions in the prompt.',
         'Results land in the user\'s Inbox. One-shot tasks missed while the app was offline are reported as missed, not run late.',
     ].join(' '),
     input_schema: {
@@ -266,7 +267,7 @@ export const rescheduleTaskTool: ToolDef = {
     name: 'reschedule_task',
     description: [
         'Change the cadence/timing of an existing scheduled task (keeps its history and state).',
-        'This is how a recurring monitor self-paces: when you notice from <task_state> that it has been quiet (e.g. nothing notable for many runs, or it is the user\'s known quiet hours / night), widen the interval; when activity picks up, tighten it.',
+        'This is how a recurring monitor self-paces: start around 15m unless the user chose another cadence; after sustained quiet widen to 30m then 1h, use longer quiet-hour intervals, and tighten again when activity returns.',
         'Use list_tasks to find the id; pass the same timing fields as schedule_task (in/at/daily_at/weekly/every/cron).',
     ].join(' '),
     input_schema: {

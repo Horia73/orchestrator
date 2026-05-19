@@ -1,7 +1,12 @@
 import { randomUUID } from "crypto"
 
 import type { AgentRunEvent, ToolExecutionContext } from "@/lib/ai/agents/types"
-import type { ContentSegment, Message, ReasoningEntry } from "@/lib/types"
+import type {
+  ContentSegment,
+  InboxReplyAction,
+  Message,
+  ReasoningEntry,
+} from "@/lib/types"
 
 import type { ScheduledTask } from "./schema"
 import { describeSchedule } from "./compute"
@@ -12,6 +17,7 @@ import {
   setTaskState,
 } from "./store"
 import { sendInboxPushNotification } from "@/lib/push-notifications"
+import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
 
 // Heavy AI modules (runner pulls in the whole tool/provider graph) are
 // imported lazily so the scheduler boot path and this module stay cheap and
@@ -66,6 +72,7 @@ function formatToolResult(
 interface NotifyRequest {
   title?: string
   body: string
+  actions?: InboxReplyAction[]
 }
 
 /**
@@ -177,12 +184,14 @@ export async function runScheduledTask(
                 const a = event.toolCall.arguments as {
                   title?: unknown
                   body?: unknown
+                  actions?: unknown
                 }
                 const body = typeof a?.body === "string" ? a.body.trim() : ""
                 if (body)
                   notifications.push({
                     title: typeof a?.title === "string" ? a.title : undefined,
                     body,
+                    actions: normalizeInboxReplyActions(a.actions),
                   })
               }
             },
@@ -240,12 +249,14 @@ export async function runScheduledTask(
               const a = event.toolCall.arguments as {
                 title?: unknown
                 body?: unknown
+                actions?: unknown
               }
               const body = typeof a?.body === "string" ? a.body.trim() : ""
               if (body)
                 notifications.push({
                   title: typeof a?.title === "string" ? a.title : undefined,
                   body,
+                  actions: normalizeInboxReplyActions(a.actions),
                 })
             }
             // The agent's private per-task memory write (last wins).
@@ -270,7 +281,7 @@ export async function runScheduledTask(
           `taskId: ${task.id}`,
           `currentSchedule: ${describeSchedule(task.schedule)}`,
           recurring
-            ? "This is a recurring task. You may self-pace: if <task_state>/history shows it has been quiet (nothing notable for many runs) or it is the user's known low-activity window (e.g. their sleep/quiet hours from USER.md), call reschedule_task on this taskId to widen the interval; tighten it again when activity returns. Learn the user's routine over time and persist durable patterns to USER.md."
+            ? "This is a recurring task. You may self-pace only if the user allowed adaptive cadence or did not request a fixed cadence. Default adaptive monitor tiering: start at 15m; after 4 quiet runs widen to 30m; after 8 more quiet runs widen to 1h; during known quiet hours use 2h-4h or the next active window depending on urgency. When activity returns, a deadline gets close, an error occurs, or the user engages, tighten back toward 15m. Store quietRuns, cadenceTier, watermarks/lastSeen, lastValue, and lastNotifiedAt in <task_state>. Use reschedule_task on this taskId for clear trends only; do not thrash, never go more frequent than allowed, and never slow below an explicit fixed cadence unless adaptive pacing was accepted. Learn durable active/quiet-hour patterns over time and persist them to USER.md/MEMORY.md/MONITORS.md."
             : "This is a one-shot task; do not reschedule it.",
           "</task_run_context>",
           "<task_state>",
@@ -347,6 +358,10 @@ export async function runScheduledTask(
       reasoning,
       contentSegments,
       attachments,
+      replyActions:
+        notifications.length > 0
+          ? notifications.flatMap((n) => n.actions ?? [])
+          : undefined,
       timestamp: Date.now(),
     }
     createInboxConversation({

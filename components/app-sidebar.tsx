@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Inbox as InboxIcon,
   LineChart,
+  LoaderCircle,
   Plus,
   Search,
   MoreHorizontal,
@@ -424,17 +425,22 @@ export function AppSidebar() {
                   <SidebarMenu className="space-y-0.5">
                     {displayedConversations.map((conv) => {
                       const unread = unreadConversationIds.has(conv.id)
+                      const isRunning =
+                        Boolean(state.activeChatStreams[conv.id]) ||
+                        (state.activeConversationId === conv.id &&
+                          state.isStreaming)
+                      const hasStatusSlot = isRunning || unread
+                      const isActiveConversationRow =
+                        state.activeConversationId === conv.id &&
+                        !isOnSettings &&
+                        !isOnScheduling &&
+                        !isOnWatchlist &&
+                        !isOnInbox
                       return (
                         <SidebarMenuItem key={conv.id}>
                           <SidebarMenuButton
                             tooltip={conv.title}
-                            isActive={
-                              state.activeConversationId === conv.id &&
-                              !isOnSettings &&
-                              !isOnScheduling &&
-                              !isOnWatchlist &&
-                              !isOnInbox
-                            }
+                            isActive={isActiveConversationRow}
                             onClick={() => handleSelectConversation(conv.id)}
                             onFocus={() => {
                               void prefetchConversationMessages(conv.id)
@@ -447,12 +453,6 @@ export function AppSidebar() {
                             }}
                             className={`text-[15px] text-foreground/75 group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
                           >
-                            {unread && (
-                              <span
-                                className="mt-[0.42em] size-1.5 shrink-0 rounded-full bg-[#b76440]"
-                                aria-label="Unread result"
-                              />
-                            )}
                             <span className="min-w-0 flex-1">
                               <span className="block truncate">
                                 {conv.title}
@@ -470,12 +470,20 @@ export function AppSidebar() {
                           <DropdownMenu>
                             <DropdownMenuTrigger asChild>
                               <SidebarMenuAction
+                                aria-label="Conversation actions"
                                 showOnHover={
-                                  state.activeConversationId !== conv.id
+                                  !hasStatusSlot && !isActiveConversationRow
                                 }
                                 className="!top-0 !right-0 !bottom-0 !h-full !w-[34px] !rounded-md text-foreground hover:bg-[#e7e5dd] focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none data-[state=open]:bg-[#e7e5dd] dark:hover:bg-white/[0.1] dark:data-[state=open]:bg-white/[0.1]"
                               >
-                                <MoreHorizontal className="!size-[20px]" />
+                                {isRunning ? (
+                                  <LoaderCircle className="!size-[16px] animate-spin text-foreground/45 group-hover/menu-item:hidden group-focus-within/menu-item:hidden group-has-[[data-state=open]]/menu-item:hidden" />
+                                ) : unread ? (
+                                  <span className="size-2 rounded-full bg-[#b76440] group-hover/menu-item:hidden group-focus-within/menu-item:hidden group-has-[[data-state=open]]/menu-item:hidden" />
+                                ) : null}
+                                <MoreHorizontal
+                                  className={`!size-[20px] ${hasStatusSlot ? "hidden group-hover/menu-item:block group-focus-within/menu-item:block group-has-[[data-state=open]]/menu-item:block" : ""}`}
+                                />
                               </SidebarMenuAction>
                             </DropdownMenuTrigger>
                             <DropdownMenuContent

@@ -11,6 +11,7 @@ import type {
   ThinkingLevel,
 } from "@/lib/config"
 import type { AgentKind, AgentStatus } from "@/lib/ai/agents/types"
+import { useAppEvent } from "@/hooks/use-app-events"
 
 export interface AgentInfo {
   id: string
@@ -214,15 +215,6 @@ function hasUsableModelProvider(data: SettingsBootstrap): boolean {
     ([providerId, status]) => providerId !== "browser" && status.available
   )
 }
-// Live reconciliation cadence. The research panel itself is already real-time
-// over the SSE stream (transcript + per-model results patch the registry
-// optimistically the instant they arrive); this poll keeps the rest of the
-// registry fresh. It can run tight because `deepEqual` below makes an
-// unchanged payload a no-op — identical data keeps the same object reference,
-// so a poll that finds nothing new triggers zero re-renders (no dropdown
-// close, no flicker). Changed data still lands within one tick.
-const SETTINGS_SYNC_INTERVAL_MS = 5000
-
 /** Order-independent structural equality, used to keep `data` identity stable
  *  across background polls so consumers don't re-render when nothing changed. */
 function deepEqual(a: unknown, b: unknown): boolean {
@@ -324,11 +316,26 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const json = await fetchSettingsBootstrap(signal)
     // Keep the same object reference when the payload is unchanged so the
     // context value (and every settings consumer) doesn't re-render on every
-    // background poll.
+    // background refresh.
     setData((prev) => (prev && deepEqual(prev, json) ? prev : json))
     setError(null)
     return json
   }, [])
+
+  const refreshBootstrap = React.useCallback(() => {
+    if (typeof window === "undefined") return
+    if (document.visibilityState !== "visible") return
+    // Don't refresh while a research run is streaming: a bootstrap snapshot can
+    // land before the server has persisted a just-researched model and would
+    // revert the optimistic patch we applied from `model_result`.
+    if (researchStreamRef.current) return
+    void loadBootstrap().catch(() => {
+      // Keep the last good settings snapshot; transient refresh failures
+      // should not blank the Settings page.
+    })
+  }, [loadBootstrap])
+
+  useAppEvent(["settings.changed", "config.updated"], refreshBootstrap)
 
   React.useEffect(() => {
     if (typeof window === "undefined") return
@@ -389,33 +396,23 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     let cancelled = false
 
     const refresh = () => {
-      if (cancelled || document.visibilityState !== "visible") return
-      // Don't poll while a research run is streaming: a bootstrap snapshot can
-      // land before the server has persisted a just-researched model and would
-      // revert the optimistic patch we applied from `model_result`.
-      if (researchStreamRef.current) return
-      void loadBootstrap().catch(() => {
-        // Keep the last good settings snapshot; transient polling failures
-        // should not blank the Settings page.
-      })
+      if (!cancelled) refreshBootstrap()
     }
     const onVisibilityChange = () => {
       if (document.visibilityState === "visible") refresh()
     }
 
-    const interval = window.setInterval(refresh, SETTINGS_SYNC_INTERVAL_MS)
     window.addEventListener("focus", refresh)
     window.addEventListener("orchestrator:config-updated", refresh)
     document.addEventListener("visibilitychange", onVisibilityChange)
 
     return () => {
       cancelled = true
-      window.clearInterval(interval)
       window.removeEventListener("focus", refresh)
       window.removeEventListener("orchestrator:config-updated", refresh)
       document.removeEventListener("visibilitychange", onVisibilityChange)
     }
-  }, [loadBootstrap])
+  }, [refreshBootstrap])
 
   const setAgentOverride = React.useCallback(
     async (agentId: string, override: AgentOverrideInput) => {

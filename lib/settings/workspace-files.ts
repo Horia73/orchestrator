@@ -14,6 +14,7 @@ import {
     ThinkingLevelSchema,
 } from '@/lib/models/schema'
 import { getEffectiveRegistry, invalidateRegistryCache } from '@/lib/models/registry'
+import { emitAppEvent } from '@/lib/events'
 
 type WorkspaceFileKind = 'json' | 'env' | 'markdown'
 type WorkspaceFileSource = 'physical' | 'virtual'
@@ -155,22 +156,29 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
             '',
             'Purpose: run initial user onboarding.',
             '',
-            'When this file exists, the orchestrator should prioritize learning enough about the user to become useful as a personal operator. Run onboarding as a short staged conversation instead of one monolithic questionnaire: ask a small logical group of high-leverage questions, wait for the user reply, then continue with the next group. Keep the tone conversational, friendly, and helpful. Do not ask for secrets, passwords, recovery codes, payment details, government identifiers, or unnecessary sensitive data.',
+            'When this file exists, the orchestrator should prioritize learning enough about the user to become useful as a personal operator. Onboarding can be long and can span multiple conversations. Use ONBOARDING.md to remember progress, resume from the next unfinished stage, and keep moving stage by stage until onboarding is complete or the user explicitly skips/stops it. Run onboarding as a short staged conversation instead of one monolithic questionnaire: ask a small logical group of high-leverage questions, wait for the user reply, record progress, then continue with the next group. Keep the tone conversational, friendly, and helpful. Do not ask for secrets, passwords, recovery codes, payment details, government identifiers, or unnecessary sensitive data.',
             '',
             'Onboarding flow:',
             '1. Start with a brief welcome and explain that setup will be split into a few small parts so it stays easy to answer.',
             '2. Ask 2-4 focused questions per turn, grouped by topic. Let the user skip anything.',
             '3. Move through the stages naturally based on the answers; do not dump every question at once.',
-            '4. Keep temporary onboarding progress in the conversation or daily memory if needed, but wait to update config.json, USER.md, MEMORY.md, and IDENTITY.md until the user has answered enough or chooses to stop.',
-            '5. Ask follow-up questions only for genuine blockers or contradictions.',
+            '4. After finishing one stage, update ONBOARDING.md and proceed to the next unfinished stage unless the user is clearly switching tasks.',
+            '5. If the user starts a different conversation or task while onboarding is active, handle that task first, then resume onboarding from ONBOARDING.md when it is natural and low-friction.',
+            '6. Keep temporary onboarding progress in ONBOARDING.md or daily memory if needed, but wait to update config.json, USER.md, MEMORY.md, and IDENTITY.md until the user has answered enough or chooses to stop.',
+            '7. If the user says skip/stop/not now for onboarding, force-finish onboarding: consolidate known durable facts, record missing non-blocking fields in ONBOARDING.md or MEMORY.md as "ask opportunistically later", set ONBOARDING.md Status to skipped, and remove BOOT.md.',
+            '8. Ask follow-up questions only for genuine blockers or contradictions.',
             '',
             'Suggested stages:',
             '1. Identity and assistant style: preferred user name, language, assistant name, and how the assistant should sound or behave (for example professional, concise, warm, direct, proactive, low-interruption, or more explanatory).',
             '2. Work and daily context: location/timezone, frequent cities, work context, projects, tools, repositories, and preferred ways to collaborate.',
             '3. Communication and operating preferences: channels the user cares about, what counts as urgent, calendar/reminder preferences, quiet hours, shopping, food, transport, delivery, booking, and travel defaults.',
-            '4. Boundaries and autonomy: privacy boundaries, actions that always require explicit confirmation, and whether browser automation is allowed for free signup/login/setup flows while still stopping before payments, subscriptions, paid trials, permission grants, legal-term acceptance, or submitting personal data unless the exact action is confirmed.',
-            '5. Browser profile setup: ask whether the user wants to configure the browser agent now. If yes, use browser_agent to open the managed browser profile and yield control so the user can sign in to Chrome/Google or key web services themselves. Ask which accounts/sites may be reused later, whether free setup/login/API-key flows may use existing sessions automatically, and which situations should always ask first. Do not ask for or store passwords, recovery codes, or 2FA codes.',
-            '6. Integrations and optional setup: present the available integrations from the live <integrations> block in plain language, mention their current connection state when known, and ask which ones the user wants to set up now versus later. Also ask whether the user wants help setting up optional free external API keys that improve the app, starting with Watchlist financial data via `TWELVE_DATA_API_KEY` for Twelve Data.',
+            '4. Proactive monitoring: explain silent-until-noteworthy monitors in plain language. Recommended default: check about every 15 minutes, adaptively slow down when quiet, speed back up when activity returns, and notify only when important. Ask whether the user prefers important-only Inbox items, summaries at specific times, or both. Ask what "important" means for Gmail/WhatsApp/Home Assistant.',
+            '5. Boundaries and autonomy: privacy boundaries, actions that always require explicit confirmation, and the default autonomy tier:',
+            '   - Ask everything: ask before logged-in browser actions, account/dashboard navigation, form entry, external writes, runtime credential storage, or anything that feels like acting on the user\'s behalf.',
+            '   - Balanced: proceed with reversible preparation, research, read-only inspection, drafts, and carts/forms prepared but not submitted; ask at exact consent/commit boundaries. Recommended default.',
+            '   - Full access: use existing sessions, navigate dashboards, fill non-sensitive fields, run free setup/API-key flows, store runtime credentials securely, and recover technical browser blockers with minimal interruption; still ask before money, paid trials/subscriptions, final order/booking/cancellation/send/submit, account/security changes, permission grants, legal-term acceptance, destructive actions, public sharing, or uploading/submitting sensitive personal documents/data unless the exact action is confirmed.',
+            '6. Browser profile setup: ask whether the user wants to configure the browser agent now. If yes, use browser_agent to open the managed browser profile and yield control so the user can sign in to Chrome/Google or key web services themselves. Ask which accounts/sites may be reused later, whether free setup/login/API-key flows may use existing sessions automatically, and which situations should always ask first. Do not ask for or store passwords, recovery codes, or 2FA codes.',
+            '7. Integrations and optional setup: present the available integrations from the live <integrations> block in plain language, mention their current connection state when known, and ask which ones the user wants to set up now versus later. Be especially proactive about Gmail, WhatsApp, and read-only Home Assistant monitoring because they unlock high-value personal-operator workflows. Also ask whether the user wants help setting up optional free external API keys that improve the app, starting with Watchlist financial data via `TWELVE_DATA_API_KEY` for Twelve Data.',
             '',
             'Discover:',
             '- preferred user name and language;',
@@ -179,13 +187,18 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
             '- location, timezone, frequent cities, and travel defaults;',
             '- work context, projects, tools, repositories, and preferred ways to collaborate;',
             '- communication channels the user cares about and what counts as urgent;',
+            '- proactive monitoring preference: default 15-minute adaptive checks versus fixed cadence, important-only Inbox notifications versus timed summaries, and quiet hours;',
+            '- Gmail monitoring rules: urgent/VIP/action-needed criteria, digest timing, and whether the user wants a first-week spam/offers cleanup review for main-inbox emails with quick archive/keep choices before any archiving automation;',
+            '- WhatsApp monitoring rules: contacts/chats that matter, urgency criteria, quiet hours, and whether to notify immediately or summarize;',
+            '- Home Assistant monitoring rules: read-only sensors/devices/problems worth watching, alert thresholds, and actions that always need explicit confirmation;',
             '- shopping, food, transport, delivery, and booking preferences;',
             '- calendar/reminder preferences and quiet hours;',
             '- privacy boundaries and what the assistant must never do without explicit confirmation;',
+            '- default autonomy tier: ask everything, balanced, or full access, plus any service-specific exceptions;',
             '- browser agent setup preference: whether to open the managed browser during onboarding for manual login, which accounts/sites may be reused, and whether future free setup/login/API-key flows can proceed automatically until the consent boundary;',
             '- which available integrations the user cares about, what they should be used for, and whether the user wants to set any of them up now or later;',
             '- whether the user wants help setting up optional free external API keys that improve the app, starting with Watchlist financial data via `TWELVE_DATA_API_KEY` for Twelve Data;',
-            '- whether the user wants the assistant to use browser automation for free signup/login/setup flows by default, while still stopping before payments, subscriptions, paid trials, permission grants, legal-term acceptance, or submitting personal data unless the exact action is confirmed;',
+            '- whether the user wants the assistant to use browser automation for free signup/login/setup flows by default, while still stopping before payments, subscriptions, paid trials, permission grants, legal-term acceptance, destructive actions, public sharing, or submitting sensitive personal documents/data unless the exact action is confirmed;',
             '- any stable constraints the user explicitly wants remembered.',
             '',
             'After onboarding is complete:',
@@ -193,8 +206,41 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
             '2. Update USER.md with stable facts and preferences.',
             '3. Update MEMORY.md with durable operating conclusions.',
             '4. Update IDENTITY.md with stable assistant/setup facts learned during onboarding.',
-            '5. Store browser-agent autonomy/profile preferences as non-secret memory only; never store passwords, 2FA, recovery codes, cookies, or API key values in markdown.',
-            '6. Remove BOOT.md so onboarding does not run again.',
+            '5. Update ONBOARDING.md with Status complete or skipped and any missing fields that should be asked opportunistically later.',
+            '6. Store the autonomy tier, browser-agent autonomy/profile preferences, and service-specific exceptions as non-secret memory only; never store passwords, 2FA, recovery codes, cookies, or API key values in markdown.',
+            '7. Remove BOOT.md so onboarding does not run again.',
+            '',
+        ].join('\n'),
+    },
+    {
+        id: 'onboarding',
+        label: 'Onboarding progress',
+        relativePath: 'ONBOARDING.md',
+        kind: 'markdown',
+        category: 'onboarding',
+        surface: 'editor',
+        description: 'Long-running onboarding progress, pending stages, and missing information to ask opportunistically later.',
+        defaultContent: [
+            '# ONBOARDING',
+            '',
+            'Status: active',
+            'Last stage: not_started',
+            'Next stage: identity_and_style',
+            '',
+            'Use this file to resume onboarding across conversations. Keep it compact: completed stages, pending stages, temporary answers not yet consolidated, and missing information to ask later.',
+            '',
+            '## Completed',
+            '',
+            '## Pending',
+            '- identity_and_style',
+            '- work_and_daily_context',
+            '- communication_and_urgency',
+            '- proactive_monitoring',
+            '- boundaries_and_autonomy',
+            '- browser_profile',
+            '- integrations',
+            '',
+            '## Missing Later',
             '',
         ].join('\n'),
     },
@@ -227,6 +273,25 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
         surface: 'editor',
         dynamic: 'daily',
         description: "Today's working memory. One file per day under MEMORY_DAY/; agents append actions and open loops to the current day.",
+    },
+    {
+        id: 'monitors',
+        label: 'Monitors',
+        relativePath: 'MONITORS.md',
+        kind: 'markdown',
+        category: 'behavior',
+        surface: 'editor',
+        description: 'Proactive monitoring preferences, candidate monitor specs, and active scheduled task ids.',
+        defaultContent: [
+            '# MONITORS',
+            '',
+            'Document proactive monitoring preferences, candidate monitor specs, and active scheduled task ids here.',
+            '',
+            'A monitor is active only when it has a scheduledTaskId from the Scheduling runtime. Notes in this file are not automation by themselves.',
+            '',
+            'Each entry should define status, scheduledTaskId when active, what to check, cadence, sources/connectors, notify threshold, whether the user wants important-only Inbox messages or timed summaries, and when to stay silent.',
+            '',
+        ].join('\n'),
     },
     {
         id: 'integration-index',
@@ -349,6 +414,7 @@ const WORKSPACE_INIT_MARKER = '.workspace-initialized'
  */
 function isMaterializable(def: WorkspaceFileDefinition): boolean {
     if (def.id === 'boot') return false
+    if (def.id === 'onboarding') return false
     if (def.source === 'virtual') return false
     if (def.surface === 'reference') return false
     if (def.kind === 'env') return false
@@ -401,11 +467,12 @@ export function ensureWorkspaceTemplates(): void {
     }
 
     if (firstRun) {
-        const boot = getDefinition('boot')
-        if (boot?.defaultContent) {
+        for (const id of ['boot', 'onboarding']) {
+            const def = getDefinition(id)
+            if (!def?.defaultContent) continue
             try {
-                const target = resolveDefinitionPath(boot)
-                if (!fs.existsSync(/* turbopackIgnore: true */ target)) writeTextAtomic(target, boot.defaultContent)
+                const target = resolveDefinitionPath(def)
+                if (!fs.existsSync(/* turbopackIgnore: true */ target)) writeTextAtomic(target, def.defaultContent)
             } catch {
                 // ignore
             }
@@ -510,15 +577,20 @@ export function writeWorkspaceFile(id: string, content: string): WorkspaceFilePa
     if (def.id === 'models-api') {
         invalidateRegistryCache()
     }
+    if (def.id === 'app-config') {
+        emitAppEvent({ type: 'config.updated' })
+        emitAppEvent({ type: 'settings.changed', reason: 'config' })
+    } else if (def.id === 'env-local' || def.id === 'models-api') {
+        emitAppEvent({ type: 'settings.changed', reason: def.id === 'env-local' ? 'env' : 'models' })
+    }
 
     return getWorkspaceFile(id)
 }
 
 function shouldListFile(summary: WorkspaceFileSummary): boolean {
-    // BOOT.md is an active onboarding script, not a reusable template. It
-    // should be visible only while the real file exists. Fresh installs seed it
-    // in ensureWorkspaceTemplates(); completed onboarding deletes it.
-    if (summary.id === 'boot') return summary.exists
+    // BOOT.md and ONBOARDING.md are first-run onboarding state, not reusable
+    // templates. They should be visible only while real files exist.
+    if (summary.id === 'boot' || summary.id === 'onboarding') return summary.exists
     return true
 }
 

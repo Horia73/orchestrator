@@ -638,6 +638,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
                                     draftValue={draft.value}
                                     attachments={draft.attachments}
                                     contextUsage={activeConversation?.contextUsage}
+                                    side={isChat ? "top" : "bottom"}
                                 />
                                 <div className="flex size-9 shrink-0 items-center justify-center">
                                     {isStreaming ? (

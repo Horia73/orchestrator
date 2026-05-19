@@ -3,6 +3,7 @@ import fs from 'fs'
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import { displayPath, resolveSandboxedWritable } from './sandbox'
 import { ensureParentDir, stringArg } from './helpers'
+import { emitAppEvent } from '@/lib/events'
 
 const ENV_LABEL_PREFIX = '# @label '
 
@@ -81,6 +82,7 @@ export function executeSetEnv(args: Record<string, unknown>): ToolResult {
         } catch {
             // Best effort; some filesystems ignore chmod.
         }
+        emitAppEvent({ type: 'settings.changed', reason: 'env' })
 
         return {
             success: true,

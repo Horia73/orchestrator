@@ -13,13 +13,78 @@ import {
 import { cn } from "@/lib/utils"
 
 const CERT_SETUP_HOSTS = new Set(["orchestrator.lan"])
+const PROMPT_KINDS = ["ready", "blocked", "unsupported", "error"] as const
+const DISMISS_STORAGE_KEY = "orchestrator:notification-prompt-dismissals"
+const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000
 
 type PlatformKind = "ios" | "mac" | "mobile" | "desktop"
-type PromptKind = "ready" | "blocked" | "unsupported" | "error"
+type PromptKind = (typeof PROMPT_KINDS)[number]
+type PromptDismissals = Partial<Record<PromptKind, number>>
 
 interface BrowserLocationInfo {
   origin: string
   certSetupUrl: string | null
+}
+
+function savePromptDismissals(dismissals: PromptDismissals) {
+  if (typeof window === "undefined") return
+
+  try {
+    if (Object.keys(dismissals).length === 0) {
+      window.localStorage.removeItem(DISMISS_STORAGE_KEY)
+    } else {
+      window.localStorage.setItem(
+        DISMISS_STORAGE_KEY,
+        JSON.stringify(dismissals)
+      )
+    }
+  } catch {
+    // Storage is best-effort; the in-memory dismissal still works for this tab.
+  }
+}
+
+function readPromptDismissals(): PromptDismissals {
+  if (typeof window === "undefined") return {}
+
+  try {
+    const parsed = JSON.parse(
+      window.localStorage.getItem(DISMISS_STORAGE_KEY) ?? "{}"
+    ) as unknown
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return {}
+    }
+
+    const now = Date.now()
+    const source = parsed as Record<string, unknown>
+    const dismissals: PromptDismissals = {}
+    for (const kind of PROMPT_KINDS) {
+      const dismissedUntil = source[kind]
+      if (typeof dismissedUntil === "number" && dismissedUntil > now) {
+        dismissals[kind] = dismissedUntil
+      }
+    }
+    savePromptDismissals(dismissals)
+    return dismissals
+  } catch {
+    return {}
+  }
+}
+
+function writePromptDismissal(kind: PromptKind): PromptDismissals {
+  const dismissals = readPromptDismissals()
+  const next = {
+    ...dismissals,
+    [kind]: Date.now() + DISMISS_DURATION_MS,
+  }
+  savePromptDismissals(next)
+  return next
+}
+
+function clearPromptDismissal(kind: PromptKind): PromptDismissals {
+  const dismissals = readPromptDismissals()
+  delete dismissals[kind]
+  savePromptDismissals(dismissals)
+  return dismissals
 }
 
 function detectPlatform(): PlatformKind {
@@ -186,9 +251,7 @@ function NotificationPermissionPromptInner() {
     origin: "",
     certSetupUrl: null,
   })
-  const [dismissedKind, setDismissedKind] = React.useState<PromptKind | null>(
-    null
-  )
+  const [dismissals, setDismissals] = React.useState<PromptDismissals>({})
   const [checking, setChecking] = React.useState(false)
   const [checkMessage, setCheckMessage] = React.useState<string | null>(null)
 
@@ -197,19 +260,33 @@ function NotificationPermissionPromptInner() {
     setLocationInfo(nextLocationInfo)
     setMounted(true)
     setPlatform(detectPlatform())
+    setDismissals(readPromptDismissals())
   }, [])
 
   const kind = promptKindFromStatus(status)
 
   React.useEffect(() => {
-    if (!kind || dismissedKind === kind) return
-    if (dismissedKind) {
-      setDismissedKind(null)
-      setCheckMessage(null)
-    }
-  }, [dismissedKind, kind])
+    if (!kind) return
 
-  if (!mounted || !kind || dismissedKind === kind) return null
+    const dismissedUntil = dismissals[kind]
+    if (!dismissedUntil) return
+
+    const delay = dismissedUntil - Date.now()
+    if (delay <= 0) {
+      setDismissals(clearPromptDismissal(kind))
+      setCheckMessage(null)
+      return
+    }
+
+    const timeout = window.setTimeout(() => {
+      setDismissals(clearPromptDismissal(kind))
+      setCheckMessage(null)
+    }, delay)
+    return () => window.clearTimeout(timeout)
+  }, [dismissals, kind])
+
+  const isDismissed = kind ? Boolean(dismissals[kind]) : false
+  if (!mounted || !kind || isDismissed) return null
 
   const copy = promptCopy({
     kind,
@@ -268,7 +345,7 @@ function NotificationPermissionPromptInner() {
   }
   const onDismiss = () => {
     setCheckMessage(null)
-    setDismissedKind(kind)
+    setDismissals(writePromptDismissal(kind))
   }
 
   return (

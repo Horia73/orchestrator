@@ -5,7 +5,6 @@ import { useSearchParams } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
 import { ChatView } from "@/components/chat-view"
 import { HomeView } from "@/components/home-view"
-import { ChatSkeleton } from "@/components/chat-skeleton"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { SidebarInset } from "@/components/ui/sidebar"
 
@@ -45,6 +44,18 @@ export default function Page() {
   const activeConversationError = state.activeConversationId
     ? state.conversationLoadErrors[state.activeConversationId]
     : null
+  const activeConversation = state.activeConversationId
+    ? state.conversations.find(
+        (conversation) => conversation.id === state.activeConversationId
+      )
+    : null
+  const isActiveConversationPriming = Boolean(
+    state.activeConversationId &&
+      (activeConversationStatus == null ||
+        activeConversationStatus === "summary" ||
+        activeConversationStatus === "loading") &&
+      (activeConversation?.messages.length ?? 0) === 0
+  )
 
   return (
     <>
@@ -53,11 +64,13 @@ export default function Page() {
         {state.isLoading ? (
           mounted ? (
             hasIdOnLoad ? (
-              <ChatSkeleton />
+              null
             ) : (
               <HomeSkeleton />
             )
           ) : null
+        ) : isActiveConversationPriming ? (
+          null
         ) : state.activeConversationId && activeConversationStatus === "error" ? (
           <div className="flex flex-1 items-center justify-center px-4 text-center">
             <div>

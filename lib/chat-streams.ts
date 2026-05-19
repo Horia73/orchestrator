@@ -1,3 +1,5 @@
+import { emitChatEvent } from '@/lib/events'
+
 interface ActiveChatStream {
     messageId: string
     startedAt: number
@@ -18,11 +20,20 @@ export function registerChatStream(conversationId: string, messageId: string, co
     const current = streams.get(conversationId)
     if (current && !current.controller.signal.aborted) {
         current.controller.abort()
+        emitChatEvent({
+            type: 'chat_stream_ended',
+            payload: { conversationId, messageId: current.messageId },
+        })
     }
-    streams.set(conversationId, {
+    const stream = {
         messageId,
         startedAt: Date.now(),
         controller,
+    }
+    streams.set(conversationId, stream)
+    emitChatEvent({
+        type: 'chat_stream_started',
+        payload: { conversationId, messageId, startedAt: stream.startedAt },
     })
 }
 
@@ -31,12 +42,21 @@ export function clearChatStream(conversationId: string, messageId?: string) {
     if (!active) return
     if (messageId && active.messageId !== messageId) return
     streams.delete(conversationId)
+    emitChatEvent({
+        type: 'chat_stream_ended',
+        payload: { conversationId, messageId: active.messageId },
+    })
 }
 
 export function stopChatStream(conversationId: string): boolean {
     const active = streams.get(conversationId)
     if (!active) return false
     active.controller.abort()
+    streams.delete(conversationId)
+    emitChatEvent({
+        type: 'chat_stream_ended',
+        payload: { conversationId, messageId: active.messageId },
+    })
     return true
 }
 

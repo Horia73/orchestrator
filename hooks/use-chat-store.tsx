@@ -14,6 +14,12 @@ import { generateId, generateTitle } from "@/lib/utils-chat"
 
 type StreamingReasoning = NonNullable<Message["reasoning"]>
 
+interface ActiveChatStream {
+  conversationId: string
+  messageId: string
+  startedAt: number
+}
+
 function updateAgentEntry(
   reasoning: StreamingReasoning,
   runId: string,
@@ -208,6 +214,7 @@ async function showChatCompletionNotification(
 interface ChatState {
   conversations: Conversation[]
   isLoading: boolean
+  activeChatStreams: Record<string, ActiveChatStream>
   conversationLoadState: Record<string, ConversationLoadState>
   conversationLoadErrors: Record<string, string | undefined>
   conversationMessagePages: Record<string, ConversationMessagePageState>
@@ -237,6 +244,9 @@ type ChatAction =
   | { type: "LOAD_CONVERSATION_START"; id: string }
   | { type: "LOAD_CONVERSATION_SUCCESS"; conversation: Conversation }
   | { type: "LOAD_CONVERSATION_ERROR"; id: string; error: string }
+  | { type: "SET_ACTIVE_CHAT_STREAMS"; streams: ActiveChatStream[] }
+  | { type: "CHAT_STREAM_STARTED"; stream: ActiveChatStream }
+  | { type: "CHAT_STREAM_ENDED"; conversationId: string; messageId?: string }
   | {
       type: "LOAD_MESSAGE_PAGE_SUCCESS"
       id: string
@@ -336,6 +346,32 @@ type ChatAction =
 
 function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
+    case "SET_ACTIVE_CHAT_STREAMS":
+      return {
+        ...state,
+        activeChatStreams: Object.fromEntries(
+          action.streams.map((stream) => [stream.conversationId, stream])
+        ),
+      }
+    case "CHAT_STREAM_STARTED":
+      return {
+        ...state,
+        activeChatStreams: {
+          ...state.activeChatStreams,
+          [action.stream.conversationId]: action.stream,
+        },
+      }
+    case "CHAT_STREAM_ENDED": {
+      const current = state.activeChatStreams[action.conversationId]
+      if (action.messageId && current && current.messageId !== action.messageId)
+        return state
+      const activeChatStreams = { ...state.activeChatStreams }
+      delete activeChatStreams[action.conversationId]
+      return {
+        ...state,
+        activeChatStreams,
+      }
+    }
     case "INIT_CONVERSATIONS": {
       const dbIds = new Set(action.conversations.map((c) => c.id))
       const locallyCreated = state.conversations.filter((c) => !dbIds.has(c.id))
@@ -592,6 +628,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ),
         conversationMessagePages: Object.fromEntries(
           Object.entries(state.conversationMessagePages).filter(
+            ([id]) => id !== action.id
+          )
+        ),
+        activeChatStreams: Object.fromEntries(
+          Object.entries(state.activeChatStreams).filter(
             ([id]) => id !== action.id
           )
         ),
@@ -1024,8 +1065,11 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : state.conversationMessagePages,
       }
       if (action.stopStreaming === false) return nextState
+      const activeChatStreams = { ...nextState.activeChatStreams }
+      delete activeChatStreams[action.conversationId]
       return {
         ...nextState,
+        activeChatStreams,
         ...stoppedStreamState,
       }
     }
@@ -1056,6 +1100,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = React.useReducer(chatReducer, {
     conversations: [],
     isLoading: true,
+    activeChatStreams: {},
     conversationLoadState: {},
     conversationLoadErrors: {},
     conversationMessagePages: {},
@@ -1179,6 +1224,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     const conversationId = activeConversationIdRef.current
     cleanupStream()
     dispatch({ type: "SET_STREAMING", isStreaming: false })
+    if (conversationId) dispatch({ type: "CHAT_STREAM_ENDED", conversationId })
     if (conversationId) {
       fetch("/api/chat/stop", {
         method: "POST",
@@ -1293,7 +1339,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [loadInitialMessages, state.activeConversationId])
 
   const checkServerStreaming = React.useCallback(
-    async (conversationId: string): Promise<boolean> => {
+    async (conversationId: string): Promise<ActiveChatStream | null> => {
       try {
         const res = await fetch(
           `/api/chat/active?conversationId=${encodeURIComponent(conversationId)}`,
@@ -1301,15 +1347,49 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             cache: "no-store",
           }
         )
-        if (!res.ok) return false
+        if (!res.ok) return null
         const data = await res.json()
-        return !!data.active
+        if (!data.active) return null
+        return {
+          conversationId,
+          messageId:
+            typeof data.messageId === "string" ? data.messageId : "unknown",
+          startedAt:
+            typeof data.startedAt === "number" ? data.startedAt : Date.now(),
+        }
       } catch {
-        return false
+        return null
       }
     },
     []
   )
+
+  const refreshActiveChatStreams = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/chat/active", { cache: "no-store" })
+      if (!res.ok) return
+      const data = await res.json()
+      const streams = Array.isArray(data.streams)
+        ? data.streams.filter(
+            (stream: unknown): stream is ActiveChatStream =>
+              Boolean(stream) &&
+              typeof stream === "object" &&
+              typeof (stream as ActiveChatStream).conversationId === "string" &&
+              typeof (stream as ActiveChatStream).messageId === "string" &&
+              typeof (stream as ActiveChatStream).startedAt === "number"
+          )
+        : []
+      dispatch({ type: "SET_ACTIVE_CHAT_STREAMS", streams })
+    } catch {
+      // Best-effort reconciliation; local actions and SSE keep the slot responsive.
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void refreshActiveChatStreams()
+    const interval = window.setInterval(refreshActiveChatStreams, 5000)
+    return () => window.clearInterval(interval)
+  }, [refreshActiveChatStreams])
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
@@ -1317,14 +1397,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
     let cancelled = false
 
-    checkServerStreaming(conversationId).then((active) => {
+    checkServerStreaming(conversationId).then((stream) => {
       if (
         cancelled ||
         activeConversationIdRef.current !== conversationId ||
         streamingRef.current
       )
         return
-      dispatch({ type: "SET_STREAMING", isStreaming: active })
+      dispatch({ type: "SET_STREAMING", isStreaming: Boolean(stream) })
+      if (stream) dispatch({ type: "CHAT_STREAM_STARTED", stream })
     })
 
     return () => {
@@ -1338,14 +1419,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
     let cancelled = false
     const tick = () => {
-      checkServerStreaming(conversationId).then((active) => {
+      checkServerStreaming(conversationId).then((stream) => {
         if (
           cancelled ||
           activeConversationIdRef.current !== conversationId ||
           streamingRef.current
         )
           return
-        if (!active) dispatch({ type: "SET_STREAMING", isStreaming: false })
+        if (stream) dispatch({ type: "CHAT_STREAM_STARTED", stream })
+        else {
+          dispatch({ type: "SET_STREAMING", isStreaming: false })
+          dispatch({ type: "CHAT_STREAM_ENDED", conversationId })
+        }
       })
     }
 
@@ -1417,6 +1502,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         } else if (data.type === "delete_conversation") {
           dispatch({ type: "DELETE_CONVERSATION", id: data.payload.id })
+        } else if (data.type === "chat_stream_started") {
+          dispatch({
+            type: "CHAT_STREAM_STARTED",
+            stream: {
+              conversationId: data.payload.conversationId,
+              messageId: data.payload.messageId,
+              startedAt: data.payload.startedAt,
+            },
+          })
+        } else if (data.type === "chat_stream_ended") {
+          dispatch({
+            type: "CHAT_STREAM_ENDED",
+            conversationId: data.payload.conversationId,
+            messageId: data.payload.messageId,
+          })
         }
       } catch (err) {
         console.error("Failed to parse SSE event", err)
@@ -1592,6 +1692,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }, 1000)
 
       const finalConvId = conversationId
+      dispatch({
+        type: "CHAT_STREAM_STARTED",
+        stream: {
+          conversationId: finalConvId,
+          messageId: assistantMsgId,
+          startedAt: Date.now(),
+        },
+      })
 
       // Call the streaming API — pass messages directly to avoid DB race condition
       fetch("/api/chat", {
@@ -2295,6 +2403,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           // (ADD_ASSISTANT_MESSAGE includes stoppedStreamState)
           if (!streamDoneRef.current) {
             dispatch({ type: "SET_STREAMING", isStreaming: false })
+            dispatch({ type: "CHAT_STREAM_ENDED", conversationId: finalConvId })
           }
         })
     },

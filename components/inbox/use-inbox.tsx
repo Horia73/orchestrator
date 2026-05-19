@@ -2,8 +2,7 @@
 
 import * as React from "react"
 import type { Message } from "@/lib/types"
-
-const POLL_MS = 4000
+import { useAppEvent } from "@/hooks/use-app-events"
 
 export interface InboxListItem {
     id: string
@@ -36,6 +35,7 @@ interface InboxApi {
     clear: () => void
     remove: (id: string) => Promise<void>
     reply: (id: string) => Promise<string | null>
+    respond: (id: string, content: string) => Promise<boolean>
 }
 
 const InboxContext = React.createContext<InboxApi | null>(null)
@@ -62,17 +62,19 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
         }
     }, [])
 
+    useAppEvent(["inbox.changed"], () => {
+        if (document.visibilityState === "visible") void refresh()
+    })
+
     React.useEffect(() => {
         let cancelled = false
         setLoading(true)
         refresh().finally(() => { if (!cancelled) setLoading(false) })
         const onTick = () => { if (document.visibilityState === "visible") void refresh() }
-        const interval = window.setInterval(onTick, POLL_MS)
         document.addEventListener("visibilitychange", onTick)
         window.addEventListener("orchestrator:inbox-updated", onTick)
         return () => {
             cancelled = true
-            window.clearInterval(interval)
             document.removeEventListener("visibilitychange", onTick)
             window.removeEventListener("orchestrator:inbox-updated", onTick)
         }
@@ -113,11 +115,27 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
         return typeof data.conversationId === "string" ? data.conversationId : null
     }, [refresh])
 
+    const respond = React.useCallback(async (id: string, content: string): Promise<boolean> => {
+        const text = content.trim()
+        if (!text) return false
+        const res = await fetch(`/api/inbox/${id}/reply`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ content: text }),
+        })
+        if (!res.ok) return false
+        const data = await res.json()
+        if (data.item) setDetail(data.item as InboxDetail)
+        await refresh()
+        window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
+        return true
+    }, [refresh])
+
     const clear = React.useCallback(() => { setSelectedId(null); setDetail(null) }, [])
 
     const value = React.useMemo<InboxApi>(() => ({
-        items, unread, loading, error, selectedId, detail, detailLoading, open, clear, remove, reply,
-    }), [items, unread, loading, error, selectedId, detail, detailLoading, open, clear, remove, reply])
+        items, unread, loading, error, selectedId, detail, detailLoading, open, clear, remove, reply, respond,
+    }), [items, unread, loading, error, selectedId, detail, detailLoading, open, clear, remove, reply, respond])
 
     return <InboxContext.Provider value={value}>{children}</InboxContext.Provider>
 }

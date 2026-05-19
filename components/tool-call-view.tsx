@@ -188,12 +188,22 @@ function CompactSearchPreview({ entry, status, data }: { entry: ToolCallReasonin
     )
 }
 
-function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: ParsedData }) {
+export function TerminalOutput({
+    text,
+    cursorBlink = false,
+    resetKey,
+    className,
+}: {
+    text: string
+    cursorBlink?: boolean
+    resetKey?: string
+    className?: string
+}) {
     const containerRef = React.useRef<HTMLDivElement>(null)
     const termRef = React.useRef<Terminal | null>(null)
     const fitRef = React.useRef<FitAddon | null>(null)
-    const writtenRef = React.useRef(0)
-    const streamText = React.useMemo(() => terminalText(entry, data), [entry, data])
+    const renderedTextRef = React.useRef("")
+    const resetKeyRef = React.useRef(resetKey)
 
     React.useEffect(() => {
         if (!containerRef.current) return
@@ -239,25 +249,30 @@ function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: Pa
             term.dispose()
             termRef.current = null
             fitRef.current = null
-            writtenRef.current = 0
+            renderedTextRef.current = ""
         }
     }, [])
 
     React.useEffect(() => {
         const term = termRef.current
         if (!term) return
-        term.options.cursorBlink = entry.status === "running"
-    }, [entry.status])
+        term.options.cursorBlink = cursorBlink
+    }, [cursorBlink])
 
     React.useEffect(() => {
         const term = termRef.current
         if (!term) return
-        const next = streamText.slice(writtenRef.current)
+        if (resetKeyRef.current !== resetKey || !text.startsWith(renderedTextRef.current)) {
+            term.reset()
+            renderedTextRef.current = ""
+            resetKeyRef.current = resetKey
+        }
+        const next = text.slice(renderedTextRef.current.length)
         if (next) {
             term.write(next)
-            writtenRef.current = streamText.length
+            renderedTextRef.current = text
         }
-    }, [streamText])
+    }, [resetKey, text])
 
     React.useEffect(() => {
         const el = containerRef.current
@@ -273,7 +288,19 @@ function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: Pa
     return (
         <div
             ref={containerRef}
-            className="min-h-0 flex-1 px-2 py-2"
+            className={cn("min-h-0 flex-1 px-2 py-2", className)}
+        />
+    )
+}
+
+function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: ParsedData }) {
+    const streamText = React.useMemo(() => terminalText(entry, data), [entry, data])
+
+    return (
+        <TerminalOutput
+            text={streamText}
+            cursorBlink={entry.status === "running"}
+            resetKey={entry.toolCallId || entry.id}
         />
     )
 }

@@ -101,6 +101,19 @@ export interface ContentSegment {
 
 export type MessageStatus = "ok" | "error" | "aborted"
 
+export type InboxReplyActionStyle = "primary" | "secondary" | "destructive"
+
+export interface InboxReplyAction {
+  /** Stable machine id for the quick action inside one message. */
+  id: string
+  /** Short button label shown in Inbox. */
+  label: string
+  /** User reply sent when the button is clicked. */
+  value: string
+  /** Optional visual intent. Destructive actions still follow model/tool confirmation rules. */
+  style?: InboxReplyActionStyle
+}
+
 export interface AgentCallReasoningEntry {
   type: "agent_call"
   /** Stable item id (used as React key and persistence merge key). */
@@ -149,6 +162,7 @@ export interface Message {
   thinkingDuration?: number
   toolCalls?: { text: string; content: string }[]
   attachments?: Attachment[]
+  replyActions?: InboxReplyAction[]
   timestamp: number
 }
 

@@ -229,20 +229,56 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
     }
 
     if (state.mode === "mac-headful" && (state.available || state.ready)) {
-        return (
-            <div className="flex items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+        const content = (
+            <>
                 <Monitor className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1">Patchright is running in a local headful browser window on this Mac.</span>
                 <span className="rounded bg-emerald-500/10 px-1.5 py-0.5 text-emerald-700 dark:text-emerald-300">headful</span>
+            </>
+        )
+        if (onOpenDetails) {
+            return (
+                <button
+                    type="button"
+                    onClick={onOpenDetails}
+                    className="group flex w-full cursor-pointer items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-left text-[12px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    aria-label="Open browser agent details"
+                    title="Open browser agent details"
+                >
+                    {content}
+                </button>
+            )
+        }
+        return (
+            <div className="flex items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+                {content}
             </div>
         )
     }
 
     if (!state.ready || !state.wsUrl) {
-        return (
-            <div className="flex items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+        const content = (
+            <>
                 <WifiOff className="size-4 shrink-0" />
                 <span className="min-w-0 flex-1">{state.reason || "Live browser view is not available."}</span>
+            </>
+        )
+        if (onOpenDetails) {
+            return (
+                <button
+                    type="button"
+                    onClick={onOpenDetails}
+                    className="group flex w-full cursor-pointer items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-left text-[12px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/35 hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                    aria-label="Open browser agent details"
+                    title="Open browser agent details"
+                >
+                    {content}
+                </button>
+            )
+        }
+        return (
+            <div className="flex items-center gap-3 rounded-md border border-border/70 bg-muted/20 px-3 py-2 text-[12px] text-muted-foreground">
+                {content}
             </div>
         )
     }
@@ -272,7 +308,7 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
                     <button
                         type="button"
                         onClick={onOpenDetails}
-                        className="group inline-flex min-w-0 flex-1 items-center gap-2 text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+                        className="group inline-flex min-w-0 flex-1 cursor-pointer items-center gap-2 text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
                         aria-label="Open browser agent logs"
                         title="Open browser agent logs"
                     >
