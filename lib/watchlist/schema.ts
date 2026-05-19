@@ -7,7 +7,7 @@ export type WatchlistAssetClass =
   | "fund"
   | "other"
 
-export type WatchlistItemKind = "financial"
+export type WatchlistItemKind = "financial" | "product"
 
 export type WatchlistRange = "1D" | "5D" | "1M" | "6M" | "1Y"
 
@@ -17,6 +17,7 @@ export interface WatchlistItem {
   symbol: string
   providerSymbol: string
   tradingViewSymbol: string | null
+  url: string | null
   name: string
   exchange: string | null
   currency: string | null
@@ -57,6 +58,15 @@ export interface WatchlistCandle {
   volume: number | null
 }
 
+export interface WatchlistObservation {
+  id: string
+  itemId: string
+  providerSymbol: string
+  price: number | null
+  changePercent: number | null
+  ts: number
+}
+
 export interface WatchlistSearchResult {
   symbol: string
   providerSymbol: string
@@ -70,6 +80,8 @@ export interface WatchlistSearchResult {
 export interface WatchlistItemInput {
   symbol: string
   kind?: WatchlistItemKind
+  url?: string
+  source?: string
   name?: string
   exchange?: string
   currency?: string
@@ -79,6 +91,8 @@ export interface WatchlistItemInput {
   notes?: string
   movePercent?: number | null
   monitorEnabled?: boolean
+  price?: number | null
+  observedAt?: number
 }
 
 export interface WatchlistItemWithQuote extends WatchlistItem {

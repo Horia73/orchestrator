@@ -1221,6 +1221,12 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
 interface ChatContextType {
   state: ChatState
   unreadConversationIds: Set<string>
+  // True while the SELECT_CONVERSATION dispatch is queued at transition
+  // priority — i.e. React is still preparing the new chat's render in the
+  // background and the committed UI is still showing the previous chat.
+  // page.tsx uses this to overlay a skeleton so a slow switch doesn't read
+  // as "stuck on the wrong chat" for several seconds.
+  isSwitchingConversation: boolean
   newChat: () => void
   selectConversation: (id: string) => void
   prefetchConversationMessages: (id: string) => Promise<void>
@@ -1250,6 +1256,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [unreadConversationIds, setUnreadConversationIds] = React.useState<
     Set<string>
   >(() => readUnreadConversationIds())
+  // Wrap the SELECT_CONVERSATION dispatch in a transition so React can
+  // prepare the (potentially expensive) new chat render in the background
+  // without blocking. The boolean flips true the instant the user clicks,
+  // and clears once the new render commits.
+  const [isSwitchingConversation, startSwitchTransition] = React.useTransition()
 
   const abortControllerRef = React.useRef<AbortController | null>(null)
   const thinkingTimerRef = React.useRef<number | null>(null)
@@ -1702,10 +1713,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const selectConversation = React.useCallback(
     (id: string) => {
+      // Re-clicking the active chat would otherwise schedule a no-op
+      // transition and flash the skeleton overlay for one frame.
+      if (activeConversationIdRef.current === id) return
       stopStreaming()
       markConversationRead(id)
       void loadInitialMessages(id)
-      dispatch({ type: "SELECT_CONVERSATION", id })
+      startSwitchTransition(() => {
+        dispatch({ type: "SELECT_CONVERSATION", id })
+      })
     },
     [loadInitialMessages, markConversationRead, stopStreaming]
   )
@@ -2572,6 +2588,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     () => ({
       state,
       unreadConversationIds,
+      isSwitchingConversation,
       newChat,
       selectConversation,
       prefetchConversationMessages: loadInitialMessages,
@@ -2583,6 +2600,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     [
       state,
       unreadConversationIds,
+      isSwitchingConversation,
       newChat,
       selectConversation,
       loadInitialMessages,

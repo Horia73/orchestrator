@@ -47,7 +47,10 @@ export async function POST(request: Request) {
   try {
     const body = (await request.json()) as Partial<WatchlistItemInput>
     const result = addWatchlistItem({
+      kind: body.kind === "product" ? "product" : "financial",
       symbol: typeof body.symbol === "string" ? body.symbol : "",
+      url: typeof body.url === "string" ? body.url : undefined,
+      source: typeof body.source === "string" ? body.source : undefined,
       providerSymbol:
         typeof body.providerSymbol === "string"
           ? body.providerSymbol
@@ -67,6 +70,9 @@ export async function POST(request: Request) {
         typeof body.monitorEnabled === "boolean"
           ? body.monitorEnabled
           : undefined,
+      price: typeof body.price === "number" ? body.price : undefined,
+      observedAt:
+        typeof body.observedAt === "number" ? body.observedAt : undefined,
     })
     void import("@/lib/monitoring/watchlist-adapter")
       .then(({ syncMarketsMonitorActivation }) =>

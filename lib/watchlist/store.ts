@@ -8,6 +8,7 @@ import type {
   WatchlistItem,
   WatchlistItemInput,
   WatchlistItemKind,
+  WatchlistObservation,
   WatchlistQuote,
 } from "./schema"
 
@@ -43,6 +44,15 @@ type WatchlistAlertRow = {
   lastTriggeredAt: number | null
   createdAt: number
   updatedAt: number
+}
+
+type WatchlistObservationRow = {
+  id: string
+  itemId: string
+  providerSymbol: string
+  price: number | null
+  changePercent: number | null
+  ts: number
 }
 
 db.exec(`
@@ -200,8 +210,84 @@ export function normalizeProviderSymbol(value: string): string {
   return withoutExchange.replace(/\s+/g, "").toUpperCase()
 }
 
+function validKind(value: WatchlistItemKind | undefined): WatchlistItemKind {
+  return value === "product" ? "product" : "financial"
+}
+
+export function normalizeProductUrl(value: string): string {
+  const cleaned = cleanOptional(value)
+  if (!cleaned) return ""
+  try {
+    const url = new URL(cleaned)
+    url.hash = ""
+    url.hostname = url.hostname.toLowerCase()
+    if (
+      (url.protocol === "https:" && url.port === "443") ||
+      (url.protocol === "http:" && url.port === "80")
+    ) {
+      url.port = ""
+    }
+    if (url.pathname !== "/") {
+      url.pathname = url.pathname.replace(/\/+$/, "")
+    }
+    return url.toString()
+  } catch {
+    return cleaned.replace(/\s+/g, " ")
+  }
+}
+
+function sourceFromUrl(value: string): string | null {
+  try {
+    const url = new URL(value)
+    return url.hostname.replace(/^www\./i, "")
+  } catch {
+    return null
+  }
+}
+
+function slugProductKey(value: string): string {
+  return value
+    .trim()
+    .toLowerCase()
+    .replace(/https?:\/\//g, "")
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 96)
+}
+
+function normalizeProductProviderSymbol(input: WatchlistItemInput): string {
+  const url = normalizeProductUrl(input.url || input.providerSymbol || "")
+  if (url) return url
+  const label = cleanOptional(input.symbol) ?? cleanOptional(input.name) ?? ""
+  const slug = slugProductKey(label)
+  return slug ? `product:${slug}` : ""
+}
+
 function normalizeDisplaySymbol(value: string): string {
   return normalizeProviderSymbol(value)
+}
+
+function normalizeProductSymbol(
+  input: WatchlistItemInput,
+  providerSymbol: string
+): string {
+  return (
+    cleanOptional(input.symbol) ??
+    cleanOptional(input.source) ??
+    sourceFromUrl(providerSymbol) ??
+    "Product"
+  )
+}
+
+function normalizeProductSource(
+  input: WatchlistItemInput,
+  providerSymbol: string
+): string | null {
+  return (
+    cleanOptional(input.source) ??
+    cleanOptional(input.exchange) ??
+    sourceFromUrl(providerSymbol)
+  )
 }
 
 function normalizeExchange(value: string | null | undefined): string | null {
@@ -268,12 +354,14 @@ export function buildTradingViewSymbol(args: {
 }
 
 function itemFromRow(row: WatchlistItemRow): WatchlistItem {
+  const kind = validKind(row.kind)
   return {
     id: row.id,
-    kind: row.kind ?? "financial",
+    kind,
     symbol: row.symbol,
     providerSymbol: row.providerSymbol,
     tradingViewSymbol: row.tradingViewSymbol,
+    url: kind === "product" ? normalizeProductUrl(row.providerSymbol) : null,
     name: row.name,
     exchange: row.exchange,
     currency: row.currency,
@@ -309,15 +397,21 @@ export function listWatchlistItems(): WatchlistItem[] {
 
 export function getWatchlistItem(idOrSymbol: string): WatchlistItem | null {
   const normalized = normalizeProviderSymbol(idOrSymbol)
+  const productUrl = normalizeProductUrl(idOrSymbol)
   const row = db
     .prepare(
       `
         SELECT * FROM watchlist_items
-        WHERE id = @value OR providerSymbol = @symbol OR symbol = @symbol
+        WHERE id = @value
+           OR providerSymbol = @value
+           OR providerSymbol = @symbol
+           OR providerSymbol = @productUrl
+           OR symbol = @value
+           OR symbol = @symbol
         LIMIT 1
     `
     )
-    .get({ value: idOrSymbol, symbol: normalized }) as
+    .get({ value: idOrSymbol, symbol: normalized, productUrl }) as
     | WatchlistItemRow
     | undefined
   return row ? itemFromRow(row) : null
@@ -327,16 +421,42 @@ export function addWatchlistItem(input: WatchlistItemInput): {
   item: WatchlistItem
   created: boolean
 } {
-  const providerSymbol = normalizeProviderSymbol(
-    input.providerSymbol || input.symbol
-  )
+  const kind = validKind(input.kind)
+  const providerSymbol =
+    kind === "product"
+      ? normalizeProductProviderSymbol(input)
+      : normalizeProviderSymbol(input.providerSymbol || input.symbol)
   if (!providerSymbol) throw new Error("symbol is required")
 
   const existing = getWatchlistItem(providerSymbol)
-  if (existing) return { item: existing, created: false }
+  if (existing) {
+    if (
+      kind === "product" &&
+      typeof input.price === "number" &&
+      Number.isFinite(input.price)
+    ) {
+      appendWatchlistObservation({
+        itemId: existing.id,
+        providerSymbol: existing.providerSymbol,
+        price: input.price,
+        ts:
+          typeof input.observedAt === "number" &&
+          Number.isFinite(input.observedAt)
+            ? input.observedAt
+            : undefined,
+      })
+    }
+    return { item: existing, created: false }
+  }
 
-  const assetClass = normalizeAssetClass(input.assetClass, providerSymbol)
-  const exchange = normalizeExchange(input.exchange)
+  const assetClass =
+    kind === "product"
+      ? "other"
+      : normalizeAssetClass(input.assetClass, providerSymbol)
+  const exchange =
+    kind === "product"
+      ? normalizeProductSource(input, providerSymbol)
+      : normalizeExchange(input.exchange)
   const currency = cleanOptional(input.currency)?.toUpperCase() ?? null
   const createdAt = now()
   const maxSort = db
@@ -344,17 +464,29 @@ export function addWatchlistItem(input: WatchlistItemInput): {
     .get() as { maxSort: number | null }
   const item: WatchlistItem = {
     id: randomUUID(),
-    kind: input.kind ?? "financial",
-    symbol: normalizeDisplaySymbol(input.symbol || providerSymbol),
+    kind,
+    symbol:
+      kind === "product"
+        ? normalizeProductSymbol(input, providerSymbol)
+        : normalizeDisplaySymbol(input.symbol || providerSymbol),
     providerSymbol,
-    tradingViewSymbol: buildTradingViewSymbol({
-      symbol: input.symbol,
-      providerSymbol,
-      tradingViewSymbol: input.tradingViewSymbol,
-      exchange,
-      assetClass,
-    }),
-    name: cleanOptional(input.name) ?? providerSymbol,
+    tradingViewSymbol:
+      kind === "product"
+        ? null
+        : buildTradingViewSymbol({
+            symbol: input.symbol,
+            providerSymbol,
+            tradingViewSymbol: input.tradingViewSymbol,
+            exchange,
+            assetClass,
+          }),
+    url: kind === "product" ? normalizeProductUrl(providerSymbol) : null,
+    name:
+      kind === "product"
+        ? (cleanOptional(input.name) ??
+          cleanOptional(input.symbol) ??
+          normalizeProductSymbol(input, providerSymbol))
+        : (cleanOptional(input.name) ?? providerSymbol),
     exchange,
     currency,
     assetClass,
@@ -382,19 +514,42 @@ export function addWatchlistItem(input: WatchlistItemInput): {
     `
   ).run({ ...item, monitorEnabled: item.monitorEnabled ? 1 : 0 })
 
+  if (
+    kind === "product" &&
+    typeof input.price === "number" &&
+    Number.isFinite(input.price)
+  ) {
+    appendWatchlistObservation({
+      itemId: item.id,
+      providerSymbol: item.providerSymbol,
+      price: input.price,
+      ts:
+        typeof input.observedAt === "number" &&
+        Number.isFinite(input.observedAt)
+          ? input.observedAt
+          : undefined,
+    })
+  }
+
   return { item, created: true }
 }
 
 export function removeWatchlistItem(idOrSymbol: string): boolean {
   const normalized = normalizeProviderSymbol(idOrSymbol)
+  const productUrl = normalizeProductUrl(idOrSymbol)
   const result = db
     .prepare(
       `
         DELETE FROM watchlist_items
-        WHERE id = @value OR providerSymbol = @symbol OR symbol = @symbol
+        WHERE id = @value
+           OR providerSymbol = @value
+           OR providerSymbol = @symbol
+           OR providerSymbol = @productUrl
+           OR symbol = @value
+           OR symbol = @symbol
     `
     )
-    .run({ value: idOrSymbol, symbol: normalized })
+    .run({ value: idOrSymbol, symbol: normalized, productUrl })
   return result.changes > 0
 }
 
@@ -535,6 +690,122 @@ export function writeHistoryCache(
   })
 }
 
+function observationFromRow(
+  row: WatchlistObservationRow
+): WatchlistObservation {
+  return {
+    id: row.id,
+    itemId: row.itemId,
+    providerSymbol: row.providerSymbol,
+    price: row.price,
+    changePercent: row.changePercent,
+    ts: row.ts,
+  }
+}
+
+export function appendWatchlistObservation(args: {
+  itemId: string
+  providerSymbol: string
+  price: number | null
+  changePercent?: number | null
+  ts?: number
+}): WatchlistObservation {
+  const observation: WatchlistObservation = {
+    id: `obs_${randomUUID()}`,
+    itemId: args.itemId,
+    providerSymbol: args.providerSymbol,
+    price:
+      typeof args.price === "number" && Number.isFinite(args.price)
+        ? args.price
+        : null,
+    changePercent:
+      typeof args.changePercent === "number" &&
+      Number.isFinite(args.changePercent)
+        ? args.changePercent
+        : null,
+    ts:
+      typeof args.ts === "number" && Number.isFinite(args.ts) ? args.ts : now(),
+  }
+  db.prepare(
+    `
+        INSERT INTO watchlist_observations (id, itemId, providerSymbol, price, changePercent, ts)
+        VALUES (@id, @itemId, @providerSymbol, @price, @changePercent, @ts)
+    `
+  ).run(observation)
+  return observation
+}
+
+export function appendProductPriceObservation(args: {
+  itemIdOrSymbol: string
+  price: number
+  currency?: string | null
+  observedAt?: number
+}): { item: WatchlistItem; observation: WatchlistObservation } {
+  const item = getWatchlistItem(args.itemIdOrSymbol)
+  if (!item) throw new Error("Watchlist product not found")
+  if (item.kind !== "product") {
+    throw new Error("Watchlist item is not a product")
+  }
+  const currency = cleanOptional(args.currency)?.toUpperCase()
+  if (currency && currency !== item.currency) {
+    db.prepare(
+      "UPDATE watchlist_items SET currency = ?, updatedAt = ? WHERE id = ?"
+    ).run(currency, now(), item.id)
+  }
+  const observation = appendWatchlistObservation({
+    itemId: item.id,
+    providerSymbol: item.providerSymbol,
+    price: args.price,
+    ts: args.observedAt,
+  })
+  return { item: getWatchlistItem(item.id) ?? item, observation }
+}
+
+export function listWatchlistObservations(
+  itemId: string,
+  options: { since?: number; limit?: number } = {}
+): WatchlistObservation[] {
+  const since =
+    typeof options.since === "number" && Number.isFinite(options.since)
+      ? options.since
+      : 0
+  const limit =
+    typeof options.limit === "number" && Number.isFinite(options.limit)
+      ? Math.max(1, Math.min(1000, Math.floor(options.limit)))
+      : 500
+  const rows = db
+    .prepare(
+      `
+        SELECT * FROM watchlist_observations
+        WHERE itemId = @itemId AND ts >= @since
+        ORDER BY ts ASC
+        LIMIT @limit
+    `
+    )
+    .all({ itemId, since, limit }) as WatchlistObservationRow[]
+  return rows.map(observationFromRow)
+}
+
+export function latestWatchlistObservations(
+  itemId: string,
+  limit = 2
+): WatchlistObservation[] {
+  const rows = db
+    .prepare(
+      `
+        SELECT * FROM watchlist_observations
+        WHERE itemId = ?
+        ORDER BY ts DESC
+        LIMIT ?
+    `
+    )
+    .all(
+      itemId,
+      Math.max(1, Math.min(20, Math.floor(limit)))
+    ) as WatchlistObservationRow[]
+  return rows.map(observationFromRow)
+}
+
 export function listWatchlistAlerts(itemId?: string): WatchlistAlert[] {
   const rows = itemId
     ? db
@@ -563,7 +834,7 @@ export function hasActiveWatchlistMonitoring(): boolean {
           (
             SELECT COUNT(*)
             FROM watchlist_items
-            WHERE monitorEnabled = 1
+            WHERE kind = 'financial' AND monitorEnabled = 1
           ) AS monitoredItems,
           (
             SELECT COUNT(*)

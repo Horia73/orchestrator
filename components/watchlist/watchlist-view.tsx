@@ -6,8 +6,10 @@ import {
   ArrowLeft,
   Bell,
   Check,
+  ExternalLink,
   LineChart,
   Loader2,
+  Package,
   Plus,
   RefreshCcw,
   Search,
@@ -57,6 +59,24 @@ type SearchResponse = {
   status: WatchlistDataStatus
   results: WatchlistSearchResult[]
   error?: string
+}
+
+type ProductAddInput = {
+  kind: "product"
+  url?: string
+  name?: string
+  source?: string
+  currency?: string
+  price?: number
+}
+
+type AddWatchlistInput =
+  | WatchlistSearchResult
+  | { symbol: string }
+  | ProductAddInput
+
+function isProductAddInput(item: AddWatchlistInput): item is ProductAddInput {
+  return "kind" in item && item.kind === "product"
 }
 
 const RANGES: WatchlistRange[] = ["1D", "5D", "1M", "6M", "1Y"]
@@ -135,13 +155,31 @@ function AssetBadge({ value }: { value: string }) {
   )
 }
 
+function itemTitle(item: WatchlistItemWithQuote) {
+  return item.kind === "product" ? item.name : item.symbol
+}
+
+function itemSubtitle(item: WatchlistItemWithQuote) {
+  if (item.kind === "product") {
+    return item.exchange || item.url || item.providerSymbol
+  }
+  return item.name
+}
+
+function itemBadge(item: WatchlistItemWithQuote) {
+  return item.kind === "product" ? "product" : item.assetClass
+}
+
 function ProviderStatus({
   status,
   errors,
+  show,
 }: {
   status: WatchlistDataStatus | null
   errors: string[]
+  show: boolean
 }) {
+  if (!show) return null
   if (!status && errors.length === 0) return null
   if (status?.configured && errors.length === 0) return null
   return (
@@ -175,6 +213,7 @@ function WatchlistRow({
   const q = item.quote
   const change = q?.changePercent ?? null
   const positive = change != null && change > 0
+  const isProduct = item.kind === "product"
   return (
     <div
       role="button"
@@ -196,12 +235,12 @@ function WatchlistRow({
       <div className="min-w-0">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[13.5px] font-semibold text-foreground">
-            {item.symbol}
+            {itemTitle(item)}
           </span>
-          <AssetBadge value={item.assetClass} />
+          <AssetBadge value={itemBadge(item)} />
         </div>
         <div className="truncate text-[11.5px] text-foreground/45">
-          {item.name}
+          {itemSubtitle(item)}
         </div>
       </div>
       <div className="text-right tabular-nums">
@@ -209,7 +248,9 @@ function WatchlistRow({
           {formatPrice(q?.price, q?.currency ?? item.currency)}
         </div>
         <div className="text-[11.5px] text-foreground/45">
-          open {formatPrice(q?.open, q?.currency ?? item.currency)}
+          {isProduct
+            ? formatTime(q?.timestamp ?? item.quoteUpdatedAt)
+            : `open ${formatPrice(q?.open, q?.currency ?? item.currency)}`}
         </div>
       </div>
       <div
@@ -250,19 +291,23 @@ function WatchlistRow({
 function SearchAdd({
   onAdd,
 }: {
-  onAdd: (
-    instrument: WatchlistSearchResult | { symbol: string }
-  ) => Promise<void>
+  onAdd: (item: AddWatchlistInput) => Promise<void>
 }) {
+  const [mode, setMode] = React.useState<"financial" | "product">("financial")
   const [query, setQuery] = React.useState("")
   const [results, setResults] = React.useState<WatchlistSearchResult[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [adding, setAdding] = React.useState<string | null>(null)
+  const [productUrl, setProductUrl] = React.useState("")
+  const [productName, setProductName] = React.useState("")
+  const [productSource, setProductSource] = React.useState("")
+  const [productPrice, setProductPrice] = React.useState("")
+  const [productCurrency, setProductCurrency] = React.useState("EUR")
 
   React.useEffect(() => {
     let cancelled = false
-    if (!query.trim()) {
+    if (mode !== "financial" || !query.trim()) {
       setResults([])
       setLoading(false)
       setError(null)
@@ -295,7 +340,7 @@ function SearchAdd({
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [query])
+  }, [mode, query])
 
   const add = async (item: WatchlistSearchResult | { symbol: string }) => {
     const key = "providerSymbol" in item ? item.providerSymbol : item.symbol
@@ -311,61 +356,183 @@ function SearchAdd({
     }
   }
 
+  const addProduct = async () => {
+    const url = productUrl.trim()
+    const name = productName.trim()
+    const source = productSource.trim()
+    const currency = productCurrency.trim().toUpperCase()
+    const normalizedPrice = productPrice.trim().replace(",", ".")
+    const price = normalizedPrice ? Number(normalizedPrice) : undefined
+    if (!url && !name) {
+      setError("Product URL or name is required")
+      return
+    }
+    if (price !== undefined && !Number.isFinite(price)) {
+      setError("Price must be a number")
+      return
+    }
+    setAdding("product")
+    try {
+      await onAdd({
+        kind: "product",
+        url: url || undefined,
+        name: name || undefined,
+        source: source || undefined,
+        currency: currency || undefined,
+        price,
+      })
+      setProductUrl("")
+      setProductName("")
+      setProductSource("")
+      setProductPrice("")
+      setError(null)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Add failed")
+    } finally {
+      setAdding(null)
+    }
+  }
+
   return (
     <div className="border-b border-border/60 px-3 pb-3">
-      <div className="relative">
-        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-foreground/35" />
-        <Input
-          value={query}
-          onChange={(event) => setQuery(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && query.trim()) {
-              event.preventDefault()
-              void add({ symbol: query.trim() })
-            }
-          }}
-          placeholder="Add AAPL, BTC/USD..."
-          className="h-9 pr-8 pl-8 text-[13px]"
-        />
-        {loading && (
-          <Loader2 className="absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-foreground/35" />
-        )}
+      <div className="mb-2 inline-flex h-8 rounded-lg bg-muted/60 p-0.5">
+        {(["financial", "product"] as const).map((item) => (
+          <button
+            key={item}
+            type="button"
+            onClick={() => {
+              setMode(item)
+              setError(null)
+            }}
+            className={cn(
+              "rounded-md px-2.5 text-[12px] font-medium transition-colors",
+              mode === item
+                ? "bg-card text-foreground shadow-sm ring-1 ring-border/50"
+                : "text-foreground/50 hover:text-foreground"
+            )}
+          >
+            {item === "financial" ? "Instrument" : "Product"}
+          </button>
+        ))}
       </div>
+      {mode === "financial" ? (
+        <>
+          <div className="relative">
+            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-foreground/35" />
+            <Input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && query.trim()) {
+                  event.preventDefault()
+                  void add({ symbol: query.trim() })
+                }
+              }}
+              placeholder="Add AAPL, BTC/USD..."
+              className="h-9 pr-8 pl-8 text-[13px]"
+            />
+            {loading && (
+              <Loader2 className="absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-foreground/35" />
+            )}
+          </div>
+        </>
+      ) : (
+        <div className="space-y-2">
+          <Input
+            value={productUrl}
+            onChange={(event) => setProductUrl(event.target.value)}
+            placeholder="Product URL"
+            className="h-9 text-[13px]"
+          />
+          <Input
+            value={productName}
+            onChange={(event) => setProductName(event.target.value)}
+            placeholder="Product name"
+            className="h-9 text-[13px]"
+          />
+          <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2">
+            <Input
+              value={productPrice}
+              onChange={(event) => setProductPrice(event.target.value)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter") {
+                  event.preventDefault()
+                  void addProduct()
+                }
+              }}
+              inputMode="decimal"
+              placeholder="Price"
+              className="h-9 text-[13px]"
+            />
+            <Input
+              value={productCurrency}
+              onChange={(event) => setProductCurrency(event.target.value)}
+              placeholder="EUR"
+              className="h-9 text-[13px] uppercase"
+            />
+          </div>
+          <div className="grid grid-cols-[minmax(0,1fr)_42px] gap-2">
+            <Input
+              value={productSource}
+              onChange={(event) => setProductSource(event.target.value)}
+              placeholder="Store"
+              className="h-9 text-[13px]"
+            />
+            <Button
+              type="button"
+              variant="outline"
+              size="icon"
+              onClick={() => void addProduct()}
+              disabled={adding === "product"}
+              title="Add product"
+              className="h-9 w-10"
+            >
+              {adding === "product" ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Plus className="size-3.5" />
+              )}
+            </Button>
+          </div>
+        </div>
+      )}
       {error && (
         <p className="mt-2 text-[11.5px] text-amber-700 dark:text-amber-300">
           {error}
         </p>
       )}
-      <div className="mt-2 max-h-[230px] overflow-y-auto">
-        {results.map((item) => (
-          <button
-            key={`${item.providerSymbol}-${item.exchange ?? ""}`}
-            type="button"
-            onClick={() => void add(item)}
-            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[#f0ede6]/70 dark:hover:bg-muted"
-          >
-            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-foreground/55">
-              {adding === item.providerSymbol ? (
-                <Loader2 className="size-3 animate-spin" />
-              ) : (
-                <Plus className="size-3" />
-              )}
-            </span>
-            <span className="min-w-0 flex-1">
-              <span className="flex items-center gap-2">
-                <span className="text-[12.5px] font-semibold">
-                  {item.symbol}
+      {mode === "financial" && (
+        <div className="mt-2 max-h-[230px] overflow-y-auto">
+          {results.map((item) => (
+            <button
+              key={`${item.providerSymbol}-${item.exchange ?? ""}`}
+              type="button"
+              onClick={() => void add(item)}
+              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[#f0ede6]/70 dark:hover:bg-muted"
+            >
+              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-foreground/55">
+                {adding === item.providerSymbol ? (
+                  <Loader2 className="size-3 animate-spin" />
+                ) : (
+                  <Plus className="size-3" />
+                )}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-2">
+                  <span className="text-[12.5px] font-semibold">
+                    {item.symbol}
+                  </span>
+                  <AssetBadge value={item.assetClass} />
                 </span>
-                <AssetBadge value={item.assetClass} />
+                <span className="block truncate text-[11.5px] text-foreground/45">
+                  {item.name}
+                  {item.exchange ? ` · ${item.exchange}` : ""}
+                </span>
               </span>
-              <span className="block truncate text-[11.5px] text-foreground/45">
-                {item.name}
-                {item.exchange ? ` · ${item.exchange}` : ""}
-              </span>
-            </span>
-          </button>
-        ))}
-      </div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
@@ -389,7 +556,7 @@ function HistoryPreview({
       setLoading(true)
       try {
         const res = await fetch(
-          `/api/watchlist/history?symbol=${encodeURIComponent(selected.providerSymbol)}&range=${range}`,
+          `/api/watchlist/history?itemId=${encodeURIComponent(selected.id)}&range=${range}`,
           { cache: "no-store" }
         )
         if (!res.ok) throw new Error(await responseError(res))
@@ -433,12 +600,14 @@ function HistoryPreview({
   }, [data?.candles, range])
 
   return (
-    <section className="min-h-[230px] border-t border-border/60 px-4 py-3">
+    <section className="min-h-[230px] min-w-0 border-t border-border/60 px-4 py-3">
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           <LineChart className="size-4 text-foreground/45" />
           <h2 className="text-[14px] font-semibold text-foreground/80">
-            Provider history
+            {selected?.kind === "product"
+              ? "Price history"
+              : "Provider history"}
           </h2>
           {loading && (
             <Loader2 className="size-3.5 animate-spin text-foreground/35" />
@@ -470,7 +639,7 @@ function HistoryPreview({
       )}
 
       {chartData.length > 1 ? (
-        <div className="h-[170px]">
+        <div className="h-[170px] min-w-0">
           <ResponsiveContainer width="100%" height="100%">
             <AreaChart
               data={chartData}
@@ -524,7 +693,8 @@ function HistoryPreview({
                 }}
                 formatter={(value) => [
                   formatPrice(
-                    typeof value === "number" ? value : Number(value)
+                    typeof value === "number" ? value : Number(value),
+                    selected?.currency
                   ),
                   "Close",
                 ]}
@@ -545,7 +715,11 @@ function HistoryPreview({
         </div>
       ) : (
         <div className="flex h-[170px] items-center justify-center rounded-lg border border-dashed border-border/70 text-[13px] text-foreground/45">
-          {selected ? "No cached history yet." : "Select an instrument."}
+          {selected
+            ? selected.kind === "product"
+              ? "No price observations yet."
+              : "No cached history yet."
+            : "Select an item."}
         </div>
       )}
     </section>
@@ -590,6 +764,11 @@ export function WatchlistView() {
   const selected = React.useMemo(() => {
     return items.find((item) => item.id === selectedId) ?? items[0] ?? null
   }, [items, selectedId])
+
+  const hasFinancialItems = React.useMemo(
+    () => items.some((item) => item.kind === "financial"),
+    [items]
+  )
 
   const load = React.useCallback(async (force = false) => {
     setRefreshing(force)
@@ -641,12 +820,16 @@ export function WatchlistView() {
     if (!selected) setMobileDetailOpen(false)
   }, [selected])
 
-  const addInstrument = React.useCallback(
-    async (instrument: WatchlistSearchResult | { symbol: string }) => {
-      const body =
-        "providerSymbol" in instrument
-          ? instrument
-          : { symbol: instrument.symbol }
+  const addItem = React.useCallback(
+    async (instrument: AddWatchlistInput) => {
+      let body: AddWatchlistInput
+      if (isProductAddInput(instrument)) {
+        body = instrument
+      } else if ("providerSymbol" in instrument) {
+        body = instrument
+      } else {
+        body = { symbol: instrument.symbol }
+      }
       const res = await fetch("/api/watchlist/items", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -674,6 +857,7 @@ export function WatchlistView() {
 
   const tvWatchlist = React.useMemo(() => {
     return items
+      .filter((item) => item.kind === "financial")
       .map((item) => item.tradingViewSymbol || item.symbol)
       .filter(Boolean)
   }, [items])
@@ -681,6 +865,9 @@ export function WatchlistView() {
   const q = selected?.quote
   const chartSymbol =
     selected?.tradingViewSymbol || selected?.symbol || "NASDAQ:AAPL"
+  const selectedIsProduct = selected?.kind === "product"
+  const productPageUrl =
+    selectedIsProduct && selected?.url?.startsWith("http") ? selected.url : null
 
   return (
     <div className="flex h-full min-h-0 flex-col">
@@ -696,8 +883,7 @@ export function WatchlistView() {
             </span>
           </div>
           <p className="mt-0.5 text-[12px] text-foreground/45">
-            Tracked instruments now; product prices and other monitors can plug
-            in later.
+            Tracked instruments and product prices.
           </p>
         </div>
         <Button
@@ -717,7 +903,11 @@ export function WatchlistView() {
         </Button>
       </header>
 
-      <ProviderStatus status={status} errors={errors} />
+      <ProviderStatus
+        status={status}
+        errors={errors}
+        show={hasFinancialItems || (!status && errors.length > 0)}
+      />
 
       <div className="grid min-h-0 flex-1 grid-cols-1 md:grid-cols-[390px_minmax(0,1fr)]">
         <aside
@@ -736,7 +926,7 @@ export function WatchlistView() {
               )}
             </div>
           </div>
-          <SearchAdd onAdd={addInstrument} />
+          <SearchAdd onAdd={addItem} />
           <div className="min-h-0 flex-1 overflow-y-auto px-2 py-2">
             {loading && items.length === 0 ? (
               <div className="space-y-2 px-2">
@@ -753,10 +943,10 @@ export function WatchlistView() {
                   <LineChart className="size-5 text-foreground/40" />
                 </div>
                 <p className="mt-3 text-[13px] font-medium text-foreground/70">
-                  No instruments yet
+                  No items yet
                 </p>
                 <p className="mt-1 text-[12px] text-foreground/45">
-                  Search above or ask the model to add one.
+                  Search above or add a product.
                 </p>
               </div>
             ) : (
@@ -799,9 +989,9 @@ export function WatchlistView() {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-2">
                       <h2 className="text-[22px] font-semibold tracking-tight">
-                        {selected.symbol}
+                        {itemTitle(selected)}
                       </h2>
-                      <AssetBadge value={selected.assetClass} />
+                      <AssetBadge value={itemBadge(selected)} />
                       {selected.exchange && (
                         <span className="text-[12px] text-foreground/45">
                           {selected.exchange}
@@ -809,7 +999,7 @@ export function WatchlistView() {
                       )}
                     </div>
                     <p className="mt-0.5 truncate text-[13px] text-foreground/50">
-                      {selected.name}
+                      {itemSubtitle(selected)}
                     </p>
                   </div>
                   <div className="text-right">
@@ -828,38 +1018,73 @@ export function WatchlistView() {
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-6">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                  {selectedIsProduct ? (
+                    <>
+                      <Stat
+                        label="Previous"
+                        value={formatPrice(
+                          q?.previousClose,
+                          q?.currency ?? selected.currency
+                        )}
+                      />
+                      <Stat
+                        label="Change"
+                        value={formatSigned(q?.change)}
+                        tone={changeTone(q?.change)}
+                      />
+                      <Stat
+                        label="Change %"
+                        value={formatSigned(q?.changePercent, "%")}
+                        tone={changeTone(q?.changePercent)}
+                      />
+                      <Stat label="Source" value={selected.exchange ?? "—"} />
+                      <Stat
+                        label="Currency"
+                        value={q?.currency ?? selected.currency ?? "—"}
+                      />
+                    </>
+                  ) : (
+                    <>
+                      <Stat
+                        label="Open"
+                        value={formatPrice(
+                          q?.open,
+                          q?.currency ?? selected.currency
+                        )}
+                      />
+                      <Stat
+                        label="High"
+                        value={formatPrice(
+                          q?.high,
+                          q?.currency ?? selected.currency
+                        )}
+                      />
+                      <Stat
+                        label="Low"
+                        value={formatPrice(
+                          q?.low,
+                          q?.currency ?? selected.currency
+                        )}
+                      />
+                      <Stat
+                        label="Prev close"
+                        value={formatPrice(
+                          q?.previousClose,
+                          q?.currency ?? selected.currency
+                        )}
+                      />
+                      <Stat label="Volume" value={formatCompact(q?.volume)} />
+                    </>
+                  )}
                   <Stat
-                    label="Open"
-                    value={formatPrice(
-                      q?.open,
-                      q?.currency ?? selected.currency
-                    )}
-                  />
-                  <Stat
-                    label="High"
-                    value={formatPrice(
-                      q?.high,
-                      q?.currency ?? selected.currency
-                    )}
-                  />
-                  <Stat
-                    label="Low"
-                    value={formatPrice(
-                      q?.low,
-                      q?.currency ?? selected.currency
-                    )}
-                  />
-                  <Stat
-                    label="Prev close"
-                    value={formatPrice(
-                      q?.previousClose,
-                      q?.currency ?? selected.currency
-                    )}
-                  />
-                  <Stat label="Volume" value={formatCompact(q?.volume)} />
-                  <Stat
-                    label={selected.quoteStale ? "Cached" : "Updated"}
+                    label={
+                      selectedIsProduct
+                        ? "Observed"
+                        : selected.quoteStale
+                          ? "Cached"
+                          : "Updated"
+                    }
                     value={formatTime(selected.quoteUpdatedAt)}
                     tone={
                       selected.quoteStale
@@ -870,26 +1095,54 @@ export function WatchlistView() {
                 </div>
               </section>
 
-              <section className="min-h-[420px] px-4 py-4">
-                <TradingViewChart
-                  symbol={chartSymbol}
-                  watchlist={tvWatchlist}
-                  className="h-[min(58vh,620px)] min-h-[420px]"
-                />
-              </section>
+              {selectedIsProduct ? (
+                <>
+                  <HistoryPreview selected={selected} />
+                  <div className="flex flex-col items-start gap-2 border-t border-border/60 px-4 py-2.5 text-[12px] text-foreground/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Package className="size-3.5" />
+                      Local observations
+                    </div>
+                    {productPageUrl && (
+                      <a
+                        href={productPageUrl}
+                        target="_blank"
+                        rel="noreferrer"
+                        className="flex min-w-0 items-center gap-1 text-foreground/55 hover:text-foreground"
+                      >
+                        <ExternalLink className="size-3.5" />
+                        <span className="truncate">
+                          {selected.exchange ?? "Product page"}
+                        </span>
+                      </a>
+                    )}
+                  </div>
+                </>
+              ) : (
+                <>
+                  <section className="min-h-[420px] px-4 py-4">
+                    <TradingViewChart
+                      symbol={chartSymbol}
+                      watchlist={tvWatchlist}
+                      className="h-[min(58vh,620px)] min-h-[420px]"
+                    />
+                  </section>
 
-              <div className="flex flex-col items-start gap-2 border-t border-border/60 px-4 py-2.5 text-[12px] text-foreground/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-                <div className="flex min-w-0 items-center gap-2">
-                  <Bell className="size-3.5" />
-                  Alerts are stored locally; scheduled monitoring plugs in next.
-                </div>
-                <div className="flex min-w-0 items-center gap-1">
-                  <Check className="size-3.5 text-emerald-600" />
-                  Chart symbol {chartSymbol}
-                </div>
-              </div>
+                  <div className="flex flex-col items-start gap-2 border-t border-border/60 px-4 py-2.5 text-[12px] text-foreground/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
+                    <div className="flex min-w-0 items-center gap-2">
+                      <Bell className="size-3.5" />
+                      Alerts are stored locally; scheduled monitoring plugs in
+                      next.
+                    </div>
+                    <div className="flex min-w-0 items-center gap-1">
+                      <Check className="size-3.5 text-emerald-600" />
+                      Chart symbol {chartSymbol}
+                    </div>
+                  </div>
 
-              <HistoryPreview selected={selected} />
+                  <HistoryPreview selected={selected} />
+                </>
+              )}
             </>
           ) : (
             <div className="flex min-h-[420px] flex-1 items-center justify-center px-6 text-center">

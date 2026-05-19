@@ -28,6 +28,7 @@ type Quoteish = {
 } | null
 type ItemWithQuote = {
   id: string
+  kind: string
   symbol: string
   name: string
   assetClass: MonitoredInstrument["assetClass"]
@@ -57,8 +58,9 @@ const adapter: MarketsAdapter = {
     }>
     const cfg = new Map(cfgRows.map((r) => [r.id, r]))
 
-    const instruments: MonitoredInstrument[] = (items as ItemWithQuote[]).map(
-      (it) => {
+    const instruments: MonitoredInstrument[] = (items as ItemWithQuote[])
+      .filter((it) => it.kind === "financial")
+      .map((it) => {
         const c = cfg.get(it.id)
         return {
           id: it.id,
@@ -71,8 +73,7 @@ const adapter: MarketsAdapter = {
           previousClose: it.quote?.previousClose ?? null,
           changePercent: it.quote?.changePercent ?? null,
         }
-      }
-    )
+      })
 
     const alerts = listWatchlistAlerts().map((a) => ({
       id: a.id,

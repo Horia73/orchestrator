@@ -12,7 +12,7 @@ import { HomeSkeleton } from "@/components/home-skeleton"
 import { ChatSkeleton } from "@/components/chat-skeleton"
 
 export default function Page() {
-  const { state, selectConversation } = useChatStore()
+  const { state, selectConversation, isSwitchingConversation } = useChatStore()
   const searchParams = useSearchParams()
   const [mounted, setMounted] = React.useState(false)
   const [hasIdOnLoad, setHasIdOnLoad] = React.useState(false)
@@ -84,7 +84,21 @@ export default function Page() {
             </div>
           </div>
         ) : state.activeConversationId ? (
-          <ChatView />
+          // Keep ChatView mounted across switches (the whole point of the
+          // perf fix) and overlay the skeleton while React is preparing the
+          // new chat at transition priority — otherwise a heavy switch reads
+          // as "stuck on the previous chat" for several seconds.
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            <ChatView />
+            {isSwitchingConversation && (
+              <div
+                className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background"
+                aria-hidden="true"
+              >
+                <ChatSkeleton />
+              </div>
+            )}
+          </div>
         ) : (
           <HomeView />
         )}
