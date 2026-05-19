@@ -6,6 +6,59 @@ self.addEventListener("activate", (event) => {
   event.waitUntil(self.clients.claim())
 })
 
+function urlBase64ToUint8Array(value) {
+  const padding = "=".repeat((4 - (value.length % 4)) % 4)
+  const base64 = `${value}${padding}`.replace(/-/g, "+").replace(/_/g, "/")
+  const raw = self.atob(base64)
+  const output = new Uint8Array(raw.length)
+  for (let i = 0; i < raw.length; i++) output[i] = raw.charCodeAt(i)
+  return output
+}
+
+async function getApplicationServerKey() {
+  const response = await fetch("/api/push/vapid-public-key", {
+    cache: "no-store",
+  })
+  if (!response.ok) throw new Error("Push configuration is unavailable")
+  const data = await response.json()
+  if (typeof data.publicKey !== "string" || !data.publicKey) {
+    throw new Error("Push public key is unavailable")
+  }
+  return urlBase64ToUint8Array(data.publicKey)
+}
+
+async function savePushSubscription(subscription) {
+  const response = await fetch("/api/push/subscriptions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ subscription: subscription.toJSON() }),
+  })
+  if (!response.ok) throw new Error("Push subscription could not be saved")
+}
+
+async function deletePushSubscription(subscription) {
+  if (!subscription?.endpoint) return
+  await fetch("/api/push/subscriptions", {
+    method: "DELETE",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ endpoint: subscription.endpoint }),
+  }).catch(() => undefined)
+}
+
+self.addEventListener("pushsubscriptionchange", (event) => {
+  event.waitUntil(
+    (async () => {
+      const applicationServerKey = await getApplicationServerKey()
+      const subscription = await self.registration.pushManager.subscribe({
+        userVisibleOnly: true,
+        applicationServerKey,
+      })
+      await savePushSubscription(subscription)
+      await deletePushSubscription(event.oldSubscription)
+    })()
+  )
+})
+
 self.addEventListener("push", (event) => {
   let data = {}
   try {
@@ -46,7 +99,9 @@ self.addEventListener("push", (event) => {
         renotify: isInbox,
         requireInteraction: isInbox,
         silent: false,
-        data: { url },
+        timestamp: Date.now(),
+        data: { url, type: data.type || "inbox" },
+        actions: isInbox ? [{ action: "open", title: "Open Inbox" }] : [],
       })
     })()
   )

@@ -147,7 +147,7 @@ function InboxViewInner() {
       >
         <header className="flex items-start justify-between gap-2 px-4 pt-[calc(1rem+env(safe-area-inset-top))] pb-4 md:px-5 md:pt-4">
           <div className="flex min-w-0 items-start gap-2">
-            <SidebarTrigger className="-ml-1 size-8 shrink-0 text-foreground/55 hover:text-foreground md:hidden" />
+            <SidebarTrigger className="-ml-1 size-10 shrink-0 text-foreground/55 hover:text-foreground md:hidden" />
             <div className="min-w-0">
               <h1 className="flex items-center gap-2 text-[18px] font-semibold">
                 <InboxIcon className="size-5 text-foreground/60" /> Inbox

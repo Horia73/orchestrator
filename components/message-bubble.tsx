@@ -832,7 +832,7 @@ interface MessageBubbleProps {
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
 }
 
-export function MessageBubble({ message, isLatestAssistantMessage, onArtifactClick, onArtifactExpand, onAttachmentClick, onAgentOpen }: MessageBubbleProps) {
+function MessageBubbleComponent({ message, isLatestAssistantMessage, onArtifactClick, onArtifactExpand, onAttachmentClick, onAgentOpen }: MessageBubbleProps) {
     const [copied, setCopied] = React.useState(false)
     const [hovered, setHovered] = React.useState(false)
     const { byMessage } = useConversationArtifacts()
@@ -981,6 +981,9 @@ export function MessageBubble({ message, isLatestAssistantMessage, onArtifactCli
         </div>
     )
 }
+
+export const MessageBubble = React.memo(MessageBubbleComponent)
+MessageBubble.displayName = "MessageBubble"
 
 // ---------------------------------------------------------------------------
 // ArtifactMetaActions — copy / download / expand for an artifact, rendered

@@ -685,7 +685,7 @@ export function WatchlistView() {
   return (
     <div className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-3 border-b border-border/60 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 md:pt-3">
-        <SidebarTrigger className="size-8 text-foreground/55 hover:text-foreground md:hidden" />
+        <SidebarTrigger className="size-10 text-foreground/55 hover:text-foreground md:hidden" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
             <h1 className="text-[18px] font-semibold tracking-tight text-foreground/90">

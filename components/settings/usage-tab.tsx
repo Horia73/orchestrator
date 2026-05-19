@@ -49,9 +49,9 @@ export function UsageTab() {
     const { data, loading, error, refresh } = useUsage(range)
 
     return (
-        <div className="flex flex-col gap-5">
-            <div className="flex flex-wrap items-center gap-2">
-                <div className="w-[calc(100%-2.5rem)] overflow-x-auto [scrollbar-width:none] sm:w-auto [&::-webkit-scrollbar]:hidden">
+        <div className="flex w-full min-w-0 max-w-full flex-col gap-5 overflow-x-hidden">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <div className="min-w-0 flex-1 overflow-x-auto [scrollbar-width:none] sm:flex-none [&::-webkit-scrollbar]:hidden">
                     <div className="inline-flex h-9 min-w-max items-center gap-0.5 rounded-lg bg-muted/60 p-0.5">
                         {RANGE_OPTIONS.map(o => (
                             <button
@@ -122,9 +122,9 @@ function CliQuotaSection() {
     const { data, loading, error, refresh } = useCliUsage()
 
     return (
-        <section className="mt-6 flex flex-col gap-3 border-t border-border/60 pt-6">
-            <div className="flex items-baseline justify-between gap-3">
-                <div>
+        <section className="mt-6 flex min-w-0 flex-col gap-3 border-t border-border/60 pt-6">
+            <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
                     <h2 className="text-[15px] font-semibold text-foreground/85">CLI subscription quotas</h2>
                     <p className="mt-0.5 text-[12.5px] text-foreground/50">
                         5-hour rolling and 7-day rolling windows for the local coding CLIs — the same numbers their
@@ -142,7 +142,7 @@ function CliQuotaSection() {
                     )}
                 >
                     {loading ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
-                    Refresh
+                    <span className="hidden sm:inline">Refresh</span>
                 </button>
             </div>
 
@@ -153,7 +153,7 @@ function CliQuotaSection() {
                 </div>
             )}
 
-            <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+            <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
                 {!data && loading && (
                     <>
                         <div className="h-[170px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
@@ -172,7 +172,7 @@ function CliQuotaCard({ id, snapshot }: { id: string; snapshot: CliQuotaSnapshot
     const label = CLI_LABELS[id] ?? { name: id, description: "" }
 
     return (
-        <div className="flex flex-col gap-3 rounded-2xl border border-border/70 bg-card p-4">
+        <div className="flex min-w-0 flex-col gap-3 rounded-xl border border-border/70 bg-card p-4 md:rounded-2xl">
             <div className="flex items-start gap-2.5">
                 <span className="flex size-8 items-center justify-center rounded-lg bg-foreground/5">
                     <TerminalIcon className="size-4 text-foreground/70" />
@@ -283,7 +283,7 @@ function UsageContent({ data }: { data: UsageReport }) {
         <>
             <KpiCards totals={data.totals} previous={data.previousTotals} />
 
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
                 <ChartCard title="Tokens per day" subtitle="Stacked input · output · thinking">
                     <TokensChart daily={data.daily} />
                 </ChartCard>
@@ -293,7 +293,7 @@ function UsageContent({ data }: { data: UsageReport }) {
             </div>
 
             <ByModelTable rows={data.byModel} />
-            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+            <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
                 <ByAgentTable rows={data.byAgent} />
                 <ByToolTable rows={data.byTool} />
             </div>
@@ -320,7 +320,7 @@ function KpiCards({ totals, previous }: { totals: UsageTotals; previous: UsageTo
     const previousErrorRate = previous && previous.requests > 0 ? previous.errors / previous.requests : null
 
     return (
-        <div className="grid grid-cols-1 gap-3 min-[420px]:grid-cols-2 md:grid-cols-4">
+        <div className="grid min-w-0 grid-cols-1 gap-3 min-[420px]:grid-cols-2 md:grid-cols-4">
             <Kpi
                 label="Requests"
                 value={totals.requests.toLocaleString()}
@@ -358,7 +358,7 @@ function Kpi({ label, value, hint, delta, deltaInverted }: {
     deltaInverted?: boolean
 }) {
     return (
-        <div className="min-w-0 rounded-2xl border border-border/70 bg-card px-4 py-3.5">
+        <div className="min-w-0 rounded-xl border border-border/70 bg-card px-4 py-3.5 md:rounded-2xl">
             <div className="text-[11.5px] font-medium uppercase tracking-wider text-foreground/50">{label}</div>
             <div className="mt-1 flex items-baseline gap-2">
                 <div className="min-w-0 text-[22px] font-semibold tabular-nums text-foreground">{value}</div>
@@ -407,7 +407,7 @@ function ChartCard({ title, subtitle, children }: {
     children: React.ReactNode
 }) {
     return (
-        <div className="rounded-2xl border border-border/70 bg-card p-4">
+        <div className="min-w-0 rounded-xl border border-border/70 bg-card p-4 md:rounded-2xl">
             <div className="mb-3">
                 <h3 className="text-[14px] font-semibold text-foreground">{title}</h3>
                 {subtitle && <p className="mt-0.5 text-[12px] text-foreground/55">{subtitle}</p>}
@@ -494,11 +494,11 @@ function ChartTooltip({ active, payload, label, valueFormatter }: ChartTooltipPr
 function ByModelTable({ rows }: { rows: UsageByModel[] }) {
     if (rows.length === 0) return null
     return (
-        <div className="overflow-hidden rounded-2xl border border-border/70 bg-card">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card md:rounded-2xl">
             <div className="border-b border-border/70 bg-muted/30 px-4 py-2.5 text-[14px] font-semibold text-foreground">
                 By model
             </div>
-            <div className="overflow-x-auto">
+            <div className="max-w-full overflow-x-auto">
                 <table className="min-w-[760px] w-full text-[13px] md:min-w-0">
                     <thead>
                         <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">
@@ -552,14 +552,14 @@ function ByModelTable({ rows }: { rows: UsageByModel[] }) {
 
 function ByAgentTable({ rows }: { rows: UsageByAgent[] }) {
     return (
-        <div className="overflow-hidden rounded-2xl border border-border/70 bg-card">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card md:rounded-2xl">
             <div className="border-b border-border/70 bg-muted/30 px-4 py-2.5 text-[14px] font-semibold text-foreground">
                 By agent
             </div>
             {rows.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[13px] text-foreground/45">No data.</p>
             ) : (
-                <div className="overflow-x-auto md:overflow-visible">
+                <div className="max-w-full overflow-x-auto md:overflow-visible">
                     <table className="min-w-[420px] w-full text-[13px] md:min-w-0">
                         <thead>
                             <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">
@@ -590,14 +590,14 @@ function ByAgentTable({ rows }: { rows: UsageByAgent[] }) {
 
 function ByToolTable({ rows }: { rows: UsageByTool[] }) {
     return (
-        <div className="overflow-hidden rounded-2xl border border-border/70 bg-card">
+        <div className="min-w-0 overflow-hidden rounded-xl border border-border/70 bg-card md:rounded-2xl">
             <div className="border-b border-border/70 bg-muted/30 px-4 py-2.5 text-[14px] font-semibold text-foreground">
                 By tool
             </div>
             {rows.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[13px] text-foreground/45">No tool calls in this range.</p>
             ) : (
-                <div className="overflow-x-auto md:overflow-visible">
+                <div className="max-w-full overflow-x-auto md:overflow-visible">
                     <table className="min-w-[420px] w-full text-[13px] md:min-w-0">
                         <thead>
                             <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">

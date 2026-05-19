@@ -21,7 +21,7 @@ export function HomeView() {
   return (
     <div className="relative flex flex-1 flex-col items-center justify-center px-4 pb-52">
       <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-3 md:hidden">
-        <SidebarTrigger className="size-8 text-foreground/60 hover:text-foreground" />
+        <SidebarTrigger className="size-10 text-foreground/60 hover:text-foreground" />
       </div>
       <div className="flex w-full max-w-[672px] flex-col items-center gap-7">
         {/* Hero greeting */}

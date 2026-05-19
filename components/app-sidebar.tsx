@@ -273,7 +273,7 @@ export function AppSidebar() {
   return (
     <Sidebar collapsible="icon" className="border-r-0">
       <SidebarHeader className="pb-2">
-        <div className="flex h-7 items-center justify-between gap-2 px-1">
+        <div className="flex h-9 items-center justify-between gap-2 px-1 md:h-7">
           {!isCollapsed && (
             <span
               className="min-w-0 truncate pl-1 text-[21px] leading-none font-semibold tracking-tight text-foreground/90"
@@ -282,7 +282,7 @@ export function AppSidebar() {
               {assistantName}
             </span>
           )}
-          <SidebarTrigger className="size-7 text-foreground/60 hover:text-foreground" />
+          <SidebarTrigger className="size-9 text-foreground/60 hover:text-foreground md:size-7" />
         </div>
       </SidebarHeader>
 

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useVirtualizer } from "@tanstack/react-virtual"
+import { flushSync } from "react-dom"
 import { ArrowDown, ChevronDown } from "lucide-react"
 import {
   ArtifactPanel,
@@ -22,13 +22,11 @@ import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
   Attachment,
-  Message,
   ReasoningEntry,
 } from "@/lib/types"
 
 const LAYOUT_TRANSITION = "duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
 const STICKY_BOTTOM_THRESHOLD = 80
-const CHAT_INPUT_FOCUS_EVENT = "chat-input-focus"
 const ARTIFACT_PANEL_DEFAULT_WIDTH = 560
 const ARTIFACT_PANEL_MIN_WIDTH = 340
 const ARTIFACT_PANEL_MAX_WIDTH = 2400
@@ -36,15 +34,8 @@ const ARTIFACT_PANEL_MIN_CHAT_WIDTH = 360
 const ARTIFACT_PANEL_RESIZE_STEP = 40
 const ARTIFACT_PANEL_RESIZER_WIDTH = 10
 const ARTIFACT_PANEL_WIDTH_STORAGE_PREFIX = "chat:artifact-panel-width"
-const MESSAGE_ROW_GAP = 24
-const MESSAGE_LIST_PADDING_START = 16
-const MESSAGE_LIST_PADDING_END = 40
-const MESSAGE_OVERSCAN = 8
 
 type ArtifactState = ArtifactPayload
-type ChatVirtualRow =
-  | { kind: "message"; id: string; message: Message; index: number }
-  | { kind: "streaming"; id: "__streaming__" }
 
 /** Old persisted artifact shape (no `kind`). Migrate to current union. */
 function migrateLegacyArtifact(stored: unknown): ArtifactState | null {
@@ -417,11 +408,15 @@ export function ChatView() {
   )
   // null  → streaming bubble holds the minHeight
   // string → committed AI message with that id holds it
-  const minHeightActiveRef = React.useRef(false) // mirrors minHeight > 0 for use in effects
+  const minHeightActiveRef = React.useRef(minHeight > 0) // mirrors minHeight > 0 for use in effects
   const followStreamingRef = React.useRef(false) // user clicked scroll-btn during streaming
 
   const [previewAttachment, setPreviewAttachment] =
     React.useState<Attachment | null>(null)
+
+  React.useEffect(() => {
+    minHeightActiveRef.current = minHeight > 0
+  }, [minHeight])
 
   const [artifact, setArtifact] = React.useState<ArtifactState | null>(() => {
     if (typeof window === "undefined") return null
@@ -448,6 +443,7 @@ export function ChatView() {
     return false
   })
   const [showScrollBtn, setShowScrollBtn] = React.useState(false)
+  const showScrollBtnRef = React.useRef(false)
   const [inputOffset, setInputOffset] = React.useState(88)
   const [artifactPanelWidth, setArtifactPanelWidth] = React.useState(
     ARTIFACT_PANEL_DEFAULT_WIDTH
@@ -535,29 +531,68 @@ export function ChatView() {
         element.scrollTop = target
         return
       }
-      // Manual smooth scroll — Safari cancels native scrollTo({ behavior: 'smooth' })
-      // when the DOM changes mid-animation (React re-renders). This can't be cancelled.
-      const start = element.scrollTop
-      const distance = target - start
-      if (Math.abs(distance) <= 1) return
-      const duration = Math.min(400, Math.max(150, Math.abs(distance) * 0.4))
-      const startTime = performance.now()
-      const animate = (now: number) => {
-        const elapsed = now - startTime
-        const progress = Math.min(elapsed / duration, 1)
-        const eased = 1 - Math.pow(1 - progress, 3)
-        element.scrollTop = start + distance * eased
-        if (progress < 1) requestAnimationFrame(animate)
+      try {
+        element.scrollTo({ top: target, behavior: "smooth" })
+      } catch {
+        element.scrollTop = target
       }
-      requestAnimationFrame(animate)
     },
     []
   )
 
   const activeIdRef = React.useRef(state.activeConversationId)
+  const pendingScrollSaveRef = React.useRef<{
+    conversationId: string
+    scrollTop: number
+  } | null>(null)
+  const scrollSaveTimeoutRef = React.useRef<number | null>(null)
   React.useEffect(() => {
     activeIdRef.current = state.activeConversationId
   }, [state.activeConversationId])
+
+  const setScrollButtonVisible = React.useCallback((visible: boolean) => {
+    if (showScrollBtnRef.current === visible) return
+    showScrollBtnRef.current = visible
+    setShowScrollBtn(visible)
+  }, [])
+
+  const flushPendingScrollSave = React.useCallback(() => {
+    const pending = pendingScrollSaveRef.current
+    if (!pending) return
+    pendingScrollSaveRef.current = null
+    localStorage.setItem(
+      `scroll:chat:${pending.conversationId}`,
+      pending.scrollTop.toString()
+    )
+  }, [])
+
+  const scheduleScrollSave = React.useCallback(
+    (scrollTop: number) => {
+      const conversationId = activeIdRef.current
+      if (!conversationId) return
+      pendingScrollSaveRef.current = {
+        conversationId,
+        scrollTop: Math.round(scrollTop),
+      }
+      if (scrollSaveTimeoutRef.current !== null) return
+      scrollSaveTimeoutRef.current = window.setTimeout(() => {
+        scrollSaveTimeoutRef.current = null
+        flushPendingScrollSave()
+      }, 160)
+    },
+    [flushPendingScrollSave]
+  )
+
+  React.useEffect(
+    () => () => {
+      if (scrollSaveTimeoutRef.current !== null) {
+        window.clearTimeout(scrollSaveTimeoutRef.current)
+        scrollSaveTimeoutRef.current = null
+      }
+      flushPendingScrollSave()
+    },
+    [flushPendingScrollSave]
+  )
 
   const syncScrollState = React.useCallback(() => {
     const element = scrollContainerRef.current
@@ -567,10 +602,7 @@ export function ChatView() {
       // Guard against the browser triggering passive layout-shift scroll events
       // when the container height is tiny or still rendering, which was poisoning the cache with `0`.
       if (element.scrollHeight > element.clientHeight) {
-        localStorage.setItem(
-          `scroll:chat:${activeIdRef.current}`,
-          element.scrollTop.toString()
-        )
+        scheduleScrollSave(element.scrollTop)
       }
     }
 
@@ -588,9 +620,9 @@ export function ChatView() {
     }
 
     if (!ignoreSyncRef.current && !suppressBtnRef.current) {
-      setShowScrollBtn(!autoScrollEnabledRef.current && !isPinnedToBottom)
+      setScrollButtonVisible(!autoScrollEnabledRef.current && !isPinnedToBottom)
     }
-  }, [])
+  }, [scheduleScrollSave, setScrollButtonVisible])
 
   React.useEffect(() => {
     const element = scrollContainerRef.current
@@ -649,82 +681,11 @@ export function ChatView() {
     conversationId,
   ])
 
-  // 2. Automatically compute fake space locally on page load / sync if the last message is from the assistant!
-  // No DB saves needed, just calculate the physical space leftover in the viewport dynamically.
-  React.useLayoutEffect(() => {
-    if (state.isStreaming || minHeightMsgId !== null) return
-    const messages = activeConversation?.messages ?? []
-    if (messages.length === 0) return
-    const lastMsg = messages[messages.length - 1]
-
-    if (lastMsg?.role === "assistant") {
-      const computePadding = () => {
-        const containerHeight = scrollContainerRef.current?.clientHeight || 600
-        const inputHeight =
-          inputContainerRef.current?.getBoundingClientRect().height || 0
-
-        // We base the fake space on the USER's message height (which is the one before the assistant's)
-        const userMsg =
-          messages.length > 1 ? messages[messages.length - 2] : null
-        const userMsgEl = userMsg
-          ? document.getElementById(`message-${userMsg.id}`)
-          : null
-
-        if (userMsgEl) {
-          const userMsgHeight = userMsgEl.getBoundingClientRect().height
-          const neededSpace = Math.max(
-            0,
-            containerHeight - userMsgHeight - inputHeight - 100
-          )
-
-          if (neededSpace > 0 && minHeight !== neededSpace) {
-            setMinHeightMsgId(lastMsg.id)
-            setMinHeight(neededSpace)
-            minHeightActiveRef.current = true
-            if (conversationId) {
-              localStorage.setItem(
-                `chat:minHeight:${conversationId}`,
-                JSON.stringify({
-                  minHeight: neededSpace,
-                  minHeightMsgId: lastMsg.id,
-                })
-              )
-            }
-            // Show scroll button immediately after minHeight grows content
-            // (bypasses ignoreSyncRef which is still locked during restoration).
-            requestAnimationFrame(() =>
-              requestAnimationFrame(() => {
-                const el = scrollContainerRef.current
-                if (el) {
-                  const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-                  if (dist > STICKY_BOTTOM_THRESHOLD) setShowScrollBtn(true)
-                }
-              })
-            )
-          }
-        }
-      }
-
-      // Let React commit the DOM from the DB load first before measuring heights, especially for thick artifact blocks.
-      const frame = requestAnimationFrame(() => {
-        requestAnimationFrame(computePadding)
-      })
-      return () => cancelAnimationFrame(frame)
-    }
-  }, [
-    state.isStreaming,
-    activeConversation?.messages,
-    minHeightMsgId,
-    conversationId,
-    minHeight,
-  ])
-
   // Handle scroll restoration ONCE on mount
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     if (!conversationId) return
     ignoreSyncRef.current = true
     const savedScroll = localStorage.getItem(`scroll:chat:${conversationId}`)
-    let frameId: number | null = null
     let showButtonFrameId: number | null = null
     let intervalId: number | null = null
     let timeoutId: number | null = null
@@ -741,7 +702,6 @@ export function ChatView() {
     const releaseRestoreResources = () => {
       if (released) return
       released = true
-      if (frameId !== null) window.cancelAnimationFrame(frameId)
       if (showButtonFrameId !== null)
         window.cancelAnimationFrame(showButtonFrameId)
       if (intervalId !== null) window.clearInterval(intervalId)
@@ -768,52 +728,48 @@ export function ChatView() {
           scrollContainerRef.current.scrollTop = parsed
         }
       }
-      frameId = window.requestAnimationFrame(() => {
-        frameId = null
-        if (released) return
-        applyScroll()
-        const el = scrollContainerRef.current
-        if (el) {
-          scrollElement = el
+      applyScroll()
+      const el = scrollContainerRef.current
+      if (el) {
+        scrollElement = el
 
-          el.addEventListener("wheel", cancelSnap, { passive: true })
-          el.addEventListener("touchmove", cancelSnap, { passive: true })
-          el.addEventListener("pointerdown", cancelSnap, { passive: true })
+        el.addEventListener("wheel", cancelSnap, { passive: true })
+        el.addEventListener("touchmove", cancelSnap, { passive: true })
+        el.addEventListener("pointerdown", cancelSnap, { passive: true })
 
-          // After first scroll restore settles, show button if not at bottom.
-          // This bypasses syncScrollState (which is gated by ignoreSyncRef for 1500ms).
-          showButtonFrameId = window.requestAnimationFrame(() => {
-            showButtonFrameId = null
-            if (released) return
-            const dist = el.scrollHeight - el.scrollTop - el.clientHeight
-            if (dist > STICKY_BOTTOM_THRESHOLD) setShowScrollBtn(true)
-          })
+        // After first scroll restore settles, show button if not at bottom.
+        // This bypasses syncScrollState (which is gated by ignoreSyncRef for 1500ms).
+        showButtonFrameId = window.requestAnimationFrame(() => {
+          showButtonFrameId = null
+          if (released) return
+          const dist = el.scrollHeight - el.scrollTop - el.clientHeight
+          if (dist > STICKY_BOTTOM_THRESHOLD) setScrollButtonVisible(true)
+        })
 
-          let lastHeight = el.scrollHeight
-          intervalId = window.setInterval(() => {
-            if (!userScrolled) applyScroll()
-          }, 15)
+        let lastHeight = el.scrollHeight
+        intervalId = window.setInterval(() => {
+          if (!userScrolled) applyScroll()
+        }, 15)
 
-          resizeObserver = new ResizeObserver(() => {
-            if (userScrolled) return
-            if (el.scrollHeight !== lastHeight) {
-              lastHeight = el.scrollHeight
-              applyScroll()
-            }
-          })
-          if (el.firstElementChild) {
-            resizeObserver.observe(el.firstElementChild)
+        resizeObserver = new ResizeObserver(() => {
+          if (userScrolled) return
+          if (el.scrollHeight !== lastHeight) {
+            lastHeight = el.scrollHeight
+            applyScroll()
           }
-          timeoutId = window.setTimeout(finishRestore, 1500)
-        } else {
-          timeoutId = window.setTimeout(finishRestore, 500)
+        })
+        if (el.firstElementChild) {
+          resizeObserver.observe(el.firstElementChild)
         }
-      })
+        timeoutId = window.setTimeout(finishRestore, 1500)
+      } else {
+        timeoutId = window.setTimeout(finishRestore, 500)
+      }
     } else {
       timeoutId = window.setTimeout(finishRestore, 500)
     }
     return releaseRestoreResources
-  }, [conversationId, syncScrollState])
+  }, [conversationId, setScrollButtonVisible, syncScrollState])
 
   React.useEffect(() => {
     const streamingStarted = !wasStreamingRef.current && state.isStreaming
@@ -822,7 +778,7 @@ export function ChatView() {
     wasStreamingRef.current = state.isStreaming
 
     if (streamingStarted) {
-      setShowScrollBtn(false)
+      setScrollButtonVisible(false)
       suppressBtnRef.current = true
       setTimeout(() => {
         suppressBtnRef.current = false
@@ -912,6 +868,7 @@ export function ChatView() {
     state.streamingContent,
     state.streamingReasoning,
     syncScrollState,
+    setScrollButtonVisible,
     activeConversation?.messages,
   ])
 
@@ -1295,8 +1252,7 @@ export function ChatView() {
   ])
 
   const handleScrollButtonClick = React.useCallback(() => {
-    setShowScrollBtn(false)
-    window.dispatchEvent(new Event(CHAT_INPUT_FOCUS_EVENT))
+    setScrollButtonVisible(false)
     if (state.isStreaming) {
       followStreamingRef.current = true
       autoScrollEnabledRef.current = true
@@ -1309,15 +1265,22 @@ export function ChatView() {
     } else {
       // Clearing the fake space instantly ensures smooth scroll can dive all the way to the text!
       if (minHeightActiveRef.current) {
-        minHeightActiveRef.current = false
-        setMinHeight(0)
-        setMinHeightMsgId(null)
+        flushSync(() => {
+          minHeightActiveRef.current = false
+          setMinHeight(0)
+          setMinHeightMsgId(null)
+        })
         if (conversationId)
           localStorage.removeItem(`chat:minHeight:${conversationId}`)
       }
       scrollToBottom("smooth")
     }
-  }, [scrollToBottom, state.isStreaming, conversationId])
+  }, [
+    scrollToBottom,
+    setScrollButtonVisible,
+    state.isStreaming,
+    conversationId,
+  ])
 
   // Keep streaming bubble alive until the committed message is ready to take
   // over minHeight (prevents layout flash on streaming end).
@@ -1326,36 +1289,6 @@ export function ChatView() {
     (state.isStreaming || (minHeight > 0 && minHeightMsgId === null)) &&
     state.activeConversationId === activeConversation.id
   )
-  const virtualRows = React.useMemo<ChatVirtualRow[]>(() => {
-    const messages = activeConversation?.messages ?? []
-    const rows: ChatVirtualRow[] = messages.map((message, index) => ({
-      kind: "message",
-      id: message.id,
-      message,
-      index,
-    }))
-    if (showStreamingBubble)
-      rows.push({ kind: "streaming", id: "__streaming__" })
-    return rows
-  }, [activeConversation?.messages, showStreamingBubble])
-  // TanStack Virtual intentionally returns instance methods; this hook usage is isolated to the chat scroller.
-  // eslint-disable-next-line react-hooks/incompatible-library
-  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
-    count: virtualRows.length,
-    getScrollElement: () => scrollContainerRef.current,
-    getItemKey: (index) => virtualRows[index]?.id ?? index,
-    estimateSize: (index) => {
-      const row = virtualRows[index]
-      if (!row) return 140
-      if (row.kind === "streaming") return 220
-      return row.message.role === "user" ? 96 : 180
-    },
-    overscan: MESSAGE_OVERSCAN,
-    gap: MESSAGE_ROW_GAP,
-    paddingStart: MESSAGE_LIST_PADDING_START,
-    paddingEnd: MESSAGE_LIST_PADDING_END,
-    useAnimationFrameWithResizeObserver: true,
-  })
 
   if (!activeConversation) return null
 
@@ -1378,7 +1311,7 @@ export function ChatView() {
         <div className="relative flex min-h-0 min-w-0 flex-col">
           <div className="relative z-10 shrink-0 bg-background px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 md:py-3">
             <div className="flex min-w-0 items-center gap-2">
-              <SidebarTrigger className="-ml-1 size-8 shrink-0 text-foreground/60 hover:text-foreground md:hidden" />
+              <SidebarTrigger className="-ml-1 size-10 shrink-0 text-foreground/60 hover:text-foreground md:hidden" />
               <button className="flex min-w-0 items-center gap-1 text-[15px] font-medium transition-opacity hover:opacity-70">
                 <span className="truncate">{activeConversation.title}</span>
                 <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
@@ -1392,83 +1325,64 @@ export function ChatView() {
             data-chat-scroll-container="true"
             className="flex-1 overflow-y-scroll"
             style={{
-              overflowAnchor: "none",
-              scrollbarGutter: "stable both-edges",
+              WebkitOverflowScrolling: "touch",
+              overscrollBehaviorY: "contain",
+              scrollbarGutter: isMobile ? "auto" : "stable both-edges",
+              touchAction: "pan-y",
             }}
           >
             <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
-              <div className="flex-1 pb-10">
-                <div className="mx-auto max-w-[700px] px-2">
-                  <div
-                    className="relative w-full"
-                    style={{ height: rowVirtualizer.getTotalSize() }}
-                  >
-                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
-                      const row = virtualRows[virtualRow.index]
-                      if (!row) return null
-                      return (
-                        <div
-                          key={virtualRow.key}
-                          data-index={virtualRow.index}
-                          ref={rowVirtualizer.measureElement}
-                          className="absolute top-0 left-0 w-full"
-                          style={{
-                            transform: `translateY(${virtualRow.start}px)`,
-                          }}
-                        >
-                          {row.kind === "message" ? (
-                            <div
-                              id={`message-${row.message.id}`}
-                              className="scroll-mt-6"
-                              style={
-                                row.message.id === minHeightMsgId &&
-                                row.index ===
-                                  activeConversation.messages.length - 1
-                                  ? { minHeight }
-                                  : undefined
-                              }
-                            >
-                              <MessageBubble
-                                message={row.message}
-                                isLatestAssistantMessage={
-                                  row.message.id === latestAssistantMessageId
-                                }
-                                onArtifactClick={handleArtifactClick}
-                                onArtifactExpand={handleArtifactExpand}
-                                onAttachmentClick={setPreviewAttachment}
-                                onAgentOpen={handleAgentOpen}
-                              />
-                            </div>
-                          ) : (
-                            <div
-                              style={
-                                minHeight > 0 && minHeightMsgId === null
-                                  ? { minHeight }
-                                  : undefined
-                              }
-                            >
-                              <StreamingBubble
-                                reasoning={state.streamingReasoning}
-                                content={state.streamingContent}
-                                contentSegments={state.streamingContentSegments}
-                                streamingMode={state.streamingMode}
-                                showCursor={showInitialStreamingCursor}
-                                onArtifactClick={handleArtifactClick}
-                                onArtifactExpand={handleArtifactExpand}
-                                onAgentOpen={handleAgentOpen}
-                                onAttachmentClick={setPreviewAttachment}
-                                messageId={
-                                  state.streamingMessageId ?? undefined
-                                }
-                                thinkingSeconds={state.thinkingSeconds}
-                                thinkingDone={state.thinkingDone}
-                              />
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-                  </div>
+              <div className="flex-1 pt-4 pb-10">
+                <div className="mx-auto max-w-[700px] space-y-6 px-2">
+                  {activeConversation.messages.map((message, index) => (
+                    <div
+                      key={message.id}
+                      id={`message-${message.id}`}
+                      className="scroll-mt-6"
+                      style={
+                        message.id === minHeightMsgId &&
+                        index === activeConversation.messages.length - 1
+                          ? { minHeight }
+                          : undefined
+                      }
+                    >
+                      <MessageBubble
+                        message={message}
+                        isLatestAssistantMessage={
+                          message.id === latestAssistantMessageId
+                        }
+                        onArtifactClick={handleArtifactClick}
+                        onArtifactExpand={handleArtifactExpand}
+                        onAttachmentClick={setPreviewAttachment}
+                        onAgentOpen={handleAgentOpen}
+                      />
+                    </div>
+                  ))}
+
+                  {showStreamingBubble && (
+                    <div
+                      style={
+                        minHeight > 0 && minHeightMsgId === null
+                          ? { minHeight }
+                          : undefined
+                      }
+                    >
+                      <StreamingBubble
+                        reasoning={state.streamingReasoning}
+                        content={state.streamingContent}
+                        contentSegments={state.streamingContentSegments}
+                        streamingMode={state.streamingMode}
+                        showCursor={showInitialStreamingCursor}
+                        onArtifactClick={handleArtifactClick}
+                        onArtifactExpand={handleArtifactExpand}
+                        onAgentOpen={handleAgentOpen}
+                        onAttachmentClick={setPreviewAttachment}
+                        messageId={state.streamingMessageId ?? undefined}
+                        thinkingSeconds={state.thinkingSeconds}
+                        thinkingDone={state.thinkingDone}
+                      />
+                    </div>
+                  )}
                 </div>
               </div>
 
@@ -1495,6 +1409,7 @@ export function ChatView() {
             >
               <button
                 type="button"
+                aria-label="Scroll to bottom"
                 onClick={handleScrollButtonClick}
                 className="flex size-9 items-center justify-center rounded-full border border-[#e6e1db] bg-white text-foreground shadow-[0_10px_24px_rgba(32,23,16,0.12)] transition-all hover:scale-105 hover:bg-[#faf8f5]"
               >

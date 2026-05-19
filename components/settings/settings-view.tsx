@@ -8,7 +8,6 @@ import { Cpu, Activity, BarChart3, AlertCircle, RefreshCcw, Loader2, CheckCircle
 import { cn } from "@/lib/utils"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { ScrollArea } from "@/components/ui/scroll-area"
 import { AgentCard } from "@/components/settings/agent-card"
 import { SettingsProvider, useSettings } from "@/components/settings/use-settings"
 import { LogsTab } from "@/components/settings/logs-tab"
@@ -75,9 +74,9 @@ function SettingsViewInner() {
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <div className="border-b border-border/60 bg-background">
-        <div className="mx-auto w-full max-w-6xl px-3 pt-3 pb-0 sm:px-6">
+        <div className="mx-auto w-full min-w-0 max-w-6xl px-3 pt-3 pb-0 sm:px-6">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-2">
               <button
@@ -121,8 +120,8 @@ function SettingsViewInner() {
           </Tabs>
         </div>
       ) : (
-        <ScrollArea className="min-h-0 flex-1">
-          <div className="mx-auto w-full max-w-6xl px-3 pt-4 pb-10 sm:px-6 sm:pt-5 sm:pb-12">
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <div className="mx-auto w-full min-w-0 max-w-6xl overflow-x-hidden px-3 pt-4 pb-10 sm:px-6 sm:pt-5 sm:pb-12">
             <Tabs value={activeTab} onValueChange={handleTabChange}>
               <TabsContent value="models">
                 <ModelsTab />
@@ -141,7 +140,7 @@ function SettingsViewInner() {
               </TabsContent>
             </Tabs>
           </div>
-        </ScrollArea>
+        </div>
       )}
     </div>
   )

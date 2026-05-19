@@ -52,6 +52,8 @@ export interface CliQuotaSnapshot {
     dataTimestamp?: number
 }
 
+export type CliQuotaId = CliQuotaSnapshot['cliId']
+
 // ---------------------------------------------------------------------------
 // Claude Code — scrape the /usage TUI panel
 // ---------------------------------------------------------------------------
@@ -577,10 +579,16 @@ async function getCodexQuota(): Promise<CliQuotaSnapshot> {
 // Combined snapshot
 // ---------------------------------------------------------------------------
 
+export async function getCliQuota(cliId: CliQuotaId): Promise<CliQuotaSnapshot> {
+    return cliId === 'claude-code'
+        ? getClaudeCodeQuota()
+        : getCodexQuota()
+}
+
 export async function getAllCliQuotas(): Promise<Record<string, CliQuotaSnapshot>> {
     const [claudeCode, codex] = await Promise.all([
-        getClaudeCodeQuota(),
-        getCodexQuota(),
+        getCliQuota('claude-code'),
+        getCliQuota('codex'),
     ])
     return {
         'claude-code': claudeCode,

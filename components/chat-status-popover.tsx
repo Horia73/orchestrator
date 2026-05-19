@@ -97,7 +97,10 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
     const activeCliId = isCliProvider(status.data?.chat.provider.id)
         ? status.data.chat.provider.id
         : null
-    const quotas = useLazyCliUsage(open && activeCliId !== null && Boolean(status.data?.chat.available))
+    const quotas = useLazyCliUsage(
+        open && activeCliId !== null && Boolean(status.data?.chat.available),
+        activeCliId
+    )
     const systemPromptTokens = status.data?.systemPromptTokens ?? null
     const contextEstimate = React.useMemo(
         () => estimateContextTokens(messages, draftValue, attachments, systemPromptTokens),
@@ -260,9 +263,9 @@ function PlanUsageSection({
                 )}
             </div>
 
-            {quotas.error && <InlineNotice tone="danger">{quotas.error}</InlineNotice>}
-
-            {!quotas.data && quotas.loading ? (
+            {quotas.error ? (
+                <InlineNotice tone="danger">{quotas.error}</InlineNotice>
+            ) : !quotas.data && quotas.loading ? (
                 <div className="space-y-3">
                     <SkeletonMetric />
                     <SkeletonMetric />
@@ -424,17 +427,23 @@ function useChatStatus() {
     return { data, loading, error }
 }
 
-function useLazyCliUsage(enabled: boolean) {
+function useLazyCliUsage(enabled: boolean, cliId: CliProviderId | null) {
     const [data, setData] = React.useState<CliQuotaMap | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
     const reqId = React.useRef(0)
 
     const refresh = React.useCallback(async () => {
+        if (!cliId) return
         const myReq = ++reqId.current
+        const controller = new AbortController()
+        const timer = window.setTimeout(() => controller.abort(), 15_000)
         setLoading(true)
         try {
-            const res = await fetch("/api/cli/usage", { cache: "no-store" })
+            const res = await fetch(`/api/cli/usage?cli=${encodeURIComponent(cliId)}`, {
+                cache: "no-store",
+                signal: controller.signal,
+            })
             if (!res.ok) throw new Error(`Failed to load CLI quotas (${res.status})`)
             const json = (await res.json()) as CliQuotaMap
             if (myReq !== reqId.current) return
@@ -442,11 +451,21 @@ function useLazyCliUsage(enabled: boolean) {
             setError(null)
         } catch (err) {
             if (myReq !== reqId.current) return
-            setError(err instanceof Error ? err.message : "Unknown quota error")
+            const message = err instanceof DOMException && err.name === "AbortError"
+                ? `Timed out loading ${CLI_LABELS[cliId]} usage.`
+                : err instanceof Error ? err.message : "Unknown quota error"
+            setError(message)
         } finally {
+            window.clearTimeout(timer)
             if (myReq === reqId.current) setLoading(false)
         }
-    }, [])
+    }, [cliId])
+
+    React.useEffect(() => {
+        if (!enabled) return
+        setData(null)
+        setError(null)
+    }, [cliId, enabled])
 
     React.useEffect(() => {
         if (!enabled || data || loading) return

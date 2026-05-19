@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 import { SidebarProvider } from "@/components/ui/sidebar"
 import { ChatStoreProvider } from "@/hooks/use-chat-store"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { NotificationPermissionPrompt } from "@/components/notification-permission-prompt"
 
 const fontSans = Geist({
   subsets: ["latin"],
@@ -79,6 +80,7 @@ export default async function RootLayout({
             <ChatStoreProvider>
               <SidebarProvider defaultOpen={defaultOpen}>
                 {children}
+                <NotificationPermissionPrompt />
               </SidebarProvider>
             </ChatStoreProvider>
           </TooltipProvider>
