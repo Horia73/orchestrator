@@ -139,6 +139,10 @@ function collectAgentRuns(
   return out
 }
 
+function hasBrowserAgentRun(reasoning?: ReasoningEntry[]): boolean {
+  return collectAgentRuns(reasoning).some((run) => run.agentId === "browser_agent")
+}
+
 type SelectedAgentTool = {
   runId: string
   artifact: ArtifactPayload
@@ -544,6 +548,10 @@ export function ChatView() {
     for (const run of runs) byId.set(run.runId, run)
     return Array.from(byId.values())
   }, [activeConversation?.messages, state.streamingReasoning])
+  const streamingHasBrowserAgent = React.useMemo(
+    () => hasBrowserAgentRun(state.streamingReasoning),
+    [state.streamingReasoning]
+  )
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(
     null
   )
@@ -563,11 +571,18 @@ export function ChatView() {
     (behavior: ScrollBehavior = "smooth") => {
       const element = scrollContainerRef.current
       if (!element) return
-      const target = element.scrollHeight - element.clientHeight
+      const setToBottom = () => {
+        element.scrollTop = Math.max(
+          0,
+          element.scrollHeight - element.clientHeight
+        )
+      }
       if (behavior !== "smooth") {
-        element.scrollTop = target
+        setToBottom()
+        window.requestAnimationFrame(setToBottom)
         return
       }
+      const target = element.scrollHeight - element.clientHeight
       try {
         element.scrollTo({ top: target, behavior: "smooth" })
       } catch {
@@ -878,7 +893,14 @@ export function ChatView() {
       setTimeout(() => {
         suppressBtnRef.current = false
       }, 300)
-      if (messageCount > 1) {
+      if (streamingHasBrowserAgent) {
+        autoScrollEnabledRef.current = false
+        followStreamingRef.current = false
+        setMinHeight(0)
+        setMinHeightMsgId(null)
+        if (conversationId)
+          localStorage.removeItem(`chat:minHeight:${conversationId}`)
+      } else if (messageCount > 1) {
         const containerHeight = scrollContainerRef.current?.clientHeight || 600
         const inputHeight =
           inputContainerRef.current?.getBoundingClientRect().height || 0
@@ -962,6 +984,7 @@ export function ChatView() {
     state.isStreaming,
     state.streamingContent,
     state.streamingReasoning,
+    streamingHasBrowserAgent,
     syncScrollState,
     setScrollButtonVisible,
     activeConversation?.messages,
@@ -1352,13 +1375,13 @@ export function ChatView() {
       followStreamingRef.current = true
       autoScrollEnabledRef.current = true
       ignoreSyncRef.current = true
-      scrollToBottom("smooth")
-      // Re-enable syncScrollState cancellation after smooth scroll animation completes.
+      scrollToBottom("auto")
+      // Re-enable syncScrollState cancellation after the jump settles.
       setTimeout(() => {
         ignoreSyncRef.current = false
-      }, 500)
+      }, 120)
     } else {
-      // Clearing the fake space instantly ensures smooth scroll can dive all the way to the text!
+      // Clearing the fake space before the jump keeps the final target exact.
       if (minHeightActiveRef.current) {
         flushSync(() => {
           minHeightActiveRef.current = false
@@ -1368,7 +1391,7 @@ export function ChatView() {
         if (conversationId)
           localStorage.removeItem(`chat:minHeight:${conversationId}`)
       }
-      scrollToBottom("smooth")
+      scrollToBottom("auto")
     }
   }, [
     scrollToBottom,
@@ -1482,7 +1505,7 @@ export function ChatView() {
                 )}
                 aria-busy={isRestoringScroll}
               >
-                <div className="mx-auto max-w-[700px] px-2">
+                <div className="mx-auto max-w-[700px] select-none px-2">
                   <div
                     className="relative w-full"
                     style={{ height: rowVirtualizer.getTotalSize() }}

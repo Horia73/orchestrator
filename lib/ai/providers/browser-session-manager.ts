@@ -99,6 +99,12 @@ class BrowserSessionManager {
             : await this.createSession(options.config)
 
         const releaseLock = await session.lock.acquire()
+        if (this.humanControl) {
+            this.humanControl = false
+            for (const managedSession of this.sessions.values()) {
+                managedSession.runtime.resumeTask()
+            }
+        }
         session.currentStatusHandler = options.onStatus
         session.currentEvidenceHandler = options.onEvidence
         session.status = 'running'
@@ -165,6 +171,30 @@ class BrowserSessionManager {
         return true
     }
 
+    async shutdownAll(): Promise<void> {
+        if (this.cleanupTimer) {
+            clearTimeout(this.cleanupTimer)
+            this.cleanupTimer = null
+        }
+
+        const sessionIds = [...this.sessions.keys()]
+        for (const sessionId of sessionIds) {
+            await this.closeSession(sessionId).catch(() => {
+                // Best-effort cleanup; callers should not fail deploy/restart
+                // just because a browser process already exited.
+            })
+        }
+
+        if (this.browserManager) {
+            await this.browserManager.close().catch(() => {
+                // Best-effort cleanup.
+            })
+            this.browserManager = null
+        }
+        this.sessions.clear()
+        this.humanControl = false
+    }
+
     async getLiveViewState(): Promise<BrowserLiveViewClientState> {
         const base = this.browserManager?.getLiveViewState() ?? {
             enabled: process.platform === 'linux' || process.platform === 'darwin',
@@ -214,6 +244,32 @@ class BrowserSessionManager {
                 session.runtime.resumeTask()
             }
         }
+        return this.getLiveViewState()
+    }
+
+    async pasteText(text: string): Promise<BrowserLiveViewClientState> {
+        if (!this.humanControl) {
+            throw new Error('Take browser control before sending input.')
+        }
+        const session = this.getHumanInteractionSession()
+        if (!session) {
+            throw new Error('No active browser session is available.')
+        }
+        await session.pageSession.paste(text)
+        session.lastUsedAt = Date.now()
+        return this.getLiveViewState()
+    }
+
+    async pressKey(key: string): Promise<BrowserLiveViewClientState> {
+        if (!this.humanControl) {
+            throw new Error('Take browser control before sending input.')
+        }
+        const session = this.getHumanInteractionSession()
+        if (!session) {
+            throw new Error('No active browser session is available.')
+        }
+        await session.pageSession.pressKey(key)
+        session.lastUsedAt = Date.now()
         return this.getLiveViewState()
     }
 
@@ -288,6 +344,13 @@ class BrowserSessionManager {
         await Promise.allSettled(expired.map(session => this.closeSession(session.id)))
     }
 
+    private getHumanInteractionSession(): ManagedBrowserSession | null {
+        const sessions = [...this.sessions.values()].sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+        return sessions.find(session => session.status === 'running' || session.status === 'awaiting_user')
+            ?? sessions[0]
+            ?? null
+    }
+
     private isExpired(session: ManagedBrowserSession): boolean {
         if (session.status === 'running') return false
 
@@ -303,6 +366,32 @@ class BrowserSessionManager {
 
 const browserSessionManager = new BrowserSessionManager()
 
+const globalForBrowserSessions = globalThis as unknown as {
+    __orchestratorBrowserSignalCleanupInstalled?: boolean
+    __orchestratorBrowserSignalCleanupInProgress?: boolean
+}
+
+if (!globalForBrowserSessions.__orchestratorBrowserSignalCleanupInstalled) {
+    globalForBrowserSessions.__orchestratorBrowserSignalCleanupInstalled = true
+    const cleanupAndExit = (signal: NodeJS.Signals) => {
+        if (globalForBrowserSessions.__orchestratorBrowserSignalCleanupInProgress) return
+        globalForBrowserSessions.__orchestratorBrowserSignalCleanupInProgress = true
+        const exitCode = signal === 'SIGINT' ? 130 : 143
+        const fallback = setTimeout(() => process.exit(exitCode), 3_000)
+        fallback.unref?.()
+        void browserSessionManager.shutdownAll().finally(() => {
+            clearTimeout(fallback)
+            process.exit(exitCode)
+        })
+    }
+    process.once('SIGTERM', cleanupAndExit)
+    process.once('SIGINT', cleanupAndExit)
+}
+
 export function getBrowserSessionManager(): BrowserSessionManager {
     return browserSessionManager
+}
+
+export async function shutdownBrowserSessionManager(): Promise<void> {
+    await browserSessionManager.shutdownAll()
 }

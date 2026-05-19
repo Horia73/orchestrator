@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Loader2, Maximize2, Minimize2, Monitor, MousePointer2, Play, WifiOff } from "lucide-react"
+import { ClipboardPaste, Loader2, Maximize2, Minimize2, Monitor, MousePointer2, Play, WifiOff } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -33,15 +33,18 @@ interface BrowserAgentLiveState {
 
 interface BrowserAgentLiveViewProps {
     active?: boolean
+    onOpenDetails?: () => void
 }
 
-export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewProps) {
+export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserAgentLiveViewProps) {
+    const liveViewRef = React.useRef<HTMLDivElement>(null)
     const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
     const rfbRef = React.useRef<import("@novnc/novnc").default | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
     const [busy, setBusy] = React.useState(false)
+    const [inputBusy, setInputBusy] = React.useState(false)
     const [fullscreen, setFullscreen] = React.useState(false)
 
     const refresh = React.useCallback(async () => {
@@ -86,6 +89,7 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
                 rfb.background = "#ffffff"
                 rfb.qualityLevel = 8
                 rfb.compressionLevel = 2
+                rfb.showDotCursor = true
                 rfb.addEventListener("connect", () => setConnection("connected"))
                 rfb.addEventListener("disconnect", () => setConnection("disconnected"))
                 rfb.addEventListener("securityfailure", () => setConnection("error"))
@@ -105,26 +109,41 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
     React.useEffect(() => {
         if (!rfbRef.current || !state) return
         rfbRef.current.viewOnly = state.controlMode !== "user"
+        if (state.controlMode === "user") {
+            requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
+        }
     }, [state])
 
     React.useEffect(() => {
         const updateFullscreen = () => {
-            setFullscreen(document.fullscreenElement === viewportRef.current)
+            const root = liveViewRef.current
+            setFullscreen(Boolean(root && document.fullscreenElement === root))
         }
         updateFullscreen()
         document.addEventListener("fullscreenchange", updateFullscreen)
         return () => document.removeEventListener("fullscreenchange", updateFullscreen)
     }, [])
 
+    const postLiveAction = React.useCallback(async (body: Record<string, unknown>) => {
+        const res = await fetch("/api/browser-agent/live", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(body),
+        })
+        if (!res.ok) {
+            const message = await res.text().catch(() => "")
+            throw new Error(message || `Browser live action failed: ${res.status}`)
+        }
+        const nextState = await res.json() as BrowserAgentLiveState
+        setState(nextState)
+        requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
+        return nextState
+    }, [])
+
     const setControl = async (mode: LiveControlMode) => {
         setBusy(true)
         try {
-            const res = await fetch("/api/browser-agent/live", {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ action: mode === "user" ? "take_control" : "release_control" }),
-            })
-            if (res.ok) setState(await res.json() as BrowserAgentLiveState)
+            await postLiveAction({ action: mode === "user" ? "take_control" : "release_control" })
         } finally {
             setBusy(false)
         }
@@ -132,15 +151,74 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
 
     const toggleFullscreen = async () => {
         try {
-            if (document.fullscreenElement === viewportRef.current) {
+            const root = liveViewRef.current
+            if (!root) return
+            if (document.fullscreenElement === root) {
                 await document.exitFullscreen()
                 return
             }
-            await viewportRef.current?.requestFullscreen()
+            await root.requestFullscreen()
         } catch {
             // Fullscreen is best-effort and may be blocked by the host shell.
         }
     }
+
+    const pasteText = React.useCallback(async (text: string) => {
+        if (!text) return
+        setInputBusy(true)
+        try {
+            await postLiveAction({ action: "paste_text", text })
+        } finally {
+            setInputBusy(false)
+        }
+    }, [postLiveAction])
+
+    const pasteFromClipboard = React.useCallback(async () => {
+        try {
+            const text = await navigator.clipboard?.readText?.()
+            await pasteText(text || "")
+        } catch {
+            requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
+        }
+    }, [pasteText])
+
+    const sendKey = React.useCallback(async (key: string) => {
+        setInputBusy(true)
+        try {
+            await postLiveAction({ action: "press_key", key })
+        } finally {
+            setInputBusy(false)
+        }
+    }, [postLiveAction])
+
+    const handleKeyDownCapture = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
+        if (state?.controlMode !== "user" || inputBusy) return
+        const key = browserShortcutFromEvent(event, state.platform)
+        if (!key) return
+        event.preventDefault()
+        event.stopPropagation()
+        if (key === "Control+V" || key === "Meta+V") {
+            const readText = navigator.clipboard?.readText?.bind(navigator.clipboard)
+            if (!readText) {
+                void sendKey(key)
+                return
+            }
+            void readText()
+                .then((text) => text ? pasteText(text) : sendKey(key))
+                .catch(() => sendKey(key))
+            return
+        }
+        void sendKey(key)
+    }, [inputBusy, pasteText, sendKey, state?.controlMode, state?.platform])
+
+    const handlePasteCapture = React.useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+        if (state?.controlMode !== "user") return
+        const text = event.clipboardData.getData("text/plain")
+        if (!text) return
+        event.preventDefault()
+        event.stopPropagation()
+        void pasteText(text)
+    }, [pasteText, state?.controlMode])
 
     if (!state) {
         return (
@@ -179,13 +257,36 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
             : connection
 
     return (
-        <div className="grid gap-2 bg-background">
+        <div
+            ref={liveViewRef}
+            className="browser-agent-live-view grid gap-2 bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:grid-rows-[auto_1fr] [&:fullscreen]:p-3"
+            tabIndex={userControl ? 0 : -1}
+            onKeyDownCapture={handleKeyDownCapture}
+            onPasteCapture={handlePasteCapture}
+            onPointerDown={() => {
+                if (userControl) rfbRef.current?.focus({ preventScroll: true })
+            }}
+        >
             <div className="flex min-w-0 flex-wrap items-center gap-2">
-                <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-[12px] text-muted-foreground">
-                    <Monitor className="size-3.5 shrink-0" />
-                    <span className="truncate font-medium text-foreground/80">Browser agent</span>
-                    <span className="truncate">{statusLabel}</span>
-                </span>
+                {onOpenDetails ? (
+                    <button
+                        type="button"
+                        onClick={onOpenDetails}
+                        className="group inline-flex min-w-0 flex-1 items-center gap-2 text-left text-[12px] text-muted-foreground transition-colors hover:text-foreground"
+                        aria-label="Open browser agent logs"
+                        title="Open browser agent logs"
+                    >
+                        <Monitor className="size-3.5 shrink-0" />
+                        <span className="truncate font-medium text-foreground/80 transition-colors group-hover:text-foreground">Browser agent</span>
+                        <span className="truncate">{statusLabel}</span>
+                    </button>
+                ) : (
+                    <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-[12px] text-muted-foreground">
+                        <Monitor className="size-3.5 shrink-0" />
+                        <span className="truncate font-medium text-foreground/80">Browser agent</span>
+                        <span className="truncate">{statusLabel}</span>
+                    </span>
+                )}
                 <button
                     type="button"
                     disabled={busy}
@@ -207,6 +308,19 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
                     )}
                     {userControl ? "Return to agent" : "Take control"}
                 </button>
+                {userControl && (
+                    <button
+                        type="button"
+                        disabled={inputBusy}
+                        onClick={pasteFromClipboard}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                        aria-label="Paste clipboard into browser"
+                        title="Paste clipboard into browser"
+                    >
+                        {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}
+                        Paste
+                    </button>
+                )}
                 <button
                     type="button"
                     onClick={toggleFullscreen}
@@ -219,11 +333,12 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
             </div>
             <div
                 ref={viewportRef}
-                className="w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white] [&:fullscreen]:h-screen [&:fullscreen]:max-h-none [&:fullscreen]:rounded-none [&:fullscreen]:border-0"
+                className="browser-agent-live-viewport min-h-0 w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white]"
                 style={{
-                    aspectRatio: `${viewportWidth} / ${viewportHeight}`,
-                    maxHeight: "min(360px, calc(100vh - 320px))",
-                    minHeight: "220px",
+                    aspectRatio: fullscreen ? "auto" : `${viewportWidth} / ${viewportHeight}`,
+                    height: fullscreen ? "100%" : undefined,
+                    maxHeight: fullscreen ? "none" : "min(360px, calc(100vh - 320px))",
+                    minHeight: fullscreen ? 0 : "220px",
                 }}
                 aria-label={`${connection} browser live view`}
             >
@@ -231,4 +346,59 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
             </div>
         </div>
     )
+}
+
+function browserShortcutFromEvent(event: React.KeyboardEvent, platform: NodeJS.Platform): string | null {
+    if (!event.ctrlKey && !event.metaKey) return null
+    if (event.key === "Control" || event.key === "Meta" || event.key === "Shift" || event.key === "Alt") return null
+
+    const key = normalizeShortcutKey(event.key)
+    if (!key) return null
+
+    const parts: string[] = []
+    if (event.ctrlKey || event.metaKey) {
+        parts.push(platform === "darwin" && event.metaKey ? "Meta" : "Control")
+    }
+    if (event.altKey) parts.push("Alt")
+    if (event.shiftKey) parts.push("Shift")
+    parts.push(key)
+    return parts.join("+")
+}
+
+function normalizeShortcutKey(key: string): string | null {
+    if (key.length === 1) {
+        if (/^[a-z0-9]$/i.test(key)) return key.toUpperCase()
+        const punctuation: Record<string, string> = {
+            "-": "Minus",
+            "=": "Equal",
+            ",": "Comma",
+            ".": "Period",
+            "/": "Slash",
+            "\\": "Backslash",
+            ";": "Semicolon",
+            "'": "Quote",
+            "`": "Backquote",
+            "[": "BracketLeft",
+            "]": "BracketRight",
+        }
+        return punctuation[key] ?? null
+    }
+    const named: Record<string, string> = {
+        " ": "Space",
+        Escape: "Escape",
+        Enter: "Enter",
+        Tab: "Tab",
+        Backspace: "Backspace",
+        Delete: "Delete",
+        ArrowLeft: "ArrowLeft",
+        ArrowRight: "ArrowRight",
+        ArrowUp: "ArrowUp",
+        ArrowDown: "ArrowDown",
+        Home: "Home",
+        End: "End",
+        PageUp: "PageUp",
+        PageDown: "PageDown",
+    }
+    if (/^F(?:[1-9]|1[0-2])$/.test(key)) return key
+    return named[key] ?? null
 }

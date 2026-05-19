@@ -186,7 +186,7 @@ const baseComponents: Components = {
   h4: ({ children }) => (
     <h4 className="mt-3 mb-1 text-[15px] font-semibold">{children}</h4>
   ),
-  p: ({ children }) => <p className="my-2 leading-relaxed">{children}</p>,
+  p: ({ children }) => <p className="-ml-2 my-2 pl-2 leading-relaxed">{children}</p>,
   strong: ({ children }) => (
     <strong className="font-semibold">{children}</strong>
   ),

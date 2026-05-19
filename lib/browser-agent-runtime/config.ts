@@ -62,6 +62,8 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
             '--no-first-run',
             '--no-default-browser-check',
             '--disable-infobars',
+            '--hide-crash-restore-bubble',
+            '--disable-session-crashed-bubble',
         ],
     },
     runtime: {

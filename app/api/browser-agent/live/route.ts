@@ -26,14 +26,46 @@ export async function POST(request: Request) {
     }
 
     const action = (body as Record<string, unknown>)?.action
-    if (action !== 'take_control' && action !== 'release_control') {
-        return NextResponse.json({ error: 'action must be take_control or release_control' }, { status: 400 })
+    const manager = getBrowserSessionManager()
+
+    if (action === 'take_control' || action === 'release_control') {
+        const state = await manager.setHumanControl(action === 'take_control')
+        return NextResponse.json(toClientState(request, state), {
+            headers: { 'Cache-Control': 'no-store' },
+        })
     }
 
-    const state = await getBrowserSessionManager().setHumanControl(action === 'take_control')
-    return NextResponse.json(toClientState(request, state), {
-        headers: { 'Cache-Control': 'no-store' },
-    })
+    if (action === 'paste_text') {
+        const text = (body as Record<string, unknown>)?.text
+        if (typeof text !== 'string') {
+            return NextResponse.json({ error: 'text must be a string' }, { status: 400 })
+        }
+        if (text.length > 200_000) {
+            return NextResponse.json({ error: 'text is too large' }, { status: 413 })
+        }
+        const state = await manager.pasteText(text)
+        return NextResponse.json(toClientState(request, state), {
+            headers: { 'Cache-Control': 'no-store' },
+        })
+    }
+
+    if (action === 'press_key') {
+        const key = (body as Record<string, unknown>)?.key
+        if (!isSafeBrowserKey(key)) {
+            return NextResponse.json({ error: 'key is invalid' }, { status: 400 })
+        }
+        const state = await manager.pressKey(key)
+        return NextResponse.json(toClientState(request, state), {
+            headers: { 'Cache-Control': 'no-store' },
+        })
+    }
+
+    return NextResponse.json({ error: 'unsupported browser live action' }, { status: 400 })
+}
+
+function isSafeBrowserKey(value: unknown): value is string {
+    if (typeof value !== 'string' || value.length === 0 || value.length > 80) return false
+    return /^[A-Za-z0-9+_.=\-/,;'\[\]\\` ]+$/.test(value)
 }
 
 function toClientState(request: Request, state: BrowserLiveViewClientState) {

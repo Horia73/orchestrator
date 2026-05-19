@@ -130,6 +130,16 @@ function buildInterleavedTimeline(
     return timeline
 }
 
+function hasLiveBrowserAgent(reasoning: ReasoningEntry[]): boolean {
+    return reasoning.some((entry) => {
+        if (entry.type !== "agent_call" || entry.agentId !== "browser_agent") {
+            return false
+        }
+        if (entry.status === "running") return true
+        return /\bSession status:\s*awaiting_user\b/i.test(entry.content)
+    })
+}
+
 // ---------------------------------------------------------------------------
 // Shared hook: computes available collapsed height dynamically
 // ---------------------------------------------------------------------------
@@ -208,6 +218,7 @@ function ThoughtBlock({
     const persistedSecs = Math.round(thinkingDuration ?? 0)
     const summarySeconds = persistedSecs > 0 ? persistedSecs : secs
     const latestAgentStatus = latestEntry?.type === "agent_call" ? latestEntry.status : undefined
+    const keepOpenForBrowser = hasLiveBrowserAgent(reasoning)
     const derivedStatus = latestAgentStatus === "aborted" || latestAgentStatus === "error"
         ? latestAgentStatus
         : undefined
@@ -240,7 +251,7 @@ function ThoughtBlock({
             const saved = localStorage.getItem(openStorageKey)
             if (saved !== null) return saved === 'true'
         }
-        return thoughtAutoOpen ? isLiveStreaming : false
+        return keepOpenForBrowser || (thoughtAutoOpen ? isLiveStreaming : false)
     })
 
     const userToggledExpandedRef = React.useRef(false)
@@ -277,6 +288,11 @@ function ThoughtBlock({
         autoExpand()
     }, [autoExpand, hasStoredExpanded, shouldDefaultExpand])
 
+    React.useEffect(() => {
+        if (!keepOpenForBrowser) return
+        window.dispatchEvent(new Event("stop-chat-autoscroll"))
+    }, [keepOpenForBrowser])
+
     // Content measurement
     const blockRef = React.useRef<HTMLDivElement>(null)
     const contentRef = React.useRef<HTMLDivElement>(null)
@@ -306,6 +322,11 @@ function ThoughtBlock({
     const wasStreamingRef = React.useRef(isLiveStreaming)
     const userOpenedRef = React.useRef(false)
     React.useEffect(() => {
+        if (keepOpenForBrowser) {
+            updateOpen(true)
+            wasStreamingRef.current = isLiveStreaming
+            return
+        }
         if (!thoughtAutoOpen) {
             wasStreamingRef.current = isLiveStreaming
             return
@@ -318,7 +339,7 @@ function ThoughtBlock({
             userOpenedRef.current = false
         }
         wasStreamingRef.current = isLiveStreaming
-    }, [autoExpand, isLiveStreaming, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
+    }, [autoExpand, isLiveStreaming, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
 
     // Auto-scroll content during streaming
     React.useEffect(() => {
@@ -699,6 +720,7 @@ function GenericAgentCallBlock({
 
 function BrowserAgentCallBlock({
     entry,
+    onOpen,
     onAttachmentClick,
 }: {
     entry: AgentCallReasoningEntry
@@ -708,7 +730,7 @@ function BrowserAgentCallBlock({
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
             <div className="ml-7 grid max-w-[min(760px,calc(100vw-180px))] gap-2">
-                <BrowserAgentLiveView active={entry.status === "running"} />
+                <BrowserAgentLiveView active={entry.status === "running"} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
                 {!!entry.attachments?.length && (
                     <div className="flex max-w-full flex-wrap gap-2">
                         {entry.attachments.map(att => (
@@ -767,7 +789,7 @@ function UserMessageContent({ messageId, content }: { messageId: string; content
     }, [content])
 
     return (
-        <div className="max-w-[85%] rounded-[10px] bg-[#f0ede6] px-4 py-2.5 text-[16px] dark:bg-muted">
+        <div className="max-w-[85%] select-text rounded-[10px] bg-[#f0ede6] px-4 py-2.5 text-[16px] dark:bg-muted">
             <div className="relative">
                 <div
                     className="overflow-hidden transition-[max-height] duration-300 ease-out"
@@ -893,7 +915,7 @@ function MessageBubbleComponent({ message, isLatestAssistantMessage, onArtifactC
     if (message.role === "user") {
         return (
             <div
-                className="flex flex-col items-end gap-2"
+                className="flex flex-col items-end gap-2 select-text"
                 onMouseEnter={() => setHovered(true)}
                 onMouseLeave={() => setHovered(false)}
             >
@@ -930,7 +952,7 @@ function MessageBubbleComponent({ message, isLatestAssistantMessage, onArtifactC
 
     return (
         <div
-            className="flex w-full min-w-0 flex-col gap-1.5"
+            className="flex w-full min-w-0 flex-col gap-1.5 select-text"
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
@@ -1073,7 +1095,7 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
 
     return (
-        <div className="flex w-full min-w-0 flex-col gap-1.5">
+        <div className="flex w-full min-w-0 flex-col gap-1.5 select-text">
             {timeline.map((item) => (
                 item.type === "reasoning" ? (
                     <ThoughtBlock

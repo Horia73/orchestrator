@@ -408,6 +408,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         '--no-first-run',
         '--no-default-browser-check',
         '--disable-infobars',
+        '--hide-crash-restore-bubble',
+        '--disable-session-crashed-bubble',
     ];
     const launchArgs = options.launchArgs && options.launchArgs.length > 0
         ? options.launchArgs
@@ -830,6 +832,24 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
 
         return results;
+    };
+
+    const isReusableInitialBlankPage = (candidatePage: Page): boolean => {
+        const ownership = pageOwnership.get(candidatePage);
+        if (ownership?.sessionId !== defaultSessionState.id || ownership.origin !== 'initial') {
+            return false;
+        }
+
+        const url = candidatePage.url();
+        return url === ''
+            || url === 'about:blank'
+            || url.startsWith('chrome://new-tab')
+            || url.startsWith('chrome://newtab');
+    };
+
+    const takeReusableInitialBlankPage = (): Page | null => {
+        const pages = getOpenOwnedPages(defaultSessionState);
+        return pages.find(isReusableInitialBlankPage) ?? null;
     };
 
     const createSessionFacade = (session: BrowserSessionState): BrowserPageSession => {
@@ -1284,7 +1304,23 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
             async paste(text: string) {
                 const activePage = await ensureActivePage(session);
+                await activePage.bringToFront();
                 await activePage.evaluate((textToPaste) => {
+                    const active = document.activeElement;
+                    if (
+                        active instanceof HTMLInputElement ||
+                        active instanceof HTMLTextAreaElement
+                    ) {
+                        const start = active.selectionStart ?? active.value.length;
+                        const end = active.selectionEnd ?? active.value.length;
+                        active.value = `${active.value.slice(0, start)}${textToPaste}${active.value.slice(end)}`;
+                        const cursor = start + textToPaste.length;
+                        active.setSelectionRange(cursor, cursor);
+                        active.dispatchEvent(new InputEvent('input', { bubbles: true, data: textToPaste, inputType: 'insertText' }));
+                        active.dispatchEvent(new Event('change', { bubbles: true }));
+                        return;
+                    }
+
                     document.execCommand('insertText', false, textToPaste);
                 }, text);
             },
@@ -1538,6 +1574,12 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 ]
                 : [];
 
+            const orphaned = killBrowserProcessesUsingPath(userDataDir);
+            if (orphaned > 0) {
+                log(`🧹 Closed ${orphaned} stale browser process${orphaned === 1 ? '' : 'es'} using the managed browser profile before launch.`);
+                await sleep(1_000);
+            }
+
             cleanupStaleBrowserProfileLocks(userDataDir);
 
             const launchPersistentContext = () => chromium.launchPersistentContext(userDataDir, {
@@ -1574,15 +1616,12 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             defaultSessionState.lastMousePosition = null;
 
             const existingPages = context.pages();
-            if (existingPages.length === 0) {
-                const initialPage = await context.newPage();
-                attachPageToSession(defaultSessionState, initialPage, { origin: 'initial' });
-            } else {
-                for (const existingPage of existingPages) {
-                    attachPageToSession(defaultSessionState, existingPage, { origin: 'initial' });
-                }
-                defaultSessionState.activePage = defaultSessionState.pages[0] || null;
+            if (existingPages.length > 0) {
+                await Promise.allSettled(existingPages.map(page => page.close()));
             }
+
+            const initialPage = await context.newPage();
+            attachPageToSession(defaultSessionState, initialPage, { origin: 'initial' });
 
             log('✅ Patchright Browser ready');
         },
@@ -1612,7 +1651,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             }
 
             const session = createSessionState(sessionOptions.id);
-            const newPage = await context.newPage();
+            const newPage = takeReusableInitialBlankPage() ?? await context.newPage();
             attachPageToSession(session, newPage, { origin: 'initial' });
             if (sessionOptions.startupUrl) {
                 await newPage.goto(sessionOptions.startupUrl, { waitUntil: 'domcontentloaded' });

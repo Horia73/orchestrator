@@ -7,6 +7,9 @@ declare module '@novnc/novnc/core/rfb.js' {
         background: string
         qualityLevel: number
         compressionLevel: number
+        showDotCursor: boolean
+        focus(options?: FocusOptions): void
+        clipboardPasteFrom(text: string): void
         disconnect(): void
     }
 }
@@ -20,6 +23,9 @@ declare module '@novnc/novnc' {
         background: string
         qualityLevel: number
         compressionLevel: number
+        showDotCursor: boolean
+        focus(options?: FocusOptions): void
+        clipboardPasteFrom(text: string): void
         disconnect(): void
     }
 }

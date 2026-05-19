@@ -51,6 +51,7 @@ Before invoking browser_agent:
 - know what data may be entered;
 - know what data must not be entered;
 - know what credentials or user actions are required;
+- know which account/profile should be used, or explicitly instruct browser_agent to ask that narrow question and yield control for login;
 - know the exact button/state where the browser must stop;
 - know whether the user has already approved a final external action, and quote that approval narrowly if so;
 - know what evidence should come back: status/current URL, screenshot, video duration, reference number, or confirmation-request details.
@@ -80,6 +81,8 @@ If the user already gave explicit confirmation for one of these actions, pass th
 Browser screenshots and recordings are model-driven actions. If you need visual evidence, ask browser_agent to decide when to use its screenshot or recordVideo action while completing the delegated task.
 
 If browser_agent asks for confirmation, ask the user yourself, then call browser_agent again with the same \`thread_id\` and the exact approved scope. Do not start a second browser thread for that same flow.
+
+If browser_agent asks for account/login/setup preferences and the answer is durable (for example "use my existing browser session for free setup flows" or "always let me take over for Google login"), save the non-secret preference to USER.md or MEMORY.md before continuing.
 </browser_agent_policy>
 
 <agent_boundaries>

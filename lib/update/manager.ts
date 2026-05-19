@@ -5,6 +5,7 @@ import { randomUUID } from 'crypto'
 
 import { listActiveChatStreams } from '@/lib/chat-streams'
 import { getEnvValue } from '@/lib/config'
+import { shutdownBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 
 type UpdatePhase = 'idle' | 'queued' | 'updating' | 'restarting' | 'completed' | 'failed'
 
@@ -471,7 +472,7 @@ async function startDockerHostUpdateRunner(job: UpdateJob) {
     }
 }
 
-function startUpdateRunner() {
+async function startUpdateRunner() {
     const next = patchJob({
         phase: 'updating',
         startedAt: Date.now(),
@@ -479,6 +480,15 @@ function startUpdateRunner() {
         activeRunCount: 0,
     })
     if (!next) return
+
+    try {
+        patchJob({ waitReason: 'Closing browser agent before update.' })
+        await shutdownBrowserSessionManager()
+    } catch {
+        // Browser cleanup is best-effort; the update runner/restart path also
+        // cleans up stale managed-profile processes on next launch.
+    }
+    patchJob({ waitReason: 'Installing update.' })
 
     if (serviceManager() === 'docker') {
         void startDockerHostUpdateRunner(next)
@@ -545,7 +555,7 @@ function scheduleQueuedJob(jobId: string) {
             return
         }
 
-        startUpdateRunner()
+        void startUpdateRunner()
     }
 
     memory.timer = setTimeout(tick, 250)
