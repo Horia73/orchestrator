@@ -2,6 +2,7 @@ import fs from 'fs'
 import path from 'path'
 
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
+import { getConversation } from '@/lib/db'
 import {
     type WhatsAppOutgoingAttachment,
     whatsappDeleteMessageForEveryone,
@@ -14,6 +15,8 @@ import {
     whatsappSendMessage,
     whatsappUnreadSummary,
 } from '@/lib/integrations/whatsapp'
+import type { Attachment } from '@/lib/types'
+import { resolveExistingUploadPath } from '@/lib/uploads'
 import { booleanArg, clamp, numberArg, stringArg } from './helpers'
 import { displayPath, isInsideProtectedAgentPath, resolveSandboxed } from './sandbox'
 
@@ -174,7 +177,7 @@ export const whatsappSendMessageTool: ToolDef = {
 export const whatsappSendMediaTool: ToolDef = {
     id: 'WhatsAppSendMedia',
     name: 'WhatsAppSendMedia',
-    description: 'Sends one or more workspace files as WhatsApp media or documents. Use only after the user explicitly approved the exact recipient/chat, files, and caption.',
+    description: 'Sends one or more workspace files or uploaded conversation attachments as WhatsApp media/documents. Use only after the user explicitly approved the exact recipient/chat, files, and caption.',
     input_schema: {
         type: 'object',
         properties: {
@@ -184,16 +187,16 @@ export const whatsappSendMediaTool: ToolDef = {
             },
             attachments: {
                 type: 'array',
-                description: 'Workspace files to attach. Each file is sent as a separate WhatsApp message; caption is applied to the first file only.',
+                description: 'Files to attach. Each item may be a workspace path string, an uploaded attachment id string, or an object with path or upload_id. Each file is sent as a separate WhatsApp message; caption is applied to the first file only.',
                 items: {
                     type: 'object',
                     properties: {
                         path: { type: 'string', description: 'Workspace file path to attach.' },
+                        upload_id: { type: 'string', description: 'Uploaded conversation attachment id, usually shown in the prompt as upload_id.' },
                         filename: { type: 'string', description: 'Optional filename shown to recipients.' },
                         content_type: { type: 'string', description: 'Optional MIME type. Defaults from file extension.' },
                         send_as_document: { type: 'boolean', description: 'Force sending as a document instead of inline media.' },
                     },
-                    required: ['path'],
                 },
             },
             caption: {
@@ -334,7 +337,10 @@ export async function executeWhatsAppSendMessage(args: Record<string, unknown>):
     return { success: true, data: result }
 }
 
-export async function executeWhatsAppSendMedia(args: Record<string, unknown>): Promise<ToolResult> {
+export async function executeWhatsAppSendMedia(
+    args: Record<string, unknown>,
+    ctx?: ToolExecutionContext
+): Promise<ToolResult> {
     if (args.confirmed_by_user !== true) {
         return { success: false, error: 'confirmed_by_user must be true after explicit user approval before sending WhatsApp media/files.' }
     }
@@ -342,7 +348,7 @@ export async function executeWhatsAppSendMedia(args: Record<string, unknown>): P
     const chatId = stringArg(args, ['chat_id', 'chatId'])
     if (!chatId) return { success: false, error: 'Missing required parameter: chat_id' }
 
-    const attachments = parseOutgoingAttachments(args)
+    const attachments = parseOutgoingAttachments(args, ctx)
     if (!attachments.ok) return attachments.error
     const caption = stringArg(args, ['caption'])
     if (caption.length > MAX_WHATSAPP_MESSAGE_CHARS) {
@@ -378,7 +384,25 @@ export async function executeWhatsAppDeleteMessageForEveryone(args: Record<strin
     return { success: true, data: result }
 }
 
-function parseOutgoingAttachments(args: Record<string, unknown>):
+interface ParsedAttachmentInput {
+    path?: string
+    uploadId?: string
+    filename?: string
+    contentType?: string
+    sendAsDocument?: boolean
+}
+
+interface ResolvedAttachmentInput {
+    resolved: string
+    display: string
+    defaultFilename?: string
+    defaultContentType?: string
+}
+
+function parseOutgoingAttachments(
+    args: Record<string, unknown>,
+    ctx?: ToolExecutionContext
+):
     | { ok: true; value: WhatsAppOutgoingAttachment[] }
     | { ok: false; error: ToolResult } {
     const raw = args.attachments ?? args.files
@@ -395,29 +419,20 @@ function parseOutgoingAttachments(args: Record<string, unknown>):
             return { ok: false, error: { success: false, error: `Invalid attachment at index ${index}: ${parsed.error}` } }
         }
 
-        const resolved = resolveSandboxed(parsed.path)
+        const resolved = resolveAttachmentInput(parsed, ctx)
         if (!resolved.ok) return { ok: false, error: { success: false, error: resolved.error } }
-        if (isInsideProtectedAgentPath(resolved.resolved)) {
-            return {
-                ok: false,
-                error: {
-                    success: false,
-                    error: `Protected workspace file cannot be sent over WhatsApp: ${displayPath(resolved.resolved)}.`,
-                },
-            }
-        }
 
         let stat: fs.Stats
         try {
             stat = fs.statSync(resolved.resolved)
         } catch {
-            return { ok: false, error: { success: false, error: `Attachment file does not exist: ${parsed.path}` } }
+            return { ok: false, error: { success: false, error: `Attachment file does not exist: ${resolved.display}` } }
         }
 
-        if (!stat.isFile()) return { ok: false, error: { success: false, error: `Attachment path is not a file: ${parsed.path}` } }
-        if (stat.size <= 0) return { ok: false, error: { success: false, error: `Attachment file is empty: ${parsed.path}` } }
+        if (!stat.isFile()) return { ok: false, error: { success: false, error: `Attachment path is not a file: ${resolved.display}` } }
+        if (stat.size <= 0) return { ok: false, error: { success: false, error: `Attachment file is empty: ${resolved.display}` } }
         if (stat.size > MAX_WHATSAPP_ATTACHMENT_BYTES) {
-            return { ok: false, error: { success: false, error: `WhatsApp attachment is over 25MB: ${parsed.path}` } }
+            return { ok: false, error: { success: false, error: `WhatsApp attachment is over 25MB: ${resolved.display}` } }
         }
 
         totalBytes += stat.size
@@ -425,8 +440,8 @@ function parseOutgoingAttachments(args: Record<string, unknown>):
             return { ok: false, error: { success: false, error: 'Total WhatsApp attachment size is capped at 75MB per send.' } }
         }
 
-        const filename = safeFilename(parsed.filename || path.basename(resolved.resolved))
-        const mimeType = normalizeMimeType(parsed.contentType || inferMimeType(filename))
+        const filename = safeFilename(parsed.filename || resolved.defaultFilename || path.basename(resolved.resolved))
+        const mimeType = normalizeMimeType(parsed.contentType || resolved.defaultContentType || inferMimeType(filename))
         attachments.push({
             filename,
             mimeType,
@@ -438,29 +453,207 @@ function parseOutgoingAttachments(args: Record<string, unknown>):
     return { ok: true, value: attachments }
 }
 
-function parseAttachmentInput(value: unknown): {
-    ok: true
-    path: string
-    filename?: string
-    contentType?: string
-    sendAsDocument?: boolean
-} | { ok: false; error: string } {
+function parseAttachmentInput(value: unknown): { ok: true } & ParsedAttachmentInput | { ok: false; error: string } {
     if (typeof value === 'string' && value.trim()) {
         return { ok: true, path: value.trim() }
     }
     if (!value || typeof value !== 'object' || Array.isArray(value)) {
-        return { ok: false, error: 'expected a workspace path string or an object with path.' }
+        return { ok: false, error: 'expected a workspace path/upload id string or an object with path or upload_id.' }
     }
     const record = value as Record<string, unknown>
     const filePath = firstString(record, ['path', 'file_path', 'filePath'])
-    if (!filePath) return { ok: false, error: 'missing path.' }
+    const uploadId = firstString(record, ['upload_id', 'uploadId', 'attachment_id', 'attachmentId', 'id'])
+    const filename = firstString(record, ['filename', 'name']) || undefined
+    if (!filePath && !uploadId && !filename) return { ok: false, error: 'missing path or upload_id.' }
     return {
         ok: true,
-        path: filePath,
-        filename: firstString(record, ['filename', 'name']) || undefined,
+        path: filePath || undefined,
+        uploadId: uploadId || undefined,
+        filename,
         contentType: firstString(record, ['content_type', 'contentType', 'mime_type', 'mimeType']) || undefined,
         sendAsDocument: optionalBooleanArg(record, ['send_as_document', 'sendAsDocument']),
     }
+}
+
+function resolveAttachmentInput(
+    parsed: ParsedAttachmentInput,
+    ctx?: ToolExecutionContext
+): { ok: true } & ResolvedAttachmentInput | { ok: false; error: string } {
+    if (parsed.uploadId) {
+        const upload = resolveUploadById(parsed.uploadId, ctx)
+        if (!upload) {
+            const fallback = resolveConversationUploadByLabel([parsed.uploadId, parsed.filename, parsed.path], ctx)
+            if (fallback.kind === 'found') return { ok: true, ...fallback.value }
+            if (fallback.kind === 'ambiguous') return { ok: false, error: fallback.error }
+            return { ok: false, error: `Uploaded attachment is no longer available: ${parsed.uploadId}` }
+        }
+        return { ok: true, ...upload }
+    }
+
+    if (parsed.path) {
+        const directUpload = resolveUploadReference(parsed.path, ctx)
+        if (directUpload) return { ok: true, ...directUpload }
+
+        const sandboxed = resolveSandboxed(parsed.path)
+        if (!sandboxed.ok) {
+            const fallback = resolveConversationUploadByLabel([parsed.path, parsed.filename], ctx)
+            if (fallback.kind === 'found') return { ok: true, ...fallback.value }
+            if (fallback.kind === 'ambiguous') return { ok: false, error: fallback.error }
+            return { ok: false, error: sandboxed.error }
+        }
+
+        if (isInsideProtectedAgentPath(sandboxed.resolved)) {
+            return {
+                ok: false,
+                error: `Protected workspace file cannot be sent over WhatsApp: ${displayPath(sandboxed.resolved)}.`,
+            }
+        }
+
+        if (fs.existsSync(sandboxed.resolved)) {
+            return {
+                ok: true,
+                resolved: sandboxed.resolved,
+                display: displayPath(sandboxed.resolved),
+                defaultFilename: path.basename(sandboxed.resolved),
+            }
+        }
+
+        const fallback = resolveConversationUploadByLabel([parsed.path, parsed.filename], ctx)
+        if (fallback.kind === 'found') return { ok: true, ...fallback.value }
+        if (fallback.kind === 'ambiguous') return { ok: false, error: fallback.error }
+
+        return {
+            ok: true,
+            resolved: sandboxed.resolved,
+            display: parsed.path,
+            defaultFilename: path.basename(sandboxed.resolved),
+        }
+    }
+
+    const fallback = resolveConversationUploadByLabel([parsed.filename], ctx)
+    if (fallback.kind === 'found') return { ok: true, ...fallback.value }
+    if (fallback.kind === 'ambiguous') return { ok: false, error: fallback.error }
+    return { ok: false, error: 'missing path or upload_id.' }
+}
+
+function resolveUploadById(uploadId: string, ctx?: ToolExecutionContext): ResolvedAttachmentInput | null {
+    const cleanUploadId = extractUploadId(uploadId)
+    if (!cleanUploadId) return null
+    const filePath = resolveExistingUploadPath(cleanUploadId)
+    if (!filePath) return null
+    const attachment = findConversationAttachmentById(cleanUploadId, ctx)
+    return {
+        resolved: filePath,
+        display: `upload_id ${cleanUploadId}`,
+        defaultFilename: attachment?.filename,
+        defaultContentType: attachment?.mimeType,
+    }
+}
+
+function resolveUploadReference(value: string, ctx?: ToolExecutionContext): ResolvedAttachmentInput | null {
+    const byId = resolveUploadById(value, ctx)
+    if (byId) return byId
+
+    const fallback = resolveConversationUploadByLabel([value], ctx)
+    return fallback.kind === 'found' ? fallback.value : null
+}
+
+function resolveConversationUploadByLabel(
+    candidates: Array<string | undefined>,
+    ctx?: ToolExecutionContext
+): { kind: 'found'; value: ResolvedAttachmentInput } | { kind: 'ambiguous'; error: string } | { kind: 'none' } {
+    if (!ctx?.conversationId) return { kind: 'none' }
+
+    const labels = normalizedAttachmentLabels(candidates)
+    if (labels.size === 0) return { kind: 'none' }
+
+    const conversation = getConversation(ctx.conversationId)
+    if (!conversation) return { kind: 'none' }
+
+    const matches = new Map<string, Attachment>()
+    for (const message of [...conversation.messages].reverse()) {
+        for (const attachment of message.attachments ?? []) {
+            if (!attachment?.id || matches.has(attachment.id)) continue
+            const attachmentLabels = normalizedAttachmentLabels([attachment.id, attachment.filename])
+            const matched = [...labels].some(label => attachmentLabels.has(label))
+            if (matched && resolveExistingUploadPath(attachment.id)) matches.set(attachment.id, attachment)
+        }
+    }
+
+    if (matches.size === 0) return { kind: 'none' }
+    if (matches.size > 1) {
+        const names = [...matches.values()]
+            .map(attachment => attachment.filename || attachment.id)
+            .slice(0, 5)
+            .join(', ')
+        return {
+            kind: 'ambiguous',
+            error: `More than one uploaded attachment matches that name (${names}). Use the exact upload_id instead.`,
+        }
+    }
+
+    const attachment = [...matches.values()][0]
+    const resolved = resolveExistingUploadPath(attachment.id)
+    if (!resolved) return { kind: 'none' }
+    return {
+        kind: 'found',
+        value: {
+            resolved,
+            display: `uploaded attachment ${attachment.filename || attachment.id}`,
+            defaultFilename: attachment.filename,
+            defaultContentType: attachment.mimeType,
+        },
+    }
+}
+
+function findConversationAttachmentById(uploadId: string, ctx?: ToolExecutionContext): Attachment | null {
+    if (!ctx?.conversationId) return null
+    const conversation = getConversation(ctx.conversationId)
+    if (!conversation) return null
+    for (const message of [...conversation.messages].reverse()) {
+        const found = (message.attachments ?? []).find(attachment => attachment.id === uploadId)
+        if (found) return found
+    }
+    return null
+}
+
+function normalizedAttachmentLabels(values: Array<string | undefined>): Set<string> {
+    const labels = new Set<string>()
+    for (const value of values) {
+        if (!value) continue
+        const clean = value.trim()
+        if (!clean) continue
+        addNormalizedLabel(labels, clean)
+        addNormalizedLabel(labels, path.basename(clean))
+
+        const uploadId = extractUploadId(clean)
+        if (uploadId) addNormalizedLabel(labels, uploadId)
+    }
+    return labels
+}
+
+function addNormalizedLabel(labels: Set<string>, value: string) {
+    const clean = value.trim().toLowerCase()
+    if (clean) labels.add(clean)
+}
+
+function extractUploadId(value: string | undefined): string | null {
+    if (!value) return null
+    const clean = value.trim()
+    if (!clean) return null
+    if (resolveExistingUploadPath(clean)) return clean
+
+    const apiMarker = '/api/uploads/'
+    const markerIndex = clean.indexOf(apiMarker)
+    if (markerIndex >= 0) {
+        const afterMarker = clean.slice(markerIndex + apiMarker.length).split(/[?#/]/)[0]
+        if (resolveExistingUploadPath(afterMarker)) return afterMarker
+    }
+
+    const basename = path.basename(clean).split(/[?#]/)[0]
+    if (basename && basename !== clean && resolveExistingUploadPath(basename)) return basename
+
+    return null
 }
 
 function firstString(record: Record<string, unknown>, keys: string[]): string {

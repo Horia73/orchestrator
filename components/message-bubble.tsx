@@ -905,6 +905,11 @@ function BrowserAgentCallBlock({
         <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
             <div className="ml-7 grid max-w-[min(760px,calc(100vw-180px))] gap-2">
                 <BrowserAgentLiveView active={entry.status === "running"} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                {entry.content.trim().length > 0 && (
+                    <div className="min-w-0 max-w-full overflow-x-auto rounded-[8px] border bg-muted/30 px-3 py-2 text-[13px] leading-relaxed">
+                        <MarkdownRenderer content={entry.content} />
+                    </div>
+                )}
                 {!!entry.attachments?.length && (
                     <div className="flex max-w-full flex-wrap gap-2">
                         {entry.attachments.map(att => (

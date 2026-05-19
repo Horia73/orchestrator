@@ -52,6 +52,13 @@ export class BrowserProvider implements AIProvider {
 
         const startedAt = Date.now()
         let lastStatusMessage = ''
+        const statusTranscript: string[] = []
+        const recordStatus = (message: string) => {
+            const trimmed = message.trim()
+            if (!trimmed || statusTranscript[statusTranscript.length - 1] === trimmed) return false
+            statusTranscript.push(trimmed)
+            return true
+        }
         const evidenceAssets: GeneratedMediaAsset[] = []
         const sessionManager = getBrowserSessionManager()
         const runtimeConfig = buildBrowserRuntimeConfig()
@@ -59,7 +66,7 @@ export class BrowserProvider implements AIProvider {
             config: runtimeConfig,
             prevSession: options.prevSession,
             onStatus(message) {
-                if (!message || message === lastStatusMessage) return
+                if (!recordStatus(message)) return
                 lastStatusMessage = message
                 callbacks.onThinking(`${message}\n`)
             },
@@ -70,15 +77,21 @@ export class BrowserProvider implements AIProvider {
                     ? `Browser video (${Math.round(capture.durationMs / 1000)}s)`
                     : 'Browser screenshot'
                 callbacks.onContent(`${label}: [${asset.attachment.filename}](${asset.url})\n`)
-                callbacks.onThinking(`Saved ${label.toLowerCase()} (${asset.attachment.filename}).\n`)
+                const message = `Saved ${label.toLowerCase()} (${asset.attachment.filename}).`
+                recordStatus(message)
+                callbacks.onThinking(`${message}\n`)
             },
         })
         const runtime = lease.runtime
 
         if (options.prevSession && !lease.resumed) {
-            callbacks.onThinking('Previous browser session is no longer available; started a fresh browser session for this thread.\n')
+            const message = 'Previous browser session is no longer available; started a fresh browser session for this thread.'
+            recordStatus(message)
+            callbacks.onThinking(`${message}\n`)
         } else if (lease.resumed) {
-            callbacks.onThinking(`Resuming browser session ${lease.id}.\n`)
+            const message = `Resuming browser session ${lease.id}.`
+            recordStatus(message)
+            callbacks.onThinking(`${message}\n`)
         }
 
         const abort = () => {
@@ -114,12 +127,13 @@ export class BrowserProvider implements AIProvider {
 
             const managedStatus = sessionManager.markFromRuntimeStatus(lease.id, finalStatus)
             statusMarked = true
-            const finalMessage = formatFinalMessage(
+            const finalMessage = formatBrowserRunOutput(
                 finalStatus.lastStatusMessage || lastStatusMessage,
                 finalStatus.currentUrl,
                 lease.id,
                 managedStatus,
                 finalStatus.lastTerminalAction,
+                statusTranscript,
             )
             callbacks.onContent(finalMessage)
             callbacks.onDone({
@@ -200,12 +214,13 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
     return fallback
 }
 
-function formatFinalMessage(
+function formatBrowserRunOutput(
     lastStatusMessage: string,
     currentUrl: string,
     sessionId: string,
     status: string,
     terminalAction?: { action?: string; reasoning?: string; text?: string } | null,
+    statusTranscript: string[] = [],
 ): string {
     const lines = ['Browser agent finished.']
     lines.push(`Browser session: ${sessionId}`)
@@ -213,14 +228,28 @@ function formatFinalMessage(
     if (status === 'awaiting_user') {
         lines.push('Browser is waiting for user input or confirmation. Continue this flow by calling browser_agent again with the same agent_thread_id/thread_id.')
     }
+    if (terminalAction?.action) {
+        lines.push(`Final action: ${terminalAction.action}`)
+    }
     if (terminalAction?.text) {
-        lines.push(`Requested input: ${terminalAction.text}`)
-    } else if (terminalAction?.reasoning && terminalAction.action === 'ask') {
-        lines.push(`Requested input: ${terminalAction.reasoning}`)
+        lines.push(`Final message: ${terminalAction.text}`)
+    } else if (terminalAction?.reasoning) {
+        lines.push(`Final message: ${terminalAction.reasoning}`)
     }
     if (lastStatusMessage) lines.push(`Status: ${lastStatusMessage}`)
     if (currentUrl) lines.push(`Current URL: ${currentUrl}`)
+    if (statusTranscript.length > 0) {
+        lines.push('')
+        lines.push('Terminal output:')
+        lines.push('```text')
+        lines.push(escapeFence(statusTranscript.join('\n')))
+        lines.push('```')
+    }
     return `${lines.join('\n')}\n`
+}
+
+function escapeFence(value: string): string {
+    return value.replace(/```/g, '`\u200b``')
 }
 
 function sleep(ms: number): Promise<void> {

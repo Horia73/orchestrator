@@ -155,8 +155,10 @@ export function createAgentRuntime(
     let activeTaskUsage: TaskUsageSummary | null = null;
     let lastTaskUsage: TaskUsageSummary | null = null;
 
-    const statusHandler = (message: string) => {
-        lastStatusMessage = message;
+    const statusHandler = (message: string, options: { remember?: boolean } = {}) => {
+        if (options.remember !== false) {
+            lastStatusMessage = message;
+        }
         onStatusUpdate(message);
     };
 
@@ -172,7 +174,8 @@ export function createAgentRuntime(
         activeTaskUsage = null;
 
         statusHandler(
-            `📊 Usage (${status}): task[${formatTotals(completedTask.totals)}] | session[${formatTotals(sessionUsage)}] | model=${completedTask.model} | thinking=${completedTask.thinkingLevel}`
+            `📊 Usage (${status}): task[${formatTotals(completedTask.totals)}] | session[${formatTotals(sessionUsage)}] | model=${completedTask.model} | thinking=${completedTask.thinkingLevel}`,
+            { remember: false }
         );
     };
 

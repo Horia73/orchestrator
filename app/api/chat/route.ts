@@ -256,7 +256,10 @@ function formatAttachmentSize(bytes: unknown): string {
   return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`
 }
 
-function buildLocalAttachmentContext(attachments: Attachment[]): string {
+function buildAttachmentContext(
+  attachments: Attachment[],
+  options: { includeLocalPath: boolean }
+): string {
   const lines: string[] = []
 
   for (const att of attachments) {
@@ -271,9 +274,11 @@ function buildLocalAttachmentContext(attachments: Attachment[]): string {
         ? att.mimeType.split(";")[0].trim()
         : "application/octet-stream"
     const filePath = resolveExistingUploadPath(att.id)
-    const location = filePath
+    const location = options.includeLocalPath && filePath
       ? `local path: ${filePath}`
-      : "local upload file is no longer available"
+      : filePath
+        ? `upload_id: ${att.id}`
+        : `upload_id: ${att.id}; local upload file is no longer available`
 
     lines.push(
       `- ${filename} (${mimeType}, ${formatAttachmentSize(att.size)}); ${location}`
@@ -285,7 +290,7 @@ function buildLocalAttachmentContext(attachments: Attachment[]): string {
   return [
     `The user attached ${lines.length === 1 ? "this file" : "these files"}:`,
     ...lines,
-    `Use the local ${lines.length === 1 ? "path" : "paths"} above to inspect the uploaded content when needed.`,
+    `Use upload_id when a tool asks for one of these uploaded attachments. Use local paths only when filesystem inspection is available.`,
   ].join("\n")
 }
 
@@ -876,8 +881,10 @@ export async function POST(request: Request) {
             ? m.attachments
             : []
           const localAttachmentContext =
-            includeLocalAttachmentContext && m.role === "user"
-              ? buildLocalAttachmentContext(messageAttachments)
+            m.role === "user"
+              ? buildAttachmentContext(messageAttachments, {
+                  includeLocalPath: includeLocalAttachmentContext,
+                })
               : ""
           const messageContent = typeof m.content === "string" ? m.content : ""
           const result: {
