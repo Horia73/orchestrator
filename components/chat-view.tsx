@@ -1466,7 +1466,7 @@ export function ChatView() {
           <div
             ref={scrollContainerRef}
             data-chat-scroll-container="true"
-            className="flex-1 overflow-y-scroll"
+            className="min-h-0 flex-1 overflow-y-scroll"
             style={{
               WebkitOverflowScrolling: "touch",
               overscrollBehaviorY: "contain",
@@ -1584,20 +1584,22 @@ export function ChatView() {
                   </div>
                 </div>
               </div>
+            </div>
+          </div>
 
-              <div
-                ref={inputContainerRef}
-                data-chat-input-container="true"
-                className="relative sticky bottom-0 shrink-0 bg-background pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
-              >
-                <TodoBar
-                  messages={activeConversation.messages}
-                  streamingReasoning={
-                    showStreamingBubble ? state.streamingReasoning : []
-                  }
-                />
-                <ChatInput variant="chat" />
-              </div>
+          <div
+            ref={inputContainerRef}
+            data-chat-input-container="true"
+            className="relative z-10 shrink-0 bg-background px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
+          >
+            <div className="mx-auto w-full max-w-[780px]">
+              <TodoBar
+                messages={activeConversation.messages}
+                streamingReasoning={
+                  showStreamingBubble ? state.streamingReasoning : []
+                }
+              />
+              <ChatInput variant="chat" />
             </div>
           </div>
 

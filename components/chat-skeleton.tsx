@@ -33,7 +33,7 @@ export function ChatSkeleton() {
                 </div>
 
                 <div
-                    className="flex-1 overflow-y-scroll pointer-events-none"
+                    className="min-h-0 flex-1 overflow-y-scroll pointer-events-none"
                     style={{ scrollbarGutter: "stable both-edges" }}
                 >
                     <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
@@ -60,17 +60,19 @@ export function ChatSkeleton() {
                                 </div>
                             </div>
                         </div>
+                    </div>
+                </div>
 
-                        <div className="relative sticky bottom-0 shrink-0 bg-background pb-3 opacity-50 pointer-events-none">
-                            <div className="mx-auto w-full max-w-[748px] rounded-[24px] bg-[#f4f4f0] shadow-sm dark:bg-[#1a1a1a] p-3 pl-4 flex flex-col justify-end min-h-[96px]">
-                                <div className="flex items-center justify-between w-full h-[36px]">
-                                    <div className="flex items-center gap-3">
-                                        <div className="size-[32px] rounded-full bg-[#e6e1db] dark:bg-[#2a2a2a] animate-pulse" />
-                                        <div className="size-[32px] rounded-[10px] bg-[#e6e1db] dark:bg-[#2a2a2a] animate-pulse" />
-                                    </div>
-                                    <div className="size-[32px] rounded-full bg-black/60 dark:bg-white/60 animate-pulse flex items-center justify-center">
-                                        <div className="size-3.5 bg-white/40 dark:bg-black/40 rounded-sm" />
-                                    </div>
+                <div className="relative shrink-0 bg-background px-4 pb-3 opacity-50 pointer-events-none">
+                    <div className="mx-auto w-full max-w-[780px]">
+                        <div className="w-full rounded-[24px] bg-[#f4f4f0] shadow-sm dark:bg-[#1a1a1a] p-3 pl-4 flex flex-col justify-end min-h-[96px]">
+                            <div className="flex items-center justify-between w-full h-[36px]">
+                                <div className="flex items-center gap-3">
+                                    <div className="size-[32px] rounded-full bg-[#e6e1db] dark:bg-[#2a2a2a] animate-pulse" />
+                                    <div className="size-[32px] rounded-[10px] bg-[#e6e1db] dark:bg-[#2a2a2a] animate-pulse" />
+                                </div>
+                                <div className="size-[32px] rounded-full bg-black/60 dark:bg-white/60 animate-pulse flex items-center justify-center">
+                                    <div className="size-3.5 bg-white/40 dark:bg-black/40 rounded-sm" />
                                 </div>
                             </div>
                         </div>
