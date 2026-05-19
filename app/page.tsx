@@ -9,6 +9,7 @@ import { useChatStore } from "@/hooks/use-chat-store"
 import { SidebarInset } from "@/components/ui/sidebar"
 
 import { HomeSkeleton } from "@/components/home-skeleton"
+import { ChatSkeleton } from "@/components/chat-skeleton"
 
 export default function Page() {
   const { state, selectConversation } = useChatStore()
@@ -64,13 +65,13 @@ export default function Page() {
         {state.isLoading ? (
           mounted ? (
             hasIdOnLoad ? (
-              null
+              <ChatSkeleton />
             ) : (
               <HomeSkeleton />
             )
           ) : null
         ) : isActiveConversationPriming ? (
-          null
+          <ChatSkeleton />
         ) : state.activeConversationId && activeConversationStatus === "error" ? (
           <div className="flex flex-1 items-center justify-center px-4 text-center">
             <div>

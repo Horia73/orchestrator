@@ -44,6 +44,7 @@ RUN apt-get update \
     git \
     fonts-liberation \
     openbox \
+    tini \
     tigervnc-standalone-server \
     xauth \
   && rm -rf /var/lib/apt/lists/*
@@ -58,4 +59,5 @@ USER node
 
 EXPOSE 3000 6080
 
+ENTRYPOINT ["tini", "--"]
 CMD ["npm", "start"]

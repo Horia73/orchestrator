@@ -16,6 +16,7 @@ import {
   Trash2,
 } from "lucide-react"
 
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 import { useSettings } from "@/components/settings/use-settings"
 
@@ -758,6 +759,8 @@ function EnvEntryRow({
   onRemove: () => void
 }) {
   const labelInputRef = React.useRef<HTMLInputElement | null>(null)
+  const copyResetTimerRef = React.useRef<number | null>(null)
+  const [copiedField, setCopiedField] = React.useState<"label" | "name" | "value" | null>(null)
   const missingKey = row.key.trim().length === 0
   const valueSet = row.value.trim().length > 0
   // A blank just-added row isn't an error — only flag "no name" once there's
@@ -766,12 +769,49 @@ function EnvEntryRow({
   const isNew = missingKey && !valueSet
   const invalid = nameError || duplicate
   const labelValue = row.label ?? (fallbackLabel === "Custom variable" ? "" : fallbackLabel)
+  const statusText = copiedField
+    ? "Copied"
+    : nameError
+      ? "No name"
+      : duplicate
+        ? "Duplicate"
+        : valueSet
+          ? "Set"
+          : isNew
+            ? "New"
+            : "Empty"
+  const statusClassName = copiedField
+    ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-500"
+    : invalid
+      ? "bg-destructive/10 text-destructive"
+      : valueSet
+        ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-500"
+        : isNew
+          ? "bg-muted text-foreground/45"
+          : "bg-amber-500/10 text-amber-700 dark:text-amber-500"
 
   React.useEffect(() => {
     if (!shouldFocusLabel) return
     labelInputRef.current?.focus()
     onLabelFocused()
   }, [onLabelFocused, shouldFocusLabel])
+
+  React.useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current !== null) window.clearTimeout(copyResetTimerRef.current)
+    }
+  }, [])
+
+  const copyField = React.useCallback(async (field: "label" | "name" | "value", value: string) => {
+    if (!value) return
+    if (!await copyTextToClipboard(value)) return
+    setCopiedField(field)
+    if (copyResetTimerRef.current !== null) window.clearTimeout(copyResetTimerRef.current)
+    copyResetTimerRef.current = window.setTimeout(() => {
+      setCopiedField(null)
+      copyResetTimerRef.current = null
+    }, 1200)
+  }, [])
 
   return (
     <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(120px,180px)_minmax(150px,240px)_minmax(0,1fr)_86px_32px] lg:items-center">
@@ -781,8 +821,13 @@ function EnvEntryRow({
           value={labelValue}
           readOnly={readOnly}
           onChange={event => onChange({ ...row, label: normalizeEnvLabelInput(event.target.value) })}
+          onPointerDown={event => {
+            if (event.button !== 0) return
+            void copyField("label", labelValue)
+          }}
           className={cn(fieldClassName(readOnly), "text-[12.5px]")}
           placeholder="Label"
+          title={labelValue ? "Click to copy" : undefined}
           autoComplete="off"
           spellCheck={false}
         />
@@ -794,6 +839,10 @@ function EnvEntryRow({
           readOnly={readOnly}
           aria-invalid={invalid}
           onChange={event => onChange({ ...row, key: normalizeEnvKeyInput(event.target.value) })}
+          onPointerDown={event => {
+            if (event.button !== 0) return
+            void copyField("name", row.key)
+          }}
           onPaste={event => {
             const parsed = parsePastedEnvEntry(event.clipboardData.getData("text"))
             if (!parsed) return
@@ -808,6 +857,7 @@ function EnvEntryRow({
           }}
           className={cn(fieldClassName(readOnly), "font-mono text-[12.5px] aria-invalid:border-destructive/60 aria-invalid:ring-destructive/15")}
           placeholder="VARIABLE_NAME"
+          title={row.key ? "Click to copy" : undefined}
           autoComplete="off"
           spellCheck={false}
         />
@@ -820,6 +870,10 @@ function EnvEntryRow({
             type={revealed ? "text" : "password"}
             readOnly={readOnly}
             onChange={event => onChange({ ...row, value: event.target.value })}
+            onPointerDown={event => {
+              if (event.button !== 0) return
+              void copyField("value", row.value)
+            }}
             onPaste={event => {
               const parsed = parsePastedEnvEntry(event.clipboardData.getData("text"))
               if (!parsed) return
@@ -834,6 +888,7 @@ function EnvEntryRow({
             }}
             className={cn(fieldClassName(readOnly), "rounded-r-none border-r-0 font-mono text-[12.5px]")}
             placeholder="value"
+            title={row.value ? "Click to copy" : undefined}
             spellCheck={false}
             autoComplete="off"
           />
@@ -851,18 +906,9 @@ function EnvEntryRow({
 
       <div className="flex items-center">
         <span
-          className={cn(
-            "inline-flex h-6 items-center rounded-md px-2 text-[11px] font-medium",
-            invalid
-              ? "bg-destructive/10 text-destructive"
-              : valueSet
-                ? "bg-emerald-500/10 text-emerald-700 dark:text-emerald-500"
-                : isNew
-                  ? "bg-muted text-foreground/45"
-                  : "bg-amber-500/10 text-amber-700 dark:text-amber-500"
-          )}
+          className={cn("inline-flex h-6 items-center rounded-md px-2 text-[11px] font-medium", statusClassName)}
         >
-          {nameError ? "No name" : duplicate ? "Duplicate" : valueSet ? "Set" : isNew ? "New" : "Empty"}
+          {statusText}
         </span>
       </div>
 

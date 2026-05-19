@@ -45,6 +45,15 @@ import type { Conversation } from "@/lib/types"
 const TABLET_NAV_MEDIA =
   "(min-width: 768px) and (max-width: 1180px), (pointer: coarse) and (min-width: 768px) and (max-width: 1366px)"
 const SEARCH_DEBOUNCE_MS = 180
+const MOBILE_CONVERSATION_PREFETCH_COUNT = 4
+
+type WindowWithIdleCallback = Window & {
+  requestIdleCallback?: (
+    callback: IdleRequestCallback,
+    options?: IdleRequestOptions
+  ) => number
+  cancelIdleCallback?: (handle: number) => void
+}
 
 function normalizeSearchText(value: string): string {
   return value
@@ -136,6 +145,7 @@ export function AppSidebar() {
   const {
     state: sidebarState,
     open: sidebarOpen,
+    openMobile,
     setOpen,
     setOpenMobile,
     isMobile,
@@ -251,18 +261,74 @@ export function AppSidebar() {
     if (searchActive && !isCollapsed) searchInputRef.current?.focus()
   }, [isCollapsed, searchActive])
 
+  React.useEffect(() => {
+    if (!isMobile || state.isLoading || isFiltering) return
+
+    const candidates = state.conversations
+      .filter((conversation) => {
+        const status = state.conversationLoadState[conversation.id]
+        return status == null || status === "summary"
+      })
+      .slice(0, MOBILE_CONVERSATION_PREFETCH_COUNT)
+      .map((conversation) => conversation.id)
+
+    if (candidates.length === 0) return
+
+    let cancelled = false
+    const warmConversations = () => {
+      for (const id of candidates) {
+        if (cancelled) return
+        void prefetchConversationMessages(id)
+      }
+    }
+
+    const browserWindow = window as WindowWithIdleCallback
+
+    if (typeof browserWindow.requestIdleCallback === "function") {
+      const idleId = browserWindow.requestIdleCallback(warmConversations, {
+        timeout: openMobile ? 250 : 1200,
+      })
+      return () => {
+        cancelled = true
+        browserWindow.cancelIdleCallback?.(idleId)
+      }
+    }
+
+    const timer = window.setTimeout(warmConversations, openMobile ? 80 : 350)
+    return () => {
+      cancelled = true
+      window.clearTimeout(timer)
+    }
+  }, [
+    isFiltering,
+    isMobile,
+    openMobile,
+    prefetchConversationMessages,
+    state.conversationLoadState,
+    state.conversations,
+    state.isLoading,
+  ])
+
   // Wrap chat actions so they always land on the chat page —
   // users can fire them from /settings or any other route.
   const handleNewChat = React.useCallback(() => {
-    newChat()
     if (isMobile) setOpenMobile(false)
+    newChat()
     if (pathname !== "/") router.push("/")
   }, [isMobile, newChat, pathname, router, setOpenMobile])
 
   const handleSelectConversation = React.useCallback(
     (id: string) => {
+      if (isMobile) {
+        setOpenMobile(false)
+        window.requestAnimationFrame(() => {
+          selectConversation(id)
+          if (pathname !== "/") router.push("/")
+        })
+        return
+      }
+
       selectConversation(id)
-      if (isMobile) setOpenMobile(false)
       if (pathname !== "/") router.push("/")
     },
     [isMobile, pathname, router, selectConversation, setOpenMobile]
@@ -445,10 +511,8 @@ export function AppSidebar() {
                             onFocus={() => {
                               void prefetchConversationMessages(conv.id)
                             }}
-                            onPointerEnter={() => {
-                              void prefetchConversationMessages(conv.id)
-                            }}
-                            onTouchStart={() => {
+                            onPointerEnter={(event) => {
+                              if (event.pointerType === "touch") return
                               void prefetchConversationMessages(conv.id)
                             }}
                             className={`text-[15px] text-foreground/75 group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}

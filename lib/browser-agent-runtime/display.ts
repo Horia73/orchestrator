@@ -65,6 +65,28 @@ export function createBrowserDisplayController(options: BrowserDisplayController
 
     const log = (message: string) => options.onLog?.(message);
 
+    const waitForExit = (proc: ChildProcess, timeoutMs: number): Promise<boolean> => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return Promise.resolve(true);
+        return new Promise(resolve => {
+            const timer = setTimeout(() => {
+                cleanup();
+                resolve(false);
+            }, timeoutMs);
+            timer.unref?.();
+            const onExit = () => {
+                cleanup();
+                resolve(true);
+            };
+            const cleanup = () => {
+                clearTimeout(timer);
+                proc.off('exit', onExit);
+                proc.off('close', onExit);
+            };
+            proc.once('exit', onExit);
+            proc.once('close', onExit);
+        });
+    };
+
     const closeProcess = async (proc: ChildProcess | null) => {
         if (!proc || proc.exitCode !== null || proc.killed) return;
         try {
@@ -72,9 +94,10 @@ export function createBrowserDisplayController(options: BrowserDisplayController
         } catch {
             return;
         }
-        await sleep(250);
-        if (proc.exitCode === null && !proc.killed) {
+        const exited = await waitForExit(proc, 750);
+        if (!exited && proc.exitCode === null) {
             try { proc.kill('SIGKILL'); } catch {}
+            await waitForExit(proc, 1_000);
         }
     };
 
@@ -154,7 +177,24 @@ export function createBrowserDisplayController(options: BrowserDisplayController
             token: wsToken,
             onLog: log,
         });
-        await proxy.start();
+        try {
+            await proxy.start();
+        } catch (error) {
+            const reason = `VNC WebSocket proxy could not listen on ${wsHost}:${wsPort}: ${formatDisplayError(error)}`;
+            log(`⚠️ ${reason}`);
+            await proxy.close().catch(() => {});
+            proxy = null;
+            await closeProcess(windowManager);
+            windowManager = null;
+            await closeProcess(xvnc);
+            xvnc = null;
+            return {
+                ...state,
+                available: false,
+                ready: false,
+                reason,
+            };
+        }
 
         return {
             enabled: true,
@@ -317,12 +357,13 @@ function waitForTcp(host: string, port: number, timeoutMs: number): Promise<bool
     });
 }
 
-function sleep(ms: number): Promise<void> {
-    return new Promise(resolve => setTimeout(resolve, ms));
-}
-
 function shellQuote(value: string): string {
     return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function formatDisplayError(error: unknown): string {
+    if (error instanceof Error) return error.message;
+    return String(error);
 }
 
 class VncWebSocketProxy {

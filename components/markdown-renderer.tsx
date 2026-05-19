@@ -263,14 +263,14 @@ const baseComponents: Components = {
 const contextComponents: Components = {
   ...baseComponents,
   ul: ({ children }) => (
-    <ul className="-ml-16 my-2 list-disc space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6">
+    <ul className="-ml-16 my-2 list-disc space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6">
       {children}
     </ul>
   ),
   ol: ({ children, start }) => (
     <ol
       start={start}
-      className="-ml-16 my-2 list-decimal space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-6"
+      className="-ml-16 my-2 list-decimal space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6"
     >
       {children}
     </ol>

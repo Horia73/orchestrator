@@ -1546,7 +1546,27 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             }
 
             if (displayController) {
-                lastLiveViewState = await displayController.ensureStarted();
+                try {
+                    lastLiveViewState = await displayController.ensureStarted();
+                } catch (err) {
+                    const reason = `Live display failed to start: ${formatBrowserError(err)}`;
+                    log(`⚠️ ${reason}`);
+                    await displayController.close().catch(() => {});
+                    lastLiveViewState = {
+                        enabled: liveViewEnabled,
+                        available: false,
+                        ready: false,
+                        mode: process.platform === 'darwin'
+                            ? 'mac-headful'
+                            : process.platform === 'linux'
+                                ? 'linux-vnc'
+                                : 'disabled',
+                        platform: process.platform,
+                        width: options.viewport?.width ?? DEFAULT_VIEWPORT.width,
+                        height: options.viewport?.height ?? DEFAULT_VIEWPORT.height,
+                        reason,
+                    };
+                }
             }
 
             const hasVirtualDisplay = lastLiveViewState.ready && lastLiveViewState.display;
@@ -1616,11 +1636,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             defaultSessionState.lastMousePosition = null;
 
             const existingPages = context.pages();
-            if (existingPages.length > 0) {
-                await Promise.allSettled(existingPages.map(page => page.close()));
+            const initialPage = existingPages[0] ?? await context.newPage();
+            const extraPages = existingPages.slice(1);
+            if (extraPages.length > 0) {
+                await Promise.allSettled(extraPages.map(page => page.close()));
             }
-
-            const initialPage = await context.newPage();
             attachPageToSession(defaultSessionState, initialPage, { origin: 'initial' });
 
             log('✅ Patchright Browser ready');

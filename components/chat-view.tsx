@@ -18,6 +18,7 @@ import { ConversationArtifactsProvider } from "@/components/artifacts/use-conver
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
+import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -46,6 +47,7 @@ const MESSAGE_ANCHOR_TOP_OFFSET = 32
 const MESSAGE_ANCHOR_SCROLL_DURATION_MS = 420
 const SCROLL_BUTTON_FADE_DISTANCE_PX = 2700
 const MAX_RESTORE_OLDER_PAGES = 64
+const MAX_MOBILE_RESTORE_OLDER_PAGES = 1
 const MESSAGE_VERTICAL_GAP = 24
 const TAIL_SPACER_UPDATE_THRESHOLD_PX = 4
 
@@ -554,6 +556,7 @@ export function ChatView() {
   const scrollJumpFadeReleaseTimeoutRef = React.useRef<number | null>(null)
   const scrollButtonLockedUntilStreamingEndRef = React.useRef(false)
   const [inputOffset, setInputOffset] = React.useState(88)
+  const keyboardInset = useMobileKeyboardInset()
   const [artifactPanelWidth, setArtifactPanelWidth] = React.useState(
     ARTIFACT_PANEL_DEFAULT_WIDTH
   )
@@ -701,7 +704,7 @@ export function ChatView() {
       const gapAfterUser = responseRect
         ? Math.max(0, Math.round(responseRect.top - userRect.bottom))
         : MESSAGE_VERTICAL_GAP
-      const bottomPadding = inputOffset + 24
+      const bottomPadding = inputOffset + keyboardInset + 24
       const neededAfterUser =
         scrollElement.clientHeight -
         MESSAGE_ANCHOR_TOP_OFFSET -
@@ -711,7 +714,7 @@ export function ChatView() {
 
       return Math.max(0, Math.ceil(neededAfterUser))
     },
-    [inputOffset]
+    [inputOffset, keyboardInset]
   )
 
   const getCommittedTailSpacer = React.useCallback(
@@ -1031,6 +1034,20 @@ export function ChatView() {
     return true
   }, [])
 
+  const isMessageNearTopAnchor = React.useCallback(
+    (messageId: string, tolerance = 96) => {
+      const element = scrollContainerRef.current
+      const messageElement = document.getElementById(`message-${messageId}`)
+      if (!element || !messageElement) return false
+
+      const currentTop =
+        messageElement.getBoundingClientRect().top -
+        element.getBoundingClientRect().top
+      return Math.abs(currentTop - MESSAGE_ANCHOR_TOP_OFFSET) <= tolerance
+    },
+    []
+  )
+
   const scheduleMessageTopAnchor = React.useCallback(
     (messageId: string) => {
       const releaseAnchor = (delay: number) => {
@@ -1039,7 +1056,9 @@ export function ChatView() {
         }
         messageTopAnchorReleaseTimeoutRef.current = window.setTimeout(() => {
           messageTopAnchorReleaseTimeoutRef.current = null
-          scrollMessageToTop(messageId, "auto")
+          if (isMessageNearTopAnchor(messageId, 140)) {
+            scrollMessageToTop(messageId, "auto")
+          }
           if (messageTopAnchorMessageIdRef.current === messageId) {
             messageTopAnchorMessageIdRef.current = null
             messageTopAnchorStartedAtRef.current = 0
@@ -1104,8 +1123,29 @@ export function ChatView() {
 
       messageTopAnchorFrameIdRef.current = window.requestAnimationFrame(run)
     },
-    [scrollMessageToTop, syncScrollState]
+    [isMessageNearTopAnchor, scrollMessageToTop, syncScrollState]
   )
+
+  const cancelMessageTopAnchor = React.useCallback(() => {
+    if (
+      messageTopAnchorFrameIdRef.current === null &&
+      messageTopAnchorReleaseTimeoutRef.current === null
+    ) {
+      return
+    }
+    if (messageTopAnchorFrameIdRef.current !== null) {
+      window.cancelAnimationFrame(messageTopAnchorFrameIdRef.current)
+      messageTopAnchorFrameIdRef.current = null
+    }
+    if (messageTopAnchorReleaseTimeoutRef.current !== null) {
+      window.clearTimeout(messageTopAnchorReleaseTimeoutRef.current)
+      messageTopAnchorReleaseTimeoutRef.current = null
+    }
+    messageTopAnchorMessageIdRef.current = null
+    messageTopAnchorStartedAtRef.current = 0
+    ignoreSyncRef.current = false
+    syncScrollState()
+  }, [syncScrollState])
 
   React.useEffect(() => {
     const element = scrollContainerRef.current
@@ -1113,18 +1153,25 @@ export function ChatView() {
 
     syncScrollState()
     element.addEventListener("scroll", syncScrollState, { passive: true })
+    element.addEventListener("wheel", cancelMessageTopAnchor, { passive: true })
+    element.addEventListener("touchmove", cancelMessageTopAnchor, {
+      passive: true,
+    })
 
     const stopAutoscroll = () => {
       autoScrollEnabledRef.current = false
       followStreamingRef.current = false
+      cancelMessageTopAnchor()
     }
     window.addEventListener("stop-chat-autoscroll", stopAutoscroll)
 
     return () => {
       element.removeEventListener("scroll", syncScrollState)
+      element.removeEventListener("wheel", cancelMessageTopAnchor)
+      element.removeEventListener("touchmove", cancelMessageTopAnchor)
       window.removeEventListener("stop-chat-autoscroll", stopAutoscroll)
     }
-  }, [syncScrollState, conversationId])
+  }, [cancelMessageTopAnchor, syncScrollState, conversationId])
 
   React.useLayoutEffect(() => {
     const anchor = olderLoadAnchorRef.current
@@ -1223,7 +1270,10 @@ export function ChatView() {
           })
         )
       }
-      if (restoredScrollConversationRef.current === conversationId) {
+      if (
+        restoredScrollConversationRef.current === conversationId &&
+        isMessageNearTopAnchor(previousMsg.id)
+      ) {
         scheduleMessageTopAnchor(previousMsg.id)
       }
     }
@@ -1234,6 +1284,7 @@ export function ChatView() {
     minHeightMsgId,
     conversationId,
     getCommittedTailSpacer,
+    isMessageNearTopAnchor,
     scheduleMessageTopAnchor,
   ])
 
@@ -1278,7 +1329,10 @@ export function ChatView() {
           viewportHeight: window.innerHeight,
         })
       )
-      if (restoredScrollConversationRef.current === conversationId) {
+      if (
+        restoredScrollConversationRef.current === conversationId &&
+        isMessageNearTopAnchor(previousMsg.id)
+      ) {
         scheduleMessageTopAnchor(previousMsg.id)
       }
     }
@@ -1286,6 +1340,7 @@ export function ChatView() {
     activeConversation?.messages,
     conversationId,
     getCommittedTailSpacer,
+    isMessageNearTopAnchor,
     minHeight,
     minHeightMsgId,
     scheduleMessageTopAnchor,
@@ -1345,7 +1400,10 @@ export function ChatView() {
           : 0
 
       if (isLoadingOlderMessages || olderLoadRequestedRef.current) return
-      if (hasOlderMessages && attempts < MAX_RESTORE_OLDER_PAGES) {
+      const maxRestoreOlderPages = isMobile
+        ? MAX_MOBILE_RESTORE_OLDER_PAGES
+        : MAX_RESTORE_OLDER_PAGES
+      if (hasOlderMessages && attempts < maxRestoreOlderPages) {
         restoreOlderAttemptRef.current = {
           conversationId,
           attempts: attempts + 1,
@@ -1445,6 +1503,7 @@ export function ChatView() {
     conversationId,
     hasOlderMessages,
     isLoadingOlderMessages,
+    isMobile,
     messageCount,
     requestOlderMessagesForRestore,
     saveScrollAnchor,
@@ -2035,7 +2094,7 @@ export function ChatView() {
                   (isRestoringScroll || isScrollJumpFading) &&
                     "pointer-events-none opacity-0"
                 )}
-                style={{ paddingBottom: inputOffset + 24 }}
+                style={{ paddingBottom: inputOffset + keyboardInset + 24 }}
                 aria-busy={isRestoringScroll}
               >
                 <div className="mx-auto max-w-[700px] space-y-6 select-none px-2">
@@ -2126,8 +2185,19 @@ export function ChatView() {
           <div
             ref={inputContainerRef}
             data-chat-input-container="true"
-            className="pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4 pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
-            style={{ right: isMobile ? 0 : 14 }}
+            className={cn(
+              "pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4 transition-[padding-bottom,transform] duration-150 ease-out",
+              keyboardInset > 0
+                ? "pb-1"
+                : "pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
+            )}
+            style={{
+              right: isMobile ? 0 : 14,
+              transform:
+                keyboardInset > 0
+                  ? `translate3d(0, -${keyboardInset}px, 0)`
+                  : undefined,
+            }}
           >
             <div className="pointer-events-auto mx-auto w-full max-w-[780px]">
               <TodoBar
@@ -2143,7 +2213,7 @@ export function ChatView() {
           {showScrollBtn && (
             <div
               className="absolute inset-x-0 z-20 flex justify-center"
-              style={{ bottom: inputOffset }}
+              style={{ bottom: inputOffset + keyboardInset }}
             >
               <button
                 type="button"

@@ -7,6 +7,7 @@ import { FilePreviewModal } from "@/components/file-preview-modal"
 import { PdfThumbnail } from "@/components/pdf-thumbnail"
 import { useVoiceRecording } from "@/components/voice-recording-overlay"
 import { ChatStatusPopover } from "@/components/chat-status-popover"
+import { isMobileKeyboardViewport } from "@/hooks/use-keyboard-inset"
 import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
 
@@ -228,7 +229,7 @@ function useDraftPersistence(conversationId: string | null) {
 
         const frame = window.requestAnimationFrame(() => {
             const el = textareaRef.current
-            if (el) {
+            if (el && !isMobileKeyboardViewport()) {
                 el.focus({ preventScroll: true })
                 const len = el.value.length
                 el.setSelectionRange(len, len)
@@ -518,7 +519,11 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
         const uploadedAttachments = draft.attachments.filter(a => a.uploaded).map(a => a.uploaded!)
         sendMessage(trimmed, undefined, uploadedAttachments.length > 0 ? uploadedAttachments : undefined)
         draft.clear()
-        textareaRef.current?.focus()
+        if (isMobileKeyboardViewport()) {
+            textareaRef.current?.blur()
+        } else {
+            textareaRef.current?.focus()
+        }
     }, [draft, hasFailedAttachments, hasPendingAttachments, isStreaming, sendMessage])
 
     const handleKeyDown = React.useCallback(
