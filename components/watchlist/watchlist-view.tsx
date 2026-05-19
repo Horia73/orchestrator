@@ -17,15 +17,7 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react"
-import {
-  Area,
-  AreaChart,
-  CartesianGrid,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts"
+import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
@@ -74,6 +66,10 @@ type AddWatchlistInput =
   | WatchlistSearchResult
   | { symbol: string }
   | ProductAddInput
+
+type HistoryChartPoint = WatchlistCandle & {
+  label: string
+}
 
 function isProductAddInput(item: AddWatchlistInput): item is ProductAddInput {
   return "kind" in item && item.kind === "product"
@@ -537,6 +533,102 @@ function SearchAdd({
   )
 }
 
+function HistoryAreaChart({
+  data,
+  currency,
+}: {
+  data: HistoryChartPoint[]
+  currency?: string | null
+}) {
+  const containerRef = React.useRef<HTMLDivElement | null>(null)
+  const [width, setWidth] = React.useState(0)
+
+  React.useEffect(() => {
+    const node = containerRef.current
+    if (!node) return
+    const updateWidth = (value: number) => {
+      setWidth(Math.max(0, Math.floor(value)))
+    }
+    updateWidth(node.getBoundingClientRect().width)
+    const observer = new ResizeObserver((entries) => {
+      updateWidth(entries[0]?.contentRect.width ?? 0)
+    })
+    observer.observe(node)
+    return () => observer.disconnect()
+  }, [])
+
+  return (
+    <div ref={containerRef} className="h-[170px] min-w-0">
+      {width > 0 && (
+        <AreaChart
+          width={width}
+          height={170}
+          data={data}
+          margin={{ top: 6, right: 8, left: -18, bottom: 0 }}
+        >
+          <defs>
+            <linearGradient id="watchlistHistory" x1="0" y1="0" x2="0" y2="1">
+              <stop
+                offset="5%"
+                stopColor="var(--color-chart-2)"
+                stopOpacity={0.28}
+              />
+              <stop
+                offset="95%"
+                stopColor="var(--color-chart-2)"
+                stopOpacity={0.02}
+              />
+            </linearGradient>
+          </defs>
+          <CartesianGrid
+            strokeDasharray="3 3"
+            vertical={false}
+            stroke="var(--border)"
+          />
+          <XAxis
+            dataKey="label"
+            tickLine={false}
+            axisLine={false}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+            minTickGap={28}
+          />
+          <YAxis
+            tickLine={false}
+            axisLine={false}
+            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
+            domain={["auto", "auto"]}
+          />
+          <Tooltip
+            contentStyle={{
+              borderRadius: 8,
+              border: "1px solid var(--border)",
+              background: "var(--card)",
+              color: "var(--foreground)",
+              fontSize: 12,
+            }}
+            formatter={(value) => [
+              formatPrice(
+                typeof value === "number" ? value : Number(value),
+                currency
+              ),
+              "Close",
+            ]}
+            labelFormatter={(_, payload) => payload?.[0]?.payload?.time ?? ""}
+          />
+          <Area
+            type="monotone"
+            dataKey="close"
+            stroke="var(--color-chart-2)"
+            strokeWidth={2}
+            fill="url(#watchlistHistory)"
+            dot={false}
+          />
+        </AreaChart>
+      )}
+    </div>
+  )
+}
+
 function HistoryPreview({
   selected,
 }: {
@@ -639,80 +731,7 @@ function HistoryPreview({
       )}
 
       {chartData.length > 1 ? (
-        <div className="h-[170px] min-w-0">
-          <ResponsiveContainer width="100%" height="100%">
-            <AreaChart
-              data={chartData}
-              margin={{ top: 6, right: 8, left: -18, bottom: 0 }}
-            >
-              <defs>
-                <linearGradient
-                  id="watchlistHistory"
-                  x1="0"
-                  y1="0"
-                  x2="0"
-                  y2="1"
-                >
-                  <stop
-                    offset="5%"
-                    stopColor="var(--color-chart-2)"
-                    stopOpacity={0.28}
-                  />
-                  <stop
-                    offset="95%"
-                    stopColor="var(--color-chart-2)"
-                    stopOpacity={0.02}
-                  />
-                </linearGradient>
-              </defs>
-              <CartesianGrid
-                strokeDasharray="3 3"
-                vertical={false}
-                stroke="var(--border)"
-              />
-              <XAxis
-                dataKey="label"
-                tickLine={false}
-                axisLine={false}
-                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
-                minTickGap={28}
-              />
-              <YAxis
-                tickLine={false}
-                axisLine={false}
-                tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
-                domain={["auto", "auto"]}
-              />
-              <Tooltip
-                contentStyle={{
-                  borderRadius: 8,
-                  border: "1px solid var(--border)",
-                  background: "var(--card)",
-                  color: "var(--foreground)",
-                  fontSize: 12,
-                }}
-                formatter={(value) => [
-                  formatPrice(
-                    typeof value === "number" ? value : Number(value),
-                    selected?.currency
-                  ),
-                  "Close",
-                ]}
-                labelFormatter={(_, payload) =>
-                  payload?.[0]?.payload?.time ?? ""
-                }
-              />
-              <Area
-                type="monotone"
-                dataKey="close"
-                stroke="var(--color-chart-2)"
-                strokeWidth={2}
-                fill="url(#watchlistHistory)"
-                dot={false}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
-        </div>
+        <HistoryAreaChart data={chartData} currency={selected?.currency} />
       ) : (
         <div className="flex h-[170px] items-center justify-center rounded-lg border border-dashed border-border/70 text-[13px] text-foreground/45">
           {selected
@@ -970,7 +989,7 @@ export function WatchlistView() {
 
         <main
           className={cn(
-            "min-h-0 flex-col overflow-y-auto md:flex",
+            "min-h-0 min-w-0 flex-col overflow-y-auto md:flex",
             mobileDetailOpen ? "flex" : "hidden md:flex"
           )}
         >
@@ -1018,7 +1037,7 @@ export function WatchlistView() {
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-6">
+                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
                   {selectedIsProduct ? (
                     <>
                       <Stat
