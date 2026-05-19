@@ -214,6 +214,13 @@ for OAuth so users can connect through an SSH tunnel, or you can set
 `GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI` / `GMAIL_OAUTH_REDIRECT_URI` to a public
 HTTPS callback.
 
+The simplest Google-compatible setup that needs no port forwarding: point a
+dynamic-DNS hostname (for example a free DuckDNS subdomain) at the box, issue a
+Let's Encrypt certificate through the DNS-01 challenge, and use split-horizon
+DNS so the name resolves to the LAN IP at home. The app then runs on a real
+publicly-trusted HTTPS URL — OAuth works directly, with no SSH tunnel and
+nothing exposed to the internet.
+
 For headless Linux where the browser is on another machine, keep the app
 reachable through the LAN name/IP for normal use, but do Google OAuth through a
 local tunnel:

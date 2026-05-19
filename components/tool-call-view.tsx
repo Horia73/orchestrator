@@ -25,6 +25,8 @@ const TOOL_CALL_PANEL_STYLE: React.CSSProperties = {
     height: TOOL_CALL_PANEL_HEIGHT,
     minHeight: TOOL_CALL_PANEL_MIN_HEIGHT,
 }
+const TOOL_CALL_INSET_CLASS = "ml-7 w-[calc(100%_-_1.75rem)] max-w-[760px]"
+const TERMINAL_MIN_WIDTH_CLASS = "min-w-[560px]"
 
 export function InlineToolCallView({ entry, searchDisplay = "expanded" }: InlineToolCallViewProps) {
     const status = entry.status ?? (entry.content ? (entry.success === false ? "error" : "ok") : "running")
@@ -35,10 +37,13 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
     if (entry.toolName === "Bash" || entry.toolName === "shell") {
         return (
             <div
-                className="relative z-10 ml-7 flex max-w-[min(760px,calc(100vw-180px))] flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm"
+                className={cn(
+                    "relative z-10 flex flex-col overflow-x-auto overflow-y-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm [touch-action:pan-x_pan-y]",
+                    TOOL_CALL_INSET_CLASS
+                )}
                 style={TOOL_CALL_PANEL_STYLE}
             >
-                <LiveTerminal entry={entry} data={data} />
+                <LiveTerminal entry={entry} data={data} className={TERMINAL_MIN_WIDTH_CLASS} />
             </div>
         )
     }
@@ -46,7 +51,7 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
     if (isSearchTool(entry.toolName)) {
         if (searchDisplay === "compact") {
             return (
-                <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] py-1 text-left">
+                <div className={cn("relative z-10 py-1 text-left", TOOL_CALL_INSET_CLASS)}>
                     <CompactSearchPreview entry={entry} status={status} data={data} />
                 </div>
             )
@@ -91,7 +96,7 @@ export function InlineWebSearchGroup({ entries }: { entries: ToolCallReasoningEn
     if (!requests.length && !websites.length) return null
 
     return (
-        <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] py-1 text-left">
+        <div className={cn("relative z-10 py-1 text-left", TOOL_CALL_INSET_CLASS)}>
             <WebActivityCard
                 requests={dedupeWebRequests(requests)}
                 websites={dedupeWebsites(websites, requests)}
@@ -109,7 +114,7 @@ function ToolFrame({
     children: React.ReactNode
 }) {
     return (
-        <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] overflow-hidden rounded-md border border-border bg-background text-left shadow-sm">
+        <div className={cn("relative z-10 overflow-hidden rounded-md border border-border bg-background text-left shadow-sm", TOOL_CALL_INSET_CLASS)}>
             <div
                 className={cn("overflow-auto bg-background", bodyClassName)}
                 style={TOOL_CALL_PANEL_STYLE}
@@ -293,7 +298,7 @@ export function TerminalOutput({
     )
 }
 
-function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: ParsedData }) {
+function LiveTerminal({ entry, data, className }: { entry: ToolCallReasoningEntry; data: ParsedData; className?: string }) {
     const streamText = React.useMemo(() => terminalText(entry, data), [entry, data])
 
     return (
@@ -301,6 +306,7 @@ function LiveTerminal({ entry, data }: { entry: ToolCallReasoningEntry; data: Pa
             text={streamText}
             cursorBlink={entry.status === "running"}
             resetKey={entry.toolCallId || entry.id}
+            className={className}
         />
     )
 }

@@ -903,7 +903,7 @@ function BrowserAgentCallBlock({
 }) {
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
-            <div className="ml-7 grid max-w-[min(760px,calc(100vw-180px))] gap-2">
+            <div className="ml-7 grid w-[calc(100%_-_1.75rem)] max-w-[760px] gap-2">
                 <BrowserAgentLiveView active={entry.status === "running"} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
                 {entry.content.trim().length > 0 && (
                     <div className="min-w-0 max-w-full overflow-x-auto rounded-[8px] border bg-muted/30 px-3 py-2 text-[13px] leading-relaxed">

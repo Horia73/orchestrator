@@ -11,24 +11,6 @@ const nextConfig = {
     "patchright-core",
     "playwright-core",
   ],
-  async redirects() {
-    return [
-      {
-        source: "/:path*",
-        has: [{ type: "host", value: "orchestrator.lan" }],
-        missing: [{ type: "header", key: "x-forwarded-proto", value: "https" }],
-        destination: "https://orchestrator.lan/:path*",
-        permanent: true,
-      },
-      {
-        source: "/:path*",
-        has: [{ type: "host", value: "orchestrator.lan:3000" }],
-        missing: [{ type: "header", key: "x-forwarded-proto", value: "https" }],
-        destination: "https://orchestrator.lan/:path*",
-        permanent: true,
-      },
-    ]
-  },
 }
 
 export default nextConfig

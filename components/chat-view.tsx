@@ -442,6 +442,8 @@ export function ChatView() {
   const artifactResizeKeyRef = React.useRef<string | null>(null)
   const olderLoadRequestedRef = React.useRef(false)
   const restoredScrollConversationRef = React.useRef<string | null>(null)
+  const [restoredScrollConversationId, setRestoredScrollConversationId] =
+    React.useState<string | null>(null)
   const bottomSettleFrameIdRef = React.useRef<number | null>(null)
   const messageTopAnchorFrameIdRef = React.useRef<number | null>(null)
   const messageTopAnchorReleaseTimeoutRef = React.useRef<number | null>(null)
@@ -1482,6 +1484,7 @@ export function ChatView() {
         )
       }
       restoredScrollConversationRef.current = conversationId
+      setRestoredScrollConversationId(conversationId)
       restoreOlderAttemptRef.current = null
       ignoreSyncRef.current = false
       if (!shouldPinBottom) setIsRestoringScroll(false)
@@ -1741,6 +1744,15 @@ export function ChatView() {
     if (artifactOpen && artifact) return `legacy:${artifactKey(artifact)}`
     return null
   }, [activeAgentRun, artifact, artifactOpen, genArtifact])
+  const isAwaitingInitialScrollRestore = Boolean(
+    conversationId &&
+      messageCount > 0 &&
+      restoredScrollConversationId !== conversationId
+  )
+  const isMessageListHidden =
+    isAwaitingInitialScrollRestore || isRestoringScroll || isScrollJumpFading
+  const isMessageListHiddenForRestore =
+    isAwaitingInitialScrollRestore || isRestoringScroll
 
   React.useEffect(() => {
     conversationIdRef.current = conversationId
@@ -2089,10 +2101,13 @@ export function ChatView() {
           >
             <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
               <div
+                data-chat-message-list="true"
                 className={cn(
-                  "flex-1 pt-8 transition-opacity duration-150",
-                  (isRestoringScroll || isScrollJumpFading) &&
-                    "pointer-events-none opacity-0"
+                  "flex-1 pt-8",
+                  isMessageListHiddenForRestore
+                    ? "transition-none"
+                    : "transition-opacity duration-150",
+                  isMessageListHidden && "pointer-events-none opacity-0"
                 )}
                 style={{ paddingBottom: inputOffset + keyboardInset + 24 }}
                 aria-busy={isRestoringScroll}

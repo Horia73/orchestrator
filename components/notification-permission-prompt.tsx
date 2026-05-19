@@ -1,8 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { usePathname } from "next/navigation"
-import { BellRing, Loader2, RefreshCw, ShieldCheck, X } from "lucide-react"
+import { BellRing, Loader2, RefreshCw, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -12,7 +11,6 @@ import {
 } from "@/hooks/use-inbox-push-notifications"
 import { cn } from "@/lib/utils"
 
-const CERT_SETUP_HOSTS = new Set(["orchestrator.lan"])
 const PROMPT_KINDS = ["ready", "blocked", "unsupported", "error"] as const
 const DISMISS_STORAGE_KEY = "orchestrator:notification-prompt-dismissals"
 const DISMISS_DURATION_MS = 24 * 60 * 60 * 1000
@@ -23,7 +21,6 @@ type PromptDismissals = Partial<Record<PromptKind, number>>
 
 interface BrowserLocationInfo {
   origin: string
-  certSetupUrl: string | null
 }
 
 function savePromptDismissals(dismissals: PromptDismissals) {
@@ -101,21 +98,10 @@ function detectPlatform(): PlatformKind {
 
 function getBrowserLocationInfo(): BrowserLocationInfo {
   if (typeof window === "undefined") {
-    return { origin: "", certSetupUrl: null }
+    return { origin: "" }
   }
 
-  const url = new URL(window.location.href)
-  const hasLanSetup = CERT_SETUP_HOSTS.has(url.hostname.toLowerCase())
-  if (!hasLanSetup) {
-    return { origin: window.location.origin, certSetupUrl: null }
-  }
-
-  url.protocol = "http:"
-  url.port = ""
-  url.pathname = "/cert-setup"
-  url.search = ""
-  url.hash = ""
-  return { origin: window.location.origin, certSetupUrl: url.toString() }
+  return { origin: window.location.origin }
 }
 
 function promptKindFromStatus(status: PushStatus): PromptKind | null {
@@ -132,9 +118,6 @@ function unsupportedMessage(
   locationInfo: BrowserLocationInfo
 ): string {
   if (reason === "insecure-context") {
-    if (locationInfo.certSetupUrl) {
-      return "Install the Orchestrator LAN certificate on this device, then open the HTTPS app to enable push notifications."
-    }
     return `This page is using an insecure URL${
       locationInfo.origin ? ` (${locationInfo.origin})` : ""
     }. Open Orchestrator over HTTPS to enable push notifications.`
@@ -152,11 +135,6 @@ function unsupportedMessage(
     return "Service workers are disabled in this browser, so background notifications cannot start."
   }
   return "This browser cannot receive push notifications for this app."
-}
-
-function isCertificateTrustError(error: string | null): boolean {
-  if (!error) return false
-  return /certificate|ssl/i.test(error)
 }
 
 function promptCopy(args: {
@@ -187,23 +165,14 @@ function promptCopy(args: {
     return {
       title:
         unsupportedReason === "insecure-context"
-          ? "HTTPS setup required"
+          ? "HTTPS required"
           : "Notifications unavailable",
       body: unsupportedMessage(unsupportedReason, platform, locationInfo),
-      action:
-        unsupportedReason === "insecure-context" ? "Setup HTTPS" : "Check",
+      action: "Check",
     }
   }
 
   if (kind === "error") {
-    if (isCertificateTrustError(error)) {
-      return {
-        title: "Certificate trust required",
-        body: "Install and trust the Orchestrator LAN certificate on this device, then reopen the HTTPS app to enable push notifications.",
-        action: "Setup HTTPS",
-      }
-    }
-
     return {
       title: "Notifications need attention",
       body: error ?? "Push setup did not finish. Try again.",
@@ -229,13 +198,6 @@ function promptCopy(args: {
 }
 
 export function NotificationPermissionPrompt() {
-  const pathname = usePathname()
-  if (pathname === "/cert-setup") return null
-
-  return <NotificationPermissionPromptInner />
-}
-
-function NotificationPermissionPromptInner() {
   const {
     status,
     permission,
@@ -249,15 +211,13 @@ function NotificationPermissionPromptInner() {
   const [platform, setPlatform] = React.useState<PlatformKind>("desktop")
   const [locationInfo, setLocationInfo] = React.useState<BrowserLocationInfo>({
     origin: "",
-    certSetupUrl: null,
   })
   const [dismissals, setDismissals] = React.useState<PromptDismissals>({})
   const [checking, setChecking] = React.useState(false)
   const [checkMessage, setCheckMessage] = React.useState<string | null>(null)
 
   React.useEffect(() => {
-    const nextLocationInfo = getBrowserLocationInfo()
-    setLocationInfo(nextLocationInfo)
+    setLocationInfo(getBrowserLocationInfo())
     setMounted(true)
     setPlatform(detectPlatform())
     setDismissals(readPromptDismissals())
@@ -296,28 +256,14 @@ function NotificationPermissionPromptInner() {
     error,
     locationInfo,
   })
-  const certificateTrustError = isCertificateTrustError(error)
-  const hasEnableAction =
-    kind === "ready" || (kind === "error" && !certificateTrustError)
+  const hasEnableAction = kind === "ready" || kind === "error"
   const onPrimaryAction = async () => {
     setCheckMessage(null)
-    if (
-      (kind === "unsupported" && unsupportedReason === "insecure-context") ||
-      (kind === "error" && certificateTrustError)
-    ) {
-      const nextLocationInfo = getBrowserLocationInfo()
-      setLocationInfo(nextLocationInfo)
-      window.location.assign(nextLocationInfo.certSetupUrl ?? "/cert-setup")
-      return
-    }
 
     if (hasEnableAction) {
       void enable()
       return
     }
-
-    const nextLocationInfo = getBrowserLocationInfo()
-    setLocationInfo(nextLocationInfo)
 
     setChecking(true)
     const result = await refresh()
@@ -395,12 +341,8 @@ function NotificationPermissionPromptInner() {
               >
                 {busy || checking ? (
                   <Loader2 className="size-3.5 animate-spin" />
-                ) : kind === "ready" ||
-                  (kind === "error" && !certificateTrustError) ? (
+                ) : hasEnableAction ? (
                   <BellRing className="size-3.5" />
-                ) : unsupportedReason === "insecure-context" ||
-                  certificateTrustError ? (
-                  <ShieldCheck className="size-3.5" />
                 ) : (
                   <RefreshCw className="size-3.5" />
                 )}
