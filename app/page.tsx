@@ -39,6 +39,13 @@ export default function Page() {
     state.isLoading,
   ])
 
+  const activeConversationStatus = state.activeConversationId
+    ? state.conversationLoadState[state.activeConversationId]
+    : null
+  const activeConversationError = state.activeConversationId
+    ? state.conversationLoadErrors[state.activeConversationId]
+    : null
+
   return (
     <>
       <AppSidebar />
@@ -51,6 +58,22 @@ export default function Page() {
               <HomeSkeleton />
             )
           ) : null
+        ) : state.activeConversationId &&
+          activeConversationStatus !== "full" ? (
+          activeConversationStatus === "error" ? (
+            <div className="flex flex-1 items-center justify-center px-4 text-center">
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Couldn&apos;t load this chat.
+                </p>
+                <p className="mt-1 text-xs text-muted-foreground">
+                  {activeConversationError ?? "Try selecting it again."}
+                </p>
+              </div>
+            </div>
+          ) : (
+            <ChatSkeleton />
+          )
         ) : state.activeConversationId ? (
           <ChatView key={state.activeConversationId} />
         ) : (

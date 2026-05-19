@@ -43,6 +43,7 @@ import type { Conversation } from "@/lib/types"
 
 const TABLET_NAV_MEDIA =
   "(min-width: 768px) and (max-width: 1180px), (pointer: coarse) and (min-width: 768px) and (max-width: 1366px)"
+const SEARCH_DEBOUNCE_MS = 180
 
 function normalizeSearchText(value: string): string {
   return value
@@ -61,12 +62,26 @@ function getSearchPreview(
   conversation: Conversation,
   normalizedQuery: string
 ): string {
+  const fallbackPreview =
+    conversation.searchMatchPreview ||
+    conversation.lastMessagePreview ||
+    conversation.messages.at(-1)?.content ||
+    "No messages yet."
+
   if (!normalizedQuery) {
-    return truncate(conversation.messages.at(-1)?.content ?? "No messages yet.")
+    return truncate(fallbackPreview)
   }
 
   if (normalizeSearchText(conversation.title).includes(normalizedQuery)) {
-    return truncate(conversation.messages.at(-1)?.content ?? "Title match")
+    return truncate(fallbackPreview || "Title match")
+  }
+
+  if (conversation.searchMatchPreview) {
+    return truncate(conversation.searchMatchPreview)
+  }
+
+  if (conversation.lastMessagePreview) {
+    return truncate(conversation.lastMessagePreview)
   }
 
   const message = conversation.messages.find((item) =>
@@ -87,6 +102,22 @@ function conversationMatches(
   if (!normalizedQuery) return true
   if (normalizeSearchText(conversation.title).includes(normalizedQuery))
     return true
+  if (
+    conversation.lastMessagePreview &&
+    normalizeSearchText(conversation.lastMessagePreview).includes(
+      normalizedQuery
+    )
+  ) {
+    return true
+  }
+  if (
+    conversation.searchMatchPreview &&
+    normalizeSearchText(conversation.searchMatchPreview).includes(
+      normalizedQuery
+    )
+  ) {
+    return true
+  }
   return conversation.messages.some((message) =>
     normalizeSearchText(message.content).includes(normalizedQuery)
   )
@@ -120,6 +151,10 @@ export function AppSidebar() {
   const inboxUnread = useInboxUnread()
   const [searchActive, setSearchActive] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
+  const [searchResults, setSearchResults] = React.useState<
+    Conversation[] | null
+  >(null)
+  const [searchLoading, setSearchLoading] = React.useState(false)
   const deferredSearchQuery = React.useDeferredValue(searchQuery)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const { assistantName } = useRuntimeConfig()
@@ -133,6 +168,43 @@ export function AppSidebar() {
       ),
     [normalizedSearchQuery, state.conversations]
   )
+  const displayedConversations =
+    isFiltering && searchResults ? searchResults : filteredConversations
+
+  React.useEffect(() => {
+    if (!isFiltering) {
+      setSearchResults(null)
+      setSearchLoading(false)
+      return
+    }
+
+    const controller = new AbortController()
+    setSearchResults(null)
+    const timer = window.setTimeout(() => {
+      setSearchLoading(true)
+      void fetch(
+        `/api/conversations?summary=1&q=${encodeURIComponent(deferredSearchQuery.trim())}`,
+        { cache: "no-store", signal: controller.signal }
+      )
+        .then((res) => {
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          return res.json() as Promise<Conversation[]>
+        })
+        .then((rows) => setSearchResults(rows))
+        .catch((err) => {
+          if (err instanceof DOMException && err.name === "AbortError") return
+          setSearchResults(null)
+        })
+        .finally(() => {
+          if (!controller.signal.aborted) setSearchLoading(false)
+        })
+    }, SEARCH_DEBOUNCE_MS)
+
+    return () => {
+      controller.abort()
+      window.clearTimeout(timer)
+    }
+  }, [deferredSearchQuery, isFiltering])
 
   const openSidebarSearch = React.useCallback(() => {
     setOpen(true)
@@ -347,9 +419,9 @@ export function AppSidebar() {
                       </SidebarMenuItem>
                     ))}
                   </SidebarMenu>
-                ) : filteredConversations.length > 0 ? (
+                ) : displayedConversations.length > 0 ? (
                   <SidebarMenu className="space-y-0.5">
-                    {filteredConversations.map((conv) => {
+                    {displayedConversations.map((conv) => {
                       const unread = unreadConversationIds.has(conv.id)
                       return (
                         <SidebarMenuItem key={conv.id}>
@@ -418,7 +490,9 @@ export function AppSidebar() {
                   </SidebarMenu>
                 ) : isFiltering ? (
                   <p className="px-2 text-[14px] whitespace-nowrap text-foreground/45">
-                    No matching chats.
+                    {searchLoading
+                      ? "Searching chats..."
+                      : "No matching chats."}
                   </p>
                 ) : (
                   <p className="px-2 text-[14px] whitespace-nowrap text-foreground/45">

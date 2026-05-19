@@ -51,13 +51,7 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
                 </div>
             )
         }
-        return (
-            <div className="relative z-10 ml-7 grid max-w-[min(760px,calc(100vw-180px))] content-start items-start gap-1.5 py-1 text-left">
-                <div className="overflow-auto pr-1" style={TOOL_CALL_PANEL_STYLE}>
-                    <SearchPreview data={data} rawText={entry.content} args={entry.args} />
-                </div>
-            </div>
-        )
+        return <InlineWebSearchGroup entries={[entry]} />
     }
 
     return (
@@ -74,6 +68,37 @@ function isHiddenToolCall(entry: ToolCallReasoningEntry): boolean {
 
 function isSearchTool(toolName: string | undefined): boolean {
     return toolName === "web_search" || toolName === "WebSearch"
+}
+
+export function isWebSearchToolCall(entry: ToolCallReasoningEntry): boolean {
+    return isSearchTool(entry.toolName)
+}
+
+export function InlineWebSearchGroup({ entries }: { entries: ToolCallReasoningEntry[] }) {
+    const requests: WebRequestItem[] = []
+    const websites: SearchWebsite[] = []
+    let hasRunning = false
+    let hasError = false
+
+    for (const entry of entries) {
+        const data = parseToolData(entry.content)
+        requests.push(...webRequestItems(data, entry.args, entry.content))
+        websites.push(...searchWebsites(data, entry.content))
+        hasRunning ||= entry.status === "running" || (!entry.status && !entry.content)
+        hasError ||= entry.success === false || entry.status === "error"
+    }
+
+    if (!requests.length && !websites.length) return null
+
+    return (
+        <div className="relative z-10 ml-7 max-w-[min(760px,calc(100vw-180px))] py-1 text-left">
+            <WebActivityCard
+                requests={dedupeWebRequests(requests)}
+                websites={dedupeWebsites(websites, requests)}
+                status={hasRunning ? "running" : hasError ? "error" : "ok"}
+            />
+        </div>
+    )
 }
 
 function ToolFrame({
@@ -279,7 +304,7 @@ function ToolPreview({ entry, data }: { entry: ToolCallReasoningEntry; data: Par
             return <TextPreview text={stringField(data, "content") || entry.content} />
         case "WebSearch":
         case "web_search":
-            return <SearchPreview data={data} rawText={entry.content} args={entry.args} />
+            return <InlineWebSearchGroup entries={[entry]} />
         default:
             return <TextPreview text={entry.content || "No output yet."} />
     }
@@ -995,86 +1020,178 @@ interface WebRequestItem {
     href?: string
 }
 
-function SearchPreview({
-    data,
-    rawText,
-    args,
+function WebActivityCard({
+    requests,
+    websites,
+    status,
 }: {
-    data: ParsedData
-    rawText: string
-    args: Record<string, unknown> | undefined
+    requests: WebRequestItem[]
+    websites: SearchWebsite[]
+    status: "running" | "ok" | "error"
 }) {
-    const websites = searchWebsites(data, rawText)
-    const requests = webRequestItems(data, args, rawText)
-    if (!websites.length && !requests.length) {
-        return null
-    }
+    const visibleRequests = requests.slice(0, 10)
+    const visibleWebsites = websites.slice(0, Math.max(0, 10 - visibleRequests.length))
+    const hiddenCount = Math.max(0, requests.length + websites.length - visibleRequests.length - visibleWebsites.length)
+    const queryCount = requests.filter(item => item.kind === "search" || item.kind === "image").length
+    const actionCount = requests.length - queryCount
+    const summary = [
+        queryCount ? `${queryCount} search${queryCount === 1 ? "" : "es"}` : "",
+        actionCount ? `${actionCount} action${actionCount === 1 ? "" : "s"}` : "",
+        websites.length ? `${websites.length} source${websites.length === 1 ? "" : "s"}` : "",
+    ].filter(Boolean).join(" · ")
+
     return (
-        <ul className="grid content-start items-start gap-1.5">
-            {requests.slice(0, 12).map((request, index) => (
-                <WebRequestRow key={`${request.kind}-${request.label}-${index}`} request={request} />
-            ))}
-            {websites.slice(0, 12).map((website, index) => {
-                const faviconUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(website.host)}&sz=32`
-                return (
-                    <li key={`source-${website.host}-${index}`} className="min-w-0">
-                        <a
-                            href={website.url}
-                            target="_blank"
-                            rel="noreferrer"
-                            title={website.title}
-                            className="inline-flex max-w-full items-start gap-2 text-[14px] leading-5 text-muted-foreground transition-colors hover:text-foreground hover:underline"
-                        >
-                            <span className="relative mt-0.5 grid size-4 shrink-0 place-items-center overflow-hidden rounded-sm bg-background text-[10px] font-semibold uppercase text-muted-foreground">
-                                {website.host[0]}
-                                {/* eslint-disable-next-line @next/next/no-img-element */}
-                                <img
-                                    src={faviconUrl}
-                                    alt=""
-                                    className="absolute inset-0 size-full bg-background object-contain"
-                                    onError={event => { event.currentTarget.remove() }}
-                                />
-                            </span>
-                            <span className="min-w-0 break-all">{website.url}</span>
-                        </a>
-                    </li>
-                )
-            })}
-        </ul>
+        <div className="overflow-hidden rounded-md border border-border/70 bg-background shadow-sm">
+            <div className="flex min-w-0 items-center gap-2 border-b border-border/60 px-3 py-2">
+                <span className="grid size-7 shrink-0 place-items-center rounded-md border border-blue-500/20 bg-blue-500/10 text-blue-600 dark:text-blue-300">
+                    <Search className={cn("size-3.5", status === "running" && "animate-pulse")} />
+                </span>
+                <span className="min-w-0 flex-1">
+                    <span className="block truncate text-[13px] font-medium text-foreground/85">Web activity</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{summary || "Web action"}</span>
+                </span>
+                <StatusPill status={status} />
+            </div>
+            <div className="divide-y divide-border/45">
+                {visibleRequests.map((request, index) => (
+                    <WebRequestRow key={`${request.kind}-${request.label}-${index}`} request={request} />
+                ))}
+                {visibleWebsites.map((website, index) => (
+                    <WebSourceRow key={`source-${website.url}-${index}`} website={website} />
+                ))}
+                {hiddenCount > 0 && (
+                    <div className="px-3 py-2 text-[12px] text-muted-foreground">
+                        +{hiddenCount} more
+                    </div>
+                )}
+            </div>
+        </div>
     )
 }
 
 function WebRequestRow({ request }: { request: WebRequestItem }) {
+    const primary = webRequestPrimaryText(request)
+    const detail = webRequestDetailText(request)
     const body = (
         <>
-            <span className="mt-0.5 grid size-4 shrink-0 place-items-center text-muted-foreground">
+            <span className="mt-0.5 grid size-5 shrink-0 place-items-center rounded-sm bg-muted/50 text-muted-foreground">
                 <WebRequestIcon kind={request.kind} />
             </span>
-            <span className="min-w-0 break-words">{request.label}</span>
+            <span className="min-w-0">
+                <span className="block truncate text-[13px] text-foreground/82">{primary}</span>
+                <span className="block truncate text-[11px] text-muted-foreground">{detail}</span>
+            </span>
         </>
     )
 
     if (request.href) {
         return (
-            <li className="min-w-0">
+            <div className="min-w-0">
                 <a
                     href={request.href}
                     target="_blank"
                     rel="noreferrer"
                     title={request.label}
-                    className="inline-flex max-w-full items-start gap-2 text-[14px] leading-5 text-muted-foreground transition-colors hover:text-foreground hover:underline"
+                    className="flex max-w-full items-start gap-2 px-3 py-2 transition-colors hover:bg-muted/35"
                 >
                     {body}
                 </a>
-            </li>
+            </div>
         )
     }
 
     return (
-        <li className="inline-flex min-w-0 max-w-full items-start gap-2 text-[14px] leading-5 text-muted-foreground">
+        <div className="flex min-w-0 max-w-full items-start gap-2 px-3 py-2">
             {body}
-        </li>
+        </div>
     )
+}
+
+function WebSourceRow({ website }: { website: SearchWebsite }) {
+    const faviconUrl = `https://www.google.com/s2/favicons?domain=${encodeURIComponent(website.host)}&sz=32`
+    const title = website.title && website.title !== website.url ? website.title : compactUrlLabel(website.url)
+    return (
+        <div className="min-w-0">
+            <a
+                href={website.url}
+                target="_blank"
+                rel="noreferrer"
+                title={website.title}
+                className="flex max-w-full items-start gap-2 px-3 py-2 transition-colors hover:bg-muted/35"
+            >
+                <span className="relative mt-0.5 grid size-5 shrink-0 place-items-center overflow-hidden rounded-sm bg-muted text-[10px] font-semibold uppercase text-muted-foreground">
+                    {website.host[0]}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                        src={faviconUrl}
+                        alt=""
+                        className="absolute inset-0 size-full bg-background object-contain"
+                        onError={event => { event.currentTarget.remove() }}
+                    />
+                </span>
+                <span className="min-w-0">
+                    <span className="block truncate text-[13px] text-foreground/82">{title}</span>
+                    <span className="block truncate text-[11px] text-muted-foreground">{website.host}</span>
+                </span>
+            </a>
+        </div>
+    )
+}
+
+function dedupeWebRequests(requests: WebRequestItem[]): WebRequestItem[] {
+    const seen = new Set<string>()
+    return requests.filter(item => {
+        const key = `${item.kind}:${item.label}:${item.href ?? ""}`
+        if (seen.has(key)) return false
+        seen.add(key)
+        return true
+    })
+}
+
+function dedupeWebsites(websites: SearchWebsite[], requests: WebRequestItem[]): SearchWebsite[] {
+    const requestUrls = new Set(requests.map(item => item.href ? normalizeUrl(item.href) : "").filter(Boolean))
+    const seen = new Set<string>()
+    return websites.filter(website => {
+        const url = normalizeUrl(website.url)
+        if (!url || requestUrls.has(url) || seen.has(url)) return false
+        seen.add(url)
+        return true
+    })
+}
+
+function webRequestPrimaryText(request: WebRequestItem): string {
+    const label = request.label
+    if (request.kind === "search" && label.startsWith("Search ")) return label.slice("Search ".length)
+    if (request.kind === "image" && label.startsWith("Image search ")) return label.slice("Image search ".length)
+    if (request.kind === "open" && label.startsWith("Open ")) return compactUrlLabel(label.slice("Open ".length))
+    if (request.kind === "click" && label.startsWith("Click ")) return compactUrlLabel(label.slice("Click ".length))
+    if (request.kind === "find" && label.startsWith("Find ")) return label.slice("Find ".length)
+    if (request.kind === "screenshot" && label.startsWith("Screenshot ")) return compactUrlLabel(label.slice("Screenshot ".length))
+    return label
+}
+
+function webRequestDetailText(request: WebRequestItem): string {
+    if (request.kind === "image") return "Image search"
+    if (request.kind === "open") return request.href ? `Open · ${hostFromUrl(request.href) || "web"}` : "Open"
+    if (request.kind === "click") return request.href ? `Click · ${hostFromUrl(request.href) || "web"}` : "Click"
+    if (request.kind === "find") return "Find on page"
+    if (request.kind === "screenshot") return "Screenshot"
+    if (request.kind === "weather") return "Weather"
+    if (request.kind === "finance") return "Finance"
+    if (request.kind === "sports") return "Sports"
+    if (request.kind === "time") return "Time"
+    return "Search"
+}
+
+function compactUrlLabel(value: string): string {
+    const url = normalizeUrl(value)
+    try {
+        const parsed = new URL(url)
+        const path = `${parsed.pathname}${parsed.search}`.replace(/\/$/, "")
+        return `${parsed.host}${path || ""}`
+    } catch {
+        return value
+    }
 }
 
 function WebRequestIcon({ kind }: { kind: WebRequestItem["kind"] }) {

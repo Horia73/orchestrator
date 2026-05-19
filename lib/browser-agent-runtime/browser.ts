@@ -1,6 +1,7 @@
 import { chromium, BrowserContext, Page } from 'patchright';
 import path from 'path';
 import fs from 'fs';
+import { execFileSync } from 'child_process';
 import { DEFAULT_VIEWPORT } from './viewport';
 import { createBrowserDisplayController, type BrowserDisplayController, type BrowserLiveViewState } from './display';
 
@@ -1537,14 +1538,36 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 ]
                 : [];
 
-            log('🚀 Launching Patchright Browser...');
-            log(`📂 User Data Dir: ${userDataDir}`);
+            cleanupStaleBrowserProfileLocks(userDataDir);
 
-            context = await chromium.launchPersistentContext(userDataDir, {
+            const launchPersistentContext = () => chromium.launchPersistentContext(userDataDir, {
                 headless,
                 viewport: headless ? (options.viewport ?? DEFAULT_VIEWPORT) : null,
                 args: [...launchArgs, ...displayLaunchArgs],
             });
+
+            log('🚀 Launching Patchright Browser...');
+            log(`📂 User Data Dir: ${userDataDir}`);
+
+            try {
+                context = await launchPersistentContext();
+            } catch (err) {
+                if (!isBrowserProfileInUseError(err)) {
+                    throw err;
+                }
+
+                const killed = killBrowserProcessesUsingPath(userDataDir);
+                if (killed > 0) {
+                    log(`🧹 Closed ${killed} stale browser process${killed === 1 ? '' : 'es'} using the managed browser profile; retrying.`);
+                    await sleep(1_000);
+                }
+                const removedLocks = cleanupStaleBrowserProfileLocks(userDataDir);
+                if (removedLocks > 0) {
+                    log(`🧹 Removed ${removedLocks} stale Chromium profile lock${removedLocks === 1 ? '' : 's'}; retrying.`);
+                }
+
+                context = await launchPersistentContext();
+            }
 
             defaultSessionState.pages = [];
             defaultSessionState.activePage = null;
@@ -1633,4 +1656,78 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     };
 
     return manager;
+}
+
+function isBrowserProfileInUseError(err: unknown): boolean {
+    const message = formatBrowserError(err).toLowerCase();
+    return message.includes('browser is already running')
+        || message.includes('userdatadir')
+        || message.includes('user data dir')
+        || message.includes('user data directory')
+        || message.includes('profile appears to be in use')
+        || message.includes('processsingleton')
+        || message.includes('singletonlock')
+        || message.includes('singleton lock')
+        || message.includes('lockfile');
+}
+
+function killBrowserProcessesUsingPath(profilePath: string): number {
+    const processes = browserProcessesUsingPath(profilePath);
+    let killed = 0;
+    for (const processInfo of processes) {
+        try {
+            process.kill(processInfo.pid, 'SIGTERM');
+            killed += 1;
+        } catch {
+            // The process may have exited between ps and kill.
+        }
+    }
+    return killed;
+}
+
+function cleanupStaleBrowserProfileLocks(profilePath: string): number {
+    if (!profilePath || browserProcessesUsingPath(profilePath).length > 0) return 0;
+
+    let removed = 0;
+    for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
+        const filePath = path.join(profilePath, name);
+        try {
+            fs.lstatSync(filePath);
+            fs.rmSync(filePath, { force: true, recursive: false });
+            removed += 1;
+        } catch {
+            // If the file disappeared or is not removable, Chromium will report it on launch.
+        }
+    }
+    return removed;
+}
+
+function browserProcessesUsingPath(profilePath: string): Array<{ pid: number; command: string }> {
+    let output: string;
+    try {
+        output = execFileSync('ps', ['-axo', 'pid=,command='], {
+            encoding: 'utf8',
+            stdio: ['ignore', 'pipe', 'ignore'],
+        });
+    } catch {
+        return [];
+    }
+
+    const processes: Array<{ pid: number; command: string }> = [];
+    for (const line of output.split('\n')) {
+        if (!line.includes(profilePath)) continue;
+        const match = line.match(/^\s*(\d+)\s+(.+)$/);
+        if (!match) continue;
+        const pid = Number(match[1]);
+        const command = match[2];
+        if (!Number.isInteger(pid) || pid <= 0 || pid === process.pid) continue;
+        if (!/chrome|chromium|brave|edge/i.test(command)) continue;
+        processes.push({ pid, command });
+    }
+    return processes;
+}
+
+function formatBrowserError(err: unknown): string {
+    if (err instanceof Error) return err.message;
+    return String(err);
 }

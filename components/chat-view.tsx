@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { useVirtualizer } from "@tanstack/react-virtual"
 import { ArrowDown, ChevronDown } from "lucide-react"
 import {
   ArtifactPanel,
@@ -21,6 +22,7 @@ import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
   Attachment,
+  Message,
   ReasoningEntry,
 } from "@/lib/types"
 
@@ -34,8 +36,15 @@ const ARTIFACT_PANEL_MIN_CHAT_WIDTH = 360
 const ARTIFACT_PANEL_RESIZE_STEP = 40
 const ARTIFACT_PANEL_RESIZER_WIDTH = 10
 const ARTIFACT_PANEL_WIDTH_STORAGE_PREFIX = "chat:artifact-panel-width"
+const MESSAGE_ROW_GAP = 24
+const MESSAGE_LIST_PADDING_START = 16
+const MESSAGE_LIST_PADDING_END = 40
+const MESSAGE_OVERSCAN = 8
 
 type ArtifactState = ArtifactPayload
+type ChatVirtualRow =
+  | { kind: "message"; id: string; message: Message; index: number }
+  | { kind: "streaming"; id: "__streaming__" }
 
 /** Old persisted artifact shape (no `kind`). Migrate to current union. */
 function migrateLegacyArtifact(stored: unknown): ArtifactState | null {
@@ -1310,13 +1319,45 @@ export function ChatView() {
     }
   }, [scrollToBottom, state.isStreaming, conversationId])
 
-  if (!activeConversation) return null
-
   // Keep streaming bubble alive until the committed message is ready to take
   // over minHeight (prevents layout flash on streaming end).
-  const showStreamingBubble =
+  const showStreamingBubble = Boolean(
+    activeConversation &&
     (state.isStreaming || (minHeight > 0 && minHeightMsgId === null)) &&
     state.activeConversationId === activeConversation.id
+  )
+  const virtualRows = React.useMemo<ChatVirtualRow[]>(() => {
+    const messages = activeConversation?.messages ?? []
+    const rows: ChatVirtualRow[] = messages.map((message, index) => ({
+      kind: "message",
+      id: message.id,
+      message,
+      index,
+    }))
+    if (showStreamingBubble)
+      rows.push({ kind: "streaming", id: "__streaming__" })
+    return rows
+  }, [activeConversation?.messages, showStreamingBubble])
+  // TanStack Virtual intentionally returns instance methods; this hook usage is isolated to the chat scroller.
+  // eslint-disable-next-line react-hooks/incompatible-library
+  const rowVirtualizer = useVirtualizer<HTMLDivElement, HTMLDivElement>({
+    count: virtualRows.length,
+    getScrollElement: () => scrollContainerRef.current,
+    getItemKey: (index) => virtualRows[index]?.id ?? index,
+    estimateSize: (index) => {
+      const row = virtualRows[index]
+      if (!row) return 140
+      if (row.kind === "streaming") return 220
+      return row.message.role === "user" ? 96 : 180
+    },
+    overscan: MESSAGE_OVERSCAN,
+    gap: MESSAGE_ROW_GAP,
+    paddingStart: MESSAGE_LIST_PADDING_START,
+    paddingEnd: MESSAGE_LIST_PADDING_END,
+    useAnimationFrameWithResizeObserver: true,
+  })
+
+  if (!activeConversation) return null
 
   return (
     <ConversationArtifactsProvider conversationId={conversationId ?? ""}>
@@ -1356,57 +1397,78 @@ export function ChatView() {
             }}
           >
             <div className="mx-auto flex min-h-full w-full max-w-[780px] flex-col px-4">
-              <div className="flex-1 pt-4 pb-10">
-                <div className="mx-auto max-w-[700px] space-y-6 px-2">
-                  {activeConversation.messages.map((message, index) => (
-                    <div
-                      key={message.id}
-                      id={`message-${message.id}`}
-                      className="scroll-mt-6"
-                      style={
-                        message.id === minHeightMsgId &&
-                        index === activeConversation.messages.length - 1
-                          ? { minHeight }
-                          : undefined
-                      }
-                    >
-                      <MessageBubble
-                        message={message}
-                        isLatestAssistantMessage={
-                          message.id === latestAssistantMessageId
-                        }
-                        onArtifactClick={handleArtifactClick}
-                        onArtifactExpand={handleArtifactExpand}
-                        onAttachmentClick={setPreviewAttachment}
-                        onAgentOpen={handleAgentOpen}
-                      />
-                    </div>
-                  ))}
-
-                  {showStreamingBubble && (
-                    <div
-                      style={
-                        minHeight > 0 && minHeightMsgId === null
-                          ? { minHeight }
-                          : undefined
-                      }
-                    >
-                      <StreamingBubble
-                        reasoning={state.streamingReasoning}
-                        content={state.streamingContent}
-                        contentSegments={state.streamingContentSegments}
-                        streamingMode={state.streamingMode}
-                        showCursor={showInitialStreamingCursor}
-                        onArtifactClick={handleArtifactClick}
-                        onArtifactExpand={handleArtifactExpand}
-                        onAgentOpen={handleAgentOpen}
-                        onAttachmentClick={setPreviewAttachment}
-                        messageId={state.streamingMessageId ?? undefined}
-                        thinkingSeconds={state.thinkingSeconds}
-                        thinkingDone={state.thinkingDone}
-                      />
-                    </div>
-                  )}
+              <div className="flex-1 pb-10">
+                <div className="mx-auto max-w-[700px] px-2">
+                  <div
+                    className="relative w-full"
+                    style={{ height: rowVirtualizer.getTotalSize() }}
+                  >
+                    {rowVirtualizer.getVirtualItems().map((virtualRow) => {
+                      const row = virtualRows[virtualRow.index]
+                      if (!row) return null
+                      return (
+                        <div
+                          key={virtualRow.key}
+                          data-index={virtualRow.index}
+                          ref={rowVirtualizer.measureElement}
+                          className="absolute top-0 left-0 w-full"
+                          style={{
+                            transform: `translateY(${virtualRow.start}px)`,
+                          }}
+                        >
+                          {row.kind === "message" ? (
+                            <div
+                              id={`message-${row.message.id}`}
+                              className="scroll-mt-6"
+                              style={
+                                row.message.id === minHeightMsgId &&
+                                row.index ===
+                                  activeConversation.messages.length - 1
+                                  ? { minHeight }
+                                  : undefined
+                              }
+                            >
+                              <MessageBubble
+                                message={row.message}
+                                isLatestAssistantMessage={
+                                  row.message.id === latestAssistantMessageId
+                                }
+                                onArtifactClick={handleArtifactClick}
+                                onArtifactExpand={handleArtifactExpand}
+                                onAttachmentClick={setPreviewAttachment}
+                                onAgentOpen={handleAgentOpen}
+                              />
+                            </div>
+                          ) : (
+                            <div
+                              style={
+                                minHeight > 0 && minHeightMsgId === null
+                                  ? { minHeight }
+                                  : undefined
+                              }
+                            >
+                              <StreamingBubble
+                                reasoning={state.streamingReasoning}
+                                content={state.streamingContent}
+                                contentSegments={state.streamingContentSegments}
+                                streamingMode={state.streamingMode}
+                                showCursor={showInitialStreamingCursor}
+                                onArtifactClick={handleArtifactClick}
+                                onArtifactExpand={handleArtifactExpand}
+                                onAgentOpen={handleAgentOpen}
+                                onAttachmentClick={setPreviewAttachment}
+                                messageId={
+                                  state.streamingMessageId ?? undefined
+                                }
+                                thinkingSeconds={state.thinkingSeconds}
+                                thinkingDone={state.thinkingDone}
+                              />
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
                 </div>
               </div>
 

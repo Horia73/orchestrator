@@ -61,6 +61,7 @@ db.exec(`
     );
 
     CREATE INDEX IF NOT EXISTS idx_messages_conversationId ON messages(conversationId);
+    CREATE INDEX IF NOT EXISTS idx_messages_conversation_timestamp ON messages(conversationId, timestamp DESC);
 
     CREATE TABLE IF NOT EXISTS request_logs (
         id TEXT PRIMARY KEY,
@@ -374,6 +375,13 @@ interface ConversationRow {
   contextUsage: string | null
 }
 
+interface ConversationSummaryRow extends ConversationRow {
+  messageCount: number
+  lastMessageContent: string | null
+  lastMessageAt: number | null
+  searchMatchContent?: string | null
+}
+
 interface MessageRow {
   id: string
   conversationId: string
@@ -414,6 +422,15 @@ function messageFromRow(msgRow: MessageRow): Message {
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
     timestamp: msgRow.timestamp,
   }
+}
+
+function compactPreview(
+  value: string | null | undefined,
+  maxLength = 220
+): string {
+  const singleLine = (value ?? "").replace(/\s+/g, " ").trim()
+  if (singleLine.length <= maxLength) return singleLine
+  return `${singleLine.slice(0, maxLength - 1).trimEnd()}...`
 }
 
 export type AgentThreadStatus = "active" | "archived"
@@ -470,8 +487,89 @@ export function getConversationsWithMessages(): Conversation[] {
     id: row.id,
     title: row.title,
     createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     messages: messagesByConv.get(row.id) || [],
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
+  }))
+}
+
+export function getConversationSummaries(search?: string): Conversation[] {
+  const query = search?.trim()
+  const like = query
+    ? `%${query.replace(/[%_]/g, (char) => `\\${char}`)}%`
+    : null
+  const where = [
+    "(c.origin IS NULL OR c.origin = 'user')",
+    like
+      ? `(c.title LIKE @like ESCAPE '\\' OR EXISTS (
+          SELECT 1
+          FROM messages sm
+          WHERE sm.conversationId = c.id
+            AND sm.content LIKE @like ESCAPE '\\'
+        ))`
+      : null,
+  ]
+    .filter(Boolean)
+    .join(" AND ")
+
+  const rows = db
+    .prepare(
+      `
+        SELECT
+          c.id,
+          c.title,
+          c.createdAt,
+          c.updatedAt,
+          c.contextUsage,
+          (
+            SELECT COUNT(*)
+            FROM messages cm
+            WHERE cm.conversationId = c.id
+          ) AS messageCount,
+          (
+            SELECT lm.content
+            FROM messages lm
+            WHERE lm.conversationId = c.id
+            ORDER BY lm.timestamp DESC
+            LIMIT 1
+          ) AS lastMessageContent,
+          (
+            SELECT lm.timestamp
+            FROM messages lm
+            WHERE lm.conversationId = c.id
+            ORDER BY lm.timestamp DESC
+            LIMIT 1
+          ) AS lastMessageAt
+          ${
+            like
+              ? `, (
+                  SELECT mm.content
+                  FROM messages mm
+                  WHERE mm.conversationId = c.id
+                    AND mm.content LIKE @like ESCAPE '\\'
+                  ORDER BY mm.timestamp DESC
+                  LIMIT 1
+                ) AS searchMatchContent`
+              : `, NULL AS searchMatchContent`
+          }
+        FROM conversations c
+        WHERE ${where}
+        ORDER BY c.updatedAt DESC
+      `
+    )
+    .all(like ? { like } : {}) as ConversationSummaryRow[]
+
+  return rows.map((row) => ({
+    id: row.id,
+    title: row.title,
+    createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    messages: [],
+    contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
+    messageCount: row.messageCount,
+    lastMessagePreview: compactPreview(row.lastMessageContent),
+    lastMessageAt: row.lastMessageAt ?? undefined,
+    searchMatchPreview: compactPreview(row.searchMatchContent),
   }))
 }
 
@@ -492,6 +590,7 @@ export function getConversation(id: string): Conversation | null {
     id: row.id,
     title: row.title,
     createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
     messages,
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
   }

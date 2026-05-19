@@ -36,7 +36,7 @@ interface BrowserAgentLiveViewProps {
 }
 
 export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewProps) {
-    const shellRef = React.useRef<HTMLDivElement>(null)
+    const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
     const rfbRef = React.useRef<import("@novnc/novnc").default | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
@@ -109,7 +109,7 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
 
     React.useEffect(() => {
         const updateFullscreen = () => {
-            setFullscreen(document.fullscreenElement === shellRef.current)
+            setFullscreen(document.fullscreenElement === viewportRef.current)
         }
         updateFullscreen()
         document.addEventListener("fullscreenchange", updateFullscreen)
@@ -132,11 +132,11 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
 
     const toggleFullscreen = async () => {
         try {
-            if (document.fullscreenElement === shellRef.current) {
+            if (document.fullscreenElement === viewportRef.current) {
                 await document.exitFullscreen()
                 return
             }
-            await shellRef.current?.requestFullscreen()
+            await viewportRef.current?.requestFullscreen()
         } catch {
             // Fullscreen is best-effort and may be blocked by the host shell.
         }
@@ -172,26 +172,20 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
     const userControl = state.controlMode === "user"
     const viewportWidth = state.width && state.width > 0 ? state.width : 16
     const viewportHeight = state.height && state.height > 0 ? state.height : 9
+    const statusLabel = state.paused
+        ? "paused"
+        : connection === "connected"
+            ? "connected"
+            : connection
 
     return (
-        <div
-            ref={shellRef}
-            className={cn(
-                "grid gap-2 bg-background",
-                fullscreen && "h-screen grid-rows-[minmax(0,1fr)_auto] p-3"
-            )}
-        >
-            <div
-                className={cn(
-                    "min-h-0 overflow-hidden rounded-md border border-border/70 bg-white shadow-sm",
-                    fullscreen ? "h-full" : "w-full"
-                )}
-                style={fullscreen ? undefined : { aspectRatio: `${viewportWidth} / ${viewportHeight}` }}
-                aria-label={`${connection} browser live view`}
-            >
-                <div ref={targetRef} className="size-full bg-white" />
-            </div>
-            <div className="flex flex-wrap justify-end gap-2">
+        <div className="grid gap-2 bg-background">
+            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                <span className="inline-flex min-w-0 flex-1 items-center gap-2 text-[12px] text-muted-foreground">
+                    <Monitor className="size-3.5 shrink-0" />
+                    <span className="truncate font-medium text-foreground/80">Browser agent</span>
+                    <span className="truncate">{statusLabel}</span>
+                </span>
                 <button
                     type="button"
                     disabled={busy}
@@ -222,6 +216,18 @@ export function BrowserAgentLiveView({ active = false }: BrowserAgentLiveViewPro
                     {fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
                     {fullscreen ? "Exit full screen" : "Full screen"}
                 </button>
+            </div>
+            <div
+                ref={viewportRef}
+                className="w-full overflow-hidden rounded-md border border-border/70 bg-white shadow-sm [background:white] [&:fullscreen]:h-screen [&:fullscreen]:max-h-none [&:fullscreen]:rounded-none [&:fullscreen]:border-0"
+                style={{
+                    aspectRatio: `${viewportWidth} / ${viewportHeight}`,
+                    maxHeight: "min(360px, calc(100vh - 320px))",
+                    minHeight: "220px",
+                }}
+                aria-label={`${connection} browser live view`}
+            >
+                <div ref={targetRef} className="size-full bg-white" />
             </div>
         </div>
     )

@@ -1,27 +1,45 @@
-import { NextResponse } from 'next/server';
-import { getConversationsWithMessages, createConversation } from '@/lib/db';
-import type { Conversation } from '@/lib/types';
+import { NextResponse } from "next/server"
+import {
+  getConversationsWithMessages,
+  getConversationSummaries,
+  createConversation,
+} from "@/lib/db"
+import type { Conversation } from "@/lib/types"
 
-export async function GET() {
-    try {
-        const conversations = getConversationsWithMessages();
-        return NextResponse.json(conversations);
-    } catch (error) {
-        console.error("Failed to fetch conversations", error);
-        return NextResponse.json({ error: "Failed to fetch conversations" }, { status: 500 });
-    }
+export async function GET(request: Request) {
+  try {
+    const { searchParams } = new URL(request.url)
+    const summary = searchParams.get("summary") === "1"
+    const q = searchParams.get("q") ?? undefined
+    const conversations = summary
+      ? getConversationSummaries(q)
+      : getConversationsWithMessages()
+    return NextResponse.json(conversations)
+  } catch (error) {
+    console.error("Failed to fetch conversations", error)
+    return NextResponse.json(
+      { error: "Failed to fetch conversations" },
+      { status: 500 }
+    )
+  }
 }
 
 export async function POST(request: Request) {
-    try {
-        const conversation: Conversation = await request.json();
-        if (!conversation.id || !conversation.title) {
-            return NextResponse.json({ error: "Invalid conversation data" }, { status: 400 });
-        }
-        createConversation(conversation);
-        return NextResponse.json({ success: true, conversation });
-    } catch (error) {
-        console.error("Failed to create conversation", error);
-        return NextResponse.json({ error: "Failed to create conversation" }, { status: 500 });
+  try {
+    const conversation: Conversation = await request.json()
+    if (!conversation.id || !conversation.title) {
+      return NextResponse.json(
+        { error: "Invalid conversation data" },
+        { status: 400 }
+      )
     }
+    createConversation(conversation)
+    return NextResponse.json({ success: true, conversation })
+  } catch (error) {
+    console.error("Failed to create conversation", error)
+    return NextResponse.json(
+      { error: "Failed to create conversation" },
+      { status: 500 }
+    )
+  }
 }

@@ -166,6 +166,11 @@ async function showChatCompletionNotification(
 interface ChatState {
   conversations: Conversation[]
   isLoading: boolean
+  conversationLoadState: Record<
+    string,
+    "summary" | "loading" | "full" | "error"
+  >
+  conversationLoadErrors: Record<string, string | undefined>
   activeConversationId: string | null
   isStreaming: boolean
   streamingContent: string
@@ -184,7 +189,14 @@ interface ChatState {
 }
 
 type ChatAction =
-  | { type: "INIT_CONVERSATIONS"; conversations: Conversation[] }
+  | {
+      type: "INIT_CONVERSATIONS"
+      conversations: Conversation[]
+      full?: boolean
+    }
+  | { type: "LOAD_CONVERSATION_START"; id: string }
+  | { type: "LOAD_CONVERSATION_SUCCESS"; conversation: Conversation }
+  | { type: "LOAD_CONVERSATION_ERROR"; id: string; error: string }
   | { type: "NEW_CHAT" }
   | { type: "SELECT_CONVERSATION"; id: string }
   | { type: "DELETE_CONVERSATION"; id: string }
@@ -276,9 +288,40 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "INIT_CONVERSATIONS": {
       const dbIds = new Set(action.conversations.map((c) => c.id))
       const locallyCreated = state.conversations.filter((c) => !dbIds.has(c.id))
-      const merged = [...locallyCreated, ...action.conversations].sort(
+      const previousById = new Map(
+        state.conversations.map((conversation) => [
+          conversation.id,
+          conversation,
+        ])
+      )
+      const mergedIncoming = action.conversations.map((conversation) => {
+        const previous = previousById.get(conversation.id)
+        const previousIsFull =
+          state.conversationLoadState[conversation.id] === "full"
+        if (!action.full && previous && previousIsFull) {
+          return {
+            ...conversation,
+            messages: previous.messages,
+            contextUsage: conversation.contextUsage ?? previous.contextUsage,
+          }
+        }
+        return conversation
+      })
+      const merged = [...locallyCreated, ...mergedIncoming].sort(
         (a, b) => b.createdAt - a.createdAt
       )
+      const conversationLoadState = { ...state.conversationLoadState }
+      const conversationLoadErrors = { ...state.conversationLoadErrors }
+      for (const conversation of action.conversations) {
+        const previousStatus = conversationLoadState[conversation.id]
+        conversationLoadState[conversation.id] =
+          action.full || previousStatus === "full"
+            ? "full"
+            : previousStatus === "loading"
+              ? "loading"
+              : "summary"
+        conversationLoadErrors[conversation.id] = undefined
+      }
       const savedId =
         typeof window !== "undefined"
           ? localStorage.getItem("chat:active-id")
@@ -287,10 +330,72 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         conversations: merged,
+        conversationLoadState,
+        conversationLoadErrors,
         activeConversationId: validSavedId,
         isLoading: false,
       }
     }
+    case "LOAD_CONVERSATION_START":
+      return {
+        ...state,
+        conversationLoadState: {
+          ...state.conversationLoadState,
+          [action.id]: "loading",
+        },
+        conversationLoadErrors: {
+          ...state.conversationLoadErrors,
+          [action.id]: undefined,
+        },
+      }
+    case "LOAD_CONVERSATION_SUCCESS": {
+      const exists = state.conversations.some(
+        (conversation) => conversation.id === action.conversation.id
+      )
+      return {
+        ...state,
+        conversations: (exists
+          ? state.conversations.map((conversation) =>
+              conversation.id === action.conversation.id
+                ? {
+                    ...conversation,
+                    ...action.conversation,
+                    messageCount: action.conversation.messages.length,
+                    lastMessagePreview:
+                      action.conversation.messages.at(-1)?.content ??
+                      conversation.lastMessagePreview,
+                    lastMessageAt:
+                      action.conversation.messages.at(-1)?.timestamp ??
+                      conversation.lastMessageAt,
+                  }
+                : conversation
+            )
+          : [action.conversation, ...state.conversations]
+        ).sort(
+          (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)
+        ),
+        conversationLoadState: {
+          ...state.conversationLoadState,
+          [action.conversation.id]: "full",
+        },
+        conversationLoadErrors: {
+          ...state.conversationLoadErrors,
+          [action.conversation.id]: undefined,
+        },
+      }
+    }
+    case "LOAD_CONVERSATION_ERROR":
+      return {
+        ...state,
+        conversationLoadState: {
+          ...state.conversationLoadState,
+          [action.id]: "error",
+        },
+        conversationLoadErrors: {
+          ...state.conversationLoadErrors,
+          [action.id]: action.error,
+        },
+      }
     case "NEW_CHAT":
       if (typeof window !== "undefined")
         localStorage.removeItem("chat:active-id")
@@ -318,6 +423,16 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         conversations,
+        conversationLoadState: Object.fromEntries(
+          Object.entries(state.conversationLoadState).filter(
+            ([id]) => id !== action.id
+          )
+        ),
+        conversationLoadErrors: Object.fromEntries(
+          Object.entries(state.conversationLoadErrors).filter(
+            ([id]) => id !== action.id
+          )
+        ),
         activeConversationId: nextActiveId,
         ...(state.activeConversationId === action.id ? stoppedStreamState : {}),
       }
@@ -330,6 +445,14 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         conversations: [action.conversation, ...state.conversations],
+        conversationLoadState: {
+          ...state.conversationLoadState,
+          [action.conversation.id]: "full",
+        },
+        conversationLoadErrors: {
+          ...state.conversationLoadErrors,
+          [action.conversation.id]: undefined,
+        },
         activeConversationId: action.conversation.id,
       }
     }
@@ -339,6 +462,14 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         conversations: [action.conversation, ...state.conversations],
+        conversationLoadState: {
+          ...state.conversationLoadState,
+          [action.conversation.id]: "full",
+        },
+        conversationLoadErrors: {
+          ...state.conversationLoadErrors,
+          [action.conversation.id]: undefined,
+        },
       }
     }
     case "ADD_USER_MESSAGE": {
@@ -348,6 +479,14 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
           conv.id === action.conversationId
             ? {
                 ...conv,
+                updatedAt: action.message.timestamp,
+                messageCount:
+                  (conv.messageCount ?? conv.messages.length) +
+                  (conv.messages.some((m) => m.id === action.message.id)
+                    ? 0
+                    : 1),
+                lastMessagePreview: action.message.content,
+                lastMessageAt: action.message.timestamp,
                 messages: conv.messages.some((m) => m.id === action.message.id)
                   ? conv.messages.map((m) =>
                       m.id === action.message.id ? action.message : m
@@ -649,6 +788,14 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
           conv.id === action.conversationId
             ? {
                 ...conv,
+                updatedAt: action.message.timestamp,
+                messageCount:
+                  (conv.messageCount ?? conv.messages.length) +
+                  (conv.messages.some((m) => m.id === action.message.id)
+                    ? 0
+                    : 1),
+                lastMessagePreview: action.message.content,
+                lastMessageAt: action.message.timestamp,
                 messages: conv.messages.some((m) => m.id === action.message.id)
                   ? conv.messages.map((m) =>
                       m.id === action.message.id ? action.message : m
@@ -689,6 +836,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [state, dispatch] = React.useReducer(chatReducer, {
     conversations: [],
     isLoading: true,
+    conversationLoadState: {},
+    conversationLoadErrors: {},
     activeConversationId: null,
     ...stoppedStreamState,
   })
@@ -826,12 +975,16 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       while (!cancelled && attempt < MAX_ATTEMPTS) {
         attempt += 1
         try {
-          const res = await fetch("/api/conversations")
+          const res = await fetch("/api/conversations?summary=1")
           if (!res.ok) throw new Error(`HTTP ${res.status}`)
           const data = await res.json()
           if (cancelled) return
           if (Array.isArray(data)) {
-            dispatch({ type: "INIT_CONVERSATIONS", conversations: data })
+            dispatch({
+              type: "INIT_CONVERSATIONS",
+              conversations: data,
+              full: false,
+            })
           }
           return
         } catch (err) {
@@ -855,6 +1008,49 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true
     }
   }, [])
+
+  React.useEffect(() => {
+    const conversationId = state.activeConversationId
+    if (!conversationId) return
+    const stableConversationId = conversationId
+    const status = state.conversationLoadState[conversationId]
+    if (status === "full" || status === "loading" || status === "error") return
+
+    const controller = new AbortController()
+    dispatch({ type: "LOAD_CONVERSATION_START", id: stableConversationId })
+
+    async function loadConversation() {
+      try {
+        const res = await fetch(
+          `/api/conversations/${encodeURIComponent(stableConversationId)}`,
+          { cache: "no-store", signal: controller.signal }
+        )
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const conversation = (await res.json()) as Conversation
+        if (controller.signal.aborted) return
+        dispatch({ type: "LOAD_CONVERSATION_SUCCESS", conversation })
+      } catch (err) {
+        if (
+          controller.signal.aborted ||
+          (err instanceof DOMException && err.name === "AbortError")
+        ) {
+          return
+        }
+        dispatch({
+          type: "LOAD_CONVERSATION_ERROR",
+          id: stableConversationId,
+          error: err instanceof Error ? err.message : "Failed to load chat",
+        })
+      }
+    }
+
+    void loadConversation()
+    return () => controller.abort()
+    // Run only when the selected conversation changes. Including the load-state
+    // object here makes this effect abort its own request after dispatching
+    // LOAD_CONVERSATION_START in React StrictMode.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [state.activeConversationId])
 
   const checkServerStreaming = React.useCallback(
     async (conversationId: string): Promise<boolean> => {

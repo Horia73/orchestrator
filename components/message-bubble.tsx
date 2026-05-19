@@ -11,7 +11,7 @@ import { AttachmentCard } from "@/components/attachment-card"
 import { RenderMessageContent } from "@/components/artifacts/render-message-content"
 import { useConversationArtifacts } from "@/components/artifacts/use-conversation-artifacts"
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
-import { InlineToolCallView, getToolCallDisplayTitle, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
+import { InlineToolCallView, InlineWebSearchGroup, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 
@@ -201,12 +201,9 @@ function ThoughtBlock({
 }) {
     const latestEntry = reasoning[reasoning.length - 1]
     const latestTitle = getEntryTitle(latestEntry)
-    const hasBrowserAgent = reasoning.some(entry =>
-        entry.type === "agent_call" && entry.agentId === "browser_agent"
-    )
-    const shouldDefaultExpand = hasBrowserAgent || (thoughtAutoExpandTools && reasoning.some(entry =>
+    const shouldDefaultExpand = thoughtAutoExpandTools && reasoning.some(entry =>
         entry.type === "tool_call" && shouldExpandToolCallByDefault(entry)
-    ))
+    )
     const secs = Math.round(thinkingSeconds ?? 0)
     const persistedSecs = Math.round(thinkingDuration ?? 0)
     const summarySeconds = persistedSecs > 0 ? persistedSecs : secs
@@ -235,15 +232,15 @@ function ThoughtBlock({
 
     // State: open/expanded, persisted via localStorage keyed by messageId
     const storageKey = messageId ? `thought:${messageId}` : null
-    const openStorageKey = storageKey ? `${storageKey}:open${hasBrowserAgent ? ":browser:v1" : ""}` : null
-    const expandedStorageKey = storageKey ? `${storageKey}:expanded:${hasBrowserAgent ? "browser:v1" : "v2"}` : null
+    const openStorageKey = storageKey ? `${storageKey}:open:v2` : null
+    const expandedStorageKey = storageKey ? `${storageKey}:expanded:v3` : null
 
     const [isOpen, setIsOpen] = React.useState(() => {
         if (openStorageKey) {
             const saved = localStorage.getItem(openStorageKey)
             if (saved !== null) return saved === 'true'
         }
-        return hasBrowserAgent || (thoughtAutoOpen ? isLiveStreaming : false)
+        return thoughtAutoOpen ? isLiveStreaming : false
     })
 
     const userToggledExpandedRef = React.useRef(false)
@@ -279,12 +276,6 @@ function ThoughtBlock({
         if (!shouldDefaultExpand || hasStoredExpanded || userToggledExpandedRef.current) return
         autoExpand()
     }, [autoExpand, hasStoredExpanded, shouldDefaultExpand])
-
-    React.useEffect(() => {
-        if (!hasBrowserAgent) return
-        updateOpen(true)
-        autoExpand()
-    }, [autoExpand, hasBrowserAgent, updateOpen])
 
     // Content measurement
     const blockRef = React.useRef<HTMLDivElement>(null)
@@ -451,35 +442,13 @@ function ThoughtBlock({
                                     <div ref={contentRef}>
                                         {reasoning.length > 0 ? (
                                             <div className="mb-2 flex flex-col gap-2">
-                                                {reasoning.map((entry, index) => (
-                                                    entry.type === "thought" ? (
-                                                        <div key={`${entry.id}-${index}`} className="flex items-start gap-3">
-                                                            <Clock className="mt-[3px] size-4 shrink-0 text-muted-foreground bg-background rounded-full" />
-                                                            <div className="min-w-0 flex-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
-                                                                <MarkdownRenderer content={entry.content} />
-                                                            </div>
-                                                        </div>
-                                                    ) : entry.type === "tool_call" ? (
-                                                        <ToolCallBlock
-                                                            key={`${entry.id}-${index}`}
-                                                            entry={entry}
-                                                            onArtifactClick={onArtifactClick}
-                                                            searchToolDisplay={searchToolDisplay}
-                                                        />
-                                                    ) : entry.type === "context_compaction" ? (
-                                                        <ContextCompactionBlock
-                                                            key={`${entry.id}-${index}`}
-                                                            entry={entry}
-                                                        />
-                                                    ) : (
-                                                        <AgentCallBlock
-                                                            key={`${entry.id}-${index}`}
-                                                            entry={entry}
-                                                            onOpen={onAgentOpen}
-                                                            onAttachmentClick={onAttachmentClick}
-                                                        />
-                                                    )
-                                                ))}
+                                                <ReasoningEntryList
+                                                    reasoning={reasoning}
+                                                    onArtifactClick={onArtifactClick}
+                                                    onAgentOpen={onAgentOpen}
+                                                    onAttachmentClick={onAttachmentClick}
+                                                    searchToolDisplay={searchToolDisplay}
+                                                />
                                             </div>
                                         ) : (
                                             <div className="h-4" />
@@ -566,6 +535,83 @@ function ThoughtBlock({
 // ---------------------------------------------------------------------------
 // ToolCallBlock
 // ---------------------------------------------------------------------------
+
+function ReasoningEntryList({
+    reasoning,
+    onArtifactClick,
+    onAgentOpen,
+    onAttachmentClick,
+    searchToolDisplay,
+}: {
+    reasoning: ReasoningEntry[]
+    onArtifactClick?: (artifact: ArtifactPayload) => void
+    onAgentOpen?: (entry: AgentCallReasoningEntry) => void
+    onAttachmentClick?: (attachment: Attachment) => void
+    searchToolDisplay: SearchToolDisplay
+}) {
+    const nodes: React.ReactNode[] = []
+
+    for (let index = 0; index < reasoning.length; index++) {
+        const entry = reasoning[index]
+
+        if (entry.type === "tool_call" && searchToolDisplay !== "compact" && isWebSearchToolCall(entry)) {
+            const entries = [entry]
+            let nextIndex = index + 1
+            while (nextIndex < reasoning.length) {
+                const nextEntry = reasoning[nextIndex]
+                if (nextEntry.type !== "tool_call" || !isWebSearchToolCall(nextEntry)) break
+                entries.push(nextEntry)
+                nextIndex++
+            }
+            nodes.push(
+                <InlineWebSearchGroup
+                    key={`web-search-${entry.id}-${index}-${entries.length}`}
+                    entries={entries}
+                />
+            )
+            index = nextIndex - 1
+            continue
+        }
+
+        if (entry.type === "thought") {
+            nodes.push(
+                <div key={`${entry.id}-${index}`} className="flex items-start gap-3">
+                    <Clock className="mt-[3px] size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
+                    <div className="min-w-0 flex-1 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+                        <MarkdownRenderer content={entry.content} />
+                    </div>
+                </div>
+            )
+        } else if (entry.type === "tool_call") {
+            nodes.push(
+                <ToolCallBlock
+                    key={`${entry.id}-${index}`}
+                    entry={entry}
+                    onArtifactClick={onArtifactClick}
+                    searchToolDisplay={searchToolDisplay}
+                />
+            )
+        } else if (entry.type === "context_compaction") {
+            nodes.push(
+                <ContextCompactionBlock
+                    key={`${entry.id}-${index}`}
+                    entry={entry}
+                />
+            )
+        } else {
+            nodes.push(
+                <AgentCallBlock
+                    key={`${entry.id}-${index}`}
+                    entry={entry}
+                    onOpen={onAgentOpen}
+                    onAttachmentClick={onAttachmentClick}
+                />
+            )
+        }
+    }
+
+    return <>{nodes}</>
+}
 
 function ContextCompactionBlock({ entry }: { entry: ContextCompactionReasoningEntry }) {
     return (
