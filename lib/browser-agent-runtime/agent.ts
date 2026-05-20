@@ -3,7 +3,7 @@
  * Smart automation loop with failure tracking and memory
  */
 
-import { ActionTrace, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
+import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
 import { VisionService, AgentAction, VisionConfig } from './vision';
 import { ActionHistoryItem, IterationLimitReview } from './prompts';
 import { initializeDefaultLearnings, addLearning } from './memory';
@@ -248,6 +248,7 @@ export function createAgentController(
                     const supplementalFrames = pendingSupplementalFrames;
                     pendingSupplementalFrames = [];
                     const openTabs = await browser.listTabs();
+                    const downloads = browser.getDownloads();
                     const isFinalIteration = iterationCount === maxIterations;
 
                     if (supplementalFrames.length > 0) {
@@ -294,7 +295,8 @@ export function createAgentController(
                             supplementalFrames,
                             isInterrupt,
                             openTabs,
-                            isAdvancedMode
+                            isAdvancedMode,
+                            downloads
                         );
                     }
                     pendingTrace = null;
@@ -508,6 +510,8 @@ export function createAgentController(
                             durationMs: action.durationMs,
                             url: action.url,
                             sub_objective: action.sub_objective,
+                            expectedFilename: action.expectedFilename,
+                            observation: execution.observation,
                             reasoning: action.reasoning,
                             success,
                         });
@@ -574,6 +578,7 @@ export function createAgentController(
                     try {
                         const reviewFrame = await browser.captureAgentFrame();
                         const reviewTabs = await browser.listTabs();
+                        const reviewDownloads = browser.getDownloads();
                         const review = await vision.reflectOnIterationLimit(
                             reviewFrame,
                             reviewGoal,
@@ -581,7 +586,8 @@ export function createAgentController(
                             conversationHistory,
                             pendingTrace,
                             pendingSupplementalFrames,
-                            reviewTabs
+                            reviewTabs,
+                            reviewDownloads
                         );
 
                         if (review) {
@@ -767,6 +773,13 @@ function formatAction(action: AgentAction): string {
             return `Switch to Tab ${action.tabIndex ?? '?'} - ${action.reasoning}`;
         case 'newTab':
             return `New Tab${action.url ? ` (${action.url})` : ''} - ${action.reasoning}`;
+        case 'listDownloads':
+            return `List Downloads - ${action.reasoning}`;
+        case 'waitForDownloads': {
+            const duration = action.durationMs ? ` up to ${action.durationMs}ms` : '';
+            const expected = action.expectedFilename ? ` expecting "${action.expectedFilename}"` : '';
+            return `Wait for Downloads${duration}${expected} - ${action.reasoning}`;
+        }
         default:
             return `${action.action} - ${action.reasoning}`;
     }
@@ -815,6 +828,80 @@ interface ActionExecutionResult {
     success: boolean;
     trace: ActionTrace | null;
     supplementalFrames: BrowserFrameSnapshot[];
+    observation?: string;
+}
+
+const DEFAULT_DOWNLOAD_WAIT_MS = 15_000;
+const MIN_DOWNLOAD_WAIT_MS = 1_000;
+const MAX_DOWNLOAD_WAIT_MS = 30_000;
+
+function clampDownloadWaitMs(value: number | undefined): number {
+    if (typeof value !== 'number' || !Number.isFinite(value)) {
+        return DEFAULT_DOWNLOAD_WAIT_MS;
+    }
+    return Math.max(MIN_DOWNLOAD_WAIT_MS, Math.min(MAX_DOWNLOAD_WAIT_MS, Math.round(value)));
+}
+
+function formatDownloadBytes(size: number | undefined): string {
+    if (typeof size !== 'number' || !Number.isFinite(size)) return 'unknown size';
+    if (size < 1024) return `${size} B`;
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function summarizeDownload(download: BrowserDownloadFile): string {
+    const details = download.state === 'saved'
+        ? `${formatDownloadBytes(download.size)} at ${download.savedPath || 'unknown path'}`
+        : download.error || 'not saved yet';
+    return `${download.state}: ${download.suggestedFilename} (${details})`;
+}
+
+function summarizeDownloads(downloads: BrowserDownloadFile[]): string {
+    if (downloads.length === 0) return 'No browser downloads recorded in this session.';
+    return downloads.slice(-8).map(summarizeDownload).join('\n');
+}
+
+function changedDownloads(before: BrowserDownloadFile[], after: BrowserDownloadFile[]): BrowserDownloadFile[] {
+    const beforeById = new Map(before.map(download => [download.id, download]));
+    return after.filter(download => {
+        const previous = beforeById.get(download.id);
+        if (!previous) return true;
+        return previous.state !== download.state
+            || previous.savedPath !== download.savedPath
+            || previous.size !== download.size
+            || previous.error !== download.error;
+    });
+}
+
+function filenameMatches(download: BrowserDownloadFile, expectedFilename: string | undefined): boolean {
+    const expected = String(expectedFilename || '').trim().toLowerCase();
+    if (!expected) return true;
+    return download.suggestedFilename.toLowerCase().includes(expected);
+}
+
+function summarizeDownloadWait(
+    before: BrowserDownloadFile[],
+    after: BrowserDownloadFile[],
+    relevant: BrowserDownloadFile[],
+    expectedFilename: string | undefined,
+): string {
+    const expected = String(expectedFilename || '').trim();
+    const header = expected
+        ? `Expected filename containing "${expected}".`
+        : 'No expected filename substring was provided.';
+
+    if (relevant.length === 0) {
+        return `${header} No new or newly completed browser download was observed. Current downloads:\n${summarizeDownloads(after)}`;
+    }
+
+    const beforePending = new Set(before.filter(download => download.state === 'pending').map(download => download.id));
+    const relevantLines = relevant.map(download => {
+        const origin = beforePending.has(download.id) ? 'completed pending download' : 'new download';
+        const match = filenameMatches(download, expectedFilename) ? 'filename matched' : 'filename did not match';
+        return `${origin}: ${summarizeDownload(download)}; ${match}`;
+    });
+
+    return `${header}\n${relevantLines.join('\n')}`;
 }
 
 async function executeAction(
@@ -1060,6 +1147,34 @@ async function executeAction(
                     onStatusUpdate('⚠️ Failed to open new tab');
                 }
                 return { success: opened, trace: null, supplementalFrames: [] };
+            }
+
+            case 'listDownloads': {
+                onStatusUpdate('📥 Listing browser downloads...');
+                const downloads = browser.getDownloads();
+                const observation = summarizeDownloads(downloads);
+                onStatusUpdate(`📥 Browser downloads:\n${observation}`);
+                return { success: true, trace: null, supplementalFrames: [], observation };
+            }
+
+            case 'waitForDownloads': {
+                const before = browser.getDownloads();
+                const hasPendingBefore = before.some(download => download.state === 'pending');
+                const waitDuration = clampDownloadWaitMs(action.durationMs);
+                const expected = action.expectedFilename ? ` expecting "${action.expectedFilename}"` : '';
+                onStatusUpdate(`📥 Waiting up to ${waitDuration}ms for a browser download${expected}...`);
+                const after = await browser.waitForDownloads(waitDuration, {
+                    waitForNew: !hasPendingBefore,
+                    baselineCount: before.length,
+                });
+                const relevant = changedDownloads(before, after);
+                const observation = summarizeDownloadWait(before, after, relevant, action.expectedFilename);
+                const savedMatches = relevant.filter(download =>
+                    download.state === 'saved' && filenameMatches(download, action.expectedFilename)
+                );
+                const success = savedMatches.length > 0;
+                onStatusUpdate(`📥 Download verification ${success ? 'succeeded' : 'did not confirm a saved file'}:\n${observation}`);
+                return { success, trace: null, supplementalFrames: [], observation };
             }
 
             case 'getLink': {

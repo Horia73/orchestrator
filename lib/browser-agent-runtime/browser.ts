@@ -66,6 +66,11 @@ export interface BrowserDownloadFile {
     error?: string;
 }
 
+export interface BrowserDownloadWaitOptions {
+    waitForNew?: boolean;
+    baselineCount?: number;
+}
+
 export type BrowserTabOrigin = 'initial' | 'newTab' | 'popup' | 'recovered';
 
 export interface BrowserTabInfo {
@@ -126,7 +131,7 @@ export interface BrowserPageSession {
     getOpenTabCount(): Promise<number>;
     getViewport(): Promise<{ width: number; height: number }>;
     getDownloads(): BrowserDownloadFile[];
-    waitForDownloads(timeoutMs?: number): Promise<BrowserDownloadFile[]>;
+    waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;
     getAgentFrameHistory(limit?: number): BrowserFrameSnapshot[];
     clearAgentFrameHistory(): void;
@@ -947,14 +952,29 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         return results;
     };
 
-    const waitForSessionDownloads = async (session: BrowserSessionState, timeoutMs = 5000): Promise<void> => {
+    const waitForSessionDownloads = async (
+        session: BrowserSessionState,
+        timeoutMs = 5000,
+        options: BrowserDownloadWaitOptions = {},
+    ): Promise<void> => {
         const deadline = Date.now() + Math.max(0, timeoutMs);
+        const baselineCount = typeof options.baselineCount === 'number' && Number.isFinite(options.baselineCount)
+            ? Math.max(0, Math.floor(options.baselineCount))
+            : session.downloads.length;
+        const waitForNew = options.waitForNew === true;
+        let sawNewDownload = session.downloads.length > baselineCount;
 
-        while (session.downloadTasks.size > 0) {
+        for (;;) {
             const tasks = [...session.downloadTasks];
             const remainingMs = deadline - Date.now();
-            if (remainingMs <= 0) return;
+            if (tasks.length === 0) {
+                sawNewDownload = sawNewDownload || session.downloads.length > baselineCount;
+                if (!waitForNew || sawNewDownload || remainingMs <= 0) return;
+                await sleep(Math.min(remainingMs, 250));
+                continue;
+            }
 
+            if (remainingMs <= 0) return;
             await Promise.race([
                 Promise.allSettled(tasks),
                 sleep(Math.min(remainingMs, 250)),
@@ -1608,8 +1628,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 return session.downloads.map((download) => cloneDownload(download));
             },
 
-            async waitForDownloads(timeoutMs?: number): Promise<BrowserDownloadFile[]> {
-                await waitForSessionDownloads(session, timeoutMs);
+            async waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]> {
+                await waitForSessionDownloads(session, timeoutMs, options);
                 return session.downloads.map((download) => cloneDownload(download));
             },
 

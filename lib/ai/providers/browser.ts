@@ -260,7 +260,7 @@ function formatBrowserRunOutput(
         lines.push('Downloaded files:')
         for (const download of downloads) {
             if (download.state === 'saved' && download.savedPath) {
-                lines.push(`- [${escapeMarkdownLabel(download.suggestedFilename)}](${download.savedPath})`)
+                lines.push(`- [${escapeMarkdownLabel(download.suggestedFilename)}](${download.savedPath}) (${formatDownloadSize(download.size)})`)
             } else {
                 const reason = download.error ? `: ${download.error}` : ''
                 lines.push(`- ${download.suggestedFilename} (${download.state}${reason})`)
@@ -279,6 +279,13 @@ function formatBrowserRunOutput(
 
 function escapeFence(value: string): string {
     return value.replace(/```/g, '`\u200b``')
+}
+
+function formatDownloadSize(size: number | undefined): string {
+    if (typeof size !== 'number' || !Number.isFinite(size)) return 'unknown size'
+    if (size < 1024) return `${size} B`
+    if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`
+    return `${(size / (1024 * 1024)).toFixed(1)} MB`
 }
 
 function escapeMarkdownLabel(value: string): string {

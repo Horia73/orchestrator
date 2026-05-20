@@ -759,6 +759,48 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
   }))
 }
 
+export function findInboxConversationByTaskAndTitle(
+  taskId: string,
+  title: string
+): InboxListItem | null {
+  const row = db
+    .prepare(
+      `
+        SELECT c.id, c.title, c.createdAt, c.readAt, c.scheduledTaskId,
+               (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
+               (SELECT m2.content FROM messages m2 WHERE m2.conversationId = c.id ORDER BY m2.timestamp DESC LIMIT 1) AS preview
+        FROM conversations c
+        WHERE c.origin = 'inbox'
+          AND c.scheduledTaskId = ?
+          AND c.title = ?
+        ORDER BY c.createdAt DESC
+        LIMIT 1
+    `
+    )
+    .get(taskId, title) as
+    | {
+        id: string
+        title: string
+        createdAt: number
+        readAt: number | null
+        scheduledTaskId: string | null
+        messageCount: number
+        preview: string | null
+      }
+    | undefined
+
+  if (!row) return null
+  return {
+    id: row.id,
+    title: row.title,
+    createdAt: row.createdAt,
+    readAt: row.readAt ?? null,
+    scheduledTaskId: row.scheduledTaskId ?? null,
+    preview: (row.preview ?? "").slice(0, 240),
+    messageCount: row.messageCount,
+  }
+}
+
 export function countUnreadInbox(): number {
   const row = db
     .prepare(

@@ -4,12 +4,12 @@
  */
 
 import { GoogleGenAI, MediaResolution, type GenerateContentConfig } from '@google/genai';
-import { ActionTrace, BrowserFrameSnapshot } from './browser';
+import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from './browser';
 import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
 import { getMemories } from './memory';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'error' | 'escalate' | 'yield_control';
+    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
@@ -25,6 +25,7 @@ export interface AgentAction {
     reasoning: string;
     memory?: string; // What we learned from this step (e.g. "To clear input, click then Ctrl+A+Backspace")
     durationMs?: number; // Duration in milliseconds for wait, hold, drag, and recordVideo actions
+    expectedFilename?: string; // Optional filename substring for download verification
 }
 
 export interface VisionConfig {
@@ -51,7 +52,8 @@ export interface VisionService {
         supplementalFrames?: BrowserFrameSnapshot[],
         isInterrupt?: boolean,
         openTabs?: TabInfo[],
-        isAdvancedMode?: boolean
+        isAdvancedMode?: boolean,
+        downloads?: BrowserDownloadFile[]
     ): Promise<AgentAction[]>;
     reflectOnIterationLimit(
         frame: BrowserFrameSnapshot,
@@ -60,7 +62,8 @@ export interface VisionService {
         conversationHistory: string[],
         recentTrace?: ActionTrace | null,
         supplementalFrames?: BrowserFrameSnapshot[],
-        openTabs?: TabInfo[]
+        openTabs?: TabInfo[],
+        downloads?: BrowserDownloadFile[]
     ): Promise<IterationLimitReview | null>;
     updateConfig(patch: Partial<VisionConfig>): void;
     getConfig(): VisionConfig;
@@ -386,7 +389,8 @@ export function createVisionService(
             supplementalFrames: BrowserFrameSnapshot[] = [],
             isInterrupt = false,
             openTabs: TabInfo[] = [],
-            isAdvancedMode: boolean = false
+            isAdvancedMode: boolean = false,
+            downloads: BrowserDownloadFile[] = []
         ): Promise<AgentAction[]> {
             // Get reusable memories (semantic + procedural)
             const memories = getMemories(frame.url, goal);
@@ -394,7 +398,7 @@ export function createVisionService(
 
             const actionPrompt = isInterrupt
                 ? buildInterruptPrompt(goal)
-                : buildActionPrompt(goal, actionHistory, openTabs);
+                : buildActionPrompt(goal, actionHistory, openTabs, downloads);
 
             try {
                 // Add conversation history context
@@ -416,7 +420,7 @@ export function createVisionService(
                 const text = response.text?.trim() || '';
                 const jsonText = extractJsonText(text);
 
-                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'escalate', 'yield_control'];
+                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'];
 
                 const parsed = JSON.parse(jsonText);
                 const actions: AgentAction[] = Array.isArray(parsed) ? parsed : [parsed];
@@ -448,10 +452,11 @@ export function createVisionService(
             conversationHistory: string[] = [],
             recentTrace: ActionTrace | null = null,
             supplementalFrames: BrowserFrameSnapshot[] = [],
-            openTabs: TabInfo[] = []
+            openTabs: TabInfo[] = [],
+            downloads: BrowserDownloadFile[] = []
         ): Promise<IterationLimitReview | null> {
             try {
-                const reviewPrompt = buildIterationLimitReviewPrompt(goal, actionHistory, openTabs);
+                const reviewPrompt = buildIterationLimitReviewPrompt(goal, actionHistory, openTabs, downloads);
                 const historyContext = conversationHistory.length > 0
                     ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
                     : '';

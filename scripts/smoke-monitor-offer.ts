@@ -4,8 +4,9 @@
  * Mocks integration status snapshots and asserts that:
  *   - newly-connected integration → exactly one offer card posted
  *   - same fingerprint on subsequent calls → idempotent (no duplicate)
+ *   - lost offer-state file with existing Inbox card → idempotent (no duplicate)
  *   - disconnected → no offer
- *   - reconnect with new fingerprint → re-offer
+ *   - reconnect/new fingerprint while the card still exists → no duplicate
  *   - offer card has the right title + body + 3 reply actions
  *   - inbox conversation is anchored to the Smart Monitor system task
  *
@@ -144,7 +145,22 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 3. Disconnect Gmail → still no offer
+    // 3. Lost state file / redeploy with existing Inbox card → still no duplicate
+    // ============================================================================
+    {
+        _resetOfferStateForTesting()
+        const r = await maybeOfferSmartMonitor({
+            gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000 }),
+            homeAssistant: haStatus({ connected: false }),
+            whatsapp: waStatus({ connected: false }),
+        })
+        check('lost state file with existing Gmail card posts nothing', r.posted.length === 0)
+        check('skipped includes existing inbox offer', r.skipped.some((s) => s.includes('existing inbox offer')))
+        check('still only one Gmail card after lost state', listInboxConversations().filter((i) => i.title.includes('Gmail connected')).length === 1)
+    }
+
+    // ============================================================================
+    // 4. Disconnect Gmail → still no offer
     // ============================================================================
     {
         const r = await maybeOfferSmartMonitor({
@@ -156,7 +172,7 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 4. Reconnect with NEW expiresAt → re-offer
+    // 5. Reconnect/new fingerprint while Inbox card exists → no duplicate
     // ============================================================================
     {
         const r = await maybeOfferSmartMonitor({
@@ -164,11 +180,12 @@ async function main(): Promise<void> {
             homeAssistant: haStatus({ connected: false }),
             whatsapp: waStatus({ connected: false }),
         })
-        check('reconnect with new fingerprint posts again', r.posted.includes('gmail'))
+        check('reconnect with new fingerprint does not duplicate existing Gmail card', !r.posted.includes('gmail'))
+        check('Gmail duplicate skipped by existing inbox offer', r.skipped.some((s) => s.includes('gmail: existing inbox offer')))
     }
 
     // ============================================================================
-    // 5. Fresh HA connect alongside existing Gmail → only HA posted
+    // 6. Fresh HA connect alongside existing Gmail → only HA posted
     // ============================================================================
     {
         const r = await maybeOfferSmartMonitor({
@@ -180,7 +197,7 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 6. WhatsApp connects → posts offer
+    // 7. WhatsApp connects → posts offer
     // ============================================================================
     {
         const r = await maybeOfferSmartMonitor({
@@ -192,17 +209,16 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 7. Verify Inbox content of the posted cards
+    // 8. Verify Inbox content of the posted cards
     // ============================================================================
     {
         const inbox = listInboxConversations()
-        check('three offer conversations created total', inbox.length === 4, { length: inbox.length })
-        // Note: it's 4 because Gmail had 2 offers across the test (fresh + reconnect)
+        check('three offer conversations created total', inbox.length === 3, { length: inbox.length })
 
         const gmailCards = inbox.filter((i) => i.title.includes('Gmail connected'))
         const haCards = inbox.filter((i) => i.title.includes('Home Assistant connected'))
         const waCards = inbox.filter((i) => i.title.includes('WhatsApp connected'))
-        check('Gmail card titles correct', gmailCards.length === 2)
+        check('Gmail card titles correct', gmailCards.length === 1)
         check('HA card title correct', haCards.length === 1)
         check('WA card title correct', waCards.length === 1)
 
@@ -222,7 +238,7 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 8. State persistence: read state file directly
+    // 9. State persistence: read state file directly
     // ============================================================================
     {
         const statePath = path.join(tmpRoot, '.orchestrator', 'private', 'smart-monitor-offers.json')

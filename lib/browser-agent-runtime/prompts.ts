@@ -4,6 +4,7 @@
  */
 
 import type { RetrievedMemory } from './memory';
+import type { BrowserDownloadFile } from './browser';
 
 export function buildSystemPrompt(memories: RetrievedMemory, isAdvancedMode: boolean = false): string {
    let memoryBlock = '';
@@ -23,13 +24,14 @@ export function buildSystemPrompt(memories: RetrievedMemory, isAdvancedMode: boo
    const now = new Date();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
    const responseActionList = isAdvancedMode
-      ? '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "ask" | "yield_control"'
-      : '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "done" | "ask" | "escalate"';
+      ? '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "ask" | "yield_control"'
+      : '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "done" | "ask" | "error" | "escalate"';
    const modeSpecificActionDocs = isAdvancedMode
       ? `- **ask**: Ask the user for clarification.
 - **yield_control**: Yield control back to the Base Model. Use this when you have cleared the blocker and normal automation can resume. Never return \`escalate\` while in advanced mode.`
       : `- **done**: Task complete.
 - **ask**: Ask the user for clarification.
+- **error**: Report a bounded, non-recoverable failure after you tried the allowed recovery path. Include what was attempted and the observed status.
 - **escalate**: Call the Advanced Reasoning Model. Don't hesitate to use this! Escalate whenever you feel stuck, trapped in a loop, repeat an action multiple times without success, or face complex captchas/reasoning. You MUST provide a clear \`sub_objective\` for the advanced agent.`;
    const subObjectiveField = isAdvancedMode
       ? ''
@@ -81,6 +83,8 @@ If the Goal contains "[Previous Goal: ...]", it means the user is replying to yo
 - **listTabs**: List all open tabs (indexes, titles, URLs). Use this to discover what tabs are available.
 - **switchTab**: Switch to a specific tab by index. Specify \`tabIndex\`.
 - **newTab**: Open a new tab. Optionally specify \`url\` to navigate immediately.
+- **listDownloads**: List browser downloads recorded in this session.
+- **waitForDownloads**: Wait briefly for a new or pending browser download to finish. Use \`durationMs\`; default is 15000 and the runtime caps it at 30000. Optionally set \`expectedFilename\` to a filename substring you expect.
 ${modeSpecificActionDocs}
 
 ## 📝 IMPORTANT RULES
@@ -104,6 +108,13 @@ ${modeSpecificActionDocs}
 14. **Batching inspectPage/evidence**: Do NOT batch \`inspectPage\`, \`screenshot\`, or \`recordVideo\` with page-changing actions. Capture first, then act after you see the next frame.
 15. **Reading From Overview**: You MAY use an overview frame to answer high-level questions about what sections, result groups, posters, cards, or major items appear on the page. If text is too small or ambiguous, scroll closer and verify in the viewport before making precise claims.
 16. **Scroll Estimation From Overview**: When using an overview frame, estimate scrolls approximately to move the viewport near the target area, then refine with one or two smaller viewport-based scrolls. Do not assume pixel-perfect precision from an overview image.
+
+## 📥 DOWNLOAD HANDLING
+- Browser files are saved to a managed workspace download folder, not the user's system Downloads folder.
+- If the task depends on downloading/exporting/saving a file, do not return \`done\` just because you clicked a button. Verify the download with \`waitForDownloads\` or \`listDownloads\` first.
+- After triggering a download, use \`waitForDownloads\` once with a short timeout (usually 10000-15000ms). If no saved file appears, make at most one materially different recovery attempt, then use \`waitForDownloads\` once more.
+- If the second verification still reports no new saved file, a failed download, a pending timeout, or a filename mismatch, stop with \`ask\` or \`error\` and state exactly what was tried plus the visible/download status. Do not keep clicking the same download/export button.
+- When you know the expected filename or extension, include \`expectedFilename\` in \`waitForDownloads\`; otherwise verify by the latest saved filename, size, path, and surrounding page context.
 
 ## 🗂️ TAB MANAGEMENT
 Manage tabs like a person would — check OPEN TABS before acting:
@@ -130,7 +141,7 @@ When you can determine multiple actions from the current screenshot (e.g. select
 Rules for batching:
 - Only batch actions that do NOT depend on page changes between them.
 - NEVER include page-changing actions in a batch (submit buttons, "Verify", "Next", "Confirm", navigate, form submission). Do the batch first, then after verifying the result in the next screenshot, submit as a separate action.
-- Prefer not to batch actions when the later action depends on seeing the result of the earlier one, especially after \`scroll\`, \`switchTab\`, \`inspectPage\`, or \`closeTab\`.
+- Prefer not to batch actions when the later action depends on seeing the result of the earlier one, especially after \`scroll\`, \`switchTab\`, \`inspectPage\`, \`closeTab\`, or download/export clicks. Run \`waitForDownloads\` as its own later action.
 - If unsure whether batching is safe, just return a single action.
 - **Fail-Safe**: If you attempted a batch previously and it failed or didn't work as expected, DO NOT batch again for those elements. Fall back to doing ONE action per turn (sequentially) to let the page settle.
 
@@ -150,6 +161,7 @@ Single action:
   "url": "<url for navigate or newTab action>",
   "tabIndex": <number>, // For switchTab or closeTab action
   "durationMs": 1000, // Optional, duration in milliseconds for wait, hold, drag, and recordVideo actions
+  "expectedFilename": "<optional substring expected in a downloaded filename>",
 ${subObjectiveField}
   "reasoning": "<brief explanation>",
   "memory": "<OPTIONAL: New lesson learned>"
@@ -179,6 +191,8 @@ export interface ActionHistoryItem {
    durationMs?: number;
    url?: string;
    sub_objective?: string;
+   expectedFilename?: string;
+   observation?: string;
    reasoning?: string;
    success: boolean;
 }
@@ -224,8 +238,10 @@ function formatActionHistory(recentActions: ActionHistoryItem[]): string {
          if (a.tabIndex !== undefined) desc += ` tab[${a.tabIndex}]`;
          if (a.text) desc += ` ("${a.text.substring(0, 30)}")`;
          if (a.submit) desc += ` + ENTER`;
+         if (a.expectedFilename) desc += ` expected="${a.expectedFilename.substring(0, 60)}"`;
          desc += a.success ? ' ✓' : ' ✗ FAILED';
          if (a.reasoning) desc += `\n         → Reason: "${a.reasoning.substring(0, 80)}"`;
+         if (a.observation) desc += `\n         → Result: "${a.observation.substring(0, 500)}"`;
          return desc;
       })
       .join('\n');
@@ -234,10 +250,33 @@ function formatActionHistory(recentActions: ActionHistoryItem[]): string {
    return historyText;
 }
 
+function formatDownloadBytes(size: number | undefined): string {
+   if (typeof size !== 'number' || !Number.isFinite(size)) return 'unknown size';
+   if (size < 1024) return `${size} B`;
+   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
+   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatDownloadContext(downloads: BrowserDownloadFile[] | undefined): string {
+   if (!downloads || downloads.length === 0) return '';
+
+   const lines = downloads.slice(-8).map((download, index) => {
+      const stateDetails = download.state === 'saved'
+         ? `${formatDownloadBytes(download.size)} | ${download.savedPath || 'path unavailable'}`
+         : download.error
+            ? download.error
+            : 'not saved yet';
+      return `[${index}] ${download.state.toUpperCase()} ${download.suggestedFilename} | ${stateDetails} | source: ${download.url || 'unknown'}`;
+   });
+
+   return `\n## 📥 BROWSER DOWNLOADS (${downloads.length}, newest last)\n${lines.join('\n')}\n`;
+}
+
 export function buildActionPrompt(
    goal: string,
    actionHistory: ActionHistoryItem[],
-   openTabs?: TabInfo[]
+   openTabs?: TabInfo[],
+   downloads?: BrowserDownloadFile[]
 ): string {
    const recentActions = actionHistory.slice(-15);
 
@@ -281,8 +320,10 @@ export function buildActionPrompt(
          .join('\n') + '\n';
    }
 
+   const downloadContext = formatDownloadContext(downloads);
+
    return `## 🎯 GOAL: ${goal}
-${loopWarning}${tabContext}${historyText}
+${loopWarning}${tabContext}${downloadContext}${historyText}
 
 ## ⚠️ BEFORE YOU ACT:
 1. Review history.
@@ -295,7 +336,8 @@ Choose one or more actions. Respond with JSON only:`;
 export function buildIterationLimitReviewPrompt(
    goal: string,
    actionHistory: ActionHistoryItem[],
-   openTabs?: TabInfo[]
+   openTabs?: TabInfo[],
+   downloads?: BrowserDownloadFile[]
 ): string {
    const recentActions = actionHistory.slice(-20);
    const historyText = formatActionHistory(recentActions);
@@ -314,13 +356,15 @@ export function buildIterationLimitReviewPrompt(
          .join('\n') + '\n';
    }
 
+   const downloadContext = formatDownloadContext(downloads);
+
    return `## ITERATION LIMIT REVIEW
 You have used all allowed automation turns for this task and did NOT finish it.
 Do NOT suggest another browser action. Do NOT return an automation action. Analyze what happened and help the user understand the failure mode.
 
 ## ORIGINAL GOAL
 ${goal}
-${tabContext}${historyText}
+${tabContext}${downloadContext}${historyText}
 
 Return JSON only with this exact shape:
 {

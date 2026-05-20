@@ -3,9 +3,9 @@
 // When the user freshly connects Gmail / WhatsApp / Home Assistant, post an
 // Inbox card explaining Smart Monitor and offering to set up a watch.
 // Idempotent: each integration carries a "fingerprint" of its current
-// connection (account id + ready epoch); we persist the last fingerprint we
-// offered and only post a new card when it changes (= the user disconnected
-// and reconnected, or it's the first install).
+// connection; we persist the last fingerprint we offered. We also check the
+// Inbox itself before posting so redeploys/state-file loss cannot duplicate
+// an existing offer card or trigger another push notification.
 //
 // The card uses the existing Inbox infrastructure (createInboxConversation +
 // replyActions). Clicking a quick reply posts the action's value back as a
@@ -198,21 +198,29 @@ async function getSmartMonitorTaskId(): Promise<string | null> {
 async function postOfferCard(args: {
     integration: IntegrationKey
     fingerprint: string
-}): Promise<void> {
+}): Promise<"posted" | "existing" | "skipped"> {
     const taskId = await getSmartMonitorTaskId()
     if (!taskId) {
         console.warn(
             `[smart-monitor-offer] no Smart Monitor system task yet; skipping ${args.integration.id} offer.`,
         )
-        return
+        return "skipped"
     }
 
     const copy = copyFor(args.integration.id)
     const actions = COMMON_ACTIONS(args.integration.label)
     const now = Date.now()
 
-    const { createInboxConversation } = await import("@/lib/scheduling/store")
+    const { createInboxConversation, findInboxConversationByTaskAndTitle } = await import("@/lib/scheduling/store")
     const { sendInboxPushNotification } = await import("@/lib/push-notifications")
+
+    const existing = findInboxConversationByTaskAndTitle(taskId, copy.title)
+    if (existing) {
+        console.log(
+            `[smart-monitor-offer] ${args.integration.id} offer already exists in Inbox (${existing.id}); skipping push.`,
+        )
+        return "existing"
+    }
 
     const conversationId = createInboxConversation({
         taskId,
@@ -240,6 +248,7 @@ async function postOfferCard(args: {
     console.log(
         `[smart-monitor-offer] posted ${args.integration.id} offer card (fingerprint=${args.fingerprint})`,
     )
+    return "posted"
 }
 
 // ---------------------------------------------------------------------------
@@ -310,10 +319,18 @@ export async function maybeOfferSmartMonitor(
                 skipped.push(`${integration.id}: same fingerprint as last offer`)
                 continue
             }
-            await postOfferCard({ integration, fingerprint: fp })
+            const result = await postOfferCard({ integration, fingerprint: fp })
+            if (result === "skipped") {
+                skipped.push(`${integration.id}: no smart monitor task`)
+                continue
+            }
             state[integration.id] = { lastOfferedFingerprint: fp }
             mutated = true
-            posted.push(integration.id)
+            if (result === "posted") {
+                posted.push(integration.id)
+            } else {
+                skipped.push(`${integration.id}: existing inbox offer`)
+            }
         }
 
         if (mutated) writeOfferState(state)
