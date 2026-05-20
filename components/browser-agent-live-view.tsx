@@ -41,11 +41,21 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
     const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
     const rfbRef = React.useRef<import("@novnc/novnc").default | null>(null)
+    const controlModeRef = React.useRef<LiveControlMode>("agent")
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
     const [busy, setBusy] = React.useState(false)
     const [inputBusy, setInputBusy] = React.useState(false)
     const [fullscreen, setFullscreen] = React.useState(false)
+    const controlMode = state?.controlMode
+
+    const focusRfb = React.useCallback(() => {
+        requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
+    }, [])
+
+    React.useEffect(() => {
+        if (controlMode) controlModeRef.current = controlMode
+    }, [controlMode])
 
     const refresh = React.useCallback(async () => {
         const res = await fetch("/api/browser-agent/live", { cache: "no-store" })
@@ -83,13 +93,13 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
             .then(({ default: RFB }) => {
                 if (disposed) return
                 const rfb = new RFB(target, wsUrl)
-                rfb.viewOnly = true
                 rfb.scaleViewport = true
                 rfb.resizeSession = false
                 rfb.background = "#ffffff"
                 rfb.qualityLevel = 8
                 rfb.compressionLevel = 2
                 rfb.showDotCursor = true
+                rfb.viewOnly = controlModeRef.current !== "user"
                 rfb.addEventListener("connect", () => setConnection("connected"))
                 rfb.addEventListener("disconnect", () => setConnection("disconnected"))
                 rfb.addEventListener("securityfailure", () => setConnection("error"))
@@ -107,12 +117,9 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
     }, [state?.mode, state?.wsUrl])
 
     React.useEffect(() => {
-        if (!rfbRef.current || !state) return
-        rfbRef.current.viewOnly = state.controlMode !== "user"
-        if (state.controlMode === "user") {
-            requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
-        }
-    }, [state])
+        if (!rfbRef.current || !controlMode) return
+        rfbRef.current.viewOnly = controlMode !== "user"
+    }, [controlMode])
 
     React.useEffect(() => {
         const updateFullscreen = () => {
@@ -136,14 +143,14 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
         }
         const nextState = await res.json() as BrowserAgentLiveState
         setState(nextState)
-        requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
         return nextState
     }, [])
 
     const setControl = async (mode: LiveControlMode) => {
         setBusy(true)
         try {
-            await postLiveAction({ action: mode === "user" ? "take_control" : "release_control" })
+            const nextState = await postLiveAction({ action: mode === "user" ? "take_control" : "release_control" })
+            if (mode === "user" && nextState.controlMode === "user") focusRfb()
         } finally {
             setBusy(false)
         }
@@ -177,10 +184,11 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
         try {
             const text = await navigator.clipboard?.readText?.()
             await pasteText(text || "")
+            focusRfb()
         } catch {
-            requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
+            focusRfb()
         }
-    }, [pasteText])
+    }, [focusRfb, pasteText])
 
     const sendKey = React.useCallback(async (key: string) => {
         setInputBusy(true)

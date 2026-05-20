@@ -5,7 +5,7 @@
 import { AgentController, ResetContextOptions, createAgentController } from './agent';
 import type { AgentTerminalAction, BrowserEvidenceCapture } from './agent';
 import { BrowserManager, BrowserPageSession, createBrowserManager } from './browser';
-import { AgentConfig } from './config';
+import { AgentConfig, type MediaResolutionLevel } from './config';
 import { clearLearnings } from './memory';
 import { DEFAULT_VIEWPORT } from './viewport';
 import { VisionService, VisionUsage, createVisionService } from './vision';
@@ -15,6 +15,7 @@ export interface SubmitTaskOptions {
     preserveContext?: boolean;
     model?: string;
     thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+    mediaResolution?: MediaResolutionLevel;
 }
 
 export interface RuntimeResetOptions extends ResetContextOptions {
@@ -57,6 +58,7 @@ export interface AgentRuntimeStatus {
     llm: {
         model: string;
         thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
+        mediaResolution: MediaResolutionLevel;
     };
     usage: {
         session: UsageTotals;
@@ -247,6 +249,7 @@ export function createAgentRuntime(
             vision = createVisionService({
                 model: config.llm.model,
                 thinkingLevel: config.llm.thinkingLevel,
+                mediaResolution: config.llm.mediaResolution,
             }, recordVisionUsage);
 
             await browserManager.launch();
@@ -260,6 +263,7 @@ export function createAgentRuntime(
                 waitActionDelayMs: config.runtime.waitActionDelayMs,
                 advancedModel: config.llm.advancedModel,
                 advancedThinkingLevel: config.llm.advancedThinkingLevel,
+                advancedMediaResolution: config.llm.advancedMediaResolution,
                 onEvidence: options.onEvidence,
             });
 
@@ -298,6 +302,9 @@ export function createAgentRuntime(
             }
             if (typeof options.thinkingLevel === 'string' && options.thinkingLevel.trim()) {
                 vision.updateConfig({ thinkingLevel: options.thinkingLevel });
+            }
+            if (typeof options.mediaResolution === 'string' && options.mediaResolution.trim()) {
+                vision.updateConfig({ mediaResolution: options.mediaResolution });
             }
 
             const llmConfig = vision.getConfig();
@@ -434,6 +441,7 @@ export function createAgentRuntime(
                     llm: {
                         model: config.llm.model,
                         thinkingLevel: config.llm.thinkingLevel,
+                        mediaResolution: config.llm.mediaResolution,
                     },
                     usage: {
                         session: cloneTotals(sessionUsage),
@@ -473,6 +481,7 @@ export function createAgentRuntime(
                 llm: {
                     model: llmConfig.model,
                     thinkingLevel: llmConfig.thinkingLevel,
+                    mediaResolution: llmConfig.mediaResolution,
                 },
                 usage: {
                     session: cloneTotals(sessionUsage),

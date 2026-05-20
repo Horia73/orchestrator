@@ -334,6 +334,12 @@ function BrowserModelSlotControls({
   const providerDef = data.providers[value.provider]
   const modelDef = providerDef?.models[value.model]
   const availableThinkingLevels = availableBrowserThinkingLevelsForModel(modelDef)
+  const hasThinkingSettings = availableThinkingLevels.length > 0
+  const visibleFeatures = browserVisibleFeatures(modelDef?.features ?? [], hasThinkingSettings)
+  const effectiveModelOptions = {
+    ...defaultBrowserModelOptions(visibleFeatures),
+    ...modelOptionsForFeatures(visibleFeatures, value.modelOptions),
+  }
   const effectiveThinkingLevel = availableThinkingLevels.includes(value.thinkingLevel)
     ? value.thinkingLevel
     : browserThinkingFallback(availableThinkingLevels)
@@ -345,16 +351,27 @@ function BrowserModelSlotControls({
     const nextThinkingLevel: ThinkingLevel = supportsCurrent
       ? effectiveThinkingLevel
       : browserThinkingFallback(nextThinkingLevels)
+    const nextHasThinkingSettings = nextThinkingLevels.length > 0
+    const nextVisibleFeatures = browserVisibleFeatures(nextModelDef?.features ?? [], nextHasThinkingSettings)
     onChange(slot, {
       provider: providerId,
       model: modelId,
       thinkingLevel: nextThinkingLevel,
+      modelOptions: defaultBrowserModelOptions(nextVisibleFeatures),
     })
   }
 
   const handleThinkingChange = (thinkingLevel: ThinkingLevel) => {
     if (thinkingLevel === value.thinkingLevel) return
-    onChange(slot, { ...value, thinkingLevel })
+    onChange(slot, { ...value, thinkingLevel, modelOptions: effectiveModelOptions })
+  }
+
+  const handleFeatureChange = (featureId: string, featureValue: ModelFeatureValue) => {
+    onChange(slot, {
+      ...value,
+      thinkingLevel: effectiveThinkingLevel,
+      modelOptions: { ...effectiveModelOptions, [featureId]: featureValue },
+    })
   }
 
   return (
@@ -380,6 +397,16 @@ function BrowserModelSlotControls({
               Not adjustable for this model
             </div>
           )}
+        </Field>
+      )}
+
+      {visibleFeatures.length > 0 && (
+        <Field label="Features">
+          <FeatureControls
+            features={visibleFeatures}
+            values={effectiveModelOptions}
+            onChange={handleFeatureChange}
+          />
         </Field>
       )}
     </div>
@@ -423,6 +450,31 @@ function browserThinkingFallback(levels: ThinkingLevel[]): ThinkingLevel {
   if (levels.includes("high")) return "high"
   if (levels.includes("low")) return "low"
   return levels[0] ?? "high"
+}
+
+function defaultBrowserModelOptions(features: NonNullable<ModelDef["features"]>): Record<string, ModelFeatureValue> {
+  const out = defaultModelOptions(features)
+  const mediaFeature = features.find(feature => feature.id === "media_resolution")
+  const hasExplicitMediaDefault = mediaFeature && "defaultValue" in mediaFeature && mediaFeature.defaultValue !== undefined
+  if (mediaFeature && !hasExplicitMediaDefault && (!out.media_resolution || out.media_resolution === "media_resolution_low")) {
+    out.media_resolution = "media_resolution_medium"
+  }
+  return out
+}
+
+function browserVisibleFeatures(
+  features: NonNullable<ModelDef["features"]>,
+  hasThinkingSettings: boolean
+): NonNullable<ModelDef["features"]> {
+  return visibleModelFeatures(features, hasThinkingSettings)
+    .map(feature => {
+      if (feature.id !== "media_resolution" || feature.type !== "enum") return feature
+      return {
+        ...feature,
+        options: feature.options.filter(option => option.value !== "media_resolution_ultra_high"),
+      }
+    })
+    .filter(feature => feature.type !== "enum" || feature.options.length > 0)
 }
 
 function KindBadge({ kind }: { kind: AgentInfo["kind"] }) {

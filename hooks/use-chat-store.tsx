@@ -1079,6 +1079,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const thinkingTimerRef = React.useRef<number | null>(null)
   const streamingRef = React.useRef(false)
   const streamDoneRef = React.useRef(false)
+  const clientStreamMessageIdRef = React.useRef<string | null>(null)
   const streamPageWasHiddenRef = React.useRef(false)
   const activeConversationIdRef = React.useRef<string | null>(null)
   const conversationsRef = React.useRef<Conversation[]>([])
@@ -1291,8 +1292,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     }
   }, [])
 
+  const detachStreaming = React.useCallback(() => {
+    // Navigation should detach this tab's live reader, not stop the server run.
+    streamDoneRef.current = true
+    clientStreamMessageIdRef.current = null
+    cleanupStream()
+    dispatch({ type: "SET_STREAMING", isStreaming: false })
+  }, [cleanupStream])
+
   const stopStreaming = React.useCallback(() => {
     const conversationId = activeConversationIdRef.current
+    clientStreamMessageIdRef.current = null
     if (conversationId) {
       streamDoneRef.current = true
       dispatch({
@@ -1815,7 +1825,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [applyConversationReadState, handleAssistantFinished])
 
   const newChat = React.useCallback(() => {
-    stopStreaming()
+    detachStreaming()
     dispatch({ type: "NEW_CHAT" })
     if (typeof window !== "undefined") {
       setTimeout(
@@ -1823,21 +1833,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         0
       )
     }
-  }, [stopStreaming])
+  }, [detachStreaming])
 
   const selectConversation = React.useCallback(
     (id: string) => {
       // Re-clicking the active chat would otherwise schedule a no-op
       // transition and flash the skeleton overlay for one frame.
       if (activeConversationIdRef.current === id) return
-      stopStreaming()
+      detachStreaming()
       markConversationRead(id)
       void loadInitialMessages(id)
       startSwitchTransition(() => {
         dispatch({ type: "SELECT_CONVERSATION", id })
       })
     },
-    [loadInitialMessages, markConversationRead, stopStreaming]
+    [detachStreaming, loadInitialMessages, markConversationRead]
   )
 
   const loadOlderMessages = React.useCallback(
@@ -1970,6 +1980,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const assistantMsgId = generateId()
       const abortController = new AbortController()
       abortControllerRef.current = abortController
+      clientStreamMessageIdRef.current = assistantMsgId
       streamingRef.current = true
       streamDoneRef.current = false
       streamPageWasHiddenRef.current = document.visibilityState !== "visible"
@@ -2717,17 +2728,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           handleAssistantFinished(finalConvId, finalMsg)
         })
         .finally(() => {
-          streamingRef.current = false
-          abortControllerRef.current = null
-          if (thinkingTimerRef.current !== null) {
-            window.clearInterval(thinkingTimerRef.current)
-            thinkingTimerRef.current = null
-          }
-          // Only dispatch SET_STREAMING if 'done' didn't already handle it
-          // (ADD_ASSISTANT_MESSAGE includes stoppedStreamState)
-          if (!streamDoneRef.current) {
-            dispatch({ type: "SET_STREAMING", isStreaming: false })
-            dispatch({ type: "CHAT_STREAM_ENDED", conversationId: finalConvId })
+          if (clientStreamMessageIdRef.current === assistantMsgId) {
+            streamingRef.current = false
+            abortControllerRef.current = null
+            clientStreamMessageIdRef.current = null
+            if (thinkingTimerRef.current !== null) {
+              window.clearInterval(thinkingTimerRef.current)
+              thinkingTimerRef.current = null
+            }
+            // Only dispatch SET_STREAMING if 'done' didn't already handle it
+            // (ADD_ASSISTANT_MESSAGE includes stoppedStreamState)
+            if (!streamDoneRef.current) {
+              dispatch({ type: "SET_STREAMING", isStreaming: false })
+              dispatch({
+                type: "CHAT_STREAM_ENDED",
+                conversationId: finalConvId,
+              })
+            }
           }
         })
     },

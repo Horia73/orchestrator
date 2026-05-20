@@ -28,6 +28,7 @@ export interface AgentControllerOptions {
     waitActionDelayMs?: number;
     advancedModel?: string;
     advancedThinkingLevel?: 'low' | 'medium' | 'high';
+    advancedMediaResolution?: VisionConfig['mediaResolution'];
     maxEscalationIterations?: number;
     onEvidence?: (capture: BrowserEvidenceCapture) => void | Promise<void>;
 }
@@ -99,6 +100,7 @@ export function createAgentController(
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
     const advancedModel = options.advancedModel ?? 'gemini-3.1-pro-preview';
     const advancedThinkingLevel = options.advancedThinkingLevel ?? 'low';
+    const advancedMediaResolution = options.advancedMediaResolution ?? 'medium';
     const maxEscalationIterations = options.maxEscalationIterations ?? 10;
     const onEvidence = options.onEvidence;
 
@@ -120,6 +122,7 @@ export function createAgentController(
         subObjective: string;
         baseModel: string;
         baseThinkingLevel: VisionConfig['thinkingLevel'];
+        baseMediaResolution: VisionConfig['mediaResolution'];
         iterations: number;
     } | null = null;
 
@@ -139,7 +142,8 @@ export function createAgentController(
 
         vision.updateConfig({
             model: escalationState.baseModel,
-            thinkingLevel: escalationState.baseThinkingLevel
+            thinkingLevel: escalationState.baseThinkingLevel,
+            mediaResolution: escalationState.baseMediaResolution
         });
     };
 
@@ -407,12 +411,14 @@ export function createAgentController(
                                 subObjective: subObj,
                                 baseModel: currentConfig.model,
                                 baseThinkingLevel: currentConfig.thinkingLevel,
+                                baseMediaResolution: currentConfig.mediaResolution,
                                 iterations: 0
                             };
 
                             vision.updateConfig({
                                 model: advancedModel,
-                                thinkingLevel: advancedThinkingLevel
+                                thinkingLevel: advancedThinkingLevel,
+                                mediaResolution: advancedMediaResolution
                             });
 
                             currentGoal = subObj;

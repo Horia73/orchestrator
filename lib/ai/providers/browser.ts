@@ -11,8 +11,8 @@ import { saveGeneratedAsset } from '@/lib/ai/media-assets'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
-import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
-import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ThinkingLevel } from '@/lib/config'
+import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type MediaResolutionLevel } from '@/lib/browser-agent-runtime/config'
+import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
 import { latestUserPromptWithPortableHistory } from './history'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
 
@@ -109,6 +109,7 @@ export class BrowserProvider implements AIProvider {
                 preserveContext: lease.resumed,
                 model: runtimeConfig.llm.model,
                 thinkingLevel: runtimeConfig.llm.thinkingLevel,
+                mediaResolution: runtimeConfig.llm.mediaResolution,
             })
 
             let finalStatus = await runtime.getStatus()
@@ -168,6 +169,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
     const appConfig = getConfig()
     const light = appConfig.browserAgent.light
     const pro = appConfig.browserAgent.pro
+    const legacyBrowserOptions = appConfig.agentOverrides.browser_agent?.modelOptions
     const liveView = parseBooleanEnv(process.env.BROWSER_AGENT_LIVE_VIEW, process.platform === 'linux')
 
     if (light.provider !== 'google' || pro.provider !== 'google') {
@@ -191,8 +193,10 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
         llm: {
             model: light.model,
             thinkingLevel: mapThinkingLevel(light.thinkingLevel),
+            mediaResolution: mapMediaResolution(light.modelOptions?.media_resolution ?? legacyBrowserOptions?.media_resolution),
             advancedModel: pro.model,
             advancedThinkingLevel: mapAdvancedThinkingLevel(pro.thinkingLevel),
+            advancedMediaResolution: mapMediaResolution(pro.modelOptions?.media_resolution ?? legacyBrowserOptions?.media_resolution),
         },
     }
 }
@@ -214,6 +218,16 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
     if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
     if (['0', 'false', 'no', 'off'].includes(normalized)) return false
     return fallback
+}
+
+function mapMediaResolution(value: ModelFeatureValue | undefined): MediaResolutionLevel {
+    const normalized = String(value ?? '')
+        .trim()
+        .toLowerCase()
+        .replace(/^media[_-]resolution[_-]/, '')
+    if (normalized === 'low' || normalized === 'medium' || normalized === 'high') return normalized
+    if (normalized === 'ultra_high' || normalized === 'ultrahigh') return 'high'
+    return 'medium'
 }
 
 function formatBrowserRunOutput(

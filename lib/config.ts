@@ -225,11 +225,17 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
         provider: "google",
         model: "gemini-3-flash-preview",
         thinkingLevel: "low",
+        modelOptions: {
+            media_resolution: "media_resolution_medium",
+        },
     },
     pro: {
         provider: "google",
         model: "gemini-3.1-pro-preview",
         thinkingLevel: "high",
+        modelOptions: {
+            media_resolution: "media_resolution_medium",
+        },
     },
 }
 
@@ -332,7 +338,7 @@ function normalizeBrowserAgentModelSettings(
         provider: value?.provider || fallback.provider,
         model: value?.model || fallback.model,
         thinkingLevel: value?.thinkingLevel || fallback.thinkingLevel,
-        modelOptions: value?.modelOptions,
+        modelOptions: value?.modelOptions ?? fallback.modelOptions,
     }
 }
 

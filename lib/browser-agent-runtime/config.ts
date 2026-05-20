@@ -24,12 +24,15 @@ export interface RuntimeConfig {
 
 export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 export type AdvancedThinkingLevel = 'low' | 'medium' | 'high';
+export type MediaResolutionLevel = 'low' | 'medium' | 'high';
 
 export interface LlmConfig {
     model: string;
     thinkingLevel: ThinkingLevel;
+    mediaResolution: MediaResolutionLevel;
     advancedModel: string;
     advancedThinkingLevel: AdvancedThinkingLevel;
+    advancedMediaResolution: MediaResolutionLevel;
 }
 
 export interface AgentConfig {
@@ -77,8 +80,10 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
     llm: {
         model: 'gemini-3-flash-preview',
         thinkingLevel: 'low',
+        mediaResolution: 'medium',
         advancedModel: 'gemini-3.1-pro-preview',
         advancedThinkingLevel: 'low',
+        advancedMediaResolution: 'medium',
     },
 };
 
@@ -128,6 +133,19 @@ function parseAdvancedThinkingLevel(value: string | undefined): AdvancedThinking
     const parsed = parseThinkingLevel(value);
     if (parsed === 'low' || parsed === 'medium' || parsed === 'high') {
         return parsed;
+    }
+
+    return undefined;
+}
+
+function parseMediaResolutionLevel(value: string | undefined): MediaResolutionLevel | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    const normalized = value.trim().toLowerCase().replace(/^media[_-]resolution[_-]/, '');
+    if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized;
     }
 
     return undefined;
@@ -190,6 +208,19 @@ function applyEnvOverrides(config: AgentConfig): AgentConfig {
         overridden.llm.advancedThinkingLevel = advancedThinkingLevelFromEnv;
     }
 
+    const mediaResolutionFromEnv = parseMediaResolutionLevel(
+        process.env.AGENT_MEDIA_RESOLUTION
+        || process.env.BROWSER_AGENT_MEDIA_RESOLUTION
+    );
+    if (mediaResolutionFromEnv) {
+        overridden.llm.mediaResolution = mediaResolutionFromEnv;
+    }
+
+    const advancedMediaResolutionFromEnv = parseMediaResolutionLevel(process.env.AGENT_ADVANCED_MEDIA_RESOLUTION);
+    if (advancedMediaResolutionFromEnv) {
+        overridden.llm.advancedMediaResolution = advancedMediaResolutionFromEnv;
+    }
+
     return overridden;
 }
 
@@ -238,8 +269,10 @@ function sanitizeConfig(config: AgentConfig): AgentConfig {
         llm: {
             model: config.llm.model || DEFAULT_AGENT_CONFIG.llm.model,
             thinkingLevel: parseThinkingLevel(config.llm.thinkingLevel) || DEFAULT_AGENT_CONFIG.llm.thinkingLevel,
+            mediaResolution: parseMediaResolutionLevel(config.llm.mediaResolution) || DEFAULT_AGENT_CONFIG.llm.mediaResolution,
             advancedModel: config.llm.advancedModel || DEFAULT_AGENT_CONFIG.llm.advancedModel,
             advancedThinkingLevel: parseAdvancedThinkingLevel(config.llm.advancedThinkingLevel) || DEFAULT_AGENT_CONFIG.llm.advancedThinkingLevel,
+            advancedMediaResolution: parseMediaResolutionLevel(config.llm.advancedMediaResolution) || DEFAULT_AGENT_CONFIG.llm.advancedMediaResolution,
         },
     };
 }

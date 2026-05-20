@@ -70,6 +70,8 @@ export default function Page() {
               <HomeSkeleton />
             )
           ) : null
+        ) : isSwitchingConversation && !state.activeConversationId ? (
+          <ChatSkeleton />
         ) : isActiveConversationPriming ? (
           <ChatSkeleton />
         ) : state.activeConversationId && activeConversationStatus === "error" ? (

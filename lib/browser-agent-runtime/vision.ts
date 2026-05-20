@@ -3,7 +3,7 @@
  * Uses smarter prompts with memory and history
  */
 
-import { GoogleGenAI, type GenerateContentConfig } from '@google/genai';
+import { GoogleGenAI, MediaResolution, type GenerateContentConfig } from '@google/genai';
 import { ActionTrace, BrowserFrameSnapshot } from './browser';
 import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
 import { getMemories } from './memory';
@@ -30,6 +30,7 @@ export interface AgentAction {
 export interface VisionConfig {
     model: string;
     thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
+    mediaResolution: 'low' | 'medium' | 'high';
 }
 
 export interface VisionUsage {
@@ -80,9 +81,96 @@ function buildThinkingConfig(explicitLevel?: unknown): { thinkingLevel: VisionCo
     };
 }
 
+function sanitizeMediaResolution(value: unknown): VisionConfig['mediaResolution'] | '' {
+    const normalized = String(value || '').trim().toLowerCase().replace(/^media[_-]resolution[_-]/, '');
+    if (normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+        return normalized;
+    }
+    return '';
+}
+
+function toGeminiMediaResolution(level: VisionConfig['mediaResolution']): MediaResolution {
+    switch (level) {
+        case 'low':
+            return MediaResolution.MEDIA_RESOLUTION_LOW;
+        case 'high':
+            return MediaResolution.MEDIA_RESOLUTION_HIGH;
+        case 'medium':
+        default:
+            return MediaResolution.MEDIA_RESOLUTION_MEDIUM;
+    }
+}
+
 function isThinkingCompatError(error: unknown): boolean {
     const message = error instanceof Error ? error.message : String(error);
     return /thinking/i.test(message) && /(not supported|invalid)/i.test(message);
+}
+
+function isMediaResolutionCompatError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /media[_\s-]?resolution/i.test(message) && /(not supported|invalid|unknown|unrecognized)/i.test(message);
+}
+
+function buildRequestConfig(state: VisionConfig): GenerateContentConfig {
+    return {
+        thinkingConfig: buildThinkingConfig(state.thinkingLevel),
+        mediaResolution: toGeminiMediaResolution(state.mediaResolution),
+    } as unknown as GenerateContentConfig;
+}
+
+async function generateContentWithFallback(
+    ai: GoogleGenAI,
+    model: string,
+    state: VisionConfig,
+    requestParts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>,
+) {
+    const request = (config: GenerateContentConfig) => ai.models.generateContent({
+        model,
+        config,
+        contents: [
+            {
+                role: 'user',
+                parts: requestParts,
+            },
+        ],
+    });
+
+    const initialConfig = buildRequestConfig(state);
+
+    try {
+        return await request(initialConfig);
+    } catch (error) {
+        if (!isThinkingCompatError(error) && !isMediaResolutionCompatError(error)) {
+            throw error;
+        }
+
+        const fallbackConfig: Partial<GenerateContentConfig> = { ...initialConfig };
+        if (isThinkingCompatError(error)) {
+            delete fallbackConfig.thinkingConfig;
+        }
+        if (isMediaResolutionCompatError(error)) {
+            delete fallbackConfig.mediaResolution;
+        }
+
+        try {
+            return await request(fallbackConfig as GenerateContentConfig);
+        } catch (fallbackError) {
+            const retryConfig: Partial<GenerateContentConfig> = { ...fallbackConfig };
+            let shouldRetry = false;
+            if (retryConfig.thinkingConfig && isThinkingCompatError(fallbackError)) {
+                delete retryConfig.thinkingConfig;
+                shouldRetry = true;
+            }
+            if (retryConfig.mediaResolution && isMediaResolutionCompatError(fallbackError)) {
+                delete retryConfig.mediaResolution;
+                shouldRetry = true;
+            }
+            if (shouldRetry) {
+                return request(retryConfig as GenerateContentConfig);
+            }
+            throw fallbackError;
+        }
+    }
 }
 
 function extractUsage(rawUsage: unknown): Omit<VisionUsage, 'model'> {
@@ -263,6 +351,7 @@ export function createVisionService(
     const state: VisionConfig = {
         model: initialConfig.model || 'gemini-3-flash-preview',
         thinkingLevel: sanitizeThinkingLevel(initialConfig.thinkingLevel) || 'minimal',
+        mediaResolution: sanitizeMediaResolution(initialConfig.mediaResolution) || 'medium',
     };
 
     const service: VisionService = {
@@ -275,12 +364,16 @@ export function createVisionService(
             if (typeof patch.thinkingLevel === 'string' && patch.thinkingLevel.trim()) {
                 state.thinkingLevel = sanitizeThinkingLevel(patch.thinkingLevel) || state.thinkingLevel;
             }
+            if (typeof patch.mediaResolution === 'string' && patch.mediaResolution.trim()) {
+                state.mediaResolution = sanitizeMediaResolution(patch.mediaResolution) || state.mediaResolution;
+            }
         },
 
         getConfig(): VisionConfig {
             return {
                 model: state.model,
                 thinkingLevel: state.thinkingLevel,
+                mediaResolution: state.mediaResolution,
             };
         },
 
@@ -310,38 +403,7 @@ export function createVisionService(
                     : '';
                 const requestParts = buildVisionParts(systemPrompt, historyContext, actionPrompt, frame, recentTrace, supplementalFrames);
 
-                const requestConfig = { thinkingConfig: buildThinkingConfig(state.thinkingLevel) } as unknown as GenerateContentConfig;
-
-                let response;
-                try {
-                    response = await ai.models.generateContent({
-                        model: state.model,
-                        config: requestConfig,
-                        contents: [
-                            {
-                                role: 'user',
-                                parts: requestParts,
-                            },
-                        ],
-                    });
-                } catch (error) {
-                    if (!isThinkingCompatError(error)) {
-                        throw error;
-                    }
-
-                    const fallbackConfig = {} satisfies GenerateContentConfig;
-
-                    response = await ai.models.generateContent({
-                        model: state.model,
-                        config: fallbackConfig,
-                        contents: [
-                            {
-                                role: 'user',
-                                parts: requestParts,
-                            },
-                        ],
-                    });
-                }
+                const response = await generateContentWithFallback(ai, state.model, state, requestParts);
 
                 const usage = extractUsage(getUsageMetadata(response));
                 if (typeof onUsage === 'function') {
@@ -395,36 +457,7 @@ export function createVisionService(
                     : '';
                 const requestParts = buildVisionParts('', historyContext, reviewPrompt, frame, recentTrace, supplementalFrames);
 
-                const requestConfig = { thinkingConfig: buildThinkingConfig(state.thinkingLevel) } as unknown as GenerateContentConfig;
-
-                let response;
-                try {
-                    response = await ai.models.generateContent({
-                        model: state.model,
-                        config: requestConfig,
-                        contents: [
-                            {
-                                role: 'user',
-                                parts: requestParts,
-                            },
-                        ],
-                    });
-                } catch (error) {
-                    if (!isThinkingCompatError(error)) {
-                        throw error;
-                    }
-
-                    response = await ai.models.generateContent({
-                        model: state.model,
-                        config: {},
-                        contents: [
-                            {
-                                role: 'user',
-                                parts: requestParts,
-                            },
-                        ],
-                    });
-                }
+                const response = await generateContentWithFallback(ai, state.model, state, requestParts);
 
                 const usage = extractUsage(getUsageMetadata(response));
                 if (typeof onUsage === 'function') {
