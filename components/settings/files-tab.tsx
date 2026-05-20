@@ -21,7 +21,6 @@ import {
 
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
-import { useSettings } from "@/components/settings/use-settings"
 
 type FileKind = "json" | "env" | "markdown"
 type FileCategory = "knowledge" | "behavior" | "integrations" | "onboarding" | "system" | "models"
@@ -30,7 +29,7 @@ type JsonPath = Array<string | number>
 type EnvQuote = "none" | "single" | "double"
 
 type EnvLine =
-  | { kind: "entry"; id: string; key: string; value: string; label?: string; quote: EnvQuote; exportPrefix: boolean }
+  | { kind: "entry"; id: string; key: string; value: string; quote: EnvQuote; exportPrefix: boolean }
   | { kind: "raw"; id: string; value: string }
 
 interface WorkspaceFileSummary {
@@ -68,7 +67,6 @@ type JsonDiagnostics =
 const AUTO_SAVE_DELAY_MS = 700
 const ENV_RESTORE_FOCUS_SUPPRESSION_MS = 2500
 const LAST_SELECTED_FILE_STORAGE_KEY = "orchestrator:settings:files:last-selected-id"
-const ENV_LABEL_PREFIX = "# @label "
 
 const ENV_PRESETS = [
   {
@@ -126,18 +124,6 @@ export function FilesTab() {
   const fetchFileRequestRef = React.useRef(0)
 
   const dirty = selectedFile !== null && content !== selectedFile.content
-
-  // Env var titles come from the provider registry (single source of truth),
-  // not a hardcoded preset list — so every provider key (Google/Anthropic/
-  // OpenAI/…) gets its real name and unknown keys get one neutral label.
-  const { data: settings } = useSettings()
-  const envLabels = React.useMemo(() => {
-    const map: Record<string, string> = {}
-    for (const provider of Object.values(settings?.providers ?? {})) {
-      if (provider.apiKeyEnv && provider.name) map[provider.apiKeyEnv] = provider.name
-    }
-    return map
-  }, [settings?.providers])
 
   const jsonDiagnostics = React.useMemo(
     () => selectedFile?.kind === "json" ? parseJson(content) : null,
@@ -436,7 +422,6 @@ export function FilesTab() {
             <EnvEditor
               content={content}
               readOnly={selectedFile.readOnly === true}
-              envLabels={envLabels}
               fileKey={selectedFile.id}
               dirty={dirty}
               saveState={saveState}
@@ -477,7 +462,6 @@ export function FilesTab() {
 function EnvEditor({
   content,
   readOnly,
-  envLabels,
   fileKey,
   dirty,
   saveState,
@@ -486,7 +470,6 @@ function EnvEditor({
 }: {
   content: string
   readOnly: boolean
-  envLabels: Record<string, string>
   fileKey: string
   dirty: boolean
   saveState: SaveState
@@ -678,8 +661,7 @@ function EnvEditor({
         {saveState.kind === "error" && (
           <p className="px-4 pb-2 text-[11.5px] text-destructive">{saveState.message}</p>
         )}
-        <div className="hidden grid-cols-[minmax(120px,180px)_minmax(150px,240px)_minmax(0,1fr)_86px_32px] gap-3 border-t border-border/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-foreground/35 lg:grid">
-          <span>Label</span>
+        <div className="hidden grid-cols-[minmax(180px,260px)_minmax(0,1fr)_86px_32px] gap-3 border-t border-border/50 px-4 py-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-foreground/35 lg:grid">
           <span>Name</span>
           <span>Value</span>
           <span>Status</span>
@@ -720,12 +702,11 @@ function EnvEditor({
             <EnvEntryRow
               key={row.id}
               row={row}
-              fallbackLabel={(row.key && envLabels[row.key]) || "Custom variable"}
               duplicate={Boolean(row.key) && (keyCounts.get(row.key) ?? 0) > 1}
               readOnly={readOnly}
               revealed={revealed[row.id] === true}
-              shouldFocusLabel={focusId === row.id}
-              onLabelFocused={() => setFocusId(current => current === row.id ? null : current)}
+              shouldFocusName={focusId === row.id}
+              onNameFocused={() => setFocusId(current => current === row.id ? null : current)}
               onReveal={() => setRevealed(prev => ({ ...prev, [row.id]: !prev[row.id] }))}
               onChange={next => updateRow(row.id, next)}
               onRemove={() => removeRow(row.id)}
@@ -747,30 +728,28 @@ function EnvEditor({
 
 function EnvEntryRow({
   row,
-  fallbackLabel,
   duplicate,
   readOnly,
   revealed,
-  shouldFocusLabel,
-  onLabelFocused,
+  shouldFocusName,
+  onNameFocused,
   onReveal,
   onChange,
   onRemove,
 }: {
   row: Extract<EnvLine, { kind: "entry" }>
-  fallbackLabel: string
   duplicate: boolean
   readOnly: boolean
   revealed: boolean
-  shouldFocusLabel: boolean
-  onLabelFocused: () => void
+  shouldFocusName: boolean
+  onNameFocused: () => void
   onReveal: () => void
   onChange: (row: Extract<EnvLine, { kind: "entry" }>) => void
   onRemove: () => void
 }) {
-  const labelInputRef = React.useRef<HTMLInputElement | null>(null)
+  const nameInputRef = React.useRef<HTMLInputElement | null>(null)
   const copyResetTimerRef = React.useRef<number | null>(null)
-  const [copiedField, setCopiedField] = React.useState<"label" | "name" | "value" | null>(null)
+  const [copiedField, setCopiedField] = React.useState<"name" | "value" | null>(null)
   const missingKey = row.key.trim().length === 0
   const valueSet = row.value.trim().length > 0
   // A blank just-added row isn't an error — only flag "no name" once there's
@@ -778,7 +757,6 @@ function EnvEntryRow({
   const nameError = missingKey && valueSet
   const isNew = missingKey && !valueSet
   const invalid = nameError || duplicate
-  const labelValue = row.label ?? (fallbackLabel === "Custom variable" ? "" : fallbackLabel)
   const statusText = copiedField
     ? "Copied"
     : nameError
@@ -801,10 +779,10 @@ function EnvEntryRow({
           : "bg-amber-500/10 text-amber-700 dark:text-amber-500"
 
   React.useEffect(() => {
-    if (!shouldFocusLabel) return
-    labelInputRef.current?.focus()
-    onLabelFocused()
-  }, [onLabelFocused, shouldFocusLabel])
+    if (!shouldFocusName) return
+    nameInputRef.current?.focus()
+    onNameFocused()
+  }, [onNameFocused, shouldFocusName])
 
   React.useEffect(() => {
     return () => {
@@ -812,7 +790,7 @@ function EnvEntryRow({
     }
   }, [])
 
-  const copyField = React.useCallback(async (field: "label" | "name" | "value", value: string) => {
+  const copyField = React.useCallback(async (field: "name" | "value", value: string) => {
     if (!value) return
     if (!await copyTextToClipboard(value)) return
     setCopiedField(field)
@@ -824,27 +802,10 @@ function EnvEntryRow({
   }, [])
 
   return (
-    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(120px,180px)_minmax(150px,240px)_minmax(0,1fr)_86px_32px] lg:items-center">
+    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(180px,260px)_minmax(0,1fr)_86px_32px] lg:items-center">
       <div className="min-w-0">
         <input
-          ref={labelInputRef}
-          value={labelValue}
-          readOnly={readOnly}
-          onChange={event => onChange({ ...row, label: normalizeEnvLabelInput(event.target.value) })}
-          onPointerDown={event => {
-            if (event.button !== 0) return
-            void copyField("label", labelValue)
-          }}
-          className={cn(fieldClassName(readOnly), "text-[12.5px]")}
-          placeholder="Label"
-          title={labelValue ? "Click to copy" : undefined}
-          autoComplete="off"
-          spellCheck={false}
-        />
-      </div>
-
-      <div className="min-w-0">
-        <input
+          ref={nameInputRef}
           value={row.key}
           readOnly={readOnly}
           aria-invalid={invalid}
@@ -971,7 +932,7 @@ function EnvRawRow({
   }
 
   return (
-    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(120px,180px)_minmax(150px,240px)_minmax(0,1fr)_86px_32px] lg:items-start">
+    <div className="grid gap-3 px-4 py-3 lg:grid-cols-[minmax(180px,260px)_minmax(0,1fr)_86px_32px] lg:items-start">
       <div className="flex h-8 items-center text-[11.5px] font-medium text-foreground/45">Raw line</div>
       <input
         value={row.value}
@@ -981,7 +942,6 @@ function EnvRawRow({
         placeholder="# comment"
         spellCheck={false}
       />
-      <div className="hidden lg:block" />
       <button
         type="button"
         onClick={onRemove}
@@ -1481,14 +1441,10 @@ function parseEnvContent(content: string): EnvLine[] {
   if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop()
   const rows: EnvLine[] = []
   for (let index = 0; index < lines.length; index += 1) {
-    const label = parseEnvLabelLine(lines[index] ?? "")
-    const nextEntry = index + 1 < lines.length ? parseEnvEntryLine(lines[index + 1] ?? "", index + 1) : null
-    if (label !== null && nextEntry) {
-      rows.push({ ...nextEntry, label })
-      index += 1
-      continue
-    }
-    rows.push(parseEnvLine(lines[index] ?? "", index))
+    const raw = lines[index] ?? ""
+    const trimmed = raw.trim()
+    if (!trimmed || trimmed.startsWith("#")) continue
+    rows.push(parseEnvLine(raw, index))
   }
   return rows
 }
@@ -1516,11 +1472,6 @@ function parsePastedEnvEntry(text: string): Extract<EnvLine, { kind: "entry" }> 
   return line ? parseEnvEntryLine(line, 0) : null
 }
 
-function parseEnvLabelLine(line: string): string | null {
-  const match = line.match(/^\s*#\s*@label\s+(.+?)\s*$/)
-  return match ? match[1].trim() : null
-}
-
 function parseEnvValue(rawValue: string): { value: string; quote: EnvQuote } {
   const value = rawValue.trim()
   if (value.length >= 2 && value.startsWith('"') && value.endsWith('"')) {
@@ -1546,9 +1497,7 @@ function formatEnvLine(row: EnvLine): string {
   if (row.kind === "raw") return row.value
   if (!row.key && !row.value) return ""
   const prefix = row.exportPrefix ? "export " : ""
-  const envLine = `${prefix}${row.key}=${formatEnvValue(row.value, row.quote)}`
-  const label = row.label?.trim()
-  return label ? `${ENV_LABEL_PREFIX}${formatEnvLabel(label)}\n${envLine}` : envLine
+  return `${prefix}${row.key}=${formatEnvValue(row.value, row.quote)}`
 }
 
 function formatEnvValue(value: string, quote: EnvQuote): string {
@@ -1573,14 +1522,6 @@ function normalizeEnvKeyInput(value: string): string {
   const withoutExport = value.replace(/^\s*export\s+/, "")
   const beforeEquals = withoutExport.includes("=") ? withoutExport.slice(0, withoutExport.indexOf("=")) : withoutExport
   return beforeEquals.trim().replace(/[^A-Za-z0-9_]/g, "_").replace(/^[^A-Za-z_]+/, "")
-}
-
-function normalizeEnvLabelInput(value: string): string {
-  return value.replace(/[\r\n]/g, " ")
-}
-
-function formatEnvLabel(value: string): string {
-  return value.replace(/[\r\n]/g, " ").trim()
 }
 
 function newEnvRowId(): string {

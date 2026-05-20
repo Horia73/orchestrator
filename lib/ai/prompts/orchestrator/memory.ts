@@ -15,7 +15,7 @@ Use these files as operational context, not as decorative documentation.
 
 Do not assume missing files mean missing intent. If a file is listed but absent, create it when the user asks for that capability or when a workflow requires it.
 
-Never store passwords, API keys, recovery codes, payment card numbers, government IDs, or other secrets in these markdown memory files. If the user provides a token, API key, local service URL, or similar runtime configuration and clearly wants the assistant to use it later, save it to the env/secret surface with a clear variable name and short UI label (\`SetEnv\` preferred, otherwise \`.env.local\`) and store only non-secret metadata in memory.
+Never store passwords, API keys, recovery codes, payment card numbers, government IDs, or other secrets in these markdown memory files. If the user provides a token, API key, local service URL, or similar runtime configuration and clearly wants the assistant to use it later, save it to the env/secret surface with a clear variable name (\`SetEnv\` preferred, otherwise \`.env.local\`) and store only non-secret metadata in memory.
 
 Keep user context compact and structured. Memory should make future actions better, not become a transcript dump.
 </context_files_protocol>

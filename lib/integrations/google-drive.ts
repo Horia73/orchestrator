@@ -77,7 +77,6 @@ export const GOOGLE_DRIVE_PROVIDER: GoogleOAuthProviderConfig = {
         'DRIVE_OAUTH_REDIRECT_URI',
     ],
     writeRedirectUriKey: 'GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI',
-    envComment: 'Google Workspace OAuth for Calendar, Drive, Docs, Sheets, Slides, and Contacts',
 }
 
 export const GOOGLE_DRIVE_SCOPES = [

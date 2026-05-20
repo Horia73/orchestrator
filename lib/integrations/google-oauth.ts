@@ -43,7 +43,6 @@ export interface GoogleOAuthProviderConfig {
     clientSecretEnvKeys?: string[]
     redirectUriEnvKeys?: string[]
     writeRedirectUriKey?: string
-    envComment?: string
 }
 
 export interface GoogleOAuthTokenRecord {
@@ -149,7 +148,6 @@ export function saveGoogleOAuthClientConfig(
 
     patchWorkspaceEnv(values, {
         keysToReplace: acceptedKeys,
-        comment: provider.envComment ?? `Google OAuth for ${provider.label}`,
     })
     for (const [key, value] of Object.entries(values)) process.env[key] = value
 
@@ -481,7 +479,7 @@ function parseEnvAssignments(raw: string, acceptedKeys: string[]): Record<string
 
 function patchWorkspaceEnv(args: {
     [key: string]: string
-}, options: { keysToReplace: string[]; comment: string }): void {
+}, options: { keysToReplace: string[] }): void {
     fs.mkdirSync(path.dirname(WORKSPACE_ENV_PATH), { recursive: true })
     const existing = fs.existsSync(WORKSPACE_ENV_PATH)
         ? fs.readFileSync(WORKSPACE_ENV_PATH, 'utf-8')
@@ -491,7 +489,7 @@ function patchWorkspaceEnv(args: {
         .split(/\r?\n/)
         .filter(line => {
             const trimmed = line.trim()
-            if (!trimmed || trimmed.startsWith('#')) return true
+            if (!trimmed || trimmed.startsWith('#')) return false
             const normalized = trimmed.startsWith('export ') ? trimmed.slice('export '.length).trim() : trimmed
             const idx = normalized.indexOf('=')
             if (idx <= 0) return true
@@ -500,7 +498,6 @@ function patchWorkspaceEnv(args: {
 
     while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop()
     if (kept.length > 0) kept.push('')
-    kept.push(`# ${options.comment}`)
     for (const [key, value] of Object.entries(args)) kept.push(`${key}=${formatEnvValue(value)}`)
 
     fs.writeFileSync(WORKSPACE_ENV_PATH, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })

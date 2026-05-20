@@ -986,7 +986,7 @@ function patchWorkspaceEnv(values: Record<string, string>): void {
         .split(/\r?\n/)
         .filter(line => {
             const trimmed = line.trim()
-            if (!trimmed || trimmed.startsWith('#')) return true
+            if (!trimmed || trimmed.startsWith('#')) return false
             const normalized = trimmed.startsWith('export ') ? trimmed.slice('export '.length).trim() : trimmed
             const idx = normalized.indexOf('=')
             if (idx <= 0) return true
@@ -995,7 +995,6 @@ function patchWorkspaceEnv(values: Record<string, string>): void {
 
     while (kept.length > 0 && kept[kept.length - 1] === '') kept.pop()
     if (kept.length > 0) kept.push('')
-    kept.push('# Google OAuth for Gmail')
     for (const key of ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_OAUTH_CLIENT_SECRET', 'GMAIL_OAUTH_REDIRECT_URI']) {
         const value = values[key]
         if (value) kept.push(`${key}=${formatEnvValue(value)}`)

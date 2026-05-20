@@ -38,7 +38,6 @@ export const GOOGLE_CALENDAR_PROVIDER: GoogleOAuthProviderConfig = {
         'CALENDAR_OAUTH_REDIRECT_URI',
     ],
     writeRedirectUriKey: 'GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI',
-    envComment: 'Google Workspace OAuth for Calendar, Drive, and Docs',
 }
 
 export const GOOGLE_CALENDAR_SCOPES = [
