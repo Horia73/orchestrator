@@ -1,11 +1,13 @@
 import { randomUUID } from 'crypto'
+import path from 'path'
 
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
-import { createBrowserManager, type BrowserManager, type BrowserPageSession } from '@/lib/browser-agent-runtime/browser'
+import { createBrowserManager, type BrowserDownloadFile, type BrowserManager, type BrowserPageSession } from '@/lib/browser-agent-runtime/browser'
 import type { BrowserLiveViewState } from '@/lib/browser-agent-runtime/display'
 import type { AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { createAgentRuntime, type AgentRuntime, type AgentRuntimeStatus } from '@/lib/browser-agent-runtime/runtime'
 import { DEFAULT_VIEWPORT } from '@/lib/browser-agent-runtime/viewport'
+import { WORKSPACE_DIR } from '@/lib/runtime-paths'
 
 const AWAITING_USER_TTL_MS = 30 * 60 * 1000
 const COMPLETED_TTL_MS = 5 * 60 * 1000
@@ -177,6 +179,14 @@ class BrowserSessionManager {
         }
     }
 
+    async collectSessionDownloads(sessionId: string, timeoutMs = 5000): Promise<BrowserDownloadFile[]> {
+        const session = this.sessions.get(sessionId)
+        if (!session) return []
+
+        session.lastUsedAt = Date.now()
+        return session.pageSession.waitForDownloads(timeoutMs)
+    }
+
     async closeSession(sessionId: string): Promise<boolean> {
         const session = this.sessions.get(sessionId)
         if (!session) return false
@@ -300,6 +310,7 @@ class BrowserSessionManager {
 
         this.browserManager = await createBrowserManager({
             userDataDir: config.browser.userDataDir,
+            downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads'),
             headless: config.browser.headless,
             liveView: config.browser.liveView,
             launchArgs: config.browser.launchArgs,

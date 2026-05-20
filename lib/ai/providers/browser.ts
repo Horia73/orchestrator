@@ -10,6 +10,7 @@ import type {
 import { saveGeneratedAsset } from '@/lib/ai/media-assets'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
+import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
 import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ThinkingLevel } from '@/lib/config'
 import { latestUserPromptWithPortableHistory } from './history'
@@ -133,6 +134,8 @@ export class BrowserProvider implements AIProvider {
             if (finalCapture) {
                 saveEvidenceCapture(finalCapture, 'Browser final screen')
             }
+            const downloads = await sessionManager.collectSessionDownloads(lease.id)
+                .catch(() => [] as BrowserDownloadFile[])
             const finalMessage = formatBrowserRunOutput(
                 finalStatus.lastStatusMessage || lastStatusMessage,
                 finalStatus.currentUrl,
@@ -140,6 +143,7 @@ export class BrowserProvider implements AIProvider {
                 managedStatus,
                 finalStatus.lastTerminalAction,
                 statusTranscript,
+                downloads,
             )
             callbacks.onContent(finalMessage)
             callbacks.onDone({
@@ -219,6 +223,7 @@ function formatBrowserRunOutput(
     status: string,
     terminalAction?: { action?: string; reasoning?: string; text?: string } | null,
     statusTranscript: string[] = [],
+    downloads: BrowserDownloadFile[] = [],
 ): string {
     const lines = ['Browser agent finished.']
     lines.push(`Browser session: ${sessionId}`)
@@ -236,6 +241,18 @@ function formatBrowserRunOutput(
     }
     if (lastStatusMessage) lines.push(`Status: ${lastStatusMessage}`)
     if (currentUrl) lines.push(`Current URL: ${currentUrl}`)
+    if (downloads.length > 0) {
+        lines.push('')
+        lines.push('Downloaded files:')
+        for (const download of downloads) {
+            if (download.state === 'saved' && download.savedPath) {
+                lines.push(`- [${escapeMarkdownLabel(download.suggestedFilename)}](${download.savedPath})`)
+            } else {
+                const reason = download.error ? `: ${download.error}` : ''
+                lines.push(`- ${download.suggestedFilename} (${download.state}${reason})`)
+            }
+        }
+    }
     if (statusTranscript.length > 0) {
         lines.push('')
         lines.push('Terminal output:')
@@ -248,6 +265,10 @@ function formatBrowserRunOutput(
 
 function escapeFence(value: string): string {
     return value.replace(/```/g, '`\u200b``')
+}
+
+function escapeMarkdownLabel(value: string): string {
+    return value.replace(/([\\\]])/g, '\\$1')
 }
 
 function sleep(ms: number): Promise<void> {

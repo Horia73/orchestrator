@@ -1,4 +1,5 @@
 import { chromium, BrowserContext, Page } from 'patchright';
+import fs from 'fs';
 import path from 'path';
 import { DEFAULT_VIEWPORT } from './viewport';
 import { createBrowserDisplayController, type BrowserDisplayController, type BrowserLiveViewState } from './display';
@@ -12,6 +13,7 @@ import {
 
 export interface BrowserManagerOptions {
     userDataDir?: string;
+    downloadsDir?: string;
     headless?: boolean;
     liveView?: boolean;
     viewport?: { width: number; height: number } | null;
@@ -51,6 +53,17 @@ export interface BrowserVideoRecording {
     frameCount: number;
     viewport: { width: number; height: number };
     page: BrowserPageMetrics;
+}
+
+export interface BrowserDownloadFile {
+    id: string;
+    timestamp: string;
+    url: string;
+    suggestedFilename: string;
+    savedPath?: string;
+    state: 'pending' | 'saved' | 'failed';
+    size?: number;
+    error?: string;
 }
 
 export type BrowserTabOrigin = 'initial' | 'newTab' | 'popup' | 'recovered';
@@ -112,6 +125,8 @@ export interface BrowserPageSession {
     getPageUrl(): string;
     getOpenTabCount(): Promise<number>;
     getViewport(): Promise<{ width: number; height: number }>;
+    getDownloads(): BrowserDownloadFile[];
+    waitForDownloads(timeoutMs?: number): Promise<BrowserDownloadFile[]>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;
     getAgentFrameHistory(limit?: number): BrowserFrameSnapshot[];
     clearAgentFrameHistory(): void;
@@ -185,6 +200,38 @@ function clampDurationMs(value: number | undefined, fallback: number, min: numbe
         return fallback;
     }
     return Math.max(min, Math.min(max, Math.round(value)));
+}
+
+function sanitizeDownloadFilename(value: string | undefined): string {
+    const fallback = `browser-download-${Date.now()}`;
+    const base = path.basename(String(value || '').trim()) || fallback;
+    const cleaned = base
+        .replace(/[\x00-\x1f\x7f]/g, '_')
+        .replace(/[\\/:"*?<>|]+/g, '_')
+        .replace(/\s+/g, '_')
+        .replace(/^\.+$/, '')
+        .slice(0, 180)
+        .trim();
+
+    return cleaned || fallback;
+}
+
+function uniqueDownloadPath(downloadsDir: string, filename: string): string {
+    const ext = path.extname(filename);
+    const stem = path.basename(filename, ext) || 'download';
+    let candidate = path.join(downloadsDir, filename);
+    let counter = 1;
+
+    while (fs.existsSync(candidate)) {
+        candidate = path.join(downloadsDir, `${stem}-${counter}${ext}`);
+        counter++;
+    }
+
+    return candidate;
+}
+
+function cloneDownload(download: BrowserDownloadFile): BrowserDownloadFile {
+    return { ...download };
 }
 
 function compressTraceFrames(frames: ActionTraceFrame[], maxFrames: number = MAX_ACTION_TRACE_FRAMES): ActionTraceFrame[] {
@@ -339,6 +386,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         frameSequence: number;
         latestAgentFrame: BrowserFrameSnapshot | null;
         agentFrameHistory: BrowserFrameSnapshot[];
+        downloads: BrowserDownloadFile[];
+        downloadTasks: Set<Promise<void>>;
     };
 
     type PageOwnership = {
@@ -370,6 +419,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             frameSequence: 0,
             latestAgentFrame: null,
             agentFrameHistory: [],
+            downloads: [],
+            downloadTasks: new Set(),
         };
         sessions.set(id, state);
         return state;
@@ -378,6 +429,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     const defaultSessionState = createSessionState('default');
 
     const userDataDir = path.resolve(/*turbopackIgnore: true*/ process.cwd(), options.userDataDir || 'user-data-patchright');
+    const downloadsDir = path.resolve(
+        /*turbopackIgnore: true*/ process.cwd(),
+        options.downloadsDir || path.join(userDataDir, 'downloads')
+    );
     const log = (message: string) => {
         if (typeof options.onLog === 'function') {
             options.onLog(message);
@@ -493,6 +548,59 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             log(`🔔 Popup attached to session "${openerOwner.id}" from ${ownedPage.url() || '(unknown URL)'}`);
             void popupPage.bringToFront().catch(() => {
                 // Ignore if the popup closes before it can be focused.
+            });
+        });
+
+        ownedPage.on('download', (download) => {
+            const owner = pageOwners.get(ownedPage) || session;
+            let sourceUrl = ownedPage.url();
+            try {
+                sourceUrl = download.url() || sourceUrl;
+            } catch {
+                // Keep the page URL as the best available source.
+            }
+
+            let suggestedFilename = '';
+            try {
+                suggestedFilename = download.suggestedFilename();
+            } catch {
+                suggestedFilename = '';
+            }
+
+            fs.mkdirSync(downloadsDir, { recursive: true });
+            const filename = sanitizeDownloadFilename(suggestedFilename);
+            const savedPath = uniqueDownloadPath(downloadsDir, filename);
+            const record: BrowserDownloadFile = {
+                id: `download_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`,
+                timestamp: new Date().toISOString(),
+                url: sourceUrl,
+                suggestedFilename: path.basename(savedPath),
+                savedPath,
+                state: 'pending',
+            };
+
+            owner.downloads.push(record);
+            log(`⬇️ Browser download started: ${record.suggestedFilename}`);
+
+            const task = download.saveAs(savedPath)
+                .then(() => {
+                    record.state = 'saved';
+                    try {
+                        record.size = fs.statSync(savedPath).size;
+                    } catch {
+                        record.size = undefined;
+                    }
+                    log(`✅ Browser download saved: ${savedPath}`);
+                })
+                .catch((error: unknown) => {
+                    record.state = 'failed';
+                    record.error = formatBrowserError(error);
+                    logError(`⚠️ Browser download failed (${record.suggestedFilename}):`, error);
+                });
+
+            owner.downloadTasks.add(task);
+            void task.finally(() => {
+                owner.downloadTasks.delete(task);
             });
         });
 
@@ -837,6 +945,21 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
 
         return results;
+    };
+
+    const waitForSessionDownloads = async (session: BrowserSessionState, timeoutMs = 5000): Promise<void> => {
+        const deadline = Date.now() + Math.max(0, timeoutMs);
+
+        while (session.downloadTasks.size > 0) {
+            const tasks = [...session.downloadTasks];
+            const remainingMs = deadline - Date.now();
+            if (remainingMs <= 0) return;
+
+            await Promise.race([
+                Promise.allSettled(tasks),
+                sleep(Math.min(remainingMs, 250)),
+            ]);
+        }
     };
 
     const isReusableInitialBlankPage = (candidatePage: Page): boolean => {
@@ -1481,6 +1604,15 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }
             },
 
+            getDownloads(): BrowserDownloadFile[] {
+                return session.downloads.map((download) => cloneDownload(download));
+            },
+
+            async waitForDownloads(timeoutMs?: number): Promise<BrowserDownloadFile[]> {
+                await waitForSessionDownloads(session, timeoutMs);
+                return session.downloads.map((download) => cloneDownload(download));
+            },
+
             getLatestAgentFrame(): BrowserFrameSnapshot | null {
                 return session.latestAgentFrame ? cloneFrame(session.latestAgentFrame) : null;
             },
@@ -1533,6 +1665,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             }
 
             ensureBrowserProfileDir(userDataDir, log, logError);
+            fs.mkdirSync(downloadsDir, { recursive: true });
 
             const liveViewEnabled = Boolean(options.liveView) || process.platform === 'darwin';
             if (liveViewEnabled && !displayController) {
@@ -1603,11 +1736,14 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             const launchPersistentContext = () => chromium.launchPersistentContext(userDataDir, {
                 headless,
                 viewport: headless ? (options.viewport ?? DEFAULT_VIEWPORT) : null,
+                acceptDownloads: true,
+                downloadsPath: downloadsDir,
                 args: [...launchArgs, ...displayLaunchArgs],
             });
 
             log('🚀 Launching Patchright Browser...');
             log(`📂 User Data Dir: ${userDataDir}`);
+            log(`📥 Downloads Dir: ${downloadsDir}`);
 
             try {
                 context = await launchPersistentContext();

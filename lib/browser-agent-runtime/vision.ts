@@ -167,28 +167,72 @@ function buildVisionParts(
     return parts;
 }
 
-function extractJsonText(text: string): string {
-    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/);
-    if (jsonMatch) {
-        return jsonMatch[1].trim();
-    }
-
+function extractFirstBalancedJson(text: string): string | null {
     const firstBracket = text.indexOf('[');
     const firstBrace = text.indexOf('{');
+    let start = -1;
 
     if (firstBracket !== -1 && (firstBrace === -1 || firstBracket < firstBrace)) {
-        const lastBracket = text.lastIndexOf(']');
-        if (lastBracket > firstBracket) {
-            return text.substring(firstBracket, lastBracket + 1);
-        }
+        start = firstBracket;
     } else if (firstBrace !== -1) {
-        const lastBrace = text.lastIndexOf('}');
-        if (lastBrace > firstBrace) {
-            return text.substring(firstBrace, lastBrace + 1);
+        start = firstBrace;
+    }
+
+    if (start < 0) return null;
+
+    const stack: string[] = [];
+    let inString = false;
+    let escaped = false;
+
+    for (let index = start; index < text.length; index++) {
+        const char = text[index];
+
+        if (inString) {
+            if (escaped) {
+                escaped = false;
+            } else if (char === '\\') {
+                escaped = true;
+            } else if (char === '"') {
+                inString = false;
+            }
+            continue;
+        }
+
+        if (char === '"') {
+            inString = true;
+            continue;
+        }
+
+        if (char === '{') {
+            stack.push('}');
+            continue;
+        }
+
+        if (char === '[') {
+            stack.push(']');
+            continue;
+        }
+
+        if (char === '}' || char === ']') {
+            const expected = stack.pop();
+            if (expected !== char) return null;
+            if (stack.length === 0) {
+                return text.slice(start, index + 1).trim();
+            }
         }
     }
 
-    return text;
+    return null;
+}
+
+function extractJsonText(text: string): string {
+    const jsonMatch = text.match(/```(?:json)?\s*([\s\S]*?)```/i);
+    if (jsonMatch) {
+        const fenced = jsonMatch[1].trim();
+        return extractFirstBalancedJson(fenced) || fenced;
+    }
+
+    return extractFirstBalancedJson(text) || text.trim();
 }
 
 function normalizeStringArray(value: unknown): string[] {
@@ -312,15 +356,8 @@ export function createVisionService(
 
                 const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'escalate', 'yield_control'];
 
-                let actions: AgentAction[];
-                try {
-                    const parsed = JSON.parse(jsonText);
-                    actions = Array.isArray(parsed) ? parsed : [parsed];
-                } catch {
-                    // Fallback: try to extract a single object
-                    const cleanJson = jsonText.replace(/^[^{]*({[\s\S]*})[^}]*$/, '$1');
-                    actions = [JSON.parse(cleanJson) as AgentAction];
-                }
+                const parsed = JSON.parse(jsonText);
+                const actions: AgentAction[] = Array.isArray(parsed) ? parsed : [parsed];
 
                 // Validate all actions
                 for (const action of actions) {
