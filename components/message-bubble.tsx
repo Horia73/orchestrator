@@ -1075,6 +1075,7 @@ function MessageBubbleComponent({ message, isLatestAssistantMessage, onArtifactC
         <div
             className={cn(
                 "flex items-center gap-2 text-[13px] text-muted-foreground transition-opacity duration-150",
+                "max-md:select-none",
                 hovered ? "opacity-100" : "opacity-0",
                 message.role === "user" ? "justify-end self-end pr-1" : "justify-start pl-1"
             )}
@@ -1147,7 +1148,7 @@ function MessageBubbleComponent({ message, isLatestAssistantMessage, onArtifactC
         <div
             ref={selectionGutterRef}
             onPointerDownCapture={handleSelectionGutterPointerDownCapture}
-            className="-ml-16 flex w-[calc(100%+4rem)] min-w-0 flex-col gap-1.5 pl-16 select-text"
+            className="flex w-full min-w-0 flex-col gap-1.5 select-text md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
@@ -1297,7 +1298,7 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
         <div
             ref={selectionGutterRef}
             onPointerDownCapture={handleSelectionGutterPointerDownCapture}
-            className="-ml-16 flex w-[calc(100%+4rem)] min-w-0 flex-col gap-1.5 pl-16 select-text"
+            className="flex w-full min-w-0 flex-col gap-1.5 select-text md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
         >
             {timeline.map((item) => (
                 item.type === "reasoning" ? (

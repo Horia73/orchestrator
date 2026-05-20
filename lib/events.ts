@@ -22,9 +22,10 @@ if (process.env.NODE_ENV !== 'production') {
 
 // Event Types
 export type ChatEvent =
-    | { type: 'create_conversation'; payload: { id: string; title: string; createdAt: number; messages?: Message[] } }
+    | { type: 'create_conversation'; payload: { id: string; title: string; createdAt: number; updatedAt?: number; messages?: Message[]; messageCount?: number; lastMessagePreview?: string; lastMessageAt?: number; readAt?: number | null } }
     | { type: 'add_message'; payload: { conversationId: string; message: Message } }
     | { type: 'context_usage'; payload: { conversationId: string; contextUsage: ContextUsageSnapshot } }
+    | { type: 'conversation_read_state'; payload: { conversationId: string; readAt: number | null } }
     | { type: 'delete_conversation'; payload: { id: string } }
     | { type: 'chat_stream_started'; payload: { conversationId: string; messageId: string; startedAt: number } }
     | { type: 'chat_stream_ended'; payload: { conversationId: string; messageId?: string } };
@@ -39,6 +40,10 @@ export type AppEvent =
     | { type: 'inbox.changed'; at: number; conversationId?: string; action?: 'created' | 'read' | 'deleted' | 'changed' }
     | { type: 'scheduled_tasks.changed'; at: number; taskId?: string; reason?: string }
     | { type: 'task_runs.changed'; at: number; taskId?: string; runId?: string }
+    // Smart Monitor — fired when a watch is created/updated/deleted/state-changed.
+    | { type: 'monitor_watches.changed'; at: number; watchId?: string; reason?: string }
+    // Fired when a watch records an event (check/match/wake/notify/action/error/...).
+    | { type: 'monitor_watch_events.changed'; at: number; watchId?: string; eventId?: string }
 
 export type AppEventType = AppEvent['type'];
 type WithOptionalAt<T extends { at: number }> = Omit<T, 'at'> & { at?: number };

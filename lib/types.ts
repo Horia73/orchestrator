@@ -176,5 +176,6 @@ export interface Conversation {
   messageCount?: number
   lastMessagePreview?: string
   lastMessageAt?: number
+  readAt?: number | null
   searchMatchPreview?: string
 }

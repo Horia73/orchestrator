@@ -139,21 +139,40 @@ export async function runScheduledTask(
         )
       }
     } else if (task.action.kind === "monitor") {
-      const { runMarketsCheapPass } =
-        await import("@/lib/monitoring/markets-heartbeat")
-      const pass = await runMarketsCheapPass({
-        priorState: getTaskState(task.id),
-        now: firedAt,
-      })
-      try {
-        setTaskState(task.id, pass.nextState)
-      } catch {
-        /* best-effort */
+      // Two consolidated monitor heartbeats today: Watchlist's markets tick
+      // and Smart Monitor's cross-source tick. Each produces the same shape
+      // (noteworthy + summary + briefPrompt) so the wake path below is shared.
+      let briefPrompt: string | undefined
+      let summary: string
+      if (task.action.monitorKind === "smart") {
+        const { runSmartMonitorCheapPass } = await import(
+          "@/lib/monitoring/smart-monitor"
+        )
+        const pass = await runSmartMonitorCheapPass({ now: firedAt })
+        summary = pass.summary
+        briefPrompt = pass.noteworthy ? pass.briefPrompt : undefined
+        // Smart Monitor manages its own per-watch state in lib/monitor/store;
+        // the scheduler task carries no extra state of its own.
+      } else {
+        const { runMarketsCheapPass } = await import(
+          "@/lib/monitoring/markets-heartbeat"
+        )
+        const pass = await runMarketsCheapPass({
+          priorState: getTaskState(task.id),
+          now: firedAt,
+        })
+        try {
+          setTaskState(task.id, pass.nextState)
+        } catch {
+          /* best-effort */
+        }
+        summary = pass.summary
+        briefPrompt = pass.noteworthy ? pass.briefPrompt : undefined
       }
 
-      if (!pass.noteworthy || !pass.briefPrompt) {
+      if (!briefPrompt) {
         ok = true
-        assistantContent = pass.summary // recorded in Past runs; stays silent
+        assistantContent = summary // recorded in Past runs; stays silent
       } else {
         const { runTextSubAgent } = await import("@/lib/ai/agents/runner")
         const { getAgent } = await import("@/lib/ai/agents/registry")
@@ -198,7 +217,7 @@ export async function runScheduledTask(
           }
           const result = await runTextSubAgent({
             target: agent,
-            prompt: pass.briefPrompt,
+            prompt: briefPrompt,
             parentCtx,
           })
           const done = topRunId ? doneByRun.get(topRunId) : undefined
@@ -206,14 +225,14 @@ export async function runScheduledTask(
             ok = true
             const data = result.data as { output?: string } | undefined
             assistantContent =
-              (data?.output ?? done?.content ?? pass.summary).trim() ||
-              pass.summary
+              (data?.output ?? done?.content ?? summary).trim() ||
+              summary
             reasoning = done?.reasoning
             contentSegments = done?.contentSegments
           } else {
             ok = false
             error = result.error
-            assistantContent = `❌ Markets monitor wake failed.\n\n${result.error ?? "Unknown error"}`
+            assistantContent = `❌ ${task.action.monitorKind === "smart" ? "Smart" : "Markets"} monitor wake failed.\n\n${result.error ?? "Unknown error"}`
             reasoning = done?.reasoning
           }
         }
@@ -276,13 +295,22 @@ export async function runScheduledTask(
         }
         const priorState = getTaskState(task.id)
         const recurring = task.schedule.kind !== "once"
+        // Adaptive pacing is opt-in (set at scheduling time by the orchestrator
+        // ONLY when the user accepted flexible cadence). A fixed-cadence task the
+        // user explicitly chose ("daily at 8am", "every 30 minutes") must NOT be
+        // told it can self-pace — that previously caused tasks like "check price
+        // once a day" to be retuned to 15m by the model. Default is stay-on-cadence.
+        const adaptive = task.action.kind === "agent" && task.action.adaptive === true
+        const cadenceLine = !recurring
+          ? "This is a one-shot task; do not reschedule it."
+          : adaptive
+            ? "This is a recurring task with ADAPTIVE pacing enabled (the user accepted flexible cadence). Default monitor tiering: start at 15m; after 4 quiet runs widen to 30m; after 8 more quiet runs widen to 1h; during known quiet hours use 2h-4h or the next active window depending on urgency. When activity returns, a deadline gets close, an error occurs, or the user engages, tighten back toward 15m. Store quietRuns, cadenceTier, watermarks/lastSeen, lastValue, and lastNotifiedAt in <task_state>. Use reschedule_task on this taskId for clear trends only; do not thrash, never go more frequent than the user allowed without asking. Learn durable active/quiet-hour patterns over time and persist them to USER.md/MEMORY.md/MONITORS.md."
+            : "This is a recurring task on a FIXED cadence the user requested. Stay on it: do NOT call reschedule_task to widen or tighten timing. Use <task_state> for watermarks/last-seen so you do not re-report; surface via notify_inbox only when noteworthy."
         const stateBlock = [
           "<task_run_context>",
           `taskId: ${task.id}`,
           `currentSchedule: ${describeSchedule(task.schedule)}`,
-          recurring
-            ? "This is a recurring task. You may self-pace only if the user allowed adaptive cadence or did not request a fixed cadence. Default adaptive monitor tiering: start at 15m; after 4 quiet runs widen to 30m; after 8 more quiet runs widen to 1h; during known quiet hours use 2h-4h or the next active window depending on urgency. When activity returns, a deadline gets close, an error occurs, or the user engages, tighten back toward 15m. Store quietRuns, cadenceTier, watermarks/lastSeen, lastValue, and lastNotifiedAt in <task_state>. Use reschedule_task on this taskId for clear trends only; do not thrash, never go more frequent than allowed, and never slow below an explicit fixed cadence unless adaptive pacing was accepted. Learn durable active/quiet-hour patterns over time and persist them to USER.md/MEMORY.md/MONITORS.md."
-            : "This is a one-shot task; do not reschedule it.",
+          cadenceLine,
           "</task_run_context>",
           "<task_state>",
           "Your private memory for this recurring task (not shared, not the user chat).",

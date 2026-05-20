@@ -596,11 +596,17 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             if (itemType === 'commandExecution') {
                 const output = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : ''
                 const exitCode = typeof item.exitCode === 'number' ? item.exitCode : null
+                const status = typeof item.status === 'string' ? item.status : null
+                const errorText = formatUnknown(item.error)
                 if (!firedToolCalls.has(item.id)) {
                     fireToolCall(item.id, 'shell', { command: item.command })
                 }
-                const success = exitCode === 0 || exitCode === null
-                fireToolResult(item.id, 'shell', success, output || (exitCode !== null ? `(exit ${exitCode})` : ''))
+                const success = (status === null || status === 'completed') && exitCode === 0 && !item.error
+                const resultText = output
+                    || (errorText && errorText !== 'null' ? errorText : '')
+                    || (exitCode !== null ? `(exit ${exitCode})` : '')
+                    || (status ? `(status ${status})` : 'Command did not complete')
+                fireToolResult(item.id, 'shell', success, resultText)
                 return
             }
 

@@ -2,6 +2,9 @@ import fs from 'fs'
 import path from 'path'
 import type { Attachment } from '@/lib/types'
 import { UPLOADS_DIR } from '@/lib/config'
+import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
+
+export { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
 
 export const MAX_UPLOAD_FILES = 10
 export const MAX_UPLOAD_FILE_BYTES = 50 * 1024 * 1024
@@ -48,45 +51,6 @@ const SAFE_UPLOAD_EXTENSIONS = new Set([
     '.wmv',
     '.3gp',
 ])
-
-export const UPLOAD_MIME_MAP: Record<string, string> = {
-    '.png': 'image/png',
-    '.jpg': 'image/jpeg',
-    '.jpeg': 'image/jpeg',
-    '.gif': 'image/gif',
-    '.webp': 'image/webp',
-    '.heic': 'image/heic',
-    '.heif': 'image/heif',
-    '.pdf': 'application/pdf',
-    '.txt': 'text/plain',
-    '.md': 'text/markdown',
-    '.csv': 'text/csv',
-    '.json': 'application/json',
-    '.xml': 'application/xml',
-    '.log': 'text/plain',
-    '.rtf': 'application/rtf',
-    '.doc': 'application/msword',
-    '.docx': 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
-    '.xls': 'application/vnd.ms-excel',
-    '.xlsx': 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-    '.ppt': 'application/vnd.ms-powerpoint',
-    '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
-    '.mp3': 'audio/mpeg',
-    '.wav': 'audio/wav',
-    '.m4a': 'audio/mp4',
-    '.aac': 'audio/aac',
-    '.aiff': 'audio/aiff',
-    '.flac': 'audio/flac',
-    '.ogg': 'audio/ogg',
-    '.mp4': 'video/mp4',
-    '.webm': 'video/webm',
-    '.mov': 'video/quicktime',
-    '.mpeg': 'video/mpeg',
-    '.mpg': 'video/mpeg',
-    '.avi': 'video/x-msvideo',
-    '.wmv': 'video/x-ms-wmv',
-    '.3gp': 'video/3gpp',
-}
 
 export interface UploadFileLike {
     name: string

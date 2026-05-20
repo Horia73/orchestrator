@@ -1,11 +1,15 @@
 import { NextResponse } from 'next/server'
 
+import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { getWorkspaceFile, writeWorkspaceFile } from '@/lib/settings/workspace-files'
 
 export async function GET(
-    _request: Request,
+    request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
+    const guard = guardSensitiveRequest(request)
+    if (guard) return guard
+
     const { id } = await params
     try {
         const file = getWorkspaceFile(id)
@@ -26,6 +30,9 @@ export async function PUT(
     request: Request,
     { params }: { params: Promise<{ id: string }> }
 ) {
+    const guard = guardSensitiveRequest(request)
+    if (guard) return guard
+
     const { id } = await params
     let body: unknown
     try {

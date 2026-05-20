@@ -1458,11 +1458,13 @@ export function ChatView() {
     setIsRestoringScroll(true)
     setScrollButtonVisible(false)
     const savedScroll = localStorage.getItem(`scroll:chat:${conversationId}`)
-    const parsedSavedScroll = savedScroll ? Number.parseInt(savedScroll, 10) : NaN
-    const shouldPinBottom =
-      savedScroll === SCROLL_BOTTOM_SENTINEL || !Number.isFinite(parsedSavedScroll)
+    const parsedSavedScroll = savedScroll
+      ? Number.parseInt(savedScroll, 10)
+      : NaN
     const savedAnchorRaw =
-      localStorage.getItem(`${SCROLL_RESTORE_STORAGE_PREFIX}:${conversationId}`) ??
+      localStorage.getItem(
+        `${SCROLL_RESTORE_STORAGE_PREFIX}:${conversationId}`
+      ) ??
       localStorage.getItem(`${SCROLL_ANCHOR_STORAGE_PREFIX}:${conversationId}`)
     let savedAnchor: SavedScrollRestore | null = null
     if (savedAnchorRaw) {
@@ -1482,17 +1484,34 @@ export function ChatView() {
               typeof parsed.distanceFromBottom === "number"
                 ? parsed.distanceFromBottom
                 : Number.POSITIVE_INFINITY,
-            savedAt:
-              typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
+            savedAt: typeof parsed.savedAt === "number" ? parsed.savedAt : 0,
           }
         }
       } catch {}
     }
 
+    const hasLegacyNumericScroll =
+      !savedAnchor &&
+      savedScroll !== null &&
+      Number.isFinite(parsedSavedScroll) &&
+      parsedSavedScroll > 0
+    const shouldPinBottom =
+      savedScroll === SCROLL_BOTTOM_SENTINEL ||
+      (!savedAnchor && !hasLegacyNumericScroll)
     const shouldRestoreBottom =
-      shouldPinBottom && (!savedAnchor || savedAnchor.distanceFromBottom <= STICKY_BOTTOM_THRESHOLD)
+      savedScroll === SCROLL_BOTTOM_SENTINEL ||
+      (!savedAnchor && !hasLegacyNumericScroll) ||
+      Boolean(
+        savedAnchor &&
+        !hasLegacyNumericScroll &&
+        !Number.isFinite(parsedSavedScroll) &&
+        savedAnchor.distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
+      )
 
-    if (savedAnchor && !document.getElementById(`message-${savedAnchor.messageId}`)) {
+    if (
+      savedAnchor &&
+      !document.getElementById(`message-${savedAnchor.messageId}`)
+    ) {
       const previousAttempt = restoreOlderAttemptRef.current
       const attempts =
         previousAttempt?.conversationId === conversationId
@@ -1555,25 +1574,24 @@ export function ChatView() {
       const anchorElement = savedAnchor
         ? document.getElementById(`message-${savedAnchor.messageId}`)
         : null
-      const anchorScrollTop =
-        anchorElement
-          ? Math.max(
-              0,
-              anchorElement.getBoundingClientRect().top -
-                element.getBoundingClientRect().top +
-                element.scrollTop -
-                (savedAnchor?.offset ?? 0)
-            )
-          : null
+      const anchorScrollTop = anchorElement
+        ? Math.max(
+            0,
+            anchorElement.getBoundingClientRect().top -
+              element.getBoundingClientRect().top +
+              element.scrollTop -
+              (savedAnchor?.offset ?? 0)
+          )
+        : null
       const targetScrollTop = shouldRestoreBottom
         ? maxScrollTop
         : anchorScrollTop != null
           ? Math.min(anchorScrollTop, maxScrollTop)
-        : savedAnchor
-          ? Math.min(Math.max(0, savedAnchor.scrollTop), maxScrollTop)
-        : Number.isFinite(parsedSavedScroll)
-          ? Math.min(Math.max(0, parsedSavedScroll), maxScrollTop)
-          : maxScrollTop
+          : savedAnchor
+            ? Math.min(Math.max(0, savedAnchor.scrollTop), maxScrollTop)
+            : hasLegacyNumericScroll
+              ? Math.min(Math.max(0, parsedSavedScroll), maxScrollTop)
+              : maxScrollTop
 
       element.scrollTop = targetScrollTop
       if (shouldRestoreBottom) {
@@ -2239,7 +2257,7 @@ export function ChatView() {
                         <div
                           key={message.id}
                           id={`message-${message.id}`}
-                          className="scroll-mt-6 -ml-16 w-[calc(100%+4rem)] pl-16"
+                          className="scroll-mt-6 md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
                           style={
                             message.id === minHeightMsgId &&
                             index === activeConversation.messages.length - 1
@@ -2263,7 +2281,7 @@ export function ChatView() {
                       {showStreamingBubble && (
                         <div
                           ref={streamingBubbleContainerRef}
-                          className="-ml-16 w-[calc(100%+4rem)] pl-16"
+                          className="md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
                           aria-hidden={!state.isStreaming}
                           style={
                             minHeight > 0 && minHeightMsgId === null
@@ -2302,8 +2320,8 @@ export function ChatView() {
             className={cn(
               "pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4 transition-[padding-bottom,transform] duration-150 ease-out",
               keyboardInset > 0
-                ? "pb-1"
-                : "pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3"
+                ? "pb-0.5"
+                : "pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:pb-3"
             )}
             style={{
               right: isMobile ? 0 : 14,

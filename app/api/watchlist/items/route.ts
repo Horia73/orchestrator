@@ -63,6 +63,8 @@ export async function POST(request: Request) {
       exchange: typeof body.exchange === "string" ? body.exchange : undefined,
       currency: typeof body.currency === "string" ? body.currency : undefined,
       assetClass: body.assetClass,
+      imageUrl:
+        typeof body.imageUrl === "string" ? body.imageUrl : undefined,
       notes: typeof body.notes === "string" ? body.notes : undefined,
       movePercent:
         typeof body.movePercent === "number" ? body.movePercent : undefined,

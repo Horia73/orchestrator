@@ -1,5 +1,6 @@
 "use client"
 
+import Image from "next/image"
 import * as React from "react"
 import {
   AlertCircle,
@@ -10,9 +11,11 @@ import {
   LineChart,
   Loader2,
   Package,
+  Pencil,
   Plus,
   RefreshCcw,
   Search,
+  Sparkles,
   Trash2,
   TrendingDown,
   TrendingUp,
@@ -60,6 +63,22 @@ type ProductAddInput = {
   source?: string
   currency?: string
   price?: number
+  imageUrl?: string
+}
+
+type ProductMetadata = {
+  url: string
+  name: string | null
+  price: number | null
+  currency: string | null
+  image: string | null
+  store: string | null
+  description: string | null
+}
+
+type ProductMetadataResponse = {
+  metadata?: ProductMetadata
+  error?: string
 }
 
 type AddWatchlistInput =
@@ -222,24 +241,34 @@ function WatchlistRow({
         }
       }}
       className={cn(
-        "group grid w-full cursor-pointer grid-cols-[minmax(92px,1fr)_minmax(86px,0.85fr)_minmax(70px,0.65fr)_28px] items-center gap-2 rounded-md px-2.5 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
+        "group flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
         selected
           ? "bg-[#f0ede6] dark:bg-muted"
           : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/60"
       )}
     >
-      <div className="min-w-0">
+      {isProduct && (
+        <ProductThumbnail
+          src={item.imageUrl}
+          alt={item.name}
+          size={36}
+          className="ring-border/30"
+        />
+      )}
+      <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[13.5px] font-semibold text-foreground">
             {itemTitle(item)}
           </span>
-          <AssetBadge value={itemBadge(item)} />
+          {!isProduct && <AssetBadge value={itemBadge(item)} />}
         </div>
         <div className="truncate text-[11.5px] text-foreground/45">
-          {itemSubtitle(item)}
+          {isProduct
+            ? item.exchange || itemSubtitle(item) || "Tracked product"
+            : itemSubtitle(item)}
         </div>
       </div>
-      <div className="text-right tabular-nums">
+      <div className="shrink-0 text-right tabular-nums">
         <div className="text-[13px] font-medium text-foreground/85">
           {formatPrice(q?.price, q?.currency ?? item.currency)}
         </div>
@@ -251,7 +280,7 @@ function WatchlistRow({
       </div>
       <div
         className={cn(
-          "flex items-center justify-end gap-1 text-right text-[12.5px] font-medium tabular-nums",
+          "flex w-[68px] shrink-0 items-center justify-end gap-1 text-right text-[12.5px] font-medium tabular-nums",
           changeTone(change)
         )}
       >
@@ -276,7 +305,7 @@ function WatchlistRow({
             onRemove()
           }
         }}
-        className="flex size-7 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-[#802020] focus:opacity-100"
+        className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-[#802020] focus:opacity-100"
       >
         <Trash2 className="size-3.5" />
       </button>
@@ -284,26 +313,81 @@ function WatchlistRow({
   )
 }
 
-function SearchAdd({
+function ListSectionHeader({
+  label,
+  count,
+}: {
+  label: string
+  count: number
+}) {
+  return (
+    <div className="mt-1 mb-0.5 flex items-center gap-2 px-2.5 pt-2 text-[10.5px] font-semibold tracking-wider text-foreground/40 uppercase">
+      <span>{label}</span>
+      <span className="rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground/45">
+        {count}
+      </span>
+    </div>
+  )
+}
+
+function ProductThumbnail({
+  src,
+  alt,
+  size = 40,
+  className,
+}: {
+  src: string | null | undefined
+  alt: string
+  size?: number
+  className?: string
+}) {
+  const [errored, setErrored] = React.useState(false)
+  const dimension = `${size}px`
+  if (!src || errored) {
+    return (
+      <div
+        className={cn(
+          "flex shrink-0 items-center justify-center rounded-md bg-muted text-foreground/35",
+          className
+        )}
+        style={{ width: dimension, height: dimension }}
+      >
+        <Package className="size-1/2" />
+      </div>
+    )
+  }
+  return (
+    <Image
+      src={src}
+      alt={alt}
+      width={size}
+      height={size}
+      unoptimized
+      loading="lazy"
+      onError={() => setErrored(true)}
+      className={cn(
+        "shrink-0 rounded-md bg-muted object-cover ring-1 ring-border/40",
+        className
+      )}
+      style={{ width: dimension, height: dimension }}
+    />
+  )
+}
+
+function InstrumentSearch({
   onAdd,
 }: {
   onAdd: (item: AddWatchlistInput) => Promise<void>
 }) {
-  const [mode, setMode] = React.useState<"financial" | "product">("financial")
   const [query, setQuery] = React.useState("")
   const [results, setResults] = React.useState<WatchlistSearchResult[]>([])
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [adding, setAdding] = React.useState<string | null>(null)
-  const [productUrl, setProductUrl] = React.useState("")
-  const [productName, setProductName] = React.useState("")
-  const [productSource, setProductSource] = React.useState("")
-  const [productPrice, setProductPrice] = React.useState("")
-  const [productCurrency, setProductCurrency] = React.useState("EUR")
 
   React.useEffect(() => {
     let cancelled = false
-    if (mode !== "financial" || !query.trim()) {
+    if (!query.trim()) {
       setResults([])
       setLoading(false)
       setError(null)
@@ -331,12 +415,11 @@ function SearchAdd({
         if (!cancelled) setLoading(false)
       }
     }, 250)
-
     return () => {
       cancelled = true
       window.clearTimeout(handle)
     }
-  }, [mode, query])
+  }, [query])
 
   const add = async (item: WatchlistSearchResult | { symbol: string }) => {
     const key = "providerSymbol" in item ? item.providerSymbol : item.symbol
@@ -352,12 +435,169 @@ function SearchAdd({
     }
   }
 
-  const addProduct = async () => {
-    const url = productUrl.trim()
-    const name = productName.trim()
-    const source = productSource.trim()
-    const currency = productCurrency.trim().toUpperCase()
-    const normalizedPrice = productPrice.trim().replace(",", ".")
+  return (
+    <div className="space-y-2">
+      <div className="relative">
+        <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-foreground/35" />
+        <Input
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            if (event.key === "Enter" && query.trim()) {
+              event.preventDefault()
+              void add({ symbol: query.trim() })
+            }
+          }}
+          placeholder="Search AAPL, BTC/USD..."
+          className="h-9 pr-8 pl-8 text-[13px]"
+          autoFocus
+        />
+        {loading && (
+          <Loader2 className="absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-foreground/35" />
+        )}
+      </div>
+      {error && (
+        <p className="text-[11.5px] text-amber-700 dark:text-amber-300">
+          {error}
+        </p>
+      )}
+      <div className="max-h-[230px] overflow-y-auto">
+        {results.map((item) => (
+          <button
+            key={`${item.providerSymbol}-${item.exchange ?? ""}`}
+            type="button"
+            onClick={() => void add(item)}
+            className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[#f0ede6]/70 dark:hover:bg-muted"
+          >
+            <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-foreground/55">
+              {adding === item.providerSymbol ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <Plus className="size-3" />
+              )}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="flex items-center gap-2">
+                <span className="text-[12.5px] font-semibold">
+                  {item.symbol}
+                </span>
+                <AssetBadge value={item.assetClass} />
+              </span>
+              <span className="block truncate text-[11.5px] text-foreground/45">
+                {item.name}
+                {item.exchange ? ` · ${item.exchange}` : ""}
+              </span>
+            </span>
+          </button>
+        ))}
+      </div>
+    </div>
+  )
+}
+
+type ProductDraft = {
+  url: string
+  name: string
+  source: string
+  price: string
+  currency: string
+  imageUrl: string | null
+}
+
+function emptyDraft(): ProductDraft {
+  return {
+    url: "",
+    name: "",
+    source: "",
+    price: "",
+    currency: "EUR",
+    imageUrl: null,
+  }
+}
+
+function ProductAdd({
+  onAdd,
+}: {
+  onAdd: (item: AddWatchlistInput) => Promise<void>
+}) {
+  type Step = "url" | "fetching" | "preview" | "manual"
+  const [step, setStep] = React.useState<Step>("url")
+  const [draft, setDraft] = React.useState<ProductDraft>(emptyDraft)
+  const [error, setError] = React.useState<string | null>(null)
+  const [info, setInfo] = React.useState<string | null>(null)
+  const [adding, setAdding] = React.useState(false)
+
+  const reset = () => {
+    setDraft(emptyDraft())
+    setStep("url")
+    setError(null)
+    setInfo(null)
+  }
+
+  const fetchMetadata = async (rawUrl: string) => {
+    const url = rawUrl.trim()
+    if (!url) {
+      setError("Paste a product URL first")
+      return
+    }
+    setError(null)
+    setInfo(null)
+    setStep("fetching")
+    try {
+      const res = await fetch(
+        `/api/watchlist/product-metadata?url=${encodeURIComponent(url)}`,
+        { cache: "no-store" }
+      )
+      const data = (await res.json()) as ProductMetadataResponse
+      if (!res.ok) {
+        setStep("manual")
+        setDraft((previous) => ({ ...previous, url }))
+        setError(
+          data.error
+            ? `Couldn't auto-detect from this page (${data.error}). Fill in manually below.`
+            : "Couldn't auto-detect from this page. Fill in manually below."
+        )
+        return
+      }
+      const meta = data.metadata
+      if (!meta) {
+        setStep("manual")
+        setDraft((previous) => ({ ...previous, url }))
+        setError("No product details detected. Fill in manually below.")
+        return
+      }
+      const sourceLabel = meta.store ?? ""
+      const next: ProductDraft = {
+        url: meta.url || url,
+        name: meta.name ?? "",
+        source: sourceLabel,
+        price: meta.price != null ? String(meta.price) : "",
+        currency: meta.currency ?? "EUR",
+        imageUrl: meta.image ?? null,
+      }
+      setDraft(next)
+      const missing: string[] = []
+      if (!next.name) missing.push("name")
+      if (!next.price) missing.push("price")
+      if (missing.length > 0) {
+        setInfo(`Detected partial info — review ${missing.join(" and ")} before adding.`)
+      } else {
+        setInfo(null)
+      }
+      setStep("preview")
+    } catch (err) {
+      setStep("manual")
+      setDraft((previous) => ({ ...previous, url }))
+      setError(err instanceof Error ? err.message : "Failed to fetch")
+    }
+  }
+
+  const commit = async () => {
+    const url = draft.url.trim()
+    const name = draft.name.trim()
+    const source = draft.source.trim()
+    const currency = draft.currency.trim().toUpperCase()
+    const normalizedPrice = draft.price.trim().replace(",", ".")
     const price = normalizedPrice ? Number(normalizedPrice) : undefined
     if (!url && !name) {
       setError("Product URL or name is required")
@@ -367,7 +607,8 @@ function SearchAdd({
       setError("Price must be a number")
       return
     }
-    setAdding("product")
+    setAdding(true)
+    setError(null)
     try {
       await onAdd({
         kind: "product",
@@ -376,19 +617,256 @@ function SearchAdd({
         source: source || undefined,
         currency: currency || undefined,
         price,
+        imageUrl: draft.imageUrl || undefined,
       })
-      setProductUrl("")
-      setProductName("")
-      setProductSource("")
-      setProductPrice("")
-      setError(null)
+      reset()
     } catch (err) {
       setError(err instanceof Error ? err.message : "Add failed")
     } finally {
-      setAdding(null)
+      setAdding(false)
     }
   }
 
+  const updateDraft = (patch: Partial<ProductDraft>) =>
+    setDraft((prev) => ({ ...prev, ...patch }))
+
+  if (step === "url" || step === "fetching") {
+    return (
+      <div className="space-y-2">
+        <label className="block text-[11px] font-medium tracking-wide text-foreground/55 uppercase">
+          Paste product URL
+        </label>
+        <div className="flex gap-2">
+          <Input
+            value={draft.url}
+            onChange={(event) =>
+              updateDraft({ url: event.target.value })
+            }
+            onKeyDown={(event) => {
+              if (event.key === "Enter") {
+                event.preventDefault()
+                void fetchMetadata(draft.url)
+              }
+            }}
+            placeholder="https://shop.example.com/product/123"
+            className="h-9 flex-1 text-[13px]"
+            autoFocus
+            disabled={step === "fetching"}
+          />
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void fetchMetadata(draft.url)}
+            disabled={step === "fetching" || !draft.url.trim()}
+            className="h-9 gap-1.5 whitespace-nowrap"
+          >
+            {step === "fetching" ? (
+              <>
+                <Loader2 className="size-3.5 animate-spin" />
+                Reading…
+              </>
+            ) : (
+              <>
+                <Sparkles className="size-3.5" />
+                Track
+              </>
+            )}
+          </Button>
+        </div>
+        <p className="text-[11.5px] text-foreground/45">
+          We&apos;ll detect name, price and image automatically.
+        </p>
+        <button
+          type="button"
+          onClick={() => {
+            setStep("manual")
+            setError(null)
+          }}
+          className="text-[11.5px] text-foreground/55 underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Or enter details manually
+        </button>
+        {error && (
+          <p className="text-[11.5px] text-amber-700 dark:text-amber-300">
+            {error}
+          </p>
+        )}
+      </div>
+    )
+  }
+
+  if (step === "preview") {
+    return (
+      <div className="space-y-3">
+        <div className="flex items-start gap-3 rounded-lg border border-border/60 bg-card p-2.5">
+          <ProductThumbnail
+            src={draft.imageUrl}
+            alt={draft.name || "Product"}
+            size={56}
+          />
+          <div className="min-w-0 flex-1">
+            <div className="truncate text-[13px] font-semibold text-foreground/90">
+              {draft.name || "Unnamed product"}
+            </div>
+            <div className="mt-0.5 truncate text-[11.5px] text-foreground/55">
+              {draft.source || "Unknown store"}
+            </div>
+            <div className="mt-1 text-[14px] font-semibold tabular-nums text-foreground">
+              {draft.price ? (
+                <>
+                  {draft.price}{" "}
+                  <span className="text-[11.5px] font-medium text-foreground/55">
+                    {draft.currency}
+                  </span>
+                </>
+              ) : (
+                <span className="text-[12px] font-normal text-foreground/45">
+                  Price not detected
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+        {info && (
+          <p className="text-[11.5px] text-foreground/55">{info}</p>
+        )}
+        {error && (
+          <p className="text-[11.5px] text-amber-700 dark:text-amber-300">
+            {error}
+          </p>
+        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void commit()}
+            disabled={adding}
+            className="h-9 flex-1 gap-1.5"
+          >
+            {adding ? (
+              <Loader2 className="size-3.5 animate-spin" />
+            ) : (
+              <Plus className="size-3.5" />
+            )}
+            Add to watchlist
+          </Button>
+          <Button
+            type="button"
+            size="sm"
+            variant="outline"
+            onClick={() => setStep("manual")}
+            className="h-9 gap-1.5"
+            title="Edit details"
+          >
+            <Pencil className="size-3.5" />
+            Edit
+          </Button>
+          <button
+            type="button"
+            onClick={reset}
+            className="text-[11.5px] text-foreground/55 underline-offset-2 hover:text-foreground hover:underline"
+          >
+            Cancel
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // Manual fallback.
+  return (
+    <div className="space-y-2">
+      <Input
+        value={draft.url}
+        onChange={(event) => updateDraft({ url: event.target.value })}
+        placeholder="Product URL"
+        className="h-9 text-[13px]"
+      />
+      <Input
+        value={draft.name}
+        onChange={(event) => updateDraft({ name: event.target.value })}
+        placeholder="Product name"
+        className="h-9 text-[13px]"
+        autoFocus
+      />
+      <Input
+        value={draft.imageUrl ?? ""}
+        onChange={(event) =>
+          updateDraft({ imageUrl: event.target.value || null })
+        }
+        placeholder="Image URL (optional)"
+        className="h-9 text-[13px]"
+      />
+      <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2">
+        <Input
+          value={draft.price}
+          onChange={(event) => updateDraft({ price: event.target.value })}
+          onKeyDown={(event) => {
+            if (event.key === "Enter") {
+              event.preventDefault()
+              void commit()
+            }
+          }}
+          inputMode="decimal"
+          placeholder="Price"
+          className="h-9 text-[13px]"
+        />
+        <Input
+          value={draft.currency}
+          onChange={(event) =>
+            updateDraft({ currency: event.target.value })
+          }
+          placeholder="EUR"
+          className="h-9 text-[13px] uppercase"
+        />
+      </div>
+      <Input
+        value={draft.source}
+        onChange={(event) => updateDraft({ source: event.target.value })}
+        placeholder="Store / source"
+        className="h-9 text-[13px]"
+      />
+      {error && (
+        <p className="text-[11.5px] text-amber-700 dark:text-amber-300">
+          {error}
+        </p>
+      )}
+      <div className="flex items-center gap-2">
+        <Button
+          type="button"
+          size="sm"
+          onClick={() => void commit()}
+          disabled={adding}
+          className="h-9 flex-1 gap-1.5"
+        >
+          {adding ? (
+            <Loader2 className="size-3.5 animate-spin" />
+          ) : (
+            <Plus className="size-3.5" />
+          )}
+          Add product
+        </Button>
+        <button
+          type="button"
+          onClick={() => {
+            setStep("url")
+            setError(null)
+          }}
+          className="text-[11.5px] text-foreground/55 underline-offset-2 hover:text-foreground hover:underline"
+        >
+          Back
+        </button>
+      </div>
+    </div>
+  )
+}
+
+function SearchAdd({
+  onAdd,
+}: {
+  onAdd: (item: AddWatchlistInput) => Promise<void>
+}) {
+  const [mode, setMode] = React.useState<"financial" | "product">("financial")
   return (
     <div className="border-b border-border/60 px-3 pb-3">
       <div className="mb-2 inline-flex h-8 rounded-lg bg-muted/60 p-0.5">
@@ -396,10 +874,7 @@ function SearchAdd({
           <button
             key={item}
             type="button"
-            onClick={() => {
-              setMode(item)
-              setError(null)
-            }}
+            onClick={() => setMode(item)}
             className={cn(
               "rounded-md px-2.5 text-[12px] font-medium transition-colors",
               mode === item
@@ -412,122 +887,9 @@ function SearchAdd({
         ))}
       </div>
       {mode === "financial" ? (
-        <>
-          <div className="relative">
-            <Search className="pointer-events-none absolute top-1/2 left-2.5 size-3.5 -translate-y-1/2 text-foreground/35" />
-            <Input
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter" && query.trim()) {
-                  event.preventDefault()
-                  void add({ symbol: query.trim() })
-                }
-              }}
-              placeholder="Add AAPL, BTC/USD..."
-              className="h-9 pr-8 pl-8 text-[13px]"
-            />
-            {loading && (
-              <Loader2 className="absolute top-1/2 right-2.5 size-3.5 -translate-y-1/2 animate-spin text-foreground/35" />
-            )}
-          </div>
-        </>
+        <InstrumentSearch onAdd={onAdd} />
       ) : (
-        <div className="space-y-2">
-          <Input
-            value={productUrl}
-            onChange={(event) => setProductUrl(event.target.value)}
-            placeholder="Product URL"
-            className="h-9 text-[13px]"
-          />
-          <Input
-            value={productName}
-            onChange={(event) => setProductName(event.target.value)}
-            placeholder="Product name"
-            className="h-9 text-[13px]"
-          />
-          <div className="grid grid-cols-[minmax(0,1fr)_84px] gap-2">
-            <Input
-              value={productPrice}
-              onChange={(event) => setProductPrice(event.target.value)}
-              onKeyDown={(event) => {
-                if (event.key === "Enter") {
-                  event.preventDefault()
-                  void addProduct()
-                }
-              }}
-              inputMode="decimal"
-              placeholder="Price"
-              className="h-9 text-[13px]"
-            />
-            <Input
-              value={productCurrency}
-              onChange={(event) => setProductCurrency(event.target.value)}
-              placeholder="EUR"
-              className="h-9 text-[13px] uppercase"
-            />
-          </div>
-          <div className="grid grid-cols-[minmax(0,1fr)_42px] gap-2">
-            <Input
-              value={productSource}
-              onChange={(event) => setProductSource(event.target.value)}
-              placeholder="Store"
-              className="h-9 text-[13px]"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              size="icon"
-              onClick={() => void addProduct()}
-              disabled={adding === "product"}
-              title="Add product"
-              className="h-9 w-10"
-            >
-              {adding === "product" ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Plus className="size-3.5" />
-              )}
-            </Button>
-          </div>
-        </div>
-      )}
-      {error && (
-        <p className="mt-2 text-[11.5px] text-amber-700 dark:text-amber-300">
-          {error}
-        </p>
-      )}
-      {mode === "financial" && (
-        <div className="mt-2 max-h-[230px] overflow-y-auto">
-          {results.map((item) => (
-            <button
-              key={`${item.providerSymbol}-${item.exchange ?? ""}`}
-              type="button"
-              onClick={() => void add(item)}
-              className="flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left hover:bg-[#f0ede6]/70 dark:hover:bg-muted"
-            >
-              <span className="flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-foreground/55">
-                {adding === item.providerSymbol ? (
-                  <Loader2 className="size-3 animate-spin" />
-                ) : (
-                  <Plus className="size-3" />
-                )}
-              </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-2">
-                  <span className="text-[12.5px] font-semibold">
-                    {item.symbol}
-                  </span>
-                  <AssetBadge value={item.assetClass} />
-                </span>
-                <span className="block truncate text-[11.5px] text-foreground/45">
-                  {item.name}
-                  {item.exchange ? ` · ${item.exchange}` : ""}
-                </span>
-              </span>
-            </button>
-          ))}
-        </div>
+        <ProductAdd onAdd={onAdd} />
       )}
     </div>
   )
@@ -784,10 +1146,22 @@ export function WatchlistView() {
     return items.find((item) => item.id === selectedId) ?? items[0] ?? null
   }, [items, selectedId])
 
-  const hasFinancialItems = React.useMemo(
-    () => items.some((item) => item.kind === "financial"),
-    [items]
-  )
+  const { financialItems, productItems, headerSummary } = React.useMemo(() => {
+    const financials = items.filter((item) => item.kind === "financial")
+    const products = items.filter((item) => item.kind === "product")
+    const parts: string[] = []
+    if (financials.length > 0)
+      parts.push(`${financials.length} ${financials.length === 1 ? "instrument" : "instruments"}`)
+    if (products.length > 0)
+      parts.push(`${products.length} ${products.length === 1 ? "product" : "products"}`)
+    return {
+      financialItems: financials,
+      productItems: products,
+      headerSummary: parts.length > 0 ? parts.join(" · ") : "Empty",
+    }
+  }, [items])
+
+  const hasFinancialItems = financialItems.length > 0
 
   const load = React.useCallback(async (force = false) => {
     setRefreshing(force)
@@ -898,7 +1272,7 @@ export function WatchlistView() {
               Watchlist
             </h1>
             <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] text-foreground/50">
-              {items.length} tracked
+              {headerSummary}
             </span>
           </div>
           <p className="mt-0.5 text-[12px] text-foreground/45">
@@ -969,19 +1343,47 @@ export function WatchlistView() {
                 </p>
               </div>
             ) : (
-              <div className="space-y-0.5">
-                {items.map((item) => (
-                  <WatchlistRow
-                    key={item.id}
-                    item={item}
-                    selected={selected?.id === item.id}
-                    onSelect={() => {
-                      setSelectedId(item.id)
-                      setMobileDetailOpen(true)
-                    }}
-                    onRemove={() => void removeInstrument(item.id)}
-                  />
-                ))}
+              <div className="space-y-0.5 pb-2">
+                {financialItems.length > 0 && (
+                  <>
+                    <ListSectionHeader
+                      label="Instruments"
+                      count={financialItems.length}
+                    />
+                    {financialItems.map((item) => (
+                      <WatchlistRow
+                        key={item.id}
+                        item={item}
+                        selected={selected?.id === item.id}
+                        onSelect={() => {
+                          setSelectedId(item.id)
+                          setMobileDetailOpen(true)
+                        }}
+                        onRemove={() => void removeInstrument(item.id)}
+                      />
+                    ))}
+                  </>
+                )}
+                {productItems.length > 0 && (
+                  <>
+                    <ListSectionHeader
+                      label="Products"
+                      count={productItems.length}
+                    />
+                    {productItems.map((item) => (
+                      <WatchlistRow
+                        key={item.id}
+                        item={item}
+                        selected={selected?.id === item.id}
+                        onSelect={() => {
+                          setSelectedId(item.id)
+                          setMobileDetailOpen(true)
+                        }}
+                        onRemove={() => void removeInstrument(item.id)}
+                      />
+                    ))}
+                  </>
+                )}
               </div>
             )}
           </div>
@@ -1005,21 +1407,45 @@ export function WatchlistView() {
                   Watchlist
                 </button>
                 <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0">
-                    <div className="flex flex-wrap items-center gap-2">
-                      <h2 className="text-[22px] font-semibold tracking-tight">
-                        {itemTitle(selected)}
-                      </h2>
-                      <AssetBadge value={itemBadge(selected)} />
-                      {selected.exchange && (
-                        <span className="text-[12px] text-foreground/45">
-                          {selected.exchange}
-                        </span>
+                  <div className="flex min-w-0 flex-1 items-start gap-3">
+                    {selectedIsProduct && (
+                      <ProductThumbnail
+                        src={selected.imageUrl}
+                        alt={selected.name}
+                        size={72}
+                      />
+                    )}
+                    <div className="min-w-0 flex-1">
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="text-[22px] font-semibold tracking-tight">
+                          {itemTitle(selected)}
+                        </h2>
+                        {!selectedIsProduct && (
+                          <AssetBadge value={itemBadge(selected)} />
+                        )}
+                        {selected.exchange && (
+                          <span className="text-[12px] text-foreground/45">
+                            {selected.exchange}
+                          </span>
+                        )}
+                      </div>
+                      <p className="mt-0.5 truncate text-[13px] text-foreground/50">
+                        {itemSubtitle(selected)}
+                      </p>
+                      {selectedIsProduct && productPageUrl && (
+                        <a
+                          href={productPageUrl}
+                          target="_blank"
+                          rel="noreferrer"
+                          className="mt-1.5 inline-flex max-w-full items-center gap-1 text-[12px] text-foreground/55 hover:text-foreground"
+                        >
+                          <ExternalLink className="size-3.5 shrink-0" />
+                          <span className="truncate">
+                            {selected.exchange ?? "Product page"}
+                          </span>
+                        </a>
                       )}
                     </div>
-                    <p className="mt-0.5 truncate text-[13px] text-foreground/50">
-                      {itemSubtitle(selected)}
-                    </p>
                   </div>
                   <div className="text-right">
                     <div className="text-[26px] font-semibold tracking-tight tabular-nums">
@@ -1031,110 +1457,95 @@ export function WatchlistView() {
                         changeTone(q?.changePercent)
                       )}
                     >
-                      {formatSigned(q?.change)} ·{" "}
-                      {formatSigned(q?.changePercent, "%")}
+                      {q?.change != null || q?.changePercent != null
+                        ? `${formatSigned(q?.change)} · ${formatSigned(q?.changePercent, "%")}`
+                        : selectedIsProduct
+                          ? "First observation"
+                          : "—"}
                     </div>
                   </div>
                 </div>
 
-                <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
-                  {selectedIsProduct ? (
-                    <>
-                      <Stat
-                        label="Previous"
-                        value={formatPrice(
-                          q?.previousClose,
-                          q?.currency ?? selected.currency
-                        )}
-                      />
-                      <Stat
-                        label="Change"
-                        value={formatSigned(q?.change)}
-                        tone={changeTone(q?.change)}
-                      />
-                      <Stat
-                        label="Change %"
-                        value={formatSigned(q?.changePercent, "%")}
-                        tone={changeTone(q?.changePercent)}
-                      />
-                      <Stat label="Source" value={selected.exchange ?? "—"} />
-                      <Stat
-                        label="Currency"
-                        value={q?.currency ?? selected.currency ?? "—"}
-                      />
-                    </>
-                  ) : (
-                    <>
-                      <Stat
-                        label="Open"
-                        value={formatPrice(
-                          q?.open,
-                          q?.currency ?? selected.currency
-                        )}
-                      />
-                      <Stat
-                        label="High"
-                        value={formatPrice(
-                          q?.high,
-                          q?.currency ?? selected.currency
-                        )}
-                      />
-                      <Stat
-                        label="Low"
-                        value={formatPrice(
-                          q?.low,
-                          q?.currency ?? selected.currency
-                        )}
-                      />
-                      <Stat
-                        label="Prev close"
-                        value={formatPrice(
-                          q?.previousClose,
-                          q?.currency ?? selected.currency
-                        )}
-                      />
-                      <Stat label="Volume" value={formatCompact(q?.volume)} />
-                    </>
-                  )}
-                  <Stat
-                    label={
-                      selectedIsProduct
-                        ? "Observed"
-                        : selected.quoteStale
-                          ? "Cached"
-                          : "Updated"
-                    }
-                    value={formatTime(selected.quoteUpdatedAt)}
-                    tone={
-                      selected.quoteStale
-                        ? "text-amber-700 dark:text-amber-300"
-                        : undefined
-                    }
-                  />
-                </div>
+                {selectedIsProduct ? (
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                    <Stat
+                      label="Previous"
+                      value={formatPrice(
+                        q?.previousClose,
+                        q?.currency ?? selected.currency
+                      )}
+                    />
+                    <Stat
+                      label="Store"
+                      value={selected.exchange ?? "—"}
+                    />
+                    <Stat
+                      label="First tracked"
+                      value={formatTime(selected.createdAt)}
+                    />
+                    <Stat
+                      label="Last checked"
+                      value={formatTime(selected.quoteUpdatedAt)}
+                      tone={
+                        selected.quoteStale
+                          ? "text-amber-700 dark:text-amber-300"
+                          : undefined
+                      }
+                    />
+                  </div>
+                ) : (
+                  <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-3 2xl:grid-cols-6">
+                    <Stat
+                      label="Open"
+                      value={formatPrice(
+                        q?.open,
+                        q?.currency ?? selected.currency
+                      )}
+                    />
+                    <Stat
+                      label="High"
+                      value={formatPrice(
+                        q?.high,
+                        q?.currency ?? selected.currency
+                      )}
+                    />
+                    <Stat
+                      label="Low"
+                      value={formatPrice(
+                        q?.low,
+                        q?.currency ?? selected.currency
+                      )}
+                    />
+                    <Stat
+                      label="Prev close"
+                      value={formatPrice(
+                        q?.previousClose,
+                        q?.currency ?? selected.currency
+                      )}
+                    />
+                    <Stat label="Volume" value={formatCompact(q?.volume)} />
+                    <Stat
+                      label={selected.quoteStale ? "Cached" : "Updated"}
+                      value={formatTime(selected.quoteUpdatedAt)}
+                      tone={
+                        selected.quoteStale
+                          ? "text-amber-700 dark:text-amber-300"
+                          : undefined
+                      }
+                    />
+                  </div>
+                )}
               </section>
 
               {selectedIsProduct ? (
                 <>
                   <HistoryPreview selected={selected} />
-                  <div className="flex flex-col items-start gap-2 border-t border-border/60 px-4 py-2.5 text-[12px] text-foreground/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
-                    <div className="flex min-w-0 items-center gap-2">
-                      <Package className="size-3.5" />
-                      Local observations
-                    </div>
-                    {productPageUrl && (
-                      <a
-                        href={productPageUrl}
-                        target="_blank"
-                        rel="noreferrer"
-                        className="flex min-w-0 items-center gap-1 text-foreground/55 hover:text-foreground"
-                      >
-                        <ExternalLink className="size-3.5" />
-                        <span className="truncate">
-                          {selected.exchange ?? "Product page"}
-                        </span>
-                      </a>
-                    )}
+                  <div className="flex items-center gap-2 border-t border-border/60 px-4 py-2.5 text-[12px] text-foreground/45">
+                    <Package className="size-3.5" />
+                    <span>
+                      Tracked locally · Price observations recorded on each
+                      visit.
+                    </span>
                   </div>
                 </>
               ) : (

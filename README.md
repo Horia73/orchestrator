@@ -20,6 +20,12 @@ By default the app binds to `127.0.0.1`. Keep it that way unless it is behind a 
 
 Do not expose Orchestrator directly to the public internet. The app has endpoints that can run agents, mutate local state, use local credentials, and execute local tools. Cross-origin mutating API requests are blocked, but that is not a substitute for authentication at the network edge.
 
+All private `/api/*` routes are restricted to same-origin browser requests or
+direct loopback calls. Direct API calls to a non-loopback host must include
+`ORCHESTRATOR_API_TOKEN` as `Authorization: Bearer <token>` or
+`X-Orchestrator-API-Token: <token>`. OAuth callbacks and internal tokenized
+bridge endpoints are handled separately.
+
 ## Requirements
 
 - Node.js `22.x` for native/manual installs.
@@ -41,6 +47,70 @@ Open:
 ```text
 http://127.0.0.1:3000
 ```
+
+### Public HTTPS With DuckDNS
+
+For a personal Linux server, the installer can also configure a DuckDNS hostname,
+DNS-based Let's Encrypt certificate, nginx reverse proxy, and the app's public
+origin. This keeps every install tied to the user's own hostname; do not bake a
+shared Orchestrator URL into the repo or image.
+
+Prerequisites:
+
+- A DuckDNS subdomain owned by the user, for example `my-orchestrator.duckdns.org`.
+- The DuckDNS account token.
+- Port `443` reachable from the user's browser to the server. Port `80` is only
+  used for HTTP-to-HTTPS redirect when reachable.
+- `sudo` on the server. The installer uses Docker for the app and host nginx for
+  TLS termination.
+
+Interactive setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
+  ORCHESTRATOR_PUBLIC_HTTPS_SETUP=duckdns \
+  bash
+```
+
+The installer asks for:
+
+- DuckDNS domain, either `my-orchestrator` or `my-orchestrator.duckdns.org`.
+- DuckDNS token.
+- Optional Let's Encrypt email.
+
+Non-interactive setup:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
+  ORCHESTRATOR_PUBLIC_HTTPS_SETUP=duckdns \
+  ORCHESTRATOR_DUCKDNS_DOMAIN=my-orchestrator \
+  ORCHESTRATOR_DUCKDNS_TOKEN='paste-duckdns-token-here' \
+  ORCHESTRATOR_LETSENCRYPT_EMAIL='me@example.com' \
+  bash
+```
+
+This mode:
+
+- sets `ORCHESTRATOR_PUBLIC_URL=https://<domain>.duckdns.org`;
+- sets `ORCHESTRATOR_SSH_HOST=<domain>.duckdns.org`;
+- updates the DuckDNS record immediately and installs a systemd user timer, or a
+  cron fallback, to keep it current;
+- installs nginx plus acme.sh;
+- issues a Let's Encrypt certificate with DuckDNS DNS-01 validation;
+- configures nginx on `80`/`443` to proxy Orchestrator to `127.0.0.1:3000` and
+  browser live-view WebSockets to `/vnc/`;
+- sets `BROWSER_AGENT_VNC_WS_PUBLIC_URL=wss://<domain>.duckdns.org/vnc`.
+
+After install, open:
+
+```text
+https://<domain>.duckdns.org
+```
+
+Google OAuth setup is handled from Orchestrator's Settings UI. The important
+installer responsibility is that `ORCHESTRATOR_PUBLIC_URL` is the user's real
+HTTPS origin before the app starts, so Orchestrator reports the correct redirect
+URIs.
 
 Useful overrides:
 
@@ -152,6 +222,7 @@ The native installer:
 - installs Linux build/browser dependencies where possible;
 - runs `npm ci`;
 - installs the Patchright Chromium runtime;
+- stores runtime workspace state under `~/.orchestrator/state` and links it into the checkout;
 - builds the app;
 - creates a `systemd --user` service on Linux or a `launchd` service on macOS;
 - installs an `orchestrator` CLI with `start`, `stop`, `restart`, `status`, `logs`, and `update`.
@@ -187,7 +258,7 @@ Important variables:
 - `WHATSAPP_USER_AGENT`: optional WhatsApp Web browser user-agent override.
 - `BROWSER_AGENT_LIVE_VIEW`: enables live browser view on Linux/Docker.
 
-For native installs, runtime workspace state and editable app files live under `.orchestrator/` in the checkout. For managed installs, that is usually `~/.orchestrator/app/.orchestrator`.
+For native installs, runtime workspace state is stored at `~/.orchestrator/state` and exposed to the app through `~/.orchestrator/app/.orchestrator`. For Docker installs, persistent app data lives in the `orchestrator-data` Docker volume mounted at `/app/.orchestrator`.
 
 ## Browser Agent Live View
 
@@ -203,36 +274,37 @@ BROWSER_AGENT_VNC_WS_PORT=6080
 BROWSER_AGENT_VNC_WS_PUBLIC_URL=ws://127.0.0.1:6080
 ```
 
-Set `ORCHESTRATOR_PUBLIC_URL` when users open the app through a LAN hostname,
-reverse proxy, or tunnel, for example `http://orchestrator.lan`. Google OAuth
-is stricter than normal app routing: Authorized redirect URIs must be either
-`localhost` for a local/SSH-tunnel setup, or an HTTPS URL on a real public
-domain. Names such as `.lan`, `.local`, and private IPs are fine for opening
-Orchestrator, but Google rejects them as OAuth redirect URIs. When the app URL
-is not Google-compatible, Orchestrator falls back to `http://localhost:3000/...`
-for OAuth so users can connect through an SSH tunnel, or you can set
-`GOOGLE_WORKSPACE_OAUTH_REDIRECT_URI` / `GMAIL_OAUTH_REDIRECT_URI` to a public
-HTTPS callback.
+Leave `ORCHESTRATOR_PUBLIC_URL` empty for local installs or when a trusted
+reverse proxy sends correct `Host` / `X-Forwarded-*` headers. Set it when the
+app must advertise one canonical URL, especially for public HTTPS installs:
 
-The simplest Google-compatible setup that needs no port forwarding: point a
-dynamic-DNS hostname (for example a free DuckDNS subdomain) at the box, issue a
-Let's Encrypt certificate through the DNS-01 challenge, and use split-horizon
-DNS so the name resolves to the LAN IP at home. The app then runs on a real
-publicly-trusted HTTPS URL — OAuth works directly, with no SSH tunnel and
-nothing exposed to the internet.
+```text
+ORCHESTRATOR_PUBLIC_URL=https://<your-domain>.duckdns.org
+```
+
+Google OAuth is stricter than normal app routing: Authorized redirect URIs must
+be either `localhost` for a local/SSH-tunnel setup, or an HTTPS URL on a real
+public domain. Names such as `.lan`, `.local`, and private IPs are fine for
+opening Orchestrator, but Google rejects them as OAuth redirect URIs. When the
+app URL is not Google-compatible, Orchestrator falls back to
+`http://localhost:3000/...` for OAuth.
+
+For DuckDNS public HTTPS installs, prefer the installer flow in
+**Public HTTPS With DuckDNS**. It writes `ORCHESTRATOR_PUBLIC_URL`, configures
+DuckDNS updates, issues the certificate, and installs nginx.
 
 For headless Linux where the browser is on another machine, keep the app
 reachable through the LAN name/IP for normal use, but do Google OAuth through a
 local tunnel:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 user@orchestrator.lan
+ssh -N -L 3000:127.0.0.1:3000 user@your-server.lan
 ```
 
 Then open `http://localhost:3000/settings`, run Connect, wait until the
 integration card says Connected, and stop the tunnel with `Ctrl+C`. If the LAN
-IP changes, prefer a stable LAN DNS name such as `orchestrator.lan`; the app
-also reports current SSH host candidates in the integration status payload.
+IP changes, prefer a stable LAN DNS name or a private network name; the app also
+reports current SSH host candidates in the integration status payload.
 
 Keep `6080` bound to `127.0.0.1` unless it is protected by the same private access layer as the main app.
 
@@ -261,6 +333,44 @@ git pull --ff-only
 docker compose up --build -d
 ```
 
+## Diagnostics and Uninstall
+
+The installer ships `scripts/doctor.sh`, also exposed as `orchestrator doctor`.
+Use it to validate a host before installing, to inspect leftover state after a
+previous installation, to verify the running system, or to remove the install
+cleanly.
+
+```bash
+orchestrator doctor            # full health check (preflight + state + runtime)
+orchestrator doctor preflight  # read-only pre-install checks
+orchestrator doctor inspect    # inventory of previous-install artifacts
+orchestrator doctor fix        # apply suggested fixes for the last check
+orchestrator uninstall         # remove install, keep data/logs and Docker volumes
+orchestrator uninstall --purge # also wipe ~/.orchestrator and Orchestrator Docker volumes/image
+```
+
+`uninstall` does not remove shared system dependencies such as Docker, Node.js,
+nginx, or acme.sh itself. `--purge` removes data owned by Orchestrator, including
+managed native state and Docker named volumes created by the Compose stack.
+
+Every install run writes a full log to `~/.orchestrator/logs/install-<timestamp>.log`.
+Every doctor run writes its own log to `~/.orchestrator/logs/doctor/run-<timestamp>.log`.
+If the installer fails, the trailing message points at both the log file and the
+doctor command for follow-up.
+
+Exit codes follow:
+
+- `0` healthy / clean / done
+- `1` hard failure (blocker)
+- `2` warnings only — non-blocking
+- `3` stale state from a previous install was found (`inspect` only)
+
+The installer calls `doctor preflight` and `doctor inspect` automatically right
+after the checkout step. When stale state is detected on an interactive run the
+installer offers `keep` (reuse what is valid), `reset` (uninstall first, then
+install fresh), or `abort`. Set `ORCHESTRATOR_SKIP_DOCTOR=1` to bypass these
+checks entirely.
+
 ## Development
 
 ```bash
@@ -273,6 +383,7 @@ Quality checks:
 
 ```bash
 npm run typecheck
+npm run smoke:monitor
 npm run lint
 npm run build
 npm audit --omit=dev --audit-level=high
@@ -287,6 +398,7 @@ Before releasing:
 ```bash
 git status --short
 npm run typecheck
+npm run smoke:monitor
 npm run lint
 npm run build
 ```

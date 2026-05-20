@@ -2,6 +2,7 @@ import dns from 'dns/promises'
 import os from 'os'
 
 import { isLoopbackHost } from '@/lib/app-origin'
+import { getEnvValue } from '@/lib/config'
 
 export interface RuntimeAccessInfo {
     appOrigin: string
@@ -37,7 +38,7 @@ export function buildRuntimeAccessContext(appOrigin: string): string[] {
     const info = buildRuntimeAccessInfo(appOrigin, [])
     const lines: string[] = []
     if (info.appHost) lines.push(`app_host: ${info.appHost}`)
-    if (info.publicUrl) lines.push(`configured_public_url: ${info.publicUrl}`)
+    if (info.publicUrl) lines.push(`effective_public_url: ${info.publicUrl}`)
     if (info.envHostLanIp) lines.push(`configured_host_lan_ip: ${info.envHostLanIp}`)
     if (info.runtimeIPv4.length > 0) lines.push(`runtime_ipv4_candidates: ${info.runtimeIPv4.join(', ')}`)
     if (info.sshHostCandidates.length > 0) lines.push(`ssh_host_candidates: ${info.sshHostCandidates.join(', ')}`)
@@ -52,14 +53,12 @@ function buildRuntimeAccessInfo(appOrigin: string, resolvedAppHostIPv4: string[]
     const url = parseOrigin(appOrigin)
     const appHost = url?.hostname ?? null
     const appPort = url?.port || defaultPort(url?.protocol)
-    const publicUrl = cleanEnv(process.env.ORCHESTRATOR_PUBLIC_URL)
-        || cleanEnv(process.env.ORCHESTRATOR_APP_URL)
-        || cleanEnv(process.env.NEXT_PUBLIC_APP_URL)
-    const envHostLanIp = cleanEnv(process.env.ORCHESTRATOR_HOST_LAN_IP)
-    const sshUser = cleanEnv(process.env.ORCHESTRATOR_SSH_USER)
+    const publicUrl = effectivePublicUrl(appOrigin)
+    const envHostLanIp = cleanEnv(getEnvValue('ORCHESTRATOR_HOST_LAN_IP'))
+    const sshUser = cleanEnv(getEnvValue('ORCHESTRATOR_SSH_USER'))
     const runtimeIPv4 = getRuntimeIPv4()
     const sshHostCandidates = uniqueStrings([
-        cleanEnv(process.env.ORCHESTRATOR_SSH_HOST),
+        cleanEnv(getEnvValue('ORCHESTRATOR_SSH_HOST')),
         appHost && !isLoopbackHost(appHost) ? appHost : null,
         ...resolvedAppHostIPv4,
         envHostLanIp,
@@ -67,7 +66,7 @@ function buildRuntimeAccessInfo(appOrigin: string, resolvedAppHostIPv4: string[]
         os.hostname(),
     ])
     const remoteHost = sshHostCandidates[0] ?? 'server'
-    const remotePort = process.env.ORCHESTRATOR_PORT || '3000'
+    const remotePort = getEnvValue('ORCHESTRATOR_PORT') || '3000'
     const localPort = appPort || remotePort
     const userHost = sshUser ? `${sshUser}@${remoteHost}` : `user@${remoteHost}`
 
@@ -127,7 +126,52 @@ function defaultPort(protocol?: string): string {
     return '3000'
 }
 
-function cleanEnv(value: string | undefined): string | null {
+function effectivePublicUrl(appOrigin: string): string | null {
+    const appUrl = parseOrigin(appOrigin)
+    const configured = configuredPublicUrl()
+    const configuredUrl = configured ? parseOrigin(configured) : null
+
+    if (appUrl && isPublicHttpsUrl(appUrl)) {
+        if (!configuredUrl || configuredUrl.origin !== appUrl.origin) {
+            return appUrl.origin
+        }
+    }
+
+    return configuredUrl?.origin ?? (appUrl && isPublicHttpsUrl(appUrl) ? appUrl.origin : null)
+}
+
+function configuredPublicUrl(): string | null {
+    return cleanEnv(getEnvValue('ORCHESTRATOR_PUBLIC_URL'))
+        || cleanEnv(getEnvValue('ORCHESTRATOR_APP_URL'))
+        || cleanEnv(getEnvValue('NEXT_PUBLIC_APP_URL'))
+}
+
+function isPublicHttpsUrl(url: URL): boolean {
+    if (url.protocol !== 'https:' || isLoopbackHost(url.hostname) || isIpAddress(url.hostname)) {
+        return false
+    }
+    const labels = url.hostname.split('.').filter(Boolean)
+    if (labels.length < 2) return false
+    const tld = labels[labels.length - 1]?.toLowerCase()
+    return Boolean(tld && /^[a-z]{2,63}$/.test(tld) && !RESERVED_TLDS.has(tld))
+}
+
+function isIpAddress(hostname: string): boolean {
+    return /^(\d{1,3}\.){3}\d{1,3}$/.test(hostname) || hostname.includes(':')
+}
+
+const RESERVED_TLDS = new Set([
+    'example',
+    'home',
+    'internal',
+    'invalid',
+    'lan',
+    'local',
+    'localhost',
+    'test',
+])
+
+function cleanEnv(value: string | null | undefined): string | null {
     const clean = value?.trim()
     return clean || null
 }

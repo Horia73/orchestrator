@@ -165,28 +165,62 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   )
 }
 
+const WORKSPACE_PATH_MARKER = "/.orchestrator/workspace/"
+const DOWNLOADABLE_WORKSPACE_EXT_RE =
+  /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp)(?:[?#].*)?$/i
+
+function workspaceDownloadHref(href: string | undefined): string | undefined {
+  const raw = href?.trim()
+  if (!raw || raw.startsWith("#") || raw.startsWith("?")) return undefined
+  if (raw.startsWith("/api/workspace/files?")) return raw
+  if (/^(?:mailto|tel|javascript):/i.test(raw)) return undefined
+
+  let candidate = raw
+  let hasProtocol = false
+  try {
+    const url = new URL(raw)
+    hasProtocol = true
+    if (url.protocol !== "file:") return undefined
+    candidate = url.pathname
+  } catch {
+    hasProtocol = /^[a-z][a-z0-9+.-]*:/i.test(raw)
+  }
+
+  if (hasProtocol && !raw.startsWith("file://")) return undefined
+
+  const pathOnly = candidate.split(/[?#]/, 1)[0]?.replace(/\\/g, "/") ?? ""
+  const isWorkspacePath = pathOnly.includes(WORKSPACE_PATH_MARKER)
+  const isRelativeWorkspaceFile =
+    !pathOnly.startsWith("/") &&
+    !pathOnly.includes("://") &&
+    DOWNLOADABLE_WORKSPACE_EXT_RE.test(candidate)
+
+  if (!isWorkspacePath && !isRelativeWorkspaceFile) return undefined
+  return `/api/workspace/files?path=${encodeURIComponent(candidate)}`
+}
+
 // ---------------------------------------------------------------------------
 // Custom react-markdown components
 // ---------------------------------------------------------------------------
 
 const baseComponents: Components = {
   h1: ({ children }) => (
-    <h1 className="-ml-16 mt-5 mb-2 pl-16 text-[22px] font-semibold tracking-tight">
+    <h1 className="mt-5 mb-2 text-[22px] font-semibold tracking-tight md:-ml-16 md:pl-16">
       {children}
     </h1>
   ),
   h2: ({ children }) => (
-    <h2 className="-ml-16 mt-5 mb-2 pl-16 text-[18px] font-semibold tracking-tight">
+    <h2 className="mt-5 mb-2 text-[18px] font-semibold tracking-tight md:-ml-16 md:pl-16">
       {children}
     </h2>
   ),
   h3: ({ children }) => (
-    <h3 className="-ml-16 mt-4 mb-1.5 pl-16 text-[16px] font-semibold">{children}</h3>
+    <h3 className="mt-4 mb-1.5 text-[16px] font-semibold md:-ml-16 md:pl-16">{children}</h3>
   ),
   h4: ({ children }) => (
-    <h4 className="-ml-16 mt-3 mb-1 pl-16 text-[15px] font-semibold">{children}</h4>
+    <h4 className="mt-3 mb-1 text-[15px] font-semibold md:-ml-16 md:pl-16">{children}</h4>
   ),
-  p: ({ children }) => <p className="-ml-16 my-2 pl-16 leading-relaxed">{children}</p>,
+  p: ({ children }) => <p className="my-2 leading-relaxed md:-ml-16 md:pl-16">{children}</p>,
   strong: ({ children }) => (
     <strong className="font-semibold">{children}</strong>
   ),
@@ -195,7 +229,7 @@ const baseComponents: Components = {
     <del className="text-muted-foreground">{children}</del>
   ),
   blockquote: ({ children }) => (
-    <blockquote className="-ml-16 my-2 border-l-2 border-border pl-[calc(4rem+0.75rem)] text-muted-foreground italic">
+    <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground italic md:-ml-16 md:pl-[calc(4rem+0.75rem)]">
       {children}
     </blockquote>
   ),
@@ -229,16 +263,19 @@ const baseComponents: Components = {
     return <CodeBlock language="" code={code} />
   },
   hr: () => <hr className="my-4 border-t border-border/60" />,
-  a: ({ href, children }) => (
-    <a
-      href={href}
-      target="_blank"
-      rel="noopener noreferrer"
-      className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
-    >
-      {children}
-    </a>
-  ),
+  a: ({ href, children }) => {
+    const downloadHref = workspaceDownloadHref(href)
+    return (
+      <a
+        href={downloadHref ?? href}
+        target={downloadHref ? undefined : "_blank"}
+        rel={downloadHref ? undefined : "noopener noreferrer"}
+        className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
+      >
+        {children}
+      </a>
+    )
+  },
   table: ({ children }) => (
     <div className="my-3 overflow-x-auto rounded-lg border border-border/50">
       <table className="w-full text-[14px]">{children}</table>
@@ -263,14 +300,14 @@ const baseComponents: Components = {
 const contextComponents: Components = {
   ...baseComponents,
   ul: ({ children }) => (
-    <ul className="-ml-16 my-2 list-disc space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6">
+    <ul className="my-2 list-disc space-y-1 pl-6 md:-ml-16 md:pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6">
       {children}
     </ul>
   ),
   ol: ({ children, start }) => (
     <ol
       start={start}
-      className="-ml-16 my-2 list-decimal space-y-1 pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6"
+      className="my-2 list-decimal space-y-1 pl-6 md:-ml-16 md:pl-[calc(4rem+1.5rem)] [&_ol]:my-1 [&_ol]:ml-0 [&_ol]:list-decimal [&_ol]:pl-6 [&_ul]:my-1 [&_ul]:ml-0 [&_ul]:list-disc [&_ul]:pl-6"
     >
       {children}
     </ol>

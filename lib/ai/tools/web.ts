@@ -64,7 +64,7 @@ export async function executeWebFetch(args: Record<string, unknown>): Promise<To
     }
 }
 
-async function safeFetch(initialUrl: URL, signal: AbortSignal): Promise<Response> {
+export async function safeFetch(initialUrl: URL, signal: AbortSignal): Promise<Response> {
     let current = initialUrl
     for (let redirectCount = 0; redirectCount <= 5; redirectCount++) {
         const response = await fetch(current.toString(), {
@@ -87,7 +87,7 @@ async function safeFetch(initialUrl: URL, signal: AbortSignal): Promise<Response
     throw new Error('Too many redirects')
 }
 
-async function validatePublicHttpUrl(raw: string): Promise<{ ok: true; url: URL } | { ok: false; error: string }> {
+export async function validatePublicHttpUrl(raw: string): Promise<{ ok: true; url: URL } | { ok: false; error: string }> {
     let url: URL
     try {
         url = new URL(raw)
@@ -97,6 +97,9 @@ async function validatePublicHttpUrl(raw: string): Promise<{ ok: true; url: URL 
 
     if (url.protocol !== 'http:' && url.protocol !== 'https:') {
         return { ok: false, error: 'Only http and https URLs are supported.' }
+    }
+    if (url.username || url.password) {
+        return { ok: false, error: 'URLs with embedded credentials are not supported.' }
     }
 
     const host = url.hostname
@@ -119,24 +122,53 @@ async function validatePublicHttpUrl(raw: string): Promise<{ ok: true; url: URL 
 
 function isPrivateAddress(address: string): boolean {
     if (net.isIPv4(address)) {
-        const [a, b] = address.split('.').map(Number)
-        return (
-            a === 10 ||
-            a === 127 ||
-            (a === 172 && b >= 16 && b <= 31) ||
-            (a === 192 && b === 168) ||
-            (a === 169 && b === 254) ||
-            a === 0
-        )
+        return isBlockedIPv4(address)
     }
     if (net.isIPv6(address)) {
         const lower = address.toLowerCase()
-        return lower === '::1' || lower.startsWith('fc') || lower.startsWith('fd') || lower.startsWith('fe80:')
+        const mapped = lower.match(/^::ffff:(\d{1,3}(?:\.\d{1,3}){3})$/)
+        if (mapped) return isBlockedIPv4(mapped[1])
+        return lower === '::'
+            || lower === '::1'
+            || lower.startsWith('fc')
+            || lower.startsWith('fd')
+            || lower.startsWith('fe8')
+            || lower.startsWith('fe9')
+            || lower.startsWith('fea')
+            || lower.startsWith('feb')
+            || lower.startsWith('ff')
+            || lower.startsWith('2001:db8:')
     }
     return true
 }
 
-async function readResponseBody(response: Response, maxBytes: number): Promise<string> {
+function isBlockedIPv4(address: string): boolean {
+    const octets = address.split('.').map(Number)
+    if (octets.length !== 4 || octets.some(octet => !Number.isInteger(octet) || octet < 0 || octet > 255)) {
+        return true
+    }
+    const [a, b, c, d] = octets
+    const asInt = ((a << 24) >>> 0) + (b << 16) + (c << 8) + d
+    return (
+        a === 0 ||
+        a === 10 ||
+        a === 127 ||
+        (a === 100 && b >= 64 && b <= 127) ||
+        (a === 169 && b === 254) ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 0) ||
+        (a === 192 && b === 0 && c === 2) ||
+        (a === 192 && b === 88 && c === 99) ||
+        (a === 192 && b === 168) ||
+        (a === 198 && (b === 18 || b === 19)) ||
+        (a === 198 && b === 51 && c === 100) ||
+        (a === 203 && b === 0 && c === 113) ||
+        a >= 224 ||
+        asInt === 0xffffffff
+    )
+}
+
+export async function readResponseBody(response: Response, maxBytes: number): Promise<string> {
     if (!response.body) return ''
     const reader = response.body.getReader()
     const chunks: Uint8Array[] = []

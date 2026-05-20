@@ -313,7 +313,7 @@ function mailComposeSchema(subjectDescription: string, bodyDescription: string, 
         cc: { type: 'array', description: 'Optional CC recipients.', items: { type: 'string' } },
         bcc: { type: 'array', description: 'Optional BCC recipients.', items: { type: 'string' } },
         subject: { type: 'string', description: subjectDescription },
-        body: { type: 'string', description: bodyDescription },
+        body: { type: 'string', description: `${bodyDescription} Use an empty string when the user explicitly asks for a blank email body.` },
         thread_id: { type: 'string', description: 'Optional Gmail thread ID when replying in an existing thread.' },
         attachments: {
             type: 'array',
@@ -365,12 +365,12 @@ function parseComposeArgs(args: Record<string, unknown>):
     const cc = stringArrayArg(args, 'cc')
     const bcc = stringArrayArg(args, 'bcc')
     const subject = stringArg(args, ['subject'])
-    const body = stringArg(args, ['body', 'text'])
+    const body = nullableStringArg(args, ['body', 'text'])
     const threadId = stringArg(args, ['thread_id', 'threadId'])
     const attachments = parseOutgoingAttachments(args)
     if (to.length === 0) return { ok: false, error: { success: false, error: 'Missing required parameter: to' } }
     if (!subject) return { ok: false, error: { success: false, error: 'Missing required parameter: subject' } }
-    if (!body) return { ok: false, error: { success: false, error: 'Missing required parameter: body' } }
+    if (body === null) return { ok: false, error: { success: false, error: 'Missing required parameter: body' } }
     if (!attachments.ok) return attachments
     return {
         ok: true,
@@ -384,6 +384,14 @@ function parseComposeArgs(args: Record<string, unknown>):
             attachments: attachments.value.length > 0 ? attachments.value : undefined,
         },
     }
+}
+
+function nullableStringArg(args: Record<string, unknown>, keys: string[]): string | null {
+    for (const key of keys) {
+        const value = args[key]
+        if (typeof value === 'string') return value
+    }
+    return null
 }
 
 function parseTargetArgs(args: Record<string, unknown>):

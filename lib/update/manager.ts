@@ -85,12 +85,12 @@ const PROJECT_DIR = process.cwd()
 const UPDATE_DIR = path.join(PROJECT_DIR, '.orchestrator')
 const UPDATE_STATE_PATH = path.join(UPDATE_DIR, 'update-state.json')
 const UPDATE_RUNNER_PATH = path.join(PROJECT_DIR, 'scripts', 'update-runner.mjs')
-const REPO_OWNER = process.env.ORCHESTRATOR_UPDATE_REPO_OWNER || 'Horia73'
-const REPO_NAME = process.env.ORCHESTRATOR_UPDATE_REPO_NAME || 'orchestrator'
+const REPO_OWNER = getEnvValue('ORCHESTRATOR_UPDATE_REPO_OWNER') || 'Horia73'
+const REPO_NAME = getEnvValue('ORCHESTRATOR_UPDATE_REPO_NAME') || 'orchestrator'
 const REPO = `${REPO_OWNER}/${REPO_NAME}`
 const LATEST_CACHE_MS = 5 * 60 * 1000
 const MAINTENANCE_STALE_MS = 60 * 60 * 1000
-const IDLE_GRACE_MS = Number.parseInt(process.env.ORCHESTRATOR_UPDATE_IDLE_GRACE_MS || '10000', 10)
+const IDLE_GRACE_MS = Number.parseInt(getEnvValue('ORCHESTRATOR_UPDATE_IDLE_GRACE_MS') || '10000', 10)
 
 const globalForUpdates = globalThis as unknown as {
     __orchestratorUpdateState?: MemoryState
@@ -394,7 +394,8 @@ function installedReleaseFallback(current: CurrentInstallInfo): LatestReleaseInf
 }
 
 function serviceManager(): string | null {
-    if (process.env.ORCHESTRATOR_SERVICE_MANAGER) return process.env.ORCHESTRATOR_SERVICE_MANAGER
+    const configured = getEnvValue('ORCHESTRATOR_SERVICE_MANAGER')
+    if (configured) return configured
     try {
         if (fs.existsSync('/.dockerenv')) return 'docker'
     } catch {
@@ -404,8 +405,8 @@ function serviceManager(): string | null {
 }
 
 function dockerHostUpdaterConfig(): { url: string; token: string } | null {
-    const url = process.env.ORCHESTRATOR_DOCKER_UPDATE_URL || process.env.ORCHESTRATOR_HOST_UPDATE_URL
-    const token = process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN || process.env.ORCHESTRATOR_HOST_UPDATE_TOKEN
+    const url = getEnvValue('ORCHESTRATOR_DOCKER_UPDATE_URL') || getEnvValue('ORCHESTRATOR_HOST_UPDATE_URL')
+    const token = getEnvValue('ORCHESTRATOR_DOCKER_UPDATE_TOKEN') || getEnvValue('ORCHESTRATOR_HOST_UPDATE_TOKEN')
     if (!url || !token) return null
     return { url, token }
 }

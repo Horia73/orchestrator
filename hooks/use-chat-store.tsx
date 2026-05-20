@@ -8,237 +8,37 @@ import type {
   ContextUsageSnapshot,
   Conversation,
   Message,
-  ReasoningEntry,
   ToolStreamDelta,
 } from "@/lib/types"
 import { generateId, generateTitle } from "@/lib/utils-chat"
-
-type StreamingReasoning = NonNullable<Message["reasoning"]>
-
-interface ActiveChatStream {
-  conversationId: string
-  messageId: string
-  startedAt: number
-}
-
-function updateAgentEntry(
-  reasoning: StreamingReasoning,
-  runId: string,
-  updater: (entry: AgentCallReasoningEntry) => AgentCallReasoningEntry
-): StreamingReasoning {
-  return reasoning.map((entry) => {
-    if (entry.type !== "agent_call" || entry.runId !== runId) return entry
-    return updater(entry)
-  })
-}
-
-function appendAgentThought(
-  entry: AgentCallReasoningEntry,
-  chunk: string
-): AgentCallReasoningEntry {
-  const reasoning = [...(entry.reasoning ?? [])]
-  const phase = entry.contentSegments?.at(-1)?.phase ?? 0
-  const last = reasoning[reasoning.length - 1]
-  if (last?.type === "thought" && last.phase === phase) {
-    reasoning[reasoning.length - 1] = { ...last, content: last.content + chunk }
-  } else {
-    reasoning.push({
-      type: "thought",
-      id: `thought_${reasoning.length + 1}`,
-      phase,
-      content: chunk,
-    })
-  }
-  return { ...entry, reasoning }
-}
-
-function appendAgentContent(
-  entry: AgentCallReasoningEntry,
-  chunk: string
-): AgentCallReasoningEntry {
-  const contentSegments = [...(entry.contentSegments ?? [])]
-  const last = contentSegments[contentSegments.length - 1]
-  if (last) {
-    contentSegments[contentSegments.length - 1] = {
-      ...last,
-      content: last.content + chunk,
-    }
-  } else {
-    contentSegments.push({ phase: 0, content: chunk })
-  }
-  return { ...entry, content: entry.content + chunk, contentSegments }
-}
-
-function markReasoningStopped(
-  reasoning: ReasoningEntry[] | undefined,
-  timestamp: number
-): ReasoningEntry[] | undefined {
-  if (!reasoning?.length) return reasoning
-  return reasoning.map((entry) => {
-    if (entry.type === "agent_call") {
-      return {
-        ...entry,
-        status: entry.status === "running" ? "aborted" : entry.status,
-        endedAt:
-          entry.status === "running" ? (entry.endedAt ?? timestamp) : entry.endedAt,
-        reasoning: markReasoningStopped(entry.reasoning, timestamp),
-      }
-    }
-    if (entry.type === "tool_call" && entry.status === "running") {
-      return {
-        ...entry,
-        status: "error",
-        success: false,
-        endedAt: entry.endedAt ?? timestamp,
-        content: entry.content || "Stopped",
-      }
-    }
-    return entry
-  })
-}
-
-const stoppedStreamState = {
-  isStreaming: false,
-  streamingContent: "",
-  streamingContentSegments: [] as NonNullable<Message["contentSegments"]>,
-  streamingReasoning: [] as StreamingReasoning,
-  streamingMode: null as "reasoning" | "content" | null,
-  thinkingSeconds: 0,
-  thinkingDone: false,
-  streamingMessageId: null as string | null,
-}
-
-const INITIAL_MESSAGE_PAGE_SIZE = 32
-const OLDER_MESSAGE_PAGE_SIZE = 64
-const CHAT_UNREAD_IDS_KEY = "chat:unread-ids"
-
-type ConversationLoadState =
-  | "summary"
-  | "loading"
-  | "partial"
-  | "full"
-  | "error"
-
-interface ConversationMessagePageState {
-  total: number
-  loadedCount: number
-  hasMore: boolean
-  nextCursor: string | null
-  isLoadingOlder: boolean
-  error?: string
-}
-
-interface MessagePageResponse {
-  messages: Message[]
-  total: number
-  hasMore: boolean
-  nextCursor: string | null
-}
-
-function sortMessagesByTimeline(messages: Message[]): Message[] {
-  return [...messages].sort((a, b) => {
-    const timeDelta = a.timestamp - b.timestamp
-    return timeDelta !== 0 ? timeDelta : a.id.localeCompare(b.id)
-  })
-}
-
-function mergeMessagesById(
-  existingMessages: Message[],
-  incomingMessages: Message[]
-): Message[] {
-  const byId = new Map<string, Message>()
-  for (const message of existingMessages) byId.set(message.id, message)
-  for (const message of incomingMessages) byId.set(message.id, message)
-  return sortMessagesByTimeline(Array.from(byId.values()))
-}
-
-function readUnreadConversationIds(): Set<string> {
-  if (typeof window === "undefined") return new Set()
-  try {
-    const parsed = JSON.parse(localStorage.getItem(CHAT_UNREAD_IDS_KEY) ?? "[]")
-    return new Set(
-      Array.isArray(parsed)
-        ? parsed.filter((id): id is string => typeof id === "string")
-        : []
-    )
-  } catch {
-    return new Set()
-  }
-}
-
-function writeUnreadConversationIds(ids: Set<string>) {
-  if (typeof window === "undefined") return
-  localStorage.setItem(CHAT_UNREAD_IDS_KEY, JSON.stringify(Array.from(ids)))
-}
-
-function compactNotificationBody(value: string): string {
-  return value
-    .replace(/```[\s\S]*?```/g, "code block")
-    .replace(/[*_`>#~-]/g, "")
-    .replace(/\[(.*?)\]\((.*?)\)/g, "$1")
-    .replace(/\s+/g, " ")
-    .trim()
-    .slice(0, 180)
-}
-
-class ChatFetchError extends Error {
-  chatMessage?: string
-
-  constructor(message: string, chatMessage?: string) {
-    super(message)
-    this.name = "ChatFetchError"
-    this.chatMessage = chatMessage
-  }
-}
-
-function errorMessageFromUnknown(error: unknown): string {
-  return error instanceof Error ? error.message : String(error)
-}
-
-async function showChatCompletionNotification(
-  conversationId: string,
-  conversation: Conversation | undefined,
-  message: Message
-) {
-  if (typeof window === "undefined" || !("Notification" in window)) return
-  if (Notification.permission !== "granted") return
-
-  const title = conversation?.title || "Chat finished"
-  const body =
-    compactNotificationBody(message.content) ||
-    "The assistant finished responding."
-  const url = `/?chat=${encodeURIComponent(conversationId)}`
-
-  try {
-    if ("serviceWorker" in navigator) {
-      let registration = await navigator.serviceWorker.getRegistration("/")
-      registration ??= await navigator.serviceWorker.register("/sw.js", {
-        scope: "/",
-      })
-      await registration.showNotification(title, {
-        body,
-        tag: `chat-${conversationId}`,
-        icon: "/icon.svg",
-        badge: "/icon.svg",
-        data: { url },
-      })
-      return
-    }
-  } catch {
-    // Fall back to the page Notification constructor below.
-  }
-
-  const notification = new Notification(title, {
-    body,
-    tag: `chat-${conversationId}`,
-    icon: "/icon.svg",
-    data: { url },
-  })
-  notification.onclick = () => {
-    window.focus()
-    window.location.href = url
-  }
-}
+import {
+  ChatFetchError,
+  INITIAL_MESSAGE_PAGE_SIZE,
+  OLDER_MESSAGE_PAGE_SIZE,
+  STREAM_RECOVERY_ATTEMPTS,
+  STREAM_RECOVERY_DELAY_MS,
+  appendAgentContent,
+  appendAgentThought,
+  deriveUnreadConversationIds,
+  errorMessageFromUnknown,
+  isConversationUnread,
+  isLikelyStreamInterruption,
+  isTerminalAssistantMessage,
+  markReasoningStopped,
+  mergeMessagesById,
+  readUnreadConversationIds,
+  showChatCompletionNotification,
+  sleep,
+  stoppedStreamState,
+  unreadSetsEqual,
+  updateAgentEntry,
+  writeUnreadConversationIds,
+  type ActiveChatStream,
+  type ConversationLoadState,
+  type ConversationMessagePageState,
+  type MessagePageResponse,
+  type StreamingReasoning,
+} from "./chat-store-utils"
 
 interface ChatState {
   conversations: Conversation[]
@@ -362,6 +162,11 @@ type ChatAction =
       type: "UPDATE_CONTEXT_USAGE"
       conversationId: string
       contextUsage: ContextUsageSnapshot
+    }
+  | {
+      type: "SET_CONVERSATION_READ_STATE"
+      conversationId: string
+      readAt: number | null
     }
   | { type: "SET_THINKING_DONE"; seconds: number }
   | { type: "SET_THINKING_SECONDS"; seconds: number }
@@ -1045,6 +850,15 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : conv
         ),
       }
+    case "SET_CONVERSATION_READ_STATE":
+      return {
+        ...state,
+        conversations: state.conversations.map((conv) =>
+          conv.id === action.conversationId
+            ? { ...conv, readAt: action.readAt }
+            : conv
+        ),
+      }
     case "SET_THINKING_DONE":
       return {
         ...state,
@@ -1129,8 +943,7 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const existingAssistantMessage =
         existingMessage?.role === "assistant" ? existingMessage : undefined
       const stoppedStreamingReasoning =
-        markReasoningStopped(state.streamingReasoning, action.timestamp) ??
-        []
+        markReasoningStopped(state.streamingReasoning, action.timestamp) ?? []
       const stoppedExistingReasoning = markReasoningStopped(
         existingAssistantMessage?.reasoning,
         action.timestamp
@@ -1266,8 +1079,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const thinkingTimerRef = React.useRef<number | null>(null)
   const streamingRef = React.useRef(false)
   const streamDoneRef = React.useRef(false)
+  const streamPageWasHiddenRef = React.useRef(false)
   const activeConversationIdRef = React.useRef<string | null>(null)
   const conversationsRef = React.useRef<Conversation[]>([])
+  const activeChatStreamsRef = React.useRef<Record<string, ActiveChatStream>>(
+    {}
+  )
+  const isStreamingStateRef = React.useRef(false)
   const conversationLoadStateRef = React.useRef<
     Record<string, ConversationLoadState>
   >({})
@@ -1284,13 +1102,59 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [state.conversations])
 
   React.useEffect(() => {
+    if (state.isLoading) return
+    const visibleActiveConversationId =
+      typeof document !== "undefined" && document.visibilityState === "visible"
+        ? state.activeConversationId
+        : null
+    const next = deriveUnreadConversationIds(
+      state.conversations,
+      visibleActiveConversationId
+    )
+    setUnreadConversationIds((current) => {
+      if (unreadSetsEqual(current, next)) return current
+      writeUnreadConversationIds(next)
+      return next
+    })
+  }, [state.activeConversationId, state.conversations, state.isLoading])
+
+  React.useEffect(() => {
+    activeChatStreamsRef.current = state.activeChatStreams
+  }, [state.activeChatStreams])
+
+  React.useEffect(() => {
+    isStreamingStateRef.current = state.isStreaming
+  }, [state.isStreaming])
+
+  React.useEffect(() => {
     conversationLoadStateRef.current = state.conversationLoadState
   }, [state.conversationLoadState])
+
+  React.useEffect(() => {
+    const markHiddenDuringStream = () => {
+      if (
+        document.visibilityState === "hidden" &&
+        (streamingRef.current ||
+          isStreamingStateRef.current ||
+          Object.keys(activeChatStreamsRef.current).length > 0)
+      ) {
+        streamPageWasHiddenRef.current = true
+      }
+    }
+
+    document.addEventListener("visibilitychange", markHiddenDuringStream)
+    window.addEventListener("pagehide", markHiddenDuringStream)
+    return () => {
+      document.removeEventListener("visibilitychange", markHiddenDuringStream)
+      window.removeEventListener("pagehide", markHiddenDuringStream)
+    }
+  }, [])
 
   const updateUnreadConversationIds = React.useCallback(
     (updater: (current: Set<string>) => Set<string>) => {
       setUnreadConversationIds((current) => {
         const next = updater(new Set(current))
+        if (unreadSetsEqual(current, next)) return current
         writeUnreadConversationIds(next)
         return next
       })
@@ -1298,20 +1162,76 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     []
   )
 
-  const markConversationRead = React.useCallback(
-    (id: string) => {
+  const applyConversationReadState = React.useCallback(
+    (id: string, readAt: number | null) => {
+      dispatch({
+        type: "SET_CONVERSATION_READ_STATE",
+        conversationId: id,
+        readAt,
+      })
       updateUnreadConversationIds((current) => {
-        current.delete(id)
+        const conversation = conversationsRef.current.find((c) => c.id === id)
+        if (!conversation) {
+          current.delete(id)
+          return current
+        }
+        const visibleActiveConversationId =
+          typeof document !== "undefined" &&
+          document.visibilityState === "visible"
+            ? activeConversationIdRef.current
+            : null
+        if (
+          isConversationUnread(
+            { ...conversation, readAt },
+            visibleActiveConversationId
+          )
+        ) {
+          current.add(id)
+        } else {
+          current.delete(id)
+        }
         return current
       })
     },
     [updateUnreadConversationIds]
   )
 
+  const persistConversationReadState = React.useCallback(
+    (id: string, read: boolean) => {
+      fetch(`/api/conversations/${encodeURIComponent(id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ read }),
+      }).catch((err) => {
+        console.error(err)
+      })
+    },
+    []
+  )
+
+  const markConversationRead = React.useCallback(
+    (id: string) => {
+      const readAt = Date.now()
+      applyConversationReadState(id, readAt)
+      persistConversationReadState(id, true)
+    },
+    [applyConversationReadState, persistConversationReadState]
+  )
+
   const markConversationUnread = React.useCallback(
     (id: string) => {
       updateUnreadConversationIds((current) => {
         current.add(id)
+        return current
+      })
+    },
+    [updateUnreadConversationIds]
+  )
+
+  const clearConversationUnread = React.useCallback(
+    (id: string) => {
+      updateUnreadConversationIds((current) => {
+        current.delete(id)
         return current
       })
     },
@@ -1397,6 +1317,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => cleanupStream, [cleanupStream])
 
+  const refreshConversationSummaries = React.useCallback(async () => {
+    const res = await fetch("/api/conversations?summary=1", {
+      cache: "no-store",
+    })
+    if (!res.ok) throw new Error(`HTTP ${res.status}`)
+    const data = await res.json()
+    if (Array.isArray(data)) {
+      dispatch({
+        type: "INIT_CONVERSATIONS",
+        conversations: data,
+        full: false,
+      })
+    }
+  }, [])
+
   // --- Fetch conversations on mount ---
   // Retries on transient network failures — the most common one is the Next
   // dev server briefly unavailable during HMR. Without the retry, every
@@ -1411,17 +1346,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       while (!cancelled && attempt < MAX_ATTEMPTS) {
         attempt += 1
         try {
-          const res = await fetch("/api/conversations?summary=1")
-          if (!res.ok) throw new Error(`HTTP ${res.status}`)
-          const data = await res.json()
+          await refreshConversationSummaries()
           if (cancelled) return
-          if (Array.isArray(data)) {
-            dispatch({
-              type: "INIT_CONVERSATIONS",
-              conversations: data,
-              full: false,
-            })
-          }
           return
         } catch (err) {
           if (cancelled) return
@@ -1443,53 +1369,101 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [refreshConversationSummaries])
 
-  const loadInitialMessages = React.useCallback(async (conversationId: string) => {
-    const status = conversationLoadStateRef.current[conversationId]
-    if (
-      status === "partial" ||
-      status === "full" ||
-      status === "loading" ||
-      status === "error"
-    )
-      return
+  React.useEffect(() => {
+    let sequence = 0
+    const reconcileSummaries = () => {
+      if (document.visibilityState !== "visible") return
+      const currentSequence = ++sequence
+      void refreshConversationSummaries().catch((err) => {
+        if (currentSequence === sequence) {
+          console.warn("Failed to refresh conversations", err)
+        }
+      })
+    }
 
-    const existingLoad = initialMessageLoadsRef.current.get(conversationId)
-    if (existingLoad) return existingLoad
+    document.addEventListener("visibilitychange", reconcileSummaries)
+    window.addEventListener("pageshow", reconcileSummaries)
+    window.addEventListener("focus", reconcileSummaries)
+    return () => {
+      sequence += 1
+      document.removeEventListener("visibilitychange", reconcileSummaries)
+      window.removeEventListener("pageshow", reconcileSummaries)
+      window.removeEventListener("focus", reconcileSummaries)
+    }
+  }, [refreshConversationSummaries])
 
-    const load = (async () => {
-      dispatch({ type: "LOAD_CONVERSATION_START", id: conversationId })
-      try {
-        const res = await fetch(
-          `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${INITIAL_MESSAGE_PAGE_SIZE}`,
-          { cache: "no-store" }
-        )
-        if (!res.ok) throw new Error(`HTTP ${res.status}`)
-        const page = (await res.json()) as MessagePageResponse
-        dispatch({
-          type: "LOAD_MESSAGE_PAGE_SUCCESS",
-          id: conversationId,
-          messages: page.messages,
-          total: page.total,
-          hasMore: page.hasMore,
-          nextCursor: page.nextCursor,
-          mode: "replace",
-        })
-      } catch (err) {
-        dispatch({
-          type: "LOAD_CONVERSATION_ERROR",
-          id: conversationId,
-          error: err instanceof Error ? err.message : "Failed to load chat",
-        })
-      } finally {
-        initialMessageLoadsRef.current.delete(conversationId)
-      }
-    })()
+  const loadInitialMessages = React.useCallback(
+    async (conversationId: string) => {
+      const status = conversationLoadStateRef.current[conversationId]
+      if (
+        status === "partial" ||
+        status === "full" ||
+        status === "loading" ||
+        status === "error"
+      )
+        return
 
-    initialMessageLoadsRef.current.set(conversationId, load)
-    return load
-  }, [])
+      const existingLoad = initialMessageLoadsRef.current.get(conversationId)
+      if (existingLoad) return existingLoad
+
+      const load = (async () => {
+        dispatch({ type: "LOAD_CONVERSATION_START", id: conversationId })
+        try {
+          const res = await fetch(
+            `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${INITIAL_MESSAGE_PAGE_SIZE}`,
+            { cache: "no-store" }
+          )
+          if (!res.ok) throw new Error(`HTTP ${res.status}`)
+          const page = (await res.json()) as MessagePageResponse
+          dispatch({
+            type: "LOAD_MESSAGE_PAGE_SUCCESS",
+            id: conversationId,
+            messages: page.messages,
+            total: page.total,
+            hasMore: page.hasMore,
+            nextCursor: page.nextCursor,
+            mode: "replace",
+          })
+        } catch (err) {
+          dispatch({
+            type: "LOAD_CONVERSATION_ERROR",
+            id: conversationId,
+            error: err instanceof Error ? err.message : "Failed to load chat",
+          })
+        } finally {
+          initialMessageLoadsRef.current.delete(conversationId)
+        }
+      })()
+
+      initialMessageLoadsRef.current.set(conversationId, load)
+      return load
+    },
+    []
+  )
+
+  const refreshConversationMessages = React.useCallback(
+    async (conversationId: string): Promise<Message[]> => {
+      const res = await fetch(
+        `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${INITIAL_MESSAGE_PAGE_SIZE}`,
+        { cache: "no-store" }
+      )
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      const page = (await res.json()) as MessagePageResponse
+      dispatch({
+        type: "LOAD_MESSAGE_PAGE_SUCCESS",
+        id: conversationId,
+        messages: page.messages,
+        total: page.total,
+        hasMore: page.hasMore,
+        nextCursor: page.nextCursor,
+        mode: "replace",
+      })
+      return page.messages
+    },
+    []
+  )
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
@@ -1523,10 +1497,82 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     []
   )
 
-  const refreshActiveChatStreams = React.useCallback(async () => {
+  const recoverInterruptedStream = React.useCallback(
+    async (
+      conversationId: string,
+      messageId?: string | null
+    ): Promise<"final" | "running" | null> => {
+      for (let attempt = 0; attempt < STREAM_RECOVERY_ATTEMPTS; attempt += 1) {
+        const [messagesResult, stream] = await Promise.allSettled([
+          refreshConversationMessages(conversationId),
+          checkServerStreaming(conversationId),
+        ])
+        const messages =
+          messagesResult.status === "fulfilled" ? messagesResult.value : []
+        const recoveredMessage =
+          (messageId
+            ? messages.find((message) => message.id === messageId)
+            : null) ??
+          [...messages]
+            .reverse()
+            .find((message) => message.role === "assistant") ??
+          null
+        const activeStream = stream.status === "fulfilled" ? stream.value : null
+
+        if (recoveredMessage) {
+          if (activeStream) {
+            dispatch({
+              type: "ADD_ASSISTANT_MESSAGE",
+              conversationId,
+              message: recoveredMessage,
+              stopStreaming: false,
+            })
+            dispatch({
+              type: "SET_STREAMING",
+              isStreaming: true,
+              messageId: activeStream.messageId,
+            })
+            dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+            return "running"
+          }
+
+          if (isTerminalAssistantMessage(recoveredMessage)) {
+            dispatch({
+              type: "ADD_ASSISTANT_MESSAGE",
+              conversationId,
+              message: recoveredMessage,
+            })
+            handleAssistantFinished(conversationId, recoveredMessage)
+            return "final"
+          }
+        }
+
+        if (activeStream) {
+          dispatch({
+            type: "SET_STREAMING",
+            isStreaming: true,
+            messageId: activeStream.messageId,
+          })
+          dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+          return "running"
+        }
+
+        if (attempt < STREAM_RECOVERY_ATTEMPTS - 1) {
+          await sleep(STREAM_RECOVERY_DELAY_MS)
+        }
+      }
+
+      return null
+    },
+    [checkServerStreaming, handleAssistantFinished, refreshConversationMessages]
+  )
+
+  const refreshActiveChatStreams = React.useCallback(async (): Promise<
+    ActiveChatStream[]
+  > => {
     try {
       const res = await fetch("/api/chat/active", { cache: "no-store" })
-      if (!res.ok) return
+      if (!res.ok) return []
       const data = await res.json()
       const streams = Array.isArray(data.streams)
         ? data.streams.filter(
@@ -1539,8 +1585,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           )
         : []
       dispatch({ type: "SET_ACTIVE_CHAT_STREAMS", streams })
+      return streams
     } catch {
       // Best-effort reconciliation; local actions and SSE keep the slot responsive.
+      return []
     }
   }, [])
 
@@ -1549,6 +1597,39 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     const interval = window.setInterval(refreshActiveChatStreams, 5000)
     return () => window.clearInterval(interval)
   }, [refreshActiveChatStreams])
+
+  React.useEffect(() => {
+    let sequence = 0
+
+    const reconcileAfterResume = () => {
+      if (document.visibilityState !== "visible") return
+      const conversationId = activeConversationIdRef.current
+      if (!conversationId) return
+
+      const knownStream = activeChatStreamsRef.current[conversationId]
+      if (!knownStream && !isStreamingStateRef.current) return
+
+      const currentSequence = ++sequence
+      void (async () => {
+        const streams = await refreshActiveChatStreams()
+        if (currentSequence !== sequence) return
+        const stream =
+          streams.find((item) => item.conversationId === conversationId) ??
+          activeChatStreamsRef.current[conversationId]
+        await recoverInterruptedStream(conversationId, stream?.messageId)
+      })()
+    }
+
+    document.addEventListener("visibilitychange", reconcileAfterResume)
+    window.addEventListener("pageshow", reconcileAfterResume)
+    window.addEventListener("focus", reconcileAfterResume)
+    return () => {
+      sequence += 1
+      document.removeEventListener("visibilitychange", reconcileAfterResume)
+      window.removeEventListener("pageshow", reconcileAfterResume)
+      window.removeEventListener("focus", reconcileAfterResume)
+    }
+  }, [recoverInterruptedStream, refreshActiveChatStreams])
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
@@ -1581,6 +1662,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     if (!conversationId || !state.isStreaming || streamingRef.current) return
 
     let cancelled = false
+    let recovering = false
+    const streamMessageId =
+      state.streamingMessageId ??
+      activeChatStreamsRef.current[conversationId]?.messageId
     const tick = () => {
       checkServerStreaming(conversationId).then((stream) => {
         if (
@@ -1597,8 +1682,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           })
           dispatch({ type: "CHAT_STREAM_STARTED", stream })
         } else {
-          dispatch({ type: "SET_STREAMING", isStreaming: false })
-          dispatch({ type: "CHAT_STREAM_ENDED", conversationId })
+          if (recovering) return
+          recovering = true
+          void recoverInterruptedStream(conversationId, streamMessageId)
+            .then((recovered) => {
+              if (cancelled || recovered) return
+              dispatch({ type: "SET_STREAMING", isStreaming: false })
+              dispatch({ type: "CHAT_STREAM_ENDED", conversationId })
+            })
+            .finally(() => {
+              recovering = false
+            })
         }
       })
     }
@@ -1609,7 +1703,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       cancelled = true
       window.clearInterval(interval)
     }
-  }, [checkServerStreaming, state.activeConversationId, state.isStreaming])
+  }, [
+    checkServerStreaming,
+    recoverInterruptedStream,
+    state.activeConversationId,
+    state.isStreaming,
+    state.streamingMessageId,
+  ])
 
   // --- SSE LIVE SYNC ---
   React.useEffect(() => {
@@ -1625,7 +1725,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               id: data.payload.id,
               title: data.payload.title,
               createdAt: data.payload.createdAt,
+              updatedAt: data.payload.updatedAt,
               messages: data.payload.messages || [],
+              messageCount: data.payload.messageCount,
+              lastMessagePreview: data.payload.lastMessagePreview,
+              lastMessageAt: data.payload.lastMessageAt,
+              readAt: data.payload.readAt ?? null,
             },
           })
         } else if (data.type === "add_message") {
@@ -1669,6 +1774,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               contextUsage: data.payload.contextUsage,
             })
           }
+        } else if (data.type === "conversation_read_state") {
+          if (typeof data.payload?.conversationId === "string") {
+            applyConversationReadState(
+              data.payload.conversationId,
+              typeof data.payload.readAt === "number"
+                ? data.payload.readAt
+                : null
+            )
+          }
         } else if (data.type === "delete_conversation") {
           dispatch({ type: "DELETE_CONVERSATION", id: data.payload.id })
         } else if (data.type === "chat_stream_started") {
@@ -1698,7 +1812,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     return () => eventSource.close()
-  }, [handleAssistantFinished])
+  }, [applyConversationReadState, handleAssistantFinished])
 
   const newChat = React.useCallback(() => {
     stopStreaming()
@@ -1765,10 +1879,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       fetch(`/api/conversations/${id}`, { method: "DELETE" }).catch(
         console.error
       )
-      markConversationRead(id)
+      clearConversationUnread(id)
       dispatch({ type: "DELETE_CONVERSATION", id })
     },
-    [markConversationRead, stopStreaming]
+    [clearConversationUnread, stopStreaming]
   )
 
   const sendMessage = React.useCallback(
@@ -1815,11 +1929,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       if (!conversationId) {
         conversationId = generateId()
+        const createdAt = Date.now()
         const newConv: Conversation = {
           id: conversationId,
           title: generateTitle(content, finalAttachments),
           messages: [userMessage],
-          createdAt: Date.now(),
+          createdAt,
+          updatedAt: userMessage.timestamp,
+          messageCount: 1,
+          lastMessagePreview: userMessage.content,
+          lastMessageAt: userMessage.timestamp,
+          readAt: userMessage.timestamp,
         }
         fetch("/api/conversations", {
           method: "POST",
@@ -1839,6 +1959,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           conversationId,
           message: userMessage,
         })
+        markConversationRead(conversationId)
 
         // Build messages array from current state + new user message
         const conv = state.conversations.find((c) => c.id === conversationId)
@@ -1851,6 +1972,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       abortControllerRef.current = abortController
       streamingRef.current = true
       streamDoneRef.current = false
+      streamPageWasHiddenRef.current = document.visibilityState !== "visible"
 
       dispatch({
         type: "SET_STREAMING",
@@ -2543,9 +2665,37 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             }
           }
         })
-        .catch((err) => {
+        .catch(async (err) => {
           if (err.name === "AbortError") return
           console.error("Chat fetch error:", err)
+
+          if (
+            isLikelyStreamInterruption(err) &&
+            (streamPageWasHiddenRef.current ||
+              document.visibilityState !== "visible" ||
+              !navigator.onLine ||
+              errorMessageFromUnknown(err)
+                .toLowerCase()
+                .includes("load failed"))
+          ) {
+            const recovered = await recoverInterruptedStream(
+              finalConvId,
+              assistantMsgId
+            )
+            if (recovered) {
+              streamDoneRef.current = true
+              return
+            }
+
+            dispatch({ type: "SET_STREAMING", isStreaming: false })
+            dispatch({
+              type: "CHAT_STREAM_ENDED",
+              conversationId: finalConvId,
+              messageId: assistantMsgId,
+            })
+            return
+          }
+
           streamDoneRef.current = true
           const messageText =
             err instanceof ChatFetchError && err.chatMessage
@@ -2581,7 +2731,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         })
     },
-    [handleAssistantFinished, state.activeConversationId, state.conversations]
+    [
+      handleAssistantFinished,
+      markConversationRead,
+      recoverInterruptedStream,
+      state.activeConversationId,
+      state.conversations,
+    ]
   )
 
   const value = React.useMemo(

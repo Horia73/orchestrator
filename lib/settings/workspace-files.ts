@@ -53,13 +53,19 @@ export interface WorkspaceFileSummary extends WorkspaceFileDefinition {
     exists: boolean
     size: number | null
     updatedAt: number | null
+    dailyDate?: string
 }
 
 export interface WorkspaceFilePayload extends WorkspaceFileSummary {
     content: string
+    contentRedacted?: boolean
 }
 
 const MAX_FILE_BYTES = 512 * 1024
+const REDACTED_ENV_VALUE = '__ORCHESTRATOR_SECRET_SET__'
+const DAILY_MEMORY_ID = 'memory-day'
+const DAILY_MEMORY_ID_PREFIX = `${DAILY_MEMORY_ID}:`
+const DAILY_MEMORY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.md$/
 
 const AppConfigFileSchema = z.object({
     assistantName: z.string(),
@@ -103,7 +109,13 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
         defaultContent: [
             '# AGENTS',
             '',
-            'Use this file for global instructions that should be visible to every agent.',
+            'Global agent instructions for this workspace.',
+            '',
+            '## Operating Notes',
+            '',
+            '## Project Rules',
+            '',
+            '## Things To Avoid',
             '',
         ].join('\n'),
     },
@@ -401,7 +413,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
 
 export function listWorkspaceFiles(): WorkspaceFileSummary[] {
     return WORKSPACE_FILE_DEFINITIONS
-        .map(def => summarizeFile(def))
+        .flatMap(def => def.dynamic === 'daily' ? listDailyFileSummaries(def) : [summarizeFile(def)])
         .filter(summary => shouldListFile(summary))
 }
 
@@ -537,17 +549,19 @@ export function resetWorkspaceFilesToInitialState(opts?: { preserveEnvLocal?: bo
 }
 
 export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
-    const def = getDefinition(id)
-    if (!def) return null
+    const target = resolveDefinitionTarget(id)
+    if (!target) return null
+    const { def, dailyStamp } = target
 
-    const summary = summarizeFile(def)
+    const summary = summarizeFile(def, dailyStamp)
     if (!shouldListFile(summary)) return null
-    let content = def.dynamic === 'daily' ? buildDailyMemoryTemplate() : (def.defaultContent ?? '')
+    let content = def.dynamic === 'daily' ? buildDailyMemoryTemplate(dailyStamp) : (def.defaultContent ?? '')
+    let contentRedacted = false
 
     if (def.source === 'virtual') {
         content = buildVirtualFileContent(def.id)
     } else if (summary.exists) {
-        const absolutePath = resolveDefinitionPath(def)
+        const absolutePath = resolveDefinitionPath(def, dailyStamp)
         const stat = fs.statSync(/* turbopackIgnore: true */ absolutePath)
         if (stat.size > MAX_FILE_BYTES) {
             throw new Error(`File is too large to edit here (${stat.size} bytes).`)
@@ -562,17 +576,27 @@ export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
         }
     }
 
-    return { ...summary, content }
+    if (def.id === 'env-local') {
+        content = redactEnvContent(content)
+        contentRedacted = true
+    }
+
+    return { ...summary, content, ...(contentRedacted ? { contentRedacted } : {}) }
 }
 
 export function writeWorkspaceFile(id: string, content: string): WorkspaceFilePayload | null {
-    const def = getDefinition(id)
-    if (!def) return null
+    const target = resolveDefinitionTarget(id)
+    if (!target) return null
+    const { def, dailyStamp } = target
     if (def.readOnly) throw new Error(`${def.label} is read-only.`)
     if (def.source === 'virtual') throw new Error(`${def.label} is generated and cannot be saved.`)
 
-    validateContent(def, content)
-    writeTextAtomic(resolveDefinitionPath(def), content, def.id === 'env-local' ? 0o600 : undefined)
+    const contentToWrite = def.id === 'env-local'
+        ? mergeRedactedEnvSubmission(content, readExistingDefinitionContent(def, dailyStamp))
+        : content
+
+    validateContent(def, contentToWrite)
+    writeTextAtomic(resolveDefinitionPath(def, dailyStamp), contentToWrite, def.id === 'env-local' ? 0o600 : undefined)
 
     if (def.id === 'models-api') {
         invalidateRegistryCache()
@@ -588,6 +612,7 @@ export function writeWorkspaceFile(id: string, content: string): WorkspaceFilePa
 }
 
 function shouldListFile(summary: WorkspaceFileSummary): boolean {
+    if (summary.category === 'integrations') return false
     // BOOT.md and ONBOARDING.md are first-run onboarding state, not reusable
     // templates. They should be visible only while real files exist.
     if (summary.id === 'boot' || summary.id === 'onboarding') return summary.exists
@@ -598,22 +623,33 @@ function getDefinition(id: string): WorkspaceFileDefinition | undefined {
     return WORKSPACE_FILE_DEFINITIONS.find(def => def.id === id)
 }
 
-function summarizeFile(def: WorkspaceFileDefinition): WorkspaceFileSummary {
+function resolveDefinitionTarget(id: string): { def: WorkspaceFileDefinition; dailyStamp?: string } | null {
+    const dailyStamp = parseDailyFileId(id)
+    if (dailyStamp) {
+        const def = getDefinition(DAILY_MEMORY_ID)
+        return def?.dynamic === 'daily' ? { def, dailyStamp } : null
+    }
+
+    const def = getDefinition(id)
+    return def ? { def } : null
+}
+
+function summarizeFile(def: WorkspaceFileDefinition, dailyStamp?: string): WorkspaceFileSummary {
     if (def.source === 'virtual') {
         const content = buildVirtualFileContent(def.id)
-        return {
+        return decorateDailySummary({
             ...def,
             exists: true,
             size: Buffer.byteLength(content, 'utf-8'),
             updatedAt: getModelRegistryUpdatedAt(),
-        }
+        }, dailyStamp)
     }
 
     if (def.id === 'models-api') {
         migrateLegacyApiModelsFile()
     }
 
-    const absolutePath = resolveDefinitionPath(def)
+    const absolutePath = resolveDefinitionPath(def, dailyStamp)
     let exists = false
     let size: number | null = null
     let updatedAt: number | null = null
@@ -629,7 +665,54 @@ function summarizeFile(def: WorkspaceFileDefinition): WorkspaceFileSummary {
         // Missing files are valid for user-managed notes/env files.
     }
 
-    return { ...def, relativePath: effectiveRelativePath(def), exists, size, updatedAt }
+    return decorateDailySummary({ ...def, relativePath: effectiveRelativePath(def, dailyStamp), exists, size, updatedAt }, dailyStamp)
+}
+
+function listDailyFileSummaries(def: WorkspaceFileDefinition): WorkspaceFileSummary[] {
+    const stamps = new Set<string>([utcDateStamp()])
+    const dailyDir = path.resolve(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR, def.relativePath)
+
+    try {
+        const entries = fs.readdirSync(/* turbopackIgnore: true */ dailyDir, { withFileTypes: true })
+        for (const entry of entries) {
+            if (!entry.isFile()) continue
+            const match = DAILY_MEMORY_FILE_RE.exec(entry.name)
+            if (match && isDailyStamp(match[1])) stamps.add(match[1])
+        }
+    } catch {
+        // Missing MEMORY_DAY is fine; ensureWorkspaceTemplates creates today's file.
+    }
+
+    return Array.from(stamps)
+        .sort((a, b) => b.localeCompare(a))
+        .map(stamp => summarizeFile(def, stamp))
+}
+
+function decorateDailySummary(summary: WorkspaceFileSummary, dailyStamp?: string): WorkspaceFileSummary {
+    if (summary.dynamic !== 'daily' || !dailyStamp) return summary
+    return {
+        ...summary,
+        id: dailyMemoryFileId(dailyStamp),
+        label: dailyStamp,
+        dailyDate: dailyStamp,
+        description: `Daily working memory for ${dailyStamp} (UTC).`,
+    }
+}
+
+function dailyMemoryFileId(stamp: string): string {
+    return `${DAILY_MEMORY_ID_PREFIX}${stamp}`
+}
+
+function parseDailyFileId(id: string): string | null {
+    if (!id.startsWith(DAILY_MEMORY_ID_PREFIX)) return null
+    const stamp = id.slice(DAILY_MEMORY_ID_PREFIX.length)
+    return isDailyStamp(stamp) ? stamp : null
+}
+
+function isDailyStamp(value: string): boolean {
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+    const date = new Date(`${value}T00:00:00.000Z`)
+    return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === value
 }
 
 function utcDateStamp(date: Date = new Date()): string {
@@ -643,8 +726,8 @@ function dailyMemoryRelativePath(stamp: string = utcDateStamp()): string {
 }
 
 /** Path actually read/written for a definition; daily files resolve to today. */
-function effectiveRelativePath(def: WorkspaceFileDefinition): string {
-    return def.dynamic === 'daily' ? dailyMemoryRelativePath() : def.relativePath
+function effectiveRelativePath(def: WorkspaceFileDefinition, dailyStamp?: string): string {
+    return def.dynamic === 'daily' ? dailyMemoryRelativePath(dailyStamp) : def.relativePath
 }
 
 function buildDailyMemoryTemplate(stamp: string = utcDateStamp()): string {
@@ -658,9 +741,9 @@ function buildDailyMemoryTemplate(stamp: string = utcDateStamp()): string {
     ].join('\n')
 }
 
-function resolveDefinitionPath(def: WorkspaceFileDefinition): string {
+function resolveDefinitionPath(def: WorkspaceFileDefinition, dailyStamp?: string): string {
     const root = AGENT_WORKSPACE_DIR
-    const resolved = path.resolve(/* turbopackIgnore: true */ root, effectiveRelativePath(def))
+    const resolved = path.resolve(/* turbopackIgnore: true */ root, effectiveRelativePath(def, dailyStamp))
     if (resolved !== root && !resolved.startsWith(root + path.sep)) {
         throw new Error(`Configured file escapes allowed root: ${def.id}`)
     }
@@ -724,6 +807,79 @@ function extractEnvLines(content: string): Array<{ key: string; raw: string }> {
         out.push({ key: match[1], raw: raw.trim() })
     }
     return out
+}
+
+function readExistingDefinitionContent(def: WorkspaceFileDefinition, dailyStamp?: string): string {
+    const fallback = def.dynamic === 'daily'
+        ? buildDailyMemoryTemplate(dailyStamp)
+        : (def.defaultContent ?? '')
+    try {
+        const absolutePath = resolveDefinitionPath(def, dailyStamp)
+        if (!fs.existsSync(/* turbopackIgnore: true */ absolutePath)) return fallback
+        return fs.readFileSync(/* turbopackIgnore: true */ absolutePath, 'utf-8')
+    } catch {
+        return fallback
+    }
+}
+
+function redactEnvContent(content: string): string {
+    return content
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map(line => {
+            const parsed = parseEnvAssignment(line)
+            if (!parsed) return line
+            if (isEmptyEnvValue(parsed.value)) return line
+            return `${parsed.prefix}${REDACTED_ENV_VALUE}`
+        })
+        .join('\n')
+}
+
+function mergeRedactedEnvSubmission(submittedContent: string, existingContent: string): string {
+    const existingValues = new Map<string, string>()
+    for (const line of existingContent.replace(/\r\n/g, '\n').split('\n')) {
+        const parsed = parseEnvAssignment(line)
+        if (parsed) existingValues.set(parsed.key, parsed.value)
+    }
+
+    return submittedContent
+        .replace(/\r\n/g, '\n')
+        .split('\n')
+        .map(line => {
+            const parsed = parseEnvAssignment(line)
+            if (!parsed || !isRedactedEnvValue(parsed.value)) return line
+            const existingValue = existingValues.get(parsed.key)
+            return `${parsed.prefix}${existingValue ?? ''}`
+        })
+        .join('\n')
+}
+
+function parseEnvAssignment(line: string): { key: string; prefix: string; value: string } | null {
+    const match = line.match(/^(\s*(?:export\s+)?([A-Za-z_][A-Za-z0-9_]*)\s*=\s*)(.*)$/)
+    if (!match?.[1] || !match[2]) return null
+    return {
+        key: match[2],
+        prefix: match[1],
+        value: match[3] ?? '',
+    }
+}
+
+function isEmptyEnvValue(value: string): boolean {
+    const trimmed = value.trim()
+    return trimmed === '' || trimmed === '""' || trimmed === "''"
+}
+
+function isRedactedEnvValue(value: string): boolean {
+    const trimmed = value.trim()
+    if (trimmed === REDACTED_ENV_VALUE) return true
+    if (
+        trimmed.length >= 2 &&
+        ((trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+            (trimmed.startsWith("'") && trimmed.endsWith("'")))
+    ) {
+        return trimmed.slice(1, -1) === REDACTED_ENV_VALUE
+    }
+    return false
 }
 
 function buildVirtualFileContent(id: string): string {

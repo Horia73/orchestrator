@@ -31,6 +31,17 @@ const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
 const SIDEBAR_TRANSITION = "duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+const MOBILE_SWIPE_EDGE_WIDTH = 28
+const MOBILE_SWIPE_OPEN_DISTANCE = 72
+const MOBILE_SWIPE_MIN_DISTANCE = 36
+const MOBILE_SWIPE_MAX_OFF_AXIS_DISTANCE = 48
+
+type MobileSwipeState = {
+  pointerId: number
+  startX: number
+  startY: number
+  opened: boolean
+}
 
 type SidebarContextProps = {
   state: "expanded" | "collapsed"
@@ -51,6 +62,151 @@ function useSidebar() {
   }
 
   return context
+}
+
+function MobileSidebarSwipeZone({
+  enabled,
+  onOpen,
+}: {
+  enabled: boolean
+  onOpen: () => void
+}) {
+  const zoneRef = React.useRef<HTMLDivElement | null>(null)
+  const swipeRef = React.useRef<MobileSwipeState | null>(null)
+
+  const resetSwipe = React.useCallback(() => {
+    swipeRef.current = null
+  }, [])
+
+  const startSwipe = React.useCallback(
+    (pointerId: number, clientX: number, clientY: number) => {
+      swipeRef.current = {
+        pointerId,
+        startX: clientX,
+        startY: clientY,
+        opened: false,
+      }
+    },
+    []
+  )
+
+  const updateSwipe = React.useCallback(
+    (
+      pointerId: number,
+      clientX: number,
+      clientY: number,
+      preventDefault: () => void
+    ) => {
+      const swipe = swipeRef.current
+      if (!swipe || swipe.pointerId !== pointerId || swipe.opened) return
+
+      const deltaX = clientX - swipe.startX
+      const deltaY = Math.abs(clientY - swipe.startY)
+
+      if (deltaX < 0 || deltaY > MOBILE_SWIPE_MAX_OFF_AXIS_DISTANCE) {
+        resetSwipe()
+        return
+      }
+
+      if (deltaX < MOBILE_SWIPE_MIN_DISTANCE || deltaX <= deltaY * 1.35) return
+
+      preventDefault()
+
+      if (deltaX >= MOBILE_SWIPE_OPEN_DISTANCE) {
+        swipe.opened = true
+        onOpen()
+        resetSwipe()
+      }
+    },
+    [onOpen, resetSwipe]
+  )
+
+  React.useEffect(() => {
+    if (!enabled) return
+
+    const zone = zoneRef.current
+    if (!zone) return
+
+    const handleTouchStart = (event: TouchEvent) => {
+      if (event.touches.length !== 1) return
+      const touch = event.touches[0]
+      startSwipe(touch.identifier, touch.clientX, touch.clientY)
+      event.preventDefault()
+    }
+
+    const handleTouchMove = (event: TouchEvent) => {
+      const swipe = swipeRef.current
+      if (!swipe) return
+
+      const touch = Array.from(event.touches).find(
+        (item) => item.identifier === swipe.pointerId
+      )
+      if (!touch) return
+
+      updateSwipe(touch.identifier, touch.clientX, touch.clientY, () =>
+        event.preventDefault()
+      )
+    }
+
+    const handleTouchEnd = (event: TouchEvent) => {
+      const swipe = swipeRef.current
+      if (
+        swipe &&
+        Array.from(event.changedTouches).some(
+          (touch) => touch.identifier === swipe.pointerId
+        )
+      ) {
+        resetSwipe()
+      }
+    }
+
+    const handleMouseDown = (event: MouseEvent) => {
+      if (event.button !== 0) return
+      startSwipe(-1, event.clientX, event.clientY)
+      event.preventDefault()
+    }
+
+    const handleMouseMove = (event: MouseEvent) => {
+      updateSwipe(-1, event.clientX, event.clientY, () =>
+        event.preventDefault()
+      )
+    }
+
+    zone.addEventListener("touchstart", handleTouchStart, { passive: false })
+    window.addEventListener("touchmove", handleTouchMove, { passive: false })
+    window.addEventListener("touchend", handleTouchEnd)
+    window.addEventListener("touchcancel", handleTouchEnd)
+    zone.addEventListener("mousedown", handleMouseDown)
+    window.addEventListener("mousemove", handleMouseMove)
+    window.addEventListener("mouseup", resetSwipe)
+
+    return () => {
+      resetSwipe()
+      zone.removeEventListener("touchstart", handleTouchStart)
+      window.removeEventListener("touchmove", handleTouchMove)
+      window.removeEventListener("touchend", handleTouchEnd)
+      window.removeEventListener("touchcancel", handleTouchEnd)
+      zone.removeEventListener("mousedown", handleMouseDown)
+      window.removeEventListener("mousemove", handleMouseMove)
+      window.removeEventListener("mouseup", resetSwipe)
+    }
+  }, [enabled, resetSwipe, startSwipe, updateSwipe])
+
+  if (!enabled) return null
+
+  return (
+    <div
+      ref={zoneRef}
+      aria-hidden="true"
+      data-sidebar="mobile-swipe-zone"
+      className="fixed inset-y-0 left-0 z-40 md:hidden"
+      style={{
+        width: `calc(env(safe-area-inset-left, 0px) + ${MOBILE_SWIPE_EDGE_WIDTH}px)`,
+        touchAction: "none",
+        overscrollBehavior: "contain",
+      }}
+    />
+  )
 }
 
 function SidebarProvider({
@@ -144,6 +300,10 @@ function SidebarProvider({
         {...props}
       >
         {children}
+        <MobileSidebarSwipeZone
+          enabled={isMobile && !openMobile}
+          onOpen={() => setOpenMobile(true)}
+        />
       </div>
     </SidebarContext.Provider>
   )

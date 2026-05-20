@@ -5,7 +5,7 @@ import { delegateParallelTool, delegateToTool } from './delegate-to'
 import { readTool } from './read'
 import { writeTool } from './write'
 import { editTool } from './edit'
-import { bashTool } from './bash'
+import { bashTool } from './bash-def'
 import { globTool } from './glob'
 import { grepTool } from './grep'
 import { webFetchTool } from './web'
@@ -25,6 +25,8 @@ import { scheduleTools } from './schedule'
 import { notifyInboxTool } from './notify'
 import { setTaskStateTool } from './task-state'
 import { watchlistTools } from './watchlist'
+import { monitorWakeFeedbackTool } from './smart-monitor-feedback'
+import { smartMonitorManageTools } from './smart-monitor-manage'
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -160,3 +162,5 @@ for (const tool of scheduleTools) registerTool(tool)
 registerTool(notifyInboxTool)
 registerTool(setTaskStateTool)
 for (const tool of watchlistTools) registerTool(tool)
+registerTool(monitorWakeFeedbackTool)
+for (const tool of smartMonitorManageTools) registerTool(tool)

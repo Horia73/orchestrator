@@ -1,10 +1,23 @@
-import type { AIProvider, ProviderCapabilities } from '@/lib/ai/agents/types'
+import type { AIProvider, ProviderCapabilities, ProviderSendOptions, StreamCallbacks } from '@/lib/ai/agents/types'
 import { GoogleProvider, GOOGLE_CAPABILITIES } from './google'
 import { AnthropicProvider } from './anthropic'
 import { OpenAIProvider } from './openai'
 import { ClaudeCodeProvider } from './claude-code'
 import { CodexProvider } from './codex'
-import { BrowserProvider } from './browser'
+import { BROWSER_CAPABILITIES } from './browser-capabilities'
+
+class LazyBrowserProvider implements AIProvider {
+    readonly id = 'browser'
+    readonly name = 'Browser agent'
+    readonly capabilities = BROWSER_CAPABILITIES
+
+    constructor(private readonly apiKey: string) {}
+
+    async stream(options: ProviderSendOptions, callbacks: StreamCallbacks): Promise<void> {
+        const { BrowserProvider } = await import('./browser')
+        return new BrowserProvider(this.apiKey).stream(options, callbacks)
+    }
+}
 
 const providerCache = new Map<string, { apiKey: string; provider: AIProvider }>()
 
@@ -32,7 +45,7 @@ export function getProvider(providerId: string, apiKey: string): AIProvider {
             provider = new CodexProvider(apiKey)
             break
         case 'browser':
-            provider = new BrowserProvider(apiKey)
+            provider = new LazyBrowserProvider(apiKey)
             break
         default:
             throw new Error(`Unknown provider: ${providerId}`)
@@ -54,7 +67,7 @@ const STATIC_CAPABILITIES: Record<string, ProviderCapabilities> = {
     openai: new OpenAIProvider('').capabilities,
     'claude-code': new ClaudeCodeProvider('').capabilities,
     codex: new CodexProvider('').capabilities,
-    browser: new BrowserProvider('').capabilities,
+    browser: BROWSER_CAPABILITIES,
 }
 
 export function getProviderCapabilities(providerId: string): ProviderCapabilities | null {

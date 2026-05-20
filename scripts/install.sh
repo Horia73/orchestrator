@@ -9,6 +9,10 @@ APP_DIR="${ORCHESTRATOR_APP_DIR:-$ORCH_HOME/app}"
 PORT="${ORCHESTRATOR_PORT:-3000}"
 HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
 PUBLIC_URL="${ORCHESTRATOR_PUBLIC_URL:-}"
+PUBLIC_HTTPS_SETUP="${ORCHESTRATOR_PUBLIC_HTTPS_SETUP:-${ORCHESTRATOR_HTTPS_SETUP:-}}"
+DUCKDNS_DOMAIN="${ORCHESTRATOR_DUCKDNS_DOMAIN:-}"
+DUCKDNS_TOKEN="${ORCHESTRATOR_DUCKDNS_TOKEN:-}"
+LETSENCRYPT_EMAIL="${ORCHESTRATOR_LETSENCRYPT_EMAIL:-${LETSENCRYPT_EMAIL:-}}"
 VNC_PORT="${ORCHESTRATOR_VNC_PORT:-${BROWSER_AGENT_VNC_WS_PORT:-6080}}"
 UPDATE_BRIDGE_PORT="${ORCHESTRATOR_UPDATE_BRIDGE_PORT:-38733}"
 UPDATE_BRIDGE_BIND="${ORCHESTRATOR_UPDATE_BRIDGE_BIND:-0.0.0.0}"
@@ -19,6 +23,8 @@ LOG_DIR="$ORCH_HOME/logs"
 SERVICE_NAME="orchestrator"
 UPDATE_BRIDGE_SERVICE_NAME="orchestrator-docker-update"
 LAUNCHD_LABEL="com.horia.orchestrator"
+INSTALL_LOG_FILE=""
+SKIP_DOCTOR="${ORCHESTRATOR_SKIP_DOCTOR:-0}"
 
 log() {
   printf '\033[1;34m[orchestrator]\033[0m %s\n' "$*"
@@ -27,6 +33,91 @@ log() {
 fail() {
   printf '\033[1;31m[orchestrator]\033[0m %s\n' "$*" >&2
   exit 1
+}
+
+tty_available() {
+  # /dev/tty can be opened. The simple [ -r ] / [ -w ] test gives false
+  # positives in contexts like `docker exec` without -t, where the path
+  # exists but actual I/O fails with ENXIO.
+  { : < /dev/tty; } >/dev/null 2>&1
+}
+
+setup_install_logging() {
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  INSTALL_LOG_FILE="$LOG_DIR/install-$(date +%Y%m%d-%H%M%S).log"
+  {
+    printf 'orchestrator install %s\n' "$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    printf '  uname: %s\n'  "$(uname -srm 2>/dev/null || true)"
+    printf '  user:  %s\n'  "$(id -un 2>/dev/null || true)"
+    printf '  home:  %s\n'  "$ORCH_HOME"
+    printf '  log:   %s\n'  "$INSTALL_LOG_FILE"
+  } > "$INSTALL_LOG_FILE" 2>/dev/null || true
+  # Mirror stdout and stderr into the log. Failures here are non-fatal.
+  exec > >(tee -a "$INSTALL_LOG_FILE") 2> >(tee -a "$INSTALL_LOG_FILE" >&2)
+}
+
+install_on_exit() {
+  local rc=$?
+  if [ "$rc" -eq 0 ]; then
+    if [ -n "$INSTALL_LOG_FILE" ]; then
+      log "Install log: $INSTALL_LOG_FILE"
+    fi
+    return 0
+  fi
+  printf '\n\033[1;31m[orchestrator]\033[0m Install failed (exit %d).\n' "$rc" >&2
+  if [ -n "$INSTALL_LOG_FILE" ]; then
+    printf '\033[1;31m[orchestrator]\033[0m Log:   %s\n' "$INSTALL_LOG_FILE" >&2
+  fi
+  if [ -x "$APP_DIR/scripts/doctor.sh" ]; then
+    printf '\033[1;31m[orchestrator]\033[0m Diagnose: %s/scripts/doctor.sh check\n' "$APP_DIR" >&2
+  fi
+}
+
+prompt_yes_no() {
+  local prompt default answer
+  prompt="$1"
+  default="${2:-n}"
+  tty_available || return 1
+  if [ "$default" = "y" ]; then
+    printf '%s [Y/n] ' "$prompt" > /dev/tty
+  else
+    printf '%s [y/N] ' "$prompt" > /dev/tty
+  fi
+  IFS= read -r answer < /dev/tty || answer=""
+  answer="$(printf '%s' "$answer" | tr '[:upper:]' '[:lower:]')"
+  if [ -z "$answer" ]; then
+    answer="$default"
+  fi
+  case "$answer" in
+    y|yes) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+prompt_value() {
+  local prompt value
+  prompt="$1"
+  tty_available || return 1
+  printf '%s' "$prompt" > /dev/tty
+  IFS= read -r value < /dev/tty || value=""
+  printf '%s' "$value"
+}
+
+prompt_secret() {
+  local prompt value old_stty
+  prompt="$1"
+  tty_available || return 1
+  printf '%s' "$prompt" > /dev/tty
+  old_stty="$(stty -g < /dev/tty 2>/dev/null || true)"
+  stty -echo < /dev/tty 2>/dev/null || true
+  IFS= read -r value < /dev/tty || value=""
+  if [ -n "$old_stty" ]; then
+    stty "$old_stty" < /dev/tty 2>/dev/null || true
+  else
+    stty echo < /dev/tty 2>/dev/null || true
+  fi
+  printf '\n' > /dev/tty
+  printf '%s' "$value"
 }
 
 run_sudo() {
@@ -70,6 +161,74 @@ detect_lan_ip() {
     hostname -I 2>/dev/null | awk '{ print $1 }'
     return
   fi
+}
+
+normalize_duckdns_domain() {
+  local raw domain
+  raw="$1"
+  domain="$(printf '%s' "$raw" | tr '[:upper:]' '[:lower:]' | sed -E 's#^https?://##; s#/.*$##; s/[[:space:]]//g; s/[.]$//')"
+  domain="${domain%.duckdns.org}"
+  if ! printf '%s' "$domain" | grep -Eq '^[a-z0-9][a-z0-9-]{0,62}$'; then
+    fail "Invalid DuckDNS domain '$raw'. Use a single DuckDNS subdomain such as my-orchestrator or my-orchestrator.duckdns.org."
+  fi
+  printf '%s' "$domain"
+}
+
+configure_public_https_inputs() {
+  local mode domain token email
+  mode="$(printf '%s' "$PUBLIC_HTTPS_SETUP" | tr '[:upper:]' '[:lower:]')"
+
+  case "$mode" in
+    ""|ask)
+      if [ "$(uname -s)" = "Linux" ] && prompt_yes_no "Configure public HTTPS with DuckDNS for this server?" "n"; then
+        mode="duckdns"
+      else
+        mode="none"
+      fi
+      ;;
+    duckdns|duck|true|yes|1)
+      mode="duckdns"
+      ;;
+    none|false|no|0)
+      mode="none"
+      ;;
+    *)
+      fail "Invalid ORCHESTRATOR_PUBLIC_HTTPS_SETUP=$PUBLIC_HTTPS_SETUP. Use duckdns or none."
+      ;;
+  esac
+
+  PUBLIC_HTTPS_SETUP="$mode"
+  if [ "$PUBLIC_HTTPS_SETUP" != "duckdns" ]; then
+    return
+  fi
+  [ "$(uname -s)" = "Linux" ] || fail "DuckDNS HTTPS setup is supported by this installer on Linux servers only."
+
+  domain="$DUCKDNS_DOMAIN"
+  if [ -z "$domain" ]; then
+    domain="$(prompt_value "DuckDNS domain (for example my-orchestrator or my-orchestrator.duckdns.org): " || true)"
+  fi
+  [ -n "$domain" ] || fail "DuckDNS domain is required. Set ORCHESTRATOR_DUCKDNS_DOMAIN or run interactively."
+  DUCKDNS_DOMAIN="$(normalize_duckdns_domain "$domain")"
+
+  token="$DUCKDNS_TOKEN"
+  if [ -z "$token" ]; then
+    token="$(prompt_secret "DuckDNS token: " || true)"
+  fi
+  [ -n "$token" ] || fail "DuckDNS token is required. Set ORCHESTRATOR_DUCKDNS_TOKEN or run interactively."
+  DUCKDNS_TOKEN="$token"
+
+  email="$LETSENCRYPT_EMAIL"
+  if [ -z "$email" ]; then
+    email="$(prompt_value "Let's Encrypt email (optional, press Enter to skip): " || true)"
+  fi
+  LETSENCRYPT_EMAIL="$email"
+
+  PUBLIC_URL="https://$DUCKDNS_DOMAIN.duckdns.org"
+  ORCHESTRATOR_SSH_HOST="${ORCHESTRATOR_SSH_HOST:-$DUCKDNS_DOMAIN.duckdns.org}"
+  BROWSER_AGENT_VNC_WS_PUBLIC_URL="${BROWSER_AGENT_VNC_WS_PUBLIC_URL:-wss://$DUCKDNS_DOMAIN.duckdns.org/vnc}"
+  export ORCHESTRATOR_SSH_HOST BROWSER_AGENT_VNC_WS_PUBLIC_URL
+
+  log "Public URL: $PUBLIC_URL"
 }
 
 install_git_if_missing() {
@@ -205,6 +364,31 @@ start_docker_daemon() {
   fail "Docker is installed but the daemon is not running. Start Docker and rerun."
 }
 
+install_public_https_packages() {
+  [ "$PUBLIC_HTTPS_SETUP" = "duckdns" ] || return
+  [ "$(uname -s)" = "Linux" ] || return
+
+  log "Installing nginx and HTTPS helper packages"
+  if command -v apt-get >/dev/null 2>&1; then
+    run_sudo apt-get update
+    run_sudo apt-get install -y nginx curl ca-certificates socat
+  elif command -v dnf >/dev/null 2>&1; then
+    run_sudo dnf install -y nginx curl ca-certificates socat
+  elif command -v yum >/dev/null 2>&1; then
+    run_sudo yum install -y nginx curl ca-certificates socat
+  elif command -v pacman >/dev/null 2>&1; then
+    run_sudo pacman -Sy --noconfirm nginx curl ca-certificates socat
+  else
+    fail "Could not install nginx automatically. Install nginx, curl, ca-certificates, and socat, then rerun."
+  fi
+
+  if command -v systemctl >/dev/null 2>&1; then
+    run_sudo systemctl enable --now nginx >/dev/null 2>&1 || run_sudo systemctl start nginx >/dev/null 2>&1 || true
+  elif command -v service >/dev/null 2>&1; then
+    run_sudo service nginx start >/dev/null 2>&1 || true
+  fi
+}
+
 run_docker() {
   if docker info >/dev/null 2>&1; then
     docker "$@"
@@ -281,6 +465,132 @@ checkout_app() {
   fi
 }
 
+dir_is_empty() {
+  [ -d "$1" ] || return 0
+  [ -z "$(find "$1" -mindepth 1 -maxdepth 1 2>/dev/null | head -1)" ]
+}
+
+ensure_native_state_dir() {
+  local app_state="$APP_DIR/.orchestrator"
+  local state_dir="${ORCHESTRATOR_NATIVE_STATE_DIR:-$ORCH_HOME/state}"
+  local backup_dir
+
+  mkdir -p "$ORCH_HOME"
+
+  if [ -L "$app_state" ]; then
+    mkdir -p "$state_dir"
+    return 0
+  fi
+
+  if [ -d "$app_state" ]; then
+    if [ ! -e "$state_dir" ] || dir_is_empty "$state_dir"; then
+      rm -rf "$state_dir" 2>/dev/null || true
+      log "Moving native runtime state to $state_dir"
+      mv "$app_state" "$state_dir"
+    elif dir_is_empty "$app_state"; then
+      rmdir "$app_state" 2>/dev/null || rm -rf "$app_state"
+    else
+      backup_dir="$ORCH_HOME/state.backup.$(date +%Y%m%d%H%M%S)"
+      log "Both $app_state and $state_dir contain data; moving checkout state to $backup_dir"
+      mv "$app_state" "$backup_dir"
+    fi
+  elif [ -e "$app_state" ]; then
+    backup_dir="$ORCH_HOME/state-file.backup.$(date +%Y%m%d%H%M%S)"
+    log "Moving non-directory $app_state to $backup_dir"
+    mv "$app_state" "$backup_dir"
+  fi
+
+  mkdir -p "$state_dir"
+  ln -sfn "$state_dir" "$app_state"
+}
+
+run_doctor_after_checkout() {
+  # Run doctor.sh preflight + inspect once the checkout is local.
+  # Caller passes the install mode so doctor uses the right port set.
+  local mode="$1" doctor="$APP_DIR/scripts/doctor.sh"
+  local preflight_rc inspect_rc
+
+  if [ "$SKIP_DOCTOR" = "1" ]; then
+    log "Skipping doctor (ORCHESTRATOR_SKIP_DOCTOR=1)"
+    return 0
+  fi
+  if [ ! -f "$doctor" ]; then
+    log "doctor.sh not present in this checkout; skipping preflight/inspect"
+    return 0
+  fi
+  chmod +x "$doctor" 2>/dev/null || true
+
+  log "Running preflight checks (doctor preflight)"
+  preflight_rc=0
+  ORCHESTRATOR_INSTALL_MODE="$mode" \
+  ORCHESTRATOR_HOME="$ORCH_HOME" \
+  ORCHESTRATOR_PORT="$PORT" \
+  ORCHESTRATOR_HOST="$HOST" \
+  ORCHESTRATOR_VNC_PORT="$VNC_PORT" \
+  ORCHESTRATOR_PUBLIC_HTTPS_SETUP="$PUBLIC_HTTPS_SETUP" \
+  ORCHESTRATOR_DUCKDNS_DOMAIN="$DUCKDNS_DOMAIN" \
+  ORCHESTRATOR_DUCKDNS_TOKEN="$DUCKDNS_TOKEN" \
+    "$doctor" preflight || preflight_rc=$?
+  case "$preflight_rc" in
+    0) log "Preflight: clean" ;;
+    2) log "Preflight: warnings only — continuing" ;;
+    1)
+      if prompt_yes_no "Preflight reported blockers (see above). Continue anyway?" "n"; then
+        log "Continuing past preflight blockers per user confirmation"
+      else
+        fail "Aborted due to preflight blockers. Re-run with ORCHESTRATOR_SKIP_DOCTOR=1 to bypass entirely."
+      fi
+      ;;
+    *)
+      log "Preflight exited with code $preflight_rc; continuing"
+      ;;
+  esac
+
+  log "Inspecting existing install state (doctor inspect)"
+  inspect_rc=0
+  ORCHESTRATOR_INSTALL_MODE="$mode" \
+  ORCHESTRATOR_HOME="$ORCH_HOME" \
+  ORCHESTRATOR_PORT="$PORT" \
+  ORCHESTRATOR_HOST="$HOST" \
+  ORCHESTRATOR_VNC_PORT="$VNC_PORT" \
+  ORCHESTRATOR_PUBLIC_HTTPS_SETUP="$PUBLIC_HTTPS_SETUP" \
+  ORCHESTRATOR_DUCKDNS_DOMAIN="$DUCKDNS_DOMAIN" \
+  ORCHESTRATOR_DUCKDNS_TOKEN="$DUCKDNS_TOKEN" \
+    "$doctor" inspect || inspect_rc=$?
+
+  if [ "$inspect_rc" -eq 3 ]; then
+    log "Detected state from a previous install."
+    if tty_available; then
+      printf '\n[orchestrator] How should the installer handle the existing state?\n' > /dev/tty
+      printf '  [k] keep — reuse what is valid, overwrite what is stale (default)\n' > /dev/tty
+      printf '  [r] reset — uninstall previous artifacts first, then install fresh\n' > /dev/tty
+      printf '  [a] abort — stop now without changing the system\n' > /dev/tty
+      local choice
+      choice="$(prompt_value 'Choice [k/r/a]: ' || true)"
+      choice="$(printf '%s' "$choice" | tr '[:upper:]' '[:lower:]')"
+      case "$choice" in
+        r|reset)
+          log "Running 'doctor uninstall' before re-installing"
+          ORCHESTRATOR_HOME="$ORCH_HOME" \
+          ORCHESTRATOR_DUCKDNS_DOMAIN="$DUCKDNS_DOMAIN" \
+            "$doctor" uninstall --yes || fail "doctor uninstall failed; aborting"
+          # checkout was wiped; recreate it.
+          checkout_app
+          [ "$mode" = "native" ] && ensure_native_state_dir
+          ;;
+        a|abort)
+          fail "Aborted at user's request. Existing install untouched."
+          ;;
+        *)
+          log "Keeping existing state. Stale items will be overwritten where the installer touches them."
+          ;;
+      esac
+    else
+      log "Non-interactive run: keeping existing state (use ORCHESTRATOR_SKIP_DOCTOR=1 to silence inspect)"
+    fi
+  fi
+}
+
 build_app() {
   log "Installing npm dependencies"
   (cd "$APP_DIR" && npm ci)
@@ -344,6 +654,198 @@ ensure_docker_env_file() {
   upsert_env_value "$env_file" BROWSER_AGENT_LIVE_VIEW "1"
   upsert_env_value "$env_file" BROWSER_AGENT_VNC_WS_PORT "$VNC_PORT"
   upsert_env_value "$env_file" BROWSER_AGENT_VNC_WS_PUBLIC_URL "${BROWSER_AGENT_VNC_WS_PUBLIC_URL:-ws://127.0.0.1:$VNC_PORT}"
+}
+
+install_duckdns_updater() {
+  local duck_dir update_script service_dir service_file timer_file response
+  [ "$PUBLIC_HTTPS_SETUP" = "duckdns" ] || return
+
+  duck_dir="$ORCH_HOME/duckdns"
+  update_script="$duck_dir/update.sh"
+  mkdir -p "$duck_dir"
+  chmod 700 "$duck_dir" || true
+
+  cat > "$update_script" <<EOF
+#!/usr/bin/env bash
+set -euo pipefail
+response="\$(curl -fsS "https://www.duckdns.org/update?domains=$DUCKDNS_DOMAIN&token=$DUCKDNS_TOKEN&ip=")"
+if [ "\$response" != "OK" ]; then
+  echo "DuckDNS update failed: \$response" >&2
+  exit 1
+fi
+EOF
+  chmod 700 "$update_script"
+
+  log "Updating DuckDNS record for $DUCKDNS_DOMAIN.duckdns.org"
+  response="$("$update_script" 2>&1)" || fail "$response"
+
+  if command -v systemctl >/dev/null 2>&1; then
+    service_dir="$HOME/.config/systemd/user"
+    service_file="$service_dir/orchestrator-duckdns.service"
+    timer_file="$service_dir/orchestrator-duckdns.timer"
+    mkdir -p "$service_dir"
+    cat > "$service_file" <<EOF
+[Unit]
+Description=Update DuckDNS record for Orchestrator
+
+[Service]
+Type=oneshot
+ExecStart=$update_script
+EOF
+    cat > "$timer_file" <<EOF
+[Unit]
+Description=Run Orchestrator DuckDNS update periodically
+
+[Timer]
+OnBootSec=1min
+OnUnitActiveSec=5min
+Unit=orchestrator-duckdns.service
+
+[Install]
+WantedBy=timers.target
+EOF
+    run_sudo loginctl enable-linger "$(id -un)" >/dev/null 2>&1 || true
+    if systemctl --user daemon-reload >/dev/null 2>&1 && systemctl --user enable --now orchestrator-duckdns.timer >/dev/null 2>&1; then
+      log "Installed DuckDNS updater timer"
+      return
+    fi
+    log "systemd user timer unavailable; trying crontab for DuckDNS updater"
+  fi
+
+  if command -v crontab >/dev/null 2>&1; then
+    (crontab -l 2>/dev/null | grep -v "$update_script" || true; printf '*/5 * * * * %s >/dev/null 2>&1\n' "$update_script") | crontab -
+    log "Installed DuckDNS updater cron entry"
+  else
+    log "Could not install a DuckDNS timer automatically. Run $update_script periodically to keep DNS current."
+  fi
+}
+
+install_acme_sh() {
+  local acme_sh install_args
+  [ "$PUBLIC_HTTPS_SETUP" = "duckdns" ] || return
+  acme_sh="$HOME/.acme.sh/acme.sh"
+  if [ -x "$acme_sh" ]; then
+    return
+  fi
+
+  log "Installing acme.sh for DuckDNS DNS-01 certificates"
+  if [ -n "$LETSENCRYPT_EMAIL" ]; then
+    install_args="email=$LETSENCRYPT_EMAIL"
+  else
+    install_args=""
+  fi
+  if [ -n "$install_args" ]; then
+    curl -fsSL https://get.acme.sh | sh -s "$install_args"
+  else
+    curl -fsSL https://get.acme.sh | sh
+  fi
+  [ -x "$acme_sh" ] || fail "acme.sh was not installed at $acme_sh"
+}
+
+issue_duckdns_certificate() {
+  local acme_sh tls_dir domain
+  [ "$PUBLIC_HTTPS_SETUP" = "duckdns" ] || return
+  acme_sh="$HOME/.acme.sh/acme.sh"
+  tls_dir="$ORCH_HOME/tls"
+  domain="$DUCKDNS_DOMAIN.duckdns.org"
+  mkdir -p "$tls_dir"
+  chmod 700 "$tls_dir" || true
+
+  "$acme_sh" --set-default-ca --server letsencrypt >/dev/null 2>&1 || true
+  if [ ! -s "$tls_dir/fullchain.pem" ] || [ ! -s "$tls_dir/privkey.pem" ]; then
+    log "Issuing Let's Encrypt certificate for $domain via DuckDNS DNS-01"
+    DuckDNS_Token="$DUCKDNS_TOKEN" "$acme_sh" --issue --dns dns_duckdns -d "$domain" --keylength ec-256 --server letsencrypt
+  else
+    log "Using existing certificate files in $tls_dir"
+  fi
+  DuckDNS_Token="$DUCKDNS_TOKEN" "$acme_sh" --install-cert -d "$domain" --ecc \
+    --fullchain-file "$tls_dir/fullchain.pem" \
+    --key-file "$tls_dir/privkey.pem" \
+    --reloadcmd "sudo systemctl reload nginx >/dev/null 2>&1 || systemctl reload nginx >/dev/null 2>&1 || true"
+}
+
+install_nginx_orchestrator_site() {
+  local domain tls_dir site_file server_name_hash_bucket_size
+  [ "$PUBLIC_HTTPS_SETUP" = "duckdns" ] || return
+  domain="$DUCKDNS_DOMAIN.duckdns.org"
+  tls_dir="$ORCH_HOME/tls"
+
+  if [ -d /etc/nginx/sites-available ]; then
+    site_file="/etc/nginx/sites-available/orchestrator.conf"
+  else
+    site_file="/etc/nginx/conf.d/orchestrator.conf"
+  fi
+
+  log "Configuring nginx reverse proxy for https://$domain"
+  run_sudo sh -c "cat > '$site_file'" <<EOF
+server {
+    listen 80;
+    server_name $domain;
+    return 301 https://\$host\$request_uri;
+}
+
+server {
+    listen 443 ssl http2;
+    server_name $domain;
+
+    ssl_certificate $tls_dir/fullchain.pem;
+    ssl_certificate_key $tls_dir/privkey.pem;
+
+    client_max_body_size 100m;
+
+    location /vnc/ {
+        proxy_pass http://127.0.0.1:$VNC_PORT/;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+
+    location / {
+        proxy_pass http://127.0.0.1:$PORT;
+        proxy_http_version 1.1;
+        proxy_set_header Host \$host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
+        proxy_set_header Upgrade \$http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 3600s;
+        proxy_send_timeout 3600s;
+    }
+}
+EOF
+
+  if [ -d /etc/nginx/sites-enabled ]; then
+    run_sudo ln -sfn "$site_file" /etc/nginx/sites-enabled/orchestrator.conf
+  fi
+
+  server_name_hash_bucket_size="$(run_sudo nginx -t 2>&1 || true)"
+  if printf '%s' "$server_name_hash_bucket_size" | grep -q 'could not build server_names_hash'; then
+    log "nginx needs a larger server_names_hash_bucket_size; adding a small compatibility config"
+    run_sudo sh -c "printf '%s\n' 'server_names_hash_bucket_size 128;' > /etc/nginx/conf.d/orchestrator-hash-bucket.conf"
+  fi
+
+  run_sudo nginx -t
+  if command -v systemctl >/dev/null 2>&1; then
+    run_sudo systemctl reload nginx
+  elif command -v service >/dev/null 2>&1; then
+    run_sudo service nginx reload
+  else
+    run_sudo nginx -s reload
+  fi
+}
+
+install_public_https_stack() {
+  [ "$PUBLIC_HTTPS_SETUP" = "duckdns" ] || return
+  install_public_https_packages
+  install_duckdns_updater
+  install_acme_sh
+  issue_duckdns_certificate
+  install_nginx_orchestrator_site
 }
 
 generate_update_bridge_token() {
@@ -642,8 +1144,22 @@ case "\${1:-status}" in
     curl -fsS -X POST "\$LOCAL_URL/api/update/apply"
     echo
     ;;
+  doctor)
+    shift || true
+    if [ "\$#" -eq 0 ]; then
+      exec "\$APP_DIR/scripts/doctor.sh" check
+    else
+      exec "\$APP_DIR/scripts/doctor.sh" "\$@"
+    fi
+    ;;
+  uninstall)
+    shift || true
+    exec "\$APP_DIR/scripts/doctor.sh" uninstall "\$@"
+    ;;
   *)
-    echo "Usage: orchestrator {start|stop|restart|status|logs|update}"
+    echo "Usage: orchestrator {start|stop|restart|status|logs|update|doctor|uninstall}"
+    echo "  doctor [preflight|inspect|check|fix]   diagnostics; default 'check'"
+    echo "  uninstall [--purge] [--yes]            remove install; --purge wipes data and Orchestrator Docker volumes"
     exit 2
     ;;
 esac
@@ -722,8 +1238,22 @@ case "\${1:-status}" in
     git -C "\$APP_DIR" pull --ff-only origin "\$BRANCH"
     compose up --build -d
     ;;
+  doctor)
+    shift || true
+    if [ "\$#" -eq 0 ]; then
+      exec "\$APP_DIR/scripts/doctor.sh" check
+    else
+      exec "\$APP_DIR/scripts/doctor.sh" "\$@"
+    fi
+    ;;
+  uninstall)
+    shift || true
+    exec "\$APP_DIR/scripts/doctor.sh" uninstall "\$@"
+    ;;
   *)
-    echo "Usage: orchestrator {start|stop|restart|status|logs|update}"
+    echo "Usage: orchestrator {start|stop|restart|status|logs|update|doctor|uninstall}"
+    echo "  doctor [preflight|inspect|check|fix]   diagnostics; default 'check'"
+    echo "  uninstall [--purge] [--yes]            remove install; --purge wipes data and Orchestrator Docker volumes"
     exit 2
     ;;
 esac
@@ -737,6 +1267,8 @@ install_native_stack() {
   ensure_node
   ensure_user_npm_global_prefix
   checkout_app
+  ensure_native_state_dir
+  run_doctor_after_checkout "native"
   build_app
 
   if [ "$(uname -s)" = "Darwin" ]; then
@@ -756,6 +1288,7 @@ install_docker_stack() {
   install_docker_packages_if_needed
   start_docker_daemon
   checkout_app
+  run_doctor_after_checkout "docker"
   install_docker_update_bridge
   ensure_docker_env_file
   log "Starting Docker Compose stack"
@@ -766,15 +1299,29 @@ install_docker_stack() {
 main() {
   local mode
   mode="$(resolve_install_mode)"
+  setup_install_logging
+  trap install_on_exit EXIT
   log "Install mode: $mode"
+  log "Install log: $INSTALL_LOG_FILE"
+  configure_public_https_inputs
 
   if [ "$mode" = "docker" ]; then
     install_docker_stack
-    log "Installed Docker stack. Open http://127.0.0.1:$PORT"
-    log "Live browser view websocket: ws://127.0.0.1:$VNC_PORT"
+    install_public_https_stack
+    if [ -n "$PUBLIC_URL" ]; then
+      log "Installed Docker stack. Open $PUBLIC_URL"
+    else
+      log "Installed Docker stack. Open http://127.0.0.1:$PORT"
+    fi
+    log "Live browser view websocket: ${BROWSER_AGENT_VNC_WS_PUBLIC_URL:-ws://127.0.0.1:$VNC_PORT}"
   else
     install_native_stack
-    log "Installed native service. Open http://$HOST:$PORT"
+    install_public_https_stack
+    if [ -n "$PUBLIC_URL" ]; then
+      log "Installed native service. Open $PUBLIC_URL"
+    else
+      log "Installed native service. Open http://$HOST:$PORT"
+    fi
   fi
 
   log "CLI: $BIN_DIR/orchestrator"

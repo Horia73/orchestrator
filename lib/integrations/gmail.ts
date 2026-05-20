@@ -483,7 +483,6 @@ export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<Gm
 
     if (to.length === 0) throw new Error('At least one recipient is required.')
     if (!subject) throw new Error('Subject is required.')
-    if (!body) throw new Error('Body is required.')
 
     const replyHeaders = input.threadId ? await getReplyHeaders(input.threadId) : null
     const from = token.accountEmail || 'me'
@@ -549,7 +548,6 @@ export async function gmailSendMessage(input: GmailCreateDraftInput): Promise<Gm
 
     if (to.length === 0) throw new Error('At least one recipient is required.')
     if (!subject) throw new Error('Subject is required.')
-    if (!body) throw new Error('Body is required.')
 
     const replyHeaders = input.threadId ? await getReplyHeaders(input.threadId) : null
     const mime = buildMimeMessage({

@@ -268,21 +268,21 @@ function applyCliOverrides(config: AgentConfig): AgentConfig {
 }
 
 export function getDefaultConfigPath(): string {
-    return path.resolve(process.cwd(), 'agent.config.json');
+    return path.resolve(/* turbopackIgnore: true */ process.cwd(), 'agent.config.json');
 }
 
 export function loadAgentConfig(explicitPath?: string): AgentConfigLoadResult {
     const configPath = explicitPath
-        ? path.resolve(process.cwd(), explicitPath)
+        ? path.resolve(/* turbopackIgnore: true */ process.cwd(), explicitPath)
         : process.env.AGENT_CONFIG_PATH
-            ? path.resolve(process.cwd(), process.env.AGENT_CONFIG_PATH)
+            ? path.resolve(/* turbopackIgnore: true */ process.cwd(), process.env.AGENT_CONFIG_PATH)
             : getDefaultConfigPath();
 
     let merged = DEFAULT_AGENT_CONFIG;
     let loadedFromFile = false;
 
-    if (fs.existsSync(configPath)) {
-        const raw = fs.readFileSync(configPath, 'utf8');
+    if (fs.existsSync(/* turbopackIgnore: true */ configPath)) {
+        const raw = fs.readFileSync(/* turbopackIgnore: true */ configPath, 'utf8');
         const parsed = JSON.parse(raw) as PartialAgentConfig;
         merged = mergeConfig(DEFAULT_AGENT_CONFIG, parsed);
         loadedFromFile = true;

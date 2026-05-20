@@ -55,6 +55,7 @@ import { normalizeUsage } from "@/lib/observability/usage-mapper"
 import { generateTitle } from "@/lib/utils-chat"
 import { getProviderReadiness } from "@/lib/provider-readiness"
 import { resolveRequestOrigin } from "@/lib/app-origin"
+import { sendChatCompletionPushNotification } from "@/lib/push-notifications"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
@@ -274,11 +275,12 @@ function buildAttachmentContext(
         ? att.mimeType.split(";")[0].trim()
         : "application/octet-stream"
     const filePath = resolveExistingUploadPath(att.id)
-    const location = options.includeLocalPath && filePath
-      ? `local path: ${filePath}`
-      : filePath
-        ? `upload_id: ${att.id}`
-        : `upload_id: ${att.id}; local upload file is no longer available`
+    const location =
+      options.includeLocalPath && filePath
+        ? `local path: ${filePath}`
+        : filePath
+          ? `upload_id: ${att.id}`
+          : `upload_id: ${att.id}; local upload file is no longer available`
 
     lines.push(
       `- ${filename} (${mimeType}, ${formatAttachmentSize(att.size)}); ${location}`
@@ -580,6 +582,8 @@ export async function POST(request: Request) {
   let lastPublishedContextUsageKey = latestContextUsage
     ? contextUsageKey(latestContextUsage)
     : ""
+  let terminalMessageStatus: Message["status"] | null = null
+  let terminalStreamError: string | null = null
 
   const persistAssistantProgress = (opts?: {
     force?: boolean
@@ -599,7 +603,7 @@ export async function POST(request: Request) {
       id: messageId,
       role: "assistant",
       content: accContent || "",
-      status: opts?.status,
+      status: opts?.status ?? terminalMessageStatus ?? undefined,
       contentSegments: accContentSegments,
       reasoning: accReasoning,
       thinking: accThinking || "",
@@ -1187,6 +1191,8 @@ export async function POST(request: Request) {
               )
             },
             onDone(meta) {
+              if (terminalStreamError) return
+
               accAttachments = meta.attachments ?? []
               // Flush any trailing parser state (unterminated tags
               // become prose; unterminated artifacts are closed
@@ -1237,6 +1243,7 @@ export async function POST(request: Request) {
               }
 
               // Save final message and emit an add_message sync event.
+              terminalMessageStatus = "ok"
               persistAssistantProgress({
                 force: true,
                 thinkingDuration: meta.thinkingDuration,
@@ -1312,16 +1319,36 @@ export async function POST(request: Request) {
                 interactionId: meta.sessionId,
                 attachments: accAttachments,
               })
+
+              const completedConversation = getConversation(conversationId)
+              void sendChatCompletionPushNotification({
+                conversationId,
+                title: completedConversation?.title ?? "Chat finished",
+                body: accContent,
+              }).catch((error) => {
+                console.warn(
+                  "Failed to send chat completion notification",
+                  error
+                )
+              })
             },
             onError(error) {
+              if (terminalStreamError) return
+              terminalStreamError = error
+              const aborted = serverAbortController.signal.aborted
+              terminalMessageStatus = aborted ? "aborted" : "error"
               console.error("Provider stream error:", error)
-              logRequestFail(messageId, error, Date.now(), accContent || null)
+              if (aborted) {
+                logRequestAbort(messageId, Date.now(), accContent || null)
+              } else {
+                logRequestFail(messageId, error, Date.now(), accContent || null)
+              }
               persistAssistantProgress({
                 force: true,
                 thinkingDuration: 0,
-                status: "error",
+                status: terminalMessageStatus,
               })
-              send({ type: "error", error })
+              send(aborted ? { type: "stopped", messageId } : { type: "error", error })
             },
           }
         )

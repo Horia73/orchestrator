@@ -63,6 +63,11 @@ export const ScheduledActionSchema = z.discriminatedUnion('kind', [
         agentId: z.string().min(1).max(64).default('orchestrator'),
         /** Instruction sent to the agent at fire time. */
         prompt: z.string().min(1).max(8000),
+        /** Opt-in: at fire time the run is told it MAY self-pace via reschedule_task
+         *  (tier widen on quiet runs, tighten on activity). Off by default: a fixed
+         *  cadence the user explicitly chose ("daily at 8am") must NOT be retuned by
+         *  the model. Only set true when the user accepted flexible/adaptive timing. */
+        adaptive: z.boolean().optional().default(false),
     }),
     z.object({
         kind: z.literal('tool'),
@@ -75,8 +80,10 @@ export const ScheduledActionSchema = z.discriminatedUnion('kind', [
     }),
     z.object({
         kind: z.literal('monitor'),
-        /** Which consolidated monitor this heartbeat drives. System-managed. */
-        monitorKind: z.literal('markets'),
+        /** Which consolidated monitor this heartbeat drives. System-managed.
+         *  - `markets` → Watchlist's market-data tick (lib/monitoring/markets-heartbeat.ts)
+         *  - `smart`   → Smart Monitor cheap tick across all watches (lib/monitoring/smart-monitor.ts) */
+        monitorKind: z.enum(['markets', 'smart']),
     }),
 ])
 export type ScheduledAction = z.infer<typeof ScheduledActionSchema>

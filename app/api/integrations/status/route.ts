@@ -29,5 +29,17 @@ export async function GET(request: Request) {
     // Warm the prompt-side snapshot so the next agent turn reflects reality
     // without paying for its own async status round-trip.
     recordIntegrationStatuses({ gmail, googleCalendar, googleDrive, whatsapp, homeAssistant })
+
+    // Smart Monitor integration-install offer check — fire-and-forget so we
+    // don't extend the status response time. Idempotent via a persisted
+    // per-integration fingerprint, so polling does not duplicate offers.
+    // Hooking here (vs. the individual connect endpoints) cleanly covers
+    // WhatsApp's async "ready" event: the UI polls /api/integrations/status
+    // while a connection is in progress, and the FIRST poll after ready
+    // posts the offer.
+    void import('@/lib/monitoring/smart-monitor-offer').then((mod) =>
+        mod.maybeOfferSmartMonitor({ gmail, homeAssistant, whatsapp })
+    ).catch((err) => console.warn('[smart-monitor-offer] background check failed', err))
+
     return NextResponse.json({ gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, runtime })
 }

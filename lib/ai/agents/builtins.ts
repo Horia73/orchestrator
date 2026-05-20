@@ -205,8 +205,26 @@ export const SCHEDULING_TOOL_IDS: string[] = [
 
 export const WATCHLIST_TOOL_IDS: string[] = [
     'WatchlistAddFinancialInstrument',
+    'WatchlistAddProduct',
     'WatchlistRemoveItem',
     'WatchlistListItems',
+    'WatchlistRecordProductPrice',
+]
+
+// Smart Monitor — watch CRUD + capability discovery + the learning-loop
+// feedback channel called at the end of every consolidated wake.
+//
+// The wake brief restricts the orchestrator to notify_inbox +
+// monitor_wake_feedback only — the monitor_watch_* lifecycle tools are for
+// the user-conversation context (set up, adjust, inspect), not for wakes.
+export const MONITORING_TOOL_IDS: string[] = [
+    'monitor_describe_sources',
+    'monitor_watch_list',
+    'monitor_watch_get',
+    'monitor_watch_add',
+    'monitor_watch_update',
+    'monitor_watch_remove',
+    'monitor_wake_feedback',
 ]
 
 export const DELEGATING_WORKSPACE_TOOLS: string[] = [

@@ -395,6 +395,18 @@ try {
   /* best-effort summary backfill */
 }
 
+try {
+  db.exec(`
+    UPDATE conversations
+    SET readAt = lastMessageAt
+    WHERE (origin IS NULL OR origin = 'user')
+      AND readAt IS NULL
+      AND lastMessageAt IS NOT NULL
+  `)
+} catch {
+  /* best-effort read-state backfill */
+}
+
 // Migrations: input/output text for log detail panel.
 try {
   db.exec(`ALTER TABLE request_logs ADD COLUMN inputText TEXT`)
@@ -452,6 +464,7 @@ interface ConversationRow {
   messageCount: number
   lastMessagePreview: string | null
   lastMessageAt: number | null
+  readAt: number | null
 }
 
 interface ConversationSummaryRow extends ConversationRow {
@@ -583,6 +596,7 @@ export function getConversationsWithMessages(): Conversation[] {
     updatedAt: row.updatedAt,
     messages: messagesByConv.get(row.id) || [],
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
+    readAt: row.readAt ?? null,
   }))
 }
 
@@ -616,7 +630,8 @@ export function getConversationSummaries(search?: string): Conversation[] {
           c.contextUsage,
           c.messageCount,
           c.lastMessagePreview,
-          c.lastMessageAt
+          c.lastMessageAt,
+          c.readAt
           ${
             like
               ? `, (
@@ -646,6 +661,7 @@ export function getConversationSummaries(search?: string): Conversation[] {
     messageCount: row.messageCount,
     lastMessagePreview: compactPreview(row.lastMessagePreview),
     lastMessageAt: row.lastMessageAt ?? undefined,
+    readAt: row.readAt ?? null,
     searchMatchPreview: compactPreview(row.searchMatchContent),
   }))
 }
@@ -670,6 +686,7 @@ export function getConversation(id: string): Conversation | null {
     updatedAt: row.updatedAt,
     messages,
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
+    readAt: row.readAt ?? null,
   }
 }
 
@@ -728,16 +745,22 @@ export function createConversation(conversation: Conversation) {
       !latest || message.timestamp > latest.timestamp ? message : latest,
     null
   )
+  const now = Date.now()
+  const initialReadAt =
+    conversation.readAt ??
+    latestMessage?.timestamp ??
+    conversation.createdAt ??
+    now
 
   // Idempotent: the chat route and POST /api/conversations both call this in
   // the same flight, and SQLite UNIQUE conflicts would otherwise abort one of
   // them. INSERT OR IGNORE preserves whichever winner inserted first.
   const insertConv = db.prepare(`
         INSERT OR IGNORE INTO conversations (
-          id, title, createdAt, updatedAt, messageCount, lastMessagePreview, lastMessageAt
+          id, title, createdAt, updatedAt, messageCount, lastMessagePreview, lastMessageAt, readAt
         )
         VALUES (
-          @id, @title, @createdAt, @updatedAt, @messageCount, @lastMessagePreview, @lastMessageAt
+          @id, @title, @createdAt, @updatedAt, @messageCount, @lastMessagePreview, @lastMessageAt, @readAt
         )
     `)
 
@@ -777,10 +800,11 @@ export function createConversation(conversation: Conversation) {
       id: conv.id,
       title: conv.title,
       createdAt: conv.createdAt,
-      updatedAt: Date.now(),
+      updatedAt: now,
       messageCount: conv.messages.length,
       lastMessagePreview: compactPreview(latestMessage?.content),
       lastMessageAt: latestMessage?.timestamp ?? null,
+      readAt: initialReadAt,
     })
 
     for (const msg of conv.messages) {
@@ -805,7 +829,7 @@ export function createConversation(conversation: Conversation) {
 
     refreshConversationSummary.run({
       id: conv.id,
-      updatedAt: Date.now(),
+      updatedAt: now,
     })
 
     return convResult.changes > 0
@@ -822,10 +846,77 @@ export function createConversation(conversation: Conversation) {
         id: conversation.id,
         title: conversation.title,
         createdAt: conversation.createdAt,
+        updatedAt: now,
         messages: conversation.messages,
+        messageCount: conversation.messages.length,
+        lastMessagePreview: compactPreview(latestMessage?.content),
+        lastMessageAt: latestMessage?.timestamp ?? undefined,
+        readAt: initialReadAt,
       },
     })
   }
+}
+
+export function markConversationRead(
+  id: string,
+  readAt = Date.now()
+): number | null {
+  const current = db
+    .prepare(
+      "SELECT lastMessageAt FROM conversations WHERE id = ? AND (origin IS NULL OR origin = 'user')"
+    )
+    .get(id) as { lastMessageAt: number | null } | undefined
+  const targetReadAt = Math.max(readAt, current?.lastMessageAt ?? readAt)
+
+  db.prepare(
+    `
+        UPDATE conversations
+        SET readAt = CASE
+          WHEN readAt IS NULL OR readAt < @readAt THEN @readAt
+          ELSE readAt
+        END
+        WHERE id = @id
+          AND (origin IS NULL OR origin = 'user')
+    `
+  ).run({ id, readAt: targetReadAt })
+
+  const row = db
+    .prepare(
+      "SELECT readAt FROM conversations WHERE id = ? AND (origin IS NULL OR origin = 'user')"
+    )
+    .get(id) as { readAt: number | null } | undefined
+  const nextReadAt = row?.readAt ?? null
+
+  emitChatEvent({
+    type: "conversation_read_state",
+    payload: {
+      conversationId: id,
+      readAt: nextReadAt,
+    },
+  })
+
+  return nextReadAt
+}
+
+export function markConversationUnread(id: string): number {
+  db.prepare(
+    `
+        UPDATE conversations
+        SET readAt = 0
+        WHERE id = @id
+          AND (origin IS NULL OR origin = 'user')
+    `
+  ).run({ id })
+
+  emitChatEvent({
+    type: "conversation_read_state",
+    payload: {
+      conversationId: id,
+      readAt: 0,
+    },
+  })
+
+  return 0
 }
 
 export function addMessage(conversationId: string, message: Message) {
@@ -852,6 +943,11 @@ export function addMessage(conversationId: string, message: Message) {
         SET
           updatedAt = @updatedAt,
           messageCount = messageCount + @messageDelta,
+          readAt = CASE
+            WHEN @messageRole = 'user' AND (readAt IS NULL OR readAt < @messageTimestamp)
+              THEN @messageTimestamp
+            ELSE readAt
+          END,
           lastMessagePreview = CASE
             WHEN lastMessageAt IS NULL OR lastMessageAt <= @messageTimestamp
               THEN @lastMessagePreview
@@ -888,6 +984,7 @@ export function addMessage(conversationId: string, message: Message) {
       id: convId,
       updatedAt: Date.now(),
       messageDelta: existingMessage ? 0 : 1,
+      messageRole: msg.role,
       lastMessagePreview: compactPreview(msg.content),
       messageTimestamp: msg.timestamp,
     })
@@ -902,6 +999,19 @@ export function addMessage(conversationId: string, message: Message) {
       message,
     },
   })
+
+  if (message.role === "user") {
+    const row = db
+      .prepare("SELECT readAt FROM conversations WHERE id = ?")
+      .get(conversationId) as { readAt: number | null } | undefined
+    emitChatEvent({
+      type: "conversation_read_state",
+      payload: {
+        conversationId,
+        readAt: row?.readAt ?? message.timestamp,
+      },
+    })
+  }
 }
 
 export function updateInteractionId(
@@ -1526,6 +1636,9 @@ function cleanupOrphanUploads(): { scanned: number; removed: number } {
   let scanned = 0
   let removed = 0
   try {
+    // Production builds use an isolated temporary DB, so the real uploads
+    // directory cannot be reconciled safely from this process.
+    if (isProductionBuild) return { scanned: 0, removed: 0 }
     if (!fs.existsSync(UPLOADS_DIR)) return { scanned: 0, removed: 0 }
 
     const rows = db

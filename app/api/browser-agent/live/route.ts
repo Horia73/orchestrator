@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import type { BrowserLiveViewClientState } from '@/lib/ai/providers/browser-session-manager'
+import { getEnvValue } from '@/lib/config'
 
 export async function GET(request: Request) {
     const guard = guardSensitiveRequest(request)
@@ -90,7 +91,7 @@ function toClientState(request: Request, state: BrowserLiveViewClientState) {
 function buildWsUrl(request: Request, state: BrowserLiveViewClientState): string | null {
     if (!state.ready || !state.wsToken || !state.wsPort) return null
 
-    const publicUrl = process.env.BROWSER_AGENT_VNC_WS_PUBLIC_URL?.trim()
+    const publicUrl = getEnvValue('BROWSER_AGENT_VNC_WS_PUBLIC_URL')?.trim()
     if (publicUrl) {
         return publicUrl.includes('{token}')
             ? publicUrl.replaceAll('{token}', encodeURIComponent(state.wsToken))

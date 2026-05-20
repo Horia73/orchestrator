@@ -21,6 +21,7 @@
 export interface MonitoredInstrument {
   id: string
   symbol: string
+  providerSymbol: string
   name: string
   assetClass: "stock" | "etf" | "crypto" | "forex" | "index" | "fund" | "other"
   /** Notable %-move threshold; null → asset-class default. */
@@ -230,7 +231,7 @@ export async function runMarketsCheapPass(args: {
     monitoredCount++
     adapter.appendObservation({
       instrumentId: inst.id,
-      providerSymbol: inst.symbol,
+      providerSymbol: inst.providerSymbol,
       price: inst.price,
       changePercent: inst.changePercent,
       ts: args.now,
@@ -242,7 +243,8 @@ export async function runMarketsCheapPass(args: {
     if (inst.price == null) continue
     if (!open) continue
 
-    const st = symbols[inst.symbol] ?? {}
+    const stateKey = inst.id
+    const st = symbols[stateKey] ?? {}
     if (st.session !== session) {
       st.lastNotifiedPct = undefined
       st.lastNotifiedAt = undefined
@@ -269,7 +271,7 @@ export async function runMarketsCheapPass(args: {
         st.lastNotifiedAt = args.now
       }
     }
-    symbols[inst.symbol] = st
+    symbols[stateKey] = st
   }
 
   for (const alert of snap.alerts) {

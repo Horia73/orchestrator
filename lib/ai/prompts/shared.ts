@@ -3,7 +3,7 @@ import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { AGENT_WORKSPACE_DIR, WORKSPACE_DIR } from '@/lib/config'
+import { AGENT_WORKSPACE_DIR, getEnvValue, WORKSPACE_DIR } from '@/lib/config'
 import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates } from '@/lib/settings/workspace-files'
 import { buildIntegrationRunbooksContext } from '@/lib/integrations/runbooks'
 import { buildIntegrationsContextBlock } from '@/lib/integrations/exposure'
@@ -357,9 +357,9 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`local_time: ${nowDate.toLocaleString('en-CA', { timeZone: tz, hour12: false })} (resolve the user's relative dates/times against this)`)
     const appOrigin = cleanOrigin(
         ctx.extra?.appOrigin
-        ?? process.env.ORCHESTRATOR_PUBLIC_URL
-        ?? process.env.ORCHESTRATOR_APP_URL
-        ?? process.env.NEXT_PUBLIC_APP_URL
+        ?? getEnvValue('ORCHESTRATOR_PUBLIC_URL')
+        ?? getEnvValue('ORCHESTRATOR_APP_URL')
+        ?? getEnvValue('NEXT_PUBLIC_APP_URL')
         ?? (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL}` : '')
     )
     if (appOrigin) {

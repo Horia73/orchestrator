@@ -22,6 +22,7 @@ type WatchlistItemRow = {
   exchange: string | null
   currency: string | null
   assetClass: WatchlistAssetClass
+  imageUrl: string | null
   movePercent: number | null
   monitorEnabled: number | null
   sortOrder: number
@@ -141,6 +142,11 @@ try {
   db.exec(
     `ALTER TABLE watchlist_items ADD COLUMN kind TEXT NOT NULL DEFAULT 'financial'`
   )
+} catch {
+  /* exists */
+}
+try {
+  db.exec(`ALTER TABLE watchlist_items ADD COLUMN imageUrl TEXT`)
 } catch {
   /* exists */
 }
@@ -366,6 +372,7 @@ function itemFromRow(row: WatchlistItemRow): WatchlistItem {
     exchange: row.exchange,
     currency: row.currency,
     assetClass: row.assetClass,
+    imageUrl: row.imageUrl ?? null,
     movePercent: row.movePercent ?? null,
     monitorEnabled: row.monitorEnabled === 1,
     sortOrder: row.sortOrder,
@@ -458,6 +465,8 @@ export function addWatchlistItem(input: WatchlistItemInput): {
       ? normalizeProductSource(input, providerSymbol)
       : normalizeExchange(input.exchange)
   const currency = cleanOptional(input.currency)?.toUpperCase() ?? null
+  const imageUrl =
+    kind === "product" ? cleanOptional(input.imageUrl ?? null) : null
   const createdAt = now()
   const maxSort = db
     .prepare("SELECT MAX(sortOrder) AS maxSort FROM watchlist_items")
@@ -490,6 +499,7 @@ export function addWatchlistItem(input: WatchlistItemInput): {
     exchange,
     currency,
     assetClass,
+    imageUrl,
     movePercent:
       typeof input.movePercent === "number" &&
       Number.isFinite(input.movePercent)
@@ -506,10 +516,10 @@ export function addWatchlistItem(input: WatchlistItemInput): {
     `
         INSERT INTO watchlist_items (
             id, kind, symbol, providerSymbol, tradingViewSymbol, name, exchange, currency,
-            assetClass, movePercent, monitorEnabled, sortOrder, notes, createdAt, updatedAt
+            assetClass, imageUrl, movePercent, monitorEnabled, sortOrder, notes, createdAt, updatedAt
         ) VALUES (
             @id, @kind, @symbol, @providerSymbol, @tradingViewSymbol, @name, @exchange, @currency,
-            @assetClass, @movePercent, @monitorEnabled, @sortOrder, @notes, @createdAt, @updatedAt
+            @assetClass, @imageUrl, @movePercent, @monitorEnabled, @sortOrder, @notes, @createdAt, @updatedAt
         )
     `
   ).run({ ...item, monitorEnabled: item.monitorEnabled ? 1 : 0 })

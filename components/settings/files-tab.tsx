@@ -4,11 +4,14 @@ import * as React from "react"
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronDown,
   ChevronLeft,
   Eye,
   EyeOff,
   FileJson,
   FileText,
+  Folder,
+  FolderOpen,
   KeyRound,
   Loader2,
   Lock,
@@ -37,6 +40,8 @@ interface WorkspaceFileSummary {
   kind: FileKind
   category: FileCategory
   surface: FileSurface
+  dynamic?: "daily"
+  dailyDate?: string
   description: string
   readOnly?: boolean
   exists: boolean
@@ -46,6 +51,7 @@ interface WorkspaceFileSummary {
 
 interface WorkspaceFilePayload extends WorkspaceFileSummary {
   content: string
+  contentRedacted?: boolean
 }
 
 type SaveState =
@@ -85,7 +91,8 @@ const ENV_PRESETS = [
   },
 ] as const
 
-const CATEGORY_ORDER: FileCategory[] = ["onboarding", "knowledge", "behavior", "integrations", "system"]
+const DAILY_MEMORY_ID_PREFIX = "memory-day:"
+const CATEGORY_ORDER: FileCategory[] = ["onboarding", "knowledge", "behavior", "system"]
 
 const CATEGORY_META: Record<FileCategory, { label: string; badge: string }> = {
   knowledge: { label: "Knowledge & memory", badge: "Memory" },
@@ -112,6 +119,7 @@ export function FilesTab() {
   const [loadingFile, setLoadingFile] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [saveState, setSaveState] = React.useState<SaveState>({ kind: "idle" })
+  const [dailyMemoryOpen, setDailyMemoryOpen] = React.useState(true)
   // On narrow viewports the list and editor share one column; this toggles
   // which one is visible (drill-in). Both panes always show from `lg` up.
   const [mobileDetailOpen, setMobileDetailOpen] = React.useState(false)
@@ -195,7 +203,7 @@ export function FilesTab() {
       })
       const json = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(json.error || `Save failed (${res.status})`)
-      const savedFile = normalizeLoadedFile({ ...(json.file as WorkspaceFilePayload), content: contentToSave })
+      const savedFile = normalizeLoadedFile(json.file as WorkspaceFilePayload)
       setSelectedFile(savedFile)
       setContent(savedFile.content)
       setFiles(prev => prev.map(item => item.id === savedFile.id ? toSummary(savedFile) : item))
@@ -219,13 +227,17 @@ export function FilesTab() {
 
     if (selectedId && flatFiles.some(file => file.id === selectedId)) return
 
-    const rememberedId = readLastSelectedFileId()
-    const nextId = rememberedId && flatFiles.some(file => file.id === rememberedId)
+    const rememberedId = resolveRememberedFileId(readLastSelectedFileId(), flatFiles)
+    const nextId = rememberedId
       ? rememberedId
       : flatFiles[0].id
 
     if (nextId !== selectedId) setSelectedId(nextId)
   }, [flatFiles, selectedId])
+
+  React.useEffect(() => {
+    if (isDailyMemoryFileId(selectedId)) setDailyMemoryOpen(true)
+  }, [selectedId])
 
   React.useEffect(() => {
     if (!selectedId || !flatFiles.some(file => file.id === selectedId)) return
@@ -306,44 +318,42 @@ export function FilesTab() {
           </p>
         </div>
         <div className="min-h-0 flex-1 overflow-y-auto p-2">
-          {groups.map(group => (
-            <div key={group.category} className="mb-1.5 last:mb-0">
-              <p className="px-2.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-foreground/35 first:pt-1">
-                {group.label}
-              </p>
-              {group.files.map(file => {
-                const active = selectedId === file.id
-                return (
-                  <button
-                    key={file.id}
-                    type="button"
-                    onClick={() => void selectFile(file.id)}
-                    aria-current={active ? "true" : undefined}
-                    className={cn(
-                      "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
-                      active
-                        ? "bg-muted text-foreground"
-                        : "text-foreground/70 hover:bg-muted/60 hover:text-foreground"
-                    )}
-                  >
-                    <FileIcon
-                      kind={file.kind}
-                      className={cn("size-4 shrink-0", active ? "text-foreground/70" : "text-foreground/45")}
-                    />
-                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium">{file.label}</span>
-                    {file.readOnly && <Lock className="size-3 shrink-0 text-foreground/35" />}
-                    {!file.exists && (
-                      <span
-                        title="Not created yet"
-                        aria-label="Not created yet"
-                        className="size-1.5 shrink-0 rounded-full bg-amber-500/70"
+          {groups.map(group => {
+            const dailyFiles = group.files.filter(isDailyMemoryFile)
+            let dailyFolderRendered = false
+            return (
+              <div key={group.category} className="mb-1.5 last:mb-0">
+                <p className="px-2.5 pb-1 pt-2 text-[10.5px] font-semibold uppercase tracking-[0.06em] text-foreground/35 first:pt-1">
+                  {group.label}
+                </p>
+                {group.files.map(file => {
+                  if (isDailyMemoryFile(file)) {
+                    if (dailyFolderRendered) return null
+                    dailyFolderRendered = true
+                    return (
+                      <DailyMemoryFolder
+                        key="daily-memory-folder"
+                        files={dailyFiles}
+                        open={dailyMemoryOpen}
+                        selectedId={selectedId}
+                        onToggle={() => setDailyMemoryOpen(open => !open)}
+                        onSelect={id => { void selectFile(id) }}
                       />
-                    )}
-                  </button>
-                )
-              })}
-            </div>
-          ))}
+                    )
+                  }
+
+                  return (
+                    <FileSidebarButton
+                      key={file.id}
+                      file={file}
+                      active={selectedId === file.id}
+                      onSelect={id => { void selectFile(id) }}
+                    />
+                  )
+                })}
+              </div>
+            )
+          })}
         </div>
       </aside>
 
@@ -1275,6 +1285,113 @@ function FileIcon({ kind, className }: { kind: FileKind; className?: string }) {
   return <FileText className={className} />
 }
 
+function FileSidebarButton({
+  file,
+  active,
+  nested = false,
+  onSelect,
+}: {
+  file: WorkspaceFileSummary
+  active: boolean
+  nested?: boolean
+  onSelect: (id: string) => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={() => onSelect(file.id)}
+      aria-current={active ? "true" : undefined}
+      title={file.relativePath}
+      className={cn(
+        "flex w-full items-center gap-2.5 rounded-lg text-left transition-colors",
+        nested ? "px-2 py-1.5" : "px-2.5 py-2",
+        active
+          ? "bg-muted text-foreground"
+          : "text-foreground/70 hover:bg-muted/60 hover:text-foreground"
+      )}
+    >
+      <FileIcon
+        kind={file.kind}
+        className={cn(
+          "size-4 shrink-0",
+          nested && "size-3.5",
+          active ? "text-foreground/70" : "text-foreground/45"
+        )}
+      />
+      <span className={cn("min-w-0 flex-1 truncate font-medium", nested ? "text-[12.5px]" : "text-[13px]")}>
+        {file.label}
+      </span>
+      {file.readOnly && <Lock className="size-3 shrink-0 text-foreground/35" />}
+      {!file.exists && (
+        <span
+          title="Not created yet"
+          aria-label="Not created yet"
+          className="size-1.5 shrink-0 rounded-full bg-amber-500/70"
+        />
+      )}
+    </button>
+  )
+}
+
+function DailyMemoryFolder({
+  files,
+  open,
+  selectedId,
+  onToggle,
+  onSelect,
+}: {
+  files: WorkspaceFileSummary[]
+  open: boolean
+  selectedId: string
+  onToggle: () => void
+  onSelect: (id: string) => void
+}) {
+  const active = files.some(file => file.id === selectedId)
+
+  return (
+    <div>
+      <button
+        type="button"
+        onClick={onToggle}
+        aria-expanded={open}
+        className={cn(
+          "flex w-full items-center gap-2.5 rounded-lg px-2.5 py-2 text-left transition-colors",
+          active
+            ? "bg-muted/80 text-foreground"
+            : "text-foreground/70 hover:bg-muted/60 hover:text-foreground"
+        )}
+      >
+        <ChevronDown
+          className={cn("size-3.5 shrink-0 text-foreground/45 transition-transform", !open && "-rotate-90")}
+        />
+        {open ? (
+          <FolderOpen className={cn("size-4 shrink-0", active ? "text-foreground/70" : "text-foreground/45")} />
+        ) : (
+          <Folder className={cn("size-4 shrink-0", active ? "text-foreground/70" : "text-foreground/45")} />
+        )}
+        <span className="min-w-0 flex-1 truncate text-[13px] font-medium">Daily memory</span>
+        <span className="shrink-0 rounded-md bg-background px-1.5 py-0.5 text-[11px] text-foreground/45">
+          {files.length}
+        </span>
+      </button>
+
+      {open && (
+        <div className="ml-4 mt-1 space-y-0.5 border-l border-border/60 pl-2">
+          {files.map(file => (
+            <FileSidebarButton
+              key={file.id}
+              file={file}
+              active={file.id === selectedId}
+              nested
+              onSelect={onSelect}
+            />
+          ))}
+        </div>
+      )}
+    </div>
+  )
+}
+
 function FileRoleBadge({ file }: { file: WorkspaceFileSummary }) {
   const label = file.kind === "env" ? "Secrets" : CATEGORY_META[file.category]?.badge ?? "File"
 
@@ -1297,6 +1414,7 @@ function groupEditorFiles(files: WorkspaceFileSummary[]): FileGroup[] {
   const byCategory = new Map<FileCategory, WorkspaceFileSummary[]>()
   for (const file of files) {
     if (file.surface !== "editor") continue
+    if (file.category === "integrations") continue
     const bucket = byCategory.get(file.category)
     if (bucket) bucket.push(file)
     else byCategory.set(file.category, [file])
@@ -1317,6 +1435,21 @@ function groupEditorFiles(files: WorkspaceFileSummary[]): FileGroup[] {
     ordered.push({ category, label: CATEGORY_META[category]?.label ?? category, files: groupFiles })
   }
   return ordered
+}
+
+function isDailyMemoryFile(file: WorkspaceFileSummary): boolean {
+  return file.dynamic === "daily" || isDailyMemoryFileId(file.id)
+}
+
+function isDailyMemoryFileId(id: string): boolean {
+  return id.startsWith(DAILY_MEMORY_ID_PREFIX)
+}
+
+function resolveRememberedFileId(id: string | null, files: WorkspaceFileSummary[]): string | null {
+  if (!id) return null
+  if (files.some(file => file.id === id)) return id
+  if (id === "memory-day") return files.find(isDailyMemoryFile)?.id ?? null
+  return null
 }
 
 function normalizeLoadedFile(file: WorkspaceFilePayload): WorkspaceFilePayload {

@@ -1,5 +1,6 @@
+import fs from 'fs'
 import path from 'path'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
 
 /**
  * Resolve a caller-supplied path against the agent sandbox.
@@ -100,7 +101,8 @@ function stripLeadingSlash(p: string): string {
 }
 
 function isInside(candidate: string, root: string): boolean {
-    return candidate === root || candidate.startsWith(root + path.sep)
+    const rel = path.relative(root, candidate)
+    return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
 }
 
 export function resolveSandboxed(inputPath: string | undefined): SandboxResult {
@@ -118,7 +120,7 @@ export function resolveSandboxed(inputPath: string | undefined): SandboxResult {
         const candidate = path.resolve(/* turbopackIgnore: true */ raw)
         for (const root of roots) {
             if (isInside(candidate, root.absolute)) {
-                return { ok: true, resolved: candidate }
+                return validateSandboxContainment(candidate, root.absolute, raw, 'agent workspace')
             }
         }
         return {
@@ -130,7 +132,7 @@ export function resolveSandboxed(inputPath: string | undefined): SandboxResult {
     // Plain relative path → workspace
     const candidate = path.resolve(/* turbopackIgnore: true */ workspaceRoot, raw)
     if (isInside(candidate, workspaceRoot)) {
-        return { ok: true, resolved: candidate }
+        return validateSandboxContainment(candidate, workspaceRoot, raw, 'agent workspace')
     }
     return {
         ok: false,
@@ -156,13 +158,72 @@ export function resolveSandboxedWritable(inputPath: string | undefined): Sandbox
         : path.resolve(/* turbopackIgnore: true */ workspaceRoot, stripLeadingSlash(raw))
 
     if (isInside(candidate, workspaceRoot)) {
-        return { ok: true, resolved: candidate }
+        return validateSandboxContainment(candidate, workspaceRoot, raw, 'writable agent workspace')
     }
 
     return {
         ok: false,
         error: `Path is outside the writable agent workspace: ${raw}. Agents can only write under the workspace directory.`,
     }
+}
+
+function validateSandboxContainment(
+    candidate: string,
+    root: string,
+    raw: string,
+    label: 'agent workspace' | 'writable agent workspace',
+): SandboxResult {
+    const rootReal = realpathOrResolved(root)
+    const unsafeSymlink = firstUnsafeSymlink(candidate, root, rootReal)
+    if (unsafeSymlink) {
+        return {
+            ok: false,
+            error: `Path resolves outside the ${label}: ${raw}. Agents can only access files under the workspace directory.`,
+        }
+    }
+
+    const candidateReal = realpathIfExists(candidate)
+    if (candidateReal && !isInside(candidateReal, rootReal)) {
+        return {
+            ok: false,
+            error: `Path resolves outside the ${label}: ${raw}. Agents can only access files under the workspace directory.`,
+        }
+    }
+
+    return { ok: true, resolved: candidate }
+}
+
+function firstUnsafeSymlink(candidate: string, root: string, rootReal: string): string | null {
+    let current = candidate
+    for (;;) {
+        try {
+            const stat = fs.lstatSync(/* turbopackIgnore: true */ current)
+            if (stat.isSymbolicLink()) {
+                const real = realpathIfExists(current)
+                if (!real || !isInside(real, rootReal)) return current
+            }
+        } catch {
+            // Missing path components are fine for future writes; keep walking
+            // upward so existing parent symlinks are still checked.
+        }
+
+        if (current === root) return null
+        const parent = path.dirname(current)
+        if (parent === current) return null
+        current = parent
+    }
+}
+
+function realpathIfExists(candidate: string): string | null {
+    try {
+        return fs.realpathSync.native(/* turbopackIgnore: true */ candidate)
+    } catch {
+        return null
+    }
+}
+
+function realpathOrResolved(candidate: string): string {
+    return realpathIfExists(candidate) ?? path.resolve(/* turbopackIgnore: true */ candidate)
 }
 
 /**

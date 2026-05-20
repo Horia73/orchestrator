@@ -22,6 +22,7 @@ export interface WatchlistItem {
   exchange: string | null
   currency: string | null
   assetClass: WatchlistAssetClass
+  imageUrl: string | null
   movePercent: number | null
   monitorEnabled: boolean
   sortOrder: number
@@ -86,6 +87,7 @@ export interface WatchlistItemInput {
   exchange?: string
   currency?: string
   assetClass?: WatchlistAssetClass
+  imageUrl?: string | null
   providerSymbol?: string
   tradingViewSymbol?: string
   notes?: string

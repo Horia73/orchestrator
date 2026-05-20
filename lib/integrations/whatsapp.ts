@@ -8,7 +8,7 @@ import { PRIVATE_STATE_DIR, getEnvValue } from '@/lib/config'
 
 import type { Chat, Client, Message, MessageSendOptions } from 'whatsapp-web.js'
 
-const AUTH_BASE_DIR = path.join(PRIVATE_STATE_DIR, 'whatsapp-web')
+const AUTH_BASE_DIR = path.join(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, 'whatsapp-web')
 const AUTH_CLIENT_ID = 'orchestrator'
 const QR_TTL_MS = 60_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
@@ -17,7 +17,6 @@ const READY_HEALTH_TIMEOUT_MS = 5_000
 const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
 const AUTO_RESUME_COOLDOWN_MS = 30_000
 const DEFAULT_WHATSAPP_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
-const nodeRequire = createRequire(import.meta.url)
 
 export type WhatsAppPhase =
     | 'idle'
@@ -241,7 +240,7 @@ class WhatsAppManager {
             }
         }
 
-        fs.rmSync(AUTH_BASE_DIR, { recursive: true, force: true })
+        fs.rmSync(/* turbopackIgnore: true */ AUTH_BASE_DIR, { recursive: true, force: true })
         this.state.accountName = null
         this.state.phoneNumber = null
         this.state.lastSyncAt = Date.now()
@@ -1097,7 +1096,8 @@ async function waitForWWebJs(page: WhatsAppPuppeteerPage, timeoutMs: number): Pr
 
 function loadWWebJsUtilities(): (() => void) | null {
     try {
-        const mod = nodeRequire('whatsapp-web.js/src/util/Injected/Utils.js') as {
+        const nodeRequire = createRequire(import.meta.url)
+        const mod = nodeRequire(/* turbopackIgnore: true */ 'whatsapp-web.js/src/util/Injected/Utils.js') as {
             LoadUtils?: () => void
         }
         return typeof mod.LoadUtils === 'function' ? mod.LoadUtils : null
@@ -1163,10 +1163,10 @@ function cleanupStaleBrowserProfileLocks(profilePath: string): number {
 
     let removed = 0
     for (const name of ['SingletonLock', 'SingletonCookie', 'SingletonSocket']) {
-        const filePath = path.join(profilePath, name)
+        const filePath = path.join(/* turbopackIgnore: true */ profilePath, name)
         try {
-            fs.lstatSync(filePath)
-            fs.rmSync(filePath, { force: true, recursive: false })
+            fs.lstatSync(/* turbopackIgnore: true */ filePath)
+            fs.rmSync(/* turbopackIgnore: true */ filePath, { force: true, recursive: false })
             removed += 1
         } catch {
             // If the file disappeared or is not removable, Chromium will report it on launch.
@@ -1201,7 +1201,7 @@ function browserProcessesUsingPath(profilePath: string): Array<{ pid: number; co
 }
 
 function authSessionPath(): string {
-    return path.join(AUTH_BASE_DIR, `session-${AUTH_CLIENT_ID}`)
+    return path.join(/* turbopackIgnore: true */ AUTH_BASE_DIR, `session-${AUTH_CLIENT_ID}`)
 }
 
 function formatClientError(err: unknown): string {
@@ -1210,9 +1210,9 @@ function formatClientError(err: unknown): string {
 }
 
 function ensurePrivateDir(dir: string) {
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true })
+    if (!fs.existsSync(/* turbopackIgnore: true */ dir)) fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true })
     try {
-        fs.chmodSync(dir, 0o700)
+        fs.chmodSync(/* turbopackIgnore: true */ dir, 0o700)
     } catch {
         // Some filesystems ignore chmod; the directory remains in private app state.
     }
@@ -1220,8 +1220,8 @@ function ensurePrivateDir(dir: string) {
 
 function hasStoredSession(): boolean {
     try {
-        if (!fs.existsSync(AUTH_BASE_DIR)) return false
-        const entries = fs.readdirSync(AUTH_BASE_DIR)
+        if (!fs.existsSync(/* turbopackIgnore: true */ AUTH_BASE_DIR)) return false
+        const entries = fs.readdirSync(/* turbopackIgnore: true */ AUTH_BASE_DIR)
         return entries.some(entry => entry.includes(AUTH_CLIENT_ID) || entry.includes('session'))
     } catch {
         return false
@@ -1252,13 +1252,13 @@ function resolveWhatsAppUserAgent(): string {
 }
 
 function puppeteerCacheExecutables(): string[] {
-    const cacheDir = path.join(os.homedir(), '.cache', 'puppeteer', 'chrome-headless-shell')
+    const cacheDir = path.join(/* turbopackIgnore: true */ os.homedir(), '.cache', 'puppeteer', 'chrome-headless-shell')
     try {
-        return fs.readdirSync(cacheDir)
+        return fs.readdirSync(/* turbopackIgnore: true */ cacheDir)
             .map(name => ({
                 name,
-                fullPath: path.join(cacheDir, name, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell'),
-                mtimeMs: statMtime(path.join(cacheDir, name)),
+                fullPath: path.join(/* turbopackIgnore: true */ cacheDir, name, 'chrome-headless-shell-mac-arm64', 'chrome-headless-shell'),
+                mtimeMs: statMtime(path.join(/* turbopackIgnore: true */ cacheDir, name)),
             }))
             .sort((a, b) => b.mtimeMs - a.mtimeMs)
             .map(item => item.fullPath)
@@ -1269,7 +1269,7 @@ function puppeteerCacheExecutables(): string[] {
 
 function statMtime(filePath: string): number {
     try {
-        return fs.statSync(filePath).mtimeMs
+        return fs.statSync(/* turbopackIgnore: true */ filePath).mtimeMs
     } catch {
         return 0
     }
@@ -1277,7 +1277,7 @@ function statMtime(filePath: string): number {
 
 function fileExists(filePath: string): boolean {
     try {
-        fs.accessSync(filePath, fs.constants.X_OK)
+        fs.accessSync(/* turbopackIgnore: true */ filePath, fs.constants.X_OK)
         return true
     } catch {
         return false

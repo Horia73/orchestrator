@@ -13,6 +13,7 @@ import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ThinkingLevel } from '@/lib/config'
 import { latestUserPromptWithPortableHistory } from './history'
+import { BROWSER_CAPABILITIES } from './browser-capabilities'
 
 const TASK_POLL_INTERVAL_MS = 500
 const TASK_TIMEOUT_MS = 10 * 60 * 1000
@@ -23,15 +24,7 @@ type BrowserAdvancedThinkingLevel = 'low' | 'medium' | 'high'
 export class BrowserProvider implements AIProvider {
     readonly id = 'browser'
     readonly name = 'Browser agent'
-    readonly capabilities: ProviderCapabilities = {
-        kinds: ['text'],
-        nativeBuiltins: [],
-        statefulMode: true,
-        promptCaching: 'none',
-        attachmentMode: 'none',
-        thinkingSupport: false,
-        requiresApiKey: false,
-    }
+    readonly capabilities: ProviderCapabilities = BROWSER_CAPABILITIES
 
     constructor(apiKey: string) {
         void apiKey

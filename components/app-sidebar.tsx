@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Inbox as InboxIcon,
   LineChart,
+  Telescope,
   LoaderCircle,
   Plus,
   Search,
@@ -156,9 +157,10 @@ export function AppSidebar() {
   const isOnSettings = pathname?.startsWith("/settings") ?? false
   const isOnScheduling = pathname?.startsWith("/scheduling") ?? false
   const isOnWatchlist = pathname?.startsWith("/watchlist") ?? false
+  const isOnMonitor = pathname?.startsWith("/monitor") ?? false
   const isOnInbox = pathname?.startsWith("/inbox") ?? false
   const shouldConstrainTabletNav =
-    isOnSettings || isOnScheduling || isOnWatchlist || isOnInbox
+    isOnSettings || isOnScheduling || isOnWatchlist || isOnMonitor || isOnInbox
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
   const inboxUnread = useInboxUnread()
   const [searchActive, setSearchActive] = React.useState(false)
@@ -450,6 +452,19 @@ export function AppSidebar() {
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
+                  tooltip="Smart monitor"
+                  isActive={isOnMonitor}
+                  className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+                >
+                  <Link href="/monitor" onClick={closeMobileSidebar}>
+                    <Telescope className="size-4" />
+                    <span>Smart monitor</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
                   tooltip="Inbox"
                   isActive={isOnInbox}
                   className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
@@ -501,6 +516,7 @@ export function AppSidebar() {
                         !isOnSettings &&
                         !isOnScheduling &&
                         !isOnWatchlist &&
+                        !isOnMonitor &&
                         !isOnInbox
                       return (
                         <SidebarMenuItem key={conv.id}>

@@ -1,51 +1,18 @@
 import fs from 'fs'
 import path from 'path'
 import { spawn as spawnProcess } from 'child_process'
-import { spawn as ptySpawn } from 'node-pty'
 
-import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
-import { AGENT_WORKSPACE_DIR, WORKSPACE_DIR } from '@/lib/config'
+import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
+import { AGENT_WORKSPACE_DIR, WORKSPACE_DIR } from '@/lib/runtime-paths'
 import { commandMentionsProtectedAgentPath, displayPath, resolveSandboxedWritable } from './sandbox'
 import { booleanArg, clamp, ensureParentDir, numberArg, stringArg, truncateText } from './helpers'
+export { bashTool } from './bash-def'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
 const MAX_STREAM_CHARS = 120_000
 const BACKGROUND_DIR = path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, '.background-jobs')
 const PROVIDER_PRIVATE_DISCOVERY_NAMES = ['.claude', '.claude-memory', 'CLAUDE.md']
-
-export const bashTool: ToolDef = {
-    id: 'Bash',
-    name: 'Bash',
-    description: 'Runs a shell command in the writable agent workspace. Use for build/test/search commands. Foreground commands are timed out and output-limited; background commands return a log path.',
-    input_schema: {
-        type: 'object',
-        properties: {
-            command: {
-                type: 'string',
-                description: 'Shell command to run.',
-            },
-            description: {
-                type: 'string',
-                description: 'Short human-readable purpose for the command.',
-            },
-            timeout: {
-                type: 'integer',
-                description: 'Timeout in milliseconds. Defaults to 120000 and is capped at 600000.',
-            },
-            run_in_background: {
-                type: 'boolean',
-                description: 'When true, start the command and return immediately with a log path.',
-            },
-            cwd: {
-                type: 'string',
-                description: 'Optional working directory inside the writable workspace. Defaults to the workspace root.',
-            },
-        },
-        required: ['command'],
-    },
-    tags: ['execute', 'shell'],
-}
 
 export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const command = stringArg(args, ['command'])
@@ -123,7 +90,9 @@ function startBackgroundCommand(command: string, cwd: string, timeoutMs: number)
     }
 }
 
-function runForegroundCommand(command: string, cwd: string, timeoutMs: number, ctx?: ToolExecutionContext): Promise<ToolResult> {
+async function runForegroundCommand(command: string, cwd: string, timeoutMs: number, ctx?: ToolExecutionContext): Promise<ToolResult> {
+    const { spawn: ptySpawn } = await import('node' + '-pty') as typeof import('node-pty')
+
     return new Promise<ToolResult>(resolve => {
         const startedAt = Date.now()
         let output = ''

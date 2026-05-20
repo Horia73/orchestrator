@@ -30,6 +30,7 @@ type ItemWithQuote = {
   id: string
   kind: string
   symbol: string
+  providerSymbol: string
   name: string
   assetClass: MonitoredInstrument["assetClass"]
   quote: Quoteish
@@ -65,6 +66,7 @@ const adapter: MarketsAdapter = {
         return {
           id: it.id,
           symbol: it.symbol,
+          providerSymbol: it.providerSymbol,
           name: it.name,
           assetClass: it.assetClass,
           movePercent: c?.movePercent ?? null,

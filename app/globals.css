@@ -151,6 +151,13 @@
   }
 }
 
+@media (max-width: 767px) {
+  html,
+  body {
+    overscroll-behavior-x: none;
+  }
+}
+
 /* Tailwind v4 preflight drops the browser default `cursor: pointer` on
    buttons. Restore it so every interactive button shows the hand cursor
    on hover without us having to thread `cursor-pointer` through hundreds

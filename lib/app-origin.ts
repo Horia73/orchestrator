@@ -1,3 +1,5 @@
+import { getEnvValue } from '@/lib/config'
+
 const DEFAULT_APP_ORIGIN = 'http://localhost:3000'
 const DEFAULT_OAUTH_LOOPBACK_ORIGIN = 'http://localhost:3000'
 
@@ -8,12 +10,12 @@ const PUBLIC_ORIGIN_ENV_KEYS = [
 ]
 
 export function resolveRequestOrigin(request: Request): string {
-    return resolveOriginPreferLoopback(originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url))
+    return resolveRequestAwareOrigin(originFromRequestHeaders(request) ?? safeRequestUrlOrigin(request.url))
 }
 
 export function resolveAppOrigin(candidate?: string | null): string {
     for (const key of PUBLIC_ORIGIN_ENV_KEYS) {
-        const origin = normalizeOrigin(process.env[key], false)
+        const origin = normalizeOrigin(getEnvValue(key), false)
         if (origin) return origin
     }
 
@@ -114,6 +116,29 @@ function resolveOriginPreferLoopback(candidate?: string | null): string {
     return resolveAppOrigin(candidate)
 }
 
+function resolveRequestAwareOrigin(candidate?: string | null): string {
+    const origin = normalizeOrigin(candidate, true)
+    if (origin && isLoopbackOrigin(origin)) return origin
+
+    const configured = configuredPublicOrigin()
+    if (origin && configured) {
+        if (isPublicHttpsOrigin(origin) && !isPublicHttpsOrigin(configured)) {
+            return origin
+        }
+        return configured
+    }
+
+    return origin ?? configured ?? DEFAULT_APP_ORIGIN
+}
+
+function configuredPublicOrigin(): string | null {
+    for (const key of PUBLIC_ORIGIN_ENV_KEYS) {
+        const origin = normalizeOrigin(getEnvValue(key), false)
+        if (origin) return origin
+    }
+    return null
+}
+
 function isLoopbackOrigin(origin: string): boolean {
     try {
         return isLoopbackHost(new URL(origin).hostname)
@@ -135,6 +160,15 @@ function loopbackOriginFor(origin: string): string {
 function isOAuthCompatibleOrigin(origin: string): boolean {
     try {
         return isOAuthCompatibleUrl(new URL(origin))
+    } catch {
+        return false
+    }
+}
+
+function isPublicHttpsOrigin(origin: string): boolean {
+    try {
+        const url = new URL(origin)
+        return url.protocol === 'https:' && !isLoopbackHost(url.hostname) && isPublicDomainLike(normalizeHostname(url.hostname))
     } catch {
         return false
     }

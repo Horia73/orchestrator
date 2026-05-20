@@ -1,4 +1,5 @@
 import type { WatchlistAssetClass, WatchlistCandle, WatchlistQuote, WatchlistSearchResult } from '../schema'
+import { getEnvValue } from '@/lib/config'
 import { buildTradingViewSymbol, normalizeProviderSymbol } from '../store'
 
 const BASE_URL = 'https://api.twelvedata.com'
@@ -8,7 +9,7 @@ const TIMEOUT_MS = 12_000
 type JsonObject = Record<string, unknown>
 
 function apiKey(): string {
-    return process.env.TWELVE_DATA_API_KEY?.trim() || process.env.MARKET_DATA_API_KEY?.trim() || ''
+    return getEnvValue('TWELVE_DATA_API_KEY')?.trim() || getEnvValue('MARKET_DATA_API_KEY')?.trim() || ''
 }
 
 export function getTwelveDataStatus() {

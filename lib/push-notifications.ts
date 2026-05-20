@@ -4,7 +4,7 @@ import path from "path"
 import webpush from "web-push"
 
 import db from "@/lib/db"
-import { PRIVATE_STATE_DIR } from "@/lib/config"
+import { getEnvValue, PRIVATE_STATE_DIR } from "@/lib/config"
 
 interface VapidKeys {
   publicKey: string
@@ -26,9 +26,9 @@ let vapidConfigured = false
 
 function getVapidSubject(): string {
   const configured =
-    process.env.WEB_PUSH_SUBJECT?.trim() ||
-    process.env.ORCHESTRATOR_APP_URL?.trim() ||
-    process.env.NEXT_PUBLIC_APP_URL?.trim()
+    getEnvValue("WEB_PUSH_SUBJECT")?.trim() ||
+    getEnvValue("ORCHESTRATOR_APP_URL")?.trim() ||
+    getEnvValue("NEXT_PUBLIC_APP_URL")?.trim()
 
   if (!configured) return "mailto:orchestrator@example.com"
   if (
@@ -44,8 +44,8 @@ function getVapidSubject(): string {
 function readOrCreateVapidKeys(): VapidKeys {
   if (cachedVapidKeys) return cachedVapidKeys
 
-  const envPublicKey = process.env.WEB_PUSH_PUBLIC_KEY?.trim()
-  const envPrivateKey = process.env.WEB_PUSH_PRIVATE_KEY?.trim()
+  const envPublicKey = getEnvValue("WEB_PUSH_PUBLIC_KEY")?.trim()
+  const envPrivateKey = getEnvValue("WEB_PUSH_PRIVATE_KEY")?.trim()
   if (envPublicKey && envPrivateKey) {
     cachedVapidKeys = { publicKey: envPublicKey, privateKey: envPrivateKey }
     return cachedVapidKeys
@@ -151,11 +151,10 @@ function compactNotificationBody(value: string): string {
     .slice(0, 220)
 }
 
-export async function sendInboxPushNotification(args: {
-  conversationId: string
-  title: string
-  body: string
-}): Promise<void> {
+async function sendPushPayloadToAll(
+  payload: string,
+  options: { TTL: number; urgency: "very-low" | "low" | "normal" | "high" }
+): Promise<void> {
   const rows = db
     .prepare("SELECT endpoint, subscription FROM push_subscriptions")
     .all() as Array<{
@@ -166,6 +165,31 @@ export async function sendInboxPushNotification(args: {
 
   configureWebPush()
 
+  await Promise.all(
+    rows.map(async (row) => {
+      try {
+        await webpush.sendNotification(
+          JSON.parse(row.subscription),
+          payload,
+          options
+        )
+      } catch (error) {
+        const statusCode = (error as { statusCode?: unknown }).statusCode
+        if (statusCode === 404 || statusCode === 410) {
+          deletePushSubscription(row.endpoint)
+          return
+        }
+        console.warn("Failed to send push notification", error)
+      }
+    })
+  )
+}
+
+export async function sendInboxPushNotification(args: {
+  conversationId: string
+  title: string
+  body: string
+}): Promise<void> {
   const unreadRow = db
     .prepare(
       "SELECT COUNT(*) AS n FROM conversations WHERE origin = 'inbox' AND readAt IS NULL"
@@ -181,21 +205,24 @@ export async function sendInboxPushNotification(args: {
     unread: unreadRow.n,
   })
 
-  await Promise.all(
-    rows.map(async (row) => {
-      try {
-        await webpush.sendNotification(JSON.parse(row.subscription), payload, {
-          TTL: 60 * 60,
-          urgency: "high",
-        })
-      } catch (error) {
-        const statusCode = (error as { statusCode?: unknown }).statusCode
-        if (statusCode === 404 || statusCode === 410) {
-          deletePushSubscription(row.endpoint)
-          return
-        }
-        console.warn("Failed to send push notification", error)
-      }
-    })
-  )
+  await sendPushPayloadToAll(payload, { TTL: 60 * 60, urgency: "high" })
+}
+
+export async function sendChatCompletionPushNotification(args: {
+  conversationId: string
+  title: string
+  body: string
+}): Promise<void> {
+  const payload = JSON.stringify({
+    type: "chat",
+    chatId: args.conversationId,
+    title: args.title || "Chat finished",
+    body:
+      compactNotificationBody(args.body) ||
+      "The assistant finished responding.",
+    url: `/?chat=${encodeURIComponent(args.conversationId)}`,
+    tag: `chat-${args.conversationId}`,
+  })
+
+  await sendPushPayloadToAll(payload, { TTL: 60 * 60, urgency: "normal" })
 }

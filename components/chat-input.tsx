@@ -529,6 +529,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
             if (event.key !== "Enter" || event.shiftKey) return
+            if (isMobileKeyboardViewport()) return
             event.preventDefault()
             handleSubmit()
         },
@@ -600,6 +601,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
                         onChange={(e) => draft.setValue(e.target.value)}
                         onKeyDown={handleKeyDown}
                         onPaste={handlePaste}
+                        enterKeyHint="enter"
                         placeholder={isChat ? "Reply..." : "How can I help you today?"}
                         rows={isChat ? 1 : 2}
                         style={{

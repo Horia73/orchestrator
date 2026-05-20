@@ -112,7 +112,7 @@ function StatusPill({ status }: { status: string }) {
   return (
     <span
       className={cn(
-        "rounded-full px-2 py-0.5 text-[11px] font-medium",
+        "shrink-0 rounded-full px-2 py-0.5 text-[11px] font-medium",
         STATUS_STYLE[status] ?? "bg-muted"
       )}
     >
@@ -374,7 +374,7 @@ function RunListButton({
             {formatRunDuration(run)}
           </span>
         </span>
-        <span className="mt-0.5 block truncate text-[13px] text-foreground/75">
+        <span className="mt-0.5 line-clamp-2 text-[13px] leading-snug break-words text-foreground/75 md:line-clamp-1 md:leading-normal">
           {primary}
         </span>
         <span className="mt-1 flex items-center gap-1.5 text-[11px] text-foreground/40">
@@ -438,7 +438,7 @@ function RunDetailPane({
         )}
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto p-4">
-        <dl className="mb-4 grid grid-cols-2 gap-3 text-[12px] md:grid-cols-4">
+        <dl className="mb-4 grid grid-cols-2 gap-3 text-[12px] 2xl:grid-cols-4">
           <div>
             <dt className="text-foreground/40">Started</dt>
             <dd className="mt-0.5 text-foreground/70">
@@ -464,7 +464,7 @@ function RunDetailPane({
         </dl>
         <div
           className={cn(
-            "rounded-md border p-3 text-[13px] leading-relaxed whitespace-pre-wrap",
+            "rounded-md border p-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap",
             run.status === "error"
               ? "border-red-200 bg-red-50 text-[#802020] dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
               : "border-border/70 bg-background text-foreground/75"
@@ -498,9 +498,9 @@ function PastRuns({ taskId }: { taskId: string }) {
   const isWideRunsViewport = useMediaQuery("(min-width: 768px)")
   const apiFilters = React.useMemo(() => runFiltersToApi(filters), [filters])
   const activeFilters = countActiveRunFilters(filters)
-  const loadLatestRef = React.useRef<((mode: "initial" | "poll") => void) | null>(
-    null
-  )
+  const loadLatestRef = React.useRef<
+    ((mode: "initial" | "poll") => void) | null
+  >(null)
 
   useAppEvent(["task_runs.changed", "scheduled_tasks.changed"], (event) => {
     if ("taskId" in event && event.taskId && event.taskId !== taskId) return
@@ -640,7 +640,12 @@ function PastRuns({ taskId }: { taskId: string }) {
     )
   } else {
     content = (
-      <div className="grid h-[calc(100dvh-260px)] max-h-[680px] min-h-[440px] overflow-hidden rounded-lg border border-border/60 bg-background md:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]">
+      <div
+        className={cn(
+          "overflow-hidden rounded-lg border border-border/60 bg-background md:grid md:h-[calc(100dvh-260px)] md:max-h-[680px] md:min-h-[440px] md:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]",
+          selectedRunId ? "min-h-0" : "h-[calc(100dvh-260px)] min-h-[360px]"
+        )}
+      >
         <div
           className={cn(
             "min-h-0 flex-col border-border/60 md:flex md:border-r",

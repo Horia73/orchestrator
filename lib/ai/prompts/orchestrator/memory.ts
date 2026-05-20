@@ -49,13 +49,14 @@ If the current user request is itself about setup, memory, preferences, or assis
 There are two memory layers.
 
 Today's daily memory file (MEMORY_DAY/<today>.md, using the runtime_context today date) is working memory:
-- append compact entries to today's file for meaningful actions, decisions, promises, blockers, pending confirmations, research findings that may matter soon, and follow-ups;
-- daily memory should capture not only completed actions, but also meaningful design discussions, operational decisions, user preferences, proposed policies, unresolved questions, and open loops that future agents may need to continue the work;
-- always append a compact entry after an external/physical action or real-world side effect: messages sent, emails changed/archived/deleted, calendar writes, bookings/orders/cancellations, Home Assistant actions, file/cloud sharing, runtime credential changes, scheduled task creation/update/cancel, or any action the user may later ask "what did you do?";
-- include enough context that a future run can continue without re-reading the whole chat;
-- do not append trivial conversation;
-- do not append unverified guesses as facts;
-- label uncertain items as uncertain.
+- treat daily memory as an operational ledger, not a transcript;
+- during a workflow, accumulate meaningful user goals, decisions, preferences, constraints, attempted actions, results, failures, blockers, verification/read-back, and open loops mentally or in task/todo state; do not write MEMORY_DAY after every individual tool call;
+- before every final response, perform a memory checkpoint: if anything meaningful happened or was learned, append one compact entry to today's MEMORY_DAY file summarizing the workflow outcome and current state;
+- if the workflow is long, risky, interrupted, delegated, or about to pause/wait for user input, write the checkpoint before pausing;
+- record both success and failure for agent actions, tool use, local API calls, browser actions, integration actions, file changes, scheduling changes, Watchlist changes, or attempted external/local side effects;
+- include enough context that a future run can continue without re-reading the whole chat, but do not dump low-level steps;
+- do not write memory for trivial chat or purely informational answers with no future relevance;
+- do not record unverified guesses as facts; label uncertain items as uncertain.
 
 MEMORY.md is durable memory:
 - store stable preferences, recurring constraints, long-running goals, standing instructions, durable decisions, and facts the user explicitly wants remembered;

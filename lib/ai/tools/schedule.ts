@@ -24,7 +24,7 @@ export const scheduleTaskTool: ToolDef = {
         'Schedule work to run later, once or recurring. Decide the action TYPE now:',
         '"tool" — a deterministic deferred action whose intent is fully known now (e.g. turn a light on/off, call a known integration tool). It runs with NO model at fire time: cheap, instant, reliable. Resolve the exact tool id + args yourself before scheduling.',
         '"agent" — work that needs fresh reasoning, data, or judgement at fire time (e.g. summarize today\'s email, check a status and message me). The agent (default: you, the orchestrator) is woken with the prompt.',
-        'For recurring agent monitors with no user-specified cadence, default to every 15m and include adaptive pacing instructions in the prompt.',
+        'For agent actions you may opt INTO adaptive self-pacing via `action.adaptive: true` — only when the user accepted flexible timing (words like "smart", "be flexible", "when relevant"). A task created with an explicit cadence ("daily at 8am", "every 30 minutes") MUST stay on that cadence: leave `adaptive` false or omit it.',
         'Results land in the user\'s Inbox. One-shot tasks missed while the app was offline are reported as missed, not run late.',
     ].join(' '),
     input_schema: {
@@ -52,6 +52,7 @@ export const scheduleTaskTool: ToolDef = {
                     type: { type: 'string', enum: ['tool', 'agent'], description: '"tool" = deterministic, no model. "agent" = wake a model with a prompt.' },
                     prompt: { type: 'string', description: 'agent: the instruction sent at fire time.' },
                     agent_id: { type: 'string', description: 'agent: optional target agent id. Default "orchestrator".' },
+                    adaptive: { type: 'boolean', description: 'agent: opt-in to model self-pacing via reschedule_task (default false). Only set true when the user explicitly accepted flexible cadence. NEVER set true for a fixed cadence the user requested.' },
                     tool_id: { type: 'string', description: 'tool: exact registry tool id, e.g. "HomeAssistantSetLight".' },
                     tool_args: { type: 'object', description: 'tool: arguments object passed verbatim to the tool.' },
                     summary: { type: 'string', description: 'tool: human one-liner of what it does (shown in UI/Inbox).' },
@@ -169,7 +170,8 @@ async function normalizeAction(action: Record<string, unknown>): Promise<{ actio
         const agentId = typeof action.agent_id === 'string' && action.agent_id.trim() ? action.agent_id.trim() : 'orchestrator'
         const { getAgent } = await import('@/lib/ai/agents/registry')
         if (!getAgent(agentId)) return { error: `Unknown agent_id: ${agentId}` }
-        return { action: { kind: 'agent', agentId, prompt } }
+        const adaptive = action.adaptive === true
+        return { action: { kind: 'agent', agentId, prompt, adaptive } }
     }
     if (type === 'tool') {
         const toolId = typeof action.tool_id === 'string' ? action.tool_id.trim() : ''

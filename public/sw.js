@@ -45,6 +45,24 @@ async function deletePushSubscription(subscription) {
   }).catch(() => undefined)
 }
 
+async function hasVisibleWindowClient() {
+  const windowClients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  })
+  return windowClients.some((client) => {
+    try {
+      const clientUrl = new URL(client.url)
+      return (
+        clientUrl.origin === self.location.origin &&
+        (client.focused || client.visibilityState === "visible")
+      )
+    } catch {
+      return false
+    }
+  })
+}
+
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil(
     (async () => {
@@ -68,14 +86,31 @@ self.addEventListener("push", (event) => {
   }
 
   const title =
-    typeof data.title === "string" && data.title ? data.title : "Inbox"
-  const body = typeof data.body === "string" ? data.body : "New Inbox item"
+    typeof data.title === "string" && data.title
+      ? data.title
+      : data.type === "chat"
+        ? "Chat finished"
+        : "Inbox"
+  const body =
+    typeof data.body === "string"
+      ? data.body
+      : data.type === "chat"
+        ? "The assistant finished responding."
+        : "New Inbox item"
   const unread = Number.isFinite(data.unread) ? data.unread : undefined
-  const url = typeof data.url === "string" && data.url ? data.url : "/inbox"
+  const url =
+    typeof data.url === "string" && data.url
+      ? data.url
+      : data.type === "chat"
+        ? "/"
+        : "/inbox"
   const isInbox = data.type === "inbox"
+  const isChat = data.type === "chat"
 
   event.waitUntil(
     (async () => {
+      if (isChat && (await hasVisibleWindowClient())) return
+
       const registrationWithBadge = self.registration
       if (
         typeof unread === "number" &&
@@ -93,7 +128,13 @@ self.addEventListener("push", (event) => {
       await self.registration.showNotification(title, {
         body,
         tag:
-          typeof data.inboxId === "string" ? `inbox-${data.inboxId}` : "inbox",
+          typeof data.tag === "string" && data.tag
+            ? data.tag
+            : typeof data.inboxId === "string"
+              ? `inbox-${data.inboxId}`
+              : typeof data.chatId === "string"
+                ? `chat-${data.chatId}`
+                : "inbox",
         icon: "/icon.svg",
         badge: "/icon.svg",
         renotify: isInbox,
@@ -101,7 +142,11 @@ self.addEventListener("push", (event) => {
         silent: false,
         timestamp: Date.now(),
         data: { url, type: data.type || "inbox" },
-        actions: isInbox ? [{ action: "open", title: "Open Inbox" }] : [],
+        actions: isInbox
+          ? [{ action: "open", title: "Open Inbox" }]
+          : isChat
+            ? [{ action: "open", title: "Open Chat" }]
+            : [],
       })
     })()
   )

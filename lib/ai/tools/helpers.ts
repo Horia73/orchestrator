@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
 
 export const DEFAULT_MAX_OUTPUT_CHARS = 100_000
 

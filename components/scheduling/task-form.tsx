@@ -39,6 +39,12 @@ const MONITOR_INFO: Record<MonitorKind, { label: string; checks: string; executi
         execution: "Runs the markets heartbeat cheap pass without a model. If a threshold crosses, it wakes the orchestrator once to research the cause.",
         output: "Silent checks are recorded in Past runs. Noteworthy crossings are sent to Inbox.",
     },
+    smart: {
+        label: "Smart monitor",
+        checks: "All enabled watches in Smart Monitor (Gmail / WhatsApp / Home Assistant / Web). Each watch carries its own rule, cadence, and suppress patterns.",
+        execution: "Runs the cheap tick across every watch due now (no model). When matches survive suppress patterns and quiet hours, the orchestrator is woken ONCE with a consolidated brief.",
+        output: "Silent checks are recorded in each watch's audit log. Notable matches surface as Inbox items.",
+    },
 }
 
 function toLocalInput(ms: number): string {
@@ -109,7 +115,10 @@ function buildPayload(f: FormState): NewTaskPayload | { error: string } {
     let action: NewTaskPayload["action"]
     if (f.actionType === "agent") {
         if (!f.agentPrompt.trim()) return { error: "Prompt is required for an agent task." }
-        action = { kind: "agent", agentId: f.agentId.trim() || "orchestrator", prompt: f.agentPrompt.trim() }
+        // UI-created agent tasks default to fixed cadence. Flexible/adaptive pacing
+        // is opt-in and only enabled via the orchestrator when the user explicitly
+        // asks for it; a future checkbox can expose it here.
+        action = { kind: "agent", agentId: f.agentId.trim() || "orchestrator", prompt: f.agentPrompt.trim(), adaptive: false }
     } else if (f.actionType === "tool") {
         if (!f.toolId.trim()) return { error: "Tool id is required for a tool task." }
         let args: Record<string, unknown> = {}

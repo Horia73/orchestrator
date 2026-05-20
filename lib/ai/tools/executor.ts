@@ -9,7 +9,6 @@ import { executeDelegateParallel, executeDelegateTo } from "./delegate-to"
 import { executeRead } from "./read"
 import { executeWrite } from "./write"
 import { executeEdit } from "./edit"
-import { executeBash } from "./bash"
 import { executeGlob } from "./glob"
 import { executeGrep } from "./grep"
 import { executeWebFetch } from "./web"
@@ -188,6 +187,15 @@ import {
 } from "./schedule"
 import { executeNotifyInbox } from "./notify"
 import { executeSetTaskState } from "./task-state"
+import { executeMonitorWakeFeedback } from "./smart-monitor-feedback"
+import {
+  executeMonitorDescribeSources,
+  executeMonitorWatchAdd,
+  executeMonitorWatchGet,
+  executeMonitorWatchList,
+  executeMonitorWatchRemove,
+  executeMonitorWatchUpdate,
+} from "./smart-monitor-manage"
 import {
   executeWatchlistAddFinancialInstrument,
   executeWatchlistAddProduct,
@@ -205,6 +213,11 @@ type ToolExecutor = (
   ctx?: ToolExecutionContext
 ) => ToolResult | Promise<ToolResult>
 
+const executeBashLazy: ToolExecutor = async (args, ctx) => {
+  const { executeBash } = await import("./bash")
+  return executeBash(args, ctx)
+}
+
 const executors: Record<string, ToolExecutor> = {
   list_dir: executeListDir,
   read_file: executeReadFile,
@@ -213,7 +226,7 @@ const executors: Record<string, ToolExecutor> = {
   Read: executeRead,
   Write: executeWrite,
   Edit: executeEdit,
-  Bash: executeBash,
+  Bash: executeBashLazy,
   Glob: executeGlob,
   Grep: executeGrep,
   WebFetch: executeWebFetch,
@@ -371,6 +384,13 @@ const executors: Record<string, ToolExecutor> = {
   WatchlistRemoveItem: executeWatchlistRemoveItem,
   WatchlistListItems: executeWatchlistListItems,
   WatchlistRecordProductPrice: executeWatchlistRecordProductPrice,
+  monitor_wake_feedback: executeMonitorWakeFeedback,
+  monitor_describe_sources: executeMonitorDescribeSources,
+  monitor_watch_list: executeMonitorWatchList,
+  monitor_watch_get: executeMonitorWatchGet,
+  monitor_watch_add: executeMonitorWatchAdd,
+  monitor_watch_update: executeMonitorWatchUpdate,
+  monitor_watch_remove: executeMonitorWatchRemove,
 }
 
 async function executeRunActivatedIntegrationTool(

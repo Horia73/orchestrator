@@ -15,43 +15,34 @@ import {
     effectiveModelExists,
 } from '@/lib/models/registry';
 import { emitAppEvent } from '@/lib/events';
+import {
+    ORCHESTRATOR_STATE_DIR,
+    PRIVATE_STATE_DIR,
+    PROJECT_DIR,
+    UPLOADS_DIR,
+    WORKSPACE_DIR,
+    WORKSPACE_ENV_PATH,
+} from '@/lib/runtime-paths';
 
-/** Project root for this orchestrator instance. */
-export const PROJECT_DIR = /* turbopackIgnore: true */ process.cwd();
+export {
+    AGENT_WORKSPACE_DIR,
+    ARTIFACTS_DIR,
+    PRIVATE_STATE_DIR,
+    PROJECT_DIR,
+    UPLOADS_DIR,
+    WORKSPACE_DIR,
+    WORKSPACE_ENV_PATH,
+} from '@/lib/runtime-paths';
 
-/** Application state lives under the project. */
-const DB_DIR = path.join(PROJECT_DIR, '.orchestrator');
-
-/**
- * Runtime workspace for agents. CLI agents start here, shell tools run here,
- * and filesystem tools expose this directory as "/".
- */
-export const WORKSPACE_DIR = path.join(DB_DIR, 'workspace');
-export const PRIVATE_STATE_DIR = path.join(DB_DIR, 'private');
-
-const LEGACY_CONFIG_PATH = path.join(DB_DIR, 'config.json');
-const CONFIG_PATH = path.join(WORKSPACE_DIR, 'config.json');
-export const WORKSPACE_ENV_PATH = path.join(WORKSPACE_DIR, '.env.local');
+const LEGACY_CONFIG_PATH = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, 'config.json');
+const CONFIG_PATH = path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, 'config.json');
 const PROJECT_ENV_PATHS = [
-    path.join(PROJECT_DIR, '.env.local'),
-    path.join(PROJECT_DIR, '.env'),
+    path.join(/* turbopackIgnore: true */ PROJECT_DIR, '.env.local'),
+    path.join(/* turbopackIgnore: true */ PROJECT_DIR, '.env'),
 ];
 const PROVIDER_API_KEY_ALIASES: Record<string, string[]> = {
     google: ['GOOGLE_API_KEY', 'GOOGLE_GENERATIVE_AI_API_KEY'],
 }
-
-/** Directory where uploaded files are stored */
-export const UPLOADS_DIR = path.join(DB_DIR, 'uploads');
-
-/**
- * Root exposed to filesystem-capable agents.
- * Relative paths in tools resolve from here, and CLI-backed agents start
- * here as their cwd.
- */
-export const AGENT_WORKSPACE_DIR = WORKSPACE_DIR;
-
-/** Real files backing persisted artifacts, mounted under the agent workspace. */
-export const ARTIFACTS_DIR = path.join(WORKSPACE_DIR, 'artifacts');
 
 // ---------------------------------------------------------------------------
 // Re-exports from the canonical schema in lib/models/schema.ts
@@ -116,6 +107,18 @@ export interface BrowserAgentSettings {
     pro: BrowserAgentModelSettings
 }
 
+export interface SmartMonitorQuietHours {
+    from: string // "HH:MM"
+    to: string   // "HH:MM"
+    timezone: string // IANA, e.g. "Europe/Bucharest"
+}
+
+export interface SmartMonitorSettings {
+    /** Global default quiet hours for Smart Monitor wakes. Per-watch
+     *  notify.quietHours overrides this when set. */
+    quietHours?: SmartMonitorQuietHours
+}
+
 export interface AppConfig {
     assistantName: string
     userName: string
@@ -129,6 +132,8 @@ export interface AppConfig {
     browserAgent: BrowserAgentSettings
     /** Favorite models, in display order. Each entry is "providerId:modelId". */
     favorites: string[]
+    /** Smart Monitor app-wide settings (quiet hours, future flags). */
+    smartMonitor?: SmartMonitorSettings
     updatedAt: number
 }
 
@@ -237,41 +242,46 @@ const DEFAULT_CONFIG: AppConfig = {
     agentOverrides: {},
     browserAgent: DEFAULT_BROWSER_AGENT_SETTINGS,
     favorites: [],
+    // smartMonitor stays undefined by default — users opt into quiet hours;
+    // we never invent them on their behalf.
     updatedAt: Date.now(),
 };
 
-if (!fs.existsSync(DB_DIR)) {
-    fs.mkdirSync(DB_DIR, { recursive: true });
+if (!fs.existsSync(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, { recursive: true });
 }
 
-if (!fs.existsSync(UPLOADS_DIR)) {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true });
+if (!fs.existsSync(/* turbopackIgnore: true */ UPLOADS_DIR)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ UPLOADS_DIR, { recursive: true });
 }
 
-if (!fs.existsSync(WORKSPACE_DIR)) {
-    fs.mkdirSync(WORKSPACE_DIR, { recursive: true });
+if (!fs.existsSync(/* turbopackIgnore: true */ WORKSPACE_DIR)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ WORKSPACE_DIR, { recursive: true });
 }
 
-if (!fs.existsSync(PRIVATE_STATE_DIR)) {
-    fs.mkdirSync(PRIVATE_STATE_DIR, { recursive: true });
+if (!fs.existsSync(/* turbopackIgnore: true */ PRIVATE_STATE_DIR)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, { recursive: true });
     try {
-        fs.chmodSync(PRIVATE_STATE_DIR, 0o700);
+        fs.chmodSync(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, 0o700);
     } catch {
         // Some filesystems ignore chmod; the directory remains inside .orchestrator.
     }
 }
 
-if (!fs.existsSync(CONFIG_PATH) && fs.existsSync(LEGACY_CONFIG_PATH)) {
-    fs.copyFileSync(LEGACY_CONFIG_PATH, CONFIG_PATH);
+if (
+    !fs.existsSync(/* turbopackIgnore: true */ CONFIG_PATH) &&
+    fs.existsSync(/* turbopackIgnore: true */ LEGACY_CONFIG_PATH)
+) {
+    fs.copyFileSync(/* turbopackIgnore: true */ LEGACY_CONFIG_PATH, CONFIG_PATH);
 }
 
-if (!fs.existsSync(CONFIG_PATH)) {
-    fs.writeFileSync(CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
+if (!fs.existsSync(/* turbopackIgnore: true */ CONFIG_PATH)) {
+    fs.writeFileSync(/* turbopackIgnore: true */ CONFIG_PATH, JSON.stringify(DEFAULT_CONFIG, null, 2), 'utf-8');
 }
 
 export function getConfig(): AppConfig {
     try {
-        const data = fs.readFileSync(CONFIG_PATH, 'utf-8');
+        const data = fs.readFileSync(/* turbopackIgnore: true */ CONFIG_PATH, 'utf-8');
         const parsed = JSON.parse(data);
         // Merge with defaults so new fields get their default values
         return normalizeAppConfig(parsed);
@@ -287,7 +297,21 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
         ...parsed,
         agentOverrides: parsed.agentOverrides ?? DEFAULT_CONFIG.agentOverrides,
         browserAgent: normalizeBrowserAgentSettings(parsed.browserAgent),
+        smartMonitor: normalizeSmartMonitorSettings(parsed.smartMonitor),
     }
+}
+
+function normalizeSmartMonitorSettings(value: unknown): SmartMonitorSettings | undefined {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return undefined
+    const raw = value as Partial<SmartMonitorSettings>
+    const qh = raw.quietHours
+    if (!qh || typeof qh !== 'object' || Array.isArray(qh)) return undefined
+    const from = typeof qh.from === 'string' ? qh.from.trim() : ''
+    const to = typeof qh.to === 'string' ? qh.to.trim() : ''
+    const timezone = typeof qh.timezone === 'string' ? qh.timezone.trim() : ''
+    const HHMM = /^([01]\d|2[0-3]):[0-5]\d$/
+    if (!HHMM.test(from) || !HHMM.test(to) || timezone.length === 0) return undefined
+    return { quietHours: { from, to, timezone } }
 }
 
 function normalizeBrowserAgentSettings(value: unknown): BrowserAgentSettings {

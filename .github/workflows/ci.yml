@@ -26,6 +26,9 @@ jobs:
       - name: Typecheck
         run: npm run typecheck
 
+      - name: Monitor smoke tests
+        run: npm run smoke:monitor
+
       - name: Lint
         run: npm run lint
 

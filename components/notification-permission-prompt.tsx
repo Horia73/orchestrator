@@ -191,8 +191,8 @@ function promptCopy(args: {
     title,
     body:
       permission === "granted"
-        ? "Finish push setup so Inbox alerts arrive when scheduled runs complete."
-        : "Get Inbox alerts when scheduled runs complete, even when Orchestrator is in the background.",
+        ? "Finish push setup so chat completions and Inbox alerts arrive in the background."
+        : "Get chat completion and Inbox alerts, even when Orchestrator is in the background.",
     action: "Enable",
   }
 }

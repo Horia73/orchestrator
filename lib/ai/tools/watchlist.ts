@@ -124,6 +124,10 @@ export const watchlistAddProductTool: ToolDef = {
         type: "number",
         description: "Current observed product price.",
       },
+      image_url: {
+        type: "string",
+        description: "Optional product thumbnail URL for richer display.",
+      },
       symbol: {
         type: "string",
         description: "Optional short display label if no URL is known.",
@@ -311,6 +315,8 @@ export function executeWatchlistAddProduct(
       source: stringValue(args, ["source", "store", "site"]) || undefined,
       name: name || undefined,
       currency: stringValue(args, ["currency"]) || undefined,
+      imageUrl:
+        stringValue(args, ["image_url", "imageUrl", "image"]) || undefined,
       notes: stringValue(args, ["notes"]) || undefined,
       price: numberValue(args, ["current_price", "currentPrice", "price"]),
     })
