@@ -1,9 +1,10 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { createBrowserManager } from '@/lib/browser-agent-runtime/browser';
 
-const root = path.resolve(process.env.BROWSER_AGENT_SMOKE_DIR || 'tmp-official-display-smoke');
+const root = path.resolve(process.env.BROWSER_AGENT_SMOKE_DIR || path.join(os.tmpdir(), 'orchestrator-official-display-smoke'));
 const viewport = {
     width: Number(process.env.BROWSER_AGENT_SMOKE_WIDTH || 1280),
     height: Number(process.env.BROWSER_AGENT_SMOKE_HEIGHT || 720),

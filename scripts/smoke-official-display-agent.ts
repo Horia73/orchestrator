@@ -1,4 +1,5 @@
 import fs from 'fs';
+import os from 'os';
 import path from 'path';
 
 import { createAgentController, type BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent';
@@ -7,7 +8,7 @@ import type { ActionHistoryItem, IterationLimitReview, TabInfo } from '@/lib/bro
 import type { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from '@/lib/browser-agent-runtime/browser';
 import type { AgentAction, VisionConfig, VisionService } from '@/lib/browser-agent-runtime/vision';
 
-const root = path.resolve(process.env.BROWSER_AGENT_SMOKE_DIR || 'tmp-official-display-agent-smoke');
+const root = path.resolve(process.env.BROWSER_AGENT_SMOKE_DIR || path.join(os.tmpdir(), 'orchestrator-official-display-agent-smoke'));
 const viewport = {
     width: Number(process.env.BROWSER_AGENT_SMOKE_WIDTH || 1280),
     height: Number(process.env.BROWSER_AGENT_SMOKE_HEIGHT || 720),
