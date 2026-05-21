@@ -24,6 +24,7 @@ import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
   Attachment,
+  Message,
   ReasoningEntry,
 } from "@/lib/types"
 
@@ -207,6 +208,27 @@ function collectAgentRuns(
     }
   }
   return out
+}
+
+function isAssistantMessageInProgress(
+  message: Message | null | undefined
+): message is Message {
+  return (
+    message?.role === "assistant" &&
+    message.status == null &&
+    message.thinkingDuration == null
+  )
+}
+
+function hasAssistantProgress(message: Message | null | undefined): boolean {
+  if (!message || message.role !== "assistant") return false
+  const hasReasoning =
+    Array.isArray(message.reasoning) && message.reasoning.length > 0
+  const hasContent = message.content.trim().length > 0
+  const hasSegments =
+    Array.isArray(message.contentSegments) &&
+    message.contentSegments.some((segment) => segment.content.length > 0)
+  return hasReasoning || hasContent || hasSegments
 }
 
 type SelectedAgentTool = {
@@ -607,6 +629,11 @@ export function ChatView() {
     (conversation) => conversation.id === state.activeConversationId
   )
   const conversationId = activeConversation?.id ?? null
+  const isStreamingThisConversation = Boolean(
+    conversationId &&
+      state.isStreaming &&
+      state.streamingConversationId === conversationId
+  )
   const messageCount = activeConversation?.messages.length ?? 0
   const messagePage = conversationId
     ? state.conversationMessagePages[conversationId]
@@ -631,12 +658,14 @@ export function ChatView() {
   }, [activeConversation?.messages])
   const hasStreamingPayload = React.useMemo(
     () =>
-      state.streamingReasoning.length > 0 ||
-      state.streamingContent.length > 0 ||
-      state.streamingContentSegments.some(
-        (segment) => segment.content.length > 0
-      ),
+      isStreamingThisConversation &&
+      (state.streamingReasoning.length > 0 ||
+        state.streamingContent.length > 0 ||
+        state.streamingContentSegments.some(
+          (segment) => segment.content.length > 0
+        )),
     [
+      isStreamingThisConversation,
       state.streamingContent,
       state.streamingContentSegments,
       state.streamingReasoning,
@@ -645,28 +674,27 @@ export function ChatView() {
   const hasInProgressAssistantProgress = React.useMemo(() => {
     const messages = activeConversation?.messages ?? []
     const lastMessage = messages[messages.length - 1]
-    if (
-      !lastMessage ||
-      lastMessage.role !== "assistant" ||
-      lastMessage.thinkingDuration != null ||
-      lastMessage.status
-    )
+    if (!isAssistantMessageInProgress(lastMessage)) {
       return false
-    const hasReasoning =
-      Array.isArray(lastMessage.reasoning) && lastMessage.reasoning.length > 0
-    const hasContent = lastMessage.content.trim().length > 0
-    const hasSegments =
-      Array.isArray(lastMessage.contentSegments) &&
-      lastMessage.contentSegments.some((segment) => segment.content.length > 0)
-    return hasReasoning || hasContent || hasSegments
+    }
+    return hasAssistantProgress(lastMessage)
   }, [activeConversation?.messages])
   const showInitialStreamingCursor =
-    state.isStreaming && !hasStreamingPayload && !hasInProgressAssistantProgress
+    isStreamingThisConversation &&
+    !hasStreamingPayload &&
+    !hasInProgressAssistantProgress
+  const showLiveStreamingBubble = Boolean(
+    isStreamingThisConversation &&
+      (!hasInProgressAssistantProgress || hasStreamingPayload)
+  )
   // Keep streaming bubble alive until the committed message is ready to take
   // over the tail spacer (prevents layout flash on streaming end).
   const showStreamingBubble = Boolean(
     activeConversation &&
-      (state.isStreaming || (minHeight > 0 && minHeightMsgId === null)) &&
+      (showLiveStreamingBubble ||
+        (minHeight > 0 &&
+          minHeightMsgId === null &&
+          !hasInProgressAssistantProgress)) &&
       state.activeConversationId === activeConversation.id
   )
 
@@ -675,11 +703,17 @@ export function ChatView() {
     for (const message of activeConversation?.messages ?? []) {
       runs.push(...collectAgentRuns(message.reasoning))
     }
-    runs.push(...collectAgentRuns(state.streamingReasoning))
+    if (isStreamingThisConversation) {
+      runs.push(...collectAgentRuns(state.streamingReasoning))
+    }
     const byId = new Map<string, AgentCallReasoningEntry>()
     for (const run of runs) byId.set(run.runId, run)
     return Array.from(byId.values())
-  }, [activeConversation?.messages, state.streamingReasoning])
+  }, [
+    activeConversation?.messages,
+    isStreamingThisConversation,
+    state.streamingReasoning,
+  ])
   const [activeAgentRunId, setActiveAgentRunId] = React.useState<string | null>(
     null
   )
@@ -1310,7 +1344,58 @@ export function ChatView() {
   }, [])
 
   React.useLayoutEffect(() => {
-    if (!conversationId || !state.isStreaming || minHeightMsgId !== null) return
+    if (
+      !conversationId ||
+      !isStreamingThisConversation ||
+      minHeightMsgId !== null
+    )
+      return
+    const messages = activeConversation?.messages ?? []
+    const lastMsg = messages[messages.length - 1]
+    const previousMsg = messages[messages.length - 2]
+    if (
+      !isAssistantMessageInProgress(lastMsg) ||
+      !hasAssistantProgress(lastMsg) ||
+      previousMsg?.role !== "user"
+    )
+      return
+
+    const assistantElement = document.getElementById(`message-${lastMsg.id}`)
+    const nextSpacer =
+      assistantElement instanceof HTMLElement
+        ? getCommittedTailSpacer(previousMsg.id, assistantElement)
+        : minHeight
+
+    minHeightActiveRef.current = nextSpacer > 0
+    setMinHeightMsgId(lastMsg.id)
+    setMinHeight(nextSpacer)
+    localStorage.setItem(
+      `chat:minHeight:${conversationId}`,
+      JSON.stringify({
+        minHeight: nextSpacer,
+        minHeightMsgId: lastMsg.id,
+        viewportHeight: window.innerHeight,
+      })
+    )
+    if (
+      restoredScrollConversationRef.current === conversationId &&
+      isMessageNearTopAnchor(previousMsg.id)
+    ) {
+      scheduleMessageTopAnchor(previousMsg.id)
+    }
+  }, [
+    activeConversation?.messages,
+    conversationId,
+    getCommittedTailSpacer,
+    isMessageNearTopAnchor,
+    isStreamingThisConversation,
+    minHeight,
+    minHeightMsgId,
+    scheduleMessageTopAnchor,
+  ])
+
+  React.useLayoutEffect(() => {
+    if (!conversationId || !isStreamingThisConversation || minHeightMsgId !== null) return
     const messages = activeConversation?.messages ?? []
     const lastMsg = messages[messages.length - 1]
     if (lastMsg?.role !== "user") return
@@ -1337,9 +1422,9 @@ export function ChatView() {
     activeConversation?.messages,
     conversationId,
     getTailResponseMinHeight,
+    isStreamingThisConversation,
     minHeight,
     minHeightMsgId,
-    state.isStreaming,
     state.streamingContent,
     state.streamingContentSegments,
     state.streamingReasoning,
@@ -1348,7 +1433,7 @@ export function ChatView() {
   // Transfer the streaming spacer to the committed assistant message before
   // paint, so the scrollbar does not briefly resize at stream end.
   React.useLayoutEffect(() => {
-    if (state.isStreaming || minHeight === 0 || minHeightMsgId !== null) return
+    if (isStreamingThisConversation || minHeight === 0 || minHeightMsgId !== null) return
     const messages = activeConversation?.messages ?? []
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
@@ -1379,18 +1464,18 @@ export function ChatView() {
       }
     }
   }, [
-    state.isStreaming,
     activeConversation?.messages,
-    minHeight,
-    minHeightMsgId,
     conversationId,
     getCommittedTailSpacer,
     isMessageNearTopAnchor,
+    isStreamingThisConversation,
+    minHeight,
+    minHeightMsgId,
     scheduleMessageTopAnchor,
   ])
 
   React.useLayoutEffect(() => {
-    if (!conversationId || state.isStreaming || showStreamingBubble) return
+    if (!conversationId || isStreamingThisConversation || showStreamingBubble) return
     const messages = activeConversation?.messages ?? []
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
@@ -1446,7 +1531,7 @@ export function ChatView() {
     minHeightMsgId,
     scheduleMessageTopAnchor,
     showStreamingBubble,
-    state.isStreaming,
+    isStreamingThisConversation,
   ])
 
   // Restore exactly once per conversation without visible animated scrolling.
@@ -1632,10 +1717,12 @@ export function ChatView() {
   ])
 
   React.useEffect(() => {
-    const streamingStarted = !wasStreamingRef.current && state.isStreaming
-    const streamingFinished = wasStreamingRef.current && !state.isStreaming
+    const streamingStarted =
+      !wasStreamingRef.current && isStreamingThisConversation
+    const streamingFinished =
+      wasStreamingRef.current && !isStreamingThisConversation
 
-    wasStreamingRef.current = state.isStreaming
+    wasStreamingRef.current = isStreamingThisConversation
 
     if (streamingStarted) {
       setScrollButtonVisible(false)
@@ -1645,6 +1732,7 @@ export function ChatView() {
       }, 300)
       const messages = activeConversation?.messages || []
       const lastMsg = messages[messages.length - 1]
+      const previousMsg = messages[messages.length - 2]
 
       if (lastMsg?.role === "user") {
         const neededSpace = getTailResponseMinHeight(
@@ -1670,6 +1758,37 @@ export function ChatView() {
         autoScrollEnabledRef.current = false
         followStreamingRef.current = false
         scheduleMessageTopAnchor(lastMsg.id)
+      } else if (
+        isAssistantMessageInProgress(lastMsg) &&
+        hasAssistantProgress(lastMsg) &&
+        previousMsg?.role === "user"
+      ) {
+        const assistantElement = document.getElementById(
+          `message-${lastMsg.id}`
+        )
+        const neededSpace =
+          assistantElement instanceof HTMLElement
+            ? getCommittedTailSpacer(previousMsg.id, assistantElement)
+            : minHeight
+
+        minHeightActiveRef.current = neededSpace > 0
+        setMinHeightMsgId(lastMsg.id)
+        setMinHeight(neededSpace)
+
+        if (conversationId) {
+          localStorage.setItem(
+            `chat:minHeight:${conversationId}`,
+            JSON.stringify({
+              minHeight: neededSpace,
+              minHeightMsgId: lastMsg.id,
+              viewportHeight: window.innerHeight,
+            })
+          )
+        }
+
+        autoScrollEnabledRef.current = false
+        followStreamingRef.current = false
+        scheduleMessageTopAnchor(previousMsg.id)
       } else {
         // Keep manual-follow behavior: do not auto-follow streaming unless
         // the user explicitly taps the scroll button.
@@ -1685,12 +1804,12 @@ export function ChatView() {
     const frame = window.requestAnimationFrame(() => {
       if (
         followStreamingRef.current &&
-        state.isStreaming &&
+        isStreamingThisConversation &&
         !ignoreSyncRef.current
       ) {
         scrollToBottom("smooth")
       } else if (autoScrollEnabledRef.current && !minHeightActiveRef.current) {
-        scrollToBottom(state.isStreaming ? "auto" : "smooth")
+        scrollToBottom(isStreamingThisConversation ? "auto" : "smooth")
       }
 
       if (streamingFinished) {
@@ -1714,12 +1833,15 @@ export function ChatView() {
   }, [
     artifactOpen,
     conversationId,
+    getCommittedTailSpacer,
     getTailResponseMinHeight,
+    isStreamingThisConversation,
     messageCount,
+    minHeight,
     scheduleMessageTopAnchor,
     scrollToBottom,
-    state.isStreaming,
     state.streamingContent,
+    state.streamingContentSegments,
     state.streamingReasoning,
     syncScrollState,
     setProgrammaticScrollbarSuppressed,
@@ -2123,7 +2245,8 @@ export function ChatView() {
     setProgrammaticScrollbarSuppressed(true)
     suppressBtnRef.current = true
     ignoreSyncRef.current = true
-    scrollButtonLockedUntilStreamingEndRef.current = state.isStreaming
+    scrollButtonLockedUntilStreamingEndRef.current =
+      isStreamingThisConversation
 
     if (scrollJumpFadeTimeoutRef.current !== null) {
       window.clearTimeout(scrollJumpFadeTimeoutRef.current)
@@ -2133,7 +2256,7 @@ export function ChatView() {
     }
 
     const startScroll = () => {
-      if (state.isStreaming) {
+      if (isStreamingThisConversation) {
         followStreamingRef.current = true
         autoScrollEnabledRef.current = true
       }
@@ -2162,7 +2285,7 @@ export function ChatView() {
     scrollToBottom,
     setScrollButtonVisible,
     setProgrammaticScrollbarSuppressed,
-    state.isStreaming,
+    isStreamingThisConversation,
     syncScrollState,
   ])
 
@@ -2282,14 +2405,14 @@ export function ChatView() {
                         <div
                           ref={streamingBubbleContainerRef}
                           className="md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
-                          aria-hidden={!state.isStreaming}
+                          aria-hidden={!showLiveStreamingBubble}
                           style={
                             minHeight > 0 && minHeightMsgId === null
                               ? { minHeight }
                               : undefined
                           }
                         >
-                          {state.isStreaming && (
+                          {showLiveStreamingBubble && (
                             <StreamingBubble
                               reasoning={state.streamingReasoning}
                               content={state.streamingContent}
@@ -2344,7 +2467,7 @@ export function ChatView() {
               <TodoBar
                 messages={activeConversation.messages}
                 streamingReasoning={
-                  state.isStreaming ? state.streamingReasoning : []
+                  isStreamingThisConversation ? state.streamingReasoning : []
                 }
               />
               <ChatInput variant="chat" />

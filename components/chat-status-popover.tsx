@@ -9,7 +9,6 @@ import {
 } from "lucide-react"
 
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
-import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
 import type { Attachment, ContextUsageSnapshot, Message } from "@/lib/types"
@@ -123,20 +122,16 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
 
     return (
         <Popover open={open} onOpenChange={setOpen}>
-            <Tooltip>
-                <TooltipTrigger asChild>
-                    <PopoverTrigger asChild>
-                        <button
-                            type="button"
-                            className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
-                            aria-label="Chat status"
-                        >
-                            <ContextRing pct={contextPct} />
-                        </button>
-                    </PopoverTrigger>
-                </TooltipTrigger>
-                <TooltipContent side="top">{modelReady ? "Status" : "No model loaded"}</TooltipContent>
-            </Tooltip>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    className="flex size-9 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted/50 hover:text-foreground"
+                    aria-label="Chat status"
+                    title={modelReady ? "Status" : "No model loaded"}
+                >
+                    <ContextRing pct={contextPct} />
+                </button>
+            </PopoverTrigger>
 
             <PopoverContent
                 side={side}

@@ -313,11 +313,17 @@ export function AppSidebar() {
 
   // Wrap chat actions so they always land on the chat page —
   // users can fire them from /settings or any other route.
+  const navigateHome = React.useCallback(() => {
+    if (pathname === "/") return
+    if (isMobile) router.replace("/")
+    else router.push("/")
+  }, [isMobile, pathname, router])
+
   const handleNewChat = React.useCallback(() => {
     if (isMobile) setOpenMobile(false)
     newChat()
-    if (pathname !== "/") router.push("/")
-  }, [isMobile, newChat, pathname, router, setOpenMobile])
+    navigateHome()
+  }, [isMobile, navigateHome, newChat, setOpenMobile])
 
   const handleSelectConversation = React.useCallback(
     (id: string) => {
@@ -325,15 +331,15 @@ export function AppSidebar() {
         setOpenMobile(false)
         window.requestAnimationFrame(() => {
           selectConversation(id)
-          if (pathname !== "/") router.push("/")
+          navigateHome()
         })
         return
       }
 
       selectConversation(id)
-      if (pathname !== "/") router.push("/")
+      navigateHome()
     },
-    [isMobile, pathname, router, selectConversation, setOpenMobile]
+    [isMobile, navigateHome, selectConversation, setOpenMobile]
   )
 
   const closeMobileSidebar = React.useCallback(() => {
@@ -430,7 +436,11 @@ export function AppSidebar() {
                   isActive={isOnScheduling}
                   className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
                 >
-                  <Link href="/scheduling" onClick={closeMobileSidebar}>
+                  <Link
+                    href="/scheduling"
+                    replace={isMobile}
+                    onClick={closeMobileSidebar}
+                  >
                     <CalendarClock className="size-4" />
                     <span>Scheduling</span>
                   </Link>
@@ -443,7 +453,11 @@ export function AppSidebar() {
                   isActive={isOnWatchlist}
                   className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
                 >
-                  <Link href="/watchlist" onClick={closeMobileSidebar}>
+                  <Link
+                    href="/watchlist"
+                    replace={isMobile}
+                    onClick={closeMobileSidebar}
+                  >
                     <LineChart className="size-4" />
                     <span>Watchlist</span>
                   </Link>
@@ -456,7 +470,11 @@ export function AppSidebar() {
                   isActive={isOnMonitor}
                   className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
                 >
-                  <Link href="/monitor" onClick={closeMobileSidebar}>
+                  <Link
+                    href="/monitor"
+                    replace={isMobile}
+                    onClick={closeMobileSidebar}
+                  >
                     <Telescope className="size-4" />
                     <span>Smart monitor</span>
                   </Link>
@@ -469,7 +487,11 @@ export function AppSidebar() {
                   isActive={isOnInbox}
                   className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
                 >
-                  <Link href="/inbox" onClick={closeMobileSidebar}>
+                  <Link
+                    href="/inbox"
+                    replace={isMobile}
+                    onClick={closeMobileSidebar}
+                  >
                     <InboxIcon className="size-4" />
                     <span>Inbox</span>
                   </Link>
@@ -509,7 +531,8 @@ export function AppSidebar() {
                       const isRunning =
                         Boolean(state.activeChatStreams[conv.id]) ||
                         (state.activeConversationId === conv.id &&
-                          state.isStreaming)
+                          state.isStreaming &&
+                          state.streamingConversationId === conv.id)
                       const hasStatusSlot = isRunning || unread
                       const isActiveConversationRow =
                         state.activeConversationId === conv.id &&
@@ -612,7 +635,11 @@ export function AppSidebar() {
               isActive={isOnSettings}
               className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
             >
-              <Link href="/settings" onClick={closeMobileSidebar}>
+              <Link
+                href="/settings"
+                replace={isMobile}
+                onClick={closeMobileSidebar}
+              >
                 <Settings className="size-4" />
                 <span>Settings</span>
               </Link>

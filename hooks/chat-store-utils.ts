@@ -95,6 +95,7 @@ export function markReasoningStopped(
 
 export const stoppedStreamState = {
   isStreaming: false,
+  streamingConversationId: null as string | null,
   streamingContent: "",
   streamingContentSegments: [] as NonNullable<Message["contentSegments"]>,
   streamingReasoning: [] as StreamingReasoning,

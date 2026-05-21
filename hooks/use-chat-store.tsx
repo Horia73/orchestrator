@@ -49,6 +49,7 @@ interface ChatState {
   conversationMessagePages: Record<string, ConversationMessagePageState>
   activeConversationId: string | null
   isStreaming: boolean
+  streamingConversationId: string | null
   streamingContent: string
   streamingContentSegments: NonNullable<Message["contentSegments"]>
   streamingReasoning: StreamingReasoning
@@ -92,7 +93,12 @@ type ChatAction =
   | { type: "DELETE_CONVERSATION"; id: string }
   | { type: "ADD_USER_MESSAGE"; conversationId: string; message: Message }
   | { type: "CREATE_CONVERSATION"; conversation: Conversation }
-  | { type: "SET_STREAMING"; isStreaming: boolean; messageId?: string }
+  | {
+      type: "SET_STREAMING"
+      isStreaming: boolean
+      conversationId?: string
+      messageId?: string
+    }
   | { type: "APPEND_STREAMING_THINKING_CHUNK"; chunk: string; phase: number }
   | { type: "APPEND_STREAMING_CONTENT"; chunk: string; phase: number }
   | {
@@ -583,6 +589,8 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ...state,
             ...stoppedStreamState,
             isStreaming: true,
+            streamingConversationId:
+              action.conversationId ?? state.streamingConversationId,
             streamingMessageId:
               action.messageId ?? state.streamingMessageId ?? null,
           }
@@ -915,10 +923,13 @@ function chatReducer(state: ChatState, action: ChatAction): ChatState {
       if (action.stopStreaming === false) return nextState
       const activeChatStreams = { ...nextState.activeChatStreams }
       delete activeChatStreams[action.conversationId]
+      const shouldClearStreaming =
+        state.streamingConversationId == null ||
+        state.streamingConversationId === action.conversationId
       return {
         ...nextState,
         activeChatStreams,
-        ...stoppedStreamState,
+        ...(shouldClearStreaming ? stoppedStreamState : {}),
       }
     }
     case "STOP_STREAMING_WITH_PARTIAL": {
@@ -1069,6 +1080,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [unreadConversationIds, setUnreadConversationIds] = React.useState<
     Set<string>
   >(() => readUnreadConversationIds())
+  const unreadConversationIdsRef =
+    React.useRef<Set<string>>(unreadConversationIds)
   // Wrap the SELECT_CONVERSATION dispatch in a transition so React can
   // prepare the (potentially expensive) new chat render in the background
   // without blocking. The boolean flips true the instant the user clicks,
@@ -1103,6 +1116,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [state.conversations])
 
   React.useEffect(() => {
+    unreadConversationIdsRef.current = unreadConversationIds
+  }, [unreadConversationIds])
+
+  React.useEffect(() => {
     if (state.isLoading) return
     const visibleActiveConversationId =
       typeof document !== "undefined" && document.visibilityState === "visible"
@@ -1112,11 +1129,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       state.conversations,
       visibleActiveConversationId
     )
-    setUnreadConversationIds((current) => {
-      if (unreadSetsEqual(current, next)) return current
-      writeUnreadConversationIds(next)
-      return next
-    })
+    if (unreadSetsEqual(unreadConversationIdsRef.current, next)) return
+    writeUnreadConversationIds(next)
+    unreadConversationIdsRef.current = next
+    setUnreadConversationIds(next)
   }, [state.activeConversationId, state.conversations, state.isLoading])
 
   React.useEffect(() => {
@@ -1157,6 +1173,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         const next = updater(new Set(current))
         if (unreadSetsEqual(current, next)) return current
         writeUnreadConversationIds(next)
+        unreadConversationIdsRef.current = next
         return next
       })
     },
@@ -1540,6 +1557,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             dispatch({
               type: "SET_STREAMING",
               isStreaming: true,
+              conversationId,
               messageId: activeStream.messageId,
             })
             dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
@@ -1561,6 +1579,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           dispatch({
             type: "SET_STREAMING",
             isStreaming: true,
+            conversationId,
             messageId: activeStream.messageId,
           })
           dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
@@ -1657,6 +1676,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({
         type: "SET_STREAMING",
         isStreaming: Boolean(stream),
+        conversationId,
         messageId: stream?.messageId,
       })
       if (stream) dispatch({ type: "CHAT_STREAM_STARTED", stream })
@@ -1669,7 +1689,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
-    if (!conversationId || !state.isStreaming || streamingRef.current) return
+    if (
+      !conversationId ||
+      !state.isStreaming ||
+      state.streamingConversationId !== conversationId ||
+      streamingRef.current
+    )
+      return
 
     let cancelled = false
     let recovering = false
@@ -1688,6 +1714,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           dispatch({
             type: "SET_STREAMING",
             isStreaming: true,
+            conversationId,
             messageId: stream.messageId,
           })
           dispatch({ type: "CHAT_STREAM_STARTED", stream })
@@ -1718,6 +1745,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     recoverInterruptedStream,
     state.activeConversationId,
     state.isStreaming,
+    state.streamingConversationId,
     state.streamingMessageId,
   ])
 
@@ -1772,7 +1800,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 !isFinalChunk &&
                 data.payload.conversationId === activeConversationIdRef.current
               ) {
-                dispatch({ type: "SET_STREAMING", isStreaming: true })
+                dispatch({
+                  type: "SET_STREAMING",
+                  isStreaming: true,
+                  conversationId: data.payload.conversationId,
+                })
               }
             }
           }
@@ -1988,6 +2020,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({
         type: "SET_STREAMING",
         isStreaming: true,
+        conversationId,
         messageId: assistantMsgId,
       })
 

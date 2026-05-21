@@ -437,7 +437,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
     const {
         sendMessage,
         stopStreaming,
-        state: { activeConversationId, conversations, isStreaming },
+        state: { activeConversationId, conversations, isStreaming, streamingConversationId },
     } = useChatStore()
 
     const textareaRef = React.useRef<HTMLTextAreaElement>(null)
@@ -488,7 +488,10 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
     const hasContent = draft.value.trim().length > 0 || draft.attachments.length > 0
     const hasPendingAttachments = draft.attachments.some(a => a.uploading || a.rendering)
     const hasFailedAttachments = draft.attachments.some(a => a.error && !a.uploaded)
-    const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments && !isStreaming
+    const isStreamingActiveConversation = Boolean(
+        isStreaming && activeConversationId && streamingConversationId === activeConversationId
+    )
+    const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments && !isStreamingActiveConversation
     const maxHeight = isChat ? 160 : 200
 
     // Restore draft on conversation switch
@@ -515,7 +518,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
 
     const handleSubmit = React.useCallback(() => {
         const trimmed = draft.value.trim()
-        if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments || isStreaming) return
+        if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments || isStreamingActiveConversation) return
         const uploadedAttachments = draft.attachments.filter(a => a.uploaded).map(a => a.uploaded!)
         sendMessage(trimmed, undefined, uploadedAttachments.length > 0 ? uploadedAttachments : undefined)
         draft.clear()
@@ -524,7 +527,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
         } else {
             textareaRef.current?.focus()
         }
-    }, [draft, hasFailedAttachments, hasPendingAttachments, isStreaming, sendMessage])
+    }, [draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, sendMessage])
 
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -537,10 +540,10 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
     )
 
     const handleMicClick = React.useCallback(() => {
-        if (isStreaming) return
+        if (isStreamingActiveConversation) return
         setIsRecording(true)
         voice.start()
-    }, [isStreaming, voice])
+    }, [isStreamingActiveConversation, voice])
 
     const handlePreviewClick = React.useCallback((att: AttachedFile) => {
         if (att.uploaded) setPreviewAttachment(att.uploaded)
@@ -648,7 +651,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
                                     side={isChat ? "top" : "bottom"}
                                 />
                                 <div className="flex size-9 shrink-0 items-center justify-center">
-                                    {isStreaming ? (
+                                    {isStreamingActiveConversation ? (
                                         <button
                                             type="button"
                                             onClick={() => stopStreaming()}

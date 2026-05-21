@@ -12,7 +12,7 @@ import {
   Trash2,
 } from "lucide-react"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
@@ -162,6 +162,7 @@ function InboxViewInner() {
   } = useInbox()
   const { selectConversation } = useChatStore()
   const router = useRouter()
+  const { isMobile } = useSidebar()
   const searchParams = useSearchParams()
   const { confirm, dialog } = useConfirm()
   const [replying, setReplying] = React.useState(false)
@@ -180,7 +181,8 @@ function InboxViewInner() {
     setReplying(false)
     if (conversationId) {
       selectConversation(conversationId)
-      router.push("/")
+      if (isMobile) router.replace("/")
+      else router.push("/")
     }
   }
 

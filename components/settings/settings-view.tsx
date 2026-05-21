@@ -81,7 +81,7 @@ function SettingsViewInner() {
             <div className="flex min-w-0 items-start gap-2">
               <button
                 type="button"
-                onClick={() => router.push("/")}
+                onClick={() => router.replace("/")}
                 aria-label="Back to chat"
                 className="mt-0.5 grid size-8 shrink-0 place-items-center rounded-md text-foreground/60 transition-colors hover:bg-muted/60 hover:text-foreground md:hidden"
               >

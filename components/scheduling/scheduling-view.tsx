@@ -24,7 +24,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { cn } from "@/lib/utils"
 import type { ScheduledTask, ScheduleSpec } from "@/lib/scheduling/schema"
@@ -1084,6 +1084,7 @@ function TaskFilterMenu({
 
 function SchedulingViewInner() {
   const { tasks, loading, error, createTask, setEnabled } = useScheduling()
+  const { isMobile } = useSidebar()
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [creating, setCreating] = React.useState(false)
   const [taskFilters, setTaskFilters] =
@@ -1130,7 +1131,11 @@ function SchedulingViewInner() {
               </h1>
               <p className="mt-0.5 text-[12px] text-foreground/50">
                 Results land in your{" "}
-                <Link href="/inbox" className="underline underline-offset-2">
+                <Link
+                  href="/inbox"
+                  replace={isMobile}
+                  className="underline underline-offset-2"
+                >
                   Inbox
                 </Link>{" "}
                 when noteworthy.
