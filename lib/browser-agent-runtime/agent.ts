@@ -524,7 +524,7 @@ export function createAgentController(
                             break;
                         }
 
-                        if (action.action === 'inspectPage') {
+                        if (action.action === 'inspectPage' || action.action === 'findInPage') {
                             shouldRestartLoop = true;
                             break;
                         }
@@ -716,6 +716,8 @@ function formatAction(action: AgentAction): string {
         }
         case 'inspectPage':
             return `Inspect Full Page - ${action.reasoning}`;
+        case 'findInPage':
+            return `Find "${action.text?.substring(0, 40) || ''}" - ${action.reasoning}`;
         case 'screenshot':
             return `Save screenshot - ${action.reasoning}`;
         case 'recordVideo': {
@@ -790,6 +792,14 @@ function denormalize(coordinate: [number, number], width: number, height: number
     const pixelX = Math.round((x / 1000) * width);
     const pixelY = Math.round((y / 1000) * height);
     return [pixelX, pixelY];
+}
+
+async function resolveCoordinate(browser: BrowserPageSession, coordinate: [number, number]): Promise<[number, number]> {
+    if (browser.capabilities.coordinateSpace === 'absolute-display') {
+        return [Math.round(coordinate[0]), Math.round(coordinate[1])];
+    }
+    const viewport = await browser.getViewport();
+    return denormalize(coordinate, viewport.width, viewport.height);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -919,8 +929,7 @@ async function executeAction(
         switch (action.action) {
             case 'click':
                 if (action.coordinate) {
-                    const viewport = await browser.getViewport();
-                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     const count = action.clickCount || 1;
                     const countStr = count > 1 ? ` (x${count})` : '';
                     onStatusUpdate(`🖱️  Clicking at [${x}, ${y}]${countStr} (from ${action.coordinate})`);
@@ -932,8 +941,7 @@ async function executeAction(
 
             case 'hover':
                 if (action.coordinate) {
-                    const viewport = await browser.getViewport();
-                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     onStatusUpdate(`🖱️  Hovering at [${x}, ${y}]`);
                     await browser.hoverCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
@@ -945,6 +953,17 @@ async function executeAction(
                 onStatusUpdate('🗺️  Capturing full-page overview...');
                 const overviewFrame = await browser.captureOverviewFrame();
                 return { success: true, trace: null, supplementalFrames: [overviewFrame] };
+            }
+
+            case 'findInPage': {
+                const query = String(action.text || '').trim();
+                if (!query) {
+                    return { success: false, trace: null, supplementalFrames: [] };
+                }
+                onStatusUpdate(`🔎 Finding in page: "${query}"`);
+                await browser.findInPage(query, Boolean(action.submit));
+                await sleep(timing.actionSettleDelayMs);
+                return { success: true, trace: null, supplementalFrames: [] };
             }
 
             case 'screenshot': {
@@ -990,8 +1009,7 @@ async function executeAction(
 
             case 'hold':
                 if (action.coordinate) {
-                    const viewport = await browser.getViewport();
-                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     const holdDuration = action.durationMs || 10000;
                     onStatusUpdate(`🖱️  Holding at [${x}, ${y}] for ${holdDuration}ms`);
                     const result = await browser.holdCoordinate(x, y, holdDuration);
@@ -1006,9 +1024,8 @@ async function executeAction(
 
             case 'drag':
                 if (action.coordinate && action.coordinateEnd) {
-                    const viewport = await browser.getViewport();
-                    const [startX, startY] = denormalize(action.coordinate, viewport.width, viewport.height);
-                    const [endX, endY] = denormalize(action.coordinateEnd, viewport.width, viewport.height);
+                    const [startX, startY] = await resolveCoordinate(browser, action.coordinate);
+                    const [endX, endY] = await resolveCoordinate(browser, action.coordinateEnd);
                     const dragDuration = action.durationMs || 900;
                     onStatusUpdate(`🖱️  Dragging from [${startX}, ${startY}] to [${endX}, ${endY}] over ${dragDuration}ms`);
                     const result = await browser.dragCoordinate(startX, startY, endX, endY, dragDuration);
@@ -1023,8 +1040,7 @@ async function executeAction(
 
             case 'clear':
                 if (action.coordinate) {
-                    const viewport = await browser.getViewport();
-                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     onStatusUpdate(`🖱️  Clicking [${x}, ${y}] to focus before clearing`);
                     await browser.clickCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
@@ -1036,8 +1052,7 @@ async function executeAction(
             case 'type':
                 if (action.text) {
                     if (action.coordinate) {
-                        const viewport = await browser.getViewport();
-                        const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                        const [x, y] = await resolveCoordinate(browser, action.coordinate);
                         onStatusUpdate(`🖱️  Clicking [${x}, ${y}] to focus`);
                         await browser.clickCoordinate(x, y);
                         await sleep(timing.actionSettleDelayMs);
@@ -1180,8 +1195,7 @@ async function executeAction(
             case 'getLink': {
                 let linkToCopy: string | null = null;
                 if (action.coordinate) {
-                    const viewport = await browser.getViewport();
-                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     linkToCopy = await browser.getHrefAt(x, y);
                     onStatusUpdate(`🔗 Checked link at [${x}, ${y}]`);
                 }
@@ -1208,8 +1222,7 @@ async function executeAction(
                 }
 
                 if (action.coordinate) {
-                    const viewport = await browser.getViewport();
-                    const [x, y] = denormalize(action.coordinate, viewport.width, viewport.height);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     onStatusUpdate(`🖱️ Clicking to focus for paste at [${x}, ${y}]`);
                     await browser.clickCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);

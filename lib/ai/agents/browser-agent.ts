@@ -1,7 +1,7 @@
 import type { AgentConfig } from './types'
 
 /**
- * Browser agent backed by the local Patchright/Gemini browser runtime.
+ * Browser agent backed by the local visual browser runtime.
  * The browser runtime owns its own visual loop and receives the delegated
  * task prompt directly, so parent agents must send self-contained handoffs.
  */

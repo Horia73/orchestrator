@@ -1048,8 +1048,7 @@ interface ChatContextType {
   // True while the SELECT_CONVERSATION dispatch is queued at transition
   // priority — i.e. React is still preparing the new chat's render in the
   // background and the committed UI is still showing the previous chat.
-  // page.tsx uses this to overlay a skeleton so a slow switch doesn't read
-  // as "stuck on the wrong chat" for several seconds.
+  // page.tsx uses this to fade the committed view while the next one prepares.
   isSwitchingConversation: boolean
   newChat: () => void
   selectConversation: (id: string) => void
@@ -1870,7 +1869,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const selectConversation = React.useCallback(
     (id: string) => {
       // Re-clicking the active chat would otherwise schedule a no-op
-      // transition and flash the skeleton overlay for one frame.
+      // transition and fade the current view for one frame.
       if (activeConversationIdRef.current === id) return
       detachStreaming()
       markConversationRead(id)

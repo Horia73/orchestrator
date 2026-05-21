@@ -10,10 +10,15 @@ import {
     isBrowserProfileInUseError,
     killBrowserProcessesUsingPath,
 } from './profile';
+import type { BrowserBackend, BrowserProfileMode } from './config';
 
 export interface BrowserManagerOptions {
+    backend?: BrowserBackend;
     userDataDir?: string;
     downloadsDir?: string;
+    profileMode?: BrowserProfileMode;
+    baseProfileDir?: string;
+    chromeExecutablePath?: string;
     headless?: boolean;
     liveView?: boolean;
     viewport?: { width: number; height: number } | null;
@@ -23,6 +28,18 @@ export interface BrowserManagerOptions {
 
 export type BrowserFrameSource = 'agent' | 'live';
 export type BrowserCaptureMode = 'viewport' | 'overview';
+export type BrowserCoordinateSpace = 'normalized-viewport' | 'absolute-display';
+
+export interface BrowserPageSessionCapabilities {
+    backend: BrowserBackend;
+    coordinateSpace: BrowserCoordinateSpace;
+    domInspection: boolean;
+    overviewCapture: boolean;
+    tabEnumeration: boolean;
+    downloadEvents: boolean;
+    displayCapture: boolean;
+    osClipboard: boolean;
+}
 
 export interface BrowserPageMetrics {
     width: number;
@@ -38,6 +55,7 @@ export interface BrowserFrameSnapshot {
     imageBase64: string;
     url: string;
     captureMode: BrowserCaptureMode;
+    coordinateSpace?: BrowserCoordinateSpace;
     viewport: { width: number; height: number };
     page: BrowserPageMetrics;
 }
@@ -103,6 +121,7 @@ export interface TracedActionResult {
 export interface BrowserPageSession {
     readonly id: string;
     readonly createdAt: string;
+    readonly capabilities: BrowserPageSessionCapabilities;
     screenshot(source?: BrowserFrameSource): Promise<string>;
     captureAgentFrame(): Promise<BrowserFrameSnapshot>;
     captureLiveFrame(): Promise<BrowserFrameSnapshot>;
@@ -116,6 +135,7 @@ export interface BrowserPageSession {
     paste(text: string): Promise<void>;
     clear(): Promise<void>;
     pressKey(key: string): Promise<void>;
+    findInPage(query: string, next?: boolean): Promise<void>;
     scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<void>;
     navigate(url: string): Promise<void>;
     goBack(): Promise<void>;
@@ -176,6 +196,7 @@ function cloneFrame(frame: BrowserFrameSnapshot): BrowserFrameSnapshot {
         imageBase64: frame.imageBase64,
         url: frame.url,
         captureMode: frame.captureMode,
+        coordinateSpace: frame.coordinateSpace,
         viewport: {
             width: frame.viewport.width,
             height: frame.viewport.height,
@@ -363,6 +384,12 @@ async function selectAllAndClear(page: Page) {
 }
 
 export async function createBrowserManager(options: BrowserManagerOptions = {}): Promise<BrowserManager> {
+    const backend = options.backend ?? 'patchright';
+    if (backend === 'official-display') {
+        const { createOfficialDisplayBrowserManager } = await import('./browser-official-display');
+        return createOfficialDisplayBrowserManager(options);
+    }
+
     let context: BrowserContext | null = null;
     let sessionSequence = 0;
     let displayController: BrowserDisplayController | null = null;
@@ -745,6 +772,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             imageBase64: buffer.toString('base64'),
             url: activePage.url(),
             captureMode,
+            coordinateSpace: 'normalized-viewport',
             viewport: {
                 width: metrics.viewportWidth,
                 height: metrics.viewportHeight,
@@ -1001,9 +1029,20 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     };
 
     const createSessionFacade = (session: BrowserSessionState): BrowserPageSession => {
+        const capabilities: BrowserPageSessionCapabilities = {
+            backend,
+            coordinateSpace: 'normalized-viewport',
+            domInspection: true,
+            overviewCapture: true,
+            tabEnumeration: true,
+            downloadEvents: true,
+            displayCapture: false,
+            osClipboard: false,
+        };
         const facade: BrowserPageSession = {
             id: session.id,
             createdAt: session.createdAt,
+            capabilities,
 
             async screenshot(source: BrowserFrameSource = 'agent'): Promise<string> {
                 const frame = await captureFrame(session, source, 90, source === 'agent');
@@ -1481,6 +1520,23 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             async pressKey(key: string) {
                 const activePage = await ensureActivePage(session);
                 await activePage.keyboard.press(key);
+            },
+
+            async findInPage(query: string, next: boolean = false) {
+                const activePage = await ensureActivePage(session);
+                const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
+                await activePage.keyboard.down(modifier);
+                await activePage.keyboard.press('f');
+                await activePage.keyboard.up(modifier);
+                await sleep(80);
+                await activePage.keyboard.down(modifier);
+                await activePage.keyboard.press('a');
+                await activePage.keyboard.up(modifier);
+                await activePage.keyboard.type(query);
+                if (next) {
+                    await activePage.keyboard.press('Enter');
+                }
             },
 
             async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number = 500) {

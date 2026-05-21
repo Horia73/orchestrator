@@ -9,7 +9,7 @@ import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterat
 import { getMemories } from './memory';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
+    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'findInPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
@@ -244,7 +244,7 @@ function buildVisionParts(
                 ? 'current-frame'
                 : 'page-frame';
         parts.push({
-            text: `Frame ${index + 1}/${orderedFrames.length}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nViewport: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\nPage: ${currentFrame.page.width}x${currentFrame.page.height}\nScroll: ${currentFrame.page.scrollX}, ${currentFrame.page.scrollY}\nTimestamp: ${currentFrame.timestamp}`,
+            text: `Frame ${index + 1}/${orderedFrames.length}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nCoordinate space: ${currentFrame.coordinateSpace ?? 'normalized-viewport'}\nViewport: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\nPage: ${currentFrame.page.width}x${currentFrame.page.height}\nScroll: ${currentFrame.page.scrollX}, ${currentFrame.page.scrollY}\nTimestamp: ${currentFrame.timestamp}`,
         });
         parts.push({
             inlineData: {
@@ -394,7 +394,7 @@ export function createVisionService(
         ): Promise<AgentAction[]> {
             // Get reusable memories (semantic + procedural)
             const memories = getMemories(frame.url, goal);
-            const systemPrompt = buildSystemPrompt(memories, isAdvancedMode);
+            const systemPrompt = buildSystemPrompt(memories, isAdvancedMode, frame.coordinateSpace);
 
             const actionPrompt = isInterrupt
                 ? buildInterruptPrompt(goal)
@@ -420,7 +420,7 @@ export function createVisionService(
                 const text = response.text?.trim() || '';
                 const jsonText = extractJsonText(text);
 
-                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'];
+                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'findInPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'];
 
                 const parsed = JSON.parse(jsonText);
                 const actions: AgentAction[] = Array.isArray(parsed) ? parsed : [parsed];

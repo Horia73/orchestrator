@@ -24,7 +24,7 @@ export interface LinuxVncDisplayStartResult {
 
 const DEFAULT_WS_PORT = 6080;
 const DEFAULT_DISPLAY_START = 90;
-const DEFAULT_DISPLAY_END = 110;
+const DEFAULT_DISPLAY_END = 200;
 
 export async function startLinuxVncDisplay(options: StartLinuxVncDisplayOptions): Promise<LinuxVncDisplayStartResult> {
     const runtime = new LinuxVncDisplayRuntime(options);
@@ -35,7 +35,8 @@ export async function startLinuxVncDisplay(options: StartLinuxVncDisplayOptions)
 class LinuxVncDisplayRuntime implements LinuxVncDisplayHandle {
     private xvnc: ChildProcess | null = null;
     private windowManager: ChildProcess | null = null;
-    private proxy: VncWebSocketProxy | null = null;
+    private proxyRoute: VncProxyRoute | null = null;
+    private displayLockPath: string | null = null;
 
     constructor(private readonly options: StartLinuxVncDisplayOptions) {}
 
@@ -55,13 +56,18 @@ class LinuxVncDisplayRuntime implements LinuxVncDisplayHandle {
             };
         }
 
-        const displayNumber = selectDisplayNumber();
+        const displayAllocation = acquireDisplayAllocation();
+        this.displayLockPath = displayAllocation.lockPath;
+        const displayNumber = displayAllocation.displayNumber;
         const display = `:${displayNumber}`;
         const vncHost = '127.0.0.1';
         const vncPort = intEnv('BROWSER_AGENT_VNC_PORT', 5900 + displayNumber);
         const wsHost = process.env.BROWSER_AGENT_VNC_WS_HOST || '127.0.0.1';
         const wsPort = intEnv('BROWSER_AGENT_VNC_WS_PORT', DEFAULT_WS_PORT);
-        const wsToken = process.env.BROWSER_AGENT_VNC_WS_TOKEN || randomBytes(18).toString('base64url');
+        const configuredWsToken = process.env.BROWSER_AGENT_VNC_WS_TOKEN;
+        const wsToken = configuredWsToken
+            ? `${configuredWsToken}.${randomBytes(9).toString('base64url')}`
+            : randomBytes(18).toString('base64url');
         const runtimeDir = process.env.XDG_RUNTIME_DIR || `/tmp/browser-agent-runtime-${process.getuid?.() ?? 'user'}`;
         try {
             fs.mkdirSync(/* turbopackIgnore: true */ runtimeDir, { recursive: true, mode: 0o700 });
@@ -106,16 +112,17 @@ class LinuxVncDisplayRuntime implements LinuxVncDisplayHandle {
             this.log(`⚠️ Window manager unavailable: ${error instanceof Error ? error.message : String(error)}`);
         }
 
-        this.proxy = new VncWebSocketProxy({
+        const proxy = await VncWebSocketProxy.forEndpoint({
             listenHost: wsHost,
             listenPort: wsPort,
-            targetHost: vncHost,
-            targetPort: vncPort,
-            token: wsToken,
             onLog: this.options.onLog,
         });
         try {
-            await this.proxy.start();
+            this.proxyRoute = proxy.registerRoute({
+                token: wsToken,
+                targetHost: vncHost,
+                targetPort: vncPort,
+            });
         } catch (error) {
             const reason = `VNC WebSocket proxy could not listen on ${wsHost}:${wsPort}: ${formatDisplayError(error)}`;
             this.log(`⚠️ ${reason}`);
@@ -146,12 +153,14 @@ class LinuxVncDisplayRuntime implements LinuxVncDisplayHandle {
     }
 
     async close(): Promise<void> {
-        await this.proxy?.close();
-        this.proxy = null;
+        await this.proxyRoute?.close();
+        this.proxyRoute = null;
         await closeProcess(this.windowManager);
         this.windowManager = null;
         await closeProcess(this.xvnc);
         this.xvnc = null;
+        releaseDisplayLock(this.displayLockPath);
+        this.displayLockPath = null;
     }
 
     private log(message: string): void {
@@ -170,19 +179,110 @@ function findExecutable(candidates: Array<string | undefined>): string | null {
     return null;
 }
 
-function selectDisplayNumber(): number {
+function acquireDisplayAllocation(): { displayNumber: number; lockPath: string } {
     const configured = intEnv('BROWSER_AGENT_DISPLAY', 0);
-    if (configured > 0) return configured;
+    if (configured > 0) {
+        return {
+            displayNumber: configured,
+            lockPath: acquireDisplayLock(configured),
+        };
+    }
 
     for (let display = DEFAULT_DISPLAY_START; display <= DEFAULT_DISPLAY_END; display++) {
         if (
             !fs.existsSync(/* turbopackIgnore: true */ `/tmp/.X${display}-lock`) &&
             !fs.existsSync(/* turbopackIgnore: true */ `/tmp/.X11-unix/X${display}`)
         ) {
-            return display;
+            const lockPath = tryAcquireDisplayLock(display);
+            if (lockPath) {
+                return { displayNumber: display, lockPath };
+            }
         }
     }
-    return DEFAULT_DISPLAY_START + Math.floor(Math.random() * 100);
+
+    for (let attempt = 0; attempt < 100; attempt++) {
+        const display = DEFAULT_DISPLAY_END + 1 + Math.floor(Math.random() * 400);
+        if (
+            fs.existsSync(/* turbopackIgnore: true */ `/tmp/.X${display}-lock`) ||
+            fs.existsSync(/* turbopackIgnore: true */ `/tmp/.X11-unix/X${display}`)
+        ) {
+            continue;
+        }
+        const lockPath = tryAcquireDisplayLock(display);
+        if (lockPath) {
+            return { displayNumber: display, lockPath };
+        }
+    }
+
+    throw new Error(`No free browser display could be reserved in :${DEFAULT_DISPLAY_START}-:${DEFAULT_DISPLAY_END}.`);
+}
+
+function acquireDisplayLock(display: number): string {
+    const lockPath = tryAcquireDisplayLock(display);
+    if (!lockPath) {
+        throw new Error(`Browser display :${display} is already reserved.`);
+    }
+    return lockPath;
+}
+
+function tryAcquireDisplayLock(display: number): string | null {
+    const lockPath = `/tmp/browser-agent-display-${display}.lock`;
+    removeStaleDisplayLock(lockPath);
+
+    try {
+        const fd = fs.openSync(/* turbopackIgnore: true */ lockPath, 'wx', 0o600);
+        try {
+            fs.writeFileSync(fd, `${process.pid}\n${Date.now()}\n`);
+        } finally {
+            fs.closeSync(fd);
+        }
+        return lockPath;
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+            return null;
+        }
+        throw error;
+    }
+}
+
+function removeStaleDisplayLock(lockPath: string): void {
+    let raw = '';
+    try {
+        raw = fs.readFileSync(/* turbopackIgnore: true */ lockPath, 'utf8');
+    } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === 'ENOENT') return;
+        return;
+    }
+
+    const pid = Number(raw.split(/\s+/)[0]);
+    if (Number.isFinite(pid) && pid > 0 && processIsAlive(pid)) {
+        return;
+    }
+
+    try {
+        fs.unlinkSync(/* turbopackIgnore: true */ lockPath);
+    } catch {}
+}
+
+function releaseDisplayLock(lockPath: string | null): void {
+    if (!lockPath) return;
+    try {
+        const raw = fs.readFileSync(/* turbopackIgnore: true */ lockPath, 'utf8');
+        const pid = Number(raw.split(/\s+/)[0]);
+        if (pid && pid !== process.pid) return;
+    } catch {}
+    try {
+        fs.unlinkSync(/* turbopackIgnore: true */ lockPath);
+    } catch {}
+}
+
+function processIsAlive(pid: number): boolean {
+    try {
+        process.kill(pid, 0);
+        return true;
+    } catch (error) {
+        return (error as NodeJS.ErrnoException).code === 'EPERM';
+    }
 }
 
 async function startWindowManager(
@@ -303,18 +403,53 @@ function formatDisplayError(error: unknown): string {
     return String(error);
 }
 
+interface VncProxyRoute {
+    close(): Promise<void>;
+}
+
+interface VncRouteTarget {
+    targetHost: string;
+    targetPort: number;
+}
+
+const vncProxyServers = new Map<string, Promise<VncWebSocketProxy>>();
+
 class VncWebSocketProxy {
     private server: WebSocketServer | null = null;
     private heartbeat: NodeJS.Timeout | null = null;
+    private routes = new Map<string, VncRouteTarget>();
+    private closePromise: Promise<void> | null = null;
 
     constructor(private readonly options: {
+        endpointKey: string;
         listenHost: string;
         listenPort: number;
-        targetHost: string;
-        targetPort: number;
-        token: string;
         onLog?: (message: string) => void;
     }) {}
+
+    static async forEndpoint(options: {
+        listenHost: string;
+        listenPort: number;
+        onLog?: (message: string) => void;
+    }): Promise<VncWebSocketProxy> {
+        const key = `${options.listenHost}:${options.listenPort}`;
+        let existing = vncProxyServers.get(key);
+        if (!existing) {
+            existing = (async () => {
+                const proxy = new VncWebSocketProxy({
+                    ...options,
+                    endpointKey: key,
+                });
+                await proxy.start();
+                return proxy;
+            })();
+            vncProxyServers.set(key, existing);
+            existing.catch(() => {
+                vncProxyServers.delete(key);
+            });
+        }
+        return existing;
+    }
 
     async start(): Promise<void> {
         if (this.server) return;
@@ -325,11 +460,12 @@ class VncWebSocketProxy {
         });
 
         this.server.on('connection', (ws, request) => {
-            if (!this.isAuthorized(request.url || '')) {
+            const target = this.resolveTarget(request.url || '');
+            if (!target) {
                 ws.close(1008, 'Unauthorized');
                 return;
             }
-            this.attach(ws);
+            this.attach(ws, target);
         });
         this.server.on('error', error => {
             this.options.onLog?.(`⚠️ VNC WebSocket proxy error: ${error.message}`);
@@ -354,32 +490,71 @@ class VncWebSocketProxy {
         this.options.onLog?.(`🔌 VNC WebSocket proxy listening on ${this.options.listenHost}:${this.options.listenPort}.`);
     }
 
-    async close(): Promise<void> {
-        if (this.heartbeat) clearInterval(this.heartbeat);
-        this.heartbeat = null;
-        const server = this.server;
-        this.server = null;
-        if (!server) return;
-        for (const client of server.clients) {
-            try { client.close(1001, 'Proxy shutting down.'); } catch {}
-        }
-        await new Promise<void>(resolve => server.close(() => resolve()));
+    registerRoute(options: { token: string; targetHost: string; targetPort: number }): VncProxyRoute {
+        this.routes.set(options.token, {
+            targetHost: options.targetHost,
+            targetPort: options.targetPort,
+        });
+        return {
+            close: async () => {
+                this.routes.delete(options.token);
+                await this.closeIfIdle();
+            },
+        };
     }
 
-    private isAuthorized(url: string): boolean {
+    private async closeIfIdle(): Promise<void> {
+        if (this.routes.size > 0 || !this.server) return;
+        if (this.closePromise) {
+            await this.closePromise;
+            return;
+        }
+
+        const server = this.server;
+        this.closePromise = new Promise<void>((resolve) => {
+            if (this.heartbeat) {
+                clearInterval(this.heartbeat);
+                this.heartbeat = null;
+            }
+
+            for (const client of server.clients) {
+                try { client.terminate(); } catch {}
+            }
+
+            server.close(() => resolve());
+        }).finally(() => {
+            if (this.server === server) {
+                this.server = null;
+            }
+            this.closePromise = null;
+            vncProxyServers.delete(this.options.endpointKey);
+            this.options.onLog?.(`🔌 VNC WebSocket proxy stopped on ${this.options.listenHost}:${this.options.listenPort}.`);
+        });
+
+        await this.closePromise;
+    }
+
+    private resolveTarget(url: string): VncRouteTarget | null {
         try {
             const parsed = new URL(url, 'ws://localhost');
-            return parsed.pathname.split('/').filter(Boolean).includes(this.options.token)
-                || parsed.searchParams.get('token') === this.options.token;
+            const candidates = [
+                ...parsed.pathname.split('/').filter(Boolean),
+                parsed.searchParams.get('token') || '',
+            ].filter(Boolean);
+            for (const token of candidates) {
+                const target = this.routes.get(token);
+                if (target) return target;
+            }
+            return null;
         } catch {
-            return false;
+            return null;
         }
     }
 
-    private attach(ws: WebSocket): void {
+    private attach(ws: WebSocket, target: VncRouteTarget): void {
         const socket = net.createConnection({
-            host: this.options.targetHost,
-            port: this.options.targetPort,
+            host: target.targetHost,
+            port: target.targetPort,
             noDelay: true,
         });
 

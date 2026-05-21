@@ -9,7 +9,8 @@ export async function GET(request: Request) {
     const guard = guardSensitiveRequest(request)
     if (guard) return guard
 
-    const state = await getBrowserSessionManager().getLiveViewState()
+    const sessionId = sessionIdFromRequest(request)
+    const state = await getBrowserSessionManager().getLiveViewState(sessionId)
     return NextResponse.json(toClientState(request, state), {
         headers: { 'Cache-Control': 'no-store' },
     })
@@ -27,10 +28,11 @@ export async function POST(request: Request) {
     }
 
     const action = (body as Record<string, unknown>)?.action
+    const sessionId = sessionIdFromBody(body)
     const manager = getBrowserSessionManager()
 
     if (action === 'take_control' || action === 'release_control') {
-        const state = await manager.setHumanControl(action === 'take_control')
+        const state = await manager.setHumanControl(action === 'take_control', sessionId)
         return NextResponse.json(toClientState(request, state), {
             headers: { 'Cache-Control': 'no-store' },
         })
@@ -44,7 +46,7 @@ export async function POST(request: Request) {
         if (text.length > 200_000) {
             return NextResponse.json({ error: 'text is too large' }, { status: 413 })
         }
-        const state = await manager.pasteText(text)
+        const state = await manager.pasteText(text, sessionId)
         return NextResponse.json(toClientState(request, state), {
             headers: { 'Cache-Control': 'no-store' },
         })
@@ -55,7 +57,7 @@ export async function POST(request: Request) {
         if (!isSafeBrowserKey(key)) {
             return NextResponse.json({ error: 'key is invalid' }, { status: 400 })
         }
-        const state = await manager.pressKey(key)
+        const state = await manager.pressKey(key, sessionId)
         return NextResponse.json(toClientState(request, state), {
             headers: { 'Cache-Control': 'no-store' },
         })
@@ -67,6 +69,26 @@ export async function POST(request: Request) {
 function isSafeBrowserKey(value: unknown): value is string {
     if (typeof value !== 'string' || value.length === 0 || value.length > 80) return false
     return /^[A-Za-z0-9+_.=\-/,;'\[\]\\` ]+$/.test(value)
+}
+
+function sessionIdFromRequest(request: Request): string | null {
+    try {
+        return cleanSessionId(new URL(request.url).searchParams.get('sessionId'))
+    } catch {
+        return null
+    }
+}
+
+function sessionIdFromBody(body: unknown): string | null {
+    if (!body || typeof body !== 'object') return null
+    return cleanSessionId((body as Record<string, unknown>).sessionId)
+}
+
+function cleanSessionId(value: unknown): string | null {
+    if (typeof value !== 'string') return null
+    const trimmed = value.trim()
+    if (!trimmed || trimmed.length > 160) return null
+    return /^[A-Za-z0-9_.:-]+$/.test(trimmed) ? trimmed : null
 }
 
 function toClientState(request: Request, state: BrowserLiveViewClientState) {
@@ -81,6 +103,7 @@ function toClientState(request: Request, state: BrowserLiveViewClientState) {
         height: state.height,
         wsUrl: buildWsUrl(request, state),
         reason: state.reason,
+        selectedSessionId: state.selectedSessionId,
         controlMode: state.controlMode,
         running: state.running,
         paused: state.paused,

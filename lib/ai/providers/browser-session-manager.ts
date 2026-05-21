@@ -30,6 +30,7 @@ export interface BrowserSessionLease {
 }
 
 export interface BrowserLiveViewClientState extends BrowserLiveViewState {
+    selectedSessionId: string | null
     controlMode: 'agent' | 'user'
     running: boolean
     paused: boolean
@@ -54,6 +55,7 @@ interface ManagedBrowserSession {
     createdAt: number
     lastUsedAt: number
     status: ManagedBrowserSessionStatus
+    browserManager: BrowserManager
     pageSession: BrowserPageSession
     runtime: AgentRuntime
     lock: AsyncLock
@@ -82,47 +84,141 @@ class AsyncLock {
     }
 }
 
+class AsyncSemaphore {
+    private active = 0
+    private waiters: Array<() => void> = []
+    private max = 3
+
+    isSaturated(maxConcurrent: number): boolean {
+        const max = normalizeMaxConcurrent(maxConcurrent)
+        return this.active >= max
+    }
+
+    async acquire(maxConcurrent: number): Promise<() => void> {
+        this.max = normalizeMaxConcurrent(maxConcurrent)
+        if (this.active < this.max) {
+            this.active++
+            return this.releaseOnce()
+        }
+
+        await new Promise<void>((resolve) => {
+            this.waiters.push(resolve)
+        })
+        return this.releaseOnce()
+    }
+
+    private releaseOnce(): () => void {
+        let released = false
+        return () => {
+            if (released) return
+            released = true
+            this.active = Math.max(0, this.active - 1)
+            this.drain()
+        }
+    }
+
+    private drain(): void {
+        while (this.active < this.max && this.waiters.length > 0) {
+            const next = this.waiters.shift()
+            if (!next) return
+            this.active++
+            next()
+        }
+    }
+}
+
+function normalizeMaxConcurrent(value: number): number {
+    return Number.isFinite(value) && value > 0 ? Math.floor(value) : 3
+}
+
+function getEffectiveMaxConcurrent(config: BrowserRuntimeConfig): number {
+    if (config.browser.backend === 'official-display' && config.browser.profileMode === 'shared-serial') {
+        return 1
+    }
+    return normalizeMaxConcurrent(config.browser.maxConcurrent)
+}
+
+function usesSharedBrowserManager(config: BrowserRuntimeConfig): boolean {
+    return config.browser.backend !== 'official-display'
+}
+
+function usesOfficialSharedSerialProfile(config: BrowserRuntimeConfig): boolean {
+    return config.browser.backend === 'official-display' && config.browser.profileMode === 'shared-serial'
+}
+
+function getOfficialDisplayUserDataDir(config: BrowserRuntimeConfig, sessionId: string): string {
+    if (config.browser.profileMode === 'shared-serial') {
+        return path.resolve(config.browser.baseProfileDir || config.browser.userDataDir)
+    }
+
+    return path.join(path.resolve(config.browser.userDataDir), 'sessions', sessionId, 'profile')
+}
+
+function getLaunchArgsForBackend(config: BrowserRuntimeConfig): string[] {
+    return config.browser.backend === 'official-display' ? [] : config.browser.launchArgs
+}
+
 class BrowserSessionManager {
     private browserManager: BrowserManager | null = null
     private sessions = new Map<string, ManagedBrowserSession>()
     private cleanupTimer: NodeJS.Timeout | null = null
     private humanControl = false
+    private humanControlSessionId: string | null = null
+    private runSlots = new AsyncSemaphore()
 
     async acquire(options: AcquireBrowserSessionOptions): Promise<BrowserSessionLease> {
-        await this.ensureBrowserManager(options.config)
-        await this.cleanupExpiredSessions()
-
-        const previous = options.prevSession?.id
-            ? this.sessions.get(options.prevSession.id)
-            : undefined
-        const resumed = Boolean(previous && !this.isExpired(previous))
-        const session = resumed
-            ? previous!
-            : await this.createSession(options.config)
-
-        const releaseLock = await session.lock.acquire()
-        if (this.humanControl) {
-            this.humanControl = false
-            for (const managedSession of this.sessions.values()) {
-                managedSession.runtime.resumeTask()
-            }
+        const maxConcurrent = getEffectiveMaxConcurrent(options.config)
+        if (this.runSlots.isSaturated(maxConcurrent)) {
+            options.onStatus(`⏳ Browser agent queued; ${maxConcurrent} run${maxConcurrent === 1 ? '' : 's'} already active.`)
         }
-        session.currentStatusHandler = options.onStatus
-        session.currentEvidenceHandler = options.onEvidence
-        session.status = 'running'
-        session.lastUsedAt = Date.now()
+        const releaseRunSlot = await this.runSlots.acquire(maxConcurrent)
 
-        return {
-            id: session.id,
-            resumed,
-            runtime: session.runtime,
-            release: () => {
-                session.currentStatusHandler = null
-                session.currentEvidenceHandler = null
-                session.lastUsedAt = Date.now()
-                releaseLock()
-                this.scheduleCleanup()
-            },
+        try {
+            if (usesSharedBrowserManager(options.config)) {
+                await this.ensureBrowserManager(options.config)
+            }
+            await this.cleanupExpiredSessions()
+
+            const previous = options.prevSession?.id
+                ? this.sessions.get(options.prevSession.id)
+                : undefined
+            const sharedSerialSession = !previous && usesOfficialSharedSerialProfile(options.config)
+                ? this.getReusableOfficialDisplaySession()
+                : undefined
+            const resumed = Boolean((previous || sharedSerialSession) && !this.isExpired((previous || sharedSerialSession)!))
+            const session = resumed
+                ? (previous || sharedSerialSession)!
+                : await this.createSession(options.config)
+
+            const releaseLock = await session.lock.acquire()
+            if (this.humanControl) {
+                this.humanControl = false
+                this.humanControlSessionId = null
+                for (const managedSession of this.sessions.values()) {
+                    managedSession.runtime.resumeTask()
+                }
+            }
+            session.currentStatusHandler = options.onStatus
+            session.currentEvidenceHandler = options.onEvidence
+            session.status = 'running'
+            session.lastUsedAt = Date.now()
+
+            return {
+                id: session.id,
+                resumed,
+                runtime: session.runtime,
+                release: () => {
+                    session.currentStatusHandler = null
+                    session.currentEvidenceHandler = null
+                    session.lastUsedAt = Date.now()
+                    releaseLock()
+                    releaseRunSlot()
+                    this.scheduleCleanup()
+                },
+            }
+        } catch (error) {
+            releaseRunSlot()
+            throw error
         }
     }
 
@@ -191,9 +287,15 @@ class BrowserSessionManager {
         const session = this.sessions.get(sessionId)
         if (!session) return false
         await session.runtime.shutdown()
-        await this.browserManager?.closeSession(sessionId)
+        await session.browserManager.closeSession(sessionId).catch(() => {
+            // Browser process may already be gone; still tear down the manager.
+        })
         this.sessions.delete(sessionId)
-        if (this.sessions.size === 0) {
+        if (session.browserManager !== this.browserManager) {
+            await session.browserManager.close().catch(() => {
+                // Best-effort cleanup for per-session display capsules.
+            })
+        } else if (this.sessions.size === 0) {
             await this.browserManager?.close()
             this.browserManager = null
         }
@@ -222,10 +324,13 @@ class BrowserSessionManager {
         }
         this.sessions.clear()
         this.humanControl = false
+        this.humanControlSessionId = null
     }
 
-    async getLiveViewState(): Promise<BrowserLiveViewClientState> {
-        const base = this.browserManager?.getLiveViewState() ?? {
+    async getLiveViewState(sessionId?: string | null): Promise<BrowserLiveViewClientState> {
+        const selectedSession = this.getHumanInteractionSession(sessionId)
+        const liveViewManager = selectedSession?.browserManager ?? this.browserManager
+        const base = liveViewManager?.getLiveViewState() ?? {
             enabled: process.platform === 'linux' || process.platform === 'darwin',
             available: false,
             ready: false,
@@ -257,6 +362,7 @@ class BrowserSessionManager {
 
         return {
             ...base,
+            selectedSessionId: selectedSession?.id ?? null,
             controlMode: this.humanControl ? 'user' : 'agent',
             running: sessionStates.some(session => session.running),
             paused: sessionStates.some(session => session.paused),
@@ -264,8 +370,11 @@ class BrowserSessionManager {
         }
     }
 
-    async setHumanControl(enabled: boolean): Promise<BrowserLiveViewClientState> {
+    async setHumanControl(enabled: boolean, sessionId?: string | null): Promise<BrowserLiveViewClientState> {
         this.humanControl = enabled
+        this.humanControlSessionId = enabled
+            ? this.getHumanInteractionSession(sessionId)?.id ?? null
+            : null
         for (const session of this.sessions.values()) {
             if (enabled) {
                 session.runtime.pauseTask()
@@ -273,47 +382,55 @@ class BrowserSessionManager {
                 session.runtime.resumeTask()
             }
         }
-        return this.getLiveViewState()
+        return this.getLiveViewState(this.humanControlSessionId ?? sessionId)
     }
 
-    async pasteText(text: string): Promise<BrowserLiveViewClientState> {
+    async pasteText(text: string, sessionId?: string | null): Promise<BrowserLiveViewClientState> {
         if (!this.humanControl) {
             throw new Error('Take browser control before sending input.')
         }
-        const session = this.getHumanInteractionSession()
+        const session = this.getHumanInteractionSession(sessionId ?? this.humanControlSessionId)
         if (!session) {
             throw new Error('No active browser session is available.')
         }
         await session.pageSession.paste(text)
         session.lastUsedAt = Date.now()
-        return this.getLiveViewState()
+        return this.getLiveViewState(session.id)
     }
 
-    async pressKey(key: string): Promise<BrowserLiveViewClientState> {
+    async pressKey(key: string, sessionId?: string | null): Promise<BrowserLiveViewClientState> {
         if (!this.humanControl) {
             throw new Error('Take browser control before sending input.')
         }
-        const session = this.getHumanInteractionSession()
+        const session = this.getHumanInteractionSession(sessionId ?? this.humanControlSessionId)
         if (!session) {
             throw new Error('No active browser session is available.')
         }
         await session.pageSession.pressKey(key)
         session.lastUsedAt = Date.now()
-        return this.getLiveViewState()
+        return this.getLiveViewState(session.id)
     }
 
     private async ensureBrowserManager(config: BrowserRuntimeConfig): Promise<void> {
+        if (!usesSharedBrowserManager(config)) {
+            return
+        }
+
         if (this.browserManager) {
             await this.browserManager.launch()
             return
         }
 
         this.browserManager = await createBrowserManager({
+            backend: config.browser.backend,
             userDataDir: config.browser.userDataDir,
             downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads'),
+            profileMode: config.browser.profileMode,
+            baseProfileDir: config.browser.baseProfileDir,
+            chromeExecutablePath: config.browser.chromeExecutablePath,
             headless: config.browser.headless,
             liveView: config.browser.liveView,
-            launchArgs: config.browser.launchArgs,
+            launchArgs: getLaunchArgsForBackend(config),
             viewport: config.browser.headless ? DEFAULT_VIEWPORT : null,
             onLog: () => {
                 // Per-run status is emitted by each runtime session; manager-level
@@ -323,13 +440,39 @@ class BrowserSessionManager {
         await this.browserManager.launch()
     }
 
-    private async createSession(config: BrowserRuntimeConfig): Promise<ManagedBrowserSession> {
-        if (!this.browserManager) {
-            throw new Error('Browser manager is not initialized')
+    private async createBrowserManagerForSession(config: BrowserRuntimeConfig, sessionId: string): Promise<BrowserManager> {
+        if (usesSharedBrowserManager(config)) {
+            await this.ensureBrowserManager(config)
+            if (!this.browserManager) {
+                throw new Error('Browser manager is not initialized')
+            }
+            return this.browserManager
         }
 
+        const manager = await createBrowserManager({
+            backend: config.browser.backend,
+            userDataDir: getOfficialDisplayUserDataDir(config, sessionId),
+            downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads', sessionId),
+            profileMode: config.browser.profileMode,
+            baseProfileDir: config.browser.baseProfileDir,
+            chromeExecutablePath: config.browser.chromeExecutablePath,
+            headless: false,
+            liveView: true,
+            launchArgs: getLaunchArgsForBackend(config),
+            viewport: DEFAULT_VIEWPORT,
+            onLog: () => {
+                // Per-run status is emitted by each runtime session; manager-level
+                // launch logs would otherwise leak into unrelated browser tasks.
+            },
+        })
+        await manager.launch()
+        return manager
+    }
+
+    private async createSession(config: BrowserRuntimeConfig): Promise<ManagedBrowserSession> {
         const id = `browser_${randomUUID()}`
-        const pageSession = await this.browserManager.createSession({
+        const browserManager = await this.createBrowserManagerForSession(config, id)
+        const pageSession = await browserManager.createSession({
             id,
             startupUrl: config.browser.startupUrl || undefined,
         })
@@ -339,6 +482,7 @@ class BrowserSessionManager {
             createdAt: Date.now(),
             lastUsedAt: Date.now(),
             status: 'idle',
+            browserManager,
             pageSession,
             lock: new AsyncLock(),
             currentStatusHandler: null,
@@ -348,7 +492,7 @@ class BrowserSessionManager {
         session.runtime = createAgentRuntime(config, (message) => {
             session.currentStatusHandler?.(message)
         }, {
-            browserManager: this.browserManager,
+            browserManager,
             browserSession: pageSession,
             closeBrowserOnShutdown: false,
             onEvidence: (capture) => session.currentEvidenceHandler?.(capture),
@@ -374,11 +518,20 @@ class BrowserSessionManager {
         await Promise.allSettled(expired.map(session => this.closeSession(session.id)))
     }
 
-    private getHumanInteractionSession(): ManagedBrowserSession | null {
+    private getHumanInteractionSession(sessionId?: string | null): ManagedBrowserSession | null {
+        if (sessionId) {
+            return this.sessions.get(sessionId) ?? null
+        }
         const sessions = [...this.sessions.values()].sort((a, b) => b.lastUsedAt - a.lastUsedAt)
         return sessions.find(session => session.status === 'running' || session.status === 'awaiting_user')
             ?? sessions[0]
             ?? null
+    }
+
+    private getReusableOfficialDisplaySession(): ManagedBrowserSession | undefined {
+        return [...this.sessions.values()]
+            .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
+            .find(session => session.pageSession.capabilities.backend === 'official-display' && !this.isExpired(session))
     }
 
     private isExpired(session: ManagedBrowserSession): boolean {

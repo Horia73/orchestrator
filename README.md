@@ -262,16 +262,34 @@ For native installs, runtime workspace state is stored at `~/.orchestrator/state
 
 ## Browser Agent Live View
 
-macOS runs Patchright in a local headful browser window. Linux/Docker uses Xvnc plus a tokenized WebSocket proxy. The provided Docker image includes Chromium, TigerVNC, Openbox, and noVNC client dependencies.
+macOS runs Patchright in a local headful browser window. Linux/Docker can either run Patchright through Xvnc or use `BROWSER_AGENT_BACKEND=official-display` to start one official Chromium window per browser-agent session on its own virtual display, driven through OS input. The provided Docker image includes Chromium, TigerVNC, Openbox, xdotool, xclip, ImageMagick, ffmpeg, and noVNC client dependencies.
 
 Default Docker live-view settings:
 
 ```text
 ORCHESTRATOR_PUBLIC_URL=
 BROWSER_AGENT_LIVE_VIEW=1
+BROWSER_AGENT_BACKEND=patchright
+BROWSER_AGENT_PROFILE_MODE=isolated
+BROWSER_AGENT_MAX_CONCURRENT=3
+BROWSER_AGENT_ALLOW_NO_SANDBOX=1
 BROWSER_AGENT_VNC_WS_HOST=0.0.0.0
 BROWSER_AGENT_VNC_WS_PORT=6080
 BROWSER_AGENT_VNC_WS_PUBLIC_URL=ws://127.0.0.1:6080
+```
+
+For the Linux official-display backend, `isolated` creates a fresh profile per
+session, `clone-base` copies `BROWSER_AGENT_BASE_PROFILE_DIR` into each session
+profile, and `shared-serial` reuses one profile but forces browser-agent runs to
+one at a time. In Docker, Chromium may require `BROWSER_AGENT_ALLOW_NO_SANDBOX=1`;
+run that container on an isolated host boundary. The `BROWSER_AGENT_DISPLAY_STABILITY_*`
+settings tune screenshot-diff settling after OS-input actions.
+
+Linux smoke tests:
+
+```bash
+BROWSER_AGENT_ALLOW_NO_SANDBOX=1 npm run smoke:official-display
+BROWSER_AGENT_ALLOW_NO_SANDBOX=1 npm run smoke:official-display-agent
 ```
 
 Leave `ORCHESTRATOR_PUBLIC_URL` empty for local installs or when a trusted

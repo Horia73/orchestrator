@@ -144,6 +144,11 @@ function isBrowserAgentAwaitingUser(entry: AgentCallReasoningEntry): boolean {
     return /\bSession status:\s*awaiting_user\b/i.test(entry.content)
 }
 
+function browserSessionIdFromContent(content: string): string | null {
+    const match = content.match(/\bBrowser session:\s*([A-Za-z0-9_.:-]+)/i)
+    return match?.[1] ?? null
+}
+
 const MESSAGE_SELECTION_GUTTER_PX = 64
 const INTERACTIVE_SELECTION_TARGET =
     'a,button,input,textarea,select,summary,[role="button"],[contenteditable="true"]'
@@ -906,10 +911,11 @@ function BrowserAgentCallBlock({
     onAttachmentClick?: (attachment: Attachment) => void
 }) {
     const awaitingUser = isBrowserAgentAwaitingUser(entry)
+    const browserSessionId = browserSessionIdFromContent(entry.content)
     return (
         <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
             <div className="ml-7 grid w-[calc(100%_-_1.75rem)] max-w-[760px] gap-2">
-                <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
+                <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
                 {awaitingUser && (
                     <div className="rounded-md border border-amber-500/20 bg-amber-500/10 px-3 py-2 text-[13px] text-amber-800 dark:text-amber-200">
                         Browser is waiting for user input or confirmation.

@@ -8,7 +8,6 @@ import {
   type ArtifactPayload,
 } from "@/components/artifact-panel"
 import { ChatInput } from "@/components/chat-input"
-import { ChatSkeleton } from "@/components/chat-skeleton"
 import { AttachmentCard } from "@/components/attachment-card"
 import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
@@ -1988,7 +1987,7 @@ export function ChatView() {
   )
   const isRestoringInitialFrame =
     isAwaitingInitialScrollRestore || isRestoringScroll
-  const isMessageListHidden = isScrollJumpFading
+  const isMessageListHidden = isScrollJumpFading || isRestoringInitialFrame
 
   React.useEffect(() => {
     conversationIdRef.current = conversationId
@@ -2340,10 +2339,7 @@ export function ChatView() {
               <div
                 data-chat-message-list="true"
                 className={cn(
-                  "flex-1 pt-8",
-                  isRestoringInitialFrame
-                    ? "transition-none"
-                    : "transition-opacity duration-150",
+                  "flex-1 pt-8 transition-opacity duration-150",
                   isMessageListHidden && "pointer-events-none opacity-0"
                 )}
                 style={{ paddingBottom: inputOffset + keyboardInset + 24 }}
@@ -2436,15 +2432,6 @@ export function ChatView() {
               </div>
             </div>
           </div>
-
-          {isRestoringInitialFrame && (
-            <div
-              className="absolute inset-0 z-30 flex min-h-0 flex-col bg-background"
-              aria-hidden="true"
-            >
-              <ChatSkeleton />
-            </div>
-          )}
 
           <div
             ref={inputContainerRef}

@@ -19,6 +19,7 @@ interface BrowserAgentLiveState {
     height?: number
     wsUrl?: string | null
     reason?: string
+    selectedSessionId?: string | null
     controlMode: LiveControlMode
     running: boolean
     paused: boolean
@@ -33,10 +34,11 @@ interface BrowserAgentLiveState {
 
 interface BrowserAgentLiveViewProps {
     active?: boolean
+    sessionId?: string | null
     onOpenDetails?: () => void
 }
 
-export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserAgentLiveViewProps) {
+export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails }: BrowserAgentLiveViewProps) {
     const liveViewRef = React.useRef<HTMLDivElement>(null)
     const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
@@ -58,10 +60,13 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
     }, [controlMode])
 
     const refresh = React.useCallback(async () => {
-        const res = await fetch("/api/browser-agent/live", { cache: "no-store" })
+        const url = sessionId
+            ? `/api/browser-agent/live?sessionId=${encodeURIComponent(sessionId)}`
+            : "/api/browser-agent/live"
+        const res = await fetch(url, { cache: "no-store" })
         if (!res.ok) throw new Error(`Live view status failed: ${res.status}`)
         setState(await res.json() as BrowserAgentLiveState)
-    }, [])
+    }, [sessionId])
 
     React.useEffect(() => {
         let cancelled = false
@@ -135,7 +140,7 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
         const res = await fetch("/api/browser-agent/live", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify(body),
+            body: JSON.stringify(sessionId ? { ...body, sessionId } : body),
         })
         if (!res.ok) {
             const message = await res.text().catch(() => "")
@@ -144,7 +149,7 @@ export function BrowserAgentLiveView({ active = false, onOpenDetails }: BrowserA
         const nextState = await res.json() as BrowserAgentLiveState
         setState(nextState)
         return nextState
-    }, [])
+    }, [sessionId])
 
     const setControl = async (mode: LiveControlMode) => {
         setBusy(true)

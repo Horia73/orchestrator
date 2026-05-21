@@ -41,12 +41,16 @@ RUN apt-get update \
     ca-certificates \
     chromium \
     curl \
+    ffmpeg \
     git \
     fonts-liberation \
+    imagemagick \
     openbox \
     tini \
     tigervnc-standalone-server \
     xauth \
+    xclip \
+    xdotool \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder --chown=node:node /app /app

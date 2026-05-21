@@ -7,20 +7,33 @@ import { ChatView } from "@/components/chat-view"
 import { HomeView } from "@/components/home-view"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { SidebarInset } from "@/components/ui/sidebar"
+import { cn } from "@/lib/utils"
 
-import { HomeSkeleton } from "@/components/home-skeleton"
-import { ChatSkeleton } from "@/components/chat-skeleton"
+function useViewFadeIn(viewKey: string, enabled: boolean) {
+  const [enteredViewKey, setEnteredViewKey] = React.useState<string | null>(
+    null
+  )
+
+  React.useLayoutEffect(() => {
+    if (!enabled) {
+      setEnteredViewKey(null)
+      return
+    }
+
+    setEnteredViewKey(null)
+    const frame = window.requestAnimationFrame(() => {
+      setEnteredViewKey(viewKey)
+    })
+
+    return () => window.cancelAnimationFrame(frame)
+  }, [enabled, viewKey])
+
+  return enabled && enteredViewKey === viewKey
+}
 
 export default function Page() {
   const { state, selectConversation, isSwitchingConversation } = useChatStore()
   const searchParams = useSearchParams()
-  const [mounted, setMounted] = React.useState(false)
-  const [hasIdOnLoad, setHasIdOnLoad] = React.useState(false)
-
-  React.useLayoutEffect(() => {
-    setHasIdOnLoad(!!localStorage.getItem("chat:active-id"))
-    setMounted(true)
-  }, [])
 
   React.useEffect(() => {
     const chatId = searchParams.get("chat")
@@ -45,64 +58,45 @@ export default function Page() {
   const activeConversationError = state.activeConversationId
     ? state.conversationLoadErrors[state.activeConversationId]
     : null
-  const activeConversation = state.activeConversationId
-    ? state.conversations.find(
-        (conversation) => conversation.id === state.activeConversationId
-      )
-    : null
-  const isActiveConversationPriming = Boolean(
-    state.activeConversationId &&
-      (activeConversationStatus == null ||
-        activeConversationStatus === "summary" ||
-        activeConversationStatus === "loading") &&
-      (activeConversation?.messages.length ?? 0) === 0
-  )
+  const viewKey = state.isLoading
+    ? "loading"
+    : state.activeConversationId
+      ? `chat:${state.activeConversationId}`
+      : "home"
+  const viewReady = !state.isLoading
+  const viewEntered = useViewFadeIn(viewKey, viewReady)
+  const viewVisible = viewReady && viewEntered && !isSwitchingConversation
 
   return (
     <>
       <AppSidebar />
       <SidebarInset className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
-        {state.isLoading ? (
-          mounted ? (
-            hasIdOnLoad ? (
-              <ChatSkeleton />
-            ) : (
-              <HomeSkeleton />
-            )
-          ) : null
-        ) : isSwitchingConversation && !state.activeConversationId ? (
-          <ChatSkeleton />
-        ) : isActiveConversationPriming ? (
-          <ChatSkeleton />
-        ) : state.activeConversationId && activeConversationStatus === "error" ? (
-          <div className="flex flex-1 items-center justify-center px-4 text-center">
-            <div>
-              <p className="text-sm font-medium text-foreground">
-                Couldn&apos;t load this chat.
-              </p>
-              <p className="mt-1 text-xs text-muted-foreground">
-                {activeConversationError ?? "Try selecting it again."}
-              </p>
-            </div>
-          </div>
-        ) : state.activeConversationId ? (
-          // Keep ChatView mounted across switches (the whole point of the
-          // perf fix) and overlay the skeleton while React is preparing the
-          // new chat at transition priority — otherwise a heavy switch reads
-          // as "stuck on the previous chat" for several seconds.
-          <div className="relative flex min-h-0 flex-1 flex-col">
-            <ChatView />
-            {isSwitchingConversation && (
-              <div
-                className="absolute inset-0 z-10 flex min-h-0 flex-col bg-background"
-                aria-hidden="true"
-              >
-                <ChatSkeleton />
+        {viewReady && (
+          <div
+            className={cn(
+              "flex min-h-0 flex-1 flex-col bg-background transition-opacity duration-150 ease-out motion-reduce:transition-none",
+              viewVisible ? "opacity-100" : "pointer-events-none opacity-0"
+            )}
+          >
+            {state.activeConversationId && activeConversationStatus === "error" ? (
+              <div className="flex flex-1 items-center justify-center px-4 text-center">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Couldn&apos;t load this chat.
+                  </p>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    {activeConversationError ?? "Try selecting it again."}
+                  </p>
+                </div>
               </div>
+            ) : state.activeConversationId ? (
+              // Keep ChatView mounted across conversation switches; the shell
+              // fades while React prepares the next chat at transition priority.
+              <ChatView />
+            ) : (
+              <HomeView />
             )}
           </div>
-        ) : (
-          <HomeView />
         )}
       </SidebarInset>
     </>
