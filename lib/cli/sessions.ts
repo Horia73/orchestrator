@@ -22,7 +22,7 @@ import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const MAX_BUFFER_BYTES = 512 * 1024
 
-export type SessionMode = 'install' | 'login' | 'logout' | 'status' | 'generate' | 'free'
+export type SessionMode = 'install' | 'login' | 'logout' | 'status' | 'generate' | 'free' | 'setup-token'
 
 export interface SessionEvent {
     type: 'data' | 'exit' | 'error'
@@ -86,6 +86,16 @@ export function startSession(args: StartArgs): string {
         case 'status': cliArgs = spec.statusArgs; break
         case 'generate': cliArgs = args.extraArgs ?? []; break
         case 'free': cliArgs = []; break
+        case 'setup-token':
+            // Claude Code mints a long-lived API token via `claude
+            // setup-token`. Codex has no equivalent; the spawn route rejects
+            // setup-token for unsupported CLIs so we don't need to handle it
+            // here defensively beyond throwing if the spec lacks args.
+            if (!spec.setupTokenArgs) {
+                throw new Error(`${spec.name} does not support setup-token mode`)
+            }
+            cliArgs = spec.setupTokenArgs
+            break
     }
 
     const cols = args.cols ?? 100

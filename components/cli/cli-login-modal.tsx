@@ -10,7 +10,7 @@ import { CliTerminal } from "./cli-terminal"
 interface CliLoginModalProps {
     cliName: string
     cliId: string
-    mode: "install" | "login" | "logout" | "free"
+    mode: "install" | "login" | "logout" | "free" | "setup-token"
     hint: string
     onClose: () => void
 }
@@ -105,7 +105,15 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
                         </span>
                         <div>
                             <h3 className="text-[16px] font-semibold leading-tight text-foreground">
-                                {cliName} — {mode === "install" ? "Install" : mode === "login" ? "Login" : mode === "logout" ? "Logout" : "Session"}
+                                {cliName} — {mode === "install"
+                                    ? "Install"
+                                    : mode === "login"
+                                        ? "Login"
+                                        : mode === "logout"
+                                            ? "Logout"
+                                            : mode === "setup-token"
+                                                ? "Set up long-lived token"
+                                                : "Session"}
                             </h3>
                             <p className="mt-0.5 text-[12.5px] text-foreground/60">{hint}</p>
                         </div>
@@ -175,7 +183,11 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
                             ? exited.code === 0
                                 ? "Session ended successfully."
                                 : `Session ended with exit ${exited.code ?? "?"}.`
-                            : mode === "install" ? "Wait for installation to finish, then close this window." : "Type or click a URL to complete the flow."}
+                            : mode === "install"
+                                ? "Wait for installation to finish, then close this window."
+                                : mode === "setup-token"
+                                    ? "Open the URL, copy the token it prints, paste it back into this terminal."
+                                    : "Type or click a URL to complete the flow."}
                     </span>
                     <button
                         onClick={onClose}

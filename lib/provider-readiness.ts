@@ -50,26 +50,36 @@ export async function getProviderReadiness(
         const statuses = await getAllCliStatuses()
         const status = statuses[providerId]
         const spec = CLI_SPECS[providerId]
-        const available = Boolean(status?.installed && status?.loggedIn)
+        // A token that's expired-or-expiring-imminently is functionally
+        // unavailable: the next chat will fail with a silent 401 from the
+        // CLI. Surface this as a setup error up-front so the chat route
+        // returns a structured 401 with a clear chatMessage instead of
+        // letting the empty/cryptic stream error reach the bubble.
+        const expired = Boolean(status?.needsReconnect)
+        const available = Boolean(status?.installed && status?.loggedIn && !expired)
         const unavailableReason = available
             ? null
             : !status?.installed
                 ? `${spec.name} is not installed.`
-                : `${spec.name} is installed but not logged in.`
+                : !status?.loggedIn
+                    ? `${spec.name} is installed but not logged in.`
+                    : `${spec.name} OAuth token has expired and needs reconnect.`
         return {
             available,
             authKind: 'cli',
             apiKeyConfigured: false,
             apiKeyMasked: null,
             cliInstalled: Boolean(status?.installed),
-            cliLoggedIn: Boolean(status?.loggedIn),
+            cliLoggedIn: Boolean(status?.loggedIn) && !expired,
             cliName: spec.name,
             unavailableReason,
             chatMessage: available
                 ? null
                 : !status?.installed
                     ? `No model loaded. Install ${spec.name} from Settings > Auth, then log in before sending a chat message.`
-                    : `No model loaded. Log in to ${spec.name} from Settings > Auth before sending a chat message.`,
+                    : !status?.loggedIn
+                        ? `No model loaded. Log in to ${spec.name} from Settings > Auth before sending a chat message.`
+                        : `${spec.name} session expired. Open Settings > Auth and click Reconnect — or run \`claude setup-token\` for a long-lived token that won't expire on a headless server.`,
         }
     }
 

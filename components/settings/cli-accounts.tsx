@@ -4,7 +4,9 @@ import * as React from "react"
 import {
     AlertCircle,
     CheckCircle2,
+    Clock,
     Download,
+    KeyRound,
     Loader2,
     LogIn,
     LogOut,
@@ -21,7 +23,7 @@ import { useCliStatus, type CliStatusEntry } from "./use-cli-status"
 interface ModalState {
     cliId: string
     cliName: string
-    mode: "install" | "login" | "logout" | "free"
+    mode: "install" | "login" | "logout" | "free" | "setup-token"
     hint: string
 }
 
@@ -98,6 +100,12 @@ export function CliAccountsSection() {
                             mode: "logout",
                             hint: "Removing stored credentials. This may be instant.",
                         })}
+                        onSetupToken={() => setModal({
+                            cliId: id,
+                            cliName: entry.name,
+                            mode: "setup-token",
+                            hint: "Browser will open to mint a long-lived API token. Copy the token it prints back into this terminal, then close this window. The token is stored locally and does not expire — recommended for headless installs.",
+                        })}
                     />
                 ))}
             </div>
@@ -115,19 +123,37 @@ export function CliAccountsSection() {
     )
 }
 
-function CliCard({ id, entry, onInstall, onLogin, onLogout }: {
+function CliCard({ id, entry, onInstall, onLogin, onLogout, onSetupToken }: {
     id: string
     entry: CliStatusEntry
     onInstall: () => void
     onLogin: () => void
     onLogout: () => void
+    onSetupToken: () => void
 }) {
-    void id  // reserved for future per-id customisation
+    // Only Claude Code exposes the setup-token flow today; codex doesn't have
+    // an equivalent and would confuse the user with an option that no-ops.
+    const supportsSetupToken = id === "claude-code"
+    const isOAuth = entry.authMethod === "oauth"
+    const isSetupToken = entry.authMethod === "setup-token"
+
     const statusBadge = !entry.installed
         ? <Badge tone="muted" icon={<XCircle className="size-3" />}>Not installed</Badge>
-        : entry.loggedIn
-            ? <Badge tone="success" icon={<CheckCircle2 className="size-3" />}>Logged in</Badge>
-            : <Badge tone="warn" icon={<AlertCircle className="size-3" />}>Not logged in</Badge>
+        : entry.needsReconnect
+            ? <Badge tone="warn" icon={<Clock className="size-3" />}>Reconnect</Badge>
+            : entry.loggedIn
+                ? <Badge tone="success" icon={<CheckCircle2 className="size-3" />}>Logged in</Badge>
+                : <Badge tone="warn" icon={<AlertCircle className="size-3" />}>Not logged in</Badge>
+
+    const authMethodLabel = isOAuth
+        ? "Browser OAuth (expires)"
+        : isSetupToken
+            ? "Long-lived token (no expiry)"
+            : entry.authMethod === "api-key"
+                ? "API key"
+                : undefined
+
+    const expiryLabel = formatExpiryHint(entry.expiresAt, entry.needsReconnect)
 
     return (
         <Card>
@@ -153,7 +179,30 @@ function CliCard({ id, entry, onInstall, onLogin, onLogout }: {
                             <span className="text-foreground/85">{entry.detail}</span>
                         </>
                     )}
+                    {authMethodLabel && (
+                        <>
+                            <span className="text-foreground/55">Auth</span>
+                            <span className={cn(
+                                "text-foreground/85",
+                                entry.needsReconnect && "text-amber-700 dark:text-amber-400"
+                            )}>
+                                {authMethodLabel}
+                                {expiryLabel ? ` · ${expiryLabel}` : ""}
+                            </span>
+                        </>
+                    )}
                 </div>
+
+                {entry.needsReconnect && supportsSetupToken && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-900 dark:text-amber-200">
+                        <p className="font-medium">OAuth session expired.</p>
+                        <p className="mt-0.5 text-amber-800/85 dark:text-amber-200/85">
+                            Click <span className="font-medium">Reconnect</span> to refresh via browser OAuth, or set up a{" "}
+                            <span className="font-medium">long-lived token</span> — recommended on a headless server so the
+                            session does not drop every few days.
+                        </p>
+                    </div>
+                )}
 
                 <div className="flex flex-wrap gap-2 pt-1">
                     {!entry.installed ? (
@@ -176,27 +225,95 @@ function CliCard({ id, entry, onInstall, onLogin, onLogout }: {
                                 </a>
                             )}
                         </>
+                    ) : entry.needsReconnect ? (
+                        <>
+                            <button
+                                onClick={onLogin}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-2.5 text-[12.5px] font-medium text-background transition-opacity hover:opacity-90"
+                            >
+                                <LogIn className="size-3.5" />
+                                Reconnect
+                            </button>
+                            {supportsSetupToken && (
+                                <button
+                                    onClick={onSetupToken}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    <KeyRound className="size-3.5" />
+                                    Use long-lived token
+                                </button>
+                            )}
+                            <button
+                                onClick={onLogout}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
+                            >
+                                <LogOut className="size-3.5" />
+                                Log out
+                            </button>
+                        </>
                     ) : entry.loggedIn ? (
-                        <button
-                            onClick={onLogout}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
-                        >
-                            <LogOut className="size-3.5" />
-                            Log out
-                        </button>
+                        <>
+                            {supportsSetupToken && isOAuth && (
+                                <button
+                                    onClick={onSetupToken}
+                                    title="Switch to a non-expiring API token — best for headless installs."
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    <KeyRound className="size-3.5" />
+                                    Switch to long-lived token
+                                </button>
+                            )}
+                            <button
+                                onClick={onLogout}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
+                            >
+                                <LogOut className="size-3.5" />
+                                Log out
+                            </button>
+                        </>
                     ) : (
-                        <button
-                            onClick={onLogin}
-                            className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-2.5 text-[12.5px] font-medium text-background transition-opacity hover:opacity-90"
-                        >
-                            <LogIn className="size-3.5" />
-                            Log in
-                        </button>
+                        <>
+                            <button
+                                onClick={onLogin}
+                                className="inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-2.5 text-[12.5px] font-medium text-background transition-opacity hover:opacity-90"
+                            >
+                                <LogIn className="size-3.5" />
+                                Log in
+                            </button>
+                            {supportsSetupToken && (
+                                <button
+                                    onClick={onSetupToken}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    <KeyRound className="size-3.5" />
+                                    Use long-lived token
+                                </button>
+                            )}
+                        </>
                     )}
                 </div>
             </CardContent>
         </Card>
     )
+}
+
+function formatExpiryHint(expiresAt: number | undefined, needsReconnect: boolean | undefined): string {
+    if (typeof expiresAt !== "number") return ""
+    const deltaMs = expiresAt - Date.now()
+    if (deltaMs < 0) {
+        const ago = -deltaMs
+        if (ago < 60_000) return "expired just now"
+        if (ago < 3_600_000) return `expired ${Math.round(ago / 60_000)}m ago`
+        if (ago < 86_400_000) return `expired ${Math.round(ago / 3_600_000)}h ago`
+        return `expired ${Math.round(ago / 86_400_000)}d ago`
+    }
+    if (needsReconnect) {
+        if (deltaMs < 60_000) return "expires in <1m"
+        return `expires in ${Math.round(deltaMs / 60_000)}m`
+    }
+    if (deltaMs < 3_600_000) return `expires in ${Math.round(deltaMs / 60_000)}m`
+    if (deltaMs < 86_400_000) return `expires in ${Math.round(deltaMs / 3_600_000)}h`
+    return `expires in ${Math.round(deltaMs / 86_400_000)}d`
 }
 
 function Badge({ tone, icon, children }: {

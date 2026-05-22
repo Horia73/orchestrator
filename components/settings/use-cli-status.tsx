@@ -11,6 +11,12 @@ export interface CliStatusEntry {
     loginHint: string
     installed: boolean
     loggedIn: boolean
+    /** True when credentials exist but are expired/expiring — render as Reconnect. */
+    needsReconnect?: boolean
+    /** Unix-ms OAuth expiry, if known. */
+    expiresAt?: number
+    /** `oauth`, `setup-token`, `api-key`, `unknown`. */
+    authMethod?: "oauth" | "setup-token" | "api-key" | "unknown"
     detail?: string
 }
 

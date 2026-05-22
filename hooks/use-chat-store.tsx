@@ -2700,7 +2700,44 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     message: finalMsg,
                   })
                 } else if (data.type === "error") {
-                  console.error("Stream error:", data.error)
+                  // Provider/runtime error mid-stream. The server has already
+                  // persisted this assistant message with status:"error" via
+                  // its own onError path, so the post-refresh DB load shows
+                  // the same content. We mirror it into local state so the
+                  // user sees the error *immediately* without needing to
+                  // refresh — symmetrically with the "stopped" branch above.
+                  streamDoneRef.current = true
+                  const rawError =
+                    typeof data.error === "string" && data.error.trim()
+                      ? data.error
+                      : "The model runtime returned an error."
+                  const errorBody =
+                    accContent && accContent.trim().length > 0
+                      ? `${accContent}\n\n[Error: ${rawError}]`
+                      : `[Error: ${rawError}]`
+                  const finalMsg: Message = {
+                    id: assistantMsgId,
+                    role: "assistant",
+                    content: errorBody,
+                    status: "error",
+                    contentSegments:
+                      accContentSegments.length > 0
+                        ? accContentSegments
+                        : [{ phase: 0, content: errorBody }],
+                    reasoning: accReasoning,
+                    thinking: accThinking || undefined,
+                    thinkingDuration: finalThinkingDuration || 0,
+                    attachments:
+                      accAttachments.length > 0 ? accAttachments : undefined,
+                    timestamp: Date.now(),
+                  }
+                  dispatch({
+                    type: "ADD_ASSISTANT_MESSAGE",
+                    conversationId: finalConvId,
+                    message: finalMsg,
+                  })
+                  handleAssistantFinished(finalConvId, finalMsg)
+                  console.error("Stream error:", rawError)
                 }
               } catch {
                 // Skip malformed JSON

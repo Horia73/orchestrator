@@ -19,6 +19,26 @@ export interface CliStatus {
     installed: boolean
     /** True if the user is authenticated (subscription/cloud). */
     loggedIn: boolean
+    /**
+     * True when credentials exist locally but are stale/expired and the next
+     * agent invocation will fail. Set independently of `loggedIn` so the UI
+     * can render a distinct "Reconnect" state without losing the account
+     * email/subscription metadata we already parsed.
+     */
+    needsReconnect?: boolean
+    /**
+     * Unix-ms timestamp of OAuth access-token expiry, when known. Surfaced so
+     * the UI can show "expires in 2h" or "expired 3 days ago" without
+     * re-parsing the credentials file.
+     */
+    expiresAt?: number
+    /**
+     * How the user is currently authenticated. `oauth` = browser/keychain
+     * login (expires); `setup-token` = long-lived token from `claude
+     * setup-token` (doesn't expire under normal use). Used to recommend
+     * `setup-token` for headless server installs.
+     */
+    authMethod?: 'oauth' | 'setup-token' | 'api-key' | 'unknown'
     /** Free-form details surfaced in the UI (email, plan, etc.). */
     detail?: string
     /** Raw stdout from the status check — useful when parsing fails. */
@@ -53,6 +73,13 @@ export interface CliSpec {
     parseStatus: (stdout: string, stderr: string, exitCode: number) => CliStatus
     /** Args for non-interactive generation given the user's prompt. */
     generationArgs: (prompt: string) => string[]
+    /**
+     * Args for the long-lived-token setup flow (e.g. `claude setup-token`).
+     * Omit on CLIs without an equivalent — UI hides the button. The flow is
+     * interactive (prompts for browser URL, asks user to paste token back) so
+     * it runs in the same PTY-backed CliTerminal as `login`.
+     */
+    setupTokenArgs?: string[]
 }
 
 type CliEnv = NodeJS.ProcessEnv | Record<string, string | undefined>
@@ -74,6 +101,13 @@ export const CLI_SPECS: Record<CliId, CliSpec> = {
         parseStatus: (stdout, _stderr, exitCode) => {
             // claude auth status emits JSON. Fall back to a permissive parse so
             // a rogue Claude Code update can't break login state detection.
+            //
+            // `loggedIn:true` here means "credentials file exists" — the CLI
+            // doesn't probe expiry. We layer expiry detection on top in
+            // lib/cli/status.ts by reading ~/.claude/.credentials.json so the
+            // UI can distinguish a healthy session from one that needs
+            // re-auth (silent 401s mid-stream otherwise — exactly the bug
+            // we hit on polybot-linux after 3 days of uptime).
             try {
                 const parsed = JSON.parse(stdout) as Record<string, unknown>
                 const loggedIn = parsed.loggedIn === true
@@ -104,6 +138,11 @@ export const CLI_SPECS: Record<CliId, CliSpec> = {
             '--include-partial-messages',
             '--verbose',
         ],
+        // `claude setup-token` opens a browser to mint a long-lived API
+        // token, prints a code, then waits for the user to paste it back.
+        // Required for headless / Docker installs where OAuth refresh
+        // silently dies after a few days. Requires a Claude subscription.
+        setupTokenArgs: ['setup-token'],
     },
     'codex': {
         id: 'codex',
