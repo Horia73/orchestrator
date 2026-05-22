@@ -3,7 +3,7 @@ export const ORCHESTRATOR_MONITORING = `
 Smart Monitor is a DEDICATED surface for "tell me when X happens at <source>" subscriptions. It is separate from Scheduling and from Watchlist:
 - Scheduling = one-off and recurring FIXED-cadence work the user explicitly asked for ("turn off the light in 7h", "weekly P&L Friday 17:00", "check the price once a day"). Produces output every fire regardless of state.
 - Watchlist = financial instruments + product prices with charts. Markets monitor (its consolidated heartbeat) is separate from Smart Monitor.
-- Smart Monitor = a SINGLE consolidated heartbeat that ticks every 5 min and silently iterates user-configured "watches" across Gmail / WhatsApp / Home Assistant / Web. Wakes you (the orchestrator) ONLY when a candidate survives suppress patterns and quiet hours — multiple matches across multiple watches are batched into ONE consolidated wake. Think of watches as subscriptions to that heartbeat, NOT as individual scheduled tasks.
+- Smart Monitor = a SINGLE consolidated heartbeat that ticks every 5 min and silently iterates user-configured "watches" across Gmail / WhatsApp / Home Assistant / Web / Weather. Wakes you (the orchestrator) ONLY when a candidate survives suppress patterns and quiet hours — multiple matches across multiple watches are batched into ONE consolidated wake. Think of watches as subscriptions to that heartbeat, NOT as individual scheduled tasks.
 
 Tools (see also \`monitor_describe_sources\` for the current capability snapshot):
 - \`monitor_describe_sources\` — what sources exist + which predicate / action kinds each understands. Call this BEFORE proposing a watch if you are not sure the predicate you have in mind is supported.
@@ -22,6 +22,8 @@ How to translate user words into a structured rule:
 - "Urgent emails" → likely \`{ kind: 'any_of', rules: [ { kind: 'gmail_subject_contains', substrings: ['urgent','asap'] }, { kind: 'gmail_from', senders: ['<their boss>'] } ] }\` — propose, refine with the user.
 - "Garage door opens" → \`{ kind: 'ha_state_equals', entityId: 'binary_sensor.garage_door', state: 'on' }\` — HA state transitions fire on the cross, not on steady state, so no spam.
 - "Tickets back in stock at <URL>" → \`{ kind: 'web_text_contains', url: '<URL>', substrings: ['Add to cart','In stock'] }\` or \`{ kind: 'web_json_path', url: '<endpoint>', jsonPath: 'available', op: 'equals', value: true }\`. Verify the page returns the value cheaply before committing.
+- "Rain in Cluj above 60% in the next 3h" → source \`weather\`, target \`Cluj\`, rule \`{ kind: 'weather_precip_probability', location: 'Cluj', windowHours: 3, op: '>=', value: 60 }\`. Weather rules fire when the whole rule crosses from false to true, not every tick while still true.
+- "UV high tomorrow" → \`{ kind: 'weather_uv', location: '<city>', windowHours: 36, op: '>=', value: 8 }\`; "AQI bad" → \`{ kind: 'weather_aqi', location: '<city>', op: '>', value: 100 }\`; "storm/snow expected" → \`{ kind: 'weather_condition', location: '<city>', windowHours: 24, conditions: ['thunderstorm','heavy-rain'] }\`.
 - If the user's intent does not map to a deterministic predicate, ask them to narrow it (the engine evaluates rules without an LLM in the hot loop, so vague intent = noise).
 
 Cadence: defaults to 900s (15 min). Bounds are [300s, 43200s] = 5min to 12h. Adaptive ON by default — the engine widens to 1.5x after 4 quiet runs, 2x after 12, and tightens back toward min on activity. If the user wants a strictly fixed cadence ("check every 30 min exactly"), pass \`cadence.adaptive: false\`. \`current\`, \`min\`, \`max\` accept either seconds or duration strings like "15m" / "2h" / "1d".
@@ -30,7 +32,7 @@ Allowed actions: by default a watch can ONLY \`notify_inbox\`. To grant the mode
 
 Quiet hours: ask whether they want one. Common pattern: 23:00-07:00 local. The engine drops the model wake during that window (matches are still recorded in the audit log; they're just not surfaced until the window ends). If the user has not set system-wide quiet hours yet, set them per-watch for now.
 
-Source extensibility: today Gmail / WhatsApp / Home Assistant / Web are wired. Web watches cover URL endpoints that return JSON or text (great for ticket pages, status pages, RSS-like polling). Custom is a reserved slot for future source modules; if a request fits none of the wired four, decline and explain rather than coerce it into web.
+Source extensibility: today Gmail / WhatsApp / Home Assistant / Web / Weather are wired. Web watches cover URL endpoints that return JSON or text (great for ticket pages, status pages, RSS-like polling). Weather watches cover deterministic forecast thresholds. Custom is a reserved slot for future source modules; if a request fits none of the wired sources, decline and explain rather than coerce it into web.
 
 What Smart Monitor is NOT for: standalone reminders (use schedule_task), markets data (use Watchlist), one-shot research ("what's the weather" — just answer it). If the user describes a periodic check that produces a value every time regardless of state (a daily report, a weekly digest), that is schedule_task, not Smart Monitor.
 

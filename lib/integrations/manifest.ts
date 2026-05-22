@@ -32,6 +32,7 @@ export type IntegrationStatusKind =
     | 'google-drive'
     | 'whatsapp'
     | 'home-assistant'
+    | 'weather'
 
 export interface IntegrationManifestEntry {
     /** Stable id — used by ActivateIntegrationTools, the activation store, and the runbook. */
@@ -57,6 +58,7 @@ const GOOGLE_CALENDAR_SETUP = ['GoogleCalendarStatus', 'GoogleCalendarConfigure'
 const GOOGLE_DRIVE_SETUP = ['GoogleDriveStatus', 'GoogleDriveConfigure', 'GoogleDriveStartOAuth']
 const WHATSAPP_SETUP = ['WhatsAppStatus', 'WhatsAppConnect']
 const HOME_ASSISTANT_SETUP = ['HomeAssistantStatus', 'HomeAssistantConfigure']
+const WEATHER_SETUP = ['WeatherStatus']
 
 function operationalOnly(all: string[], setup: string[]): string[] {
     const setupSet = new Set(setup)
@@ -116,6 +118,18 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
         statusKind: 'home-assistant',
         setupToolIds: HOME_ASSISTANT_SETUP,
         operationalToolIds: operationalOnly(HOME_ASSISTANT_TOOL_IDS, HOME_ASSISTANT_SETUP),
+    },
+    {
+        id: 'weather',
+        label: 'Weather',
+        capability: 'Render live iOS-style weather cards inline in the chat — current conditions, 24-hour scroll, 10-day forecast, UV/wind/sunrise detail tiles, optional AQI, historical comparison, and pollen. Uses Google Weather / Air Quality / Pollen when the shared Maps Platform key is configured, with keyless Open-Meteo fallback.',
+        runbookId: 'weather',
+        statusKind: 'weather',
+        setupToolIds: WEATHER_SETUP,
+        // WeatherShow lives on the orchestrator directly (composition exclusive).
+        // Manifest entry exists for the connection-status block.
+        operationalToolIds: [],
+        note: 'WeatherShow is always visible to the orchestrator. Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.',
     },
 ]
 

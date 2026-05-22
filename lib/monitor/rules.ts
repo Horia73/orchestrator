@@ -82,12 +82,35 @@ export interface WebCandidate {
     fetchedAt: number
 }
 
+/** One weather forecast snapshot for a location. Weather rules are steady-state
+ *  here; the weather source adapter handles "fire only on threshold crossing"
+ *  at the whole-rule level so composed rules behave correctly. */
+export interface WeatherCandidate {
+    source: 'weather'
+    location: string
+    timezone: string
+    fetchedAt: number
+    currentTemperature: number
+    feelsLike: number
+    highTemperature: number
+    lowTemperature: number
+    maxPrecipProbability: number
+    maxUvIndex: number
+    windSpeed: number
+    windGust: number | null
+    aqi: number | null
+    currentCondition: string
+    conditions: string[]
+    windowHours: number
+}
+
 /** Union of all candidate shapes. The adapter narrows by the `source` tag. */
 export type EvalCandidate =
     | GmailCandidate
     | HomeAssistantCandidate
     | WhatsAppCandidate
     | WebCandidate
+    | WeatherCandidate
 
 // --- helpers --------------------------------------------------------------
 
@@ -139,6 +162,22 @@ function compareStatus(
         case '>=': return status >= value
         case '<': return status < value
     }
+}
+
+function locationMatches(ruleLocation: string | undefined, candidateLocation: string): boolean {
+    if (!ruleLocation) return true
+    const rule = normalizeLocation(ruleLocation)
+    const candidate = normalizeLocation(candidateLocation)
+    return candidate === rule || candidate.includes(rule) || rule.includes(candidate)
+}
+
+function normalizeLocation(value: string): string {
+    return value
+        .normalize('NFKD')
+        .replace(/[\u0300-\u036f]/g, '')
+        .toLowerCase()
+        .replace(/[^a-z0-9]+/g, ' ')
+        .trim()
 }
 
 /** Minimal dot-path lookup, supports `a.b.c` and `a.b[0].c`. Returns
@@ -293,6 +332,44 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
             if (candidate.url !== rule.url) return false
             if (candidate.text === null) return false
             return containsAny(candidate.text, rule.substrings, rule.caseInsensitive)
+
+        // --- weather ---
+        case 'weather_precip_probability':
+            if (candidate.source !== 'weather') return false
+            if (!locationMatches(rule.location, candidate.location)) return false
+            return compareNumeric(rule.op, candidate.maxPrecipProbability, rule.value)
+        case 'weather_temperature': {
+            if (candidate.source !== 'weather') return false
+            if (!locationMatches(rule.location, candidate.location)) return false
+            const value = rule.metric === 'current' ? candidate.currentTemperature
+                : rule.metric === 'feels_like' ? candidate.feelsLike
+                : rule.metric === 'high' ? candidate.highTemperature
+                : candidate.lowTemperature
+            return compareNumeric(rule.op, value, rule.value)
+        }
+        case 'weather_wind': {
+            if (candidate.source !== 'weather') return false
+            if (!locationMatches(rule.location, candidate.location)) return false
+            const value = rule.metric === 'gust'
+                ? (candidate.windGust ?? candidate.windSpeed)
+                : candidate.windSpeed
+            return compareNumeric(rule.op, value, rule.value)
+        }
+        case 'weather_uv':
+            if (candidate.source !== 'weather') return false
+            if (!locationMatches(rule.location, candidate.location)) return false
+            return compareNumeric(rule.op, candidate.maxUvIndex, rule.value)
+        case 'weather_aqi':
+            if (candidate.source !== 'weather') return false
+            if (!locationMatches(rule.location, candidate.location)) return false
+            if (candidate.aqi === null) return false
+            return compareNumeric(rule.op, candidate.aqi, rule.value)
+        case 'weather_condition': {
+            if (candidate.source !== 'weather') return false
+            if (!locationMatches(rule.location, candidate.location)) return false
+            const wanted = new Set<string>(rule.conditions)
+            return candidate.conditions.some((condition) => wanted.has(condition))
+        }
     }
 }
 
@@ -307,6 +384,14 @@ export const RULE_KINDS_BY_SOURCE = {
     whatsapp: ['wa_from', 'wa_text_contains', 'wa_mention'] as const,
     home_assistant: ['ha_state_equals', 'ha_state_changes', 'ha_attribute_changes', 'ha_threshold'] as const,
     web: ['web_status', 'web_json_path', 'web_text_contains'] as const,
+    weather: [
+        'weather_precip_probability',
+        'weather_temperature',
+        'weather_wind',
+        'weather_uv',
+        'weather_aqi',
+        'weather_condition',
+    ] as const,
     custom: [] as const,
 } satisfies Record<string, ReadonlyArray<MonitorRule['kind']>>
 

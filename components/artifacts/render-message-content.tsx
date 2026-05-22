@@ -75,10 +75,26 @@ export function RenderMessageContent({ content, messageId, onExpand }: RenderArg
                 // sandboxed iframe isn't asked to compile half-written JSX on
                 // every token. Markdown / SVG / CSV stay live — they fail
                 // gracefully on partial input.
-                const streamingType = !seg.closed && !realRow && RUNTIME_TYPES.has(seg.attrs.type)
+                //
+                // Weather artifacts are JSON-bodied. Showing them as streamed
+                // code makes the user stare at a one-line horizontally
+                // scrolling JSON until the close tag lands; a friendly
+                // placeholder is much better UX while the model fills in the body.
+                const streaming = !seg.closed && !realRow
+                const isPlaceholderTarget = streaming && PLACEHOLDER_TYPES.has(seg.attrs.type)
+                if (isPlaceholderTarget) {
+                    return (
+                        <StreamingPlaceholder
+                            key={`p-${i}-${seg.attrs.identifier}`}
+                            type={seg.attrs.type}
+                            title={seg.attrs.title}
+                        />
+                    )
+                }
+                const streamingType = streaming && RUNTIME_TYPES.has(seg.attrs.type)
                     ? 'application/vnd.ant.code'
                     : seg.attrs.type
-                const streamingLanguage = !seg.closed && !realRow
+                const streamingLanguage = streaming
                     ? streamingLanguageFor(seg.attrs)
                     : seg.attrs.language ?? null
                 const artifact: ArtifactRow = realRow ?? {
@@ -139,7 +155,31 @@ const RUNTIME_TYPES = new Set([
     'application/vnd.ant.react',
     'text/html',
     'application/vnd.ant.mermaid',
+    'application/vnd.ant.weather',
 ])
+
+/**
+ * MIME types whose streamed body is JSON-shaped. The user gets no value
+ * from staring at a single-line horizontally scrolling JSON dump while the
+ * model fills it in, so we swap in a tiny placeholder card until the real
+ * renderer mounts.
+ */
+const PLACEHOLDER_TYPES = new Set([
+    'application/vnd.ant.weather',
+])
+
+function StreamingPlaceholder({ type, title }: { type: string; title: string }) {
+    const kind = type === 'application/vnd.ant.weather' ? 'weather' : 'artifact'
+    return (
+        <div className="my-2 flex items-center gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm">
+            <div className="size-2 animate-pulse rounded-full bg-blue-500" aria-hidden />
+            <div className="min-w-0 flex-1">
+                <div className="truncate font-medium text-foreground">{title}</div>
+                <div className="text-[12px] text-muted-foreground">Building {kind}…</div>
+            </div>
+        </div>
+    )
+}
 
 function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
     if (attrs.language) return attrs.language
@@ -147,6 +187,7 @@ function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
         case 'application/vnd.ant.react': return 'tsx'
         case 'text/html': return 'html'
         case 'application/vnd.ant.mermaid': return 'text'
+        case 'application/vnd.ant.weather': return 'json'
         default: return null
     }
 }

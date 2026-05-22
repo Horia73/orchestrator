@@ -27,6 +27,7 @@ import { setTaskStateTool } from './task-state'
 import { watchlistTools } from './watchlist'
 import { monitorWakeFeedbackTool } from './smart-monitor-feedback'
 import { smartMonitorManageTools } from './smart-monitor-manage'
+import { weatherSetCalendarContextTool, weatherSetOutfitTool, weatherSetWhyTool, weatherShowTool, weatherStatusTool } from './weather'
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -164,3 +165,8 @@ registerTool(setTaskStateTool)
 for (const tool of watchlistTools) registerTool(tool)
 registerTool(monitorWakeFeedbackTool)
 for (const tool of smartMonitorManageTools) registerTool(tool)
+registerTool(weatherStatusTool)
+registerTool(weatherShowTool)
+registerTool(weatherSetOutfitTool)
+registerTool(weatherSetWhyTool)
+registerTool(weatherSetCalendarContextTool)

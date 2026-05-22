@@ -36,6 +36,7 @@ export const WatchSourceSchema = z.enum([
     'whatsapp',
     'home_assistant',
     'web',
+    'weather',
     'custom',
 ])
 export type WatchSource = z.infer<typeof WatchSourceSchema>
@@ -142,11 +143,38 @@ export type MonitorRule =
     | { kind: 'web_status'; url: string; op: 'equals' | 'not_equals' | '>=' | '<' | 'changes'; value?: number }
     | { kind: 'web_json_path'; url: string; jsonPath: string; op: 'equals' | 'not_equals' | 'changes'; value?: unknown }
     | { kind: 'web_text_contains'; url: string; substrings: string[]; caseInsensitive?: boolean }
+    // weather
+    | { kind: 'weather_precip_probability'; location?: string; windowHours?: number; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
+    | { kind: 'weather_temperature'; location?: string; metric: 'current' | 'feels_like' | 'high' | 'low'; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
+    | { kind: 'weather_wind'; location?: string; metric: 'speed' | 'gust'; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
+    | { kind: 'weather_uv'; location?: string; windowHours?: number; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
+    | { kind: 'weather_aqi'; location?: string; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
+    | { kind: 'weather_condition'; location?: string; windowHours?: number; conditions: Array<'clear' | 'partly-cloudy' | 'cloudy' | 'overcast' | 'fog' | 'drizzle' | 'rain' | 'heavy-rain' | 'sleet' | 'snow' | 'heavy-snow' | 'hail' | 'thunderstorm' | 'windy' | 'unknown'> }
     // composition
     | { kind: 'any_of'; rules: MonitorRule[] }
     | { kind: 'all_of'; rules: MonitorRule[] }
 
 // Non-recursive cases as a discriminated union for cheap dispatch / nice errors.
+const WeatherRuleLocationSchema = z.string().min(1).max(160).optional()
+const WeatherWindowHoursSchema = z.number().int().min(1).max(240).optional()
+const WeatherNumericOpSchema = z.enum(['>', '<', '>=', '<=', '==', '!='])
+const WeatherMonitorConditionSchema = z.enum([
+    'clear',
+    'partly-cloudy',
+    'cloudy',
+    'overcast',
+    'fog',
+    'drizzle',
+    'rain',
+    'heavy-rain',
+    'sleet',
+    'snow',
+    'heavy-snow',
+    'hail',
+    'thunderstorm',
+    'windy',
+    'unknown',
+])
 const LeafRuleSchema = z.discriminatedUnion('kind', [
     // gmail
     z.object({
@@ -220,6 +248,47 @@ const LeafRuleSchema = z.discriminatedUnion('kind', [
         url: z.string().url().max(2048),
         substrings: z.array(z.string().min(1).max(200)).min(1).max(16),
         caseInsensitive: z.boolean().optional(),
+    }),
+    // weather
+    z.object({
+        kind: z.literal('weather_precip_probability'),
+        location: WeatherRuleLocationSchema,
+        windowHours: WeatherWindowHoursSchema,
+        op: WeatherNumericOpSchema,
+        value: z.number().min(0).max(100),
+    }),
+    z.object({
+        kind: z.literal('weather_temperature'),
+        location: WeatherRuleLocationSchema,
+        metric: z.enum(['current', 'feels_like', 'high', 'low']),
+        op: WeatherNumericOpSchema,
+        value: z.number(),
+    }),
+    z.object({
+        kind: z.literal('weather_wind'),
+        location: WeatherRuleLocationSchema,
+        metric: z.enum(['speed', 'gust']),
+        op: WeatherNumericOpSchema,
+        value: z.number().min(0),
+    }),
+    z.object({
+        kind: z.literal('weather_uv'),
+        location: WeatherRuleLocationSchema,
+        windowHours: WeatherWindowHoursSchema,
+        op: WeatherNumericOpSchema,
+        value: z.number().min(0).max(20),
+    }),
+    z.object({
+        kind: z.literal('weather_aqi'),
+        location: WeatherRuleLocationSchema,
+        op: WeatherNumericOpSchema,
+        value: z.number().min(0).max(1000),
+    }),
+    z.object({
+        kind: z.literal('weather_condition'),
+        location: WeatherRuleLocationSchema,
+        windowHours: WeatherWindowHoursSchema,
+        conditions: z.array(WeatherMonitorConditionSchema).min(1).max(16),
     }),
 ])
 

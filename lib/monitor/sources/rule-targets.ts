@@ -122,3 +122,22 @@ export function extractWaContactsFromRule(rule: MonitorRule): string[] {
     })
     return [...seen]
 }
+
+/** Distinct weather locations referenced by weather_* leaves. Empty means
+ *  the adapter should use the watch target as the location. */
+export function extractWeatherLocationsFromRule(rule: MonitorRule): string[] {
+    const seen = new Set<string>()
+    walk(rule, (leaf) => {
+        if (
+            leaf.kind === 'weather_precip_probability' ||
+            leaf.kind === 'weather_temperature' ||
+            leaf.kind === 'weather_wind' ||
+            leaf.kind === 'weather_uv' ||
+            leaf.kind === 'weather_aqi' ||
+            leaf.kind === 'weather_condition'
+        ) {
+            if (leaf.location?.trim()) seen.add(leaf.location.trim())
+        }
+    })
+    return [...seen]
+}

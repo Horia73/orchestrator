@@ -7,6 +7,7 @@ import { getGoogleCalendarIntegrationStatus } from '@/lib/integrations/google-ca
 import { getGoogleDriveIntegrationStatus } from '@/lib/integrations/google-drive'
 import { getHomeAssistantIntegrationStatus } from '@/lib/integrations/home-assistant'
 import { getWhatsAppIntegrationStatus } from '@/lib/integrations/whatsapp'
+import { getWeatherIntegrationStatus } from '@/lib/integrations/weather'
 import { recordIntegrationStatuses } from '@/lib/integrations/status-snapshot'
 import { getRuntimeAccessInfo } from '@/lib/runtime-access'
 
@@ -18,17 +19,18 @@ export async function GET(request: Request) {
     if (guard) return guard
 
     const origin = resolveRequestOrigin(request)
-    const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, runtime] = await Promise.all([
+    const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, weather, runtime] = await Promise.all([
         getGmailIntegrationStatus(origin, true),
         getGoogleCalendarIntegrationStatus(origin, true),
         getGoogleDriveIntegrationStatus(origin, true),
         getWhatsAppIntegrationStatus(origin),
         getHomeAssistantIntegrationStatus(true),
+        getWeatherIntegrationStatus(true),
         getRuntimeAccessInfo(origin),
     ])
     // Warm the prompt-side snapshot so the next agent turn reflects reality
     // without paying for its own async status round-trip.
-    recordIntegrationStatuses({ gmail, googleCalendar, googleDrive, whatsapp, homeAssistant })
+    recordIntegrationStatuses({ gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, weather })
 
     // Smart Monitor integration-install offer check — fire-and-forget so we
     // don't extend the status response time. Idempotent via a persisted
@@ -41,5 +43,5 @@ export async function GET(request: Request) {
         mod.maybeOfferSmartMonitor({ gmail, homeAssistant, whatsapp })
     ).catch((err) => console.warn('[smart-monitor-offer] background check failed', err))
 
-    return NextResponse.json({ gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, runtime })
+    return NextResponse.json({ gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, weather, runtime })
 }

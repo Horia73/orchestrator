@@ -252,6 +252,7 @@ Important variables:
 - `OPENAI_API_KEY`: OpenAI provider.
 - `ANTHROPIC_API_KEY`: Anthropic provider.
 - `TWELVE_DATA_API_KEY`: Watchlist financial search, quotes, and history.
+- `GOOGLE_MAPS_API_KEY`: optional Google Maps Platform key for Google Weather, Air Quality, Pollen, and Google Geocoding. Weather can fall back through keyless Open-Meteo when it is not set.
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`: Google Workspace and Gmail OAuth.
 - `HOME_ASSISTANT_URL` / `HOME_ASSISTANT_TOKEN`: Home Assistant integration.
 - `WHATSAPP_CHROME_EXECUTABLE_PATH`: browser executable override for WhatsApp.

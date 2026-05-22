@@ -87,6 +87,7 @@ function extensionFor(type: string, language?: string | null): string {
         case 'application/x-latex': return 'tex'
         case 'text/html': return 'html'
         case 'application/vnd.ant.react': return 'tsx'
+        case 'application/vnd.ant.weather': return 'json'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
         case 'application/vnd.ant.code': return safePathPart(language ?? 'txt')

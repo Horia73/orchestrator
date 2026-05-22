@@ -227,6 +227,18 @@ export const MONITORING_TOOL_IDS: string[] = [
     'monitor_wake_feedback',
 ]
 
+// Weather artifact authoring — orchestrator-only by design. Other agents
+// that want a weather card delegate back. `WeatherShow` is end-to-end
+// (geocode + fetch + transform + validate), so it sits on the orchestrator
+// with the rest of the composition tools.
+export const WEATHER_TOOL_IDS: string[] = [
+    'WeatherStatus',
+    'WeatherShow',
+    'WeatherSetOutfit',
+    'WeatherSetWhy',
+    'WeatherSetCalendarContext',
+]
+
 export const DELEGATING_WORKSPACE_TOOLS: string[] = [
     ...LEGACY_WORKSPACE_TOOL_IDS,
     ...WORKSPACE_TOOL_IDS,

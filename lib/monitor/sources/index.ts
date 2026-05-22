@@ -6,6 +6,7 @@ import { gmailSourceAdapter } from './gmail'
 import { homeAssistantSourceAdapter } from './home_assistant'
 import type { SourceAdapter } from './types'
 import { webSourceAdapter } from './web'
+import { weatherSourceAdapter } from './weather'
 import { whatsappSourceAdapter } from './whatsapp'
 
 // ---------------------------------------------------------------------------
@@ -21,6 +22,7 @@ const REGISTRY: Record<WatchSource, SourceAdapter> = {
     whatsapp: whatsappSourceAdapter,
     home_assistant: homeAssistantSourceAdapter,
     web: webSourceAdapter,
+    weather: weatherSourceAdapter,
     custom: customSourceAdapter,
 }
 

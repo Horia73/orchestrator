@@ -43,6 +43,19 @@ export function describeRule(rule: MonitorRule): string {
         case 'web_text_contains':
             return `Web ${rule.url} page text contains: ${rule.substrings.join(' OR ')}`
 
+        case 'weather_precip_probability':
+            return `Weather ${rule.location ?? 'target'} rain probability next ${rule.windowHours ?? 24}h ${rule.op} ${rule.value}%`
+        case 'weather_temperature':
+            return `Weather ${rule.location ?? 'target'} ${rule.metric} temperature ${rule.op} ${rule.value}°C`
+        case 'weather_wind':
+            return `Weather ${rule.location ?? 'target'} ${rule.metric} ${rule.op} ${rule.value} m/s`
+        case 'weather_uv':
+            return `Weather ${rule.location ?? 'target'} UV next ${rule.windowHours ?? 24}h ${rule.op} ${rule.value}`
+        case 'weather_aqi':
+            return `Weather ${rule.location ?? 'target'} AQI ${rule.op} ${rule.value}`
+        case 'weather_condition':
+            return `Weather ${rule.location ?? 'target'} condition in next ${rule.windowHours ?? 24}h: ${rule.conditions.join(' OR ')}`
+
         case 'any_of':
             return `ANY of: { ${rule.rules.map(describeRule).join(' | ')} }`
         case 'all_of':

@@ -8,6 +8,7 @@ import { ORCHESTRATOR_MONITORING } from './monitoring'
 import { ORCHESTRATOR_OUTPUT_CONTRACT } from './output-contract'
 import { ORCHESTRATOR_SCHEDULING } from './scheduling'
 import { ORCHESTRATOR_WATCHLIST } from './watchlist'
+import { ORCHESTRATOR_WEATHER } from './weather'
 
 export const ORCHESTRATOR_PROMPT = [
     ORCHESTRATOR_CORE,
@@ -23,6 +24,10 @@ export const ORCHESTRATOR_PROMPT = [
     // the model contrast each.
     ORCHESTRATOR_MONITORING,
     ORCHESTRATOR_SCHEDULING,
+    // Weather capability — exclusive to orchestrator. One tool, end-to-end
+    // (geocode + fetch + transform); the model emits the resulting
+    // <artifact type="application/vnd.ant.weather"> verbatim.
+    ORCHESTRATOR_WEATHER,
     ORCHESTRATOR_OUTPUT_CONTRACT,
     ORCHESTRATOR_EXAMPLES,
 ].filter(Boolean).join('\n\n')

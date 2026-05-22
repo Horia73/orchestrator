@@ -47,6 +47,12 @@ import { ArtifactParser } from "@/lib/artifacts/parser"
 import type { ArtifactOpenAttrs } from "@/lib/artifacts/schema"
 import { insertArtifact } from "@/lib/artifacts/store"
 import { stripWrappingCodeFence } from "@/lib/artifacts/sanitize"
+import {
+  getArtifactUpdateData,
+  getDirectEmitArtifactData,
+  stripArtifactUpdatePayload,
+  stripDirectEmitPayload,
+} from "@/lib/artifacts/direct-emit"
 import { redactToolArgs } from "@/lib/ai/tools/redaction"
 import { filterIntegrationToolExposure } from "@/lib/integrations/exposure"
 import { resolveExistingUploadPath } from "@/lib/uploads"
@@ -936,6 +942,101 @@ export async function POST(request: Request) {
           return result
         })
 
+        // Shared content-chunk pipeline. Called for every text fragment that
+        // arrives — either real model output (`onContent`) or a server-side
+        // injection from a tool result (`directEmit` artifacts). Centralising
+        // the path means a synthetic chunk gets accContent persistence,
+        // streaming SSE delivery, parser-driven artifact creation, and the
+        // resulting `artifact_end` event with the inserted row — all
+        // identical to a chunk the model emitted itself.
+        const processContentChunk = (text: string, synthetic: boolean): void => {
+          void synthetic
+          accContent += text
+          appendContentChunk(text)
+          if (text.length > 0) streamMode = "content"
+          if (text.length > 0) send({ type: "content", content: text })
+          for (const ev of artifactParser.feed(text)) {
+            switch (ev.kind) {
+              case "prose":
+                break
+              case "artifact_start":
+                pendingArtifacts.set(ev.clientToken, {
+                  attrs: ev.attrs,
+                  content: "",
+                })
+                send({
+                  type: "artifact_start",
+                  clientToken: ev.clientToken,
+                  attrs: ev.attrs,
+                })
+                break
+              case "artifact_chunk": {
+                const p = pendingArtifacts.get(ev.clientToken)
+                if (p) p.content += ev.text
+                break
+              }
+              case "artifact_end": {
+                const p = pendingArtifacts.get(ev.clientToken)
+                pendingArtifacts.delete(ev.clientToken)
+                if (p) {
+                  try {
+                    const row = insertArtifact({
+                      conversationId,
+                      messageId,
+                      identifier: p.attrs.identifier,
+                      type: p.attrs.type,
+                      title: p.attrs.title,
+                      language: p.attrs.language ?? null,
+                      display: p.attrs.display ?? null,
+                      content: stripWrappingCodeFence(p.content),
+                    })
+                    send({
+                      type: "artifact_end",
+                      clientToken: ev.clientToken,
+                      artifact: row,
+                    })
+                  } catch (err) {
+                    send({
+                      type: "artifact_error",
+                      clientToken: ev.clientToken,
+                      message: err instanceof Error ? err.message : "persist failed",
+                    })
+                  }
+                } else {
+                  send({ type: "artifact_end", clientToken: ev.clientToken })
+                }
+                break
+              }
+              case "artifact_error":
+                send({ type: "artifact_error", message: ev.message })
+                break
+            }
+          }
+          persistAssistantProgress()
+        }
+
+        // Build the synthetic artifact tag a tool wants auto-emitted into
+        // the assistant message body. Used by tools that return a
+        // canonical `body` along with `directEmit: true` (Weather today;
+        // map / report / spreadsheet in time). The tag follows the EXACT
+        // shape the model would normally write — same parser path, same
+        // DB row, same client rendering.
+        function buildAutoArtifactTag(data: {
+          identifier: string
+          type: string
+          title: string
+          display?: string | null
+          body: string
+        }): string {
+          const escape = (v: string) => v
+            .replace(/&/g, "&amp;")
+            .replace(/"/g, "&quot;")
+            .replace(/</g, "&lt;")
+            .replace(/>/g, "&gt;")
+          const display = data.display ? ` display="${escape(data.display)}"` : ""
+          return `\n<artifact identifier="${escape(data.identifier)}" type="${escape(data.type)}" title="${escape(data.title)}"${display}>${data.body}</artifact>\n`
+        }
+
         await providerStream.call(
           provider,
           {
@@ -975,95 +1076,7 @@ export async function POST(request: Request) {
               send({ type: "thinking_done", seconds })
             },
             onContent(text) {
-              // Always preserve raw text in DB so the message is
-              // reload-safe regardless of artifact-renderer support.
-              accContent += text
-              appendContentChunk(text)
-              if (text.length > 0) streamMode = "content"
-
-              // Send raw text to the client. The live UI runs its
-              // own ArtifactParser to interleave prose with
-              // artifact cards — keeping the wire as raw text
-              // means StreamingBubble and MessageBubble render
-              // identically whether the message is mid-stream,
-              // just-finished, or reloaded from the DB.
-              if (text.length > 0) send({ type: "content", content: text })
-
-              // Server-side parse stays — it's how we persist
-              // artifact rows to SQLite and surface artifact_*
-              // signals (draft placeholders, error fallback).
-              for (const ev of artifactParser.feed(text)) {
-                switch (ev.kind) {
-                  case "prose":
-                    // Already in the raw content event above.
-                    break
-                  case "artifact_start":
-                    pendingArtifacts.set(ev.clientToken, {
-                      attrs: ev.attrs,
-                      content: "",
-                    })
-                    send({
-                      type: "artifact_start",
-                      clientToken: ev.clientToken,
-                      attrs: ev.attrs,
-                    })
-                    break
-                  case "artifact_chunk": {
-                    // Accumulate locally for the DB row at
-                    // artifact_end. Body bytes are already
-                    // on the wire via the raw content
-                    // stream, so no SSE event here.
-                    const p = pendingArtifacts.get(ev.clientToken)
-                    if (p) p.content += ev.text
-                    break
-                  }
-                  case "artifact_end": {
-                    const p = pendingArtifacts.get(ev.clientToken)
-                    pendingArtifacts.delete(ev.clientToken)
-                    if (p) {
-                      try {
-                        const row = insertArtifact({
-                          conversationId,
-                          messageId,
-                          identifier: p.attrs.identifier,
-                          type: p.attrs.type,
-                          title: p.attrs.title,
-                          language: p.attrs.language ?? null,
-                          display: p.attrs.display ?? null,
-                          // Strip wrapping ```lang ... ``` fence if the model added one.
-                          content: stripWrappingCodeFence(p.content),
-                        })
-                        send({
-                          type: "artifact_end",
-                          clientToken: ev.clientToken,
-                          artifact: row,
-                        })
-                      } catch (err) {
-                        send({
-                          type: "artifact_error",
-                          clientToken: ev.clientToken,
-                          message:
-                            err instanceof Error
-                              ? err.message
-                              : "persist failed",
-                        })
-                      }
-                    } else {
-                      send({
-                        type: "artifact_end",
-                        clientToken: ev.clientToken,
-                      })
-                    }
-                    break
-                  }
-                  case "artifact_error":
-                    // Malformed tag — surface to UI and fall back to prose (the
-                    // parser already feeds the raw literal to the prose stream).
-                    send({ type: "artifact_error", message: ev.message })
-                    break
-                }
-              }
-              persistAssistantProgress()
+              processContentChunk(text, /* synthetic= */ false)
             },
             onToolCall(toolCall) {
               if (streamMode === "content") {
@@ -1103,6 +1116,80 @@ export async function POST(request: Request) {
               appendToolDelta(toolCallId, toolName, delta, send)
             },
             onToolResult(toolCallId, toolName, result) {
+              // Auto-inject artifact tag for tools that opt in via
+              // `directEmit: true`. The synthetic tag flows through the
+              // SAME content-chunk pipeline the model uses, so the parser
+              // creates the artifact row, the client mounts the card, and
+              // the assistant message body reads identically to a turn
+              // where the model emitted the tag itself.
+              const directEmit = result.success
+                ? getDirectEmitArtifactData(result.data)
+                : null
+              if (directEmit) {
+                // Always log the outcome of the directEmit check — makes it
+                // possible to diagnose "no card appeared" without spelunking
+                // through the SSE stream. Logs are dev-only noise; consider
+                // gating behind a debug flag later.
+                console.log(
+                  `[autoinject] tool=${toolName} success=${result.success} directEmit=true ` +
+                  `hasBody=true type=${directEmit.type} identifier=${directEmit.identifier} -> INJECTING`,
+                )
+                const tag = buildAutoArtifactTag({
+                  identifier: directEmit.identifier,
+                  type: directEmit.type,
+                  title: directEmit.title,
+                  display: directEmit.display ?? "inline",
+                  body: directEmit.body,
+                })
+                processContentChunk(tag, /* synthetic= */ true)
+                // Strip body + usage from the streamed tool result so the
+                // UI does not show giant JSON after the artifact has mounted.
+                result = {
+                  ...result,
+                  data: stripDirectEmitPayload(directEmit.source),
+                }
+              } else {
+                const artifactUpdate = result.success
+                  ? getArtifactUpdateData(result.data)
+                  : null
+                if (artifactUpdate) {
+                  try {
+                    const row = insertArtifact({
+                      conversationId,
+                      messageId,
+                      identifier: artifactUpdate.identifier,
+                      type: artifactUpdate.type,
+                      title: artifactUpdate.title,
+                      display: artifactUpdate.display === "panel" ? "panel" : "inline",
+                      content: stripWrappingCodeFence(artifactUpdate.body),
+                    })
+                    send({
+                      type: "artifact_end",
+                      clientToken: `artifact-update-${row.id}`,
+                      artifact: row,
+                    })
+                    console.log(
+                      `[artifact-update] tool=${toolName} identifier=${artifactUpdate.identifier} ` +
+                      `type=${artifactUpdate.type} version=${row.version}`,
+                    )
+                    result = {
+                      ...result,
+                      data: stripArtifactUpdatePayload(artifactUpdate.source),
+                    }
+                  } catch (err) {
+                    result = {
+                      success: false,
+                      error: err instanceof Error ? err.message : "artifact update failed",
+                    }
+                  }
+                } else if (toolName === "WeatherShow") {
+                  console.log(
+                    `[autoinject] WeatherShow result: success=${result.success} ` +
+                    `error=${result.error ?? "n/a"}`,
+                  )
+                }
+              }
+
               const displayContent = result.success
                 ? typeof result.data === "object"
                   ? JSON.stringify(result.data, null, 2)

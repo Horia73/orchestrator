@@ -186,6 +186,18 @@ import {
   executeScheduleTask,
 } from "./schedule"
 import { executeNotifyInbox } from "./notify"
+import {
+    executeWeatherSetCalendarContext,
+    executeWeatherSetOutfit,
+    executeWeatherSetWhy,
+    executeWeatherShow,
+    executeWeatherStatus,
+    WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
+    WEATHER_SET_OUTFIT_TOOL_ID,
+    WEATHER_SET_WHY_TOOL_ID,
+    WEATHER_SHOW_TOOL_ID,
+    WEATHER_STATUS_TOOL_ID,
+} from "./weather"
 import { executeSetTaskState } from "./task-state"
 import { executeMonitorWakeFeedback } from "./smart-monitor-feedback"
 import {
@@ -379,6 +391,11 @@ const executors: Record<string, ToolExecutor> = {
   reschedule_task: executeRescheduleTask,
   notify_inbox: executeNotifyInbox,
   set_task_state: executeSetTaskState,
+  [WEATHER_SHOW_TOOL_ID]: executeWeatherShow,
+  [WEATHER_SET_OUTFIT_TOOL_ID]: executeWeatherSetOutfit,
+  [WEATHER_SET_WHY_TOOL_ID]: executeWeatherSetWhy,
+  [WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID]: executeWeatherSetCalendarContext,
+  [WEATHER_STATUS_TOOL_ID]: executeWeatherStatus,
   WatchlistAddFinancialInstrument: executeWatchlistAddFinancialInstrument,
   WatchlistAddProduct: executeWatchlistAddProduct,
   WatchlistRemoveItem: executeWatchlistRemoveItem,

@@ -26,6 +26,7 @@ import {
     type GmailCandidate,
     type HomeAssistantCandidate,
     type WebCandidate,
+    type WeatherCandidate,
     type WhatsAppCandidate,
 } from '@/lib/monitor/rules'
 import type { MonitorRule } from '@/lib/monitor/schema'
@@ -34,6 +35,7 @@ import {
     extractEntityIdsFromRule,
     extractUrlsFromRule,
     extractWaContactsFromRule,
+    extractWeatherLocationsFromRule,
 } from '@/lib/monitor/sources/rule-targets'
 import {
     assertRuleMatchesSource,
@@ -108,6 +110,27 @@ function web(partial: Partial<WebCandidate>): WebCandidate {
         json: { items: [{ available: true, price: 9.99 }] },
         previousJson: { items: [{ available: false, price: 9.99 }] },
         fetchedAt: 1_700_000_000_000,
+        ...partial,
+    }
+}
+function weather(partial: Partial<WeatherCandidate>): WeatherCandidate {
+    return {
+        source: 'weather',
+        location: 'Cluj-Napoca',
+        timezone: 'Europe/Bucharest',
+        fetchedAt: 1_700_000_000_000,
+        currentTemperature: 24,
+        feelsLike: 25,
+        highTemperature: 29,
+        lowTemperature: 17,
+        maxPrecipProbability: 65,
+        maxUvIndex: 7,
+        windSpeed: 5,
+        windGust: 12,
+        aqi: 42,
+        currentCondition: 'partly-cloudy',
+        conditions: ['partly-cloudy', 'rain'],
+        windowHours: 24,
         ...partial,
     }
 }
@@ -249,7 +272,39 @@ check('web rules return false when URL mismatches', !evaluateRule(
 ))
 
 // ============================================================================
-// 5. Cross-source defensive
+// 5. Weather predicates
+// ============================================================================
+check('weather_precip_probability hit', evaluateRule(
+    { kind: 'weather_precip_probability', location: 'Cluj', op: '>=', value: 60 },
+    weather({}),
+))
+check('weather_temperature high hit', evaluateRule(
+    { kind: 'weather_temperature', metric: 'high', op: '>', value: 28 },
+    weather({}),
+))
+check('weather_wind gust hit', evaluateRule(
+    { kind: 'weather_wind', metric: 'gust', op: '>=', value: 12 },
+    weather({}),
+))
+check('weather_uv hit', evaluateRule(
+    { kind: 'weather_uv', op: '>=', value: 7 },
+    weather({}),
+))
+check('weather_aqi hit', evaluateRule(
+    { kind: 'weather_aqi', op: '<', value: 50 },
+    weather({}),
+))
+check('weather_condition hit', evaluateRule(
+    { kind: 'weather_condition', conditions: ['rain'] },
+    weather({}),
+))
+check('weather location mismatch misses', !evaluateRule(
+    { kind: 'weather_temperature', location: 'Bucharest', metric: 'current', op: '>', value: 20 },
+    weather({}),
+))
+
+// ============================================================================
+// 6. Cross-source defensive
 // ============================================================================
 check('gmail rule on HA candidate → false', !evaluateRule(
     { kind: 'gmail_from', senders: ['mom@x'] },
@@ -258,6 +313,10 @@ check('gmail rule on HA candidate → false', !evaluateRule(
 check('HA rule on web candidate → false', !evaluateRule(
     { kind: 'ha_state_changes', entityId: 'x' },
     web({}) as EvalCandidate,
+))
+check('weather rule on Gmail candidate → false', !evaluateRule(
+    { kind: 'weather_uv', location: 'Cluj', op: '>=', value: 6 },
+    gmail({}) as EvalCandidate,
 ))
 
 // ============================================================================
@@ -326,6 +385,15 @@ const waRule: MonitorRule = {
 }
 check('extractWaContactsFromRule', JSON.stringify(extractWaContactsFromRule(waRule).sort()) === JSON.stringify(['Dad', 'Mom']))
 
+const weatherRule: MonitorRule = {
+    kind: 'any_of', rules: [
+        { kind: 'weather_temperature', location: 'Cluj', metric: 'high', op: '>', value: 30 },
+        { kind: 'weather_uv', location: 'Cluj', op: '>=', value: 8 },
+        { kind: 'weather_condition', location: 'Bucharest', conditions: ['rain'] },
+    ],
+}
+check('extractWeatherLocationsFromRule distinct', JSON.stringify(extractWeatherLocationsFromRule(weatherRule).sort()) === JSON.stringify(['Bucharest', 'Cluj']))
+
 // ============================================================================
 // 9. Gmail query builder
 // ============================================================================
@@ -355,10 +423,11 @@ check('registry returns gmail adapter', getSourceAdapter('gmail').source === 'gm
 check('registry returns web adapter', getSourceAdapter('web').source === 'web')
 check('registry returns ha adapter', getSourceAdapter('home_assistant').source === 'home_assistant')
 check('registry returns wa adapter', getSourceAdapter('whatsapp').source === 'whatsapp')
+check('registry returns weather adapter', getSourceAdapter('weather').source === 'weather')
 check('registry returns custom adapter (stub)', getSourceAdapter('custom').source === 'custom')
 
 const caps = listSourceCapabilities()
-check('listSourceCapabilities covers all sources', caps.length === 5)
+check('listSourceCapabilities covers all sources', caps.length === 6)
 
 check('ruleMatchesSource accepts gmail rule on gmail', ruleMatchesSource(
     { kind: 'gmail_from', senders: ['x@y'] },
@@ -382,6 +451,10 @@ check('ruleMatchesSource rejects mixed-source composition', !ruleMatchesSource(
     ] },
     'gmail',
 ))
+check('ruleMatchesSource accepts weather rule on weather', ruleMatchesSource(
+    { kind: 'weather_precip_probability', location: 'Cluj', windowHours: 6, op: '>=', value: 50 },
+    'weather',
+))
 
 expectThrow('assertRuleMatchesSource throws on mismatch', () => assertRuleMatchesSource(
     { kind: 'web_status', url: 'https://x', op: 'equals', value: 200 },
@@ -393,6 +466,7 @@ check('RULE_KINDS_BY_SOURCE gmail count', RULE_KINDS_BY_SOURCE.gmail.length === 
 check('RULE_KINDS_BY_SOURCE home_assistant count', RULE_KINDS_BY_SOURCE.home_assistant.length === 4)
 check('RULE_KINDS_BY_SOURCE web count', RULE_KINDS_BY_SOURCE.web.length === 3)
 check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 3)
+check('RULE_KINDS_BY_SOURCE weather count', RULE_KINDS_BY_SOURCE.weather.length === 6)
 check('RULE_KINDS_BY_SOURCE custom is empty', RULE_KINDS_BY_SOURCE.custom.length === 0)
 
 console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)

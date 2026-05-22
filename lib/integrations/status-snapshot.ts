@@ -4,6 +4,7 @@ import { getGoogleCalendarIntegrationStatus } from '@/lib/integrations/google-ca
 import { getGoogleDriveIntegrationStatus } from '@/lib/integrations/google-drive'
 import { getWhatsAppIntegrationStatus } from '@/lib/integrations/whatsapp'
 import { getHomeAssistantIntegrationStatus } from '@/lib/integrations/home-assistant'
+import { getWeatherIntegrationStatus } from '@/lib/integrations/weather'
 
 // ---------------------------------------------------------------------------
 // Connection-status snapshot.
@@ -40,6 +41,7 @@ function emptySnapshot(): IntegrationStatusSnapshot {
         'google-drive': UNKNOWN,
         'whatsapp': UNKNOWN,
         'home-assistant': UNKNOWN,
+        'weather': UNKNOWN,
     }
 }
 
@@ -70,6 +72,12 @@ type Calendarish = StatusLike & { accountEmail?: string | null }
 type Driveish = StatusLike & { accountEmail?: string | null; accountName?: string | null }
 type WhatsAppish = StatusLike & { phoneNumber?: string | null; accountName?: string | null }
 type HomeAssistantish = StatusLike & { locationName?: string | null; baseUrl?: string | null }
+type Weatherish = StatusLike & {
+    error?: string | null
+    providerInUse?: 'google' | 'open-meteo' | null
+    google?: { connected?: boolean; error?: string | null }
+    openMeteo?: { available?: boolean; error?: string | null }
+}
 
 export interface RawStatuses {
     gmail?: Gmailish | null
@@ -77,6 +85,7 @@ export interface RawStatuses {
     googleDrive?: Driveish | null
     whatsapp?: WhatsAppish | null
     homeAssistant?: HomeAssistantish | null
+    weather?: Weatherish | null
 }
 
 /** Build a snapshot from already-computed status objects (used by the UI status route too). */
@@ -87,6 +96,7 @@ export function snapshotFromStatuses(raw: RawStatuses): IntegrationStatusSnapsho
         'google-drive': entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName),
         'whatsapp': entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName),
         'home-assistant': entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl),
+        'weather': entry(raw.weather, weatherDetail(raw.weather)),
     }
 }
 
@@ -104,12 +114,13 @@ export function rememberOrigin(origin: string | undefined): void {
 }
 
 async function fetchSnapshot(origin: string): Promise<IntegrationStatusSnapshot> {
-    const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant] = await Promise.allSettled([
+    const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, weather] = await Promise.allSettled([
         getGmailIntegrationStatus(origin, true),
         getGoogleCalendarIntegrationStatus(origin, true),
         getGoogleDriveIntegrationStatus(origin, true),
         getWhatsAppIntegrationStatus(origin),
         getHomeAssistantIntegrationStatus(true),
+        getWeatherIntegrationStatus(true),
     ])
     const val = <T>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null)
     return snapshotFromStatuses({
@@ -118,6 +129,7 @@ async function fetchSnapshot(origin: string): Promise<IntegrationStatusSnapshot>
         googleDrive: val(googleDrive),
         whatsapp: val(whatsapp),
         homeAssistant: val(homeAssistant),
+        weather: val(weather),
     })
 }
 
@@ -159,8 +171,17 @@ export function recordIntegrationStatuses(raw: RawStatuses): void {
         'google-drive': hasOwn(raw, 'googleDrive') ? entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName) : previous['google-drive'],
         'whatsapp': hasOwn(raw, 'whatsapp') ? entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName) : previous.whatsapp,
         'home-assistant': hasOwn(raw, 'homeAssistant') ? entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl) : previous['home-assistant'],
+        'weather': hasOwn(raw, 'weather') ? entry(raw.weather, weatherDetail(raw.weather)) : previous.weather,
     }
     fetchedAt = Date.now()
+}
+
+function weatherDetail(weather: Weatherish | null | undefined): string | null {
+    if (!weather) return null
+    if (weather.needsReconnect && weather.google?.error) return weather.google.error
+    if (weather.providerInUse === 'google') return 'Google Weather'
+    if (weather.providerInUse === 'open-meteo') return 'Open-Meteo fallback'
+    return weather.error ?? weather.openMeteo?.error ?? null
 }
 
 function hasOwn<T extends object>(obj: T, key: PropertyKey): boolean {

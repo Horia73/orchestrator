@@ -13,6 +13,7 @@ import { MarkdownArtifactRenderer } from "./renderers/markdown-artifact-renderer
 import { MermaidRenderer } from "./renderers/mermaid-renderer"
 import { ReactSandboxRenderer } from "./renderers/react-sandbox-renderer"
 import { SvgRenderer } from "./renderers/svg-renderer"
+import { WeatherRenderer } from "./renderers/weather-renderer"
 
 /**
  * Inline artifact placement.
@@ -98,6 +99,8 @@ export function ArtifactBody({
             return <HtmlSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} />
         case 'application/vnd.ant.react':
             return <ReactSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} />
+        case 'application/vnd.ant.weather':
+            return <WeatherRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/xml':
         case 'text/vnd.graphviz':
             // No first-class renderer yet — fall through to syntax-highlighted code.
@@ -123,6 +126,7 @@ function extensionFor(mime: string, language?: string | null): string {
         case 'application/x-latex': return 'tex'
         case 'text/html': return 'html'
         case 'application/vnd.ant.react': return 'tsx'
+        case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.code': return language || 'txt'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'

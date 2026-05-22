@@ -4,6 +4,8 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import { displayPath, resolveSandboxedWritable } from './sandbox'
 import { ensureParentDir, stringArg } from './helpers'
 import { emitAppEvent } from '@/lib/events'
+import { invalidateWeatherConnectionProbe } from '@/lib/integrations/weather'
+import { invalidateWeatherProviderState } from '@/lib/weather/providers'
 
 export const setEnvTool: ToolDef = {
     id: 'SetEnv',
@@ -68,6 +70,11 @@ export function executeSetEnv(args: Record<string, unknown>): ToolResult {
             fs.chmodSync(sandboxed.resolved, 0o600)
         } catch {
             // Best effort; some filesystems ignore chmod.
+        }
+        process.env[key] = value
+        if (key === 'GOOGLE_MAPS_API_KEY') {
+            invalidateWeatherConnectionProbe()
+            invalidateWeatherProviderState()
         }
         emitAppEvent({ type: 'settings.changed', reason: 'env' })
 

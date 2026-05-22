@@ -150,7 +150,7 @@ export const monitorWatchListTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            source: { type: 'string', description: 'Optional filter: gmail / whatsapp / home_assistant / web / custom.' },
+            source: { type: 'string', description: 'Optional filter: gmail / whatsapp / home_assistant / web / weather / custom.' },
             enabled: { type: 'boolean', description: 'Optional filter on enabled state.' },
         },
     },
@@ -266,7 +266,7 @@ export const monitorWatchAddTool: ToolDef = {
     name: 'monitor_watch_add',
     description: [
         'Create a Smart Monitor watch.',
-        'Use this when the user wants to subscribe to a periodic source check (Gmail VIPs, HA sensors, web endpoint changes, WhatsApp from specific contacts). Always ask the user for: WHAT to watch (source + target), the RULE that defines a match (translate plain language to a structured MonitorRule — call monitor_describe_sources first if unsure of supported predicates), the CADENCE (in seconds or a duration string like "15m"), the NOTIFY policy (immediate vs digest, quiet hours), and explicitly which ACTIONS the model is allowed to take beyond notify_inbox (default: notify-only).',
+        'Use this when the user wants to subscribe to a periodic source check (Gmail VIPs, HA sensors, web endpoint changes, weather thresholds, WhatsApp from specific contacts). Always ask the user for: WHAT to watch (source + target), the RULE that defines a match (translate plain language to a structured MonitorRule — call monitor_describe_sources first if unsure of supported predicates), the CADENCE (in seconds or a duration string like "15m"), the NOTIFY policy (immediate vs digest, quiet hours), and explicitly which ACTIONS the model is allowed to take beyond notify_inbox (default: notify-only).',
         'Watches start ENABLED unless the user explicitly asks to pause. Cadence defaults: 900s (15 min), min 300s, max 43200s (12h), adaptive=true.',
         'Returns the new watch id. The Smart Monitor heartbeat system task auto-arms on first enabled watch.',
     ].join(' '),
