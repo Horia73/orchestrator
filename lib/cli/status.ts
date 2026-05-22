@@ -100,6 +100,37 @@ async function runStatus(id: CliId): Promise<CliStatus> {
 function enrichWithCredentialMetadata(id: CliId, status: CliStatus): CliStatus {
     if (!status.loggedIn || id !== 'claude-code') return status
 
+    // Claude Code's `auth status` reports the auth source it actually used:
+    //   "claude.ai"   → browser OAuth, refreshed from .credentials.json
+    //   "oauth_token" → CLAUDE_CODE_OAUTH_TOKEN env (long-lived, doesn't expire)
+    //   "api_key"     → ANTHROPIC_API_KEY env
+    // When the CLI is using a non-keychain source, the .credentials.json
+    // file's expiry is irrelevant — env-var tokens win, and they don't
+    // expire on the same clock. Skip enrichment to avoid a false "Reconnect"
+    // badge on headless installs that already moved to a long-lived token.
+    let runtimeAuthMethod: string | undefined
+    try {
+        const parsedRaw = status.raw ? JSON.parse(status.raw) as Record<string, unknown> : null
+        const v = parsedRaw?.authMethod
+        runtimeAuthMethod = typeof v === 'string' ? v : undefined
+    } catch {
+        /* raw isn't JSON — fall through */
+    }
+
+    if (runtimeAuthMethod === 'oauth_token') {
+        return {
+            ...status,
+            authMethod: 'setup-token',
+            // Override the (stale) `claude.ai · expired Nd ago` shape the
+            // earlier code path would have produced — long-lived tokens
+            // don't expire from a per-request perspective.
+            detail: status.detail?.replace(/\s*·?\s*expired[^·]*$/i, '').trim() || undefined,
+        }
+    }
+    if (runtimeAuthMethod === 'api_key') {
+        return { ...status, authMethod: 'api-key' }
+    }
+
     const credentialsPath = join(homedir(), '.claude', '.credentials.json')
     let raw: string
     try {
