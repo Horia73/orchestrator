@@ -5,6 +5,7 @@ import {
     listMonitorWatches,
     type MonitorWatch,
 } from '@/lib/monitor/store'
+import { syncSmartMonitorActivation } from '@/lib/monitoring/smart-monitor-adapter'
 import { describeAction, describeRule } from '@/lib/monitor/describe'
 import { WatchSourceSchema } from '@/lib/monitor/schema'
 
@@ -40,7 +41,7 @@ function compactRow(w: MonitorWatch) {
 
 function isBadInput(err: unknown): boolean {
     const name = (err as { name?: string })?.name
-    return name === 'ZodError' || err instanceof SyntaxError
+    return name === 'ZodError' || name === 'DuplicateMonitorSourceError' || err instanceof SyntaxError
 }
 
 export async function GET(request: Request) {
@@ -78,6 +79,7 @@ export async function POST(request: Request) {
     try {
         const body = await request.json()
         const watch = createMonitorWatch(body)
+        await syncSmartMonitorActivation()
         return NextResponse.json({ watch: compactRow(watch) })
     } catch (error) {
         if (isBadInput(error)) {

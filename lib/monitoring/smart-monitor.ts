@@ -1,7 +1,7 @@
 // Smart Monitor — consolidated cheap tick across all user-configured watches.
 //
-// Runs at a FIXED cadence (the scheduled task's `every` schedule, 5 min). No
-// model in the hot loop:
+// Runs at a FIXED cadence (the scheduled task's `every` schedule, 15 min,
+// aligned to quarter-hour slots). No model in the hot loop:
 //   1. listDueWatches(now) — only enabled watches whose nextCheckAt has come due
 //   2. per watch: source-adapter availability check → cheapCheck → suppress
 //      patterns → quiet hours → adaptive cadence update → checkpoint persist
@@ -16,6 +16,7 @@
 
 import { evaluateRule } from '../monitor/rules'
 import { describeAction, describeRule } from '../monitor/describe'
+import { nextMonitorCheckAt, snapCadenceSeconds } from '../monitor/cadence'
 import type {
     MonitorWatch,
     NotifyPolicy,
@@ -44,9 +45,9 @@ import { safeAdapterCall, withTimeout } from '../monitor/sources/types'
 // ---------------------------------------------------------------------------
 
 /** Per-watch hard timeout for one cheap-check. The master tick fires every
- *  5 min and processes watches sequentially; this bound × N watches must stay
+ *  15 minutes and processes watches sequentially; this bound × N watches must stay
  *  comfortably under that. With 10 watches and a 6s ceiling we cap at 60s
- *  worst case (every adapter timing out), well under the next tick. */
+ *  worst case (every adapter timing out), well under the next 15-minute tick. */
 const PER_WATCH_TIMEOUT_MS = 6000
 
 /** Adaptive cadence steps. The model can author suppress patterns to silence
@@ -184,7 +185,7 @@ export async function runSmartMonitorCheapPass(
             // so it auto-recovers when the integration comes back.
             setWatchCheckpoint(watch.id, {
                 lastCheckedAt: now,
-                nextCheckAt: now + watch.cadence.current * 1000,
+                nextCheckAt: nextMonitorCheckAt(now, watch.cadence.current),
                 lastError: availability.reason ?? 'integration unavailable',
             })
             continue
@@ -215,7 +216,7 @@ export async function runSmartMonitorCheapPass(
 
             setWatchCheckpoint(watch.id, {
                 lastCheckedAt: now,
-                nextCheckAt: now + nextCheckIn,
+                nextCheckAt: nextMonitorCheckAt(now, Math.ceil(nextCheckIn / 1000)),
                 consecutiveErrors: nextErrors,
                 lastError: errMsg,
             })
@@ -312,7 +313,7 @@ export async function runSmartMonitorCheapPass(
         const effectiveCadence = desiredCadence
         setWatchCheckpoint(watch.id, {
             lastCheckedAt: now,
-            nextCheckAt: now + effectiveCadence * 1000,
+            nextCheckAt: nextMonitorCheckAt(now, effectiveCadence),
             lastFiredAt: visibleMatches.length > 0 ? now : undefined,
             consecutiveErrors: 0,
             lastError: null,
@@ -480,17 +481,17 @@ export function computeAdaptiveCadence(
     hadMatches: boolean,
 ): number {
     if (hadMatches) {
-        return Math.max(min, Math.round(current * TIGHTEN_MULTIPLIER))
+        return snapCadenceSeconds(current * TIGHTEN_MULTIPLIER, min, max)
     }
     // Widen only at the tier thresholds, not every quiet run — prevents
     // unbounded drift. Step 4 may add learned-routine adjustments on top.
     let target = current
     if (quietRuns >= QUIET_RUNS_BEFORE_SECOND_WIDEN && quietRuns % 4 === 0) {
-        target = Math.round(current * WIDEN_MULTIPLIER_2)
+        target = current * WIDEN_MULTIPLIER_2
     } else if (quietRuns === QUIET_RUNS_BEFORE_FIRST_WIDEN) {
-        target = Math.round(current * WIDEN_MULTIPLIER_1)
+        target = current * WIDEN_MULTIPLIER_1
     }
-    return Math.min(max, Math.max(min, target))
+    return snapCadenceSeconds(target, min, max)
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +585,9 @@ function buildBriefPrompt(
 ): string {
     const lines: string[] = []
     lines.push('You are a Smart Monitor consolidated wake. The cheap tick produced matches across the user\'s active watches. Decide what to surface, and record feedback so future ticks get smarter.')
+    lines.push('Important operating model: this is one consolidated monitor wake, not one agent per source or one agent per urgency tier. You can evaluate many Gmail, Calendar, Home Assistant, WhatsApp, Web, and Weather candidates in this single turn. Group related items and notify sparingly.')
+    lines.push('Work through the watch sections in order. For each watch: read the user intent from its title/rule/target, inspect all matches for that watch, decide notify vs suppress/summary/action within its allowed actions, then move to the next watch. After all watches are assessed, send the fewest useful Inbox notifications by grouping related items across watches, and record monitor_wake_feedback once per watch involved.')
+    lines.push('For broad triage watches, treat the rule as the candidate feed, not as a reason to interrupt for every match. Interrupt only for matches that look important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the watch intent. Routine automated messages and repeated low-value matches are usually noise or summary material. If only notify_inbox is allowed, never perform source-side changes; only suggest choices in an Inbox note when useful and learn from feedback with narrow suppress patterns.')
     lines.push('')
     lines.push(`Tick at ${new Date(now).toISOString()}.`)
     lines.push('')

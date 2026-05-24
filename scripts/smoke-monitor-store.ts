@@ -141,10 +141,10 @@ async function main(): Promise<void> {
     check('setWatchCadenceCurrent clamps to max', clamped?.cadence.current === MAX_CADENCE_SECONDS)
 
     updateMonitorWatch(created.id, { cadence: { adaptive: false } })
-    const refused = setWatchCadenceCurrent(created.id, 10 * 60)
+    const refused = setWatchCadenceCurrent(created.id, 30 * 60)
     check('setWatchCadenceCurrent is no-op when adaptive=false', refused?.cadence.current === MAX_CADENCE_SECONDS)
     const forced = setWatchCadenceCurrent(created.id, 10 * 60, { force: true })
-    check('setWatchCadenceCurrent honors force flag', forced?.cadence.current === 10 * 60)
+    check('setWatchCadenceCurrent honors force flag and snaps to 15m', forced?.cadence.current === 15 * 60)
 
     // ---- 6. setWatchCheckpoint + listDueWatches -----------------------------
     const now = Date.now()
@@ -245,7 +245,7 @@ async function main(): Promise<void> {
         source: 'home_assistant',
         target: 'binary_sensor.garage_door',
         rule: { kind: 'ha_state_equals', entityId: 'binary_sensor.garage_door', state: 'open' },
-        cadence: { current: 5 * 60, min: 5 * 60, max: 30 * 60, adaptive: true },
+        cadence: { current: 15 * 60, min: 15 * 60, max: 30 * 60, adaptive: true },
     })
     createMonitorWatch({
         title: 'Concert tickets page',

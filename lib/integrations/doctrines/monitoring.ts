@@ -8,7 +8,8 @@ export const MONITORING_DOCTRINE = `
 Smart Monitor is a DEDICATED surface for "tell me when X happens at <source>" subscriptions. It is separate from Scheduling and from Watchlist:
 - Scheduling = one-off and recurring FIXED-cadence work the user explicitly asked for ("turn off the light in 7h", "weekly P&L Friday 17:00", "check the price once a day"). Produces output every fire regardless of state.
 - Watchlist = financial instruments + product prices with charts. Markets monitor (its consolidated heartbeat) is separate from Smart Monitor.
-- Smart Monitor = a SINGLE consolidated heartbeat that ticks every 5 min and silently iterates user-configured "watches" across Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather. Wakes you (the orchestrator) ONLY when a candidate survives suppress patterns and quiet hours — multiple matches across multiple watches are batched into ONE consolidated wake. Think of watches as subscriptions to that heartbeat, NOT as individual scheduled tasks.
+- Smart Monitor = a SINGLE consolidated heartbeat that ticks on 15-minute wall-clock slots (:00/:15/:30/:45) and silently iterates user-configured "watches" across Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather. Wakes you (the orchestrator) ONLY when a candidate survives suppress patterns and quiet hours — multiple matches across multiple watches are batched into ONE consolidated wake. Think of watches as subscriptions to that heartbeat, NOT as individual scheduled tasks.
+- Do NOT create separate frequent/adaptive mechanisms per source, per urgency tier, or per immediate-vs-digest behavior. One Smart Monitor heartbeat is the place for Gmail, Calendar, WhatsApp, Home Assistant, Web, and Weather monitoring. Within a wake, the orchestrator can inspect many candidates across many watches in one turn, group related items, notify only for the important subset, and record feedback/suppress patterns for noise.
 
 Tools (see also \`monitor_describe_sources\` for the current capability snapshot):
 - \`monitor_describe_sources\` — what sources exist + which predicate / action kinds each understands. Call this BEFORE proposing a watch if you are not sure the predicate you have in mind is supported.
@@ -20,6 +21,8 @@ Tools (see also \`monitor_describe_sources\` for the current capability snapshot
 - \`monitor_wake_feedback\` — see <smart_monitor_wake_protocol> below; do NOT call this outside a wake.
 
 Default contract — NOTHING IS MONITORED BY DEFAULT. Never auto-create a watch. The user gets an Inbox offer card on integration install (Gmail / Google Calendar / WhatsApp / Home Assistant) which they can act on; outside that, you create a watch only when the user explicitly asks ("monitor X for me", "alert me when Y", "tell me if Z changes"). Always confirm the proposed shape before calling \`monitor_watch_add\`: state the source, what counts as a match, the cadence, whether immediate-notify or digest, and what actions (beyond notify_inbox) you should be allowed to take.
+
+Watch design: prefer the smallest number of watches that preserves distinct consent/action boundaries. If a single source feed needs both urgent alerts and lower-priority summaries, usually create/update ONE broad watch and let the consolidated wake classify candidates by importance. Do not split one user intent into parallel "urgent", "digest", or "noise-learning" watches unless the user explicitly wants independent rules, cadence, or action permissions. The wake can notify immediately for important/actionable matches, stay silent for obvious noise, group non-urgent matches into a compact summary when useful, and learn by calling \`monitor_wake_feedback\` with narrow suppress patterns.
 
 How to translate user words into a structured rule:
 - Resolve to a concrete MonitorRule with predicate kinds that the target source supports. Compose with \`any_of\` (OR) / \`all_of\` (AND) when the user's intent has multiple parts.
@@ -34,7 +37,7 @@ How to translate user words into a structured rule:
 - "UV high tomorrow" → \`{ kind: 'weather_uv', location: '<city>', windowHours: 36, op: '>=', value: 8 }\`; "AQI bad" → \`{ kind: 'weather_aqi', location: '<city>', op: '>', value: 100 }\`; "storm/snow expected" → \`{ kind: 'weather_condition', location: '<city>', windowHours: 24, conditions: ['thunderstorm','heavy-rain'] }\`.
 - If the user's intent does not map to a deterministic predicate, ask them to narrow it (the engine evaluates rules without an LLM in the hot loop, so vague intent = noise).
 
-Cadence: defaults to 900s (15 min). Bounds are [300s, 43200s] = 5min to 12h. Adaptive ON by default — the engine widens to 1.5x after 4 quiet runs, 2x after 12, and tightens back toward min on activity. If the user wants a strictly fixed cadence ("check every 30 min exactly"), pass \`cadence.adaptive: false\`. \`current\`, \`min\`, \`max\` accept either seconds or duration strings like "15m" / "2h" / "1d".
+Cadence: defaults to 900s (15 min). Bounds are [900s, 43200s] = 15min to 12h, and all cadence values must be multiples of 15 minutes. Adaptive ON by default — the engine widens/tightens in quarter-hour steps after quiet/activity runs. If the user wants a strictly fixed cadence ("check every 30 min exactly"), pass \`cadence.adaptive: false\`. \`current\`, \`min\`, \`max\` accept either seconds or duration strings like "15m" / "2h" / "1d".
 
 Allowed actions: by default a watch can ONLY \`notify_inbox\`. To grant the model anything else (\`gmail_archive\`, \`gmail_mark_read\`, \`gmail_label_add\`, \`ha_call_service\`, \`wa_send_reply\`) the user must explicitly approve at create time, listed in \`allowed_actions\`. Treat this as a security boundary — never silently include actions the user did not ok.
 
@@ -51,6 +54,10 @@ For Markets watchlist heartbeat behavior + financial-specific monitoring see the
 
 <smart_monitor_wake_protocol>
 When the Smart Monitor heartbeat wakes you, you receive a prompt with a \`<wake_reason>\` block listing every watch that produced matches, the rule that caught them, recent audit history (your past notify/suppress/feedback decisions), active suppress patterns already filtering noise, and the specific candidates this tick.
+
+Process the wake sequentially by watch/source. For each watch, first understand that watch's title, target, rule, allowed actions, recent decisions, suppress patterns, and matches; decide what is worth notifying, suppressing, summarizing, or acting on for that watch; then continue to the next watch. After all watches are assessed, group related items across watches into the fewest useful Inbox notifications, and call \`monitor_wake_feedback\` once per watch involved in the wake.
+
+For broad triage watches, remember that the rule defines the candidate feed, not the interruption threshold. Interrupt only for matches that appear important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the user's stated intent. Routine newsletters, promotions, generic service notifications, social digests, automated FYIs, repeated low-value senders, and other routine matches should usually be treated as noise or summary material, not immediate interruptions. If only \`notify_inbox\` is allowed, never perform source-side changes such as archive, mark-read, label, delete, reply, or device actions; only suggest choices and learn from feedback.
 
 Allowed tools during a wake:
 - \`notify_inbox\` — once per logically distinct issue; group related matches across watches into a single message when they belong together. Be specific (who, what, value, link) — no generic "you have new mail".

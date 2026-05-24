@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { countEnabledWatches, getNextDueTime, listMonitorWatches } from '@/lib/monitor/store'
+import { syncSmartMonitorActivation } from '@/lib/monitoring/smart-monitor-adapter'
 import { listScheduledTasks } from '@/lib/scheduling/store'
 
 // Header status endpoint for the /monitor page. Returns:
@@ -11,6 +12,11 @@ import { listScheduledTasks } from '@/lib/scheduling/store'
 // Read-only; fast (one COUNT + one list of system tasks).
 export async function GET() {
     try {
+        // Self-heal stale heartbeat state before reporting status. This covers
+        // cases where watches are enabled but the system task stayed paused
+        // because the app missed the watch-change event.
+        await syncSmartMonitorActivation()
+
         const tasks = listScheduledTasks().filter(
             (t) => t.action.kind === 'monitor' && t.action.monitorKind === 'smart',
         )

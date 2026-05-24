@@ -42,7 +42,7 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     {
         id: 'monitoring',
         label: 'Smart Monitor',
-        capability: '"Tell me when X happens at <source>" subscriptions. One consolidated 5-minute heartbeat silently evaluates user-configured watches across Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather; wakes the orchestrator only when a candidate survives suppress patterns and quiet hours.',
+        capability: '"Tell me when X happens at <source>" subscriptions. One consolidated 15-minute heartbeat silently evaluates user-configured watches across Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather; wakes the orchestrator only when a candidate survives suppress patterns and quiet hours.',
         doctrine: MONITORING_DOCTRINE,
     },
     {

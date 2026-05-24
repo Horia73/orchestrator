@@ -412,6 +412,7 @@ Return JSON only with this exact shape:
 Rules:
 - Be concrete and honest.
 - If the main blocker was missing user input, say so clearly.
+- Put only fixable platform/tool gaps in "missingToolsOrCapabilities"; do not list ordinary missing user input there.
 - If a human could likely recover, explain what advantage the human has.
 - If no extra questions are needed, return an empty array for "questionsForUser".
 - Keep arrays short and high-signal.

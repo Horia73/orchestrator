@@ -2,6 +2,10 @@ import fs from 'fs'
 import path from 'path'
 
 import {
+    AGENT_NEEDS_DEFAULT_CONTENT,
+    AGENT_NEEDS_RELATIVE_PATH,
+} from '../lib/agent-needs'
+import {
     INTEGRATION_INDEX_DEFAULT_CONTENT,
     INTEGRATION_INDEX_PATH,
     INTEGRATION_RUNBOOKS,
@@ -67,6 +71,11 @@ const files: Array<{ path: string; content: string; resetByDefault: boolean }> =
             'Keep this file compact. Store durable facts, recurring preferences, standing instructions, long-running goals, and decisions that should affect future behavior. Do not store one-off chatter, temporary state, unverified assumptions, or sensitive data unless the user explicitly wants it remembered.',
             '',
         ].join('\n'),
+    },
+    {
+        path: AGENT_NEEDS_RELATIVE_PATH,
+        resetByDefault: true,
+        content: AGENT_NEEDS_DEFAULT_CONTENT,
     },
     {
         path: 'MONITORS.md',

@@ -71,7 +71,7 @@ async function main(): Promise<void> {
             source: 'gmail',
             target: 'mom@example.com',
             rule: { kind: 'gmail_from', senders: ['mom@example.com'] },
-            cadence: { current: '15m', min: '5m', max: '6h', adaptive: true },
+            cadence: { current: '15m', min: '15m', max: '6h', adaptive: true },
             notify: { onMatch: true, quietHours: { from: '23:00', to: '07:00', timezone: 'Europe/Bucharest' } },
         })
         check('watch_add succeeds', r.success === true)
@@ -80,7 +80,7 @@ async function main(): Promise<void> {
         check('watch_add returns watch_id', momWatchId.startsWith('mw_'))
         const w = getMonitorWatch(momWatchId)!
         check('cadence.current parsed from "15m" = 900s', w.cadence.current === 900)
-        check('cadence.min parsed from "5m" = 300s', w.cadence.min === 300)
+        check('cadence.min parsed from "15m" = 900s', w.cadence.min === 900)
         check('cadence.max parsed from "6h" = 21600s', w.cadence.max === 21600)
         check('quiet hours persisted', w.notify.quietHours?.from === '23:00')
     }
@@ -123,6 +123,15 @@ async function main(): Promise<void> {
             rule: { kind: 'gmail_from', senders: ['x@y'] },
         })
         check('add rejects empty title', r4.success === false)
+
+        const r5 = await executeMonitorWatchAdd({
+            title: 'duplicate gmail',
+            source: 'gmail',
+            target: 'other@example.com',
+            rule: { kind: 'gmail_from', senders: ['other@example.com'] },
+        })
+        check('add rejects second Gmail integration watch', r5.success === false)
+        check('duplicate error says update existing watch', typeof r5.error === 'string' && r5.error.includes('Update that watch'))
     }
 
     // ============================================================================
@@ -134,7 +143,7 @@ async function main(): Promise<void> {
             source: 'home_assistant',
             target: 'binary_sensor.garage_door',
             rule: { kind: 'ha_state_equals', entityId: 'binary_sensor.garage_door', state: 'on' },
-            cadence: { current: '5m' },
+            cadence: { current: '15m' },
         })
 
         const all = await executeMonitorWatchList({})
@@ -183,7 +192,7 @@ async function main(): Promise<void> {
         check('update partial cadence succeeds', r1.success === true)
         const w = getMonitorWatch(momWatchId)!
         check('cadence.current updated to 1800s', w.cadence.current === 1800)
-        check('cadence.min preserved at 300s', w.cadence.min === 300)
+        check('cadence.min preserved at 900s', w.cadence.min === 900)
         check('cadence.adaptive preserved at true', w.cadence.adaptive === true)
         check('notify quiet hours preserved through cadence update', w.notify.quietHours?.from === '23:00')
 

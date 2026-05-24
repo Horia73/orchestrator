@@ -1,3 +1,5 @@
+import { redactLikelySecrets } from '@/lib/agent-needs'
+
 function envPath(args: Record<string, unknown> | undefined): string {
     const raw = typeof args?.path === 'string'
         ? args.path
@@ -28,5 +30,17 @@ export function redactToolArgs(
         return redacted
     }
 
+    if (toolName === 'ReportAgentNeed') {
+        return redactObjectStrings(args)
+    }
+
     return args
+}
+
+function redactObjectStrings(args: Record<string, unknown>): Record<string, unknown> {
+    const out: Record<string, unknown> = {}
+    for (const [key, value] of Object.entries(args)) {
+        out[key] = typeof value === 'string' ? redactLikelySecrets(value) : value
+    }
+    return out
 }

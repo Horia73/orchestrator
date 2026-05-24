@@ -10,6 +10,7 @@ export const WORKSPACE_TOOL_IDS: string[] = [
     'WebFetch',
     'SetEnv',
     'TodoWrite',
+    'ReportAgentNeed',
 ]
 
 export const LEGACY_WORKSPACE_TOOL_IDS: string[] = [

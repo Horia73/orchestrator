@@ -186,18 +186,16 @@ function InboxViewInner() {
     }
   }
 
-  const onRespond = async (
-    id: string,
-    content: string,
-    actionId?: string
-  ) => {
-    if (!content.trim() || responding) return
+  const onRespond = async (id: string, content: string, actionId?: string) => {
+    const text = content.trim()
+    if (!text || responding) return
     setResponding(true)
     setBusyActionId(actionId ?? null)
-    const ok = await respond(id, content)
+    if (!actionId) setDraft("")
+    const ok = await respond(id, text)
     setResponding(false)
     setBusyActionId(null)
-    if (ok && !actionId) setDraft("")
+    if (!ok && !actionId) setDraft(content)
   }
 
   React.useEffect(() => {
@@ -252,7 +250,9 @@ function InboxViewInner() {
           ) : (
             <ul className="space-y-0.5">
               {items.map((it) => {
-                const isUnread = it.readAt == null
+                const activityAt =
+                  it.lastMessageAt ?? it.updatedAt ?? it.createdAt
+                const isUnread = it.readAt == null || it.readAt < activityAt
                 return (
                   <li key={it.id}>
                     <button
@@ -277,7 +277,7 @@ function InboxViewInner() {
                           {it.title}
                         </span>
                         <span className="shrink-0 text-[11px] text-foreground/40">
-                          {timeAgo(it.createdAt)}
+                          {timeAgo(activityAt)}
                         </span>
                       </div>
                       <p className="mt-0.5 truncate text-[12px] text-foreground/45">
@@ -354,10 +354,14 @@ function InboxViewInner() {
             </header>
             <div className="min-h-0 flex-1 overflow-y-auto px-6 py-5">
               <div className="mx-auto max-w-2xl space-y-5">
-                {detail.messages.map((m) => (
+                {detail.messages.map((m, index) => (
                   <div key={m.id}>
                     <div className="mb-1 text-[11px] font-medium tracking-wide text-foreground/40 uppercase">
-                      {m.role === "user" ? "Trigger" : "Result"}
+                      {m.role === "user"
+                        ? index === 0
+                          ? "Trigger"
+                          : "Sent!"
+                        : "Result"}
                     </div>
                     <div className="rounded-xl border border-border/50 bg-background px-4 py-3 text-[14px] leading-relaxed">
                       <MarkdownRenderer content={m.content} />

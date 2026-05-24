@@ -13,6 +13,7 @@ import { executeGlob } from "./glob"
 import { executeGrep } from "./grep"
 import { executeWebFetch } from "./web"
 import { executeTodoWrite } from "./todo-write"
+import { executeReportAgentNeed } from "./agent-needs"
 import { executeSetEnv } from "./set-env"
 import { getActivatedIntegrations } from "@/lib/integrations/activation-store"
 import {
@@ -265,6 +266,7 @@ const executors: Record<string, ToolExecutor> = {
   Grep: executeGrep,
   WebFetch: executeWebFetch,
   TodoWrite: executeTodoWrite,
+  ReportAgentNeed: executeReportAgentNeed,
   SetEnv: executeSetEnv,
   ActivateIntegrationTools: executeActivateIntegrationTools,
   RunActivatedIntegrationTool: executeRunActivatedIntegrationTool,

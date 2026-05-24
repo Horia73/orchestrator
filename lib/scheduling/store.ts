@@ -677,11 +677,22 @@ export function createInboxConversation(args: {
 }): string {
   const now = Date.now()
   const conversationId = args.id ?? `inbox_${randomUUID()}`
+  const latestMessage = args.messages.reduce<Message | null>(
+    (latest, message) =>
+      !latest || message.timestamp > latest.timestamp ? message : latest,
+    null
+  )
   const tx = db.transaction(() => {
     db.prepare(
       `
-            INSERT INTO conversations (id, title, createdAt, updatedAt, origin, scheduledTaskId, readAt)
-            VALUES (@id, @title, @createdAt, @updatedAt, 'inbox', @taskId, NULL)
+            INSERT INTO conversations (
+              id, title, createdAt, updatedAt, origin, scheduledTaskId, readAt,
+              messageCount, lastMessagePreview, lastMessageAt
+            )
+            VALUES (
+              @id, @title, @createdAt, @updatedAt, 'inbox', @taskId, NULL,
+              @messageCount, @lastMessagePreview, @lastMessageAt
+            )
         `
     ).run({
       id: conversationId,
@@ -689,6 +700,9 @@ export function createInboxConversation(args: {
       createdAt: now,
       updatedAt: now,
       taskId: args.taskId,
+      messageCount: args.messages.length,
+      lastMessagePreview: latestMessage?.content.slice(0, 240) ?? null,
+      lastMessageAt: latestMessage?.timestamp ?? null,
     })
 
     for (const msg of args.messages) {
@@ -706,7 +720,9 @@ export function createInboxConversation(args: {
         thinkingDuration: msg.thinkingDuration ?? null,
         toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
         attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
-        replyActions: msg.replyActions ? JSON.stringify(msg.replyActions) : null,
+        replyActions: msg.replyActions
+          ? JSON.stringify(msg.replyActions)
+          : null,
         timestamp: msg.timestamp,
       })
     }
@@ -720,6 +736,8 @@ export interface InboxListItem {
   id: string
   title: string
   createdAt: number
+  updatedAt: number
+  lastMessageAt: number | null
   readAt: number | null
   scheduledTaskId: string | null
   preview: string
@@ -730,12 +748,14 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
   const rows = db
     .prepare(
       `
-        SELECT c.id, c.title, c.createdAt, c.readAt, c.scheduledTaskId,
+        SELECT c.id, c.title, c.createdAt, c.updatedAt, c.lastMessageAt, c.readAt, c.scheduledTaskId,
                (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
                (SELECT m2.content FROM messages m2 WHERE m2.conversationId = c.id ORDER BY m2.timestamp DESC LIMIT 1) AS preview
         FROM conversations c
         WHERE c.origin = 'inbox'
-        ORDER BY c.createdAt DESC
+        ORDER BY COALESCE(c.lastMessageAt, c.updatedAt, c.createdAt) DESC,
+                 c.updatedAt DESC,
+                 c.createdAt DESC
         LIMIT ?
     `
     )
@@ -743,6 +763,8 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
     id: string
     title: string
     createdAt: number
+    updatedAt: number
+    lastMessageAt: number | null
     readAt: number | null
     scheduledTaskId: string | null
     messageCount: number
@@ -752,6 +774,8 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
     id: r.id,
     title: r.title,
     createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+    lastMessageAt: r.lastMessageAt ?? null,
     readAt: r.readAt ?? null,
     scheduledTaskId: r.scheduledTaskId ?? null,
     preview: (r.preview ?? "").slice(0, 240),
@@ -766,14 +790,16 @@ export function findInboxConversationByTaskAndTitle(
   const row = db
     .prepare(
       `
-        SELECT c.id, c.title, c.createdAt, c.readAt, c.scheduledTaskId,
+        SELECT c.id, c.title, c.createdAt, c.updatedAt, c.lastMessageAt, c.readAt, c.scheduledTaskId,
                (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
                (SELECT m2.content FROM messages m2 WHERE m2.conversationId = c.id ORDER BY m2.timestamp DESC LIMIT 1) AS preview
         FROM conversations c
         WHERE c.origin = 'inbox'
           AND c.scheduledTaskId = ?
           AND c.title = ?
-        ORDER BY c.createdAt DESC
+        ORDER BY COALESCE(c.lastMessageAt, c.updatedAt, c.createdAt) DESC,
+                 c.updatedAt DESC,
+                 c.createdAt DESC
         LIMIT 1
     `
     )
@@ -782,6 +808,8 @@ export function findInboxConversationByTaskAndTitle(
         id: string
         title: string
         createdAt: number
+        updatedAt: number
+        lastMessageAt: number | null
         readAt: number | null
         scheduledTaskId: string | null
         messageCount: number
@@ -794,6 +822,8 @@ export function findInboxConversationByTaskAndTitle(
     id: row.id,
     title: row.title,
     createdAt: row.createdAt,
+    updatedAt: row.updatedAt,
+    lastMessageAt: row.lastMessageAt ?? null,
     readAt: row.readAt ?? null,
     scheduledTaskId: row.scheduledTaskId ?? null,
     preview: (row.preview ?? "").slice(0, 240),
@@ -804,7 +834,15 @@ export function findInboxConversationByTaskAndTitle(
 export function countUnreadInbox(): number {
   const row = db
     .prepare(
-      "SELECT COUNT(*) AS n FROM conversations WHERE origin = 'inbox' AND readAt IS NULL"
+      `
+        SELECT COUNT(*) AS n
+        FROM conversations
+        WHERE origin = 'inbox'
+          AND (
+            readAt IS NULL
+            OR (lastMessageAt IS NOT NULL AND readAt < lastMessageAt)
+          )
+      `
     )
     .get() as { n: number }
   return row.n
@@ -893,9 +931,7 @@ export function appendInboxMessage(
   message: Message
 ): boolean {
   const row = db
-    .prepare(
-      "SELECT id FROM conversations WHERE id = ? AND origin = 'inbox'"
-    )
+    .prepare("SELECT id FROM conversations WHERE id = ? AND origin = 'inbox'")
     .get(conversationId)
   if (!row) return false
 
@@ -917,7 +953,9 @@ export function appendInboxMessage(
       thinking: message.thinking || null,
       thinkingDuration: message.thinkingDuration ?? null,
       toolCalls: message.toolCalls ? JSON.stringify(message.toolCalls) : null,
-      attachments: message.attachments ? JSON.stringify(message.attachments) : null,
+      attachments: message.attachments
+        ? JSON.stringify(message.attachments)
+        : null,
       replyActions: message.replyActions
         ? JSON.stringify(message.replyActions)
         : null,
@@ -949,11 +987,47 @@ export function appendInboxMessage(
   return true
 }
 
-export function markInboxRead(id: string): void {
-  const res = db.prepare(
-    "UPDATE conversations SET readAt = @now WHERE id = @id AND origin = 'inbox' AND readAt IS NULL"
-  ).run({ id, now: Date.now() })
+export function markInboxRead(id: string): number | null {
+  const current = db
+    .prepare(
+      `
+        SELECT readAt, lastMessageAt, updatedAt, createdAt
+        FROM conversations
+        WHERE id = ? AND origin = 'inbox'
+      `
+    )
+    .get(id) as
+    | {
+        readAt: number | null
+        lastMessageAt: number | null
+        updatedAt: number
+        createdAt: number
+      }
+    | undefined
+  if (!current) return null
+
+  const readAt = current.lastMessageAt ?? current.updatedAt ?? current.createdAt
+  const res = db
+    .prepare(
+      `
+      UPDATE conversations
+      SET readAt = @readAt
+      WHERE id = @id
+        AND origin = 'inbox'
+        AND (readAt IS NULL OR readAt < @readAt)
+    `
+    )
+    .run({ id, readAt })
+
+  const row = db
+    .prepare(
+      "SELECT readAt FROM conversations WHERE id = ? AND origin = 'inbox'"
+    )
+    .get(id) as { readAt: number | null } | undefined
+  const nextReadAt = row?.readAt ?? null
+
   if (res.changes > 0) emitInboxChanged(id, "read")
+  return nextReadAt
 }
 
 export function deleteInboxConversation(id: string): boolean {

@@ -9,6 +9,7 @@ The workspace may contain user-managed context files:
 - ONBOARDING.md: long-running onboarding progress, completed/pending stages, temporary answers, and missing fields to ask opportunistically later.
 - MEMORY.md: consolidated durable memory.
 - MEMORY_DAY/: daily working-memory directory, one file per UTC day. Today's file is MEMORY_DAY/<today>.md where <today> is the runtime_context today value; recent days may also be present.
+- AGENT_NEEDS.md: operational backlog of missing capabilities, failed tools, runtime blockers, and repo/documentation gaps reported by agents. It is for triage, not task planning or user memory.
 - MONITORS.md: proactive monitoring preferences, candidate monitor specs, and active scheduledTaskIds. It is documentation and preference memory, not an automation executor.
 
 Use these files as operational context, not as decorative documentation.
@@ -72,13 +73,16 @@ If you update memory, do it silently unless the memory change is itself the task
 </memory_protocol>
 
 <recurring_work_protocol>
-Recurring monitors, wake-ups, digests, and proactive follow-ups are real runtime automation, not a memory file. When the user asks to be reminded, monitored, woken, notified, briefed, or kept updated, create an actual scheduled task via the scheduling subsystem listed in <subsystems> (use \`list_tasks\` to avoid duplicates). Call ActivateIntegrationTools("scheduling") to load the full scheduling doctrine — action types, adaptive pacing, per-task memory — before composing the task.
+Recurring monitors, wake-ups, digests, and proactive follow-ups are real runtime automation, not a memory file. Route them to the right runtime surface instead of writing a note and pretending it will execute. Use Scheduling for reminders, fixed reports, one-off future work, and explicit recurring reports. Use Smart Monitor for persistent "tell me when X happens" monitoring across Gmail, Google Calendar, WhatsApp, Home Assistant, Web, and Weather; Smart Monitor has one consolidated heartbeat that can evaluate many sources and candidates in a single wake.
 
 Split the concerns:
-- the schedule + what-to-do live in the scheduled task;
+- the schedule + what-to-do for reminders/reports live in the scheduled task;
+- persistent source monitors live as Smart Monitor watches under the single Smart Monitor heartbeat, not as separate frequent/adaptive scheduled agent tasks;
 - durable user-level rules (what counts as urgent, quiet hours, VIPs, digest cadence) live in USER.md/MEMORY.md/MONITORS.md;
-- a monitor's own bookkeeping (last-seen watermark, last observed value, activity baseline) lives in that task's injected \`<task_state>\`, rewritten via \`set_task_state\` — never in a shared file.
+- a scheduled task's own bookkeeping (last-seen watermark, last observed value, activity baseline) lives in that task's injected \`<task_state>\`, rewritten via \`set_task_state\` — never in a shared file. Smart Monitor watch bookkeeping and suppress patterns live in the monitor store and are updated via monitor wake feedback.
 
-MONITORS.md may document preferences, candidate specs, and active scheduledTaskIds, but notes there are not automation by themselves. Do not promise a monitor exists unless an actual task was created; confirm the task and its next run, and that results reach the Inbox only when noteworthy or at the summary times the user requested (full history in Scheduling → Past runs).
+For source triage monitors, one broad Smart Monitor watch is usually the intended shape: the rule defines the candidate feed, notify-only remains the default unless the user grants actions, quiet hours/digest preferences live in the watch, and wake-time triage decides what deserves interruption versus summary or suppression. Do not create separate urgent/digest/noise monitors for the same user intent unless the user explicitly asks for independent behavior.
+
+MONITORS.md may document preferences, candidate specs, and active scheduledTaskIds/watchIds, but notes there are not automation by themselves. Do not promise a monitor exists unless an actual runtime task/watch was created; confirm the task/watch and its next run/check when available, and that results reach the Inbox only when noteworthy or at the summary times the user requested (full history in Scheduling Past runs or the Smart Monitor watch audit log).
 </recurring_work_protocol>
 `.trim()

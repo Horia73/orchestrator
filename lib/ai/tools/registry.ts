@@ -10,6 +10,7 @@ import { globTool } from './glob'
 import { grepTool } from './grep'
 import { webFetchTool } from './web'
 import { todoWriteTool } from './todo-write'
+import { reportAgentNeedTool } from './agent-needs'
 import { setEnvTool } from './set-env'
 import { activateIntegrationToolsTool, runActivatedIntegrationTool } from './integrations'
 import { gmailTools } from './gmail'
@@ -159,6 +160,7 @@ registerTool(globTool)
 registerTool(grepTool)
 registerTool(webFetchTool)
 registerTool(todoWriteTool)
+registerTool(reportAgentNeedTool)
 registerTool(setEnvTool)
 registerTool(activateIntegrationToolsTool)
 registerTool(runActivatedIntegrationTool)

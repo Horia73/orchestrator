@@ -50,6 +50,8 @@ async function main(): Promise<void> {
         available?: boolean
         availableReason?: string
         matches?: Array<{ id: string; summary: string; body: string; from?: string }>
+        webMatches?: Array<{ id: string; summary: string; text: string }>
+        haMatches?: Array<{ id: string; summary: string; entityId: string }>
         throwInCheap?: boolean
         ok?: boolean
         errorMessage?: string
@@ -110,13 +112,56 @@ async function main(): Promise<void> {
         supportedActionKinds: ['notify_inbox'],
         async isAvailable() { return { available: true } },
         async cheapCheck({ now }) {
-            return { ok: true, matches: [], candidatesSeen: 0, stateUpdate: { lastFetchedAt: now }, fetchedAt: now }
+            const mocks = behavior.haMatches ?? []
+            const matches = mocks.map((m) => ({
+                candidate: {
+                    source: 'home_assistant' as const,
+                    entityId: m.entityId,
+                    state: 'on',
+                    attributes: {},
+                    numericValue: null,
+                    previousState: 'off',
+                    previousAttributes: {},
+                    previousNumericValue: null,
+                    lastChanged: now,
+                },
+                summary: m.summary,
+                externalId: m.id,
+                details: { entityId: m.entityId },
+            }))
+            return { ok: true, matches, candidatesSeen: mocks.length, stateUpdate: { lastFetchedAt: now }, fetchedAt: now }
+        },
+    }
+    const webMock: SourceAdapter = {
+        source: 'web',
+        supportedRuleKinds: ['web_status', 'web_json_path', 'web_text_contains'],
+        supportedActionKinds: ['notify_inbox'],
+        async isAvailable() { return { available: true } },
+        async cheapCheck({ now }) {
+            const mocks = behavior.webMatches ?? []
+            const matches = mocks.map((m) => ({
+                candidate: {
+                    source: 'web' as const,
+                    url: 'https://example.com/status',
+                    status: 200,
+                    previousStatus: 200,
+                    text: m.text,
+                    json: null,
+                    previousJson: null,
+                    fetchedAt: now,
+                },
+                summary: m.summary,
+                externalId: m.id,
+                details: { url: 'https://example.com/status' },
+            }))
+            return { ok: true, matches, candidatesSeen: mocks.length, stateUpdate: { lastFetchedAt: now }, fetchedAt: now }
         },
     }
 
     const mockRegistry = (source: WatchSource): SourceAdapter => {
         if (source === 'gmail') return gmailMock
         if (source === 'home_assistant') return haMock
+        if (source === 'web') return webMock
         throw new Error(`unmocked source: ${source}`)
     }
 
@@ -158,6 +203,7 @@ async function main(): Promise<void> {
         const w = getMonitorWatch(w1.id)!
         check('lastCheckedAt updated', w.lastCheckedAt !== null)
         check('nextCheckAt scheduled in future', w.nextCheckAt !== null && w.nextCheckAt > Date.now())
+        check('nextCheckAt aligned to 15-minute slot', w.nextCheckAt !== null && w.nextCheckAt % (15 * 60 * 1000) === 0)
         check('activeRuns bumped to 1', w.state.activeRuns === 1)
         check('quietRuns reset to 0', w.state.quietRuns === 0)
         check('lastFiredAt set', w.lastFiredAt !== null)
@@ -206,10 +252,10 @@ async function main(): Promise<void> {
     // Build a quiet-hours watch where "now" is within the window. Use a tz
     // that wraps midnight to also exercise the wrap branch.
     const w2 = createMonitorWatch({
-        title: 'Boss watch',
-        source: 'gmail',
-        target: 'boss@example.com',
-        rule: { kind: 'gmail_from', senders: ['boss@example.com'] },
+        title: 'Status page quiet watch',
+        source: 'web',
+        target: 'https://example.com/status',
+        rule: { kind: 'web_status', url: 'https://example.com/status', op: 'equals', value: 200 },
         notify: {
             onMatch: true,
             quietHours: { from: '00:00', to: '23:59', timezone: 'UTC' }, // basically always quiet
@@ -218,7 +264,7 @@ async function main(): Promise<void> {
     setWatchCheckpoint(w2.id, { nextCheckAt: Date.now() })
     setBehavior({
         available: true,
-        matches: [{ id: 'b1', summary: 'Got a sec?', body: 'Need to talk', from: 'boss@example.com' }],
+        webMatches: [{ id: 'w1', summary: 'Status page matched', text: 'ok' }],
     })
     {
         const t3 = Date.now() + 3
@@ -232,7 +278,7 @@ async function main(): Promise<void> {
     // ============================================================================
     const minC = MIN_CADENCE_SECONDS
     const maxC = 12 * 3600
-    check('cadence tightens on active run', computeAdaptiveCadence(900, minC, maxC, 0, true) < 900)
+    check('cadence tightens on active run', computeAdaptiveCadence(1800, minC, maxC, 0, true) < 1800)
     check('cadence stays steady on first quiet runs', computeAdaptiveCadence(900, minC, maxC, 1, false) === 900)
     check('cadence widens at threshold 1 (4 quiet)', computeAdaptiveCadence(900, minC, maxC, 4, false) > 900)
     check('cadence widens further at threshold 2', computeAdaptiveCadence(900, minC, maxC, 12, false) > Math.round(900 * 1.5))
@@ -304,14 +350,14 @@ async function main(): Promise<void> {
     // 9. Multi-watch consolidated wake
     // ============================================================================
     // Reset w1 to be due, behavior to produce one Gmail match. Create a new
-    // gmail watch w3 also due, with another match. One tick should produce
+    // Home Assistant watch w3 also due, with another match. One tick should produce
     // ONE briefPrompt with both watches enumerated.
     setWatchCheckpoint(w1.id, { nextCheckAt: Date.now(), consecutiveErrors: 0 })
     const w3 = createMonitorWatch({
-        title: 'Dad watch',
-        source: 'gmail',
-        target: 'dad@example.com',
-        rule: { kind: 'gmail_from', senders: ['dad@example.com'] },
+        title: 'Garage door',
+        source: 'home_assistant',
+        target: 'binary_sensor.garage_door',
+        rule: { kind: 'ha_state_equals', entityId: 'binary_sensor.garage_door', state: 'on' },
     })
     // Mark w3 already primed so it doesn't no-op on first tick (only used
     // for production Gmail adapter — our mock doesn't prime).
@@ -328,13 +374,14 @@ async function main(): Promise<void> {
     setBehavior({
         available: true,
         matches: [{ id: 'mm1', summary: 'shared message - both watches see it', body: 'hi from both' }],
+        haMatches: [{ id: 'ha1', summary: 'Garage door opened', entityId: 'binary_sensor.garage_door' }],
     })
     {
         const t5 = Date.now() + 6
         const r = await runSmartMonitorCheapPass({ now: t5, getAdapter: mockRegistry })
         check('multi-watch tick is noteworthy', r.noteworthy === true)
         check('briefPrompt mentions Mom @ Gmail', r.briefPrompt?.includes('Mom @ Gmail') === true)
-        check('briefPrompt mentions Dad watch', r.briefPrompt?.includes('Dad watch') === true)
+        check('briefPrompt mentions Garage door', r.briefPrompt?.includes('Garage door') === true)
         check('debug.watchesProcessed >= 2', r.debug.watchesProcessed >= 2)
     }
 

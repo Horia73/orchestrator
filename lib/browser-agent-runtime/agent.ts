@@ -5,8 +5,9 @@
 
 import { ActionTrace, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
 import { VisionService, AgentAction, VisionConfig } from './vision';
-import { ActionHistoryItem } from './prompts';
+import { ActionHistoryItem, IterationLimitReview } from './prompts';
 import { initializeDefaultLearnings, addLearning } from './memory';
+import { recordAgentNeed } from '@/lib/agent-needs';
 import {
     changedDownloads,
     clampDownloadWaitMs,
@@ -601,6 +602,13 @@ export function createAgentController(
 
                         if (review) {
                             onStatusUpdate(formatIterationLimitReview(review, iterationCount, maxIterations));
+                            const agentNeedStatus = recordBrowserIterationLimitNeed(
+                                review,
+                                reviewGoal,
+                                actionHistory,
+                                reviewTabs.find(tab => tab.isActive)?.url || reviewTabs[0]?.url || ''
+                            );
+                            if (agentNeedStatus) onStatusUpdate(agentNeedStatus);
 
                             if (review.questionsForUser.length > 0) {
                                 pushConversationHistory(
@@ -729,6 +737,73 @@ async function resolveCoordinate(browser: BrowserPageSession, coordinate: [numbe
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function recordBrowserIterationLimitNeed(
+    review: IterationLimitReview,
+    goal: string,
+    actionHistory: ActionHistoryItem[],
+    currentUrl: string
+): string | null {
+    if (review.missingToolsOrCapabilities.length === 0) return null;
+
+    const host = hostFromUrl(currentUrl);
+    const missing = review.missingToolsOrCapabilities.join('; ');
+    const future = review.futureStrategy.length > 0
+        ? ` Suggested next steps: ${review.futureStrategy.join(' | ')}`
+        : '';
+
+    try {
+        const result = recordAgentNeed({
+            agent: 'browser_agent',
+            severity: 'medium',
+            category: 'missing_capability',
+            summary: compactSentence(review.stuckPoint || review.whyNotFinished || `Browser agent could not finish task on ${host}.`, 180),
+            attempted: [
+                `Goal: ${goal}`,
+                `Current URL: ${currentUrl || 'unknown'}`,
+                `Iteration limit reached after ${actionHistory.length} recorded action(s).`,
+                review.whyNotFinished ? `Why not finished: ${review.whyNotFinished}` : '',
+                review.whySelfRecoveryFailed ? `Why self-recovery failed: ${review.whySelfRecoveryFailed}` : '',
+                recentActionSummary(actionHistory),
+            ].filter(Boolean).join('\n'),
+            needed: `Missing tools/capabilities: ${missing}.${future}`,
+            workaround: [
+                review.humanAssessment ? `Human assessment: ${review.humanAssessment}` : '',
+                review.questionsForUser.length > 0 ? `Questions for user: ${review.questionsForUser.join(' | ')}` : '',
+            ].filter(Boolean).join('\n'),
+            dedupeKey: `browser_agent:${host}:${missing}`,
+            source: 'browser_iteration_limit_review',
+        });
+
+        return result.duplicate
+            ? `📝 Browser blocker already logged in ${result.path} (${result.dedupeKey}).`
+            : `📝 Logged browser blocker to ${result.path} (${result.dedupeKey}).`;
+    } catch (error) {
+        return `⚠️ Could not log browser blocker to AGENT_NEEDS.md: ${error instanceof Error ? error.message : 'Unknown error'}`;
+    }
+}
+
+function hostFromUrl(value: string): string {
+    try {
+        return new URL(value).hostname.replace(/^www\./, '') || 'general';
+    } catch {
+        return 'general';
+    }
+}
+
+function recentActionSummary(actionHistory: ActionHistoryItem[]): string {
+    const recent = actionHistory.slice(-8);
+    if (recent.length === 0) return '';
+    return `Recent actions: ${recent.map(action => {
+        const detail = action.reasoning ? ` (${compactSentence(action.reasoning, 80)})` : '';
+        return `${action.action}${action.success ? '' : ' failed'}${detail}`;
+    }).join(' -> ')}`;
+}
+
+function compactSentence(value: string, maxChars: number): string {
+    const clean = value.replace(/\s+/g, ' ').trim();
+    return clean.length <= maxChars ? clean : `${clean.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
 interface ActionExecutionResult {

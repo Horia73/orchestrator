@@ -9,18 +9,34 @@
 // adapter is just the bridge between the watch store and the scheduler's
 // system-task surface.
 
+import { nextMonitorSlotAfter, isMonitorSlotAligned, MONITOR_CADENCE_STEP_MS } from '../monitor/cadence'
 import { countEnabledWatches } from '../monitor/store'
 
 // ---------------------------------------------------------------------------
 // System task lifecycle
 // ---------------------------------------------------------------------------
 
-/** Master tick cadence for the cheap loop. Fixed at 5 minutes — see
- *  smart-monitor.ts header for why this loop is fixed-cadence even though
- *  per-watch cadences are adaptive. Aligns with MIN_CADENCE_SECONDS in
- *  lib/monitor/schema.ts so no watch can be polled more often than the
- *  master tick. */
-const SMART_TICK_INTERVAL_MS = 5 * 60_000
+/** Master tick cadence for the cheap loop. Fixed at 15 minutes and aligned
+ *  to wall-clock quarter-hour slots (:00/:15/:30/:45). Per-watch cadences are
+ *  adaptive, but they are also quantized to these slots so one model wake can
+ *  batch every due integration. */
+const SMART_TICK_INTERVAL_MS = MONITOR_CADENCE_STEP_MS
+
+function desiredSmartMonitorSchedule(): { kind: 'every'; everyMs: number; startAt: number } {
+    return {
+        kind: 'every',
+        everyMs: SMART_TICK_INTERVAL_MS,
+        startAt: nextMonitorSlotAfter(Date.now()),
+    }
+}
+
+function needsScheduleRealignment(schedule: unknown): boolean {
+    if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return true
+    const spec = schedule as { kind?: unknown; everyMs?: unknown; startAt?: unknown }
+    if (spec.kind !== 'every') return true
+    if (spec.everyMs !== SMART_TICK_INTERVAL_MS) return true
+    return typeof spec.startAt !== 'number' || !isMonitorSlotAligned(spec.startAt)
+}
 
 /**
  * Idempotently create the single system "Smart monitor" heartbeat task and
@@ -38,19 +54,22 @@ export async function ensureSmartMonitorHeartbeat(options: {
         (t) => t.action.kind === 'monitor' && t.action.monitorKind === 'smart',
     )
     if (existing) {
-        if (
-            existing.createdBy === 'system' &&
-            existing.enabled !== options.enabled
-        ) {
-            updateScheduledTask(existing.id, { enabled: options.enabled })
+        if (existing.createdBy === 'system') {
+            const patch: Parameters<typeof updateScheduledTask>[1] = {}
+            if (existing.enabled !== options.enabled) patch.enabled = options.enabled
+            if (needsScheduleRealignment(existing.schedule)) {
+                patch.schedule = desiredSmartMonitorSchedule()
+            }
+            if (Object.keys(patch).length > 0) {
+                updateScheduledTask(existing.id, patch)
+            }
         }
         return
     }
     createScheduledTask({
         title: 'Smart monitor',
         action: { kind: 'monitor', monitorKind: 'smart' },
-        // FIXED 5-min cadence — see smart-monitor.ts comments.
-        schedule: { kind: 'every', everyMs: SMART_TICK_INTERVAL_MS },
+        schedule: desiredSmartMonitorSchedule(),
         enabled: options.enabled,
         createdBy: 'system',
     })

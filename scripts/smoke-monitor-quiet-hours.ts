@@ -30,7 +30,7 @@ async function main(): Promise<void> {
         if (!ok) failures++
     }
 
-    // Adapter that always returns one Gmail match.
+    // Adapters that always return one match for their source.
     const gmailMock: SourceAdapter = {
         source: 'gmail',
         supportedRuleKinds: ['gmail_from'],
@@ -60,8 +60,67 @@ async function main(): Promise<void> {
             }
         },
     }
+    const webMock: SourceAdapter = {
+        source: 'web',
+        supportedRuleKinds: ['web_status'],
+        supportedActionKinds: ['notify_inbox'],
+        async isAvailable() { return { available: true } },
+        async cheapCheck({ now }) {
+            return {
+                ok: true,
+                matches: [{
+                    candidate: {
+                        source: 'web',
+                        url: 'https://example.com/status',
+                        status: 200,
+                        previousStatus: 200,
+                        text: 'ok',
+                        json: null,
+                        previousJson: null,
+                        fetchedAt: now,
+                    },
+                    summary: 'web',
+                    externalId: `w${now}`,
+                }],
+                candidatesSeen: 1,
+                stateUpdate: { lastFetchedAt: now },
+                fetchedAt: now,
+            }
+        },
+    }
+    const haMock: SourceAdapter = {
+        source: 'home_assistant',
+        supportedRuleKinds: ['ha_state_equals'],
+        supportedActionKinds: ['notify_inbox'],
+        async isAvailable() { return { available: true } },
+        async cheapCheck({ now }) {
+            return {
+                ok: true,
+                matches: [{
+                    candidate: {
+                        source: 'home_assistant',
+                        entityId: 'binary_sensor.garage_door',
+                        state: 'on',
+                        attributes: {},
+                        numericValue: null,
+                        previousState: 'off',
+                        previousAttributes: {},
+                        previousNumericValue: null,
+                        lastChanged: now,
+                    },
+                    summary: 'ha',
+                    externalId: `ha${now}`,
+                }],
+                candidatesSeen: 1,
+                stateUpdate: { lastFetchedAt: now },
+                fetchedAt: now,
+            }
+        },
+    }
     const mockReg = (src: WatchSource): SourceAdapter => {
         if (src === 'gmail') return gmailMock
+        if (src === 'web') return webMock
+        if (src === 'home_assistant') return haMock
         throw new Error('not mocked')
     }
 
@@ -94,9 +153,9 @@ async function main(): Promise<void> {
     // ============================================================================
     const w2 = createMonitorWatch({
         title: 'No per-watch quiet',
-        source: 'gmail',
-        target: 'mom@example.com',
-        rule: { kind: 'gmail_from', senders: ['mom@example.com'] },
+        source: 'web',
+        target: 'https://example.com/status',
+        rule: { kind: 'web_status', url: 'https://example.com/status', op: 'equals', value: 200 },
         notify: { onMatch: true }, // NO quietHours here
     })
     setWatchCheckpoint(w2.id, { nextCheckAt: Date.now() })
@@ -132,9 +191,9 @@ async function main(): Promise<void> {
     // window → never quiet per our parser semantics: from === to disables).
     const w3 = createMonitorWatch({
         title: 'Per-watch always-on',
-        source: 'gmail',
-        target: 'mom@example.com',
-        rule: { kind: 'gmail_from', senders: ['mom@example.com'] },
+        source: 'home_assistant',
+        target: 'binary_sensor.garage_door',
+        rule: { kind: 'ha_state_equals', entityId: 'binary_sensor.garage_door', state: 'on' },
         notify: {
             onMatch: true,
             quietHours: { from: '00:00', to: '00:00', timezone: 'UTC' },

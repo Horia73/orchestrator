@@ -5,6 +5,10 @@ import { z } from "zod"
 
 import { AGENT_WORKSPACE_DIR } from "@/lib/config"
 import {
+  AGENT_NEEDS_DEFAULT_CONTENT,
+  AGENT_NEEDS_RELATIVE_PATH,
+} from "@/lib/agent-needs"
+import {
   INTEGRATION_INDEX_DEFAULT_CONTENT,
   INTEGRATION_INDEX_PATH,
   INTEGRATION_RUNBOOKS,
@@ -350,6 +354,17 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
     dynamic: "daily",
     description:
       "Today's working memory. One file per day under MEMORY_DAY/; agents append actions and open loops to the current day.",
+  },
+  {
+    id: "agent-needs",
+    label: "Agent needs",
+    relativePath: AGENT_NEEDS_RELATIVE_PATH,
+    kind: "markdown",
+    category: "behavior",
+    surface: "editor",
+    description:
+      "Operational backlog of missing capabilities, failed tools, runtime blockers, and repo/documentation gaps reported by agents.",
+    defaultContent: AGENT_NEEDS_DEFAULT_CONTENT,
   },
   {
     id: "monitors",

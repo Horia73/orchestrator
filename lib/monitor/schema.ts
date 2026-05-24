@@ -44,21 +44,34 @@ export type WatchSource = z.infer<typeof WatchSourceSchema>
 
 // --- cadence ---------------------------------------------------------------
 
-/** Master tick floor & ceiling. 5 minutes is the minimum because the engine's
- *  cheap loop also runs at this rate; below it we'd be busy-polling. 12h is
- *  the lazy ceiling — anything slower should really be a scheduled task. */
-export const MIN_CADENCE_SECONDS = 5 * 60
+/** Smart Monitor runs on shared quarter-hour slots. Per-watch adaptive
+ *  cadence is also quantized to this step so one consolidated wake can handle
+ *  all due integrations together. */
+export const MONITOR_CADENCE_STEP_SECONDS = 15 * 60
+
+/** Master tick floor & ceiling. 15 minutes is the minimum because the
+ *  consolidated heartbeat also runs at this rate. 12h is the lazy ceiling —
+ *  anything slower should really be a scheduled task/report. */
+export const MIN_CADENCE_SECONDS = MONITOR_CADENCE_STEP_SECONDS
 export const MAX_CADENCE_SECONDS = 12 * 60 * 60
 export const DEFAULT_CADENCE_SECONDS = 15 * 60
+
+const CadenceSecondsSchema = z.number()
+    .int()
+    .min(MIN_CADENCE_SECONDS)
+    .max(MAX_CADENCE_SECONDS)
+    .refine((n) => n % MONITOR_CADENCE_STEP_SECONDS === 0, {
+        message: 'cadence values must be multiples of 15 minutes',
+    })
 
 const CadenceFieldsSchema = z.object({
     /** Current effective cadence in seconds. Engine reads this when scheduling
      *  the next check. */
-    current: z.number().int().min(MIN_CADENCE_SECONDS).max(MAX_CADENCE_SECONDS).default(DEFAULT_CADENCE_SECONDS),
+    current: CadenceSecondsSchema.default(DEFAULT_CADENCE_SECONDS),
     /** Minimum cadence the engine is allowed to use for this watch. */
-    min: z.number().int().min(MIN_CADENCE_SECONDS).max(MAX_CADENCE_SECONDS).default(MIN_CADENCE_SECONDS),
+    min: CadenceSecondsSchema.default(MIN_CADENCE_SECONDS),
     /** Maximum cadence the engine is allowed to use for this watch. */
-    max: z.number().int().min(MIN_CADENCE_SECONDS).max(MAX_CADENCE_SECONDS).default(MAX_CADENCE_SECONDS),
+    max: CadenceSecondsSchema.default(MAX_CADENCE_SECONDS),
     /** Whether the engine may widen/tighten `current` between [min, max] based
      *  on quiet/active runs. When false, the engine pins to `current`. */
     adaptive: z.boolean().default(true),
@@ -80,9 +93,9 @@ export type CadencePolicy = z.infer<typeof CadencePolicySchema>
  *  spread-merge. So we hand-write the optional shape without defaults: an
  *  empty partial means "don't touch anything", not "reset to defaults". */
 export const CadencePolicyPartialInputSchema = z.object({
-    current: z.number().int().min(MIN_CADENCE_SECONDS).max(MAX_CADENCE_SECONDS).optional(),
-    min: z.number().int().min(MIN_CADENCE_SECONDS).max(MAX_CADENCE_SECONDS).optional(),
-    max: z.number().int().min(MIN_CADENCE_SECONDS).max(MAX_CADENCE_SECONDS).optional(),
+    current: CadenceSecondsSchema.optional(),
+    min: CadenceSecondsSchema.optional(),
+    max: CadenceSecondsSchema.optional(),
     adaptive: z.boolean().optional(),
 })
 export type CadencePolicyPartialInput = z.infer<typeof CadencePolicyPartialInputSchema>

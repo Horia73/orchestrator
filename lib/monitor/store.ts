@@ -29,7 +29,28 @@ import {
     type WatchSource,
     type WatchState,
 } from './schema'
+import { snapCadenceSeconds } from './cadence'
 import { RULE_KINDS_BY_SOURCE, ruleMatchesSource } from './rules'
+
+export class DuplicateMonitorSourceError extends Error {
+    constructor(
+        public readonly source: WatchSource,
+        public readonly existingId: string,
+        public readonly existingTitle: string,
+    ) {
+        super(
+            `Smart Monitor already has a watch for integration "${source}" (${existingId}: "${existingTitle}"). Update that watch instead of creating another one for the same integration.`,
+        )
+        this.name = 'DuplicateMonitorSourceError'
+    }
+}
+
+const SINGLE_WATCH_SOURCES = new Set<WatchSource>([
+    'gmail',
+    'google_calendar',
+    'whatsapp',
+    'home_assistant',
+])
 
 // ---------------------------------------------------------------------------
 // Smart Monitor SQLite store.
@@ -282,10 +303,21 @@ function assertRuleSourceCompat(rule: MonitorRule, source: WatchSource): void {
     }
 }
 
+function assertSingleIntegrationWatch(source: WatchSource): void {
+    if (!SINGLE_WATCH_SOURCES.has(source)) return
+    const existing = db
+        .prepare('SELECT id, title FROM monitor_watches WHERE source = ? ORDER BY createdAt DESC LIMIT 1')
+        .get(source) as { id: string; title: string } | undefined
+    if (existing) {
+        throw new DuplicateMonitorSourceError(source, existing.id, existing.title)
+    }
+}
+
 export function createMonitorWatch(input: CreateMonitorWatchInput): MonitorWatch {
     const validated = CreateMonitorWatchInputSchema.parse(input)
     assertRuleDepth(validated.rule)
     assertRuleSourceCompat(validated.rule, validated.source)
+    assertSingleIntegrationWatch(validated.source)
 
     const now = Date.now()
     const id = `mw_${randomUUID()}`
@@ -489,9 +521,9 @@ export function setWatchCadenceCurrent(
     const existing = getMonitorWatch(id)
     if (!existing) return null
     if (!opts.force && !existing.cadence.adaptive) return existing
-    const clamped = Math.max(existing.cadence.min, Math.min(existing.cadence.max, Math.round(desiredSeconds)))
-    if (clamped === existing.cadence.current) return existing
-    const nextCadence = CadencePolicySchema.parse({ ...existing.cadence, current: clamped })
+    const snapped = snapCadenceSeconds(desiredSeconds, existing.cadence.min, existing.cadence.max)
+    if (snapped === existing.cadence.current) return existing
+    const nextCadence = CadencePolicySchema.parse({ ...existing.cadence, current: snapped })
     db.prepare(
         `UPDATE monitor_watches SET cadence = @cadence, updatedAt = @updatedAt WHERE id = @id`,
     ).run({
@@ -501,7 +533,7 @@ export function setWatchCadenceCurrent(
     })
     recordWatchEvent(id, 'cadence_change', {
         from: existing.cadence.current,
-        to: clamped,
+        to: snapped,
     })
     emitWatchesChanged(id, 'cadence')
     return getMonitorWatch(id)

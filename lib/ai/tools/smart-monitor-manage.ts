@@ -97,7 +97,7 @@ export async function executeMonitorDescribeSources(): Promise<ToolResult> {
                 default: DEFAULT_CADENCE_SECONDS,
             },
             notes: [
-                'Cadence is continuous in seconds; you may give a string like "15m" or "2h" when creating/updating — both forms accepted.',
+                'Cadence is expressed in seconds but quantized to 15-minute slots; you may give a string like "15m" or "2h" when creating/updating — both forms accepted.',
                 'notify_inbox is implicitly allowed on every watch; everything else needs explicit user consent in allowedActions.',
                 'Gmail, Google Calendar, and WhatsApp watches PRIME on first tick (no history blast). Home Assistant watches do not prime — alert immediately if entity is already in the matching state.',
                 'For the actual rule/action object schemas see lib/monitor/schema.ts on the project.',
@@ -133,6 +133,16 @@ async function compactWatchRow(watchId: string): Promise<Record<string, unknown>
         suppress_pattern_count: w.suppressPatterns.length,
         active_runs: w.state.activeRuns,
         quiet_runs: w.state.quietRuns,
+    }
+}
+
+async function syncHeartbeatBestEffort(): Promise<void> {
+    try {
+        const { syncSmartMonitorActivation } = await import('@/lib/monitoring/smart-monitor-adapter')
+        await syncSmartMonitorActivation()
+    } catch {
+        // Management tools should still return the watch mutation result; the
+        // status endpoint and boot hook also reconcile the heartbeat.
     }
 }
 
@@ -267,7 +277,8 @@ export const monitorWatchAddTool: ToolDef = {
     description: [
         'Create a Smart Monitor watch.',
         'Use this when the user wants to subscribe to a periodic source check (Gmail VIPs, Google Calendar events/invites, HA sensors, web endpoint changes, weather thresholds, WhatsApp from specific contacts). Always ask the user for: WHAT to watch (source + target), the RULE that defines a match (translate plain language to a structured MonitorRule — call monitor_describe_sources first if unsure of supported predicates), the CADENCE (in seconds or a duration string like "15m"), the NOTIFY policy (immediate vs digest, quiet hours), and explicitly which ACTIONS the model is allowed to take beyond notify_inbox (default: notify-only).',
-        'Watches start ENABLED unless the user explicitly asks to pause. Cadence defaults: 900s (15 min), min 300s, max 43200s (12h), adaptive=true.',
+        'For connector integrations, use at most one watch per source: one Gmail watch, one Google Calendar watch, one WhatsApp watch, one Home Assistant watch. If a watch already exists for that integration, update it instead of adding another.',
+        'Watches start ENABLED unless the user explicitly asks to pause. Cadence defaults: 900s (15 min), min 900s, max 43200s (12h), adaptive=true; current/min/max must be multiples of 15 minutes.',
         'Returns the new watch id. The Smart Monitor heartbeat system task auto-arms on first enabled watch.',
     ].join(' '),
     input_schema: {
@@ -283,7 +294,7 @@ export const monitorWatchAddTool: ToolDef = {
                 description: 'Cadence policy. Accepts {current, min, max} as numbers (seconds) OR strings ("15m"/"2h"/"1d"), plus {adaptive: bool}.',
                 properties: {
                     current: { type: 'string', description: 'Default cadence (number seconds or "15m"). Defaults to 900s.' },
-                    min: { type: 'string', description: 'Lower bound for adaptive widening. Defaults to 300s.' },
+                    min: { type: 'string', description: 'Lower bound for adaptive widening. Defaults to 900s.' },
                     max: { type: 'string', description: 'Upper bound for adaptive widening. Defaults to 43200s (12h).' },
                     adaptive: { type: 'boolean', description: 'Whether the engine may widen on quiet runs / tighten on activity. Defaults to true.' },
                 },
@@ -379,6 +390,7 @@ export async function executeMonitorWatchAdd(args: Record<string, unknown>): Pro
             enabled,
             createdBy: 'orchestrator',
         })
+        await syncHeartbeatBestEffort()
         const compact = await compactWatchRow(created.id)
         return { success: true, data: { watch_id: created.id, watch: compact } }
     } catch (err) {
@@ -469,6 +481,7 @@ export async function executeMonitorWatchUpdate(args: Record<string, unknown>): 
         const { updateMonitorWatch } = await import('@/lib/monitor/store')
         const updated = updateMonitorWatch(id, patch as never)
         if (!updated) return { success: false, error: `No watch with id ${id}.` }
+        await syncHeartbeatBestEffort()
         const compact = await compactWatchRow(updated.id)
         return { success: true, data: { watch_id: updated.id, watch: compact } }
     } catch (err) {
@@ -499,6 +512,7 @@ export async function executeMonitorWatchRemove(args: Record<string, unknown>): 
     const before = getMonitorWatch(id)
     if (!before) return { success: false, error: `No watch with id ${id}.` }
     const ok = deleteMonitorWatch(id)
+    if (ok) await syncHeartbeatBestEffort()
     return ok
         ? { success: true, data: { watch_id: id, removed: true, title: before.title, source: before.source } }
         : { success: false, error: `Failed to delete watch ${id}.` }

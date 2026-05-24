@@ -6,6 +6,7 @@ import {
     updateMonitorWatch,
     type MonitorWatch,
 } from '@/lib/monitor/store'
+import { syncSmartMonitorActivation } from '@/lib/monitoring/smart-monitor-adapter'
 import { describeAction, describeRule } from '@/lib/monitor/describe'
 
 // Detail view — includes the structured rule + rendered description side by
@@ -71,6 +72,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ id
         const body = await request.json()
         const w = updateMonitorWatch(id, body)
         if (!w) return NextResponse.json({ error: 'Watch not found' }, { status: 404 })
+        await syncSmartMonitorActivation()
         return NextResponse.json({ watch: fullView(w) })
     } catch (error) {
         if (isBadInput(error)) {
@@ -92,6 +94,7 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ i
         const { id } = await params
         const ok = deleteMonitorWatch(id)
         if (!ok) return NextResponse.json({ error: 'Watch not found' }, { status: 404 })
+        await syncSmartMonitorActivation()
         return NextResponse.json({ success: true })
     } catch (error) {
         console.error('Failed to delete monitor watch', error)

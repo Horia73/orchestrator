@@ -15,6 +15,7 @@ export function StatusHeader({
   const now = useNow(1000)
   const hb = status?.heartbeat
   const armed = hb !== null && hb !== undefined && hb.enabled
+  const enabledWatches = status?.counts.enabled ?? 0
 
   return (
     <div className="border-b border-border/60 px-5 py-3 text-[12px] text-foreground/65">
@@ -39,7 +40,9 @@ export function StatusHeader({
               : !hb
                 ? "not installed yet"
                 : !hb.enabled
-                  ? "paused (no enabled watches)"
+                  ? enabledWatches > 0
+                    ? "paused (watches will not run)"
+                    : "paused (no enabled watches)"
                   : "armed"}
           </span>
         </div>
