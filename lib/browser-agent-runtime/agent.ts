@@ -105,7 +105,7 @@ export function createAgentController(
     const maxIterations = options.maxIterations ?? 50;
     const maxConversationHistory = options.maxConversationHistory ?? 40;
     const stepDelayMs = options.stepDelayMs ?? 500;
-    const actionSettleDelayMs = options.actionSettleDelayMs ?? 300;
+    const actionSettleDelayMs = options.actionSettleDelayMs ?? 1000;
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
     const advancedModel = options.advancedModel ?? 'gemini-3.1-pro-preview';
     const advancedThinkingLevel = options.advancedThinkingLevel ?? 'low';
@@ -1016,6 +1016,27 @@ async function executeAction(
                 return { success, trace: null, supplementalFrames: [], observation };
             }
 
+            case 'readClipboard': {
+                onStatusUpdate('📋 Reading browser clipboard...');
+                const content = await browser.readClipboard();
+                if (content === null) {
+                    const observation = 'Clipboard could not be read.';
+                    onStatusUpdate(`⚠️ ${observation}`);
+                    return { success: false, trace: null, supplementalFrames: [], observation };
+                }
+
+                clipboardOps.set(content);
+                const observation = content.length > 0
+                    ? `Clipboard: ${content}`
+                    : 'Clipboard is empty.';
+                onStatusUpdate(
+                    content.length > 0
+                        ? `📋 Clipboard read (${content.length} characters).`
+                        : '📋 Clipboard is empty.'
+                );
+                return { success: true, trace: null, supplementalFrames: [], observation };
+            }
+
             case 'getLink': {
                 let linkToCopy: string | null = null;
                 if (action.coordinate) {
@@ -1039,7 +1060,15 @@ async function executeAction(
             }
 
             case 'pasteLink': {
-                const content = clipboardOps.get();
+                let content = clipboardOps.get();
+                if (!content) {
+                    const browserClipboard = await browser.readClipboard();
+                    if (browserClipboard) {
+                        content = browserClipboard;
+                        clipboardOps.set(content);
+                        onStatusUpdate(`📋 Using browser clipboard (${content.length} characters).`);
+                    }
+                }
                 if (!content) {
                     onStatusUpdate("⚠️ Clipboard is empty! Use 'getLink' first.");
                     return { success: false, trace: null, supplementalFrames: [] };

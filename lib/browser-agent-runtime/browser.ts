@@ -204,6 +204,75 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     const pageOwnership = new WeakMap<Page, PageOwnership>();
     const instrumentedPages = new WeakSet<Page>();
 
+    const grantClipboardAccess = async (page?: Page | null) => {
+        if (!context) return;
+
+        let origin: string | undefined;
+        if (page) {
+            try {
+                const url = page.url();
+                if (url && !url.startsWith('about:')) {
+                    const parsedOrigin = new URL(url).origin;
+                    if (parsedOrigin && parsedOrigin !== 'null') {
+                        origin = parsedOrigin;
+                    }
+                }
+            } catch {
+                origin = undefined;
+            }
+        }
+
+        try {
+            await context.grantPermissions(['clipboard-read', 'clipboard-write'], origin ? { origin } : undefined);
+        } catch (error) {
+            log(`⚠️ Could not grant browser clipboard permissions${origin ? ` for ${origin}` : ''}: ${formatBrowserError(error)}`);
+        }
+    };
+
+    const readClipboardByPaste = async (page: Page): Promise<string | null> => {
+        const marker = `ai-clipboard-reader-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
+        try {
+            await page.evaluate((id) => {
+                const textarea = document.createElement('textarea');
+                textarea.id = id;
+                textarea.setAttribute('aria-hidden', 'true');
+                textarea.style.position = 'fixed';
+                textarea.style.left = '-10000px';
+                textarea.style.top = '0';
+                textarea.style.width = '1px';
+                textarea.style.height = '1px';
+                textarea.style.opacity = '0';
+                document.documentElement.appendChild(textarea);
+                textarea.focus();
+            }, marker);
+            await page.keyboard.down(modifier);
+            await page.keyboard.press('v');
+            await page.keyboard.up(modifier);
+            await sleep(100);
+            return await page.evaluate((id) => {
+                const textarea = document.getElementById(id) as HTMLTextAreaElement | null;
+                const value = textarea?.value ?? '';
+                textarea?.remove();
+                return value;
+            }, marker);
+        } catch (error) {
+            log(`⚠️ Clipboard paste fallback failed: ${formatBrowserError(error)}`);
+            try {
+                await page.keyboard.up(modifier);
+            } catch {
+                // Ignore cleanup errors when the page closed mid-action.
+            }
+            try {
+                await page.evaluate((id) => document.getElementById(id)?.remove(), marker);
+            } catch {
+                // Ignore cleanup errors when the page closed mid-action.
+            }
+            return null;
+        }
+    };
+
     const createSessionState = (requestedId?: string): BrowserSessionState => {
         const id = requestedId?.trim() || `browser_session_${++sessionSequence}`;
         if (sessions.has(id)) {
@@ -1280,6 +1349,28 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 }, text);
             },
 
+            async readClipboard(): Promise<string | null> {
+                const activePage = await ensureActivePage(session);
+                await activePage.bringToFront();
+                await grantClipboardAccess(activePage);
+
+                try {
+                    const value = await activePage.evaluate(async () => {
+                        if (!navigator.clipboard?.readText) {
+                            return null;
+                        }
+                        return navigator.clipboard.readText();
+                    });
+                    if (typeof value === 'string') {
+                        return value;
+                    }
+                } catch (error) {
+                    log(`⚠️ navigator.clipboard.readText failed: ${formatBrowserError(error)}`);
+                }
+
+                return readClipboardByPaste(activePage);
+            },
+
             async clear() {
                 const activePage = await ensureActivePage(session);
                 await selectAllAndClear(activePage);
@@ -1317,6 +1408,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             async navigate(url: string) {
                 const activePage = await ensureActivePage(session);
                 await activePage.goto(url, { waitUntil: 'domcontentloaded' });
+                await grantClipboardAccess(activePage);
             },
 
             async goBack() {
@@ -1653,6 +1745,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             attachPageToSession(session, newPage, { origin: 'initial' });
             if (sessionOptions.startupUrl) {
                 await newPage.goto(sessionOptions.startupUrl, { waitUntil: 'domcontentloaded' });
+                await grantClipboardAccess(newPage);
             }
             await newPage.bringToFront();
 

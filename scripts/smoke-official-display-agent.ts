@@ -1,4 +1,5 @@
 import fs from 'fs';
+import http from 'http';
 import os from 'os';
 import path from 'path';
 
@@ -13,10 +14,6 @@ const viewport = {
     width: Number(process.env.BROWSER_AGENT_SMOKE_WIDTH || 1280),
     height: Number(process.env.BROWSER_AGENT_SMOKE_HEIGHT || 720),
 };
-
-function fileUrl(filePath: string): string {
-    return `file://${filePath}`;
-}
 
 function createSmokeVision(): VisionService {
     let step = 0;
@@ -53,24 +50,15 @@ function createSmokeVision(): VisionService {
             step += 1;
             if (step === 1) {
                 return [{
-                    action: 'type',
-                    coordinate: [220, 111],
-                    text: 'typed-by-agent-loop',
-                    clearBefore: true,
-                    reasoning: 'Type into the visible input using absolute display coordinates.',
+                    action: 'click',
+                    coordinate: [Math.round(viewport.width / 2), Math.round(viewport.height / 2)],
+                    reasoning: 'Click the full-screen target using absolute display coordinates.',
                 }];
             }
             if (step === 2) {
                 return [{
-                    action: 'findInPage',
-                    text: 'Needle phrase',
-                    reasoning: 'Use browser find to jump to target text.',
-                }];
-            }
-            if (step === 3) {
-                return [{
                     action: 'screenshot',
-                    reasoning: 'Capture evidence after find-in-page moved the viewport.',
+                    reasoning: 'Capture evidence after the click.',
                 }];
             }
             return [{
@@ -97,21 +85,37 @@ async function main() {
     fs.rmSync(root, { recursive: true, force: true });
     fs.mkdirSync(root, { recursive: true });
 
+    let clickCount = 0;
     const pagePath = path.join(root, 'page.html');
-    fs.writeFileSync(
-        pagePath,
-        `<!doctype html>
+    const pageHtml = `<!doctype html>
 <html>
   <head>
     <title>Official Display Agent Smoke</title>
   </head>
-  <body style="font-family: sans-serif; padding: 48px">
-    <h1>Official display agent smoke</h1>
-    <input id="field" value="initial" style="font-size: 24px; width: 420px">
-    <p style="margin-top: 760px; font-size: 30px">Needle phrase for agent loop</p>
+  <body style="font-family: sans-serif; margin: 0">
+    <button
+      id="click-target"
+      style="position: fixed; inset: 0; width: 100vw; height: 100vh; border: 0; background: #0f766e; color: white; font-size: 42px"
+      onclick="fetch('/clicked', { method: 'POST' }).then(() => { this.textContent = 'Clicked by agent'; this.style.background = '#166534'; })"
+    >Click target</button>
   </body>
-</html>`,
-    );
+</html>`;
+    fs.writeFileSync(pagePath, pageHtml);
+    const server = http.createServer((request, response) => {
+        if (request.method === 'POST' && request.url === '/clicked') {
+            clickCount++;
+            response.writeHead(204);
+            response.end();
+            return;
+        }
+        response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' });
+        response.end(pageHtml);
+    });
+    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
+    const address = server.address();
+    if (!address || typeof address === 'string') {
+        throw new Error('Smoke HTTP server did not expose a TCP port.');
+    }
 
     const manager = await createBrowserManager({
         backend: 'official-display',
@@ -131,7 +135,7 @@ async function main() {
         await manager.launch();
         const session = await manager.createSession({
             id: 'agent-smoke',
-            startupUrl: fileUrl(pagePath),
+            startupUrl: `http://127.0.0.1:${address.port}/`,
         });
 
         const controller = createAgentController(
@@ -164,6 +168,9 @@ async function main() {
         if (evidence.length < 1) {
             throw new Error('Agent loop did not produce screenshot evidence.');
         }
+        if (clickCount < 1) {
+            throw new Error('Agent loop did not trigger the click target.');
+        }
 
         const finalFrame = await session.captureAgentFrame();
         const finalScreenshotPath = path.join(root, 'final-frame.jpg');
@@ -174,6 +181,7 @@ async function main() {
             wsPort: manager.getLiveViewState().wsPort,
             statuses: statuses.length,
             evidenceCount: evidence.length,
+            clickCount,
             finalScreenshotPath,
             finalFrameBytes: fs.statSync(finalScreenshotPath).size,
             coordinateSpace: finalFrame.coordinateSpace,
@@ -181,6 +189,7 @@ async function main() {
         }, null, 2));
     } finally {
         await manager.close();
+        await new Promise<void>((resolve) => server.close(() => resolve()));
     }
 }
 

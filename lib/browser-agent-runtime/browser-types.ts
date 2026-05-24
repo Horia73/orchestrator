@@ -123,6 +123,7 @@ export interface BrowserPageSession {
     hoverCoordinate(x: number, y: number): Promise<void>;
     type(text: string): Promise<void>;
     paste(text: string): Promise<void>;
+    readClipboard(): Promise<string | null>;
     clear(): Promise<void>;
     pressKey(key: string): Promise<void>;
     findInPage(query: string, next?: boolean): Promise<void>;

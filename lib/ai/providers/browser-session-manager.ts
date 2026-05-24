@@ -61,6 +61,7 @@ interface ManagedBrowserSession {
     lock: AsyncLock
     currentStatusHandler: ((message: string) => void) | null
     currentEvidenceHandler: ((capture: BrowserEvidenceCapture) => void | Promise<void>) | null
+    pendingStatusMessages: string[]
 }
 
 class AsyncLock {
@@ -202,6 +203,10 @@ class BrowserSessionManager {
             session.currentEvidenceHandler = options.onEvidence
             session.status = 'running'
             session.lastUsedAt = Date.now()
+            const pendingStatusMessages = session.pendingStatusMessages.splice(0)
+            for (const message of pendingStatusMessages) {
+                session.currentStatusHandler?.(message)
+            }
 
             return {
                 id: session.id,
@@ -440,7 +445,11 @@ class BrowserSessionManager {
         await this.browserManager.launch()
     }
 
-    private async createBrowserManagerForSession(config: BrowserRuntimeConfig, sessionId: string): Promise<BrowserManager> {
+    private async createBrowserManagerForSession(
+        config: BrowserRuntimeConfig,
+        sessionId: string,
+        onBrowserLog?: (message: string) => void,
+    ): Promise<BrowserManager> {
         if (usesSharedBrowserManager(config)) {
             await this.ensureBrowserManager(config)
             if (!this.browserManager) {
@@ -460,10 +469,10 @@ class BrowserSessionManager {
             liveView: true,
             launchArgs: getLaunchArgsForBackend(config),
             viewport: DEFAULT_VIEWPORT,
-            onLog: () => {
+            onLog: onBrowserLog ?? (() => {
                 // Per-run status is emitted by each runtime session; manager-level
                 // launch logs would otherwise leak into unrelated browser tasks.
-            },
+            }),
         })
         await manager.launch()
         return manager
@@ -471,7 +480,17 @@ class BrowserSessionManager {
 
     private async createSession(config: BrowserRuntimeConfig): Promise<ManagedBrowserSession> {
         const id = `browser_${randomUUID()}`
-        const browserManager = await this.createBrowserManagerForSession(config, id)
+        const pendingStatusMessages: string[] = []
+        let managedRef: ManagedBrowserSession | null = null
+        const browserManager = await this.createBrowserManagerForSession(config, id, (message) => {
+            if (managedRef?.currentStatusHandler) {
+                managedRef.currentStatusHandler(message)
+                return
+            }
+            if (!managedRef || managedRef.status === 'idle' || managedRef.status === 'running') {
+                pendingStatusMessages.push(message)
+            }
+        })
         const pageSession = await browserManager.createSession({
             id,
             startupUrl: config.browser.startupUrl || undefined,
@@ -487,6 +506,7 @@ class BrowserSessionManager {
             lock: new AsyncLock(),
             currentStatusHandler: null,
             currentEvidenceHandler: null,
+            pendingStatusMessages,
         }
 
         session.runtime = createAgentRuntime(config, (message) => {
@@ -499,6 +519,7 @@ class BrowserSessionManager {
         })
 
         const managed = session as ManagedBrowserSession
+        managedRef = managed
         this.sessions.set(id, managed)
         this.scheduleCleanup()
         return managed

@@ -293,6 +293,8 @@ function browserAgentTerminalText(run: AgentCallReasoningEntry): string {
     )
   }
   if (content) {
+    const finalTranscript = extractBrowserAgentTerminalTranscript(content)
+    if (finalTranscript) return normalizeTerminalText(finalTranscript)
     return normalizeTerminalText(
       stripBrowserAgentTerminalTranscript(content) || content
     )
@@ -329,6 +331,11 @@ function stripBrowserAgentTerminalTranscript(content: string): string {
   return content
     .replace(/\nTerminal output:\n```text\n[\s\S]*?\n```\n?/g, "\n")
     .trimEnd()
+}
+
+function extractBrowserAgentTerminalTranscript(content: string): string {
+  const match = content.match(/\nTerminal output:\n```text\n([\s\S]*?)\n```\n?/)
+  return match?.[1]?.trimEnd() ?? ""
 }
 
 function joinTerminalSections(sections: string[]): string {

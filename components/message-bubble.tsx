@@ -459,7 +459,7 @@ function ThoughtBlock({
                                 >
                                     <div ref={contentRef}>
                                         {reasoning.length > 0 ? (
-                                            <div className="mb-2 flex flex-col gap-2">
+                                            <div className="mb-2 flex flex-col gap-2 pt-1">
                                                 <ReasoningEntryList
                                                     reasoning={reasoning}
                                                     onArtifactClick={onArtifactClick}

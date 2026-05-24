@@ -202,7 +202,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
         },
         runtime: {
             ...DEFAULT_AGENT_CONFIG.runtime,
-            actionSettleDelayMs: 300,
+            actionSettleDelayMs: 1000,
         },
         llm: {
             model: light.model,

@@ -28,8 +28,8 @@ export function buildSystemPrompt(
    const now = new Date();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
    const responseActionList = isAdvancedMode
-      ? '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "ask" | "yield_control"'
-      : '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "done" | "ask" | "error" | "escalate"';
+      ? '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "ask" | "yield_control"'
+      : '"click" | "type" | "key" | "scroll" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "done" | "ask" | "error" | "escalate"';
    const modeSpecificActionDocs = isAdvancedMode
       ? `- **ask**: Ask the user for clarification.
 - **yield_control**: Yield control back to the Base Model. Use this when you have cleared the blocker and normal automation can resume. Never return \`escalate\` while in advanced mode.`
@@ -108,7 +108,8 @@ ${inspectPageDoc}
 - **refresh**: Reload the page.
 - **closeTab**: Close a tab. If you provide \`tabIndex\`, it closes that tab even if it is not active. If omitted, it closes the current tab.
 ${getLinkDoc}
-- **pasteLink**: Type the copied link into the input at (x,y).
+- **readClipboard**: Read the browser/OS clipboard and store it for later use. Use this after clicking a visible "Copy", "Copy link", "Copy key", or similar button when the task depends on the copied value or you need to paste it elsewhere.
+- **pasteLink**: Type the stored clipboard/link content into the input at (x,y). If no link was stored through \`getLink\`, this can use the real browser clipboard read by \`readClipboard\` or a page Copy button.
 - **clear**: Clear the input field at (x,y). Always use this before typing in a non-empty input field.
 - **goBack**: Go back.
 - **goForward**: Go forward.
@@ -136,6 +137,7 @@ ${inspectPageRule}
 13. **Batching inspectPage/evidence**: Do NOT batch \`inspectPage\`, \`screenshot\`, or \`recordVideo\` with page-changing actions. Capture first, then act after you see the next frame.
 14. **Reading From Overview**: You MAY use an overview frame to answer high-level questions about what sections, result groups, posters, cards, or major items appear on the page. If text is too small or ambiguous, scroll closer and verify in the viewport before making precise claims.
 15. **Scroll Estimation From Overview**: When using an overview frame, estimate scrolls approximately to move the viewport near the target area, then refine with one or two smaller viewport-based scrolls. Do not assume pixel-perfect precision from an overview image.
+16. **Clipboard Verification**: If you click a Copy button and the copied value matters, use \`readClipboard\` as the next action before returning \`done\` or trying to paste it.
 
 ## 📥 DOWNLOAD HANDLING
 - Browser files are saved to a managed workspace download folder, not the user's system Downloads folder.

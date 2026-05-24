@@ -81,6 +81,8 @@ export function formatAction(action: AgentAction): string {
             const expected = action.expectedFilename ? ` expecting "${action.expectedFilename}"` : '';
             return `Wait for Downloads${duration}${expected} - ${action.reasoning}`;
         }
+        case 'readClipboard':
+            return `Read Clipboard - ${action.reasoning}`;
         default:
             return `${action.action} - ${action.reasoning}`;
     }

@@ -86,7 +86,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
         maxIterations: 50,
         maxConversationHistory: 40,
         stepDelayMs: 500,
-        actionSettleDelayMs: 500,
+        actionSettleDelayMs: 1000,
         waitActionDelayMs: 3000,
         cleanContextBeforeTask: false,
     },

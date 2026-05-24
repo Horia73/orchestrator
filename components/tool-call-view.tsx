@@ -668,9 +668,6 @@ function WebActivityCard({
     websites: SearchWebsite[]
     status: "running" | "ok" | "error"
 }) {
-    const visibleRequests = requests.slice(0, 10)
-    const visibleWebsites = websites.slice(0, Math.max(0, 10 - visibleRequests.length))
-    const hiddenCount = Math.max(0, requests.length + websites.length - visibleRequests.length - visibleWebsites.length)
     const queryCount = requests.filter(item => item.kind === "search" || item.kind === "image").length
     const actionCount = requests.length - queryCount
     const summary = [
@@ -692,17 +689,12 @@ function WebActivityCard({
                 <StatusPill status={status} />
             </div>
             <div className="divide-y divide-border/45">
-                {visibleRequests.map((request, index) => (
+                {requests.map((request, index) => (
                     <WebRequestRow key={`${request.kind}-${request.label}-${index}`} request={request} />
                 ))}
-                {visibleWebsites.map((website, index) => (
+                {websites.map((website, index) => (
                     <WebSourceRow key={`source-${website.url}-${index}`} website={website} />
                 ))}
-                {hiddenCount > 0 && (
-                    <div className="px-3 py-2 text-[12px] text-muted-foreground">
-                        +{hiddenCount} more
-                    </div>
-                )}
             </div>
         </div>
     )

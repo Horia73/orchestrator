@@ -9,7 +9,7 @@ import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterat
 import { getMemories } from './memory';
 
 export interface AgentAction {
-    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'findInPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
+    action: 'click' | 'type' | 'key' | 'scroll' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'findInPage' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
     sub_objective?: string; // Goal string when escalating task to advanced reasoning model
     coordinate?: [number, number]; // [x, y]
     coordinateEnd?: [number, number]; // [x, y] — end point for drag action
@@ -420,7 +420,7 @@ export function createVisionService(
                 const text = response.text?.trim() || '';
                 const jsonText = extractJsonText(text);
 
-                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'findInPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'];
+                const validActions = ['click', 'type', 'key', 'scroll', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'findInPage', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'];
 
                 const parsed = JSON.parse(jsonText);
                 const actions: AgentAction[] = Array.isArray(parsed) ? parsed : [parsed];

@@ -125,6 +125,17 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         await sleep(20);
     };
 
+    const clampDisplayCoordinate = (x: number, y: number): [number, number] => {
+        const roundedX = Number.isFinite(x) ? Math.round(x) : 0;
+        const roundedY = Number.isFinite(y) ? Math.round(y) : 0;
+        const safeX = Math.max(0, Math.min(roundedX, state.viewport.width - 1));
+        const safeY = Math.max(0, Math.min(roundedY, state.viewport.height - 1));
+        if (safeX !== roundedX || safeY !== roundedY) {
+            log(`⚠️ Clamping display coordinates from [${x}, ${y}] to [${safeX}, ${safeY}] (${state.viewport.width}x${state.viewport.height})`);
+        }
+        return [safeX, safeY];
+    };
+
     const findChromeWindow = (): string | null => {
         const found = spawnSync('xdotool', ['search', '--onlyvisible', '--class', 'chrom'], {
             env: displayEnv(state.display.display),
@@ -138,13 +149,27 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         const windowId = state.chromeWindowId || findChromeWindow();
         if (!windowId) return;
         state.chromeWindowId = windowId;
+        let lastError: unknown = null;
+        let focused = false;
         try {
-            run('xdotool', ['windowactivate', '--sync', windowId]);
-            await sleep(40);
+            run('xdotool', ['windowraise', windowId]);
         } catch (error) {
-            state.chromeWindowId = null;
-            log(`⚠️ Could not activate Chromium window before input: ${formatError(error)}`);
+            lastError = error;
         }
+        for (const args of [['windowactivate', '--sync', windowId], ['windowfocus', windowId]]) {
+            try {
+                run('xdotool', args);
+                focused = true;
+            } catch (error) {
+                lastError = error;
+            }
+        }
+        if (!focused) {
+            state.chromeWindowId = null;
+            log(`⚠️ Could not activate Chromium window before input: ${formatError(lastError)}`);
+            return;
+        }
+        await sleep(40);
     };
 
     const closeClipboardOwners = () => {
@@ -158,30 +183,37 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
 
     const setClipboard = async (text: string) => {
         closeClipboardOwners();
-        const owner = spawn('xclip', ['-selection', 'clipboard', '-i'], {
+        const owner = spawn('xclip', ['-selection', 'clipboard', '-i', '-quiet'], {
             env: displayEnv(state.display.display),
             stdio: ['pipe', 'ignore', 'pipe'],
         });
         let stderr = '';
+        let spawnError: Error | null = null;
         state.clipboardOwners.add(owner);
         owner.once('exit', () => {
             state.clipboardOwners.delete(owner);
         });
         owner.once('error', error => {
+            spawnError = error;
             state.clipboardOwners.delete(owner);
             log(`⚠️ xclip failed: ${error.message}`);
         });
         owner.stderr?.on('data', chunk => {
             const message = chunk.toString('utf8').trim();
             if (message) {
-                stderr = stderr ? `${stderr}\n${message}` : message;
-                log(`[xclip] ${message}`);
+                stderr = `${stderr ? `${stderr}\n` : ''}${message}`.slice(-2_000);
             }
         });
         owner.stdin.end(text);
         await sleep(150);
-        if (owner.exitCode !== null || owner.signalCode !== null) {
-            throw new Error(`xclip did not keep clipboard ownership${stderr ? `: ${stderr}` : ''}`);
+        if (spawnError) {
+            throw spawnError;
+        }
+        if (owner.exitCode !== null && owner.exitCode !== 0) {
+            throw new Error(`xclip exited with code ${owner.exitCode}${stderr ? `: ${stderr}` : ''}`);
+        }
+        if (owner.signalCode !== null) {
+            throw new Error(`xclip exited with signal ${owner.signalCode}${stderr ? `: ${stderr}` : ''}`);
         }
     };
 
@@ -244,8 +276,11 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             const windowId = findChromeWindow();
             if (windowId) {
                 state.chromeWindowId = windowId;
-                spawnSync('xdotool', ['windowactivate', windowId], { env: displayEnv(state.display.display) });
-                spawnSync('xdotool', ['windowsize', windowId, String(state.viewport.width), String(state.viewport.height)], { env: displayEnv(state.display.display) });
+                spawnSync('xdotool', ['windowmove', '--sync', windowId, '0', '0'], { env: displayEnv(state.display.display) });
+                spawnSync('xdotool', ['windowsize', '--sync', windowId, String(state.viewport.width), String(state.viewport.height)], { env: displayEnv(state.display.display) });
+                spawnSync('xdotool', ['windowraise', windowId], { env: displayEnv(state.display.display) });
+                spawnSync('xdotool', ['windowactivate', '--sync', windowId], { env: displayEnv(state.display.display) });
+                spawnSync('xdotool', ['windowfocus', windowId], { env: displayEnv(state.display.display) });
                 return;
             }
             await sleep(200);
@@ -279,6 +314,14 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         const url = startupUrl || 'about:blank';
         const chromeArgs = [
             `--user-data-dir=${state.userDataDir}`,
+            '--no-first-run',
+            '--no-default-browser-check',
+            '--disable-infobars',
+            '--hide-crash-restore-bubble',
+            '--disable-session-crashed-bubble',
+            `--window-position=0,0`,
+            `--window-size=${state.viewport.width},${state.viewport.height}`,
+            '--force-device-scale-factor=1',
             ...(options.launchArgs || []),
             '--new-window',
         ];
@@ -398,21 +441,32 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             };
         },
         async clickCoordinate(x: number, y: number, count = 1) {
-            await xdotool(['mousemove', String(Math.round(x)), String(Math.round(y))]);
-            for (let i = 0; i < Math.max(1, count); i++) {
-                await xdotool(['click', '1']);
+            await activateChromeWindow();
+            const [safeX, safeY] = clampDisplayCoordinate(x, y);
+            const repeat = Number.isFinite(count) ? Math.max(1, Math.round(count)) : 1;
+            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            for (let i = 0; i < repeat; i++) {
+                await xdotool(['mousedown', '1']);
+                await sleep(45);
+                await xdotool(['mouseup', '1']);
+                if (i < repeat - 1) {
+                    await sleep(80);
+                }
             }
             await settleAfterAction();
             return true;
         },
         async dragCoordinate(startX: number, startY: number, endX: number, endY: number, durationMs = 900): Promise<TracedActionResult> {
+            await activateChromeWindow();
+            const [safeStartX, safeStartY] = clampDisplayCoordinate(startX, startY);
+            const [safeEndX, safeEndY] = clampDisplayCoordinate(endX, endY);
             const steps = Math.max(8, Math.min(40, Math.round(durationMs / 35)));
-            await xdotool(['mousemove', String(Math.round(startX)), String(Math.round(startY)), 'mousedown', '1']);
+            await xdotool(['mousemove', '--sync', String(safeStartX), String(safeStartY), 'mousedown', '1']);
             for (let step = 1; step <= steps; step++) {
                 const ratio = step / steps;
-                const x = Math.round(startX + (endX - startX) * ratio);
-                const y = Math.round(startY + (endY - startY) * ratio);
-                await xdotool(['mousemove', String(x), String(y)]);
+                const x = Math.round(safeStartX + (safeEndX - safeStartX) * ratio);
+                const y = Math.round(safeStartY + (safeEndY - safeStartY) * ratio);
+                await xdotool(['mousemove', '--sync', String(x), String(y)]);
                 await sleep(Math.max(5, durationMs / steps));
             }
             await xdotool(['mouseup', '1']);
@@ -420,14 +474,18 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             return { success: true, trace: emptyTrace('drag') };
         },
         async holdCoordinate(x: number, y: number, durationMs = 10000): Promise<TracedActionResult> {
-            await xdotool(['mousemove', String(Math.round(x)), String(Math.round(y)), 'mousedown', '1']);
+            await activateChromeWindow();
+            const [safeX, safeY] = clampDisplayCoordinate(x, y);
+            await xdotool(['mousemove', '--sync', String(safeX), String(safeY), 'mousedown', '1']);
             await sleep(Math.max(200, durationMs));
             await xdotool(['mouseup', '1']);
             await settleAfterAction();
             return { success: true, trace: emptyTrace('hold') };
         },
         async hoverCoordinate(x: number, y: number) {
-            await xdotool(['mousemove', String(Math.round(x)), String(Math.round(y))]);
+            await activateChromeWindow();
+            const [safeX, safeY] = clampDisplayCoordinate(x, y);
+            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
         },
         async type(text: string) {
             await setClipboard(text);
@@ -438,6 +496,14 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             await setClipboard(text);
             await pressShortcut('Control+V');
             await settleAfterAction();
+        },
+        async readClipboard(): Promise<string | null> {
+            try {
+                return run('xclip', ['-selection', 'clipboard', '-o']).toString('utf8');
+            } catch (error) {
+                log(`⚠️ Could not read clipboard: ${formatError(error)}`);
+                return null;
+            }
         },
         async clear() {
             await pressShortcut('Control+A');
@@ -460,6 +526,9 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             await settleAfterAction();
         },
         async scroll(direction: 'up' | 'down' | 'left' | 'right', amount = 500) {
+            await activateChromeWindow();
+            const [centerX, centerY] = clampDisplayCoordinate(state.viewport.width / 2, state.viewport.height / 2);
+            await xdotool(['mousemove', '--sync', String(centerX), String(centerY)]);
             const button = direction === 'up' ? '4' : direction === 'down' ? '5' : direction === 'left' ? '6' : '7';
             const repeats = Math.max(1, Math.min(20, Math.ceil(amount / 120)));
             for (let i = 0; i < repeats; i++) {

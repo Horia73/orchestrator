@@ -884,7 +884,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const deleteConversation = React.useCallback(
     (id: string) => {
-      stopStreaming()
+      if (activeConversationIdRef.current === id) {
+        stopStreaming()
+      } else if (activeChatStreamsRef.current[id]) {
+        stopChatStream(id).catch((err) => {
+          console.error(err)
+        })
+      }
       deleteConversationRequest(id).catch(console.error)
       clearConversationUnread(id)
       dispatch({ type: "DELETE_CONVERSATION", id })
