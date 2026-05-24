@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
-import { factoryResetAppData } from '@/lib/settings/factory-reset'
+import { factoryResetAppData, isFactoryResetScope, type FactoryResetScope } from '@/lib/settings/factory-reset'
 
 export const dynamic = 'force-dynamic'
 
@@ -29,9 +29,19 @@ export async function POST(request: Request) {
     const preserveEnvLocal = body && typeof body === 'object' && 'preserveEnvLocal' in body
         ? (body as { preserveEnvLocal?: unknown }).preserveEnvLocal !== false
         : true
+    const scopes = body && typeof body === 'object' && 'scopes' in body
+        ? parseScopes((body as { scopes?: unknown }).scopes)
+        : undefined
+
+    if (Array.isArray(scopes) && scopes.length === 0) {
+        return NextResponse.json(
+            { error: 'Select at least one reset scope.' },
+            { status: 400, headers: { 'Cache-Control': 'no-store' } }
+        )
+    }
 
     try {
-        const result = factoryResetAppData({ preserveEnvLocal })
+        const result = factoryResetAppData({ preserveEnvLocal, scopes })
         return NextResponse.json(
             { success: true, ...result },
             { headers: { 'Cache-Control': 'no-store' } }
@@ -42,4 +52,10 @@ export async function POST(request: Request) {
             { status: 500, headers: { 'Cache-Control': 'no-store' } }
         )
     }
+}
+
+function parseScopes(value: unknown): FactoryResetScope[] | undefined {
+    if (value === undefined) return undefined
+    if (!Array.isArray(value)) return []
+    return value.filter(isFactoryResetScope)
 }

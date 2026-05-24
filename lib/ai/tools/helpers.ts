@@ -52,7 +52,8 @@ export function truncateText(text: string, maxChars = DEFAULT_MAX_OUTPUT_CHARS):
 }
 
 export function ensureParentDir(filePath: string): void {
-    fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(filePath), { recursive: true })
+    const dir = path.dirname(/* turbopackIgnore: true */ filePath)
+    fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true })
 }
 
 export function workspaceCwd(inputPath?: string): string {

@@ -4,6 +4,7 @@ import * as React from "react"
 import type {
   BrowserAgentModelSettings,
   BrowserAgentModelSlot,
+  BrowserAgentSettings,
   ModelFeatureValue,
   ModelPricing,
   ProviderDef,
@@ -12,6 +13,18 @@ import type {
 } from "@/lib/config"
 import type { AgentKind, AgentStatus } from "@/lib/ai/agents/types"
 import { useAppEvent } from "@/hooks/use-app-events"
+import {
+  RESEARCH_EVENTS_STORAGE_KEY,
+  capResearchEvents,
+  containsLegacyCodexMcpTransportError,
+  isTerminalResearchEvent,
+  readStoredResearchEvents,
+  sealStaleResearchEvents,
+  type ModelResearchClientEvent,
+  type ModelResearchStatusSnapshot,
+} from "@/components/settings/model-research-events"
+
+export type { ModelResearchClientEvent } from "@/components/settings/model-research-events"
 
 export interface AgentInfo {
   id: string
@@ -65,8 +78,14 @@ interface SettingsContextValue {
     slot: BrowserAgentModelSlot,
     override: BrowserAgentModelSettings
   ) => Promise<void>
+  /** Set how browser_agent chooses its browser automation backend. */
+  setBrowserAgentBackend: (
+    backend: BrowserAgentSettings["backend"]
+  ) => Promise<void>
   /** Clear the override for an agent — falls back to global defaults. */
   clearAgentOverride: (agentId: string) => Promise<void>
+  /** Replace the agent settings sidebar order. Optimistic with rollback. */
+  setAgentOrder: (agentOrder: string[]) => Promise<void>
   /** Replace the favorites list (used after toggle/reorder). Optimistic with rollback. */
   setFavorites: (favorites: string[]) => Promise<void>
   /** Toggle archived state for a single model (curated layer). Optimistic. */
@@ -112,103 +131,7 @@ export interface RefreshResult {
   results: Record<string, { fetched: number; error?: string; skipped?: string }>
 }
 
-type ModelResearchEventBase = { at?: number }
-
-export type ModelResearchClientEvent = ModelResearchEventBase &
-  (
-    | { type: "ready"; runId?: string; total: number; concurrency?: number }
-    | {
-        type: "model_start"
-        key: string
-        providerId: string
-        modelId: string
-        name: string
-        index: number
-        total: number
-        missing: string[]
-      }
-    | { type: "agent_event"; key: string; event: Record<string, unknown> }
-    | {
-        type: "model_retry"
-        key: string
-        attempt: number
-        maxAttempts: number
-        reason: string
-      }
-    | {
-        type: "model_result"
-        key: string
-        status: "updated" | "unchanged" | "incomplete" | "failed"
-        summary?: string
-        error?: string
-        remainingMissing?: string[]
-        unresolved?: Array<{ field: string; reason?: string }>
-        model?: ProviderDef["models"][string]
-      }
-    | {
-        type: "done"
-        runId?: string
-        total: number
-        updated: number
-        incomplete: number
-        failed: number
-      }
-    | { type: "stopped"; runId?: string; message: string }
-    | { type: "error"; runId?: string; message: string }
-  )
-
 const SettingsContext = React.createContext<SettingsContextValue | null>(null)
-const RESEARCH_EVENTS_STORAGE_KEY = "orchestrator:model-research-events:v1"
-const MAX_RESEARCH_EVENTS = 400
-
-function isTerminalResearchEvent(event: ModelResearchClientEvent): boolean {
-  return (
-    event.type === "done" || event.type === "stopped" || event.type === "error"
-  )
-}
-
-/**
- * Cap the event buffer WITHOUT ever dropping structural events. The previous
- * implementation kept only the last N events, which evicted the `ready` event
- * (it is always first) on any real run — and once `ready` is gone the progress
- * counter loses its denominator and renders "3/0". We keep every structural
- * event (bounded ~ models×3) and only ring-buffer the high-volume agent
- * transcript.
- */
-function capResearchEvents(
-  events: ModelResearchClientEvent[]
-): ModelResearchClientEvent[] {
-  if (events.length <= MAX_RESEARCH_EVENTS) return events
-  const structural = events.filter((e) => e.type !== "agent_event")
-  const transcriptBudget = Math.max(0, MAX_RESEARCH_EVENTS - structural.length)
-  const keptTranscript = events
-    .filter((e) => e.type === "agent_event")
-    .slice(-transcriptBudget)
-  const keep = new Set<ModelResearchClientEvent>([
-    ...structural,
-    ...keptTranscript,
-  ])
-  return events.filter((e) => keep.has(e))
-}
-
-/**
- * If a half-finished run was restored from localStorage but the server has no
- * record of it (process restarted), close it out so the panel doesn't show a
- * perpetual "running" spinner.
- */
-function sealStaleResearchEvents(
-  events: ModelResearchClientEvent[]
-): ModelResearchClientEvent[] {
-  if (events.length === 0 || events.some(isTerminalResearchEvent)) return events
-  return [
-    ...events,
-    {
-      type: "stopped",
-      message: "Previous research run is no longer active",
-      at: Date.now(),
-    },
-  ]
-}
 
 function hasUsableModelProvider(data: SettingsBootstrap): boolean {
   return Object.entries(data.providerStatus).some(
@@ -243,48 +166,6 @@ function deepEqual(a: unknown, b: unknown): boolean {
     if (!deepEqual(ao[k], bo[k])) return false
   }
   return true
-}
-
-interface ModelResearchStatusSnapshot {
-  running: boolean
-  runId: string | null
-  status: "idle" | "running" | "done" | "stopped" | "error"
-  startedAt: number | null
-  endedAt: number | null
-  concurrency: number
-  events: ModelResearchClientEvent[]
-}
-
-function readStoredResearchEvents(): ModelResearchClientEvent[] {
-  if (typeof window === "undefined") return []
-  try {
-    const raw = window.localStorage.getItem(RESEARCH_EVENTS_STORAGE_KEY)
-    if (!raw) return []
-    const parsed = JSON.parse(raw)
-    if (!Array.isArray(parsed)) return []
-    const events = parsed as ModelResearchClientEvent[]
-    if (containsLegacyCodexMcpTransportError(events)) {
-      window.localStorage.removeItem(RESEARCH_EVENTS_STORAGE_KEY)
-      return []
-    }
-    return capResearchEvents(events)
-  } catch {
-    return []
-  }
-}
-
-function containsLegacyCodexMcpTransportError(
-  events: ModelResearchClientEvent[]
-): boolean {
-  return events.some((event) => {
-    if (event.type !== "error" && event.type !== "model_result") return false
-    const message = event.type === "error" ? event.message : event.error
-    return (
-      typeof message === "string" &&
-      message.includes("invalid transport") &&
-      message.includes("mcp_servers.playwright")
-    )
-  })
 }
 
 async function fetchSettingsBootstrap(
@@ -496,6 +377,47 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     []
   )
 
+  const setBrowserAgentBackend = React.useCallback(
+    async (backend: BrowserAgentSettings["backend"]) => {
+      setData((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          config: {
+            ...prev.config,
+            browserAgent: {
+              ...prev.config.browserAgent,
+              backend,
+            },
+            browserAgentBackend: {
+              ...prev.config.browserAgentBackend,
+              configured: backend,
+            },
+          },
+        }
+      })
+
+      const res = await fetch("/api/config/browser-agent/backend", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ backend }),
+      })
+
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        const refresh = await fetch("/api/settings/bootstrap")
+        if (refresh.ok) setData(await refresh.json())
+        throw new Error(json.error || `Save failed (${res.status})`)
+      }
+
+      const json = (await res.json()) as { config: RuntimeConfig }
+      setData((prev) =>
+        prev ? { ...prev, config: { ...prev.config, ...json.config } } : prev
+      )
+    },
+    []
+  )
+
   const clearAgentOverride = React.useCallback(async (agentId: string) => {
     setData((prev) => {
       if (!prev) return prev
@@ -521,6 +443,33 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     const json = (await res.json()) as { config: RuntimeConfig }
     setData((prev) =>
       prev ? { ...prev, config: { ...prev.config, ...json.config } } : prev
+    )
+  }, [])
+
+  const setAgentOrder = React.useCallback(async (agentOrder: string[]) => {
+    setData((prev) => {
+      if (!prev) return prev
+      return { ...prev, config: { ...prev.config, agentOrder } }
+    })
+
+    const res = await fetch("/api/config/agent-order", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agentOrder }),
+    })
+
+    if (!res.ok) {
+      const json = await res.json().catch(() => ({}))
+      const refresh = await fetch("/api/settings/bootstrap")
+      if (refresh.ok) setData(await refresh.json())
+      throw new Error(json.error || `Save failed (${res.status})`)
+    }
+
+    const json = (await res.json()) as { agentOrder: string[] }
+    setData((prev) =>
+      prev
+        ? { ...prev, config: { ...prev.config, agentOrder: json.agentOrder } }
+        : prev
     )
   }, [])
 
@@ -920,7 +869,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       error,
       setAgentOverride,
       setBrowserAgentModel,
+      setBrowserAgentBackend,
       clearAgentOverride,
+      setAgentOrder,
       setFavorites,
       setArchived,
       curateModel,
@@ -938,7 +889,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       error,
       setAgentOverride,
       setBrowserAgentModel,
+      setBrowserAgentBackend,
       clearAgentOverride,
+      setAgentOrder,
       setFavorites,
       setArchived,
       curateModel,

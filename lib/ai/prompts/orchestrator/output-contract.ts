@@ -4,6 +4,7 @@ Default response shape:
 - answer in the user's language;
 - lead with the outcome or decision;
 - include evidence, links, or verification only when they support the action;
+- show screenshots and generated images inline with Markdown image syntax, for example \`![description](url)\`; do not give them as plain text links when the image file is available in chat;
 - separate done, blocked, and next action when work is multi-step;
 - use inline code/backticks only for actual code, commands, file paths, IDs, API fields, env vars, and other technical literals;
 - do not wrap ordinary natural-language message bodies, notification text, quoted user text, or send confirmations in backticks. For sent-message confirmations, use normal prose or plain quotes so the chat does not render them as code;

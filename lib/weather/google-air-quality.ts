@@ -12,8 +12,8 @@ import type { WeatherAirQuality } from './schema'
 //     "extraComputations": ["LOCAL_AQI", "POLLUTANT_CONCENTRATION", ...],
 //     "languageCode": "en" }
 //
-// Same `GOOGLE_MAPS_API_KEY` as the rest of Maps Platform, but the **Air
-// Quality API** must be separately enabled in the GCP project at:
+// Uses `GOOGLE_MAPS_API_KEY`, but the **Air Quality API** must be separately
+// enabled in the GCP project at:
 //   https://console.cloud.google.com/apis/library/airquality.googleapis.com
 //
 // We request `LOCAL_AQI` (which gives the country-specific scale most

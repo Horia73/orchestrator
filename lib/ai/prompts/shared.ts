@@ -6,7 +6,11 @@ import path from 'path'
 import { AGENT_WORKSPACE_DIR, getEnvValue, WORKSPACE_DIR } from '@/lib/config'
 import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates } from '@/lib/settings/workspace-files'
 import { buildIntegrationRunbooksContext } from '@/lib/integrations/runbooks'
-import { buildIntegrationsContextBlock } from '@/lib/integrations/exposure'
+import {
+    buildActiveCapabilityDoctrinesBlock,
+    buildIntegrationsContextBlock,
+    buildSubsystemsContextBlock,
+} from '@/lib/integrations/exposure'
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 
@@ -130,11 +134,9 @@ Explicit confirmation is required before any of these. First summarize the actio
 - scheduling recurring external actions that notify others or consume paid resources.
 Vague or prior approval is not permission for a broader or different action.
 
-Autonomy tiers are user preferences for how quickly you proceed; they never weaken the hard confirmation list above. If USER.md, MEMORY.md, BOOT.md, or the current request names an autonomy tier, apply it:
-- Ask everything: ask before using logged-in sessions, entering form data, taking browser control through account areas, changing any external state, or storing runtime configuration. Still answer, research, inspect public pages, and draft internally without delay.
-- Balanced: default when no durable preference exists. Proceed with reversible preparation, read-only inspection, public navigation, drafts, carts/forms prepared but not submitted, and non-sensitive local file work. Ask only when the next step would cross a hard confirmation boundary or a missing answer would materially change the outcome.
-- Full access: proceed autonomously through reversible browser/app work, logged-in dashboard navigation with existing sessions, non-sensitive form filling, free setup/API-key flows, local config/env storage for discovered runtime credentials, and technical recovery. Still stop before money, paid trials/subscriptions, final order/booking/cancellation/send/submit, account/security changes, OAuth/API permission grants, legal-term acceptance, destructive actions, public sharing, or uploading/submitting sensitive personal documents/data unless the current user message explicitly confirmed that exact action.
-When the tier is unknown and the task naturally reaches signup/login/setup automation, ask one concise preference question and remember only the non-secret answer.
+Time-critical scoped execution: a current user message can be the explicit confirmation when it unambiguously asks you to execute a specific time-bound external action on their behalf, especially because they will be unavailable at the critical moment (for example "at 14:00 claim this exact 1-point drop for me", "try to reserve this exact free slot when it opens", or "if it is this item and cost is <= X, do it without asking again"). Treat that as a narrow, one-run confirmation only when all material details match: provider/site/link, item/event/slot, quantity, account/profile, latest acceptable cost or points, timing window, and any personal data to submit. Do not ask again at the scheduled moment; quote the authorization in the executor handoff instead. Before the deadline, gather a preflight packet of non-secret details the future run will need, and at runtime try safe autonomous recovery with the persistent profile, known direct links, non-secret memory, refresh/retry, official fallback pages, and runtime recovery before interrupting the user. Do not ask for passwords or verification codes in chat. If a browser challenge or captcha appears inside the authorized flow, let browser_agent attempt ordinary in-session visual interaction and advanced recovery first; stop or notify only if it requires human verification, 2FA/codes, credentials, or cannot be completed through legitimate browser interaction. If the site shows new money charges, a paid trial/subscription, new payment details, different item/date/quantity, sensitive document upload, broader legal declaration, account/security/permission change, or materially different terms, the confirmation no longer applies and you must stop or notify the user.
+
+Default posture: between user turns, proceed with reversible preparation — research, read-only inspection, public navigation, drafts, forms/carts prepared but not submitted, non-sensitive local file work, and use of existing logged-in browser sessions. Ask only when the next step would cross the hard confirmation list above or when a missing answer would materially change the outcome. If USER.md or MEMORY.md records a durable preference about a specific class of action (for example "always ask before account-area navigation" or "use existing browser sessions for free setup flows without asking"), honor it as a soft default that still never weakens the hard list.
 
 Free setup nuance: do not refuse or stop early just because a free account/API key/dashboard setup may be involved. You may research, open pages, navigate dashboards, use existing logged-in sessions, and prepare forms without extra confirmation. If the missing piece is sensitive or preference-dependent (which account to use, whether to sign in, whether to let the user take over the browser, whether this kind of setup may be handled automatically in the future), ask that narrow question instead of refusing the task. When the user gives a durable preference, remember the non-secret preference in USER.md or MEMORY.md. If the target of the task is an API key or similar runtime credential and it is visible after authorized login/setup, either store it in the secret/env surface or relay it exactly when the user asked to see/copy/configure it. Still stop before the final external submit/consent step if it shares personal data, creates an account, accepts legal terms, grants permissions, starts a paid trial/subscription, changes account/security settings, or commits the user externally; ask for exact confirmation at that final step.
 
@@ -388,8 +390,8 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`workspace_cwd: ${AGENT_WORKSPACE_DIR}`)
     lines.push(`file_tools_root: ${AGENT_WORKSPACE_DIR}`)
     lines.push(`runtime_state_dir: ${WORKSPACE_DIR}`)
-    lines.push('filesystem_scope: relative file paths and shell commands start in workspace_cwd; file tools reject paths outside that workspace unless a native CLI provider grants broader access.')
-    lines.push('discovery_scope: routine file listing/search omits provider-private CLI metadata; direct exact paths still work when intentionally requested.')
+    lines.push('filesystem_scope: relative file paths start in workspace_cwd. File tools reject paths outside that workspace unless a native CLI provider grants broader access; shell commands also start in workspace_cwd but may use host commands and absolute paths permitted by the runtime user.')
+    lines.push('discovery_scope: file discovery tools may omit provider-private CLI metadata; shell command output is returned as produced by the command.')
     lines.push('workspace_files: these workspace files are intentionally accessible to every agent by exact path, relative to workspace_cwd (some are edited from dedicated Settings surfaces rather than the file editor):')
     const todayStamp = new Date().toISOString().slice(0, 10)
     for (const file of WORKSPACE_FILE_DEFINITIONS) {
@@ -404,15 +406,31 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         '</runtime_context>',
     ].join('\n')
 
+    const exposureOpts = {
+        conversationId: ctx.conversationId,
+        origin: appOrigin || undefined,
+    }
+    // Orchestrator-only surfaces: integrations + subsystems + active
+    // doctrines all live next to each other so the model can see what
+    // exists, what it has activated, and what's still gated. Sub-agents
+    // don't need this surface — they receive their tools directly and
+    // delegate composition back to the orchestrator.
+    const isOrchestrator = ctx.agentId === 'orchestrator'
     return [
         runtime,
         buildAgentThreadsContextBlock(ctx),
-        buildIntegrationsContextBlock(ctx.declaredToolIds ?? [], {
-            conversationId: ctx.conversationId,
-            origin: appOrigin || undefined,
-        }),
+        buildIntegrationsContextBlock(ctx.declaredToolIds ?? [], exposureOpts),
+        // Native subsystems (watchlist, monitoring, scheduling) — orchestrator-
+        // only. Sub-agents never schedule or set up monitors themselves.
+        isOrchestrator ? buildSubsystemsContextBlock(exposureOpts) : '',
+        // Lazy doctrines for activated capabilities (maps, weather, watchlist,
+        // monitoring, scheduling, …). Empty until the orchestrator calls
+        // ActivateIntegrationTools. Sits adjacent to <integrations>/<subsystems>
+        // so the model sees the capability summary + its loaded doctrine
+        // together.
+        buildActiveCapabilityDoctrinesBlock(exposureOpts),
         buildIntegrationRunbooksContext(),
-        buildWorkspaceContextFiles(),
+        buildWorkspaceContextFiles(ctx.agentId),
     ].filter(Boolean).join('\n\n')
 }
 
@@ -493,9 +511,16 @@ function readWorkspaceFile(relPath: string): string | null {
     }
 }
 
-function buildWorkspaceContextFiles(): string {
+function buildWorkspaceContextFiles(agentId: string | undefined): string {
     const blocks: string[] = []
     let remaining = MAX_CONTEXT_TOTAL_CHARS
+
+    // BOOT.md and ONBOARDING.md are the user-facing onboarding script —
+    // only the orchestrator runs onboarding. Sub-agents (researcher,
+    // multipurpose, concierge, etc.) get the durable context files
+    // (USER/IDENTITY/MEMORY/MEMORY_DAY) but skip the onboarding script
+    // so it doesn't bloat their prompts every turn while BOOT.md exists.
+    const isOrchestrator = agentId === 'orchestrator'
 
     // Returns false when the char budget is exhausted so callers stop.
     const pushBlock = (relPath: string, id: string, raw: string): boolean => {
@@ -513,6 +538,7 @@ function buildWorkspaceContextFiles(): string {
 
     for (const file of WORKSPACE_FILE_DEFINITIONS) {
         if (!CONTEXT_FILE_IDS.has(file.id)) continue
+        if (!isOrchestrator && (file.id === 'boot' || file.id === 'onboarding')) continue
         if (remaining <= 0) break
 
         if (file.id === 'memory-day') {

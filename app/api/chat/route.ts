@@ -55,270 +55,29 @@ import {
 } from "@/lib/artifacts/direct-emit"
 import { redactToolArgs } from "@/lib/ai/tools/redaction"
 import { filterIntegrationToolExposure } from "@/lib/integrations/exposure"
+import { activateIntegrations } from "@/lib/integrations/activation-store"
 import { resolveExistingUploadPath } from "@/lib/uploads"
 import { getEffectiveRegistry } from "@/lib/models/registry"
-import { normalizeUsage } from "@/lib/observability/usage-mapper"
 import { generateTitle } from "@/lib/utils-chat"
 import { getProviderReadiness } from "@/lib/provider-readiness"
 import { resolveRequestOrigin } from "@/lib/app-origin"
 import { sendChatCompletionPushNotification } from "@/lib/push-notifications"
+import {
+  appendPromptContext,
+  buildAttachmentContext,
+  buildFinalContextUsageSnapshot,
+  buildToolTitle,
+  canProviderReadLocalUploads,
+  contextUsageKey,
+  dedupeTools,
+  mergeContextUsage,
+  mergeMessagesForProvider,
+  sanitizeCapabilityActivations,
+  sanitizePromptContext,
+} from "./route-support"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
-
-/** Format a path for display — relative to cwd when inside, basename for deep absolutes. */
-function displayPath(p: string): string {
-  if (!p) return ""
-  const cwd = process.cwd()
-  if (p === cwd) return "."
-  if (p.startsWith(cwd + "/")) return p.slice(cwd.length + 1)
-  return p
-}
-
-/** Build a human-readable title for a tool call from its name + args. */
-function buildToolTitle(
-  toolName: string,
-  args: Record<string, unknown> | undefined
-): string {
-  const rawPath =
-    typeof args?.path === "string"
-      ? args.path
-      : typeof args?.file_path === "string"
-        ? args.file_path
-        : ""
-  const shown = displayPath(rawPath)
-  if (toolName === "read_file") return shown ? `Read ${shown}` : "Read file"
-  if (toolName === "Read") return shown ? `Read ${shown}` : "Read file"
-  if (toolName === "list_dir") return shown ? `List ${shown}` : "List directory"
-  if (toolName === "Write") return shown ? `Write ${shown}` : "Write file"
-  if (toolName === "Edit") return shown ? `Edit ${shown}` : "Edit file"
-  if (toolName === "Bash" || toolName === "shell")
-    return typeof args?.command === "string"
-      ? `Run ${args.command.slice(0, 80)}`
-      : "Run command"
-  if (toolName === "Glob")
-    return typeof args?.pattern === "string" ? `Glob ${args.pattern}` : "Glob"
-  if (toolName === "Grep")
-    return typeof args?.pattern === "string" ? `Grep ${args.pattern}` : "Grep"
-  if (toolName === "WebFetch")
-    return typeof args?.url === "string" ? `Fetch ${args.url}` : "Fetch URL"
-  if (toolName === "SetEnv")
-    return typeof args?.key === "string" ? `Set env ${args.key}` : "Set env"
-  if (toolName === "web_search" || toolName === "WebSearch") {
-    const queries = Array.isArray(args?.queries)
-      ? args.queries.filter((q) => typeof q === "string")
-      : []
-    if (queries.length > 0) return `Search ${queries.join(", ").slice(0, 90)}`
-    return typeof args?.query === "string"
-      ? `Search ${args.query}`
-      : "Search web"
-  }
-  if (toolName === "TodoWrite") return "Update todos"
-  if (toolName === "delegate_to") {
-    const agentId = typeof args?.agent_id === "string" ? args.agent_id : "agent"
-    return `Delegate to ${agentId}`
-  }
-  if (toolName === "delegate_parallel") {
-    const count = Array.isArray(args?.jobs) ? args.jobs.length : 0
-    return count > 0
-      ? `Delegate ${count} jobs in parallel`
-      : "Delegate in parallel"
-  }
-  if (toolName === "RunActivatedIntegrationTool") {
-    return typeof args?.tool_id === "string"
-      ? `Run ${args.tool_id}`
-      : "Run integration tool"
-  }
-  return toolName
-}
-
-function dedupeTools<T extends { id: string }>(tools: T[]): T[] {
-  const seen = new Set<string>()
-  const out: T[] = []
-  for (const tool of tools) {
-    if (seen.has(tool.id)) continue
-    seen.add(tool.id)
-    out.push(tool)
-  }
-  return out
-}
-
-function buildFinalContextUsageSnapshot(args: {
-  provider: string
-  model: string
-  rawUsage: unknown
-  contextWindow?: number | null
-  requestId: string
-  interactionId?: string | null
-}): ContextUsageSnapshot | null {
-  const usage = normalizeUsage(args.provider, args.rawUsage)
-  if (
-    usage.inputTokens === null &&
-    usage.outputTokens === null &&
-    usage.thinkingTokens === null &&
-    usage.cachedTokens === null &&
-    usage.totalTokens === null
-  ) {
-    return null
-  }
-  const visibleOutputTokens =
-    args.provider === "openai" &&
-    usage.outputTokens !== null &&
-    usage.thinkingTokens !== null
-      ? Math.max(0, usage.outputTokens - usage.thinkingTokens)
-      : usage.outputTokens
-  return {
-    provider: args.provider,
-    model: args.model,
-    source: "provider-final",
-    accuracy: "actual",
-    updatedAt: Date.now(),
-    requestId: args.requestId,
-    interactionId: args.interactionId ?? undefined,
-    contextWindow: args.contextWindow ?? null,
-    contextTokens: sumNumbers(usage.inputTokens, visibleOutputTokens),
-    inputTokens: usage.inputTokens,
-    outputTokens: usage.outputTokens,
-    thinkingTokens: usage.thinkingTokens,
-    cachedTokens: usage.cachedTokens,
-    totalTokens: usage.totalTokens,
-  }
-}
-
-function mergeContextUsage(
-  previous: ContextUsageSnapshot | null,
-  next: ContextUsageSnapshot
-): ContextUsageSnapshot {
-  const sameSource = Boolean(
-    previous &&
-    previous.provider === next.provider &&
-    previous.model === next.model
-  )
-  return {
-    ...(sameSource ? (previous ?? {}) : {}),
-    ...next,
-    last: next.last ?? (sameSource ? previous?.last : null) ?? null,
-    total: next.total ?? (sameSource ? previous?.total : null) ?? null,
-    threadTokens:
-      next.threadTokens ?? (sameSource ? previous?.threadTokens : null) ?? null,
-    lastCompactedAt:
-      next.lastCompactedAt ??
-      (sameSource ? previous?.lastCompactedAt : null) ??
-      null,
-    compactedCount:
-      next.compactedCount ??
-      (sameSource ? previous?.compactedCount : undefined),
-  }
-}
-
-function contextUsageKey(snapshot: ContextUsageSnapshot): string {
-  return JSON.stringify({
-    provider: snapshot.provider,
-    model: snapshot.model,
-    source: snapshot.source,
-    requestId: snapshot.requestId ?? null,
-    interactionId: snapshot.interactionId ?? null,
-    threadId: snapshot.threadId ?? null,
-    turnId: snapshot.turnId ?? null,
-    contextWindow: snapshot.contextWindow ?? null,
-    contextTokens: snapshot.contextTokens ?? null,
-    inputTokens: snapshot.inputTokens ?? null,
-    outputTokens: snapshot.outputTokens ?? null,
-    thinkingTokens: snapshot.thinkingTokens ?? null,
-    cachedTokens: snapshot.cachedTokens ?? null,
-    totalTokens: snapshot.totalTokens ?? null,
-    threadTokens: snapshot.threadTokens ?? null,
-    lastCompactedAt: snapshot.lastCompactedAt ?? null,
-    compactedCount: snapshot.compactedCount ?? null,
-  })
-}
-
-function sumNumbers(
-  ...values: Array<number | null | undefined>
-): number | null {
-  let total = 0
-  let seen = false
-  for (const value of values) {
-    if (typeof value !== "number" || !Number.isFinite(value) || value < 0)
-      continue
-    total += value
-    seen = true
-  }
-  return seen ? total : null
-}
-
-function canProviderReadLocalUploads(providerId: string): boolean {
-  return providerId === "codex" || providerId === "claude-code"
-}
-
-function formatAttachmentSize(bytes: unknown): string {
-  if (typeof bytes !== "number" || !Number.isFinite(bytes) || bytes < 0)
-    return "unknown size"
-  if (bytes < 1024) return `${bytes} B`
-  const kb = bytes / 1024
-  if (kb < 1024) return `${kb.toFixed(kb >= 10 ? 0 : 1)} KB`
-  const mb = kb / 1024
-  if (mb < 1024) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`
-  const gb = mb / 1024
-  return `${gb.toFixed(gb >= 10 ? 0 : 1)} GB`
-}
-
-function buildAttachmentContext(
-  attachments: Attachment[],
-  options: { includeLocalPath: boolean }
-): string {
-  const lines: string[] = []
-
-  for (const att of attachments) {
-    if (!att || typeof att.id !== "string") continue
-
-    const filename =
-      typeof att.filename === "string" && att.filename.trim()
-        ? att.filename.trim()
-        : att.id
-    const mimeType =
-      typeof att.mimeType === "string" && att.mimeType.trim()
-        ? att.mimeType.split(";")[0].trim()
-        : "application/octet-stream"
-    const filePath = resolveExistingUploadPath(att.id)
-    const location =
-      options.includeLocalPath && filePath
-        ? `local path: ${filePath}`
-        : filePath
-          ? `upload_id: ${att.id}`
-          : `upload_id: ${att.id}; local upload file is no longer available`
-
-    lines.push(
-      `- ${filename} (${mimeType}, ${formatAttachmentSize(att.size)}); ${location}`
-    )
-  }
-
-  if (!lines.length) return ""
-
-  return [
-    `The user attached ${lines.length === 1 ? "this file" : "these files"}:`,
-    ...lines,
-    `Use upload_id when a tool asks for one of these uploaded attachments. Use local paths only when filesystem inspection is available.`,
-  ].join("\n")
-}
-
-function appendPromptContext(content: string, context: string): string {
-  if (!context) return content
-  return content.trim() ? `${content}\n\n${context}` : context
-}
-
-function mergeMessagesForProvider(
-  dbMessages: Message[],
-  requestMessages: Message[]
-): Message[] {
-  const byId = new Map<string, Message>()
-  for (const message of dbMessages) byId.set(message.id, message)
-  for (const message of requestMessages) byId.set(message.id, message)
-  return Array.from(byId.values()).sort((a, b) => {
-    const timeDelta = a.timestamp - b.timestamp
-    return timeDelta !== 0 ? timeDelta : a.id.localeCompare(b.id)
-  })
-}
 
 export async function POST(request: Request) {
   const requestOrigin = resolveRequestOrigin(request)
@@ -364,7 +123,13 @@ export async function POST(request: Request) {
     registry[agentSettings.provider]?.models[agentSettings.model]
       ?.contextWindow ?? null
 
-  let body: { conversationId: string; messageId: string; messages: Message[] }
+  let body: {
+    conversationId: string
+    messageId: string
+    messages: Message[]
+    promptContext?: string
+    activateIntegrations?: string[]
+  }
   try {
     body = await request.json()
   } catch {
@@ -391,6 +156,16 @@ export async function POST(request: Request) {
     existingConversation?.messages ?? [],
     messages
   )
+  const promptContext = sanitizePromptContext(body.promptContext)
+  const promptContextMessageId = promptContext
+    ? [...messagesForProvider].reverse().find((m) => m.role === "user")?.id
+    : null
+  const requestedActivations = sanitizeCapabilityActivations(
+    body.activateIntegrations
+  )
+  if (requestedActivations.length > 0) {
+    activateIntegrations(conversationId, requestedActivations)
+  }
 
   if (!existingConversation) {
     const firstUserMsg =
@@ -903,6 +678,15 @@ export async function POST(request: Request) {
                 })
               : ""
           const messageContent = typeof m.content === "string" ? m.content : ""
+          const runtimePromptContext =
+            m.id === promptContextMessageId
+              ? [
+                  "<runtime_context source=\"Smart Maps UI\">",
+                  "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with map-aware tools and artifacts; do not quote it back verbatim.",
+                  promptContext,
+                  "</runtime_context>",
+                ].join("\n")
+              : ""
           const result: {
             role: string
             content: string
@@ -910,8 +694,8 @@ export async function POST(request: Request) {
           } = {
             role: m.role,
             content: appendPromptContext(
-              messageContent,
-              localAttachmentContext
+              appendPromptContext(messageContent, localAttachmentContext),
+              runtimePromptContext
             ),
           }
 

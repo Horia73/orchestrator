@@ -35,6 +35,7 @@ const SOURCE_TOGGLEABLE_TYPES = new Set([
     'application/vnd.ant.react',
     'text/html',
     'application/vnd.ant.mermaid',
+    'application/vnd.ant.map',
     'application/vnd.ant.weather',
     'image/svg+xml',
     'text/vnd.graphviz',
@@ -46,6 +47,7 @@ function sourceLanguageFor(artifact: ArtifactRow): string {
         case 'application/vnd.ant.react': return 'tsx'
         case 'text/html': return 'html'
         case 'application/vnd.ant.mermaid': return 'text'
+        case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
         case 'image/svg+xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
@@ -292,6 +294,7 @@ function prettyType(mime: string): string {
         case 'application/vnd.ant.code': return 'code'
         case 'text/html': return 'html'
         case 'application/vnd.ant.react': return 'react'
+        case 'application/vnd.ant.map': return 'map'
         case 'application/vnd.ant.weather': return 'weather'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'graphviz'

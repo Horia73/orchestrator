@@ -4,6 +4,7 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import { displayPath, resolveSandboxedWritable } from './sandbox'
 import { ensureParentDir, stringArg } from './helpers'
 import { emitAppEvent } from '@/lib/events'
+import { invalidateMapsConnectionProbe } from '@/lib/integrations/maps'
 import { invalidateWeatherConnectionProbe } from '@/lib/integrations/weather'
 import { invalidateWeatherProviderState } from '@/lib/weather/providers'
 
@@ -73,6 +74,7 @@ export function executeSetEnv(args: Record<string, unknown>): ToolResult {
         }
         process.env[key] = value
         if (key === 'GOOGLE_MAPS_API_KEY') {
+            invalidateMapsConnectionProbe()
             invalidateWeatherConnectionProbe()
             invalidateWeatherProviderState()
         }

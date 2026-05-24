@@ -33,6 +33,7 @@ import { z } from 'zod'
  *  future ad-hoc HTTP/RSS observers without expanding the enum. */
 export const WatchSourceSchema = z.enum([
     'gmail',
+    'google_calendar',
     'whatsapp',
     'home_assistant',
     'web',
@@ -130,6 +131,14 @@ export type MonitorRule =
     | { kind: 'gmail_subject_contains'; substrings: string[]; caseInsensitive?: boolean }
     | { kind: 'gmail_label'; labels: string[] }
     | { kind: 'gmail_query'; q: string }
+    // google calendar
+    | { kind: 'calendar_event_title_contains'; substrings: string[]; caseInsensitive?: boolean; calendarIds?: string[]; lookaheadDays?: number }
+    | { kind: 'calendar_event_description_contains'; substrings: string[]; caseInsensitive?: boolean; calendarIds?: string[]; lookaheadDays?: number }
+    | { kind: 'calendar_event_location_contains'; substrings: string[]; caseInsensitive?: boolean; calendarIds?: string[]; lookaheadDays?: number }
+    | { kind: 'calendar_event_attendee'; attendees: string[]; calendarIds?: string[]; lookaheadDays?: number }
+    | { kind: 'calendar_event_needs_response'; calendarIds?: string[]; lookaheadDays?: number }
+    | { kind: 'calendar_event_starts_within'; minutes: number; calendarIds?: string[]; lookaheadDays?: number }
+    | { kind: 'calendar_event_query'; q: string; calendarIds?: string[]; lookaheadDays?: number }
     // whatsapp
     | { kind: 'wa_from'; contacts: string[] }
     | { kind: 'wa_text_contains'; substrings: string[]; caseInsensitive?: boolean }
@@ -158,6 +167,8 @@ export type MonitorRule =
 const WeatherRuleLocationSchema = z.string().min(1).max(160).optional()
 const WeatherWindowHoursSchema = z.number().int().min(1).max(240).optional()
 const WeatherNumericOpSchema = z.enum(['>', '<', '>=', '<=', '==', '!='])
+const CalendarIdsSchema = z.array(z.string().min(1).max(250)).min(1).max(25).optional()
+const CalendarLookaheadDaysSchema = z.number().int().min(1).max(180).optional()
 const WeatherMonitorConditionSchema = z.enum([
     'clear',
     'partly-cloudy',
@@ -193,6 +204,51 @@ const LeafRuleSchema = z.discriminatedUnion('kind', [
     z.object({
         kind: z.literal('gmail_query'),
         q: z.string().min(1).max(500),
+    }),
+    // google calendar
+    z.object({
+        kind: z.literal('calendar_event_title_contains'),
+        substrings: z.array(z.string().min(1).max(200)).min(1).max(32),
+        caseInsensitive: z.boolean().optional(),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
+    }),
+    z.object({
+        kind: z.literal('calendar_event_description_contains'),
+        substrings: z.array(z.string().min(1).max(200)).min(1).max(32),
+        caseInsensitive: z.boolean().optional(),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
+    }),
+    z.object({
+        kind: z.literal('calendar_event_location_contains'),
+        substrings: z.array(z.string().min(1).max(200)).min(1).max(32),
+        caseInsensitive: z.boolean().optional(),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
+    }),
+    z.object({
+        kind: z.literal('calendar_event_attendee'),
+        attendees: z.array(z.string().min(1).max(320)).min(1).max(64),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
+    }),
+    z.object({
+        kind: z.literal('calendar_event_needs_response'),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
+    }),
+    z.object({
+        kind: z.literal('calendar_event_starts_within'),
+        minutes: z.number().int().min(1).max(60 * 24 * 30),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
+    }),
+    z.object({
+        kind: z.literal('calendar_event_query'),
+        q: z.string().min(1).max(500),
+        calendarIds: CalendarIdsSchema,
+        lookaheadDays: CalendarLookaheadDaysSchema,
     }),
     // whatsapp
     z.object({
@@ -405,7 +461,8 @@ export const MonitorWatchSchema = z.object({
     title: z.string().min(1).max(200),
     source: WatchSourceSchema,
     /** Human-meaningful identifier for the thing being watched. Format is
-     *  source-specific (Gmail: address/query, HA: entity_id, Web: URL, etc.). */
+     *  source-specific (Gmail: address/query, Calendar: primary/all/calendar
+     *  ids, HA: entity_id, Web: URL, Weather: location, etc.). */
     target: z.string().min(1).max(500),
     rule: MonitorRuleSchema,
     allowedActions: z.array(MonitorActionSchema).max(16).default([]),

@@ -256,6 +256,24 @@ button:not(:disabled),
     }
   }
 
+  .overflow-auto,
+  .overflow-scroll,
+  [data-slot="scroll-area-viewport"] {
+    overscroll-behavior: contain;
+  }
+
+  .overflow-y-auto,
+  .overflow-y-scroll,
+  .chat-scroll-container,
+  .xterm-viewport {
+    overscroll-behavior-y: contain;
+  }
+
+  .overflow-x-auto,
+  .overflow-x-scroll {
+    overscroll-behavior-x: contain;
+  }
+
   ::-webkit-scrollbar {
     width: 7px;
     height: 7px;
@@ -288,4 +306,24 @@ button:not(:disabled),
   .chat-scroll-container[data-scrollbar-visible="true"]::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--foreground) 50%, transparent);
   }
+
+}
+
+html[data-orch-settings-page="true"],
+html[data-orch-settings-page="true"] body,
+html[data-orch-settings-page="true"] *,
+[data-orch-settings-content="true"],
+[data-orch-settings-content="true"] * {
+  scrollbar-width: none !important;
+  scrollbar-gutter: auto !important;
+}
+
+html[data-orch-settings-page="true"]::-webkit-scrollbar,
+html[data-orch-settings-page="true"] body::-webkit-scrollbar,
+html[data-orch-settings-page="true"] *::-webkit-scrollbar,
+[data-orch-settings-content="true"]::-webkit-scrollbar,
+[data-orch-settings-content="true"] *::-webkit-scrollbar {
+  width: 0 !important;
+  height: 0 !important;
+  display: none !important;
 }

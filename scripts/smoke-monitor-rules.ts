@@ -24,6 +24,7 @@ import {
     RULE_KINDS_BY_SOURCE,
     type EvalCandidate,
     type GmailCandidate,
+    type GoogleCalendarCandidate,
     type HomeAssistantCandidate,
     type WebCandidate,
     type WeatherCandidate,
@@ -32,7 +33,10 @@ import {
 import type { MonitorRule } from '@/lib/monitor/schema'
 import {
     buildGmailQueryFromRule,
+    extractCalendarIdsFromRule,
+    extractCalendarLookaheadDaysFromRule,
     extractEntityIdsFromRule,
+    matchingCalendarStartWindows,
     extractUrlsFromRule,
     extractWaContactsFromRule,
     extractWeatherLocationsFromRule,
@@ -69,6 +73,38 @@ function gmail(partial: Partial<GmailCandidate>): GmailCandidate {
         subject: 'Urgent: car broke',
         snippet: 'Can you call?',
         timestamp: 1_700_000_000_000,
+        ...partial,
+    }
+}
+function calendar(partial: Partial<GoogleCalendarCandidate>): GoogleCalendarCandidate {
+    return {
+        source: 'google_calendar',
+        calendarId: 'primary',
+        eventId: 'evt_1',
+        htmlLink: 'https://calendar.google.com/event?eid=evt_1',
+        status: 'confirmed',
+        summary: 'Customer onboarding',
+        description: 'Kickoff and setup plan',
+        location: 'Zoom',
+        start: '2026-06-01T09:00:00.000Z',
+        end: '2026-06-01T10:00:00.000Z',
+        allDay: false,
+        startMs: Date.parse('2026-06-01T09:00:00.000Z'),
+        endMs: Date.parse('2026-06-01T10:00:00.000Z'),
+        updated: '2026-05-23T12:00:00.000Z',
+        eventType: 'default',
+        creator: { email: 'pm@example.com', displayName: 'PM', self: false },
+        organizer: { email: 'pm@example.com', displayName: 'PM', self: false },
+        attendees: [
+            { email: 'me@example.com', displayName: 'Me', responseStatus: 'needsAction', self: true },
+            { email: 'client@example.com', displayName: 'Client', responseStatus: 'accepted', self: false },
+        ],
+        selfResponseStatus: 'needsAction',
+        minutesUntilStart: 25,
+        fingerprint: 'fp2',
+        previousFingerprint: 'fp1',
+        isNew: false,
+        isUpdated: true,
         ...partial,
     }
 }
@@ -168,7 +204,47 @@ check('gmail_query is true for gmail candidates (server-filtered)', evaluateRule
 ))
 
 // ============================================================================
-// 2. WhatsApp predicates
+// 2. Google Calendar predicates
+// ============================================================================
+check('calendar_event_title_contains hit', evaluateRule(
+    { kind: 'calendar_event_title_contains', substrings: ['onboarding'] },
+    calendar({}),
+))
+check('calendar_event_description_contains hit', evaluateRule(
+    { kind: 'calendar_event_description_contains', substrings: ['setup'] },
+    calendar({}),
+))
+check('calendar_event_location_contains hit', evaluateRule(
+    { kind: 'calendar_event_location_contains', substrings: ['zoom'] },
+    calendar({}),
+))
+check('calendar_event_attendee matches attendee email/name', evaluateRule(
+    { kind: 'calendar_event_attendee', attendees: ['client@example.com'] },
+    calendar({}),
+))
+check('calendar_event_needs_response hit', evaluateRule(
+    { kind: 'calendar_event_needs_response' },
+    calendar({ selfResponseStatus: 'needsAction' }),
+))
+check('calendar_event_starts_within hit', evaluateRule(
+    { kind: 'calendar_event_starts_within', minutes: 30 },
+    calendar({ minutesUntilStart: 25 }),
+))
+check('calendar_event_starts_within misses outside window', !evaluateRule(
+    { kind: 'calendar_event_starts_within', minutes: 10 },
+    calendar({ minutesUntilStart: 25 }),
+))
+check('calendar_event_query searches event text', evaluateRule(
+    { kind: 'calendar_event_query', q: 'kickoff' },
+    calendar({}),
+))
+check('calendar rule calendarIds filter misses wrong calendar', !evaluateRule(
+    { kind: 'calendar_event_query', q: 'onboarding', calendarIds: ['work@example.com'] },
+    calendar({ calendarId: 'primary' }),
+))
+
+// ============================================================================
+// 3. WhatsApp predicates
 // ============================================================================
 check('wa_from matches chat name', evaluateRule(
     { kind: 'wa_from', contacts: ['Mom'] },
@@ -192,7 +268,7 @@ check('wa_mention hit', evaluateRule(
 ))
 
 // ============================================================================
-// 3. Home Assistant transition semantics
+// 4. Home Assistant transition semantics
 // ============================================================================
 check('ha_state_equals fires on transition off→on', evaluateRule(
     { kind: 'ha_state_equals', entityId: 'binary_sensor.garage_door', state: 'on' },
@@ -240,7 +316,7 @@ check('ha_threshold fires on first obs above', evaluateRule(
 ))
 
 // ============================================================================
-// 4. Web predicates
+// 5. Web predicates
 // ============================================================================
 check('web_status equals', evaluateRule(
     { kind: 'web_status', url: 'https://example.com/status', op: 'equals', value: 200 },
@@ -272,7 +348,7 @@ check('web rules return false when URL mismatches', !evaluateRule(
 ))
 
 // ============================================================================
-// 5. Weather predicates
+// 6. Weather predicates
 // ============================================================================
 check('weather_precip_probability hit', evaluateRule(
     { kind: 'weather_precip_probability', location: 'Cluj', op: '>=', value: 60 },
@@ -304,7 +380,7 @@ check('weather location mismatch misses', !evaluateRule(
 ))
 
 // ============================================================================
-// 6. Cross-source defensive
+// 7. Cross-source defensive
 // ============================================================================
 check('gmail rule on HA candidate → false', !evaluateRule(
     { kind: 'gmail_from', senders: ['mom@x'] },
@@ -318,9 +394,13 @@ check('weather rule on Gmail candidate → false', !evaluateRule(
     { kind: 'weather_uv', location: 'Cluj', op: '>=', value: 6 },
     gmail({}) as EvalCandidate,
 ))
+check('calendar rule on Gmail candidate → false', !evaluateRule(
+    { kind: 'calendar_event_query', q: 'onboarding' },
+    gmail({}) as EvalCandidate,
+))
 
 // ============================================================================
-// 6. Composition
+// 8. Composition
 // ============================================================================
 check('any_of fires when first leaf hits', evaluateRule(
     { kind: 'any_of', rules: [
@@ -348,7 +428,7 @@ check('any_of empty = false', !evaluateRule({ kind: 'any_of', rules: [] }, gmail
 check('all_of empty = true (vacuous)', evaluateRule({ kind: 'all_of', rules: [] }, gmail({})))
 
 // ============================================================================
-// 7. jsonPath + jsonEquals
+// 9. jsonPath + jsonEquals
 // ============================================================================
 check('jsonPathGet dot+array', jsonPathGet({ a: { b: [{ c: 42 }] } }, 'a.b[0].c') === 42)
 check('jsonPathGet missing returns undefined', jsonPathGet({ a: 1 }, 'a.b.c') === undefined)
@@ -358,7 +438,7 @@ check('jsonEquals objects key-order independent', jsonEquals({ a: 1, b: 2 }, { b
 check('jsonEquals null/undefined', jsonEquals(null, null) && !jsonEquals(null, undefined))
 
 // ============================================================================
-// 8. Rule-target extractors
+// 10. Rule-target extractors
 // ============================================================================
 const multiUrl: MonitorRule = {
     kind: 'any_of', rules: [
@@ -385,6 +465,16 @@ const waRule: MonitorRule = {
 }
 check('extractWaContactsFromRule', JSON.stringify(extractWaContactsFromRule(waRule).sort()) === JSON.stringify(['Dad', 'Mom']))
 
+const calendarRule: MonitorRule = {
+    kind: 'any_of', rules: [
+        { kind: 'calendar_event_query', q: 'onboarding', calendarIds: ['primary'], lookaheadDays: 14 },
+        { kind: 'calendar_event_starts_within', minutes: 30, calendarIds: ['team@example.com'], lookaheadDays: 7 },
+    ],
+}
+check('extractCalendarIdsFromRule distinct', JSON.stringify(extractCalendarIdsFromRule(calendarRule).sort()) === JSON.stringify(['primary', 'team@example.com']))
+check('extractCalendarLookaheadDaysFromRule max', extractCalendarLookaheadDaysFromRule(calendarRule) === 14)
+check('matchingCalendarStartWindows', JSON.stringify(matchingCalendarStartWindows(calendarRule, 25)) === JSON.stringify([30]))
+
 const weatherRule: MonitorRule = {
     kind: 'any_of', rules: [
         { kind: 'weather_temperature', location: 'Cluj', metric: 'high', op: '>', value: 30 },
@@ -395,7 +485,7 @@ const weatherRule: MonitorRule = {
 check('extractWeatherLocationsFromRule distinct', JSON.stringify(extractWeatherLocationsFromRule(weatherRule).sort()) === JSON.stringify(['Bucharest', 'Cluj']))
 
 // ============================================================================
-// 9. Gmail query builder
+// 11. Gmail query builder
 // ============================================================================
 {
     const q = buildGmailQueryFromRule({
@@ -417,9 +507,10 @@ check('buildGmailQueryFromRule returns null on non-gmail rule', buildGmailQueryF
 }
 
 // ============================================================================
-// 10. Source registry
+// 12. Source registry
 // ============================================================================
 check('registry returns gmail adapter', getSourceAdapter('gmail').source === 'gmail')
+check('registry returns google calendar adapter', getSourceAdapter('google_calendar').source === 'google_calendar')
 check('registry returns web adapter', getSourceAdapter('web').source === 'web')
 check('registry returns ha adapter', getSourceAdapter('home_assistant').source === 'home_assistant')
 check('registry returns wa adapter', getSourceAdapter('whatsapp').source === 'whatsapp')
@@ -427,7 +518,7 @@ check('registry returns weather adapter', getSourceAdapter('weather').source ===
 check('registry returns custom adapter (stub)', getSourceAdapter('custom').source === 'custom')
 
 const caps = listSourceCapabilities()
-check('listSourceCapabilities covers all sources', caps.length === 6)
+check('listSourceCapabilities covers all sources', caps.length === 7)
 
 check('ruleMatchesSource accepts gmail rule on gmail', ruleMatchesSource(
     { kind: 'gmail_from', senders: ['x@y'] },
@@ -455,6 +546,10 @@ check('ruleMatchesSource accepts weather rule on weather', ruleMatchesSource(
     { kind: 'weather_precip_probability', location: 'Cluj', windowHours: 6, op: '>=', value: 50 },
     'weather',
 ))
+check('ruleMatchesSource accepts calendar rule on google_calendar', ruleMatchesSource(
+    { kind: 'calendar_event_query', q: 'onboarding' },
+    'google_calendar',
+))
 
 expectThrow('assertRuleMatchesSource throws on mismatch', () => assertRuleMatchesSource(
     { kind: 'web_status', url: 'https://x', op: 'equals', value: 200 },
@@ -463,6 +558,7 @@ expectThrow('assertRuleMatchesSource throws on mismatch', () => assertRuleMatche
 
 // Sanity: RULE_KINDS_BY_SOURCE has the expected counts and no duplicates.
 check('RULE_KINDS_BY_SOURCE gmail count', RULE_KINDS_BY_SOURCE.gmail.length === 4)
+check('RULE_KINDS_BY_SOURCE google_calendar count', RULE_KINDS_BY_SOURCE.google_calendar.length === 7)
 check('RULE_KINDS_BY_SOURCE home_assistant count', RULE_KINDS_BY_SOURCE.home_assistant.length === 4)
 check('RULE_KINDS_BY_SOURCE web count', RULE_KINDS_BY_SOURCE.web.length === 3)
 check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 3)

@@ -7,6 +7,7 @@ import {
   CalendarClock,
   Inbox as InboxIcon,
   LineChart,
+  MapPinned,
   Telescope,
   LoaderCircle,
   Plus,
@@ -47,6 +48,7 @@ const TABLET_NAV_MEDIA =
   "(min-width: 768px) and (max-width: 1180px), (pointer: coarse) and (min-width: 768px) and (max-width: 1366px)"
 const SEARCH_DEBOUNCE_MS = 180
 const MOBILE_CONVERSATION_PREFETCH_COUNT = 4
+const MAPS_CONFIG_CHANGED_EVENT = "orch:maps-config-changed"
 
 type WindowWithIdleCallback = Window & {
   requestIdleCallback?: (
@@ -134,6 +136,84 @@ function conversationMatches(
   )
 }
 
+function useMapsConfigured(): boolean {
+  const [configured, setConfigured] = React.useState(false)
+
+  const refresh = React.useCallback(async () => {
+    try {
+      const res = await fetch("/api/integrations/maps/config", {
+        cache: "no-store",
+      })
+      const body = (await res.json().catch(() => ({}))) as {
+        maps?: { configured?: unknown }
+      }
+      if (!res.ok) throw new Error(`HTTP ${res.status}`)
+      setConfigured(body.maps?.configured === true)
+    } catch {
+      setConfigured(false)
+    }
+  }, [])
+
+  React.useEffect(() => {
+    void refresh()
+
+    const onMapsConfigChanged = () => void refresh()
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") void refresh()
+    }
+
+    window.addEventListener(MAPS_CONFIG_CHANGED_EVENT, onMapsConfigChanged)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    return () => {
+      window.removeEventListener(MAPS_CONFIG_CHANGED_EVENT, onMapsConfigChanged)
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+    }
+  }, [refresh])
+
+  return configured
+}
+
+interface SidebarSearchFieldProps {
+  value: string
+  inputRef: React.RefObject<HTMLInputElement | null>
+  onChange: (value: string) => void
+  onClose: () => void
+  onFocus: () => void
+}
+
+function SidebarSearchField({
+  value,
+  inputRef,
+  onChange,
+  onClose,
+  onFocus,
+}: SidebarSearchFieldProps) {
+  return (
+    <div className="relative flex h-8 items-center rounded-md border border-border/70 bg-background/75 transition-colors hover:bg-background focus-within:border-foreground/25 focus-within:bg-background dark:bg-muted/40 dark:hover:bg-muted/55 dark:focus-within:bg-muted/55">
+      <Search className="pointer-events-none absolute left-2 size-4 shrink-0 text-foreground/45" />
+      <input
+        ref={inputRef}
+        value={value}
+        onFocus={onFocus}
+        onChange={(event) => onChange(event.target.value)}
+        onKeyDown={(event) => {
+          if (event.key === "Escape") onClose()
+        }}
+        placeholder="Search chats..."
+        className="h-full min-w-0 flex-1 bg-transparent pr-8 pl-8 text-[15px] leading-none text-foreground outline-none placeholder:text-foreground/40"
+      />
+      <button
+        type="button"
+        aria-label="Close search"
+        onClick={onClose}
+        className="absolute right-1.5 flex size-5 shrink-0 items-center justify-center rounded text-foreground/45 transition-colors hover:bg-background/65 hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground/15 focus-visible:outline-none"
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  )
+}
+
 export function AppSidebar() {
   const {
     state,
@@ -158,9 +238,11 @@ export function AppSidebar() {
   const isOnScheduling = pathname?.startsWith("/scheduling") ?? false
   const isOnWatchlist = pathname?.startsWith("/watchlist") ?? false
   const isOnMonitor = pathname?.startsWith("/monitor") ?? false
+  const isOnMaps = pathname?.startsWith("/maps") ?? false
+  const mapsConfigured = useMapsConfigured()
   const isOnInbox = pathname?.startsWith("/inbox") ?? false
   const shouldConstrainTabletNav =
-    isOnSettings || isOnScheduling || isOnWatchlist || isOnMonitor || isOnInbox
+    isOnSettings || isOnScheduling || isOnWatchlist || isOnMonitor || isOnMaps || isOnInbox
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
   const inboxUnread = useInboxUnread()
   const [searchActive, setSearchActive] = React.useState(false)
@@ -379,35 +461,17 @@ export function AppSidebar() {
               </SidebarMenuItem>
               {searchActive && !isCollapsed ? (
                 <SidebarMenuItem>
-                  <div className="flex h-8 items-center gap-2 rounded-md bg-background/70 px-2 text-foreground/75 ring-1 ring-border/70 focus-within:ring-foreground/20">
-                    <Search className="size-4 shrink-0 text-foreground/45" />
-                    <input
-                      ref={searchInputRef}
-                      value={searchQuery}
-                      onChange={(event) => setSearchQuery(event.target.value)}
-                      onKeyDown={(event) => {
-                        if (event.key === "Escape") {
-                          setSearchQuery("")
-                          setSearchActive(false)
-                        }
-                      }}
-                      placeholder="Search chats..."
-                      className="h-full min-w-0 flex-1 bg-transparent text-[14px] outline-none placeholder:text-foreground/40"
-                    />
-                    {(searchQuery || searchActive) && (
-                      <button
-                        type="button"
-                        aria-label="Close search"
-                        onClick={() => {
-                          setSearchQuery("")
-                          setSearchActive(false)
-                        }}
-                        className="flex size-5 shrink-0 items-center justify-center rounded text-foreground/45 hover:bg-muted hover:text-foreground"
-                      >
-                        <X className="size-3.5" />
-                      </button>
-                    )}
-                  </div>
+                  <SidebarSearchField
+                    inputRef={searchInputRef}
+                    value={searchQuery}
+                    onChange={setSearchQuery}
+                    onFocus={() => setSearchActive(true)}
+                    onClose={() => {
+                      setSearchQuery("")
+                      setSearchActive(false)
+                      searchInputRef.current?.blur()
+                    }}
+                  />
                 </SidebarMenuItem>
               ) : (
                 <SidebarMenuItem>
@@ -480,6 +544,25 @@ export function AppSidebar() {
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
+              {mapsConfigured && (
+                <SidebarMenuItem>
+                  <SidebarMenuButton
+                    asChild
+                    tooltip="Smart Maps"
+                    isActive={isOnMaps}
+                    className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+                  >
+                    <Link
+                      href="/maps"
+                      replace={isMobile}
+                      onClick={closeMobileSidebar}
+                    >
+                      <MapPinned className="size-4" />
+                      <span>Smart Maps</span>
+                    </Link>
+                  </SidebarMenuButton>
+                </SidebarMenuItem>
+              )}
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
@@ -540,6 +623,7 @@ export function AppSidebar() {
                         !isOnScheduling &&
                         !isOnWatchlist &&
                         !isOnMonitor &&
+                        !isOnMaps &&
                         !isOnInbox
                       return (
                         <SidebarMenuItem key={conv.id}>

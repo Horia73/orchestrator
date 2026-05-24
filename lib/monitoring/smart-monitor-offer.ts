@@ -1,7 +1,8 @@
 // Smart Monitor integration-install offer cards.
 //
-// When the user freshly connects Gmail / WhatsApp / Home Assistant, post an
-// Inbox card explaining Smart Monitor and offering to set up a watch.
+// When the user freshly connects Gmail / Google Calendar / WhatsApp / Home
+// Assistant, post an Inbox card explaining Smart Monitor and offering to set
+// up a watch.
 // Idempotent: each integration carries a "fingerprint" of its current
 // connection; we persist the last fingerprint we offered. We also check the
 // Inbox itself before posting so redeploys/state-file loss cannot duplicate
@@ -24,6 +25,7 @@ import { randomUUID } from "crypto"
 
 import { PRIVATE_STATE_DIR } from "@/lib/config"
 import type { GmailIntegrationStatus } from "@/lib/integrations/gmail"
+import type { GoogleCalendarIntegrationStatus } from "@/lib/integrations/google-calendar"
 import type { HomeAssistantIntegrationStatus } from "@/lib/integrations/home-assistant"
 import type { WhatsAppIntegrationStatus } from "@/lib/integrations/whatsapp"
 
@@ -70,6 +72,16 @@ function gmailFingerprint(status: GmailIntegrationStatus | null): string | null 
     return `${status.accountEmail ?? "-"}:${status.expiresAt ?? "0"}`
 }
 
+function googleCalendarFingerprint(status: GoogleCalendarIntegrationStatus | null): string | null {
+    if (!status?.connected) return null
+    return [
+        status.accountEmail ?? "-",
+        status.primaryCalendarId ?? "-",
+        status.calendarCount ?? "-",
+        status.expiresAt ?? "0",
+    ].join(":")
+}
+
 function homeAssistantFingerprint(status: HomeAssistantIntegrationStatus | null): string | null {
     if (!status?.connected) return null
     return `${status.baseUrl ?? "-"}:${status.locationName ?? "-"}:${status.version ?? "-"}`
@@ -105,6 +117,21 @@ const GMAIL_COPY: OfferCopy = {
     ].join("\n"),
 }
 
+const GOOGLE_CALENDAR_COPY: OfferCopy = {
+    title: "Google Calendar connected — want Smart Monitor?",
+    body: [
+        "I can watch your calendar in the background and only ping you when a relevant event appears, changes, needs a response, or is about to start.",
+        "",
+        "Common watches:",
+        "- events with words like \"onboarding\", \"interview\", \"deadline\", or a project name",
+        "- new invites that still need your RSVP",
+        "- meetings with specific attendees",
+        "- events at certain locations or starting within a chosen window",
+        "",
+        "Nothing happens until you tell me what matters. Existing events are used to prime the monitor, so you do not get a blast of old calendar items.",
+    ].join("\n"),
+}
+
 const HA_COPY: OfferCopy = {
     title: "Home Assistant connected — want Smart Monitor?",
     body: [
@@ -134,7 +161,7 @@ const WHATSAPP_COPY: OfferCopy = {
     ].join("\n"),
 }
 
-const COMMON_ACTIONS = (integration: "Gmail" | "Home Assistant" | "WhatsApp") => [
+const COMMON_ACTIONS = (integration: "Gmail" | "Google Calendar" | "Home Assistant" | "WhatsApp") => [
     {
         id: "set_up_watch",
         label: `Set up a ${integration} watch`,
@@ -156,12 +183,13 @@ const COMMON_ACTIONS = (integration: "Gmail" | "Home Assistant" | "WhatsApp") =>
 ]
 
 interface IntegrationKey {
-    id: "gmail" | "home_assistant" | "whatsapp"
-    label: "Gmail" | "Home Assistant" | "WhatsApp"
+    id: "gmail" | "google_calendar" | "home_assistant" | "whatsapp"
+    label: "Gmail" | "Google Calendar" | "Home Assistant" | "WhatsApp"
 }
 
 const INTEGRATIONS: IntegrationKey[] = [
     { id: "gmail", label: "Gmail" },
+    { id: "google_calendar", label: "Google Calendar" },
     { id: "home_assistant", label: "Home Assistant" },
     { id: "whatsapp", label: "WhatsApp" },
 ]
@@ -170,6 +198,8 @@ function copyFor(id: IntegrationKey["id"]): OfferCopy {
     switch (id) {
         case "gmail":
             return GMAIL_COPY
+        case "google_calendar":
+            return GOOGLE_CALENDAR_COPY
         case "home_assistant":
             return HA_COPY
         case "whatsapp":
@@ -257,6 +287,7 @@ async function postOfferCard(args: {
 
 export interface OfferCheckSnapshot {
     gmail?: GmailIntegrationStatus | null
+    googleCalendar?: GoogleCalendarIntegrationStatus | null
     homeAssistant?: HomeAssistantIntegrationStatus | null
     whatsapp?: WhatsAppIntegrationStatus | null
 }
@@ -288,6 +319,14 @@ export async function maybeOfferSmartMonitor(
             ])
             gmail = await gmailMod.getGmailIntegrationStatus(originMod.resolveAppOrigin(), false)
         }
+        let googleCalendar: GoogleCalendarIntegrationStatus | null | undefined = snapshot.googleCalendar
+        if (googleCalendar === undefined) {
+            const [calendarMod, originMod] = await Promise.all([
+                import("@/lib/integrations/google-calendar"),
+                import("@/lib/app-origin"),
+            ])
+            googleCalendar = await calendarMod.getGoogleCalendarIntegrationStatus(originMod.resolveAppOrigin(), false)
+        }
         let homeAssistant: HomeAssistantIntegrationStatus | null | undefined = snapshot.homeAssistant
         if (homeAssistant === undefined) {
             const mod = await import("@/lib/integrations/home-assistant")
@@ -301,6 +340,7 @@ export async function maybeOfferSmartMonitor(
 
         const fingerprints: Record<IntegrationKey["id"], string | null> = {
             gmail: gmailFingerprint(gmail ?? null),
+            google_calendar: googleCalendarFingerprint(googleCalendar ?? null),
             home_assistant: homeAssistantFingerprint(homeAssistant ?? null),
             whatsapp: whatsappFingerprint(whatsapp ?? null),
         }

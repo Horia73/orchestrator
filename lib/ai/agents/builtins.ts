@@ -227,6 +227,23 @@ export const MONITORING_TOOL_IDS: string[] = [
     'monitor_wake_feedback',
 ]
 
+// Map artifact authoring — orchestrator-only by design. Other agents that
+// want a map shown delegate back through the orchestrator. The tool
+// validates a MapArtifact payload and returns the canonical JSON body the
+// orchestrator drops inside an <artifact type="application/vnd.ant.map">.
+export const MAPS_TOOL_IDS: string[] = [
+    'MapsStatus',
+    'MapsCurrentLocation',
+    'MapsListLocationSources',
+    'MapsSetLocationSource',
+    'MapsGeocode',
+    'MapsReverseGeocode',
+    'MapsPlaces',
+    'MapsOptimizeStops',
+    'MapsDirections',
+    'MapRender',
+]
+
 // Weather artifact authoring — orchestrator-only by design. Other agents
 // that want a weather card delegate back. `WeatherShow` is end-to-end
 // (geocode + fetch + transform + validate), so it sits on the orchestrator

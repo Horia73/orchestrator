@@ -27,6 +27,18 @@ import { setTaskStateTool } from './task-state'
 import { watchlistTools } from './watchlist'
 import { monitorWakeFeedbackTool } from './smart-monitor-feedback'
 import { smartMonitorManageTools } from './smart-monitor-manage'
+import {
+    mapRenderTool,
+    mapsCurrentLocationTool,
+    mapsDirectionsTool,
+    mapsGeocodeTool,
+    mapsListLocationSourcesTool,
+    mapsOptimizeStopsTool,
+    mapsPlacesTool,
+    mapsReverseGeocodeTool,
+    mapsSetLocationSourceTool,
+    mapsStatusTool,
+} from './maps'
 import { weatherSetCalendarContextTool, weatherSetOutfitTool, weatherSetWhyTool, weatherShowTool, weatherStatusTool } from './weather'
 
 // ---------------------------------------------------------------------------
@@ -165,6 +177,16 @@ registerTool(setTaskStateTool)
 for (const tool of watchlistTools) registerTool(tool)
 registerTool(monitorWakeFeedbackTool)
 for (const tool of smartMonitorManageTools) registerTool(tool)
+registerTool(mapsStatusTool)
+registerTool(mapsCurrentLocationTool)
+registerTool(mapsListLocationSourcesTool)
+registerTool(mapsSetLocationSourceTool)
+registerTool(mapsGeocodeTool)
+registerTool(mapsReverseGeocodeTool)
+registerTool(mapsPlacesTool)
+registerTool(mapsOptimizeStopsTool)
+registerTool(mapsDirectionsTool)
+registerTool(mapRenderTool)
 registerTool(weatherStatusTool)
 registerTool(weatherShowTool)
 registerTool(weatherSetOutfitTool)

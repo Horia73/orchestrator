@@ -1,5 +1,14 @@
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import {
+    inventoryOptions,
+    inventorySchema,
+    numberArrayArg,
+    optionalNumberArg,
+    recordArg,
+    registryKindsArg,
+    stringListArg,
+} from './home-assistant-args'
+import {
     getHomeAssistantIntegrationStatus,
     homeAssistantApiInfo,
     homeAssistantAutomationActivity,
@@ -168,7 +177,8 @@ export const homeAssistantSearchEntitiesTool: ToolDef = {
 export const homeAssistantListServicesTool: ToolDef = {
     id: 'HomeAssistantListServices',
     name: 'HomeAssistantListServices',
-    description: 'Lists Home Assistant service domains and service schemas from GET /api/services. Read-only; does not call services.',
+    description:
+        'Lists Home Assistant service domains and service schemas from GET /api/services. Read-only; does not call services.',
     input_schema: {
         type: 'object',
         properties: {
@@ -199,7 +209,8 @@ export const homeAssistantHistoryTool: ToolDef = {
             entity_ids: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Entity IDs to read history for. Required to avoid accidentally fetching the full database.',
+                description:
+                    'Entity IDs to read history for. Required to avoid accidentally fetching the full database.',
             },
             start_time: {
                 type: 'string',
@@ -234,7 +245,8 @@ export const homeAssistantHistoryTool: ToolDef = {
 export const homeAssistantLogbookTool: ToolDef = {
     id: 'HomeAssistantLogbook',
     name: 'HomeAssistantLogbook',
-    description: 'Reads Home Assistant logbook entries, optionally for one entity. Defaults to the last 24 hours. Read-only.',
+    description:
+        'Reads Home Assistant logbook entries, optionally for one entity. Defaults to the last 24 hours. Read-only.',
     input_schema: {
         type: 'object',
         properties: {
@@ -349,7 +361,8 @@ export const homeAssistantRenderTemplateTool: ToolDef = {
 export const homeAssistantCheckConfigTool: ToolDef = {
     id: 'HomeAssistantCheckConfig',
     name: 'HomeAssistantCheckConfig',
-    description: 'Runs Home Assistant config validation through POST /api/config/core/check_config. Read-only validation.',
+    description:
+        'Runs Home Assistant config validation through POST /api/config/core/check_config. Read-only validation.',
     input_schema: { type: 'object', properties: {} },
     tags: ['read', 'home-assistant', 'config'],
 }
@@ -357,7 +370,8 @@ export const homeAssistantCheckConfigTool: ToolDef = {
 export const homeAssistantWebSocketReadTool: ToolDef = {
     id: 'HomeAssistantWebSocketRead',
     name: 'HomeAssistantWebSocketRead',
-    description: 'Runs a whitelisted read-only Home Assistant WebSocket command: get_config, get_states, get_services, get_panels, or ping.',
+    description:
+        'Runs a whitelisted read-only Home Assistant WebSocket command: get_config, get_states, get_services, get_panels, or ping.',
     input_schema: {
         type: 'object',
         properties: {
@@ -375,7 +389,8 @@ export const homeAssistantWebSocketReadTool: ToolDef = {
 export const homeAssistantListRegistriesTool: ToolDef = {
     id: 'HomeAssistantListRegistries',
     name: 'HomeAssistantListRegistries',
-    description: 'Best-effort read of Home Assistant area, device, entity, floor, and label registries over WebSocket. Read-only.',
+    description:
+        'Best-effort read of Home Assistant area, device, entity, floor, and label registries over WebSocket. Read-only.',
     input_schema: {
         type: 'object',
         properties: {
@@ -416,14 +431,16 @@ export const homeAssistantListScenesTool: ToolDef = {
 export const homeAssistantAutomationActivityTool: ToolDef = {
     id: 'HomeAssistantAutomationActivity',
     name: 'HomeAssistantAutomationActivity',
-    description: 'Reads logbook activity for automation entities. Defaults to listed automations and last 24 hours. Read-only.',
+    description:
+        'Reads logbook activity for automation entities. Defaults to listed automations and last 24 hours. Read-only.',
     input_schema: {
         type: 'object',
         properties: {
             entity_ids: {
                 type: 'array',
                 items: { type: 'string' },
-                description: 'Optional automation entity IDs. If omitted, reads the first automations returned by HomeAssistantListAutomations.',
+                description:
+                    'Optional automation entity IDs. If omitted, reads the first automations returned by HomeAssistantListAutomations.',
             },
             start_time: {
                 type: 'string',
@@ -449,7 +466,8 @@ export const homeAssistantAutomationActivityTool: ToolDef = {
 export const homeAssistantReadAutomationConfigTool: ToolDef = {
     id: 'HomeAssistantReadAutomationConfig',
     name: 'HomeAssistantReadAutomationConfig',
-    description: 'Reads trigger/condition/action components for one Home Assistant automation when it is exposed by the automation config API. Read-only.',
+    description:
+        'Reads trigger/condition/action components for one Home Assistant automation when it is exposed by the automation config API. Read-only.',
     input_schema: {
         type: 'object',
         properties: {
@@ -466,7 +484,8 @@ export const homeAssistantReadAutomationConfigTool: ToolDef = {
 export const homeAssistantListAutomationConfigsTool: ToolDef = {
     id: 'HomeAssistantListAutomationConfigs',
     name: 'HomeAssistantListAutomationConfigs',
-    description: 'Reads trigger/condition/action components for multiple automation entities when available. Falls back cleanly for YAML/unexposed automations. Read-only.',
+    description:
+        'Reads trigger/condition/action components for multiple automation entities when available. Falls back cleanly for YAML/unexposed automations. Read-only.',
     input_schema: {
         type: 'object',
         properties: {
@@ -495,12 +514,27 @@ export const homeAssistantPreviewActionTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            domain: { type: 'string', description: 'Service domain, for example light, cover, climate, notify, switch.' },
-            service: { type: 'string', description: 'Service name, for example turn_on, set_temperature, mobile_app_horias_iphone.' },
-            target: { type: 'object', description: 'Optional Home Assistant target object, usually { "entity_id": "..." }.' },
+            domain: {
+                type: 'string',
+                description: 'Service domain, for example light, cover, climate, notify, switch.',
+            },
+            service: {
+                type: 'string',
+                description: 'Service name, for example turn_on, set_temperature, mobile_app_horias_iphone.',
+            },
+            target: {
+                type: 'object',
+                description: 'Optional Home Assistant target object, usually { "entity_id": "..." }.',
+            },
             data: { type: 'object', description: 'Optional service data payload.' },
-            confirmed: { type: 'boolean', description: 'Whether the user has explicitly confirmed this exact non-direct service call.' },
-            reason: { type: 'string', description: 'Short user-facing reason for the action.' },
+            confirmed: {
+                type: 'boolean',
+                description: 'Whether the user has explicitly confirmed this exact non-direct service call.',
+            },
+            reason: {
+                type: 'string',
+                description: 'Short user-facing reason for the action.',
+            },
         },
         required: ['domain', 'service'],
     },
@@ -519,13 +553,31 @@ export const homeAssistantCallServiceTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            domain: { type: 'string', description: 'Service domain, for example light, switch, lock, automation, script.' },
-            service: { type: 'string', description: 'Service name within the domain.' },
-            target: { type: 'object', description: 'Optional Home Assistant target object.' },
+            domain: {
+                type: 'string',
+                description: 'Service domain, for example light, switch, lock, automation, script.',
+            },
+            service: {
+                type: 'string',
+                description: 'Service name within the domain.',
+            },
+            target: {
+                type: 'object',
+                description: 'Optional Home Assistant target object.',
+            },
             data: { type: 'object', description: 'Optional service data payload.' },
-            confirmed: { type: 'boolean', description: 'Required true for non-direct domains after explicit user confirmation.' },
-            reason: { type: 'string', description: 'Short reason to store in the local action audit log.' },
-            return_response: { type: 'boolean', description: 'Request a Home Assistant response when the service supports it.' },
+            confirmed: {
+                type: 'boolean',
+                description: 'Required true for non-direct domains after explicit user confirmation.',
+            },
+            reason: {
+                type: 'string',
+                description: 'Short reason to store in the local action audit log.',
+            },
+            return_response: {
+                type: 'boolean',
+                description: 'Request a Home Assistant response when the service supports it.',
+            },
         },
         required: ['domain', 'service'],
     },
@@ -535,17 +587,40 @@ export const homeAssistantCallServiceTool: ToolDef = {
 export const homeAssistantSetLightTool: ToolDef = {
     id: 'HomeAssistantSetLight',
     name: 'HomeAssistantSetLight',
-    description: 'Direct action-mode light control with brightness, color, color temperature, effect, transition, turn_on, turn_off, and toggle.',
+    description:
+        'Direct action-mode light control with brightness, color, color temperature, effect, transition, turn_on, turn_off, and toggle.',
     input_schema: {
         type: 'object',
         properties: {
-            entity_ids: { type: 'array', items: { type: 'string' }, description: 'One or more light entity IDs.' },
-            action: { type: 'string', enum: ['turn_on', 'turn_off', 'toggle'], description: 'Light action. Defaults to turn_on.' },
+            entity_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'One or more light entity IDs.',
+            },
+            action: {
+                type: 'string',
+                enum: ['turn_on', 'turn_off', 'toggle'],
+                description: 'Light action. Defaults to turn_on.',
+            },
             brightness: { type: 'integer', description: 'Brightness 0-255.' },
-            brightness_pct: { type: 'number', description: 'Brightness percent 0-100.' },
-            rgb_color: { type: 'array', items: { type: 'integer' }, description: 'RGB color array [r,g,b], each 0-255.' },
-            hs_color: { type: 'array', items: { type: 'number' }, description: 'HS color array [hue 0-360, saturation 0-100].' },
-            color_temp_kelvin: { type: 'integer', description: 'Color temperature in Kelvin.' },
+            brightness_pct: {
+                type: 'number',
+                description: 'Brightness percent 0-100.',
+            },
+            rgb_color: {
+                type: 'array',
+                items: { type: 'integer' },
+                description: 'RGB color array [r,g,b], each 0-255.',
+            },
+            hs_color: {
+                type: 'array',
+                items: { type: 'number' },
+                description: 'HS color array [hue 0-360, saturation 0-100].',
+            },
+            color_temp_kelvin: {
+                type: 'integer',
+                description: 'Color temperature in Kelvin.',
+            },
             effect: { type: 'string', description: 'Optional light effect.' },
             transition: { type: 'number', description: 'Transition seconds.' },
         },
@@ -561,10 +636,24 @@ export const homeAssistantSetCoverTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            entity_ids: { type: 'array', items: { type: 'string' }, description: 'One or more cover entity IDs.' },
-            action: { type: 'string', enum: ['open', 'close', 'stop', 'toggle', 'set_position', 'set_tilt_position'], description: 'Cover action.' },
-            position: { type: 'integer', description: 'Cover position 0-100 for set_position.' },
-            tilt_position: { type: 'integer', description: 'Tilt position 0-100 for set_tilt_position.' },
+            entity_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'One or more cover entity IDs.',
+            },
+            action: {
+                type: 'string',
+                enum: ['open', 'close', 'stop', 'toggle', 'set_position', 'set_tilt_position'],
+                description: 'Cover action.',
+            },
+            position: {
+                type: 'integer',
+                description: 'Cover position 0-100 for set_position.',
+            },
+            tilt_position: {
+                type: 'integer',
+                description: 'Tilt position 0-100 for set_tilt_position.',
+            },
         },
         required: ['entity_ids', 'action'],
     },
@@ -574,15 +663,29 @@ export const homeAssistantSetCoverTool: ToolDef = {
 export const homeAssistantSetClimateTool: ToolDef = {
     id: 'HomeAssistantSetClimate',
     name: 'HomeAssistantSetClimate',
-    description: 'Direct action-mode climate control for HVAC mode, temperature, preset, fan, humidity, and swing mode.',
+    description:
+        'Direct action-mode climate control for HVAC mode, temperature, preset, fan, humidity, and swing mode.',
     input_schema: {
         type: 'object',
         properties: {
-            entity_ids: { type: 'array', items: { type: 'string' }, description: 'One or more climate entity IDs.' },
-            hvac_mode: { type: 'string', description: 'HVAC mode such as off, heat, cool, heat_cool, fan_only.' },
+            entity_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'One or more climate entity IDs.',
+            },
+            hvac_mode: {
+                type: 'string',
+                description: 'HVAC mode such as off, heat, cool, heat_cool, fan_only.',
+            },
             temperature: { type: 'number', description: 'Target temperature.' },
-            target_temp_low: { type: 'number', description: 'Low target temperature.' },
-            target_temp_high: { type: 'number', description: 'High target temperature.' },
+            target_temp_low: {
+                type: 'number',
+                description: 'Low target temperature.',
+            },
+            target_temp_high: {
+                type: 'number',
+                description: 'High target temperature.',
+            },
             preset_mode: { type: 'string', description: 'Preset mode.' },
             fan_mode: { type: 'string', description: 'Fan mode.' },
             humidity: { type: 'integer', description: 'Target humidity 0-100.' },
@@ -596,11 +699,15 @@ export const homeAssistantSetClimateTool: ToolDef = {
 export const homeAssistantNotifyTool: ToolDef = {
     id: 'HomeAssistantNotify',
     name: 'HomeAssistantNotify',
-    description: 'Direct action-mode Home Assistant notify call. Use a notify service such as mobile_app_horias_iphone and provide a message.',
+    description:
+        'Direct action-mode Home Assistant notify call. Use a notify service such as mobile_app_horias_iphone and provide a message.',
     input_schema: {
         type: 'object',
         properties: {
-            service: { type: 'string', description: 'Notify service name, for example mobile_app_horias_iphone.' },
+            service: {
+                type: 'string',
+                description: 'Notify service name, for example mobile_app_horias_iphone.',
+            },
             message: { type: 'string', description: 'Notification message.' },
             title: { type: 'string', description: 'Optional notification title.' },
             data: { type: 'object', description: 'Optional notify data payload.' },
@@ -617,7 +724,10 @@ export const homeAssistantReadActionAuditTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            max_results: { type: 'integer', description: 'Maximum audit entries to return. Defaults to 50 and is capped at 200.' },
+            max_results: {
+                type: 'integer',
+                description: 'Maximum audit entries to return. Defaults to 50 and is capped at 200.',
+            },
         },
     },
     tags: ['read', 'home-assistant', 'actions', 'audit'],
@@ -676,7 +786,7 @@ export async function executeHomeAssistantConfigure(args: Record<string, unknown
         data: {
             ...data,
             instruction: data.connected
-                ? 'Home Assistant is configured and verified. Do not reveal the stored token.'
+                ? 'Home Assistant is configured and verified. Do not reveal the stored token. Next, call MapsListLocationSources, infer which person.* or device_tracker.* represents the current user, and call MapsSetLocationSource for a high-confidence match; ask the user only if candidates are ambiguous.'
                 : 'Config was saved, but Home Assistant did not verify. Ask for the corrected URL/token or local network access.',
         },
     }
@@ -723,7 +833,10 @@ export async function executeHomeAssistantSearchEntities(args: Record<string, un
 }
 
 export async function executeHomeAssistantListServices(args: Record<string, unknown>): Promise<ToolResult> {
-    return { success: true, data: await homeAssistantListServices(stringArg(args, ['domain'])) }
+    return {
+        success: true,
+        data: await homeAssistantListServices(stringArg(args, ['domain'])),
+    }
 }
 
 export async function executeHomeAssistantListEvents(): Promise<ToolResult> {
@@ -762,7 +875,9 @@ export async function executeHomeAssistantLogbook(args: Record<string, unknown>)
 export async function executeHomeAssistantErrorLog(args: Record<string, unknown>): Promise<ToolResult> {
     return {
         success: true,
-        data: await homeAssistantErrorLog(clamp(Math.floor(numberArg(args, ['max_chars', 'maxChars'], 60_000)), 1_000, 200_000)),
+        data: await homeAssistantErrorLog(
+            clamp(Math.floor(numberArg(args, ['max_chars', 'maxChars'], 60_000)), 1_000, 200_000)
+        ),
     }
 }
 
@@ -774,19 +889,38 @@ export async function executeHomeAssistantReadCalendar(args: Record<string, unkn
     const calendarEntityId = stringArg(args, ['calendar_entity_id', 'calendarEntityId'])
     const start = stringArg(args, ['start'])
     const end = stringArg(args, ['end'])
-    if (!calendarEntityId) return { success: false, error: 'Missing required parameter: calendar_entity_id' }
-    if (!start || !end) return { success: false, error: 'Missing required parameters: start and end' }
-    return { success: true, data: await homeAssistantReadCalendar({ calendarEntityId, start, end }) }
+    if (!calendarEntityId)
+        return {
+            success: false,
+            error: 'Missing required parameter: calendar_entity_id',
+        }
+    if (!start || !end)
+        return {
+            success: false,
+            error: 'Missing required parameters: start and end',
+        }
+    return {
+        success: true,
+        data: await homeAssistantReadCalendar({ calendarEntityId, start, end }),
+    }
 }
 
 export async function executeHomeAssistantCameraSnapshot(args: Record<string, unknown>): Promise<ToolResult> {
     const cameraEntityId = stringArg(args, ['camera_entity_id', 'cameraEntityId'])
-    if (!cameraEntityId) return { success: false, error: 'Missing required parameter: camera_entity_id' }
+    if (!cameraEntityId)
+        return {
+            success: false,
+            error: 'Missing required parameter: camera_entity_id',
+        }
     return {
         success: true,
         data: await homeAssistantCameraSnapshot({
             cameraEntityId,
-            maxBytes: clamp(Math.floor(numberArg(args, ['max_bytes', 'maxBytes'], 5 * 1024 * 1024)), 1_000, 5 * 1024 * 1024),
+            maxBytes: clamp(
+                Math.floor(numberArg(args, ['max_bytes', 'maxBytes'], 5 * 1024 * 1024)),
+                1_000,
+                5 * 1024 * 1024
+            ),
         }),
     }
 }
@@ -805,25 +939,45 @@ export async function executeHomeAssistantWebSocketRead(args: Record<string, unk
     const command = stringArg(args, ['command'])
     if (!command) return { success: false, error: 'Missing required parameter: command' }
     if (!['get_config', 'get_states', 'get_services', 'get_panels', 'ping'].includes(command)) {
-        return { success: false, error: `Unsupported read-only Home Assistant WebSocket command: ${command}` }
+        return {
+            success: false,
+            error: `Unsupported read-only Home Assistant WebSocket command: ${command}`,
+        }
     }
-    return { success: true, data: await homeAssistantWebSocketRead(command as 'get_config' | 'get_states' | 'get_services' | 'get_panels' | 'ping') }
+    return {
+        success: true,
+        data: await homeAssistantWebSocketRead(
+            command as 'get_config' | 'get_states' | 'get_services' | 'get_panels' | 'ping'
+        ),
+    }
 }
 
 export async function executeHomeAssistantListRegistries(args: Record<string, unknown>): Promise<ToolResult> {
-    return { success: true, data: await homeAssistantListRegistries(registryKindsArg(args)) }
+    return {
+        success: true,
+        data: await homeAssistantListRegistries(registryKindsArg(args)),
+    }
 }
 
 export async function executeHomeAssistantListAutomations(args: Record<string, unknown>): Promise<ToolResult> {
-    return { success: true, data: await homeAssistantListAutomations(inventoryOptions(args)) }
+    return {
+        success: true,
+        data: await homeAssistantListAutomations(inventoryOptions(args)),
+    }
 }
 
 export async function executeHomeAssistantListScripts(args: Record<string, unknown>): Promise<ToolResult> {
-    return { success: true, data: await homeAssistantListScripts(inventoryOptions(args)) }
+    return {
+        success: true,
+        data: await homeAssistantListScripts(inventoryOptions(args)),
+    }
 }
 
 export async function executeHomeAssistantListScenes(args: Record<string, unknown>): Promise<ToolResult> {
-    return { success: true, data: await homeAssistantListScenes(inventoryOptions(args)) }
+    return {
+        success: true,
+        data: await homeAssistantListScenes(inventoryOptions(args)),
+    }
 }
 
 export async function executeHomeAssistantAutomationActivity(args: Record<string, unknown>): Promise<ToolResult> {
@@ -846,7 +1000,10 @@ export async function executeHomeAssistantAutomationActivity(args: Record<string
 export async function executeHomeAssistantReadAutomationConfig(args: Record<string, unknown>): Promise<ToolResult> {
     const entityId = stringArg(args, ['entity_id', 'entityId'])
     if (!entityId) return { success: false, error: 'Missing required parameter: entity_id' }
-    return { success: true, data: await homeAssistantReadAutomationConfig(entityId) }
+    return {
+        success: true,
+        data: await homeAssistantReadAutomationConfig(entityId),
+    }
 }
 
 export async function executeHomeAssistantListAutomationConfigs(args: Record<string, unknown>): Promise<ToolResult> {
@@ -863,7 +1020,11 @@ export async function executeHomeAssistantListAutomationConfigs(args: Record<str
 export async function executeHomeAssistantPreviewAction(args: Record<string, unknown>): Promise<ToolResult> {
     const domain = stringArg(args, ['domain'])
     const service = stringArg(args, ['service'])
-    if (!domain || !service) return { success: false, error: 'Missing required parameters: domain and service' }
+    if (!domain || !service)
+        return {
+            success: false,
+            error: 'Missing required parameters: domain and service',
+        }
     return {
         success: true,
         data: await homeAssistantPreviewAction({
@@ -880,7 +1041,11 @@ export async function executeHomeAssistantPreviewAction(args: Record<string, unk
 export async function executeHomeAssistantCallService(args: Record<string, unknown>): Promise<ToolResult> {
     const domain = stringArg(args, ['domain'])
     const service = stringArg(args, ['service'])
-    if (!domain || !service) return { success: false, error: 'Missing required parameters: domain and service' }
+    if (!domain || !service)
+        return {
+            success: false,
+            error: 'Missing required parameters: domain and service',
+        }
     return {
         success: true,
         data: await homeAssistantCallService({
@@ -899,7 +1064,8 @@ export async function executeHomeAssistantSetLight(args: Record<string, unknown>
     const entityIds = stringListArg(args, ['entity_ids', 'entityIds', 'entity_id', 'entityId'])
     if (entityIds.length === 0) return { success: false, error: 'Missing required parameter: entity_ids' }
     const action = stringArg(args, ['action']) || undefined
-    if (action && !['turn_on', 'turn_off', 'toggle'].includes(action)) return { success: false, error: `Unsupported light action: ${action}` }
+    if (action && !['turn_on', 'turn_off', 'toggle'].includes(action))
+        return { success: false, error: `Unsupported light action: ${action}` }
     return {
         success: true,
         data: await homeAssistantSetLight({
@@ -956,7 +1122,11 @@ export async function executeHomeAssistantSetClimate(args: Record<string, unknow
 export async function executeHomeAssistantNotify(args: Record<string, unknown>): Promise<ToolResult> {
     const service = stringArg(args, ['service'])
     const message = stringArg(args, ['message'])
-    if (!service || !message) return { success: false, error: 'Missing required parameters: service and message' }
+    if (!service || !message)
+        return {
+            success: false,
+            error: 'Missing required parameters: service and message',
+        }
     return {
         success: true,
         data: await homeAssistantNotify({
@@ -971,91 +1141,8 @@ export async function executeHomeAssistantNotify(args: Record<string, unknown>):
 export async function executeHomeAssistantReadActionAudit(args: Record<string, unknown>): Promise<ToolResult> {
     return {
         success: true,
-        data: await homeAssistantReadActionAudit(clamp(Math.floor(numberArg(args, ['max_results', 'maxResults'], 50)), 1, 200)),
+        data: await homeAssistantReadActionAudit(
+            clamp(Math.floor(numberArg(args, ['max_results', 'maxResults'], 50)), 1, 200)
+        ),
     }
-}
-
-function inventorySchema(): ToolDef['input_schema'] {
-    return {
-        type: 'object',
-        properties: {
-            include_attributes: {
-                type: 'boolean',
-                description: 'Include full entity attributes. Defaults to true for automation/script/scene inspection.',
-            },
-            max_results: {
-                type: 'integer',
-                description: 'Maximum entities to return. Defaults to 500 and is capped at 5000.',
-            },
-        },
-    }
-}
-
-function inventoryOptions(args: Record<string, unknown>) {
-    return {
-        includeAttributes: booleanArg(args, ['include_attributes', 'includeAttributes'], true),
-        maxResults: clamp(Math.floor(numberArg(args, ['max_results', 'maxResults'], 500)), 1, 5000),
-    }
-}
-
-function stringListArg(args: Record<string, unknown>, keys: string[]): string[] {
-    for (const key of keys) {
-        const value = args[key]
-        if (Array.isArray(value)) return value.filter((item): item is string => typeof item === 'string' && item.trim() !== '')
-        if (typeof value === 'string' && value.trim()) {
-            return value.split(',').map(item => item.trim()).filter(Boolean)
-        }
-    }
-    return []
-}
-
-function registryKindsArg(args: Record<string, unknown>) {
-    const allowed = new Set(['areas', 'devices', 'entities', 'floors', 'labels'])
-    const kinds = stringListArg(args, ['kinds', 'kind']).filter(kind => allowed.has(kind))
-    return kinds.length ? kinds as Array<'areas' | 'devices' | 'entities' | 'floors' | 'labels'> : undefined
-}
-
-function recordArg(args: Record<string, unknown>, keys: string[]): Record<string, unknown> | undefined {
-    for (const key of keys) {
-        const value = args[key]
-        if (value && typeof value === 'object' && !Array.isArray(value)) return value as Record<string, unknown>
-        if (typeof value === 'string' && value.trim().startsWith('{')) {
-            try {
-                const parsed = JSON.parse(value) as unknown
-                if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) return parsed as Record<string, unknown>
-            } catch {
-                return undefined
-            }
-        }
-    }
-    return undefined
-}
-
-function optionalNumberArg(args: Record<string, unknown>, keys: string[]): number | undefined {
-    for (const key of keys) {
-        const value = args[key]
-        if (typeof value === 'number' && Number.isFinite(value)) return value
-        if (typeof value === 'string' && value.trim() !== '') {
-            const parsed = Number(value)
-            if (Number.isFinite(parsed)) return parsed
-        }
-    }
-    return undefined
-}
-
-function numberArrayArg(args: Record<string, unknown>, keys: string[]): number[] | undefined {
-    for (const key of keys) {
-        const value = args[key]
-        if (Array.isArray(value)) {
-            const parsed = value
-                .map(item => typeof item === 'number' ? item : typeof item === 'string' ? Number(item) : Number.NaN)
-                .filter(Number.isFinite)
-            if (parsed.length > 0) return parsed
-        }
-        if (typeof value === 'string' && value.trim()) {
-            const parsed = value.split(',').map(item => Number(item.trim())).filter(Number.isFinite)
-            if (parsed.length > 0) return parsed
-        }
-    }
-    return undefined
 }

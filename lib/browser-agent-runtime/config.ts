@@ -31,6 +31,7 @@ export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 export type AdvancedThinkingLevel = 'low' | 'medium' | 'high';
 export type MediaResolutionLevel = 'low' | 'medium' | 'high';
 export type BrowserBackend = 'patchright' | 'official-display';
+export type BrowserBackendPreference = 'auto' | BrowserBackend;
 export type BrowserProfileMode = 'isolated' | 'clone-base' | 'shared-serial';
 
 export interface LlmConfig {

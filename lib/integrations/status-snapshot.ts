@@ -4,6 +4,7 @@ import { getGoogleCalendarIntegrationStatus } from '@/lib/integrations/google-ca
 import { getGoogleDriveIntegrationStatus } from '@/lib/integrations/google-drive'
 import { getWhatsAppIntegrationStatus } from '@/lib/integrations/whatsapp'
 import { getHomeAssistantIntegrationStatus } from '@/lib/integrations/home-assistant'
+import { getMapsIntegrationStatus } from '@/lib/integrations/maps'
 import { getWeatherIntegrationStatus } from '@/lib/integrations/weather'
 
 // ---------------------------------------------------------------------------
@@ -41,6 +42,7 @@ function emptySnapshot(): IntegrationStatusSnapshot {
         'google-drive': UNKNOWN,
         'whatsapp': UNKNOWN,
         'home-assistant': UNKNOWN,
+        'maps': UNKNOWN,
         'weather': UNKNOWN,
     }
 }
@@ -72,6 +74,7 @@ type Calendarish = StatusLike & { accountEmail?: string | null }
 type Driveish = StatusLike & { accountEmail?: string | null; accountName?: string | null }
 type WhatsAppish = StatusLike & { phoneNumber?: string | null; accountName?: string | null }
 type HomeAssistantish = StatusLike & { locationName?: string | null; baseUrl?: string | null }
+type Mapsish = StatusLike & { error?: string | null }
 type Weatherish = StatusLike & {
     error?: string | null
     providerInUse?: 'google' | 'open-meteo' | null
@@ -85,6 +88,7 @@ export interface RawStatuses {
     googleDrive?: Driveish | null
     whatsapp?: WhatsAppish | null
     homeAssistant?: HomeAssistantish | null
+    maps?: Mapsish | null
     weather?: Weatherish | null
 }
 
@@ -96,6 +100,10 @@ export function snapshotFromStatuses(raw: RawStatuses): IntegrationStatusSnapsho
         'google-drive': entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName),
         'whatsapp': entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName),
         'home-assistant': entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl),
+        // Maps doesn't have an account identity to surface as a detail —
+        // when needsReconnect we forward the Google error so the
+        // orchestrator can read it from the always-on integrations block.
+        'maps': entry(raw.maps, raw.maps?.error ?? null),
         'weather': entry(raw.weather, weatherDetail(raw.weather)),
     }
 }
@@ -114,12 +122,13 @@ export function rememberOrigin(origin: string | undefined): void {
 }
 
 async function fetchSnapshot(origin: string): Promise<IntegrationStatusSnapshot> {
-    const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, weather] = await Promise.allSettled([
+    const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, maps, weather] = await Promise.allSettled([
         getGmailIntegrationStatus(origin, true),
         getGoogleCalendarIntegrationStatus(origin, true),
         getGoogleDriveIntegrationStatus(origin, true),
         getWhatsAppIntegrationStatus(origin),
         getHomeAssistantIntegrationStatus(true),
+        getMapsIntegrationStatus(true),
         getWeatherIntegrationStatus(true),
     ])
     const val = <T>(r: PromiseSettledResult<T>): T | null => (r.status === 'fulfilled' ? r.value : null)
@@ -129,6 +138,7 @@ async function fetchSnapshot(origin: string): Promise<IntegrationStatusSnapshot>
         googleDrive: val(googleDrive),
         whatsapp: val(whatsapp),
         homeAssistant: val(homeAssistant),
+        maps: val(maps),
         weather: val(weather),
     })
 }
@@ -171,6 +181,7 @@ export function recordIntegrationStatuses(raw: RawStatuses): void {
         'google-drive': hasOwn(raw, 'googleDrive') ? entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName) : previous['google-drive'],
         'whatsapp': hasOwn(raw, 'whatsapp') ? entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName) : previous.whatsapp,
         'home-assistant': hasOwn(raw, 'homeAssistant') ? entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl) : previous['home-assistant'],
+        'maps': hasOwn(raw, 'maps') ? entry(raw.maps, raw.maps?.error ?? null) : previous.maps,
         'weather': hasOwn(raw, 'weather') ? entry(raw.weather, weatherDetail(raw.weather)) : previous.weather,
     }
     fetchedAt = Date.now()

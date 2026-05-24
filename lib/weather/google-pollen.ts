@@ -9,8 +9,8 @@ import type { WeatherPollen, WeatherPollenSpecies } from './schema'
 //   GET https://pollen.googleapis.com/v1/forecast:lookup
 //     ?location.latitude=LAT&location.longitude=LNG&days=1&key=...
 //
-// Same `GOOGLE_MAPS_API_KEY` as the rest of Maps Platform, but the **Pollen
-// API** must be separately enabled in the GCP project at:
+// Uses `GOOGLE_MAPS_API_KEY`, but the **Pollen API** must be separately
+// enabled in the GCP project at:
 //   https://console.cloud.google.com/apis/library/pollen.googleapis.com
 //
 // Google returns Universal Pollen Index (UPI) values on a 0-5 scale for

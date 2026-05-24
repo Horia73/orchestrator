@@ -4,7 +4,7 @@ import path from 'path'
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { ensureParentDir } from './helpers'
 
-const TODO_DIR = path.join(process.cwd(), '.orchestrator', 'todos')
+const TODO_DIR = path.join(/* turbopackIgnore: true */ process.cwd(), '.orchestrator', 'todos')
 
 export const todoWriteTool: ToolDef = {
     id: 'TodoWrite',
@@ -45,10 +45,10 @@ export function executeTodoWrite(args: Record<string, unknown>, ctx?: ToolExecut
     const invalid = todos.find(todo => todo.error)
     if (invalid?.error) return { success: false, error: invalid.error }
 
-    const filePath = path.join(TODO_DIR, `${safeFileName(ctx.conversationId)}.json`)
+    const filePath = path.join(/* turbopackIgnore: true */ TODO_DIR, `${safeFileName(ctx.conversationId)}.json`)
     try {
         ensureParentDir(filePath)
-        fs.writeFileSync(filePath, JSON.stringify({
+        fs.writeFileSync(/* turbopackIgnore: true */ filePath, JSON.stringify({
             conversationId: ctx.conversationId,
             updatedAt: Date.now(),
             todos: todos.map(stripError),

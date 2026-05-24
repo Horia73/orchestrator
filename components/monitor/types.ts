@@ -1,4 +1,11 @@
-export type WatchSource = "gmail" | "whatsapp" | "home_assistant" | "web" | "custom"
+export type WatchSource =
+  | "gmail"
+  | "google_calendar"
+  | "whatsapp"
+  | "home_assistant"
+  | "web"
+  | "weather"
+  | "custom"
 
 export interface WatchRow {
   id: string

@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, Check, CheckCircle2, ChevronDown, KeyRound, FlaskConical } from "lucide-react"
+import { AlertCircle, Check, CheckCircle2, ChevronDown, FlaskConical, KeyRound } from "lucide-react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import type { BrowserAgentModelSettings, BrowserAgentModelSlot, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
+import type { BrowserAgentModelSettings, BrowserAgentModelSlot, BrowserAgentSettings, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
 import { useSettings, type AgentInfo, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
 import { ModelPicker, type ModelPickerOption } from "./model-picker"
 
@@ -33,12 +33,15 @@ const THINKING_LABELS: Record<string, string> = {
 
 const NON_SELECTABLE_THINKING_LEVELS = new Set(["off", "auto", "enabled", "disabled", "reasoning", "thinking"])
 
-export function AgentCard({ agentId }: { agentId: string }) {
-  const { data, setAgentOverride, setBrowserAgentModel } = useSettings()
+export function AgentCard({
+  agentId,
+  className,
+}: {
+  agentId: string
+  className?: string
+}) {
+  const { data, setAgentOverride, setBrowserAgentModel, setBrowserAgentBackend } = useSettings()
   const [status, setStatus] = React.useState<SaveStatus>({ kind: "idle" })
-  // Feature controls are collapsed by default — image models can expose many
-  // of them and they shouldn't dominate the card.
-  const [featuresOpen, setFeaturesOpen] = React.useState(false)
 
   // Auto-clear "saved" badge after a couple seconds
   React.useEffect(() => {
@@ -52,7 +55,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
   const agent = data.agents.find(a => a.id === agentId)
   if (!agent) {
     return (
-      <Card>
+      <Card className={className}>
         <CardContent className="pt-5">
           <p className="text-[14px] text-foreground/60">Agent <code>{agentId}</code> not found.</p>
         </CardContent>
@@ -66,6 +69,8 @@ export function AgentCard({ agentId }: { agentId: string }) {
         agent={agent}
         data={data}
         setBrowserAgentModel={setBrowserAgentModel}
+        setBrowserAgentBackend={setBrowserAgentBackend}
+        className={className}
       />
     )
   }
@@ -136,7 +141,7 @@ export function AgentCard({ agentId }: { agentId: string }) {
   }
 
   return (
-    <Card className="relative">
+    <Card className={cn("relative", className)}>
       {/* Save badge — absolutely positioned so it doesn't reflow the title */}
       <div className="pointer-events-none absolute top-3.5 right-3.5 z-10">
         <SaveBadge status={status} />
@@ -183,32 +188,19 @@ export function AgentCard({ agentId }: { agentId: string }) {
 
         {visibleFeatures.length > 0 && (
           <div className="flex flex-col gap-1.5">
-            <button
-              type="button"
-              onClick={() => setFeaturesOpen(o => !o)}
-              aria-expanded={featuresOpen}
-              className="group/features flex w-full items-center gap-2 text-left"
-            >
-              <span className="text-[12px] font-medium uppercase tracking-wider text-foreground/55 transition-colors group-hover/features:text-foreground/75">
+            <div className="flex w-full items-center gap-2">
+              <span className="text-[12px] font-medium uppercase tracking-wider text-foreground/55">
                 Features
               </span>
               <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/55">
                 {visibleFeatures.length}
               </span>
-              <ChevronDown
-                className={cn(
-                  "ml-auto size-3.5 text-foreground/45 transition-transform",
-                  featuresOpen && "rotate-180"
-                )}
-              />
-            </button>
-            {featuresOpen && (
-              <FeatureControls
-                features={visibleFeatures}
-                values={effectiveModelOptions}
-                onChange={handleFeatureChange}
-              />
-            )}
+            </div>
+            <FeatureControls
+              features={visibleFeatures}
+              values={effectiveModelOptions}
+              onChange={handleFeatureChange}
+            />
           </div>
         )}
 
@@ -238,10 +230,14 @@ function BrowserAgentCard({
   agent,
   data,
   setBrowserAgentModel,
+  setBrowserAgentBackend,
+  className,
 }: {
   agent: AgentInfo
   data: SettingsBootstrap
   setBrowserAgentModel: (slot: BrowserAgentModelSlot, override: BrowserAgentModelSettings) => Promise<void>
+  setBrowserAgentBackend: (backend: BrowserAgentSettings["backend"]) => Promise<void>
+  className?: string
 }) {
   const [status, setStatus] = React.useState<SaveStatus>({ kind: "idle" })
 
@@ -261,6 +257,17 @@ function BrowserAgentCard({
     }
   }
 
+  const saveBackend = async (backend: BrowserAgentSettings["backend"]) => {
+    if (backend === data.config.browserAgent.backend) return
+    setStatus({ kind: "saving" })
+    try {
+      await setBrowserAgentBackend(backend)
+      setStatus({ kind: "saved", at: Date.now() })
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Save failed" })
+    }
+  }
+
   const selectedProviders = new Set([
     data.config.browserAgent.light.provider,
     data.config.browserAgent.pro.provider,
@@ -273,7 +280,7 @@ function BrowserAgentCard({
   const missingProviderDef = missingProvider ? data.providers[missingProvider] : undefined
 
   return (
-    <Card className="relative">
+    <Card className={cn("relative", className)}>
       <div className="pointer-events-none absolute top-3.5 right-3.5 z-10">
         <SaveBadge status={status} />
       </div>
@@ -288,7 +295,12 @@ function BrowserAgentCard({
       </CardHeader>
 
       <CardContent>
-        <div className="flex flex-col gap-5">
+        <div className="flex flex-col gap-4">
+          <BrowserBackendControls
+            value={data.config.browserAgent.backend}
+            status={data.config.browserAgentBackend}
+            onChange={saveBackend}
+          />
           <BrowserModelSlotControls
             title="Light model"
             slot="light"
@@ -316,6 +328,83 @@ function BrowserAgentCard({
       </CardContent>
     </Card>
   )
+}
+
+const BROWSER_BACKEND_OPTIONS: Array<{ value: BrowserAgentSettings["backend"]; label: string }> = [
+  { value: "auto", label: "Auto" },
+  { value: "patchright", label: "Patchright" },
+  { value: "official-display", label: "Chromium" },
+]
+
+function BrowserBackendControls({
+  value,
+  status,
+  onChange,
+}: {
+  value: BrowserAgentSettings["backend"]
+  status: SettingsBootstrap["config"]["browserAgentBackend"]
+  onChange: (backend: BrowserAgentSettings["backend"]) => void
+}) {
+  const envLocked = status.envOverride !== null
+  const effectiveLabel = status.effective === "official-display" ? "Chromium display" : "Patchright"
+  const statusText = backendStatusText(status, envLocked)
+  const showUnavailable = !status.officialDisplay.supported && (
+    value === "official-display" ||
+    (value === "auto" && status.platform === "linux")
+  )
+  const showStatusLine = envLocked || showUnavailable
+
+  return (
+    <Field label="Browser backend" hint={`Effective: ${effectiveLabel}`}>
+      <div className="flex flex-col gap-2">
+        <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5" title={statusText}>
+          {BROWSER_BACKEND_OPTIONS.map(option => {
+            const selected = value === option.value
+            return (
+              <button
+                key={option.value}
+                type="button"
+                disabled={envLocked}
+                onClick={() => onChange(option.value)}
+                aria-pressed={selected}
+                className={cn(
+                  "inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md px-1.5 text-[11.5px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60",
+                  selected
+                    ? "bg-background text-foreground shadow-sm"
+                    : "text-foreground/55 hover:bg-background/55 hover:text-foreground"
+                )}
+              >
+                <Check className={cn("size-3 shrink-0", selected ? "opacity-100" : "opacity-0")} />
+                <span className="min-w-0 truncate">{option.label}</span>
+              </button>
+            )
+          })}
+        </div>
+
+        {showStatusLine && (
+          <p className="truncate text-[11.5px] text-foreground/50" title={statusText}>
+            {statusText}
+          </p>
+        )}
+
+        {showUnavailable && (
+          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[12px] text-amber-700 dark:text-amber-400">
+            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
+            <p className="min-w-0">{status.reason}</p>
+          </div>
+        )}
+      </div>
+    </Field>
+  )
+}
+
+function backendStatusText(
+  status: SettingsBootstrap["config"]["browserAgentBackend"],
+  envLocked: boolean
+): string {
+  if (envLocked) return `Set by BROWSER_AGENT_BACKEND=${status.envOverride}`
+  if (status.configured === "auto") return status.reason
+  return "Managed in Settings"
 }
 
 function BrowserModelSlotControls({
@@ -401,13 +490,21 @@ function BrowserModelSlotControls({
       )}
 
       {visibleFeatures.length > 0 && (
-        <Field label="Features">
+        <div className="flex flex-col gap-1.5">
+          <div className="flex w-full items-center gap-2">
+            <span className="text-[12px] font-medium uppercase tracking-wider text-foreground/55">
+              Features
+            </span>
+            <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/55">
+              {visibleFeatures.length}
+            </span>
+          </div>
           <FeatureControls
             features={visibleFeatures}
             values={effectiveModelOptions}
             onChange={handleFeatureChange}
           />
-        </Field>
+        </div>
       )}
     </div>
   )
@@ -525,16 +622,17 @@ function FeatureControls({
                 type="button"
                 role="switch"
                 aria-checked={checked}
+                aria-label={feature.label}
                 onClick={() => onChange(feature.id, !checked)}
                 className={cn(
-                  "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors",
+                  "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
                   checked ? "bg-emerald-500" : "bg-muted-foreground/25"
                 )}
               >
                 <span
                   className={cn(
-                    "absolute top-0.5 size-4 rounded-full bg-background shadow-sm transition-transform",
-                    checked ? "translate-x-4" : "translate-x-0.5"
+                    "absolute left-0.5 top-0.5 size-4 rounded-full bg-background shadow-sm transition-transform",
+                    checked ? "translate-x-4" : "translate-x-0"
                   )}
                 />
               </button>
@@ -718,8 +816,9 @@ function sanitizeThinkingLevels(levels: ThinkingLevel[]): ThinkingLevel[] {
 }
 
 function visibleModelFeatures(features: NonNullable<ModelDef["features"]>, hasThinkingSettings: boolean): NonNullable<ModelDef["features"]> {
-  if (!hasThinkingSettings) return features
-  return features.filter(feature => !isFirstClassThinkingFeature(feature))
+  const nonInternalFeatures = features.filter(feature => !isInternalReasoningFeature(feature))
+  if (!hasThinkingSettings) return nonInternalFeatures
+  return nonInternalFeatures.filter(feature => !isFirstClassThinkingFeature(feature))
 }
 
 function isFirstClassThinkingFeature(feature: NonNullable<ModelDef["features"]>[number]): boolean {
@@ -733,6 +832,24 @@ function isFirstClassThinkingFeature(feature: NonNullable<ModelDef["features"]>[
     || token === "thinkingeffort"
     || token === "reasoningeffort"
     || token === "reasoningeffortlevel"
+  )
+}
+
+function isInternalReasoningFeature(feature: NonNullable<ModelDef["features"]>[number]): boolean {
+  const tokens = [
+    normalizeFeatureToken(feature.id),
+    normalizeFeatureToken(feature.label),
+    normalizeFeatureToken(feature.providerParam),
+    normalizeFeatureToken(feature.category),
+  ]
+  return tokens.some(token =>
+    token === "thinking"
+    || token === "reasoning"
+    || token === "thoughtsummaries"
+    || token === "thinkingsummaries"
+    || token === "includethoughts"
+    || token.includes("thinkingconfig")
+    || token.includes("thought")
   )
 }
 

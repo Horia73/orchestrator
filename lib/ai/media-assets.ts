@@ -51,6 +51,18 @@ export function saveGeneratedAsset(data: Buffer, mimeType: string, baseName: str
 
 export function formatAssetSummary(label: string, assets: GeneratedMediaAsset[]): string {
     return assets
-        .map((asset, index) => `${assets.length > 1 ? `${label} ${index + 1}` : label}: [${asset.attachment.filename}](${asset.url})`)
+        .map((asset, index) => `${assets.length > 1 ? `${label} ${index + 1}` : label}: ${formatAssetReference(asset)}`)
         .join('\n')
+}
+
+export function formatAssetReference(asset: GeneratedMediaAsset): string {
+    const label = escapeMarkdownLabel(asset.attachment.filename)
+    if (asset.attachment.type === 'image' || asset.attachment.mimeType.startsWith('image/')) {
+        return `![${label}](${asset.url})`
+    }
+    return `[${label}](${asset.url})`
+}
+
+function escapeMarkdownLabel(value: string): string {
+    return value.replace(/([\\\]])/g, '\\$1')
 }

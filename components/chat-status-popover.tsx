@@ -139,7 +139,7 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
                 sideOffset={isMobile ? 8 : 10}
                 collisionPadding={isMobile ? 12 : undefined}
                 className={cn(
-                    "max-h-[calc(var(--radix-popover-content-available-height)-8px)] overflow-y-auto rounded-lg p-0",
+                    "z-[120] max-h-[calc(var(--radix-popover-content-available-height)-8px)] overflow-y-auto rounded-lg p-0",
                     // Mobile: span the collision-safe width so the symmetric 12px
                     // gutters Radix reserves on both sides are actually even —
                     // anchoring a near-edge trigger with align="end" otherwise

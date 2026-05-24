@@ -1,9 +1,11 @@
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import {
-    ALL_INTEGRATION_IDS,
+    ALL_CAPABILITY_IDS,
     describeActivatedIntegration,
+    isSubsystemId,
 } from '@/lib/integrations/exposure'
 import { getIntegrationManifest } from '@/lib/integrations/manifest'
+import { getSubsystemManifest } from '@/lib/integrations/subsystem-manifest'
 import { refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
 import { activateIntegrations } from '@/lib/integrations/activation-store'
 
@@ -21,14 +23,14 @@ export const activateIntegrationToolsTool: ToolDef = {
     id: 'ActivateIntegrationTools',
     name: 'ActivateIntegrationTools',
     description:
-        'Load the operational tool schemas for one or more connected integrations into your tool list for the rest of this conversation. Use this when you are about to operate an integration whose State in <integrations> is "connected" but whose Tools are "inactive". Does not connect or configure anything — for setup, follow the integration runbook with the setup/lifecycle tools instead.',
+        'Load a capability for the rest of this conversation — either an integration from <integrations> (loads operational tool schemas + any doctrine) or a native subsystem from <subsystems> (loads doctrine only; the subsystem\'s tools are already granted). Use when you are about to operate the capability: an integration whose State is "connected" but whose Tools are "inactive", or a composition capability whose Doctrine says "not loaded". Does not connect or configure anything — for integration setup follow the runbook with the setup/lifecycle tools instead.',
     input_schema: {
         type: 'object',
         properties: {
             integrations: {
                 type: 'array',
-                description: 'Integration ids to activate (from the <integrations> block), e.g. ["gmail"] or ["google-workspace"]. Activate only what you are about to use.',
-                items: { type: 'string', enum: ALL_INTEGRATION_IDS },
+                description: 'Capability ids to activate (from <integrations> or <subsystems>), e.g. ["gmail"], ["maps"], ["watchlist"], ["scheduling"]. Activate only what you are about to use.',
+                items: { type: 'string', enum: ALL_CAPABILITY_IDS },
             },
         },
         required: ['integrations'],
@@ -80,26 +82,39 @@ export async function executeActivateIntegrationTools(
 
     const ids = parseIds(args)
     if (ids.length === 0) {
-        return { success: false, error: 'Provide one or more integration ids in "integrations".' }
+        return { success: false, error: 'Provide one or more capability ids in "integrations".' }
     }
 
-    const unknown = ids.filter(id => !ALL_INTEGRATION_IDS.includes(id))
+    const unknown = ids.filter(id => !ALL_CAPABILITY_IDS.includes(id))
     if (unknown.length > 0) {
         return {
             success: false,
-            error: `Unknown integration id(s): ${unknown.join(', ')}. Valid ids: ${ALL_INTEGRATION_IDS.join(', ')}.`,
+            error: `Unknown capability id(s): ${unknown.join(', ')}. Valid ids: ${ALL_CAPABILITY_IDS.join(', ')}.`,
         }
     }
 
-    const snapshot = await refreshIntegrationStatusSnapshot(ctx?.appOrigin)
+    // Refresh the snapshot once, lazily — only when an integration id is in
+    // the list. Subsystems have no connection state so they skip the probe.
+    const integrationIds = ids.filter((id) => !isSubsystemId(id))
+    const snapshot = integrationIds.length > 0
+        ? await refreshIntegrationStatusSnapshot(ctx?.appOrigin)
+        : null
     const activatedNow: string[] = []
     const skipped: string[] = []
     const report: string[] = []
 
     for (const id of ids) {
+        if (isSubsystemId(id)) {
+            const subsystem = getSubsystemManifest(id)
+            if (!subsystem) continue
+            activatedNow.push(id)
+            report.push(describeActivatedIntegration(id))
+            continue
+        }
+
         const entry = getIntegrationManifest(id)
         if (!entry) continue
-        const state = snapshot[entry.statusKind]?.state
+        const state = snapshot?.[entry.statusKind]?.state
         if (state === 'connected') {
             activatedNow.push(id)
             report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.`)

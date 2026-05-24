@@ -36,6 +36,36 @@ export interface GmailCandidate {
     timestamp: number
 }
 
+/** One Google Calendar event in the watch's lookahead window. Calendar
+ *  adapters suppress steady-state repeats; this candidate only expresses
+ *  whether the event itself satisfies the user's predicate. */
+export interface GoogleCalendarCandidate {
+    source: 'google_calendar'
+    calendarId: string
+    eventId: string
+    htmlLink: string
+    status: string
+    summary: string
+    description: string
+    location: string
+    start: string
+    end: string
+    allDay: boolean
+    startMs: number | null
+    endMs: number | null
+    updated: string | null
+    eventType: string | null
+    creator: { email: string; displayName: string; self: boolean } | null
+    organizer: { email: string; displayName: string; self: boolean } | null
+    attendees: Array<{ email: string; displayName: string; responseStatus: string; self: boolean }>
+    selfResponseStatus: string | null
+    minutesUntilStart: number | null
+    fingerprint: string
+    previousFingerprint: string | null
+    isNew: boolean
+    isUpdated: boolean
+}
+
 /** One Home Assistant entity state snapshot, paired with the previous snapshot
  *  the engine has on file for that entity (read out of WatchState.extra). The
  *  "previous" half is what lets `*_changes` and `*_threshold` rules express
@@ -107,6 +137,7 @@ export interface WeatherCandidate {
 /** Union of all candidate shapes. The adapter narrows by the `source` tag. */
 export type EvalCandidate =
     | GmailCandidate
+    | GoogleCalendarCandidate
     | HomeAssistantCandidate
     | WhatsAppCandidate
     | WebCandidate
@@ -129,6 +160,35 @@ function emailMatchesAny(haystack: string, candidates: string[]): boolean {
     const hay = haystack.toLowerCase()
     return candidates.some((c) => {
         const needle = c.toLowerCase().trim()
+        return needle.length > 0 && hay.includes(needle)
+    })
+}
+
+function calendarPeopleText(candidate: GoogleCalendarCandidate): string {
+    const people = [
+        candidate.creator,
+        candidate.organizer,
+        ...candidate.attendees,
+    ].filter(Boolean) as Array<{ email?: string; displayName?: string }>
+    return people
+        .flatMap((p) => [p.email ?? '', p.displayName ?? ''])
+        .filter(Boolean)
+        .join(' ')
+}
+
+function calendarEventText(candidate: GoogleCalendarCandidate): string {
+    return [
+        candidate.summary,
+        candidate.description,
+        candidate.location,
+        calendarPeopleText(candidate),
+    ].filter(Boolean).join('\n')
+}
+
+function calendarPersonMatchesAny(candidate: GoogleCalendarCandidate, people: string[]): boolean {
+    const hay = calendarPeopleText(candidate).toLowerCase()
+    return people.some((p) => {
+        const needle = p.toLowerCase().trim()
         return needle.length > 0 && hay.includes(needle)
     })
 }
@@ -252,6 +312,38 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
             // true — the cheap-check already filtered.
             return candidate.source === 'gmail'
 
+        // --- google calendar ---
+        case 'calendar_event_title_contains':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return containsAny(candidate.summary, rule.substrings, rule.caseInsensitive)
+        case 'calendar_event_description_contains':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return containsAny(candidate.description, rule.substrings, rule.caseInsensitive)
+        case 'calendar_event_location_contains':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return containsAny(candidate.location, rule.substrings, rule.caseInsensitive)
+        case 'calendar_event_attendee':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return calendarPersonMatchesAny(candidate, rule.attendees)
+        case 'calendar_event_needs_response':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return candidate.selfResponseStatus === 'needsAction'
+        case 'calendar_event_starts_within':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return candidate.minutesUntilStart !== null &&
+                candidate.minutesUntilStart >= 0 &&
+                candidate.minutesUntilStart <= rule.minutes
+        case 'calendar_event_query':
+            if (candidate.source !== 'google_calendar') return false
+            if (!calendarIdMatches(rule.calendarIds, candidate.calendarId)) return false
+            return containsAny(calendarEventText(candidate), [rule.q], true)
+
         // --- whatsapp ---
         case 'wa_from': {
             if (candidate.source !== 'whatsapp') return false
@@ -373,6 +465,12 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
     }
 }
 
+function calendarIdMatches(ruleCalendarIds: string[] | undefined, candidateCalendarId: string): boolean {
+    if (!ruleCalendarIds || ruleCalendarIds.length === 0) return true
+    const candidate = candidateCalendarId.toLowerCase()
+    return ruleCalendarIds.some((id) => id.toLowerCase() === candidate)
+}
+
 // --- source<->rule compatibility ------------------------------------------
 
 /** All non-composition rule kinds supported per source. The composition kinds
@@ -381,6 +479,15 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
  *  tool/UI to validate input before persistence. */
 export const RULE_KINDS_BY_SOURCE = {
     gmail: ['gmail_from', 'gmail_subject_contains', 'gmail_label', 'gmail_query'] as const,
+    google_calendar: [
+        'calendar_event_title_contains',
+        'calendar_event_description_contains',
+        'calendar_event_location_contains',
+        'calendar_event_attendee',
+        'calendar_event_needs_response',
+        'calendar_event_starts_within',
+        'calendar_event_query',
+    ] as const,
     whatsapp: ['wa_from', 'wa_text_contains', 'wa_mention'] as const,
     home_assistant: ['ha_state_equals', 'ha_state_changes', 'ha_attribute_changes', 'ha_threshold'] as const,
     web: ['web_status', 'web_json_path', 'web_text_contains'] as const,

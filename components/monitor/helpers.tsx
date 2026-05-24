@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Cog, Globe, Home, Mail, MessageSquare } from "lucide-react"
+import { CalendarDays, CloudSun, Cog, Globe, Home, Mail, MessageSquare } from "lucide-react"
 
 import type { WatchEvent, WatchSource } from "./types"
 
@@ -53,12 +53,16 @@ export function sourceIcon(source: WatchSource, className = "size-4") {
   switch (source) {
     case "gmail":
       return <Mail className={className} />
+    case "google_calendar":
+      return <CalendarDays className={className} />
     case "whatsapp":
       return <MessageSquare className={className} />
     case "home_assistant":
       return <Home className={className} />
     case "web":
       return <Globe className={className} />
+    case "weather":
+      return <CloudSun className={className} />
     case "custom":
       return <Cog className={className} />
   }
@@ -68,12 +72,16 @@ export function sourceLabel(source: WatchSource): string {
   switch (source) {
     case "gmail":
       return "Gmail"
+    case "google_calendar":
+      return "Google Calendar"
     case "whatsapp":
       return "WhatsApp"
     case "home_assistant":
       return "Home Assistant"
     case "web":
       return "Web"
+    case "weather":
+      return "Weather"
     case "custom":
       return "Custom"
   }

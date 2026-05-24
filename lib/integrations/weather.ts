@@ -1,4 +1,4 @@
-import { getEnvValue } from '@/lib/config'
+import { readGoogleMapsApiKey } from '@/lib/maps/google-session'
 import { fetchGoogleWeather, GoogleWeatherError } from '@/lib/weather/google-weather'
 import { openMeteoProvider } from '@/lib/weather/providers/open-meteo'
 
@@ -22,7 +22,7 @@ export interface WeatherIntegrationStatus {
     id: 'weather'
     name: string
     description: string
-    /** GOOGLE_MAPS_API_KEY is set. */
+    /** Google Maps Platform key is set. */
     configured: boolean
     /** At least one provider can answer. */
     connected: boolean
@@ -101,7 +101,7 @@ function formatProbeError(err: GoogleWeatherError | Error): string {
 }
 
 export async function getWeatherIntegrationStatus(useCachedProbe = true): Promise<WeatherIntegrationStatus> {
-    const apiKey = getEnvValue('GOOGLE_MAPS_API_KEY')
+    const apiKey = readGoogleMapsApiKey()
     const configured = !!apiKey
     const base = {
         id: 'weather' as const,

@@ -4,25 +4,17 @@ import { spawn as spawnProcess } from 'child_process'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { AGENT_WORKSPACE_DIR, WORKSPACE_DIR } from '@/lib/runtime-paths'
-import { commandMentionsProtectedAgentPath, displayPath, resolveSandboxedWritable } from './sandbox'
-import { booleanArg, clamp, ensureParentDir, numberArg, stringArg, truncateText } from './helpers'
+import { displayPath } from './sandbox'
 export { bashTool } from './bash-def'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
 const MAX_STREAM_CHARS = 120_000
-const BACKGROUND_DIR = path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, '.background-jobs')
-const PROVIDER_PRIVATE_DISCOVERY_NAMES = ['.claude', '.claude-memory', 'CLAUDE.md']
+const BACKGROUND_DIR = `${WORKSPACE_DIR}/.background-jobs`
 
 export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const command = stringArg(args, ['command'])
     if (!command.trim()) return { success: false, error: 'Missing required parameter: command' }
-    if (commandMentionsProtectedAgentPath(command)) {
-        return {
-            success: false,
-            error: 'Bash cannot access protected workspace secret files such as .env.local. Use SetEnv for secret updates.',
-        }
-    }
 
     const cwdResult = resolveCwd(stringArg(args, ['cwd']))
     if (!cwdResult.ok) return { success: false, error: cwdResult.error }
@@ -34,31 +26,34 @@ export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecu
 }
 
 function resolveCwd(cwdArg: string): { ok: true; cwd: string } | { ok: false; error: string } {
-    if (!cwdArg.trim()) return { ok: true, cwd: AGENT_WORKSPACE_DIR }
-    const sandboxed = resolveSandboxedWritable(cwdArg)
-    if (!sandboxed.ok) return { ok: false, error: sandboxed.error }
-    if (!fs.existsSync(/* turbopackIgnore: true */ sandboxed.resolved)) {
-        return { ok: false, error: `Working directory not found: ${displayPath(sandboxed.resolved)}` }
-    }
-    if (!fs.statSync(/* turbopackIgnore: true */ sandboxed.resolved).isDirectory()) {
-        return { ok: false, error: `Working path is not a directory: ${displayPath(sandboxed.resolved)}` }
-    }
-    return { ok: true, cwd: sandboxed.resolved }
+    const clean = cwdArg.trim()
+    if (!clean) return { ok: true, cwd: AGENT_WORKSPACE_DIR }
+    const resolved = path.normalize(path.isAbsolute(clean) ? clean : `${AGENT_WORKSPACE_DIR}/${clean}`)
+    return { ok: true, cwd: resolved }
 }
 
 function startBackgroundCommand(command: string, cwd: string, timeoutMs: number): ToolResult {
     const id = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const logPath = path.join(/* turbopackIgnore: true */ BACKGROUND_DIR, `${id}.log`)
+    const logPath = `${BACKGROUND_DIR}/${id}.log`
     ensureParentDir(logPath)
     const logStream = fs.createWriteStream(/* turbopackIgnore: true */ logPath, { flags: 'a' })
     logStream.write(`$ ${command}\n\n`)
 
-    const proc = spawnProcess(process.env.SHELL || '/bin/zsh', ['-lc', command], {
-        cwd,
-        env: process.env,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        detached: true,
-    })
+    let proc: ReturnType<typeof spawnProcess>
+    try {
+        proc = spawnProcess(process.env.SHELL || '/bin/zsh', ['-lc', command], {
+            cwd,
+            env: process.env,
+            stdio: ['ignore', 'pipe', 'pipe'],
+            detached: true,
+        })
+    } catch (err) {
+        logStream.end()
+        return {
+            success: false,
+            error: err instanceof Error ? err.message : `Could not start command in ${displayPath(cwd)}`,
+        }
+    }
 
     const startedAt = Date.now()
     const timer = setTimeout(() => {
@@ -101,6 +96,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
         let timedOut = false
         const signal = ctx?.signal
         const toolCallId = ctx?.currentToolCallId
+        let proc: ReturnType<typeof ptySpawn>
 
         const emit = (text: string) => {
             if (toolCallId && text) {
@@ -114,18 +110,6 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
             output = next.text
             outputTruncated ||= next.truncated
         }
-
-        const proc = ptySpawn(process.env.SHELL || '/bin/zsh', ['-lc', command], {
-            name: 'xterm-256color',
-            cols: 120,
-            rows: 32,
-            cwd,
-            env: {
-                ...process.env,
-                FORCE_COLOR: process.env.FORCE_COLOR ?? '1',
-                TERM: 'xterm-256color',
-            } as Record<string, string>,
-        })
 
         const finish = (result: ToolResult) => {
             if (finished) return
@@ -145,14 +129,33 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
         const onAbort = () => kill('abort')
         signal?.addEventListener('abort', onAbort, { once: true })
 
+        try {
+            proc = ptySpawn(process.env.SHELL || '/bin/zsh', ['-lc', command], {
+                name: 'xterm-256color',
+                cols: 120,
+                rows: 32,
+                cwd,
+                env: {
+                    ...process.env,
+                    FORCE_COLOR: process.env.FORCE_COLOR ?? '1',
+                    TERM: 'xterm-256color',
+                } as Record<string, string>,
+            })
+        } catch (err) {
+            finish({
+                success: false,
+                error: err instanceof Error ? err.message : `Could not start command in ${displayPath(cwd)}`,
+            })
+            return
+        }
+
         emit(`\x1b[2m$ ${command}\x1b[0m\r\n`)
 
         proc.onData(chunk => {
             emit(chunk)
         })
         proc.onExit(({ exitCode }) => {
-            const visibleOutput = filterRoutineDiscoveryOutput(command, output)
-            const out = truncateText(visibleOutput, MAX_STREAM_CHARS)
+            const out = truncateText(output, MAX_STREAM_CHARS)
             const code = typeof exitCode === 'number' ? exitCode : null
             const success = !timedOut && (code === 0)
             finish({
@@ -189,15 +192,53 @@ function appendBounded(current: string, chunk: string): { text: string; truncate
     return { text: combined.slice(-(MAX_STREAM_CHARS * 2)), truncated: true }
 }
 
-function filterRoutineDiscoveryOutput(command: string, output: string): string {
-    if (!isRoutineDiscoveryCommand(command)) return output
-    if (PROVIDER_PRIVATE_DISCOVERY_NAMES.some(name => command.includes(name))) return output
-    return output
-        .split('\n')
-        .filter(line => !PROVIDER_PRIVATE_DISCOVERY_NAMES.some(name => line.includes(name)))
-        .join('\n')
+function stringArg(args: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+        const value = args[key]
+        if (typeof value === 'string') return value
+    }
+    return ''
 }
 
-function isRoutineDiscoveryCommand(command: string): boolean {
-    return /(^|[;&|]\s*)(command\s+)?(ls|find)(\s|$)/.test(command)
+function numberArg(args: Record<string, unknown>, keys: string[], fallback: number): number {
+    for (const key of keys) {
+        const value = args[key]
+        if (typeof value === 'number' && Number.isFinite(value)) return value
+        if (typeof value === 'string' && value.trim() !== '') {
+            const parsed = Number(value)
+            if (Number.isFinite(parsed)) return parsed
+        }
+    }
+    return fallback
+}
+
+function booleanArg(args: Record<string, unknown>, keys: string[], fallback = false): boolean {
+    for (const key of keys) {
+        const value = args[key]
+        if (typeof value === 'boolean') return value
+        if (typeof value === 'string') {
+            if (value.toLowerCase() === 'true') return true
+            if (value.toLowerCase() === 'false') return false
+        }
+    }
+    return fallback
+}
+
+function clamp(n: number, min: number, max: number): number {
+    return Math.min(max, Math.max(min, n))
+}
+
+function truncateText(text: string, maxChars: number): { text: string; truncated: boolean } {
+    if (text.length <= maxChars) return { text, truncated: false }
+    const keepHead = Math.floor(maxChars * 0.6)
+    const keepTail = maxChars - keepHead
+    return {
+        text: `${text.slice(0, keepHead)}\n\n...[truncated ${text.length - maxChars} chars]...\n\n${text.slice(-keepTail)}`,
+        truncated: true,
+    }
+}
+
+function ensureParentDir(filePath: string): void {
+    const dir = path.dirname(/* turbopackIgnore: true */ filePath)
+    fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true })
 }

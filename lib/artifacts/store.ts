@@ -29,6 +29,14 @@ interface RawArtifactRow {
     createdAt: number
 }
 
+interface RawArtifactListRow extends RawArtifactRow {
+    conversationTitle: string | null
+}
+
+export interface ArtifactListItem extends ArtifactRow {
+    conversationTitle: string | null
+}
+
 function resolveArtifactReadPath(filePath: string): string | null {
     try {
         const root = fs.realpathSync(/* turbopackIgnore: true */ ARTIFACTS_DIR)
@@ -55,6 +63,13 @@ function parseRow(r: RawArtifactRow): ArtifactRow {
         ...r,
         display: r.display as ArtifactDisplay | null,
         content,
+    }
+}
+
+function parseListRow(r: RawArtifactListRow): ArtifactListItem {
+    return {
+        ...parseRow(r),
+        conversationTitle: r.conversationTitle,
     }
 }
 
@@ -87,6 +102,7 @@ function extensionFor(type: string, language?: string | null): string {
         case 'application/x-latex': return 'tex'
         case 'text/html': return 'html'
         case 'application/vnd.ant.react': return 'tsx'
+        case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
@@ -194,6 +210,72 @@ export function listLatestArtifactsForConversation(conversationId: string): Arti
 export function getArtifactById(id: string): ArtifactRow | null {
     const row = db.prepare(`SELECT * FROM artifacts WHERE id = ?`).get(id) as RawArtifactRow | undefined
     return row ? parseRow(row) : null
+}
+
+export function deleteArtifactIdentifierChainById(
+    id: string,
+    options: { conversationId?: string; type?: string } = {},
+): { deleted: number; row: ArtifactRow | null } {
+    const row = db.prepare(`SELECT * FROM artifacts WHERE id = ?`).get(id) as RawArtifactRow | undefined
+    if (!row) return { deleted: 0, row: null }
+    if (options.conversationId && row.conversationId !== options.conversationId) {
+        return { deleted: 0, row: parseRow(row) }
+    }
+    if (options.type && row.type !== options.type) {
+        return { deleted: 0, row: parseRow(row) }
+    }
+
+    const rows = db.prepare(
+        `SELECT * FROM artifacts
+          WHERE conversationId = ?
+            AND identifier = ?
+            AND (? IS NULL OR type = ?)`,
+    ).all(row.conversationId, row.identifier, options.type ?? null, options.type ?? null) as RawArtifactRow[]
+
+    const result = db.prepare(
+        `DELETE FROM artifacts
+          WHERE conversationId = ?
+            AND identifier = ?
+            AND (? IS NULL OR type = ?)`,
+    ).run(row.conversationId, row.identifier, options.type ?? null, options.type ?? null)
+
+    for (const item of rows) {
+        if (!item.filePath) continue
+        const filePath = resolveArtifactReadPath(item.filePath)
+        if (!filePath) continue
+        try {
+            fs.rmSync(/* turbopackIgnore: true */ filePath, { force: true })
+        } catch {
+            // The database row is the source of truth; stale files can be
+            // ignored if the OS races us or the backing file was already gone.
+        }
+    }
+
+    return { deleted: result.changes, row: parseRow(row) }
+}
+
+/** Latest versions for a MIME type across all conversations, newest first. */
+export function listLatestArtifactsByType(type: string, limit = 100): ArtifactListItem[] {
+    const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 500))
+    const rows = db
+        .prepare(
+            `SELECT a.*, c.title AS conversationTitle
+               FROM artifacts a
+               JOIN (
+                   SELECT conversationId, identifier, MAX(version) AS v
+                     FROM artifacts
+                    WHERE type = ?
+                    GROUP BY conversationId, identifier
+               ) m ON m.conversationId = a.conversationId
+                  AND m.identifier = a.identifier
+                  AND m.v = a.version
+               LEFT JOIN conversations c ON c.id = a.conversationId
+              WHERE a.type = ?
+              ORDER BY a.createdAt DESC
+              LIMIT ?`
+        )
+        .all(type, type, safeLimit) as RawArtifactListRow[]
+    return rows.map(parseListRow)
 }
 
 /** All versions for a specific identifier, version asc. Powers the panel's version dropdown. */

@@ -20,6 +20,21 @@ export function describeRule(rule: MonitorRule): string {
         case 'gmail_query':
             return `Gmail search: ${rule.q}`
 
+        case 'calendar_event_title_contains':
+            return `Calendar title contains: ${rule.substrings.join(' OR ')}${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+        case 'calendar_event_description_contains':
+            return `Calendar description contains: ${rule.substrings.join(' OR ')}${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+        case 'calendar_event_location_contains':
+            return `Calendar location contains: ${rule.substrings.join(' OR ')}${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+        case 'calendar_event_attendee':
+            return `Calendar attendee contains: ${rule.attendees.join(' OR ')}${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+        case 'calendar_event_needs_response':
+            return `Calendar invite needs my response${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+        case 'calendar_event_starts_within':
+            return `Calendar event starts within ${rule.minutes}m${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+        case 'calendar_event_query':
+            return `Calendar event text contains: ${rule.q}${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
+
         case 'wa_from':
             return `WhatsApp from: ${rule.contacts.join(' OR ')}`
         case 'wa_text_contains':

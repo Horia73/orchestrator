@@ -187,16 +187,38 @@ import {
 } from "./schedule"
 import { executeNotifyInbox } from "./notify"
 import {
-    executeWeatherSetCalendarContext,
-    executeWeatherSetOutfit,
-    executeWeatherSetWhy,
-    executeWeatherShow,
-    executeWeatherStatus,
-    WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
-    WEATHER_SET_OUTFIT_TOOL_ID,
-    WEATHER_SET_WHY_TOOL_ID,
-    WEATHER_SHOW_TOOL_ID,
-    WEATHER_STATUS_TOOL_ID,
+  executeMapsCurrentLocation,
+  executeMapsDirections,
+  executeMapsListLocationSources,
+  executeMapRender,
+  executeMapsGeocode,
+  executeMapsOptimizeStops,
+  executeMapsPlaces,
+  executeMapsReverseGeocode,
+  executeMapsSetLocationSource,
+  executeMapsStatus,
+  MAPS_CURRENT_LOCATION_TOOL_ID,
+  MAPS_DIRECTIONS_TOOL_ID,
+  MAPS_LIST_LOCATION_SOURCES_TOOL_ID,
+  MAP_RENDER_TOOL_ID,
+  MAPS_GEOCODE_TOOL_ID,
+  MAPS_OPTIMIZE_STOPS_TOOL_ID,
+  MAPS_PLACES_TOOL_ID,
+  MAPS_REVERSE_GEOCODE_TOOL_ID,
+  MAPS_SET_LOCATION_SOURCE_TOOL_ID,
+  MAPS_STATUS_TOOL_ID,
+} from "./maps"
+import {
+  executeWeatherSetCalendarContext,
+  executeWeatherSetOutfit,
+  executeWeatherSetWhy,
+  executeWeatherShow,
+  executeWeatherStatus,
+  WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
+  WEATHER_SET_OUTFIT_TOOL_ID,
+  WEATHER_SET_WHY_TOOL_ID,
+  WEATHER_SHOW_TOOL_ID,
+  WEATHER_STATUS_TOOL_ID,
 } from "./weather"
 import { executeSetTaskState } from "./task-state"
 import { executeMonitorWakeFeedback } from "./smart-monitor-feedback"
@@ -391,6 +413,16 @@ const executors: Record<string, ToolExecutor> = {
   reschedule_task: executeRescheduleTask,
   notify_inbox: executeNotifyInbox,
   set_task_state: executeSetTaskState,
+  [MAP_RENDER_TOOL_ID]: executeMapRender,
+  [MAPS_STATUS_TOOL_ID]: executeMapsStatus,
+  [MAPS_CURRENT_LOCATION_TOOL_ID]: executeMapsCurrentLocation,
+  [MAPS_LIST_LOCATION_SOURCES_TOOL_ID]: executeMapsListLocationSources,
+  [MAPS_SET_LOCATION_SOURCE_TOOL_ID]: executeMapsSetLocationSource,
+  [MAPS_GEOCODE_TOOL_ID]: executeMapsGeocode,
+  [MAPS_REVERSE_GEOCODE_TOOL_ID]: executeMapsReverseGeocode,
+  [MAPS_PLACES_TOOL_ID]: executeMapsPlaces,
+  [MAPS_OPTIMIZE_STOPS_TOOL_ID]: executeMapsOptimizeStops,
+  [MAPS_DIRECTIONS_TOOL_ID]: executeMapsDirections,
   [WEATHER_SHOW_TOOL_ID]: executeWeatherShow,
   [WEATHER_SET_OUTFIT_TOOL_ID]: executeWeatherSetOutfit,
   [WEATHER_SET_WHY_TOOL_ID]: executeWeatherSetWhy,
@@ -409,6 +441,24 @@ const executors: Record<string, ToolExecutor> = {
   monitor_watch_update: executeMonitorWatchUpdate,
   monitor_watch_remove: executeMonitorWatchRemove,
 }
+
+const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
+  MAP_RENDER_TOOL_ID,
+  MAPS_STATUS_TOOL_ID,
+  MAPS_CURRENT_LOCATION_TOOL_ID,
+  MAPS_LIST_LOCATION_SOURCES_TOOL_ID,
+  MAPS_SET_LOCATION_SOURCE_TOOL_ID,
+  MAPS_GEOCODE_TOOL_ID,
+  MAPS_REVERSE_GEOCODE_TOOL_ID,
+  MAPS_PLACES_TOOL_ID,
+  MAPS_OPTIMIZE_STOPS_TOOL_ID,
+  MAPS_DIRECTIONS_TOOL_ID,
+  WEATHER_STATUS_TOOL_ID,
+  WEATHER_SHOW_TOOL_ID,
+  WEATHER_SET_OUTFIT_TOOL_ID,
+  WEATHER_SET_WHY_TOOL_ID,
+  WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
+])
 
 async function executeRunActivatedIntegrationTool(
   args: Record<string, unknown>,
@@ -502,6 +552,16 @@ export async function executeTool(
   args: Record<string, unknown>,
   ctx?: ToolExecutionContext
 ): Promise<ToolResult> {
+  if (
+    (!ctx || ctx.callerAgentId !== "orchestrator") &&
+    ORCHESTRATOR_ONLY_TOOL_IDS.has(tool.id)
+  ) {
+    return {
+      success: false,
+      error: `${tool.id} is orchestrator-only. Other agents must return structured data for the orchestrator to render.`,
+    }
+  }
+
   const executor = executors[tool.id]
   if (!executor) {
     return {

@@ -12,6 +12,7 @@ import {
   RefreshCcw,
   RotateCw,
   Trash2,
+  Upload,
   X,
 } from "lucide-react"
 import ReactMarkdown from "react-markdown"
@@ -81,6 +82,44 @@ interface UpdateStatus {
 
 const ACTIVE_PHASES = new Set<UpdatePhase>(["queued", "updating", "restarting"])
 
+type FactoryResetScope = "chat" | "automations" | "memory" | "integrations" | "env"
+
+const DEFAULT_RESET_SCOPES: FactoryResetScope[] = ["chat", "automations", "memory", "integrations"]
+
+const RESET_SCOPE_OPTIONS: Array<{
+  id: FactoryResetScope
+  label: string
+  description: string
+  destructive?: boolean
+}> = [
+  {
+    id: "chat",
+    label: "Chat, inbox & logs",
+    description: "Conversations, messages, generated artifacts, uploads, agent threads, and activity logs.",
+  },
+  {
+    id: "automations",
+    label: "Automations & saved data",
+    description: "Scheduled tasks, push subscriptions, Smart Monitor watches, watchlist data, and saved map places.",
+  },
+  {
+    id: "memory",
+    label: "Memory & identity",
+    description: "USER.md, IDENTITY.md, MEMORY.md, daily memory, onboarding state, and monitor notes.",
+  },
+  {
+    id: "integrations",
+    label: "Integration sessions",
+    description: "OAuth tokens, WhatsApp session files, browser-agent profile state, and private integration state.",
+  },
+  {
+    id: "env",
+    label: ".env.local",
+    description: "Provider keys, service URLs, OAuth client secrets, and local runtime config.",
+    destructive: true,
+  },
+]
+
 function formatDate(value: string | number | null | undefined) {
   if (!value) return "Never"
   const date = typeof value === "number" ? new Date(value) : new Date(value)
@@ -119,8 +158,12 @@ export function UpdateTab() {
   const [resetting, setResetting] = React.useState(false)
   const [resetModalOpen, setResetModalOpen] = React.useState(false)
   const [resetConfirmText, setResetConfirmText] = React.useState("")
+  const [resetScopes, setResetScopes] = React.useState<FactoryResetScope[]>(DEFAULT_RESET_SCOPES)
   const [error, setError] = React.useState<string | null>(null)
   const [resetMessage, setResetMessage] = React.useState<string | null>(null)
+  const [memoryBusy, setMemoryBusy] = React.useState<"export" | "import" | null>(null)
+  const [memoryMessage, setMemoryMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
+  const memoryImportInputRef = React.useRef<HTMLInputElement | null>(null)
 
   const loadStatus = React.useCallback(async (refresh = false) => {
     const res = await fetch(`/api/update/status${refresh ? "?refresh=1" : ""}`, { cache: "no-store" })
@@ -189,8 +232,17 @@ export function UpdateTab() {
     }
   }
 
+  const toggleResetScope = React.useCallback((scope: FactoryResetScope) => {
+    setResetScopes(current => (
+      current.includes(scope)
+        ? current.filter(item => item !== scope)
+        : [...current, scope]
+    ))
+  }, [])
+
   const handleFactoryReset = async () => {
     if (resetConfirmText.trim().toLowerCase() !== "delete") return
+    if (resetScopes.length === 0) return
 
     setResetting(true)
     setResetMessage(null)
@@ -199,11 +251,15 @@ export function UpdateTab() {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         cache: "no-store",
-        body: JSON.stringify({ confirm: "factory-reset", preserveEnvLocal: true }),
+        body: JSON.stringify({
+          confirm: "factory-reset",
+          scopes: resetScopes,
+          preserveEnvLocal: !resetScopes.includes("env"),
+        }),
       })
       const json = await res.json().catch(() => null)
       if (!res.ok) throw new Error(json?.error || `Factory reset failed (${res.status})`)
-      setResetMessage("Factory reset complete. Reloading initial workspace.")
+      setResetMessage(`Reset complete: ${formatScopeSummary(resetScopes)}. Reloading.`)
       setResetModalOpen(false)
       window.setTimeout(() => window.location.assign("/"), 800)
     } catch (err) {
@@ -215,7 +271,72 @@ export function UpdateTab() {
 
   const openFactoryReset = () => {
     setResetConfirmText("")
+    setResetScopes(DEFAULT_RESET_SCOPES)
     setResetModalOpen(true)
+  }
+
+  const handleMemoryExport = async () => {
+    setMemoryBusy("export")
+    setMemoryMessage(null)
+    try {
+      const res = await fetch("/api/settings/memory/export", { cache: "no-store" })
+      const text = await res.text()
+      if (!res.ok) {
+        const parsed = parseJsonObject(text)
+        throw new Error(parsed?.error || `Memory export failed (${res.status})`)
+      }
+      const blob = new Blob([text], { type: "application/json" })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement("a")
+      link.href = url
+      link.download = filenameFromContentDisposition(res.headers.get("content-disposition")) ?? `orchestrator-memory-${new Date().toISOString().slice(0, 10)}.json`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      URL.revokeObjectURL(url)
+      setMemoryMessage({ tone: "success", text: "Memory export downloaded." })
+    } catch (err) {
+      setMemoryMessage({ tone: "error", text: err instanceof Error ? err.message : "Memory export failed." })
+    } finally {
+      setMemoryBusy(null)
+    }
+  }
+
+  const handleMemoryImportFile = async (file: File | null | undefined) => {
+    if (!file) return
+    setMemoryBusy("import")
+    setMemoryMessage(null)
+    try {
+      const text = await file.text()
+      const bundle = JSON.parse(text) as unknown
+      const count = bundle && typeof bundle === "object" && Array.isArray((bundle as { files?: unknown }).files)
+        ? (bundle as { files: unknown[] }).files.length
+        : null
+      const ok = window.confirm(
+        count === null
+          ? "Import this memory file and replace matching local memory files?"
+          : `Import ${count} memory file${count === 1 ? "" : "s"} and replace matching local memory files?`
+      )
+      if (!ok) return
+
+      const res = await fetch("/api/settings/memory/import", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        cache: "no-store",
+        body: JSON.stringify(bundle),
+      })
+      const json = await res.json().catch(() => null) as { importedFiles?: unknown[]; error?: string } | null
+      if (!res.ok) throw new Error(json?.error || `Memory import failed (${res.status})`)
+      setMemoryMessage({
+        tone: "success",
+        text: `Imported ${json?.importedFiles?.length ?? count ?? 0} memory file${(json?.importedFiles?.length ?? count ?? 0) === 1 ? "" : "s"}.`,
+      })
+    } catch (err) {
+      setMemoryMessage({ tone: "error", text: err instanceof Error ? err.message : "Memory import failed." })
+    } finally {
+      setMemoryBusy(null)
+      if (memoryImportInputRef.current) memoryImportInputRef.current.value = ""
+    }
   }
 
   if (loading) {
@@ -240,7 +361,9 @@ export function UpdateTab() {
         open={resetModalOpen}
         value={resetConfirmText}
         resetting={resetting}
+        selectedScopes={resetScopes}
         onChange={setResetConfirmText}
+        onToggleScope={toggleResetScope}
         onClose={() => {
           if (!resetting) setResetModalOpen(false)
         }}
@@ -414,26 +537,118 @@ export function UpdateTab() {
         </div>
       )}
 
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4">
-        <div>
-          <h3 className="text-[13px] font-medium text-foreground/70">Danger zone</h3>
-          <p className="mt-0.5 text-[12.5px] text-foreground/45">
-            Return app data to first-run state while keeping installation env secrets.
-          </p>
+      <div className="mt-2 border-t border-border/60 pt-4">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div>
+            <h3 className="text-[13px] font-medium text-foreground/70">Danger zone</h3>
+            <p className="mt-0.5 text-[12.5px] text-foreground/45">
+              Reset selected local data, or move memory between Orchestrator installs.
+            </p>
+          </div>
         </div>
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={openFactoryReset}
-          disabled={resetting}
-          className="border-destructive/25 bg-destructive/5 text-destructive hover:bg-destructive/10 hover:text-destructive"
-        >
-          {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-          Factory reset
-        </Button>
+
+        <div className="mt-3 grid gap-3 lg:grid-cols-2">
+          <div className="rounded-xl border border-border/70 bg-card px-3 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h4 className="text-[13px] font-medium text-foreground/75">Memory portability</h4>
+                <p className="mt-0.5 text-[12.5px] leading-relaxed text-foreground/45">
+                  Export or import USER, IDENTITY, MEMORY, daily memory, onboarding, and monitor notes. Review exports before sharing.
+                </p>
+              </div>
+              <div className="flex shrink-0 items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleMemoryExport}
+                  disabled={memoryBusy !== null}
+                  aria-label="Export memory"
+                >
+                  {memoryBusy === "export" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  Export
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => memoryImportInputRef.current?.click()}
+                  disabled={memoryBusy !== null}
+                  aria-label="Import memory"
+                >
+                  {memoryBusy === "import" ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+                  Import
+                </Button>
+                <input
+                  ref={memoryImportInputRef}
+                  type="file"
+                  accept="application/json,.json"
+                  className="hidden"
+                  onChange={event => { void handleMemoryImportFile(event.target.files?.[0]) }}
+                />
+              </div>
+            </div>
+            {memoryMessage && (
+              <p
+                className={cn(
+                  "mt-2 text-[12px]",
+                  memoryMessage.tone === "success" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
+                )}
+              >
+                {memoryMessage.text}
+              </p>
+            )}
+          </div>
+
+          <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-3">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <h4 className="text-[13px] font-medium text-destructive">Factory reset</h4>
+                <p className="mt-0.5 text-[12.5px] leading-relaxed text-destructive/75">
+                  Choose exactly which local data groups to clear before confirming.
+                </p>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={openFactoryReset}
+                disabled={resetting}
+                className="border-destructive/25 bg-background/70 text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+                Open reset
+              </Button>
+            </div>
+          </div>
+        </div>
       </div>
     </div>
   )
+}
+
+function formatScopeSummary(scopes: FactoryResetScope[]): string {
+  if (scopes.length === 0) return "nothing"
+  return scopes
+    .map(scope => RESET_SCOPE_OPTIONS.find(option => option.id === scope)?.label ?? scope)
+    .join(", ")
+}
+
+function parseJsonObject(text: string): { error?: string } | null {
+  try {
+    const value = JSON.parse(text) as unknown
+    return value && typeof value === "object" ? value as { error?: string } : null
+  } catch {
+    return null
+  }
+}
+
+function filenameFromContentDisposition(value: string | null): string | null {
+  if (!value) return null
+  const match = /filename\*?=(?:UTF-8''|")?([^";]+)/i.exec(value)
+  if (!match?.[1]) return null
+  try {
+    return decodeURIComponent(match[1].trim().replace(/^"|"$/g, ""))
+  } catch {
+    return match[1].trim().replace(/^"|"$/g, "")
+  }
 }
 
 function ReleaseNotesMarkdown({ content }: { content: string }) {
@@ -476,19 +691,23 @@ function FactoryResetModal({
   open,
   value,
   resetting,
+  selectedScopes,
   onChange,
+  onToggleScope,
   onClose,
   onConfirm,
 }: {
   open: boolean
   value: string
   resetting: boolean
+  selectedScopes: FactoryResetScope[]
   onChange: (value: string) => void
+  onToggleScope: (scope: FactoryResetScope) => void
   onClose: () => void
   onConfirm: () => void
 }) {
   const inputRef = React.useRef<HTMLInputElement>(null)
-  const canConfirm = value.trim().toLowerCase() === "delete"
+  const canConfirm = value.trim().toLowerCase() === "delete" && selectedScopes.length > 0
 
   React.useEffect(() => {
     if (!open) return
@@ -504,7 +723,7 @@ function FactoryResetModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-2xl border border-border/70 bg-card p-5 shadow-2xl"
+        className="max-h-[calc(100dvh-2rem)] w-full max-w-lg overflow-y-auto rounded-2xl border border-border/70 bg-card p-5 shadow-2xl"
         onClick={event => event.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3">
@@ -515,7 +734,7 @@ function FactoryResetModal({
             <div>
               <h3 className="text-[16px] font-semibold text-foreground">Factory reset Orchestrator?</h3>
               <p className="mt-1 text-[12.5px] leading-relaxed text-foreground/55">
-                This clears conversations, inbox, schedules, watchlist, uploads, artifacts, and workspace memory. Env secrets stay in place.
+                Select the local data groups to clear. Unchecked groups stay in place.
               </p>
             </div>
           </div>
@@ -523,15 +742,51 @@ function FactoryResetModal({
             type="button"
             onClick={onClose}
             disabled={resetting}
-            className="flex size-7 items-center justify-center rounded-md text-foreground/45 transition-colors hover:bg-muted/70 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
+            className="grid h-7 w-7 shrink-0 place-items-center rounded-md p-0 text-foreground/45 transition-colors hover:bg-foreground/5 hover:text-foreground disabled:pointer-events-none disabled:opacity-50"
             aria-label="Close"
           >
             <X className="size-4" />
           </button>
         </div>
 
+        <div className="mt-4 space-y-2">
+          {RESET_SCOPE_OPTIONS.map(scope => {
+            const checked = selectedScopes.includes(scope.id)
+            return (
+              <label
+                key={scope.id}
+                className={cn(
+                  "grid cursor-pointer grid-cols-[18px_minmax(0,1fr)] gap-2.5 rounded-xl border px-3 py-2.5 transition-colors",
+                  checked
+                    ? scope.destructive
+                      ? "border-destructive/35 bg-destructive/5"
+                      : "border-foreground/15 bg-muted/35"
+                    : "border-border/60 bg-background/50 hover:bg-muted/30",
+                  resetting && "pointer-events-none opacity-60"
+                )}
+              >
+                <input
+                  type="checkbox"
+                  checked={checked}
+                  disabled={resetting}
+                  onChange={() => onToggleScope(scope.id)}
+                  className="mt-0.5 size-4 accent-current"
+                />
+                <span className="min-w-0">
+                  <span className={cn("block text-[13px] font-medium", scope.destructive ? "text-destructive" : "text-foreground/80")}>
+                    {scope.label}
+                  </span>
+                  <span className="mt-0.5 block text-[12px] leading-relaxed text-foreground/50">
+                    {scope.description}
+                  </span>
+                </span>
+              </label>
+            )
+          })}
+        </div>
+
         <div className="mt-4 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-2.5 text-[12.5px] leading-relaxed text-destructive">
-          This action cannot be undone from the UI.
+          This action cannot be undone from the UI. Selected now: {selectedScopes.length > 0 ? formatScopeSummary(selectedScopes) : "nothing"}.
         </div>
 
         <label className="mt-4 block">
@@ -562,7 +817,7 @@ function FactoryResetModal({
             disabled={!canConfirm || resetting}
           >
             {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-            Factory reset
+            Reset selected
           </Button>
         </div>
       </div>

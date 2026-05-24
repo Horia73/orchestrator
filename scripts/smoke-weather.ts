@@ -25,7 +25,8 @@ import {
     uvLabel,
     windCompass,
 } from '@/lib/weather/weather-codes'
-import { effectiveWeatherHours, executeWeatherShow } from '@/lib/ai/tools/weather'
+import { executeTool } from '@/lib/ai/tools/executor'
+import { effectiveWeatherHours, executeWeatherShow, weatherShowTool } from '@/lib/ai/tools/weather'
 import {
     readCachedWeather,
     weatherCacheSize,
@@ -409,6 +410,51 @@ check('aqi: 400 → Hazardous', aqiLabel(400) === 'Hazardous')
     check('WeatherShow: hours default to days horizon plus boundary buffer', effectiveWeatherHours(3, undefined) === 96)
     check('WeatherShow: hours cannot undershoot visible days', effectiveWeatherHours(3, 24) === 96)
     check('WeatherShow: hours can request longer horizon', effectiveWeatherHours(3, 96) === 96)
+}
+
+// --- orchestrator-only runtime guard --------------------------------------
+
+{
+    const blocked = await executeTool(
+        weatherShowTool,
+        { location: 'Bucharest' },
+        {
+            callerAgentId: 'researcher',
+            depth: 1,
+            conversationId: 'smoke-weather',
+            parentRequestId: 'smoke-parent',
+        }
+    )
+    check(
+        'WeatherShow: runtime blocks non-orchestrator calls',
+        !blocked.success && /orchestrator-only/.test(blocked.error ?? ''),
+        blocked
+    )
+
+    const blockedWithoutContext = await executeTool(weatherShowTool, { location: 'Bucharest' })
+    check(
+        'WeatherShow: runtime blocks calls without caller context',
+        !blockedWithoutContext.success && /orchestrator-only/.test(blockedWithoutContext.error ?? ''),
+        blockedWithoutContext
+    )
+
+    const allowedValidation = await executeTool(
+        weatherShowTool,
+        { location: '' },
+        {
+            callerAgentId: 'orchestrator',
+            depth: 0,
+            conversationId: 'smoke-weather',
+            parentRequestId: 'smoke-parent',
+        }
+    )
+    check(
+        'WeatherShow: runtime allows orchestrator calls through to validation',
+        !allowedValidation.success &&
+            /non-empty/.test(allowedValidation.error ?? '') &&
+            !/orchestrator-only/.test(allowedValidation.error ?? ''),
+        allowedValidation
+    )
 }
 
 // --- provider chain --------------------------------------------------------

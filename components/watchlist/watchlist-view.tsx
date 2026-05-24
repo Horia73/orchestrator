@@ -6,7 +6,6 @@ import {
   AlertCircle,
   ArrowLeft,
   Bell,
-  Check,
   ExternalLink,
   LineChart,
   Loader2,
@@ -20,34 +19,30 @@ import {
   TrendingDown,
   TrendingUp,
 } from "lucide-react"
-import { Area, AreaChart, CartesianGrid, Tooltip, XAxis, YAxis } from "recharts"
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 import type {
-  WatchlistCandle,
   WatchlistDataStatus,
   WatchlistItemWithQuote,
-  WatchlistRange,
   WatchlistSearchResult,
 } from "@/lib/watchlist/schema"
-import { TradingViewChart } from "./tradingview-chart"
+import { FinancialPriceChart, HistoryPreview } from "./watchlist-history-charts"
+import {
+  changeTone,
+  formatCompact,
+  formatPrice,
+  formatSigned,
+  formatTime,
+  responseError,
+} from "./watchlist-view-helpers"
 
 type WatchlistResponse = {
   status: WatchlistDataStatus
   items: WatchlistItemWithQuote[]
   errors?: string[]
-}
-
-type HistoryResponse = {
-  status: WatchlistDataStatus
-  candles: WatchlistCandle[]
-  updatedAt: number | null
-  stale: boolean
-  interval: string
-  error?: string
 }
 
 type SearchResponse = {
@@ -86,81 +81,11 @@ type AddWatchlistInput =
   | { symbol: string }
   | ProductAddInput
 
-type HistoryChartPoint = WatchlistCandle & {
-  label: string
-}
-
 function isProductAddInput(item: AddWatchlistInput): item is ProductAddInput {
   return "kind" in item && item.kind === "product"
 }
 
-const RANGES: WatchlistRange[] = ["1D", "5D", "1M", "6M", "1Y"]
 const AUTO_REFRESH_MS = 10 * 60 * 1000
-
-function formatPrice(
-  value: number | null | undefined,
-  currency?: string | null
-) {
-  if (value == null || !Number.isFinite(value)) return "—"
-  const abs = Math.abs(value)
-  const digits = abs >= 100 ? 2 : abs >= 1 ? 3 : 6
-  try {
-    if (currency && /^[A-Z]{3}$/.test(currency)) {
-      return new Intl.NumberFormat(undefined, {
-        style: "currency",
-        currency,
-        maximumFractionDigits: digits,
-      }).format(value)
-    }
-  } catch {
-    // Fall through to plain numeric formatting for unusual currency codes.
-  }
-  return new Intl.NumberFormat(undefined, {
-    maximumFractionDigits: digits,
-  }).format(value)
-}
-
-function formatCompact(value: number | null | undefined) {
-  if (value == null || !Number.isFinite(value)) return "—"
-  return new Intl.NumberFormat(undefined, {
-    notation: "compact",
-    maximumFractionDigits: 1,
-  }).format(value)
-}
-
-function formatSigned(value: number | null | undefined, suffix = "") {
-  if (value == null || !Number.isFinite(value)) return "—"
-  const sign = value > 0 ? "+" : ""
-  return `${sign}${value.toFixed(2)}${suffix}`
-}
-
-function formatTime(value: number | null | undefined) {
-  if (!value) return "Never"
-  return new Intl.DateTimeFormat(undefined, {
-    month: "short",
-    day: "numeric",
-    hour: "2-digit",
-    minute: "2-digit",
-  }).format(value)
-}
-
-async function responseError(res: Response): Promise<string> {
-  try {
-    const data = await res.json()
-    return typeof data.error === "string"
-      ? data.error
-      : `Request failed (${res.status})`
-  } catch {
-    return `Request failed (${res.status})`
-  }
-}
-
-function changeTone(value: number | null | undefined) {
-  if (value == null || value === 0) return "text-foreground/55"
-  return value > 0
-    ? "text-emerald-600 dark:text-emerald-400"
-    : "text-[#802020] dark:text-red-300"
-}
 
 function AssetBadge({ value }: { value: string }) {
   return (
@@ -241,7 +166,7 @@ function WatchlistRow({
         }
       }}
       className={cn(
-        "group flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
+        "group relative flex w-full cursor-pointer items-center gap-2.5 rounded-md px-2.5 py-2 pr-9 text-left transition-colors focus-visible:ring-2 focus-visible:ring-ring/40 focus-visible:outline-none",
         selected
           ? "bg-[#f0ede6] dark:bg-muted"
           : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/60"
@@ -268,11 +193,11 @@ function WatchlistRow({
             : itemSubtitle(item)}
         </div>
       </div>
-      <div className="shrink-0 text-right tabular-nums">
-        <div className="text-[13px] font-medium text-foreground/85">
+      <div className="w-[92px] shrink-0 text-right tabular-nums">
+        <div className="truncate text-[13px] font-medium text-foreground/85">
           {formatPrice(q?.price, q?.currency ?? item.currency)}
         </div>
-        <div className="text-[11.5px] text-foreground/45">
+        <div className="truncate text-[11.5px] text-foreground/45">
           {isProduct
             ? formatTime(q?.timestamp ?? item.quoteUpdatedAt)
             : `open ${formatPrice(q?.open, q?.currency ?? item.currency)}`}
@@ -294,6 +219,7 @@ function WatchlistRow({
       <button
         type="button"
         title="Remove"
+        aria-label={`Remove ${itemTitle(item)}`}
         onClick={(event) => {
           event.stopPropagation()
           onRemove()
@@ -305,7 +231,7 @@ function WatchlistRow({
             onRemove()
           }
         }}
-        className="flex size-7 shrink-0 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-[#802020] focus:opacity-100"
+        className="absolute top-1/2 right-1 flex size-7 -translate-y-1/2 items-center justify-center rounded-md text-foreground/30 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-red-50 hover:text-[#802020] focus:opacity-100"
       >
         <Trash2 className="size-3.5" />
       </button>
@@ -313,13 +239,7 @@ function WatchlistRow({
   )
 }
 
-function ListSectionHeader({
-  label,
-  count,
-}: {
-  label: string
-  count: number
-}) {
+function ListSectionHeader({ label, count }: { label: string; count: number }) {
   return (
     <div className="mt-1 mb-0.5 flex items-center gap-2 px-2.5 pt-2 text-[10.5px] font-semibold tracking-wider text-foreground/40 uppercase">
       <span>{label}</span>
@@ -580,7 +500,9 @@ function ProductAdd({
       if (!next.name) missing.push("name")
       if (!next.price) missing.push("price")
       if (missing.length > 0) {
-        setInfo(`Detected partial info — review ${missing.join(" and ")} before adding.`)
+        setInfo(
+          `Detected partial info — review ${missing.join(" and ")} before adding.`
+        )
       } else {
         setInfo(null)
       }
@@ -639,9 +561,7 @@ function ProductAdd({
         <div className="flex gap-2">
           <Input
             value={draft.url}
-            onChange={(event) =>
-              updateDraft({ url: event.target.value })
-            }
+            onChange={(event) => updateDraft({ url: event.target.value })}
             onKeyDown={(event) => {
               if (event.key === "Enter") {
                 event.preventDefault()
@@ -711,7 +631,7 @@ function ProductAdd({
             <div className="mt-0.5 truncate text-[11.5px] text-foreground/55">
               {draft.source || "Unknown store"}
             </div>
-            <div className="mt-1 text-[14px] font-semibold tabular-nums text-foreground">
+            <div className="mt-1 text-[14px] font-semibold text-foreground tabular-nums">
               {draft.price ? (
                 <>
                   {draft.price}{" "}
@@ -727,9 +647,7 @@ function ProductAdd({
             </div>
           </div>
         </div>
-        {info && (
-          <p className="text-[11.5px] text-foreground/55">{info}</p>
-        )}
+        {info && <p className="text-[11.5px] text-foreground/55">{info}</p>}
         {error && (
           <p className="text-[11.5px] text-amber-700 dark:text-amber-300">
             {error}
@@ -813,9 +731,7 @@ function ProductAdd({
         />
         <Input
           value={draft.currency}
-          onChange={(event) =>
-            updateDraft({ currency: event.target.value })
-          }
+          onChange={(event) => updateDraft({ currency: event.target.value })}
           placeholder="EUR"
           className="h-9 text-[13px] uppercase"
         />
@@ -895,218 +811,6 @@ function SearchAdd({
   )
 }
 
-function HistoryAreaChart({
-  data,
-  currency,
-}: {
-  data: HistoryChartPoint[]
-  currency?: string | null
-}) {
-  const containerRef = React.useRef<HTMLDivElement | null>(null)
-  const [width, setWidth] = React.useState(0)
-
-  React.useEffect(() => {
-    const node = containerRef.current
-    if (!node) return
-    const updateWidth = (value: number) => {
-      setWidth(Math.max(0, Math.floor(value)))
-    }
-    updateWidth(node.getBoundingClientRect().width)
-    const observer = new ResizeObserver((entries) => {
-      updateWidth(entries[0]?.contentRect.width ?? 0)
-    })
-    observer.observe(node)
-    return () => observer.disconnect()
-  }, [])
-
-  return (
-    <div ref={containerRef} className="h-[170px] min-w-0">
-      {width > 0 && (
-        <AreaChart
-          width={width}
-          height={170}
-          data={data}
-          margin={{ top: 6, right: 8, left: -18, bottom: 0 }}
-        >
-          <defs>
-            <linearGradient id="watchlistHistory" x1="0" y1="0" x2="0" y2="1">
-              <stop
-                offset="5%"
-                stopColor="var(--color-chart-2)"
-                stopOpacity={0.28}
-              />
-              <stop
-                offset="95%"
-                stopColor="var(--color-chart-2)"
-                stopOpacity={0.02}
-              />
-            </linearGradient>
-          </defs>
-          <CartesianGrid
-            strokeDasharray="3 3"
-            vertical={false}
-            stroke="var(--border)"
-          />
-          <XAxis
-            dataKey="label"
-            tickLine={false}
-            axisLine={false}
-            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
-            minTickGap={28}
-          />
-          <YAxis
-            tickLine={false}
-            axisLine={false}
-            tick={{ fontSize: 11, fill: "var(--muted-foreground)" }}
-            domain={["auto", "auto"]}
-          />
-          <Tooltip
-            contentStyle={{
-              borderRadius: 8,
-              border: "1px solid var(--border)",
-              background: "var(--card)",
-              color: "var(--foreground)",
-              fontSize: 12,
-            }}
-            formatter={(value) => [
-              formatPrice(
-                typeof value === "number" ? value : Number(value),
-                currency
-              ),
-              "Close",
-            ]}
-            labelFormatter={(_, payload) => payload?.[0]?.payload?.time ?? ""}
-          />
-          <Area
-            type="monotone"
-            dataKey="close"
-            stroke="var(--color-chart-2)"
-            strokeWidth={2}
-            fill="url(#watchlistHistory)"
-            dot={false}
-          />
-        </AreaChart>
-      )}
-    </div>
-  )
-}
-
-function HistoryPreview({
-  selected,
-}: {
-  selected: WatchlistItemWithQuote | null
-}) {
-  const [range, setRange] = React.useState<WatchlistRange>("1M")
-  const [data, setData] = React.useState<HistoryResponse | null>(null)
-  const [loading, setLoading] = React.useState(false)
-
-  React.useEffect(() => {
-    if (!selected) {
-      setData(null)
-      return
-    }
-    let cancelled = false
-    const load = async () => {
-      setLoading(true)
-      try {
-        const res = await fetch(
-          `/api/watchlist/history?itemId=${encodeURIComponent(selected.id)}&range=${range}`,
-          { cache: "no-store" }
-        )
-        if (!res.ok) throw new Error(await responseError(res))
-        const result = (await res.json()) as HistoryResponse
-        if (!cancelled) setData(result)
-      } catch (error) {
-        if (!cancelled) {
-          setData({
-            status: { provider: "twelve-data", configured: false },
-            candles: [],
-            updatedAt: null,
-            stale: true,
-            interval: "",
-            error: error instanceof Error ? error.message : "History failed",
-          })
-        }
-      } finally {
-        if (!cancelled) setLoading(false)
-      }
-    }
-    void load()
-    return () => {
-      cancelled = true
-    }
-  }, [selected, range])
-
-  const chartData = React.useMemo(() => {
-    return (data?.candles ?? []).map((candle) => ({
-      ...candle,
-      label:
-        range === "1D"
-          ? new Intl.DateTimeFormat(undefined, {
-              hour: "2-digit",
-              minute: "2-digit",
-            }).format(candle.timestamp)
-          : new Intl.DateTimeFormat(undefined, {
-              month: "short",
-              day: "numeric",
-            }).format(candle.timestamp),
-    }))
-  }, [data?.candles, range])
-
-  return (
-    <section className="min-h-[230px] min-w-0 border-t border-border/60 px-4 py-3">
-      <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <LineChart className="size-4 text-foreground/45" />
-          <h2 className="text-[14px] font-semibold text-foreground/80">
-            {selected?.kind === "product"
-              ? "Price history"
-              : "Provider history"}
-          </h2>
-          {loading && (
-            <Loader2 className="size-3.5 animate-spin text-foreground/35" />
-          )}
-        </div>
-        <div className="inline-flex h-8 rounded-lg bg-muted/60 p-0.5">
-          {RANGES.map((item) => (
-            <button
-              key={item}
-              type="button"
-              onClick={() => setRange(item)}
-              className={cn(
-                "rounded-md px-2.5 text-[12px] font-medium transition-colors",
-                range === item
-                  ? "bg-card text-foreground shadow-sm ring-1 ring-border/50"
-                  : "text-foreground/50 hover:text-foreground"
-              )}
-            >
-              {item}
-            </button>
-          ))}
-        </div>
-      </div>
-
-      {data?.error && (
-        <div className="mb-2 rounded-md bg-amber-50 px-3 py-2 text-[12px] text-amber-800 dark:bg-amber-950/35 dark:text-amber-200">
-          {data.error}
-        </div>
-      )}
-
-      {chartData.length > 1 ? (
-        <HistoryAreaChart data={chartData} currency={selected?.currency} />
-      ) : (
-        <div className="flex h-[170px] items-center justify-center rounded-lg border border-dashed border-border/70 text-[13px] text-foreground/45">
-          {selected
-            ? selected.kind === "product"
-              ? "No price observations yet."
-              : "No cached history yet."
-            : "Select an item."}
-        </div>
-      )}
-    </section>
-  )
-}
-
 function Stat({
   label,
   value,
@@ -1151,9 +855,13 @@ export function WatchlistView() {
     const products = items.filter((item) => item.kind === "product")
     const parts: string[] = []
     if (financials.length > 0)
-      parts.push(`${financials.length} ${financials.length === 1 ? "instrument" : "instruments"}`)
+      parts.push(
+        `${financials.length} ${financials.length === 1 ? "instrument" : "instruments"}`
+      )
     if (products.length > 0)
-      parts.push(`${products.length} ${products.length === 1 ? "product" : "products"}`)
+      parts.push(
+        `${products.length} ${products.length === 1 ? "product" : "products"}`
+      )
     return {
       financialItems: financials,
       productItems: products,
@@ -1248,16 +956,7 @@ export function WatchlistView() {
     [load]
   )
 
-  const tvWatchlist = React.useMemo(() => {
-    return items
-      .filter((item) => item.kind === "financial")
-      .map((item) => item.tradingViewSymbol || item.symbol)
-      .filter(Boolean)
-  }, [items])
-
   const q = selected?.quote
-  const chartSymbol =
-    selected?.tradingViewSymbol || selected?.symbol || "NASDAQ:AAPL"
   const selectedIsProduct = selected?.kind === "product"
   const productPageUrl =
     selectedIsProduct && selected?.url?.startsWith("http") ? selected.url : null
@@ -1475,10 +1174,7 @@ export function WatchlistView() {
                         q?.currency ?? selected.currency
                       )}
                     />
-                    <Stat
-                      label="Store"
-                      value={selected.exchange ?? "—"}
-                    />
+                    <Stat label="Store" value={selected.exchange ?? "—"} />
                     <Stat
                       label="First tracked"
                       value={formatTime(selected.createdAt)}
@@ -1550,13 +1246,7 @@ export function WatchlistView() {
                 </>
               ) : (
                 <>
-                  <section className="min-h-[420px] px-4 py-4">
-                    <TradingViewChart
-                      symbol={chartSymbol}
-                      watchlist={tvWatchlist}
-                      className="h-[min(58vh,620px)] min-h-[420px]"
-                    />
-                  </section>
+                  <FinancialPriceChart selected={selected} />
 
                   <div className="flex flex-col items-start gap-2 border-t border-border/60 px-4 py-2.5 text-[12px] text-foreground/45 sm:flex-row sm:items-center sm:justify-between sm:gap-3">
                     <div className="flex min-w-0 items-center gap-2">
@@ -1565,12 +1255,10 @@ export function WatchlistView() {
                       next.
                     </div>
                     <div className="flex min-w-0 items-center gap-1">
-                      <Check className="size-3.5 text-emerald-600" />
-                      Chart symbol {chartSymbol}
+                      <LineChart className="size-3.5 text-foreground/35" />
+                      Provider symbol {selected.providerSymbol}
                     </div>
                   </div>
-
-                  <HistoryPreview selected={selected} />
                 </>
               )}
             </>

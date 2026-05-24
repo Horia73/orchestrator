@@ -99,7 +99,7 @@ export async function executeMonitorDescribeSources(): Promise<ToolResult> {
             notes: [
                 'Cadence is continuous in seconds; you may give a string like "15m" or "2h" when creating/updating — both forms accepted.',
                 'notify_inbox is implicitly allowed on every watch; everything else needs explicit user consent in allowedActions.',
-                'Gmail and WhatsApp watches PRIME on first tick (no history blast). Home Assistant watches do not prime — alert immediately if entity is already in the matching state.',
+                'Gmail, Google Calendar, and WhatsApp watches PRIME on first tick (no history blast). Home Assistant watches do not prime — alert immediately if entity is already in the matching state.',
                 'For the actual rule/action object schemas see lib/monitor/schema.ts on the project.',
             ],
         },
@@ -150,7 +150,7 @@ export const monitorWatchListTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            source: { type: 'string', description: 'Optional filter: gmail / whatsapp / home_assistant / web / weather / custom.' },
+            source: { type: 'string', description: 'Optional filter: gmail / google_calendar / whatsapp / home_assistant / web / weather / custom.' },
             enabled: { type: 'boolean', description: 'Optional filter on enabled state.' },
         },
     },
@@ -266,7 +266,7 @@ export const monitorWatchAddTool: ToolDef = {
     name: 'monitor_watch_add',
     description: [
         'Create a Smart Monitor watch.',
-        'Use this when the user wants to subscribe to a periodic source check (Gmail VIPs, HA sensors, web endpoint changes, weather thresholds, WhatsApp from specific contacts). Always ask the user for: WHAT to watch (source + target), the RULE that defines a match (translate plain language to a structured MonitorRule — call monitor_describe_sources first if unsure of supported predicates), the CADENCE (in seconds or a duration string like "15m"), the NOTIFY policy (immediate vs digest, quiet hours), and explicitly which ACTIONS the model is allowed to take beyond notify_inbox (default: notify-only).',
+        'Use this when the user wants to subscribe to a periodic source check (Gmail VIPs, Google Calendar events/invites, HA sensors, web endpoint changes, weather thresholds, WhatsApp from specific contacts). Always ask the user for: WHAT to watch (source + target), the RULE that defines a match (translate plain language to a structured MonitorRule — call monitor_describe_sources first if unsure of supported predicates), the CADENCE (in seconds or a duration string like "15m"), the NOTIFY policy (immediate vs digest, quiet hours), and explicitly which ACTIONS the model is allowed to take beyond notify_inbox (default: notify-only).',
         'Watches start ENABLED unless the user explicitly asks to pause. Cadence defaults: 900s (15 min), min 300s, max 43200s (12h), adaptive=true.',
         'Returns the new watch id. The Smart Monitor heartbeat system task auto-arms on first enabled watch.',
     ].join(' '),
@@ -274,8 +274,8 @@ export const monitorWatchAddTool: ToolDef = {
         type: 'object',
         properties: {
             title: { type: 'string', description: 'Short human-readable label shown in /monitor and the wake brief. e.g. "Mom @ Gmail" or "Garage door sensor".' },
-            source: { type: 'string', description: 'One of: gmail, whatsapp, home_assistant, web. (custom is reserved.)' },
-            target: { type: 'string', description: 'Source-specific identifier for the thing being watched. Gmail: address or query; WhatsApp: contact name; HA: entity_id; Web: URL.' },
+            source: { type: 'string', description: 'One of: gmail, google_calendar, whatsapp, home_assistant, web, weather. (custom is reserved.)' },
+            target: { type: 'string', description: 'Source-specific identifier for the thing being watched. Gmail: address or query; Google Calendar: primary, all, selected, or comma-separated calendar ids; WhatsApp: contact name; HA: entity_id; Web: URL; Weather: location.' },
             rule: { type: 'object', description: 'Structured MonitorRule. Predicate kinds must match the source — call monitor_describe_sources to see which are valid. Use any_of / all_of for composition.' },
             allowed_actions: { type: 'array', description: 'MonitorAction[] the model is permitted to execute when matches survive. notify_inbox is implicit and need NOT be listed; everything else requires explicit user consent (gmail_archive, gmail_mark_read, gmail_label_add, ha_call_service, wa_send_reply).' },
             cadence: {

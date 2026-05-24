@@ -25,7 +25,7 @@ const SIDEBAR_WIDTH = "18rem"
 const SIDEBAR_WIDTH_MOBILE = "18rem"
 const SIDEBAR_WIDTH_ICON = "3rem"
 const SIDEBAR_KEYBOARD_SHORTCUT = "b"
-const SIDEBAR_TRANSITION = "duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+const SIDEBAR_TRANSITION = "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
 const MOBILE_SWIPE_EDGE_WIDTH = 28
 const MOBILE_SWIPE_OPEN_DISTANCE = 72
 const MOBILE_SWIPE_MIN_DISTANCE = 36
@@ -379,7 +379,7 @@ function Sidebar({
       <div
         data-slot="sidebar-gap"
         className={cn(
-          "relative w-(--sidebar-width) bg-transparent transition-[width]",
+          "relative w-(--sidebar-width) bg-transparent transition-[width] will-change-[width]",
           SIDEBAR_TRANSITION,
           "group-data-[collapsible=offcanvas]:w-0",
           "group-data-[side=right]:rotate-180",
@@ -392,7 +392,7 @@ function Sidebar({
         data-slot="sidebar-container"
         data-side={side}
         className={cn(
-          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] md:flex",
+          "fixed inset-y-0 z-10 hidden h-svh w-(--sidebar-width) transition-[left,right,width] will-change-[left,right,width] data-[side=left]:left-0 data-[side=left]:group-data-[collapsible=offcanvas]:left-[calc(var(--sidebar-width)*-1)] data-[side=right]:right-0 data-[side=right]:group-data-[collapsible=offcanvas]:right-[calc(var(--sidebar-width)*-1)] md:flex",
           SIDEBAR_TRANSITION,
           // Adjust the padding for floating and inset variants.
           variant === "floating" || variant === "inset"
@@ -692,9 +692,8 @@ function SidebarMenuButton({
       data-active={isActive}
       title={props.title ?? tooltipLabel}
       aria-label={
-        props["aria-label"] ?? (state === "collapsed" && !isMobile
-          ? tooltipLabel
-          : undefined)
+        props["aria-label"] ??
+        (state === "collapsed" && !isMobile ? tooltipLabel : undefined)
       }
       className={cn(sidebarMenuButtonVariants({ variant, size }), className)}
       {...props}

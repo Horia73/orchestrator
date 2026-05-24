@@ -9,7 +9,6 @@ import {
     recordManualRun,
     recoverStuckRunning,
 } from './store'
-import { postInboxNotice, runScheduledTask } from './run'
 
 // ---------------------------------------------------------------------------
 // The scheduler tick. This is the ONLY long-lived background loop in the app.
@@ -47,6 +46,7 @@ function log(msg: string): void {
 async function executeAndFinish(task: ScheduledTask, isOnce: boolean, firedAt: number): Promise<void> {
     state.inFlight.add(task.id)
     try {
+        const { runScheduledTask } = await import('./run')
         const result = await runScheduledTask(task, firedAt)
         finishRun(task.id, {
             ok: result.ok,
@@ -87,6 +87,7 @@ async function tick(): Promise<void> {
                 const missed = markMissed(task.id, now)
                 if (missed) {
                     try {
+                        const { postInboxNotice } = await import('./run')
                         postInboxNotice(
                             missed,
                             `⚠️ Missed scheduled task **${missed.title}** — it was due ${new Date(
@@ -123,13 +124,19 @@ export function startScheduler(): void {
 
     try {
         const recovered = recoverStuckRunning(Date.now())
-        for (const task of recovered) {
-            try {
-                postInboxNotice(
-                    task,
-                    `⚠️ Scheduled task **${task.title}** was interrupted by a restart and did not complete. It was not re-run.`,
-                )
-            } catch { /* best-effort */ }
+        if (recovered.length > 0) {
+            void import('./run')
+                .then(({ postInboxNotice }) => {
+                    for (const task of recovered) {
+                        try {
+                            postInboxNotice(
+                                task,
+                                `⚠️ Scheduled task **${task.title}** was interrupted by a restart and did not complete. It was not re-run.`,
+                            )
+                        } catch { /* best-effort */ }
+                    }
+                })
+                .catch(() => { /* best-effort */ })
         }
         if (recovered.length > 0) log(`recovered ${recovered.length} interrupted one-shot task(s)`)
     } catch (err) {
@@ -156,6 +163,7 @@ export async function runTaskNow(id: string): Promise<{ ok: boolean; conversatio
     state.inFlight.add(id)
     try {
         const now = Date.now()
+        const { runScheduledTask } = await import('./run')
         const result = await runScheduledTask(task, now, { trigger: 'manual' })
         recordManualRun(id, {
             ok: result.ok,

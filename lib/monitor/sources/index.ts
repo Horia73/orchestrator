@@ -3,6 +3,7 @@ import { ruleMatchesSource } from '../rules'
 
 import { customSourceAdapter } from './custom'
 import { gmailSourceAdapter } from './gmail'
+import { googleCalendarSourceAdapter } from './google_calendar'
 import { homeAssistantSourceAdapter } from './home_assistant'
 import type { SourceAdapter } from './types'
 import { webSourceAdapter } from './web'
@@ -19,6 +20,7 @@ import { whatsappSourceAdapter } from './whatsapp'
 
 const REGISTRY: Record<WatchSource, SourceAdapter> = {
     gmail: gmailSourceAdapter,
+    google_calendar: googleCalendarSourceAdapter,
     whatsapp: whatsappSourceAdapter,
     home_assistant: homeAssistantSourceAdapter,
     web: webSourceAdapter,

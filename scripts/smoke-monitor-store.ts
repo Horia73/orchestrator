@@ -253,8 +253,14 @@ async function main(): Promise<void> {
         target: 'https://tickets.example.com/event/42',
         rule: { kind: 'web_text_contains', url: 'https://tickets.example.com/event/42', substrings: ['Sold out'] },
     })
+    createMonitorWatch({
+        title: 'Calendar onboarding',
+        source: 'google_calendar',
+        target: 'primary',
+        rule: { kind: 'calendar_event_query', q: 'onboarding' },
+    })
     const sources = listMonitorWatches().map((w) => w.source).sort()
-    check('multi-source coexistence', JSON.stringify(sources) === JSON.stringify(['home_assistant', 'web']))
+    check('multi-source coexistence', JSON.stringify(sources) === JSON.stringify(['google_calendar', 'home_assistant', 'web']))
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)

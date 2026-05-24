@@ -30,6 +30,8 @@ Do not arbitrarily cap viable results. If there are many, group by country/selle
 
 For travel research, return constraints and verified options that can be turned into an itinerary or booking workflow.
 
+For geographic research ("best coffee shops in X", "where are the cleanest beaches in Y", "compare these neighbourhoods"), include coordinates for every place you return — both \`lat\` and \`lng\` as numbers, or a structured \`position\` field with [lng, lat] in GeoJSON order. Many authoritative sources surface coordinates inline (Google Maps result pages, OpenStreetMap node detail, Wikidata, official venue pages, Foursquare). When the orchestrator asks for places "on a map", the coordinate is the part it cannot easily recover from the rest of your findings — prioritise getting it right over decorating the entry. If you genuinely cannot find a coordinate, return the name and best address; the orchestrator can geocode as a fallback.
+
 For scientific/medical research, return evidence quality and limitations, not just conclusions.
 
 For executor handoff, include:

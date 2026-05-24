@@ -9,6 +9,7 @@ import { CsvRenderer } from "./renderers/csv-renderer"
 import { HtmlSandboxRenderer } from "./renderers/html-sandbox-renderer"
 import { JsonRenderer } from "./renderers/json-renderer"
 import { LatexRenderer } from "./renderers/latex-renderer"
+import { MapRenderer } from "./renderers/map-renderer"
 import { MarkdownArtifactRenderer } from "./renderers/markdown-artifact-renderer"
 import { MermaidRenderer } from "./renderers/mermaid-renderer"
 import { ReactSandboxRenderer } from "./renderers/react-sandbox-renderer"
@@ -99,6 +100,8 @@ export function ArtifactBody({
             return <HtmlSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} />
         case 'application/vnd.ant.react':
             return <ReactSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} />
+        case 'application/vnd.ant.map':
+            return <MapRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/vnd.ant.weather':
             return <WeatherRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/xml':
@@ -126,6 +129,7 @@ function extensionFor(mime: string, language?: string | null): string {
         case 'application/x-latex': return 'tex'
         case 'text/html': return 'html'
         case 'application/vnd.ant.react': return 'tsx'
+        case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.code': return language || 'txt'
         case 'application/xml': return 'xml'

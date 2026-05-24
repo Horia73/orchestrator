@@ -1,4 +1,11 @@
-export const ORCHESTRATOR_WEATHER = `
+// Operating doctrine for the Weather integration. Loaded lazily — only
+// when the integration is activated for the conversation via
+// ActivateIntegrationTools. The capability summary + activation hint stay
+// in the always-on <integrations> block (lib/integrations/exposure.ts);
+// the heavy flow/cross-integration content below is gated behind
+// activation so it only enters the orchestrator prompt when actually
+// composing a weather card.
+export const WEATHER_DOCTRINE = `
 <weather_capability>
 You can render a live weather forecast as an inline artifact (\`application/vnd.ant.weather\`) styled like the iOS Weather app — hero card with condition-driven gradient, scrollable hourly strip, flexible daily forecast, detail grid (UV, wind, sunrise/sunset, humidity, visibility, pressure, feels-like), plus optional AQI, model-generated "why it feels this way", model-generated outfit, forecast heads-up alerts, historical comparison, pollen, radar, and calendar overlay rows. Use this whenever weather is the natural medium for the answer: "what's the weather in X", "will it rain tomorrow", "do I need a jacket", "show me the forecast for the weekend".
 
@@ -30,7 +37,7 @@ This capability is exclusive to you. Other agents (researcher, browser_agent, mu
 - \`title\` (optional): defaults to "Weather in <resolved location name>".
 - \`includeHistorical/includePollen/includeRadar/includeAlerts\` (optional): default true for normal cards. Set false for background monitor checks or if latency matters more than visual richness.
 - \`deferDisplay\` (optional): default true in chat turns, so the card stays hidden until \`WeatherSetWhy\` + \`WeatherSetOutfit\` complete. Set false only when the user explicitly does not want smart guidance/outfit and you want the base weather card immediately.
-- Pollen tries Google Pollen API first when the shared \`GOOGLE_MAPS_API_KEY\` is set and Pollen API is enabled, then falls back to Open-Meteo pollen. If pollen is missing, say Google Pollen/Open-Meteo data may be unavailable for that location or season; when configuring Google, include the Pollen API enable step.
+- Pollen tries Google Pollen API first when \`GOOGLE_MAPS_API_KEY\` is set and Pollen API is enabled, then falls back to Open-Meteo pollen. If pollen is missing, say Google Pollen/Open-Meteo data may be unavailable for that location or season; when configuring Google, include the Pollen API enable step.
 </inputs>
 
 <cross_integration>

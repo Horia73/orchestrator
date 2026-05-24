@@ -3,7 +3,7 @@ import type { MonitorRule } from '../schema'
 // ---------------------------------------------------------------------------
 // Pure helpers that walk a (possibly composed) rule and extract the concrete
 // targets each adapter needs to fetch: URLs for the web adapter, entity_ids
-// for Home Assistant, Gmail search queries, WhatsApp contacts.
+// for Home Assistant, Gmail search queries, Calendar ids, WhatsApp contacts.
 //
 // Sharing them keeps adapter code small and consistent — and lets the engine
 // preview "what will this watch actually hit" for the detail UI.
@@ -108,6 +108,73 @@ export function buildGmailQueryFromRule(rule: MonitorRule): string | null {
 function quoteGmailToken(value: string): string {
     if (/^[A-Za-z0-9._@\-+]+$/.test(value)) return value
     return `"${value.replace(/"/g, '\\"')}"`
+}
+
+/** Distinct Google Calendar ids referenced by calendar_* leaves. Empty means
+ *  the adapter should derive calendars from the watch target. */
+export function extractCalendarIdsFromRule(rule: MonitorRule): string[] {
+    const seen = new Set<string>()
+    walk(rule, (leaf) => {
+        if (
+            leaf.kind === 'calendar_event_title_contains' ||
+            leaf.kind === 'calendar_event_description_contains' ||
+            leaf.kind === 'calendar_event_location_contains' ||
+            leaf.kind === 'calendar_event_attendee' ||
+            leaf.kind === 'calendar_event_needs_response' ||
+            leaf.kind === 'calendar_event_starts_within' ||
+            leaf.kind === 'calendar_event_query'
+        ) {
+            for (const id of leaf.calendarIds ?? []) {
+                const clean = id.trim()
+                if (clean) seen.add(clean)
+            }
+        }
+    })
+    return [...seen]
+}
+
+/** Largest lookahead requested by calendar_* leaves. The adapter caps this
+ *  further so a broad watch cannot page through unbounded history. */
+export function extractCalendarLookaheadDaysFromRule(rule: MonitorRule): number | null {
+    let max: number | null = null
+    walk(rule, (leaf) => {
+        if (
+            leaf.kind === 'calendar_event_title_contains' ||
+            leaf.kind === 'calendar_event_description_contains' ||
+            leaf.kind === 'calendar_event_location_contains' ||
+            leaf.kind === 'calendar_event_attendee' ||
+            leaf.kind === 'calendar_event_needs_response' ||
+            leaf.kind === 'calendar_event_starts_within' ||
+            leaf.kind === 'calendar_event_query'
+        ) {
+            if (typeof leaf.lookaheadDays === 'number') {
+                max = max === null ? leaf.lookaheadDays : Math.max(max, leaf.lookaheadDays)
+            }
+        }
+    })
+    return max
+}
+
+export function ruleContainsCalendarStartWindow(rule: MonitorRule): boolean {
+    let found = false
+    walk(rule, (leaf) => {
+        if (leaf.kind === 'calendar_event_starts_within') found = true
+    })
+    return found
+}
+
+export function matchingCalendarStartWindows(rule: MonitorRule, minutesUntilStart: number | null): number[] {
+    if (minutesUntilStart === null || minutesUntilStart < 0) return []
+    const windows = new Set<number>()
+    walk(rule, (leaf) => {
+        if (
+            leaf.kind === 'calendar_event_starts_within' &&
+            minutesUntilStart <= leaf.minutes
+        ) {
+            windows.add(leaf.minutes)
+        }
+    })
+    return [...windows].sort((a, b) => a - b)
 }
 
 /** Distinct WhatsApp contact tokens referenced by wa_from leaves. The

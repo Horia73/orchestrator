@@ -1,4 +1,4 @@
-import { getEnvValue } from '@/lib/config'
+import { readGoogleMapsApiKey } from '@/lib/maps/google-session'
 
 import {
     fetchGoogleAirQuality,
@@ -37,7 +37,7 @@ async function probeGoogleAvailability(): Promise<WeatherAvailability> {
     if (probeCache && Date.now() - probeCache.at < PROBE_TTL_MS) {
         return probeCache.result
     }
-    const apiKey = getEnvValue('GOOGLE_MAPS_API_KEY')
+    const apiKey = readGoogleMapsApiKey()
     if (!apiKey) {
         const result: WeatherAvailability = {
             available: false,

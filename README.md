@@ -252,25 +252,27 @@ Important variables:
 - `OPENAI_API_KEY`: OpenAI provider.
 - `ANTHROPIC_API_KEY`: Anthropic provider.
 - `TWELVE_DATA_API_KEY`: Watchlist financial search, quotes, and history.
-- `GOOGLE_MAPS_API_KEY`: optional Google Maps Platform key for Google Weather, Air Quality, Pollen, and Google Geocoding. Weather can fall back through keyless Open-Meteo when it is not set.
+- `GOOGLE_MAPS_API_KEY`: optional Google Maps Platform key for Smart Maps, geocoding, places, routes, Google Weather, Google Air Quality, and Google Pollen. Weather/pollen can fall back through keyless Open-Meteo if a Google environmental API is not enabled.
+- `GOOGLE_MAPS_MAP_ID`: recommended JavaScript Vector Map ID with Tilt and Rotation enabled for production Smart Maps tilt/heading. Earth-like 3D uses Google Maps JavaScript 3D Maps beta where coverage exists.
 - `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`: Google Workspace and Gmail OAuth.
 - `HOME_ASSISTANT_URL` / `HOME_ASSISTANT_TOKEN`: Home Assistant integration.
 - `WHATSAPP_CHROME_EXECUTABLE_PATH`: browser executable override for WhatsApp.
 - `WHATSAPP_USER_AGENT`: optional WhatsApp Web browser user-agent override.
 - `BROWSER_AGENT_LIVE_VIEW`: enables live browser view on Linux/Docker.
+- `BROWSER_AGENT_BACKEND`: optional browser-agent backend override. Leave empty to use the Settings default (`Auto`); set `patchright`, `official-display`, or `auto` only when a deployment should ignore the saved UI setting.
 
 For native installs, runtime workspace state is stored at `~/.orchestrator/state` and exposed to the app through `~/.orchestrator/app/.orchestrator`. For Docker installs, persistent app data lives in the `orchestrator-data` Docker volume mounted at `/app/.orchestrator`.
 
 ## Browser Agent Live View
 
-macOS runs Patchright in a local headful browser window. Linux/Docker can either run Patchright through Xvnc or use `BROWSER_AGENT_BACKEND=official-display` to start one official Chromium window per browser-agent session on its own virtual display, driven through OS input. The provided Docker image includes Chromium, TigerVNC, Openbox, xdotool, xclip, ImageMagick, ffmpeg, and noVNC client dependencies.
+The browser agent backend is controlled from Settings > Models > Browser Agent. `Auto` selects Patchright on macOS and official Chromium display on Linux/Docker when Chromium, Xvnc/TigerVNC, xdotool, xclip, and ImageMagick are available; otherwise it falls back to Patchright. Set `BROWSER_AGENT_BACKEND=patchright` or `BROWSER_AGENT_BACKEND=official-display` only to force a backend from the deployment environment. The provided Docker image includes Chromium, TigerVNC, Openbox, xdotool, xclip, ImageMagick, ffmpeg, and noVNC client dependencies.
 
 Default Docker live-view settings:
 
 ```text
 ORCHESTRATOR_PUBLIC_URL=
 BROWSER_AGENT_LIVE_VIEW=1
-BROWSER_AGENT_BACKEND=patchright
+BROWSER_AGENT_BACKEND=
 BROWSER_AGENT_PROFILE_MODE=isolated
 BROWSER_AGENT_MAX_CONCURRENT=3
 BROWSER_AGENT_ALLOW_NO_SANDBOX=1

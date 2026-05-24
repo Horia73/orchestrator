@@ -15,7 +15,7 @@ import {
 } from "@/components/ui/command"
 import { cn } from "@/lib/utils"
 import type { ProviderDef, ModelDef, ModelPricing } from "@/lib/config"
-import { useSettings, type SettingsBootstrap } from "./use-settings"
+import { useSettings, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
 
 export interface ModelPickerProps {
   /** Current value as "providerId:modelId" */
@@ -33,6 +33,7 @@ export interface ModelPickerProps {
 // wrapper. Hide its entries from every picker (the browser agent's card
 // hides the picker entirely so its "default" entry never needs to show up).
 const HIDDEN_PROVIDERS = new Set(['browser'])
+const CLI_PROVIDER_IDS = new Set(['claude-code', 'codex'])
 
 export interface ModelPickerOption {
   key: string
@@ -62,13 +63,13 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
 
   if (!data) return null
 
-  // ALL usable models from ALL providers (except the hidden browser provider).
-  // A provider only becomes usable after its API key is configured or its CLI
-  // is installed and logged in. This keeps seeded models out of the picker
-  // until the runtime can actually run them.
+  // All models from providers that should be visible in Settings. API-backed
+  // providers still require a configured key before they show up. CLI-backed
+  // providers remain visible while logged out so existing selections don't
+  // collapse to "No model loaded"; the row/group badges carry the auth state.
   const allModels = flattenModels(data.providers)
     .filter(m => !HIDDEN_PROVIDERS.has(m.providerId))
-    .filter(m => isProviderAvailable(m.providerId, data))
+    .filter(m => isProviderVisibleInPicker(m.providerId, data))
     .filter(m => !filterModel || filterModel(m))
 
   // Split archived from active. Archived only show when the user expands the
@@ -93,6 +94,7 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
   // agent references a model whose kind metadata changed.
   const current = modelsByKey.get(value) ??
     (allModels.find(m => m.key === value) ?? undefined)
+  const currentProviderLabel = current ? providerUnavailableLabel(current.providerId, data) : null
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen)
@@ -151,11 +153,16 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
             className
           )}
         >
-          <span className="flex min-w-0 items-center gap-2">
+          <span className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden">
             {current ? (
               <>
                 <ProviderDot providerId={current.providerId} />
-                <span className="truncate">{current.model.name}</span>
+                <span className="min-w-0 truncate">{current.model.name}</span>
+                {currentProviderLabel && (
+                  <span className="hidden max-w-[160px] shrink-0 truncate rounded-full bg-amber-500/10 px-1.5 py-0.5 text-[10px] font-medium text-amber-700 sm:inline dark:text-amber-400">
+                    {currentProviderLabel.long}
+                  </span>
+                )}
               </>
             ) : (
               <span className="text-foreground/50">No model loaded</span>
@@ -180,14 +187,7 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
         >
           <div className="px-2 pt-2">
             <div className="px-0.5 pb-1.5">
-              <span
-                className={cn(
-                  "text-[11px] font-semibold uppercase tracking-wider text-foreground/50",
-                  // Light sweeps left→right across the title while the dropdown
-                  // is active, mirroring the running-tool shimmer.
-                  open && "search-shimmer-text"
-                )}
-              >
+              <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/50">
                 Search models
               </span>
             </div>
@@ -208,10 +208,10 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
               ) : null}
             />
           </div>
-          <CommandList>
+          <CommandList className="[scrollbar-gutter:stable]">
             <CommandEmpty>
               {activeModels.length === 0 && archivedModels.length === 0
-                ? "No usable models. Add an API key or log in to a CLI provider."
+                ? "No models shown. Add an API key or unarchive a CLI model."
                 : `No models match “${query}”.`}
             </CommandEmpty>
 
@@ -229,6 +229,7 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
                     <ModelRow
                       key={m.key}
                       model={m}
+                      providerLabel={providerUnavailableLabel(m.providerId, data)}
                       isActive={m.key === value}
                       isFavorite
                       onSelect={handleSelect}
@@ -245,11 +246,12 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
             )}
 
             {Object.entries(groupedNonFavorites).map(([providerId, models]) => (
-              <CommandGroup key={providerId} heading={data.providers[providerId]?.name ?? providerId}>
+              <CommandGroup key={providerId} heading={<ProviderGroupHeading providerId={providerId} data={data} />}>
                 {models.map(m => (
                   <ModelRow
                     key={m.key}
                     model={m}
+                    providerLabel={providerUnavailableLabel(m.providerId, data)}
                     isActive={m.key === value}
                     isFavorite={false}
                     onSelect={handleSelect}
@@ -294,6 +296,7 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
                     <ModelRow
                       key={m.key}
                       model={m}
+                      providerLabel={providerUnavailableLabel(m.providerId, data)}
                       isActive={m.key === value}
                       isFavorite={false}
                       onSelect={handleSelect}
@@ -339,8 +342,31 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
 
 // ---------- Internals ----------
 
+type ProviderUnavailableLabel = {
+  short: string
+  long: string
+}
+
+function ProviderGroupHeading({ providerId, data }: { providerId: string; data: SettingsBootstrap }) {
+  const label = providerUnavailableLabel(providerId, data)
+  return (
+    <span className="flex min-w-0 flex-1 items-center gap-1.5">
+      <span className="truncate">{data.providers[providerId]?.name ?? providerId}</span>
+      {label && (
+        <span
+          className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 normal-case dark:text-amber-400"
+          title={label.long}
+        >
+          {label.short}
+        </span>
+      )}
+    </span>
+  )
+}
+
 function ModelRow({
   model,
+  providerLabel,
   isActive,
   isFavorite,
   onSelect,
@@ -351,6 +377,7 @@ function ModelRow({
   onMove,
 }: {
   model: FlatModel
+  providerLabel: ProviderUnavailableLabel | null
   isActive: boolean
   isFavorite: boolean
   onSelect: (key: string) => void
@@ -389,8 +416,8 @@ function ModelRow({
         <div className="truncate text-[13px] font-medium text-foreground" title={model.model.name}>
           {model.model.name}
         </div>
-        {/* Row 2: badges + ctx + price on a single horizontal line */}
-        <div className="mt-0.5 flex items-center gap-1.5 text-[11.5px] tabular-nums text-foreground/50">
+        {/* Row 2: badges + ctx + price, wrapping before they overflow. */}
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11.5px] tabular-nums text-foreground/50">
           {isPreview && (
             <span className="rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 dark:text-amber-400">
               preview
@@ -402,6 +429,14 @@ function ModelRow({
               title="Pricing, thinking levels, or context size unknown"
             >
               no data
+            </span>
+          )}
+          {providerLabel && (
+            <span
+              className="rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 dark:text-amber-400"
+              title={providerLabel.long}
+            >
+              {providerLabel.short}
             </span>
           )}
           <span>{formatContext(model.model.contextWindow)}</span>
@@ -565,6 +600,36 @@ function isProviderAvailable(providerId: string, data: SettingsBootstrap): boole
   if (typeof status?.available === "boolean") return status.available
   const provider = data.providers[providerId]
   return Boolean(provider?.apiKeyEnv?.includes("NO_API_KEY") || status?.apiKeyConfigured)
+}
+
+function isProviderVisibleInPicker(providerId: string, data: SettingsBootstrap): boolean {
+  if (isCliProvider(providerId, data.providerStatus?.[providerId])) return true
+  return isProviderAvailable(providerId, data)
+}
+
+function isCliProvider(providerId: string, status: ProviderStatus | undefined): boolean {
+  return status?.authKind === "cli" || CLI_PROVIDER_IDS.has(providerId)
+}
+
+function providerUnavailableLabel(providerId: string, data: SettingsBootstrap): ProviderUnavailableLabel | null {
+  const status = data.providerStatus?.[providerId]
+  if (!status || status.available || status.authKind !== "cli") return null
+
+  const providerName = status.cliName ?? data.providers[providerId]?.name ?? providerId
+  const reason = (status.unavailableReason ?? "").toLowerCase()
+  if (status.cliInstalled === false) {
+    return { short: "not installed", long: `${providerName} not installed` }
+  }
+  if (reason.includes("expired")) {
+    return { short: "session expired", long: `${providerName} session expired` }
+  }
+  if (status.cliLoggedIn === false) {
+    return { short: "not logged in", long: `${providerName} not logged in` }
+  }
+  return {
+    short: "unavailable",
+    long: status.unavailableReason ?? `${providerName} unavailable`,
+  }
 }
 
 function groupByProvider(models: FlatModel[]): Record<string, FlatModel[]> {

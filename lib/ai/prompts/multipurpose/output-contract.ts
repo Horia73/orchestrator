@@ -5,6 +5,7 @@ Lead with the deliverable.
 Default closeout:
 - what was created/changed;
 - where the file is or whether an artifact_candidate is included;
+- screenshots and generated images should be embedded inline with Markdown image syntax, not returned as plain text links when the image file is available in chat;
 - assumptions that matter;
 - blockers or missing tools, if any;
 - verification performed.

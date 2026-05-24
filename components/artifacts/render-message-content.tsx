@@ -20,6 +20,7 @@ interface RenderArgs {
      */
     messageId: string
     onExpand?: (a: ArtifactRow) => void
+    suppressArtifactTypes?: string[]
 }
 
 /**
@@ -40,9 +41,13 @@ interface RenderArgs {
  * `artifact_end`), we render a "Generating artifact…" stub so users see
  * something happening.
  */
-export function RenderMessageContent({ content, messageId, onExpand }: RenderArgs) {
+export function RenderMessageContent({ content, messageId, onExpand, suppressArtifactTypes }: RenderArgs) {
     const { byMessage } = useConversationArtifacts()
     const rowsForMessage = React.useMemo(() => byMessage.get(messageId) ?? [], [byMessage, messageId])
+    const suppressedTypes = React.useMemo(
+        () => new Set(suppressArtifactTypes ?? []),
+        [suppressArtifactTypes]
+    )
 
     // Map identifier → artifact row for this message. Multiple versions in
     // the same message would be unusual but possible — we keep the latest
@@ -65,6 +70,15 @@ export function RenderMessageContent({ content, messageId, onExpand }: RenderArg
                     if (!seg.text.trim()) return null
                     return <MarkdownRenderer key={`p-${i}`} content={seg.text} />
                 }
+                if (suppressedTypes.has(seg.attrs.type)) {
+                    return (
+                        <SuppressedArtifactNotice
+                            key={`s-${i}-${seg.attrs.identifier}`}
+                            title={seg.attrs.title}
+                            type={seg.attrs.type}
+                        />
+                    )
+                }
                 // Prefer the persisted row when it has landed — it carries the
                 // canonical sanitised content + version metadata. While the
                 // model is still streaming the body, synthesise a transient
@@ -76,10 +90,11 @@ export function RenderMessageContent({ content, messageId, onExpand }: RenderArg
                 // every token. Markdown / SVG / CSV stay live — they fail
                 // gracefully on partial input.
                 //
-                // Weather artifacts are JSON-bodied. Showing them as streamed
-                // code makes the user stare at a one-line horizontally
+                // Map and weather artifacts are JSON-bodied. Showing them as
+                // streamed code makes the user stare at a one-line horizontally
                 // scrolling JSON until the close tag lands; a friendly
-                // placeholder is much better UX while the model fills in the body.
+                // "building map / weather" placeholder is much better UX while
+                // the model fills in the body.
                 const streaming = !seg.closed && !realRow
                 const isPlaceholderTarget = streaming && PLACEHOLDER_TYPES.has(seg.attrs.type)
                 if (isPlaceholderTarget) {
@@ -125,6 +140,17 @@ export function RenderMessageContent({ content, messageId, onExpand }: RenderArg
     )
 }
 
+function SuppressedArtifactNotice({ title, type }: { title: string; type: string }) {
+    const label = type === 'application/vnd.ant.map' ? 'Updated the main map' : 'Updated artifact'
+    return (
+        <div className="my-2 rounded-lg border border-border/60 bg-muted/25 px-3 py-2 text-[13px] text-muted-foreground">
+            <span className="font-medium text-foreground">{label}</span>
+            <span className="mx-1">·</span>
+            <span>{title}</span>
+        </div>
+    )
+}
+
 function PanelArtifactButton({
     artifact,
     onExpand,
@@ -155,21 +181,23 @@ const RUNTIME_TYPES = new Set([
     'application/vnd.ant.react',
     'text/html',
     'application/vnd.ant.mermaid',
+    'application/vnd.ant.map',
     'application/vnd.ant.weather',
 ])
 
 /**
- * MIME types whose streamed body is JSON-shaped. The user gets no value
+ * MIME types whose streamed body is JSON-shaped — the user gets ZERO value
  * from staring at a single-line horizontally scrolling JSON dump while the
- * model fills it in, so we swap in a tiny placeholder card until the real
- * renderer mounts.
+ * model fills it in. We swap in a tiny placeholder card so the message
+ * bubble stays calm; the real renderer mounts once the closing tag lands.
  */
 const PLACEHOLDER_TYPES = new Set([
+    'application/vnd.ant.map',
     'application/vnd.ant.weather',
 ])
 
 function StreamingPlaceholder({ type, title }: { type: string; title: string }) {
-    const kind = type === 'application/vnd.ant.weather' ? 'weather' : 'artifact'
+    const kind = type === 'application/vnd.ant.weather' ? 'weather' : 'map'
     return (
         <div className="my-2 flex items-center gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm">
             <div className="size-2 animate-pulse rounded-full bg-blue-500" aria-hidden />
@@ -187,6 +215,7 @@ function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
         case 'application/vnd.ant.react': return 'tsx'
         case 'text/html': return 'html'
         case 'application/vnd.ant.mermaid': return 'text'
+        case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
         default: return null
     }

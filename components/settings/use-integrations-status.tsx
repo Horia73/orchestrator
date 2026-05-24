@@ -127,6 +127,50 @@ export interface HomeAssistantIntegrationStatusEntry {
     }
 }
 
+export interface MapsIntegrationStatusEntry {
+    id: "maps"
+    name: string
+    description: string
+    configured: boolean
+    connected: boolean
+    needsReconnect: boolean
+    error?: string
+    mapIdConfigured: boolean
+    mapIdSource: "env" | "demo"
+    mapIdLabel: string
+    vectorMap: {
+        configured: boolean
+        message: string
+    }
+    earth3d: {
+        readyToTry: boolean
+        channel: "beta"
+        message: string
+    }
+}
+
+export interface WeatherIntegrationStatusEntry {
+    id: "weather"
+    name: string
+    description: string
+    configured: boolean
+    connected: boolean
+    needsReconnect: boolean
+    error?: string
+    google: {
+        configured: boolean
+        connected: boolean
+        needsReconnect: boolean
+        error?: string
+    }
+    openMeteo: {
+        available: boolean
+        error?: string
+    }
+    anyProviderReady: boolean
+    providerInUse: "google" | "open-meteo" | null
+}
+
 export interface RuntimeAccessInfo {
     appOrigin: string
     appHost: string | null
@@ -155,6 +199,8 @@ export type IntegrationStatusEntry =
     | GoogleDriveIntegrationStatusEntry
     | WhatsAppIntegrationStatusEntry
     | HomeAssistantIntegrationStatusEntry
+    | MapsIntegrationStatusEntry
+    | WeatherIntegrationStatusEntry
 
 export interface IntegrationsStatus {
     gmail: GmailIntegrationStatusEntry
@@ -162,6 +208,8 @@ export interface IntegrationsStatus {
     googleDrive: GoogleDriveIntegrationStatusEntry
     whatsapp: WhatsAppIntegrationStatusEntry
     homeAssistant: HomeAssistantIntegrationStatusEntry
+    maps: MapsIntegrationStatusEntry
+    weather: WeatherIntegrationStatusEntry
     runtime?: RuntimeAccessInfo
 }
 

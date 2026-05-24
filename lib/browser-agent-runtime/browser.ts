@@ -4,301 +4,69 @@ import path from 'path';
 import { DEFAULT_VIEWPORT } from './viewport';
 import { createBrowserDisplayController, type BrowserDisplayController, type BrowserLiveViewState } from './display';
 import {
+    clampDurationMs,
+    cloneDownload,
+    cloneFrame,
+    compressTraceFrames,
+    DEFAULT_DRAG_DURATION_MS,
+    DEFAULT_VIDEO_DURATION_MS,
+    DEFAULT_VIDEO_FPS,
+    getActionTraceFrameCount,
+    getTraceCaptureInterval,
+    getTraceCaptureRatios,
+    MAX_AGENT_FRAME_HISTORY,
+    MAX_VIDEO_DURATION_MS,
+    MIN_VIDEO_DURATION_MS,
+    sanitizeDownloadFilename,
+    sleep,
+    toFrameId,
+    uniqueDownloadPath,
+} from './browser-helpers';
+import type {
+    ActionTrace,
+    ActionTraceFrame,
+    BrowserCaptureMode,
+    BrowserDownloadFile,
+    BrowserDownloadWaitOptions,
+    BrowserFrameSnapshot,
+    BrowserFrameSource,
+    BrowserManager,
+    BrowserManagerOptions,
+    BrowserPageSession,
+    BrowserPageSessionCapabilities,
+    BrowserPageSessionOptions,
+    BrowserTabInfo,
+    BrowserTabOrigin,
+    BrowserVideoRecording,
+    TracedActionResult,
+} from './browser-types';
+import {
     cleanupStaleBrowserProfileLocks,
     ensureBrowserProfileDir,
     formatBrowserError,
     isBrowserProfileInUseError,
     killBrowserProcessesUsingPath,
 } from './profile';
-import type { BrowserBackend, BrowserProfileMode } from './config';
-
-export interface BrowserManagerOptions {
-    backend?: BrowserBackend;
-    userDataDir?: string;
-    downloadsDir?: string;
-    profileMode?: BrowserProfileMode;
-    baseProfileDir?: string;
-    chromeExecutablePath?: string;
-    headless?: boolean;
-    liveView?: boolean;
-    viewport?: { width: number; height: number } | null;
-    launchArgs?: string[];
-    onLog?: (message: string) => void;
-}
-
-export type BrowserFrameSource = 'agent' | 'live';
-export type BrowserCaptureMode = 'viewport' | 'overview';
-export type BrowserCoordinateSpace = 'normalized-viewport' | 'absolute-display';
-
-export interface BrowserPageSessionCapabilities {
-    backend: BrowserBackend;
-    coordinateSpace: BrowserCoordinateSpace;
-    domInspection: boolean;
-    overviewCapture: boolean;
-    tabEnumeration: boolean;
-    downloadEvents: boolean;
-    displayCapture: boolean;
-    osClipboard: boolean;
-}
-
-export interface BrowserPageMetrics {
-    width: number;
-    height: number;
-    scrollX: number;
-    scrollY: number;
-}
-
-export interface BrowserFrameSnapshot {
-    id: string;
-    source: BrowserFrameSource;
-    timestamp: string;
-    imageBase64: string;
-    url: string;
-    captureMode: BrowserCaptureMode;
-    coordinateSpace?: BrowserCoordinateSpace;
-    viewport: { width: number; height: number };
-    page: BrowserPageMetrics;
-}
-
-export interface BrowserVideoRecording {
-    id: string;
-    timestamp: string;
-    mimeType: string;
-    videoBase64: string;
-    url: string;
-    durationMs: number;
-    fps: number;
-    frameCount: number;
-    viewport: { width: number; height: number };
-    page: BrowserPageMetrics;
-}
-
-export interface BrowserDownloadFile {
-    id: string;
-    timestamp: string;
-    url: string;
-    suggestedFilename: string;
-    savedPath?: string;
-    state: 'pending' | 'saved' | 'failed';
-    size?: number;
-    error?: string;
-}
-
-export interface BrowserDownloadWaitOptions {
-    waitForNew?: boolean;
-    baselineCount?: number;
-}
-
-export type BrowserTabOrigin = 'initial' | 'newTab' | 'popup' | 'recovered';
-
-export interface BrowserTabInfo {
-    index: number;
-    title: string;
-    url: string;
-    isActive: boolean;
-    sessionId: string;
-    openedAt: string;
-    origin: BrowserTabOrigin;
-    openerTabIndex?: number;
-    openerUrl?: string;
-}
-
-export interface ActionTraceFrame extends BrowserFrameSnapshot {
-    label: string;
-}
-
-export interface ActionTrace {
-    action: 'hold' | 'drag';
-    intervalMs: number;
-    frames: ActionTraceFrame[];
-}
-
-export interface TracedActionResult {
-    success: boolean;
-    trace: ActionTrace | null;
-}
-
-export interface BrowserPageSession {
-    readonly id: string;
-    readonly createdAt: string;
-    readonly capabilities: BrowserPageSessionCapabilities;
-    screenshot(source?: BrowserFrameSource): Promise<string>;
-    captureAgentFrame(): Promise<BrowserFrameSnapshot>;
-    captureLiveFrame(): Promise<BrowserFrameSnapshot>;
-    captureOverviewFrame(): Promise<BrowserFrameSnapshot>;
-    recordVideo(durationMs?: number): Promise<BrowserVideoRecording>;
-    clickCoordinate(x: number, y: number, count?: number): Promise<boolean>;
-    dragCoordinate(startX: number, startY: number, endX: number, endY: number, durationMs?: number): Promise<TracedActionResult>;
-    holdCoordinate(x: number, y: number, durationMs?: number): Promise<TracedActionResult>;
-    hoverCoordinate(x: number, y: number): Promise<void>;
-    type(text: string): Promise<void>;
-    paste(text: string): Promise<void>;
-    clear(): Promise<void>;
-    pressKey(key: string): Promise<void>;
-    findInPage(query: string, next?: boolean): Promise<void>;
-    scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<void>;
-    navigate(url: string): Promise<void>;
-    goBack(): Promise<void>;
-    goForward(): Promise<void>;
-    reloadPage(): Promise<void>;
-    closeTab(index?: number): Promise<boolean>;
-    listTabs(): Promise<BrowserTabInfo[]>;
-    switchTab(index: number): Promise<boolean>;
-    newTab(url?: string): Promise<boolean>;
-    getHrefAt(x: number, y: number): Promise<string | null>;
-    getPage(): Page | null;
-    getPageUrl(): string;
-    getOpenTabCount(): Promise<number>;
-    getViewport(): Promise<{ width: number; height: number }>;
-    getDownloads(): BrowserDownloadFile[];
-    waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]>;
-    getLatestAgentFrame(): BrowserFrameSnapshot | null;
-    getAgentFrameHistory(limit?: number): BrowserFrameSnapshot[];
-    clearAgentFrameHistory(): void;
-    closeOwnedPages(): Promise<void>;
-}
-
-export interface BrowserPageSessionOptions {
-    id?: string;
-    startupUrl?: string;
-}
-
-export interface BrowserManager extends BrowserPageSession {
-    launch(): Promise<void>;
-    close(): Promise<void>;
-    createSession(options?: BrowserPageSessionOptions): Promise<BrowserPageSession>;
-    getSession(id: string): BrowserPageSession | null;
-    closeSession(id: string): Promise<boolean>;
-    listAllTabs(): Promise<BrowserTabInfo[]>;
-    getContext(): BrowserContext | null;
-    getLiveViewState(): BrowserLiveViewState;
-}
-
-const MAX_AGENT_FRAME_HISTORY = 240;
-const MIN_ACTION_TRACE_FRAMES = 3;
-const MAX_ACTION_TRACE_FRAMES = 10;
-const TARGET_ACTION_TRACE_SPACING_MS = 3000;
-const DEFAULT_DRAG_DURATION_MS = 900;
-const DEFAULT_VIDEO_DURATION_MS = 5000;
-const MIN_VIDEO_DURATION_MS = 1000;
-const MAX_VIDEO_DURATION_MS = 60000;
-const DEFAULT_VIDEO_FPS = 4;
-
-function toFrameId(sequence: number): string {
-    return `frame_${Date.now().toString(36)}_${sequence.toString(36)}`;
-}
-
-function cloneFrame(frame: BrowserFrameSnapshot): BrowserFrameSnapshot {
-    return {
-        id: frame.id,
-        source: frame.source,
-        timestamp: frame.timestamp,
-        imageBase64: frame.imageBase64,
-        url: frame.url,
-        captureMode: frame.captureMode,
-        coordinateSpace: frame.coordinateSpace,
-        viewport: {
-            width: frame.viewport.width,
-            height: frame.viewport.height,
-        },
-        page: {
-            width: frame.page.width,
-            height: frame.page.height,
-            scrollX: frame.page.scrollX,
-            scrollY: frame.page.scrollY,
-        },
-    };
-}
-
-function cloneTraceFrame(frame: ActionTraceFrame): ActionTraceFrame {
-    return {
-        ...cloneFrame(frame),
-        label: frame.label,
-    };
-}
-
-function sleep(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
-}
-
-function clampDurationMs(value: number | undefined, fallback: number, min: number, max: number): number {
-    if (typeof value !== 'number' || !Number.isFinite(value)) {
-        return fallback;
-    }
-    return Math.max(min, Math.min(max, Math.round(value)));
-}
-
-function sanitizeDownloadFilename(value: string | undefined): string {
-    const fallback = `browser-download-${Date.now()}`;
-    const base = path.basename(String(value || '').trim()) || fallback;
-    const cleaned = base
-        .replace(/[\x00-\x1f\x7f]/g, '_')
-        .replace(/[\\/:"*?<>|]+/g, '_')
-        .replace(/\s+/g, '_')
-        .replace(/^\.+$/, '')
-        .slice(0, 180)
-        .trim();
-
-    return cleaned || fallback;
-}
-
-function uniqueDownloadPath(downloadsDir: string, filename: string): string {
-    const ext = path.extname(filename);
-    const stem = path.basename(filename, ext) || 'download';
-    let candidate = path.join(downloadsDir, filename);
-    let counter = 1;
-
-    while (fs.existsSync(candidate)) {
-        candidate = path.join(downloadsDir, `${stem}-${counter}${ext}`);
-        counter++;
-    }
-
-    return candidate;
-}
-
-function cloneDownload(download: BrowserDownloadFile): BrowserDownloadFile {
-    return { ...download };
-}
-
-function compressTraceFrames(frames: ActionTraceFrame[], maxFrames: number = MAX_ACTION_TRACE_FRAMES): ActionTraceFrame[] {
-    if (frames.length <= maxFrames) {
-        return frames.map((frame) => cloneTraceFrame(frame));
-    }
-
-    const selectedIndexes = new Set<number>([0, frames.length - 1]);
-    const interiorSlots = Math.max(0, maxFrames - selectedIndexes.size);
-    for (let slot = 1; slot <= interiorSlots; slot++) {
-        const ratio = slot / (interiorSlots + 1);
-        const index = Math.round(ratio * (frames.length - 1));
-        selectedIndexes.add(index);
-    }
-
-    return [...selectedIndexes]
-        .sort((a, b) => a - b)
-        .slice(0, maxFrames)
-        .map((index) => cloneTraceFrame(frames[index]));
-}
-
-function getActionTraceFrameCount(durationMs: number): number {
-    const requestedCount = Math.ceil(durationMs / TARGET_ACTION_TRACE_SPACING_MS);
-    return Math.max(MIN_ACTION_TRACE_FRAMES, Math.min(MAX_ACTION_TRACE_FRAMES, requestedCount));
-}
-
-function getTraceCaptureInterval(durationMs: number, frameCount: number = getActionTraceFrameCount(durationMs)): number {
-    if (frameCount <= 1) {
-        return Math.max(1, Math.round(durationMs));
-    }
-
-    return Math.max(1, Math.round(durationMs / (frameCount - 1)));
-}
-
-function getTraceCaptureRatios(frameCount: number = MIN_ACTION_TRACE_FRAMES): number[] {
-    if (frameCount <= 1) {
-        return [1];
-    }
-
-    return Array.from({ length: frameCount }, (_, index) => index / (frameCount - 1));
-}
+export type {
+    ActionTrace,
+    ActionTraceFrame,
+    BrowserCaptureMode,
+    BrowserCoordinateSpace,
+    BrowserDownloadFile,
+    BrowserDownloadWaitOptions,
+    BrowserFrameSnapshot,
+    BrowserFrameSource,
+    BrowserManager,
+    BrowserManagerOptions,
+    BrowserPageMetrics,
+    BrowserPageSession,
+    BrowserPageSessionCapabilities,
+    BrowserPageSessionOptions,
+    BrowserTabInfo,
+    BrowserTabOrigin,
+    BrowserVideoRecording,
+    TracedActionResult,
+} from './browser-types';
 
 interface HumanMouseMoveOptions {
     durationMs?: number;

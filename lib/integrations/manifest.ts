@@ -9,6 +9,9 @@ import {
     HOME_ASSISTANT_TOOL_IDS,
     WHATSAPP_TOOL_IDS,
 } from '@/lib/ai/agents/builtins'
+import { GOOGLE_WORKSPACE_DOCTRINE } from '@/lib/integrations/doctrines/google-workspace'
+import { MAPS_DOCTRINE } from '@/lib/integrations/doctrines/maps'
+import { WEATHER_DOCTRINE } from '@/lib/integrations/doctrines/weather'
 import { INTEGRATION_RUNBOOKS } from '@/lib/integrations/runbooks'
 
 // ---------------------------------------------------------------------------
@@ -32,6 +35,7 @@ export type IntegrationStatusKind =
     | 'google-drive'
     | 'whatsapp'
     | 'home-assistant'
+    | 'maps'
     | 'weather'
 
 export interface IntegrationManifestEntry {
@@ -49,6 +53,15 @@ export interface IntegrationManifestEntry {
     setupToolIds: string[]
     /** Operational tool ids — exposed only when connected AND activated (Tier 2). */
     operationalToolIds: string[]
+    /**
+     * Heavy operating doctrine — schema references, cross-integration recipes,
+     * when-to-use guidance. Loaded lazily into the prompt only when the
+     * integration is activated for the conversation. Composition-style
+     * integrations (maps, weather) use this so the orchestrator base prompt
+     * stays slim; integrations whose how-to lives in the runbook leave it
+     * unset.
+     */
+    doctrine?: string
     /** Optional note shown in the block, e.g. shared-account caveats. */
     note?: string
 }
@@ -58,6 +71,7 @@ const GOOGLE_CALENDAR_SETUP = ['GoogleCalendarStatus', 'GoogleCalendarConfigure'
 const GOOGLE_DRIVE_SETUP = ['GoogleDriveStatus', 'GoogleDriveConfigure', 'GoogleDriveStartOAuth']
 const WHATSAPP_SETUP = ['WhatsAppStatus', 'WhatsAppConnect']
 const HOME_ASSISTANT_SETUP = ['HomeAssistantStatus', 'HomeAssistantConfigure']
+const MAPS_SETUP = ['MapsStatus', 'MapsCurrentLocation', 'MapsListLocationSources', 'MapsSetLocationSource']
 const WEATHER_SETUP = ['WeatherStatus']
 
 function operationalOnly(all: string[], setup: string[]): string[] {
@@ -99,6 +113,10 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
             ...GOOGLE_SHEETS_TOOL_IDS,
             ...GOOGLE_SLIDES_TOOL_IDS,
         ],
+        // Doctrine covers production quality — when/why/how to compose
+        // Drive/Docs/Sheets/Slides/Contacts outputs. Loads alongside the
+        // tool schemas when the orchestrator activates google-workspace.
+        doctrine: GOOGLE_WORKSPACE_DOCTRINE,
         note: 'Uses the existing Google Workspace OAuth token stored by the Google Drive integration endpoints.',
     },
     {
@@ -120,15 +138,33 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
         operationalToolIds: operationalOnly(HOME_ASSISTANT_TOOL_IDS, HOME_ASSISTANT_SETUP),
     },
     {
+        id: 'maps',
+        label: 'Google Maps',
+        capability: 'Render interactive satellite maps inline in the chat — pins, routes, polygons, multi-day trip-planner views, and local multi-stop order optimization. Backed by Google Maps JavaScript API, Geocoding API for address lookup, Places API for POI search, Routes API for route geometry, and an optional Home Assistant live-location fallback.',
+        runbookId: 'maps',
+        statusKind: 'maps',
+        setupToolIds: MAPS_SETUP,
+        // MapRender et al. are granted directly to the orchestrator (no
+        // activation gate on the tools themselves). The doctrine block —
+        // schema + cross-integration recipes — is gated: it only enters
+        // the prompt once the orchestrator activates maps for the
+        // conversation, keeping the always-on base prompt slim.
+        operationalToolIds: [],
+        doctrine: MAPS_DOCTRINE,
+        note: 'MapRender, MapsCurrentLocation, MapsListLocationSources, MapsSetLocationSource, MapsGeocode, MapsReverseGeocode, MapsPlaces, MapsOptimizeStops, and MapsDirections are always visible to the orchestrator. Maps uses GOOGLE_MAPS_API_KEY for Maps JavaScript, Geocoding, Places, and Routes APIs. MapsOptimizeStops itself is local and works without an upstream call once coordinates are known.',
+    },
+    {
         id: 'weather',
         label: 'Weather',
-        capability: 'Render live iOS-style weather cards inline in the chat — current conditions, 24-hour scroll, 10-day forecast, UV/wind/sunrise detail tiles, optional AQI, historical comparison, and pollen. Uses Google Weather / Air Quality / Pollen when the shared Maps Platform key is configured, with keyless Open-Meteo fallback.',
+        capability: 'Render live iOS-style weather cards inline in the chat — current conditions, 24-hour scroll, 10-day forecast, UV/wind/sunrise detail tiles, optional AQI, historical comparison, and pollen. Uses Google Weather / Air Quality / Pollen when the Maps Platform key is configured, with keyless Open-Meteo fallback.',
         runbookId: 'weather',
         statusKind: 'weather',
         setupToolIds: WEATHER_SETUP,
-        // WeatherShow lives on the orchestrator directly (composition exclusive).
-        // Manifest entry exists for the connection-status block.
+        // Same shape as maps: WeatherShow is always granted to the
+        // orchestrator, but the doctrine (flow, cross-integration, when-
+        // to-use, monitoring) is lazy via activation.
         operationalToolIds: [],
+        doctrine: WEATHER_DOCTRINE,
         note: 'WeatherShow is always visible to the orchestrator. Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.',
     },
 ]

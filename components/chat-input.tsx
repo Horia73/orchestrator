@@ -3,6 +3,7 @@
 import * as React from "react"
 import { ArrowUp, Mic, Plus, Square, X, FileText } from "lucide-react"
 import { useChatStore } from "@/hooks/use-chat-store"
+import type { SendMessageOptions } from "@/hooks/use-chat-store"
 import { FilePreviewModal } from "@/components/file-preview-modal"
 import { PdfThumbnail } from "@/components/pdf-thumbnail"
 import { useVoiceRecording } from "@/components/voice-recording-overlay"
@@ -431,9 +432,17 @@ function useFileAttachments(setAttachments: React.Dispatch<React.SetStateAction<
 
 interface ChatInputProps {
     variant?: "home" | "chat"
+    placeholder?: string
+    buildSendOptions?: (content: string) => SendMessageOptions | undefined
+    onSend?: (
+        content: string,
+        files?: File[],
+        uploadedAttachments?: Attachment[],
+        options?: SendMessageOptions
+    ) => void
 }
 
-export function ChatInput({ variant = "home" }: ChatInputProps) {
+export function ChatInput({ variant = "home", placeholder, buildSendOptions, onSend }: ChatInputProps) {
     const {
         sendMessage,
         stopStreaming,
@@ -471,9 +480,13 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
                 const data = await res.json().catch(() => ({}))
                 if (!res.ok) throw new Error(uploadErrorMessage(data, `Upload failed (${res.status})`))
                 const uploaded = uploadedAttachmentFromResponse(data)
-                if (uploaded) sendMessage("", undefined, [uploaded])
+                if (uploaded) {
+                    const options = buildSendOptions?.("")
+                    if (onSend) onSend("", undefined, [uploaded], options)
+                    else sendMessage("", undefined, [uploaded], options)
+                }
             } catch { /* upload failed silently */ }
-        }, [sendMessage]),
+        }, [buildSendOptions, onSend, sendMessage]),
         onDismiss: React.useCallback(() => {
             setIsRecording(false)
             textareaRef.current?.focus()
@@ -520,14 +533,29 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
         const trimmed = draft.value.trim()
         if ((!trimmed && draft.attachments.length === 0) || hasPendingAttachments || hasFailedAttachments || isStreamingActiveConversation) return
         const uploadedAttachments = draft.attachments.filter(a => a.uploaded).map(a => a.uploaded!)
-        sendMessage(trimmed, undefined, uploadedAttachments.length > 0 ? uploadedAttachments : undefined)
+        const options = buildSendOptions?.(trimmed)
+        if (onSend) {
+            onSend(
+                trimmed,
+                undefined,
+                uploadedAttachments.length > 0 ? uploadedAttachments : undefined,
+                options
+            )
+        } else {
+            sendMessage(
+                trimmed,
+                undefined,
+                uploadedAttachments.length > 0 ? uploadedAttachments : undefined,
+                options
+            )
+        }
         draft.clear()
         if (isMobileKeyboardViewport()) {
             textareaRef.current?.blur()
         } else {
             textareaRef.current?.focus()
         }
-    }, [draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, sendMessage])
+    }, [buildSendOptions, draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, onSend, sendMessage])
 
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -605,7 +633,7 @@ export function ChatInput({ variant = "home" }: ChatInputProps) {
                         onKeyDown={handleKeyDown}
                         onPaste={handlePaste}
                         enterKeyHint="enter"
-                        placeholder={isChat ? "Reply..." : "How can I help you today?"}
+                        placeholder={placeholder ?? (isChat ? "Reply..." : "How can I help you today?")}
                         rows={isChat ? 1 : 2}
                         style={{
                             gridArea: "1 / 1",

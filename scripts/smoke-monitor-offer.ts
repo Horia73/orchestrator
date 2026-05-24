@@ -16,6 +16,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import type { GmailIntegrationStatus } from '@/lib/integrations/gmail'
+import type { GoogleCalendarIntegrationStatus } from '@/lib/integrations/google-calendar'
 import type { HomeAssistantIntegrationStatus } from '@/lib/integrations/home-assistant'
 import type { WhatsAppIntegrationStatus } from '@/lib/integrations/whatsapp'
 
@@ -54,6 +55,28 @@ async function main(): Promise<void> {
             redirectUri: '',
             expiresAt: opts.expiresAt ?? null,
             needsReconnect: false,
+        }
+    }
+    function calendarStatus(opts: { connected: boolean; email?: string; expiresAt?: number; primaryCalendarId?: string }): GoogleCalendarIntegrationStatus {
+        return {
+            id: 'googleCalendar',
+            name: 'Google Calendar',
+            description: '',
+            configured: true,
+            connected: opts.connected,
+            accountEmail: opts.email ?? null,
+            scopes: [],
+            requestedScopes: [],
+            missingConfig: [],
+            redirectUri: '',
+            expiresAt: opts.expiresAt ?? null,
+            needsReconnect: false,
+            calendarCount: opts.connected ? 2 : null,
+            writableCalendarCount: opts.connected ? 1 : null,
+            primaryCalendarId: opts.primaryCalendarId ?? null,
+            primaryCalendarSummary: opts.connected ? 'Primary' : null,
+            timeZone: 'Europe/Bucharest',
+            capabilities: [],
         }
     }
     function haStatus(opts: { connected: boolean; baseUrl?: string }): HomeAssistantIntegrationStatus {
@@ -124,11 +147,12 @@ async function main(): Promise<void> {
     {
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: false }),
             homeAssistant: haStatus({ connected: false }),
             whatsapp: waStatus({ connected: false }),
         })
         check('first Gmail connect posts an offer', r.posted.includes('gmail') && r.posted.length === 1)
-        check('skipped HA + WA', r.skipped.some((s) => s.includes('home_assistant')) && r.skipped.some((s) => s.includes('whatsapp')))
+        check('skipped Calendar + HA + WA', r.skipped.some((s) => s.includes('google_calendar')) && r.skipped.some((s) => s.includes('home_assistant')) && r.skipped.some((s) => s.includes('whatsapp')))
     }
 
     // ============================================================================
@@ -137,6 +161,7 @@ async function main(): Promise<void> {
     {
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: false }),
             homeAssistant: haStatus({ connected: false }),
             whatsapp: waStatus({ connected: false }),
         })
@@ -151,6 +176,7 @@ async function main(): Promise<void> {
         _resetOfferStateForTesting()
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: false }),
             homeAssistant: haStatus({ connected: false }),
             whatsapp: waStatus({ connected: false }),
         })
@@ -165,6 +191,7 @@ async function main(): Promise<void> {
     {
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: false }),
+            googleCalendar: calendarStatus({ connected: false }),
             homeAssistant: haStatus({ connected: false }),
             whatsapp: waStatus({ connected: false }),
         })
@@ -177,6 +204,7 @@ async function main(): Promise<void> {
     {
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_800_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: false }),
             homeAssistant: haStatus({ connected: false }),
             whatsapp: waStatus({ connected: false }),
         })
@@ -185,11 +213,25 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 6. Fresh HA connect alongside existing Gmail → only HA posted
+    // 6. Fresh Google Calendar connect alongside existing Gmail → only Calendar posted
     // ============================================================================
     {
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_800_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000, primaryCalendarId: 'primary' }),
+            homeAssistant: haStatus({ connected: false }),
+            whatsapp: waStatus({ connected: false }),
+        })
+        check('fresh Google Calendar posts offer, Gmail does not', r.posted.includes('google_calendar') && !r.posted.includes('gmail'))
+    }
+
+    // ============================================================================
+    // 7. Fresh HA connect alongside existing Gmail/Calendar → only HA posted
+    // ============================================================================
+    {
+        const r = await maybeOfferSmartMonitor({
+            gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_800_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000, primaryCalendarId: 'primary' }),
             homeAssistant: haStatus({ connected: true, baseUrl: 'http://homeassistant.local:8123' }),
             whatsapp: waStatus({ connected: false }),
         })
@@ -197,11 +239,12 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 7. WhatsApp connects → posts offer
+    // 8. WhatsApp connects → posts offer
     // ============================================================================
     {
         const r = await maybeOfferSmartMonitor({
             gmail: gmailStatus({ connected: true, email: 'me@example.com', expiresAt: 1_800_000_000_000 }),
+            googleCalendar: calendarStatus({ connected: true, email: 'me@example.com', expiresAt: 1_700_000_000_000, primaryCalendarId: 'primary' }),
             homeAssistant: haStatus({ connected: true, baseUrl: 'http://homeassistant.local:8123' }),
             whatsapp: waStatus({ connected: true, phoneNumber: '+40123', lastReadyAt: 1_700_000_000_000 }),
         })
@@ -209,16 +252,18 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 8. Verify Inbox content of the posted cards
+    // 9. Verify Inbox content of the posted cards
     // ============================================================================
     {
         const inbox = listInboxConversations()
-        check('three offer conversations created total', inbox.length === 3, { length: inbox.length })
+        check('four offer conversations created total', inbox.length === 4, { length: inbox.length })
 
         const gmailCards = inbox.filter((i) => i.title.includes('Gmail connected'))
+        const calendarCards = inbox.filter((i) => i.title.includes('Google Calendar connected'))
         const haCards = inbox.filter((i) => i.title.includes('Home Assistant connected'))
         const waCards = inbox.filter((i) => i.title.includes('WhatsApp connected'))
         check('Gmail card titles correct', gmailCards.length === 1)
+        check('Google Calendar card title correct', calendarCards.length === 1)
         check('HA card title correct', haCards.length === 1)
         check('WA card title correct', waCards.length === 1)
 
@@ -228,6 +273,8 @@ async function main(): Promise<void> {
         const msg = detail?.messages[0]
         check('Gmail card body mentions VIP senders', (msg?.content ?? '').toLowerCase().includes('senders'))
         check('Gmail card has 3 reply actions', (msg?.replyActions?.length ?? 0) === 3)
+        const calendarDetail = getInboxConversation(calendarCards[0].id)
+        check('Calendar card body mentions onboarding', (calendarDetail?.messages[0]?.content ?? '').toLowerCase().includes('onboarding'))
         const actionLabels = (msg?.replyActions ?? []).map((a) => a.label)
         check('action labels include set-up-watch', actionLabels.some((l) => l.toLowerCase().includes('set up')))
         check('action labels include show-possibilities', actionLabels.some((l) => l.toLowerCase().includes('what')))
@@ -238,13 +285,14 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 9. State persistence: read state file directly
+    // 10. State persistence: read state file directly
     // ============================================================================
     {
         const statePath = path.join(tmpRoot, '.orchestrator', 'private', 'smart-monitor-offers.json')
         check('offer state file exists on disk', fs.existsSync(statePath))
         const state = JSON.parse(fs.readFileSync(statePath, 'utf8'))
         check('state has gmail fingerprint persisted', typeof state.gmail?.lastOfferedFingerprint === 'string')
+        check('state has google_calendar fingerprint persisted', typeof state.google_calendar?.lastOfferedFingerprint === 'string')
         check('state has home_assistant fingerprint persisted', typeof state.home_assistant?.lastOfferedFingerprint === 'string')
         check('state has whatsapp fingerprint persisted', typeof state.whatsapp?.lastOfferedFingerprint === 'string')
     }

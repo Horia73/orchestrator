@@ -27,6 +27,7 @@ export interface PushRefreshResult {
 
 const SYNC_RECORD_KEY = "orchestrator:push-subscription-sync"
 const SYNC_TTL_MS = 12 * 60 * 60 * 1000
+let subscriptionSetupPromise: Promise<PushSubscription> | null = null
 
 function urlBase64ToApplicationServerKey(value: string): ArrayBuffer {
   const padding = "=".repeat((4 - (value.length % 4)) % 4)
@@ -165,6 +166,53 @@ async function syncSubscriptionIfNeeded(
   await saveSubscription(subscription)
 }
 
+async function getOrCreatePushSubscription(): Promise<PushSubscription> {
+  if (!subscriptionSetupPromise) {
+    subscriptionSetupPromise = (async () => {
+      const registration = await registerServiceWorker()
+      let subscription = await registration.pushManager.getSubscription()
+      const applicationServerKey = await getApplicationServerKey()
+
+      if (!subscription) {
+        return registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey,
+        })
+      }
+
+      if (
+        !buffersMatch(
+          subscription.options.applicationServerKey,
+          applicationServerKey
+        )
+      ) {
+        const oldEndpoint = subscription.endpoint
+        await subscription.unsubscribe()
+        await deleteSubscription(oldEndpoint)
+        subscription = await registration.pushManager.subscribe({
+          userVisibleOnly: true,
+          applicationServerKey,
+        })
+      }
+
+      return subscription
+    })().finally(() => {
+      subscriptionSetupPromise = null
+    })
+  }
+
+  return subscriptionSetupPromise
+}
+
+async function ensurePushSubscription(options?: {
+  forceSave?: boolean
+}): Promise<PushSubscription> {
+  const subscription = await getOrCreatePushSubscription()
+  if (options?.forceSave) await saveSubscription(subscription)
+  else await syncSubscriptionIfNeeded(subscription)
+  return subscription
+}
+
 export function useInboxPushNotifications() {
   const [status, setStatus] = React.useState<PushStatus>("checking")
   const [permission, setPermission] =
@@ -208,8 +256,15 @@ export function useInboxPushNotifications() {
       try {
         const registration = await registerServiceWorker()
         const subscription = await registration.pushManager.getSubscription()
-        if (subscription) await syncSubscriptionIfNeeded(subscription)
-        const nextStatus: PushStatus = subscription ? "enabled" : "ready"
+        let nextStatus: PushStatus = "ready"
+        if (Notification.permission === "granted") {
+          if (subscription) await syncSubscriptionIfNeeded(subscription)
+          else await ensurePushSubscription()
+          nextStatus = "enabled"
+        } else if (subscription) {
+          await syncSubscriptionIfNeeded(subscription)
+          nextStatus = "enabled"
+        }
         setStatus(nextStatus)
         setError(null)
         return {
@@ -286,30 +341,7 @@ export function useInboxPushNotifications() {
         return false
       }
 
-      const registration = await registerServiceWorker()
-      let subscription = await registration.pushManager.getSubscription()
-      const applicationServerKey = await getApplicationServerKey()
-      if (!subscription) {
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey,
-        })
-      } else if (
-        !buffersMatch(
-          subscription.options.applicationServerKey,
-          applicationServerKey
-        )
-      ) {
-        const oldEndpoint = subscription.endpoint
-        await subscription.unsubscribe()
-        await deleteSubscription(oldEndpoint)
-        subscription = await registration.pushManager.subscribe({
-          userVisibleOnly: true,
-          applicationServerKey,
-        })
-      }
-
-      await saveSubscription(subscription)
+      await ensurePushSubscription({ forceSave: true })
       setStatus("enabled")
       return true
     } catch (err) {

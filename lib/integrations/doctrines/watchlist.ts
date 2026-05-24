@@ -1,7 +1,11 @@
-export const ORCHESTRATOR_WATCHLIST = `
+// Operating doctrine for the Watchlist subsystem. Lazy — only loaded into
+// the prompt after the orchestrator activates the subsystem for the
+// conversation. The capability summary stays in the always-on <subsystems>
+// block (lib/integrations/exposure.ts).
+export const WATCHLIST_DOCTRINE = `
 <watchlist_capability>
 The app has a local Watchlist surface for things the user wants tracked. It supports:
-- financial instruments (stocks, ETFs, indexes, forex, crypto) with TradingView charts and cached quote/history data;
+- financial instruments (stocks, ETFs, indexes, forex, crypto) with cached quote/history charts;
 - products with local price observations and a price-history chart.
 
 Use the Watchlist tools directly when the user's intent is clear:

@@ -48,12 +48,14 @@ async function main(): Promise<void> {
         check('describe_sources succeeds', r.success === true)
         const data = r.data as Record<string, unknown> | undefined
         const sources = data?.sources as Array<{ source: string; supported_rule_kinds: string[]; supported_action_kinds: string[] }>
-        check('describe_sources lists 6 sources', sources?.length === 6)
+        check('describe_sources lists 7 sources', sources?.length === 7)
         const gmail = sources?.find((s) => s.source === 'gmail')
+        const calendar = sources?.find((s) => s.source === 'google_calendar')
         const weather = sources?.find((s) => s.source === 'weather')
         check('gmail source has rule kinds', (gmail?.supported_rule_kinds.length ?? 0) >= 4)
         check('gmail source advertises any_of/all_of', gmail?.supported_rule_kinds.includes('any_of') && gmail?.supported_rule_kinds.includes('all_of'))
         check('gmail source has notify_inbox + archive actions', gmail?.supported_action_kinds.includes('notify_inbox') && gmail?.supported_action_kinds.includes('gmail_archive'))
+        check('calendar source has calendar rules', calendar?.supported_rule_kinds.includes('calendar_event_query') === true)
         check('weather source has weather rules', weather?.supported_rule_kinds.includes('weather_temperature') === true)
         const bounds = data?.cadence_bounds_seconds as Record<string, number>
         check('cadence bounds present', bounds?.min === MIN_CADENCE_SECONDS && bounds?.max === 12 * 3600)

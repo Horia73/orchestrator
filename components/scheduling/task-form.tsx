@@ -41,7 +41,7 @@ const MONITOR_INFO: Record<MonitorKind, { label: string; checks: string; executi
     },
     smart: {
         label: "Smart monitor",
-        checks: "All enabled watches in Smart Monitor (Gmail / WhatsApp / Home Assistant / Web). Each watch carries its own rule, cadence, and suppress patterns.",
+        checks: "All enabled watches in Smart Monitor (Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather). Each watch carries its own rule, cadence, and suppress patterns.",
         execution: "Runs the cheap tick across every watch due now (no model). When matches survive suppress patterns and quiet hours, the orchestrator is woken ONCE with a consolidated brief.",
         output: "Silent checks are recorded in each watch's audit log. Notable matches surface as Inbox items.",
     },
