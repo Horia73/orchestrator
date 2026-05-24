@@ -211,6 +211,9 @@ export function MapRenderer({
   overlayPins,
   actionCommand,
   cameraResetKey,
+  sidePanelOverride,
+  sidePanelOverrideOpen = false,
+  sidePanelInFlow = true,
   assistantOpen = false,
   sidebarCollapsed = false,
   onOpenAssistant,
@@ -235,6 +238,9 @@ export function MapRenderer({
   overlayPins?: MapPinType[]
   actionCommand?: MapActionCommand | null
   cameraResetKey?: string
+  sidePanelOverride?: React.ReactNode
+  sidePanelOverrideOpen?: boolean
+  sidePanelInFlow?: boolean
   assistantOpen?: boolean
   sidebarCollapsed?: boolean
   onOpenAssistant?: () => void
@@ -326,6 +332,9 @@ export function MapRenderer({
       overlayPins={overlayPins}
       actionCommand={actionCommand}
       cameraResetKey={cameraResetKey}
+      sidePanelOverride={sidePanelOverride}
+      sidePanelOverrideOpen={sidePanelOverrideOpen}
+      sidePanelInFlow={sidePanelInFlow}
       assistantOpen={assistantOpen}
       sidebarCollapsed={sidebarCollapsed}
       onOpenAssistant={onOpenAssistant}
@@ -362,6 +371,9 @@ function MapArtifactShell({
   overlayPins,
   actionCommand,
   cameraResetKey,
+  sidePanelOverride,
+  sidePanelOverrideOpen,
+  sidePanelInFlow,
   assistantOpen,
   sidebarCollapsed,
   onOpenAssistant,
@@ -388,6 +400,9 @@ function MapArtifactShell({
   overlayPins?: MapPinType[]
   actionCommand?: MapActionCommand | null
   cameraResetKey?: string
+  sidePanelOverride?: React.ReactNode
+  sidePanelOverrideOpen: boolean
+  sidePanelInFlow: boolean
   assistantOpen: boolean
   sidebarCollapsed: boolean
   onOpenAssistant?: () => void
@@ -450,6 +465,9 @@ function MapArtifactShell({
         overlayPins={overlayPins}
         actionCommand={actionCommand}
         cameraResetKey={cameraResetKey}
+        sidePanelOverride={sidePanelOverride}
+        sidePanelOverrideOpen={sidePanelOverrideOpen}
+        sidePanelInFlow={sidePanelInFlow}
         assistantOpen={assistantOpen}
         sidebarCollapsed={sidebarCollapsed}
         onOpenAssistant={onOpenAssistant}
@@ -479,6 +497,9 @@ function MapArtifactShell({
             overlayPins={overlayPins}
             actionCommand={actionCommand}
             cameraResetKey={cameraResetKey}
+            sidePanelOverride={sidePanelOverride}
+            sidePanelOverrideOpen={sidePanelOverrideOpen}
+            sidePanelInFlow={sidePanelInFlow}
             assistantOpen={assistantOpen}
             sidebarCollapsed={sidebarCollapsed}
             onOpenAssistant={onOpenAssistant}
@@ -550,6 +571,9 @@ function ShellBody({
   overlayPins,
   actionCommand,
   cameraResetKey,
+  sidePanelOverride,
+  sidePanelOverrideOpen,
+  sidePanelInFlow,
   assistantOpen,
   sidebarCollapsed,
   onOpenAssistant,
@@ -578,6 +602,9 @@ function ShellBody({
   overlayPins?: MapPinType[]
   actionCommand?: MapActionCommand | null
   cameraResetKey?: string
+  sidePanelOverride?: React.ReactNode
+  sidePanelOverrideOpen: boolean
+  sidePanelInFlow: boolean
   assistantOpen: boolean
   sidebarCollapsed: boolean
   onOpenAssistant?: () => void
@@ -1218,6 +1245,14 @@ function ShellBody({
     (visibleRows.length >= 1 || Boolean(activeRow))
   const shouldRenderRichSidebar =
     !hideSidebar && !isInline && (visibleRows.length >= 1 || Boolean(activeRow))
+  const sidePanelOverrideActive =
+    !hideSidebar && !isInline && Boolean(sidePanelOverride)
+  const shouldRenderSidePanelSlot = Boolean(
+    sidePanelOverrideActive || shouldRenderRichSidebar
+  )
+  const sidePanelSlotOpen = Boolean(
+    sidePanelOverrideActive ? sidePanelOverrideOpen : shouldShowSidebar
+  )
 
   const containerCls = isInline
     ? "flex w-full flex-col gap-2"
@@ -1312,40 +1347,60 @@ function ShellBody({
           />
         )}
       </div>
-      {shouldRenderRichSidebar && (
-        <RichSidebar
-          open={shouldShowSidebar}
-          title={
-            hasDays && activeDay >= 0
-              ? (days[activeDay]?.label ?? "Locations")
-              : title
-          }
-          rows={visibleRows}
-          activeKey={activeKey}
-          activeRow={activeRow}
-          onSelect={flyToPin}
-          onCloseActive={clearActivePin}
-          activeDirections={activeDirections}
-          directionsLoadingKey={directionsLoadingKey}
-          directionsError={directionsError}
-          tripDays={hasDays ? days : []}
-          activeDay={activeDay}
-          onDayChange={changeDay}
-          onDirections={handleDirections}
-          onAddStop={handleAddStop}
-          onRemoveStop={handleRemoveStop}
-          onReorderStops={handleReorderStops}
-          streetViewAvailable={activeStreetViewAvailable}
-          onStreetView={openStreetViewForRow}
-          assistantOpen={assistantOpen}
-          onOpenAssistant={onOpenAssistant}
-          onOpenMapLibrary={onOpenMapLibrary}
-          onCollapse={
-            onSidebarCollapsedChange
-              ? () => onSidebarCollapsedChange(true)
-              : undefined
-          }
-        />
+      {shouldRenderSidePanelSlot && (
+        <div
+          aria-hidden={!sidePanelSlotOpen}
+          className={cn(
+            "pointer-events-none absolute top-0 right-0 bottom-0 z-[70] flex justify-end overflow-hidden transition-[width,opacity,transform] will-change-[width,transform,opacity]",
+            sidePanelInFlow &&
+              "xl:relative xl:inset-auto xl:z-auto xl:h-full xl:shrink-0",
+            "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            sidePanelSlotOpen
+              ? "w-[380px] translate-x-0 opacity-100"
+              : "w-0 translate-x-4 opacity-0"
+          )}
+        >
+          <div className="pointer-events-auto h-full w-[380px] shrink-0 overflow-hidden">
+            {sidePanelOverrideActive ? (
+              sidePanelOverride
+            ) : (
+              <RichSidebar
+                framed
+                open={sidePanelSlotOpen}
+                title={
+                  hasDays && activeDay >= 0
+                    ? (days[activeDay]?.label ?? "Locations")
+                    : title
+                }
+                rows={visibleRows}
+                activeKey={activeKey}
+                activeRow={activeRow}
+                onSelect={flyToPin}
+                onCloseActive={clearActivePin}
+                activeDirections={activeDirections}
+                directionsLoadingKey={directionsLoadingKey}
+                directionsError={directionsError}
+                tripDays={hasDays ? days : []}
+                activeDay={activeDay}
+                onDayChange={changeDay}
+                onDirections={handleDirections}
+                onAddStop={handleAddStop}
+                onRemoveStop={handleRemoveStop}
+                onReorderStops={handleReorderStops}
+                streetViewAvailable={activeStreetViewAvailable}
+                onStreetView={openStreetViewForRow}
+                assistantOpen={assistantOpen}
+                onOpenAssistant={onOpenAssistant}
+                onOpenMapLibrary={onOpenMapLibrary}
+                onCollapse={
+                  onSidebarCollapsedChange
+                    ? () => onSidebarCollapsedChange(true)
+                    : undefined
+                }
+              />
+            )}
+          </div>
+        </div>
       )}
     </div>
   )

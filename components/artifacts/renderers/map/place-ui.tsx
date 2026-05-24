@@ -421,6 +421,7 @@ export function RichSidebar({
   onOpenAssistant,
   onOpenMapLibrary,
   onCollapse,
+  framed = false,
 }: {
   open?: boolean
   title: string
@@ -445,6 +446,7 @@ export function RichSidebar({
   onOpenAssistant?: () => void
   onOpenMapLibrary?: () => void
   onCollapse?: () => void
+  framed?: boolean
 }) {
   const activeRowRef = React.useRef<HTMLButtonElement>(null)
   React.useEffect(() => {
@@ -461,11 +463,14 @@ export function RichSidebar({
       <aside
         aria-hidden={!open}
         className={cn(
-          "absolute right-2 bottom-2 left-2 z-20 flex max-h-[min(72dvh,calc(100%_-_1rem))] flex-col overflow-hidden rounded-lg border border-border/60 bg-background shadow-2xl transition-[width,opacity,transform] will-change-[width,transform,opacity] xl:relative xl:inset-auto xl:z-auto xl:max-h-none xl:min-w-0 xl:shrink-0 xl:rounded-none xl:border-y-0 xl:border-r-0 xl:border-l xl:shadow-none",
-          RICH_SIDEBAR_TRANSITION_CLASS,
-          open
-            ? "pointer-events-auto translate-x-0 opacity-100 xl:w-[380px]"
-            : "pointer-events-none translate-x-4 opacity-0 xl:w-0"
+          framed
+            ? "flex h-full w-[380px] max-w-[100vw] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background shadow-none"
+            : "absolute right-2 bottom-2 left-2 z-20 flex max-h-[min(72dvh,calc(100%_-_1rem))] flex-col overflow-hidden rounded-lg border border-border/60 bg-background shadow-2xl transition-[width,opacity,transform] will-change-[width,transform,opacity] xl:relative xl:inset-auto xl:z-auto xl:max-h-none xl:min-w-0 xl:shrink-0 xl:rounded-none xl:border-y-0 xl:border-r-0 xl:border-l xl:shadow-none",
+          !framed && RICH_SIDEBAR_TRANSITION_CLASS,
+          !framed &&
+            (open
+              ? "pointer-events-auto translate-x-0 opacity-100 xl:w-[380px]"
+              : "pointer-events-none translate-x-4 opacity-0 xl:w-0")
         )}
       >
         <header className="border-b border-border/60 px-3 py-2.5">
@@ -534,11 +539,14 @@ export function RichSidebar({
     <aside
       aria-hidden={!open}
       className={cn(
-        "absolute right-2 bottom-2 left-2 z-20 flex max-h-[min(72dvh,calc(100%_-_1rem))] flex-col overflow-hidden rounded-lg border border-border/60 bg-background shadow-2xl transition-[width,opacity,transform] will-change-[width,transform,opacity] xl:relative xl:inset-auto xl:z-auto xl:max-h-none xl:min-w-0 xl:shrink-0 xl:rounded-none xl:border-y-0 xl:border-r-0 xl:border-l xl:shadow-none",
-        RICH_SIDEBAR_TRANSITION_CLASS,
-        open
-          ? "pointer-events-auto translate-x-0 opacity-100 xl:w-[380px]"
-          : "pointer-events-none translate-x-4 opacity-0 xl:w-0"
+        framed
+          ? "flex h-full w-[380px] max-w-[100vw] shrink-0 flex-col overflow-hidden border-l border-border/60 bg-background shadow-none"
+          : "absolute right-2 bottom-2 left-2 z-20 flex max-h-[min(72dvh,calc(100%_-_1rem))] flex-col overflow-hidden rounded-lg border border-border/60 bg-background shadow-2xl transition-[width,opacity,transform] will-change-[width,transform,opacity] xl:relative xl:inset-auto xl:z-auto xl:max-h-none xl:min-w-0 xl:shrink-0 xl:rounded-none xl:border-y-0 xl:border-r-0 xl:border-l xl:shadow-none",
+        !framed && RICH_SIDEBAR_TRANSITION_CLASS,
+        !framed &&
+          (open
+            ? "pointer-events-auto translate-x-0 opacity-100 xl:w-[380px]"
+            : "pointer-events-none translate-x-4 opacity-0 xl:w-0")
       )}
     >
       <header className="border-b border-border/60">

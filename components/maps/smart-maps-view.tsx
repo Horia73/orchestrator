@@ -67,8 +67,7 @@ import type { UserMapLocation } from "@/lib/maps/user-location"
 import { cn } from "@/lib/utils"
 
 const MAP_SIDE_PANEL_TRANSITION_MS = 300
-const MAP_SIDE_PANEL_TRANSITION_CLASS =
-  "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]"
+const RENDERER_SIDE_PANEL_FLOW_QUERY = "(min-width: 1280px)"
 const WIDE_SIDE_PANEL_DOCK_QUERY = "(min-width: 1536px)"
 const useIsomorphicLayoutEffect =
   typeof window === "undefined" ? React.useEffect : React.useLayoutEffect
@@ -102,6 +101,9 @@ export function SmartMapsView({
     setOpen,
     setOpenMobile,
   } = useSidebar()
+  const rendererSidePanelFlowViewport = useMediaQuery(
+    RENDERER_SIDE_PANEL_FLOW_QUERY
+  )
   const wideSidePanelDockViewport = useMediaQuery(WIDE_SIDE_PANEL_DOCK_QUERY)
   const requestedMapId = initialMapId ?? searchParams.get("map")
 
@@ -1436,6 +1438,10 @@ export function SmartMapsView({
       setRenderedDockedSidePanelMode(dockedSidePanelMode)
       return
     }
+    if (sidePanelMode === "places") {
+      if (renderedDockedSidePanelMode) setRenderedDockedSidePanelMode(null)
+      return
+    }
     if (!renderedDockedSidePanelMode) return
 
     const timer = window.setTimeout(
@@ -1443,21 +1449,23 @@ export function SmartMapsView({
       MAP_SIDE_PANEL_TRANSITION_MS
     )
     return () => window.clearTimeout(timer)
-  }, [dockedSidePanelMode, renderedDockedSidePanelMode])
+  }, [dockedSidePanelMode, renderedDockedSidePanelMode, sidePanelMode])
 
   const visibleDockedSidePanelMode =
-    dockedSidePanelMode ?? renderedDockedSidePanelMode
+    sidePanelMode === "places"
+      ? null
+      : (dockedSidePanelMode ?? renderedDockedSidePanelMode)
   const shouldRenderDockedSidePanel = !isMobile && !streetViewVisible
-  const dockedSidePanelExpanded =
-    !isMobile && !streetViewVisible && dockedSidePanelMode !== null
+  const desktopSidePanelExpanded =
+    shouldRenderDockedSidePanel && sidePanelOpen
   const appSidebarExpanded = !isMobile && appSidebarState === "expanded"
-  const sidePanelDockedInFlow =
-    dockedSidePanelExpanded &&
+  const rendererSidePanelInFlow =
+    desktopSidePanelExpanded &&
+    rendererSidePanelFlowViewport &&
     (!appSidebarExpanded || wideSidePanelDockViewport)
-  const overlaySidePanelOpen = dockedSidePanelExpanded && !sidePanelDockedInFlow
-  const shouldReserveRendererSidebar = sidePanelMode === "places"
-  const shouldReserveMapChrome =
-    shouldReserveRendererSidebar || overlaySidePanelOpen
+  const overlaySidePanelOpen =
+    desktopSidePanelExpanded && !rendererSidePanelInFlow
+  const shouldReserveMapChrome = desktopSidePanelExpanded
 
   if (mapsConfig.status === "loading") {
     return <SmartMapsSetupState status="loading" />
@@ -1544,6 +1552,13 @@ export function SmartMapsView({
     />
   )
 
+  const dockedSidePanelContent =
+    shouldRenderDockedSidePanel && visibleDockedSidePanelMode === "map"
+      ? renderMapLibraryDrawer(true)
+      : shouldRenderDockedSidePanel && visibleDockedSidePanelMode === "chat"
+        ? renderMapChatPanel(true)
+        : null
+
   return (
     <div className="relative flex h-full min-h-0 overflow-hidden bg-background">
       <div className="relative min-w-0 flex-1 overflow-hidden bg-background">
@@ -1565,6 +1580,9 @@ export function SmartMapsView({
           cameraResetKey={
             savedPlacesRouteDraft?.key ?? selectedArtifact?.id ?? "home"
           }
+          sidePanelOverride={dockedSidePanelContent}
+          sidePanelOverrideOpen={dockedSidePanelMode !== null}
+          sidePanelInFlow={rendererSidePanelInFlow}
           onAreaSelected={handleAreaSelected}
           onAreaDrawingCancelled={handleAreaDrawingCancelled}
           onStreetViewVisibleChange={handleStreetViewVisibleChange}
@@ -1722,26 +1740,6 @@ export function SmartMapsView({
         {!streetViewVisible && isMobile && renderMapChatPanel(false)}
       </div>
 
-      {shouldRenderDockedSidePanel && (
-        <div
-          aria-hidden={!dockedSidePanelExpanded}
-          className={cn(
-            "pointer-events-none absolute top-0 right-0 bottom-0 z-[70] flex justify-end overflow-hidden transition-[width,opacity,transform] will-change-[width,transform,opacity] xl:relative xl:inset-auto xl:z-auto xl:h-full xl:shrink-0",
-            appSidebarExpanded &&
-              "xl:absolute xl:inset-y-0 xl:right-0 xl:left-auto xl:z-[70] 2xl:relative 2xl:inset-auto 2xl:z-auto 2xl:h-full 2xl:shrink-0",
-            MAP_SIDE_PANEL_TRANSITION_CLASS,
-            dockedSidePanelExpanded
-              ? "w-[380px] translate-x-0 opacity-100"
-              : "w-0 translate-x-4 opacity-0"
-          )}
-        >
-          <div className="pointer-events-auto h-full w-[380px] shrink-0">
-            {visibleDockedSidePanelMode === "map" &&
-              renderMapLibraryDrawer(true)}
-            {visibleDockedSidePanelMode === "chat" && renderMapChatPanel(true)}
-          </div>
-        </div>
-      )}
     </div>
   )
 }
