@@ -6,6 +6,10 @@ import { emitAppEvent } from '@/lib/events'
 import {
     CadencePolicySchema,
     CreateMonitorWatchInputSchema,
+    DEFAULT_CADENCE_SECONDS,
+    MAX_CADENCE_SECONDS,
+    MIN_CADENCE_SECONDS,
+    MONITOR_CADENCE_STEP_SECONDS,
     MonitorActionSchema,
     MonitorRuleSchema,
     MonitorWatchSchema,
@@ -157,6 +161,35 @@ function parseSuppressJson(raw: string): SuppressPattern[] {
     return arr.map((p) => SuppressPatternSchema.parse(p))
 }
 
+function normalizeStoredCadence(raw: string): CadencePolicy {
+    const parsed = JSON.parse(raw) as Partial<CadencePolicy> | null
+    if (!parsed || typeof parsed !== 'object') {
+        return CadencePolicySchema.parse({})
+    }
+
+    const min = snapStoredCadenceSeconds(parsed.min, MIN_CADENCE_SECONDS)
+    const rawMax = snapStoredCadenceSeconds(parsed.max, MAX_CADENCE_SECONDS)
+    const max = Math.max(min, rawMax)
+    const rawCurrent = snapStoredCadenceSeconds(parsed.current, DEFAULT_CADENCE_SECONDS)
+    const current = Math.max(min, Math.min(max, rawCurrent))
+
+    return CadencePolicySchema.parse({
+        current,
+        min,
+        max,
+        adaptive: typeof parsed.adaptive === 'boolean' ? parsed.adaptive : true,
+    })
+}
+
+function snapStoredCadenceSeconds(value: unknown, fallback: number): number {
+    const numeric = typeof value === 'number' && Number.isFinite(value)
+        ? value
+        : fallback
+    const bounded = Math.max(MIN_CADENCE_SECONDS, Math.min(MAX_CADENCE_SECONDS, numeric))
+    const slots = Math.max(1, Math.ceil(bounded / MONITOR_CADENCE_STEP_SECONDS))
+    return Math.min(MAX_CADENCE_SECONDS, slots * MONITOR_CADENCE_STEP_SECONDS)
+}
+
 function watchFromRow(row: MonitorWatchRow): MonitorWatch {
     return MonitorWatchSchema.parse({
         id: row.id,
@@ -165,7 +198,7 @@ function watchFromRow(row: MonitorWatchRow): MonitorWatch {
         target: row.target,
         rule: parseRuleJson(row.rule),
         allowedActions: parseActionsJson(row.allowedActions),
-        cadence: CadencePolicySchema.parse(JSON.parse(row.cadence)),
+        cadence: normalizeStoredCadence(row.cadence),
         notify: NotifyPolicySchema.parse(JSON.parse(row.notify)),
         enabled: row.enabled === 1,
         state: WatchStateSchema.parse(JSON.parse(row.state)),

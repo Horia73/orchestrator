@@ -43,6 +43,7 @@ async function main(): Promise<void> {
         updateMonitorWatch,
     } = await import('@/lib/monitor/store')
 
+    const { default: db } = await import('@/lib/db')
     const { MIN_CADENCE_SECONDS, MAX_CADENCE_SECONDS } = await import('@/lib/monitor/schema')
 
     let failures = 0
@@ -93,6 +94,39 @@ async function main(): Promise<void> {
     check('filter by source=home_assistant is empty', byOther.length === 0)
 
     check('countEnabledWatches = 1', countEnabledWatches() === 1)
+
+    const legacyNow = Date.now()
+    const legacyId = 'mw_legacy_cadence'
+    db.prepare(`
+        INSERT INTO monitor_watches (
+            id, title, source, target, rule, allowedActions, cadence, notify, enabled,
+            state, suppressPatterns, lastCheckedAt, nextCheckAt, lastFiredAt,
+            consecutiveErrors, lastError, createdBy, createdAt, updatedAt
+        ) VALUES (
+            @id, @title, @source, @target, @rule, @allowedActions, @cadence, @notify, @enabled,
+            @state, @suppressPatterns, NULL, NULL, NULL,
+            0, NULL, @createdBy, @createdAt, @updatedAt
+        )
+    `).run({
+        id: legacyId,
+        title: 'Legacy 5 minute cadence',
+        source: 'web',
+        target: 'https://legacy.example.com',
+        rule: JSON.stringify({ kind: 'web_status', url: 'https://legacy.example.com', op: 'equals', value: 200 }),
+        allowedActions: JSON.stringify([{ kind: 'notify_inbox' }]),
+        cadence: JSON.stringify({ current: 300, min: 300, max: 3600, adaptive: true }),
+        notify: JSON.stringify({ onMatch: true }),
+        enabled: 0,
+        state: JSON.stringify({}),
+        suppressPatterns: JSON.stringify([]),
+        createdBy: 'orchestrator',
+        createdAt: legacyNow,
+        updatedAt: legacyNow,
+    })
+    const legacy = getMonitorWatch(legacyId)
+    check('legacy stored 5m cadence normalizes to 15m slots', legacy?.cadence.current === 15 * 60 && legacy?.cadence.min === 15 * 60 && legacy?.cadence.max === 60 * 60)
+    check('legacy disabled cadence row does not change enabled count', countEnabledWatches() === 1)
+    deleteMonitorWatch(legacyId)
 
     // ---- 3. Schema rejections ------------------------------------------------
     expectThrow('reject cadence.current below MIN', () =>
