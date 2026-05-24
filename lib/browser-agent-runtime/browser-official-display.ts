@@ -39,6 +39,7 @@ type OfficialDisplayState = {
     display: BrowserLiveViewState;
     displayHandle: LinuxVncDisplayHandle | null;
     chrome: ChildProcess | null;
+    chromeWindowId: string | null;
     clipboardOwners: Set<ChildProcess>;
     userDataDir: string;
     downloadsDir: string;
@@ -76,6 +77,7 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         },
         displayHandle: null,
         chrome: null,
+        chromeWindowId: null,
         clipboardOwners: new Set(),
         userDataDir: rootUserDataDir,
         downloadsDir,
@@ -123,6 +125,28 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         await sleep(20);
     };
 
+    const findChromeWindow = (): string | null => {
+        const found = spawnSync('xdotool', ['search', '--onlyvisible', '--class', 'chrom'], {
+            env: displayEnv(state.display.display),
+            encoding: 'utf8',
+        });
+        if (found.status !== 0) return null;
+        return found.stdout.trim().split(/\s+/)[0] || null;
+    };
+
+    const activateChromeWindow = async () => {
+        const windowId = state.chromeWindowId || findChromeWindow();
+        if (!windowId) return;
+        state.chromeWindowId = windowId;
+        try {
+            run('xdotool', ['windowactivate', '--sync', windowId]);
+            await sleep(40);
+        } catch (error) {
+            state.chromeWindowId = null;
+            log(`⚠️ Could not activate Chromium window before input: ${formatError(error)}`);
+        }
+    };
+
     const closeClipboardOwners = () => {
         for (const owner of state.clipboardOwners) {
             if (owner.exitCode === null && !owner.killed) {
@@ -134,10 +158,11 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
 
     const setClipboard = async (text: string) => {
         closeClipboardOwners();
-        const owner = spawn('xclip', ['-selection', 'clipboard', '-i', '-loops', '1'], {
+        const owner = spawn('xclip', ['-selection', 'clipboard', '-i'], {
             env: displayEnv(state.display.display),
             stdio: ['pipe', 'ignore', 'pipe'],
         });
+        let stderr = '';
         state.clipboardOwners.add(owner);
         owner.once('exit', () => {
             state.clipboardOwners.delete(owner);
@@ -148,14 +173,21 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         });
         owner.stderr?.on('data', chunk => {
             const message = chunk.toString('utf8').trim();
-            if (message) log(`[xclip] ${message}`);
+            if (message) {
+                stderr = stderr ? `${stderr}\n${message}` : message;
+                log(`[xclip] ${message}`);
+            }
         });
         owner.stdin.end(text);
-        await sleep(80);
+        await sleep(150);
+        if (owner.exitCode !== null || owner.signalCode !== null) {
+            throw new Error(`xclip did not keep clipboard ownership${stderr ? `: ${stderr}` : ''}`);
+        }
     };
 
     const pressShortcut = async (key: string) => {
-        await xdotool(['key', normalizeXdotoolKey(key)]);
+        await activateChromeWindow();
+        await xdotool(['key', '--clearmodifiers', normalizeXdotoolKey(key)]);
     };
 
     const waitForDisplayStability = async (timeoutMs = DEFAULT_STABILITY_TIMEOUT_MS) => {
@@ -209,12 +241,9 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             if (state.chrome && (state.chrome.exitCode !== null || state.chrome.signalCode !== null)) {
                 throw new Error(`Chromium exited early with code ${state.chrome.exitCode ?? state.chrome.signalCode}.`);
             }
-            const found = spawnSync('xdotool', ['search', '--onlyvisible', '--class', 'chrom'], {
-                env: displayEnv(state.display.display),
-                encoding: 'utf8',
-            });
-            if (found.status === 0 && found.stdout.trim()) {
-                const windowId = found.stdout.trim().split(/\s+/)[0];
+            const windowId = findChromeWindow();
+            if (windowId) {
+                state.chromeWindowId = windowId;
                 spawnSync('xdotool', ['windowactivate', windowId], { env: displayEnv(state.display.display) });
                 spawnSync('xdotool', ['windowsize', windowId, String(state.viewport.width), String(state.viewport.height)], { env: displayEnv(state.display.display) });
                 return;
@@ -561,6 +590,7 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         async close() {
             await closeProcess(state.chrome);
             state.chrome = null;
+            state.chromeWindowId = null;
             closeClipboardOwners();
             await state.displayHandle?.close();
             state.displayHandle = null;

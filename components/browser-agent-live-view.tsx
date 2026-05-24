@@ -7,6 +7,7 @@ import { cn } from "@/lib/utils"
 
 type LiveControlMode = "agent" | "user"
 type LiveMode = "disabled" | "mac-headful" | "linux-vnc"
+type BrowserShortcutEvent = Pick<KeyboardEvent, "altKey" | "ctrlKey" | "key" | "metaKey" | "shiftKey">
 
 interface BrowserAgentLiveState {
     enabled: boolean
@@ -42,22 +43,72 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     const liveViewRef = React.useRef<HTMLDivElement>(null)
     const viewportRef = React.useRef<HTMLDivElement>(null)
     const targetRef = React.useRef<HTMLDivElement>(null)
+    const hiddenPasteRef = React.useRef<HTMLTextAreaElement>(null)
     const rfbRef = React.useRef<import("@novnc/novnc").default | null>(null)
     const controlModeRef = React.useRef<LiveControlMode>("agent")
+    const stateRef = React.useRef<BrowserAgentLiveState | null>(null)
+    const inputBusyRef = React.useRef(false)
+    const inputMessageTimerRef = React.useRef<number | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
     const [busy, setBusy] = React.useState(false)
     const [inputBusy, setInputBusy] = React.useState(false)
+    const [inputMessage, setInputMessage] = React.useState<string | null>(null)
     const [fullscreen, setFullscreen] = React.useState(false)
     const controlMode = state?.controlMode
 
     const focusRfb = React.useCallback(() => {
-        requestAnimationFrame(() => rfbRef.current?.focus({ preventScroll: true }))
+        requestAnimationFrame(() => {
+            const rfb = rfbRef.current
+            if (rfb) {
+                rfb.focus({ preventScroll: true })
+                return
+            }
+            liveViewRef.current?.focus({ preventScroll: true })
+        })
     }, [])
 
     React.useEffect(() => {
         if (controlMode) controlModeRef.current = controlMode
     }, [controlMode])
+
+    React.useEffect(() => {
+        stateRef.current = state
+    }, [state])
+
+    React.useEffect(() => {
+        inputBusyRef.current = inputBusy
+    }, [inputBusy])
+
+    React.useEffect(() => {
+        return () => {
+            if (inputMessageTimerRef.current) {
+                window.clearTimeout(inputMessageTimerRef.current)
+            }
+        }
+    }, [])
+
+    const showInputMessage = React.useCallback((message: string) => {
+        setInputMessage(message)
+        if (inputMessageTimerRef.current) {
+            window.clearTimeout(inputMessageTimerRef.current)
+        }
+        inputMessageTimerRef.current = window.setTimeout(() => {
+            setInputMessage(null)
+            inputMessageTimerRef.current = null
+        }, 5_000)
+    }, [])
+
+    const requestManualPasteCapture = React.useCallback((message: string) => {
+        showInputMessage(message)
+        requestAnimationFrame(() => {
+            const target = hiddenPasteRef.current
+            if (!target) return
+            target.value = ""
+            target.focus({ preventScroll: true })
+            target.select()
+        })
+    }, [showInputMessage])
 
     const refresh = React.useCallback(async () => {
         const url = sessionId
@@ -175,25 +226,39 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         }
     }
 
-    const pasteText = React.useCallback(async (text: string) => {
-        if (!text) return
+    const pasteText = React.useCallback(async (text: string): Promise<boolean> => {
+        if (!text) {
+            showInputMessage("Clipboard is empty.")
+            focusRfb()
+            return false
+        }
         setInputBusy(true)
         try {
             await postLiveAction({ action: "paste_text", text })
+            focusRfb()
+            return true
+        } catch (error) {
+            showInputMessage(`Paste failed: ${formatInputError(error)}`)
+            focusRfb()
+            return false
         } finally {
             setInputBusy(false)
         }
-    }, [postLiveAction])
+    }, [focusRfb, postLiveAction, showInputMessage])
 
     const pasteFromClipboard = React.useCallback(async () => {
-        try {
-            const text = await navigator.clipboard?.readText?.()
-            await pasteText(text || "")
-            focusRfb()
-        } catch {
-            focusRfb()
+        const readText = navigator.clipboard?.readText?.bind(navigator.clipboard)
+        if (!readText || !window.isSecureContext) {
+            requestManualPasteCapture("Clipboard access is blocked. Press paste shortcut now.")
+            return
         }
-    }, [focusRfb, pasteText])
+        try {
+            const text = await readText()
+            await pasteText(text || "")
+        } catch {
+            requestManualPasteCapture("Clipboard permission was denied. Press paste shortcut now.")
+        }
+    }, [pasteText, requestManualPasteCapture])
 
     const sendKey = React.useCallback(async (key: string) => {
         setInputBusy(true)
@@ -204,34 +269,81 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         }
     }, [postLiveAction])
 
-    const handleKeyDownCapture = React.useCallback((event: React.KeyboardEvent<HTMLDivElement>) => {
-        if (state?.controlMode !== "user" || inputBusy) return
-        const key = browserShortcutFromEvent(event, state.platform)
-        if (!key) return
-        event.preventDefault()
-        event.stopPropagation()
+    const handleBrowserShortcut = React.useCallback((key: string) => {
         if (key === "Control+V" || key === "Meta+V") {
             const readText = navigator.clipboard?.readText?.bind(navigator.clipboard)
             if (!readText) {
-                void sendKey(key)
+                requestManualPasteCapture("Clipboard access is blocked. Press paste shortcut again.")
                 return
             }
             void readText()
-                .then((text) => text ? pasteText(text) : sendKey(key))
-                .catch(() => sendKey(key))
+                .then((text) => {
+                    if (text) void pasteText(text)
+                    else void sendKey(key)
+                })
+                .catch(() => requestManualPasteCapture("Clipboard permission was denied. Press paste shortcut again."))
             return
         }
         void sendKey(key)
-    }, [inputBusy, pasteText, sendKey, state?.controlMode, state?.platform])
+    }, [pasteText, requestManualPasteCapture, sendKey])
 
-    const handlePasteCapture = React.useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
-        if (state?.controlMode !== "user") return
-        const text = event.clipboardData.getData("text/plain")
-        if (!text) return
-        event.preventDefault()
-        event.stopPropagation()
-        void pasteText(text)
-    }, [pasteText, state?.controlMode])
+    const browserInputContainsTarget = React.useCallback((target: EventTarget | null) => {
+        const root = liveViewRef.current
+        if (!root) return false
+        if (target instanceof Node && root.contains(target)) return true
+        const active = document.activeElement
+        return active instanceof Node && root.contains(active)
+    }, [])
+
+    React.useEffect(() => {
+        if (controlMode !== "user") return
+
+        const handleNativeKeyDownCapture = (event: KeyboardEvent) => {
+            const currentState = stateRef.current
+            if (currentState?.controlMode !== "user" || inputBusyRef.current) return
+            if (!browserInputContainsTarget(event.target)) return
+            const key = browserShortcutFromEvent(event, currentState.platform)
+            if (!key) return
+            if ((key === "Control+V" || key === "Meta+V") && (!navigator.clipboard?.readText || !window.isSecureContext)) {
+                return
+            }
+
+            event.preventDefault()
+            event.stopPropagation()
+            event.stopImmediatePropagation()
+            handleBrowserShortcut(key)
+        }
+
+        const handleNativePasteCapture = (event: ClipboardEvent) => {
+            const currentState = stateRef.current
+            if (currentState?.controlMode !== "user") return
+            if (!browserInputContainsTarget(event.target)) return
+            const text = event.clipboardData?.getData("text/plain")
+            if (!text) return
+
+            event.preventDefault()
+            event.stopPropagation()
+            event.stopImmediatePropagation()
+            if (hiddenPasteRef.current) hiddenPasteRef.current.value = ""
+            void pasteText(text)
+        }
+
+        document.addEventListener("keydown", handleNativeKeyDownCapture, true)
+        document.addEventListener("paste", handleNativePasteCapture, true)
+        return () => {
+            document.removeEventListener("keydown", handleNativeKeyDownCapture, true)
+            document.removeEventListener("paste", handleNativePasteCapture, true)
+        }
+    }, [browserInputContainsTarget, controlMode, handleBrowserShortcut, pasteText])
+
+    const handleViewportPointerDown = React.useCallback(() => {
+        if (stateRef.current?.controlMode === "user") focusRfb()
+    }, [focusRfb])
+
+    const handleLiveViewFocus = React.useCallback((event: React.FocusEvent<HTMLDivElement>) => {
+        if (event.target !== event.currentTarget) return
+        if (stateRef.current?.controlMode === "user") focusRfb()
+    }, [focusRfb])
 
     if (!state) {
         return (
@@ -310,12 +422,14 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             ref={liveViewRef}
             className="browser-agent-live-view grid gap-2 bg-background outline-none [&:fullscreen]:h-screen [&:fullscreen]:grid-rows-[auto_1fr] [&:fullscreen]:p-3"
             tabIndex={userControl ? 0 : -1}
-            onKeyDownCapture={handleKeyDownCapture}
-            onPasteCapture={handlePasteCapture}
-            onPointerDown={() => {
-                if (userControl) rfbRef.current?.focus({ preventScroll: true })
-            }}
+            onFocus={handleLiveViewFocus}
         >
+            <textarea
+                ref={hiddenPasteRef}
+                aria-label="Browser clipboard paste target"
+                className="sr-only"
+                tabIndex={-1}
+            />
             <div className="flex min-w-0 flex-wrap items-center gap-2">
                 {onOpenDetails ? (
                     <button
@@ -379,6 +493,11 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                     {fullscreen ? <Minimize2 className="size-3.5" /> : <Maximize2 className="size-3.5" />}
                     {fullscreen ? "Exit full screen" : "Full screen"}
                 </button>
+                {inputMessage && (
+                    <span className="min-w-0 flex-[1_1_100%] rounded-md border border-border/70 bg-muted/25 px-2.5 py-1.5 text-[12px] text-muted-foreground">
+                        {inputMessage}
+                    </span>
+                )}
             </div>
             <div
                 ref={viewportRef}
@@ -390,6 +509,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                     minHeight: fullscreen ? 0 : "220px",
                 }}
                 aria-label={`${connection} browser live view`}
+                onPointerDown={handleViewportPointerDown}
             >
                 <div ref={targetRef} className="size-full bg-white" />
             </div>
@@ -397,7 +517,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     )
 }
 
-function browserShortcutFromEvent(event: React.KeyboardEvent, platform: NodeJS.Platform): string | null {
+function browserShortcutFromEvent(event: BrowserShortcutEvent, platform: NodeJS.Platform): string | null {
     if (!event.ctrlKey && !event.metaKey) return null
     if (event.key === "Control" || event.key === "Meta" || event.key === "Shift" || event.key === "Alt") return null
 
@@ -412,6 +532,11 @@ function browserShortcutFromEvent(event: React.KeyboardEvent, platform: NodeJS.P
     if (event.shiftKey) parts.push("Shift")
     parts.push(key)
     return parts.join("+")
+}
+
+function formatInputError(error: unknown): string {
+    if (error instanceof Error) return error.message
+    return String(error || "unknown error")
 }
 
 function normalizeShortcutKey(key: string): string | null {
