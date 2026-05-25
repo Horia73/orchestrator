@@ -67,6 +67,19 @@ async function main(): Promise<void> {
         implicitForwardedLoopbackGuard?.status,
     )
 
+    const publicUrlImplicitForwardedLoopbackGuard = guardSensitiveRequest(new Request('https://orchestrator.lan/api/config', {
+        headers: {
+            host: '127.0.0.1:3000',
+            'x-forwarded-host': '127.0.0.1:3000',
+            'x-forwarded-proto': 'http',
+        },
+    }))
+    check(
+        'implicit forwarded loopback request allows public runtime URL',
+        publicUrlImplicitForwardedLoopbackGuard === null,
+        publicUrlImplicitForwardedLoopbackGuard?.status,
+    )
+
     const forwardedMappedLoopbackGuard = guardSensitiveRequest(new Request('http://127.0.0.1:3000/api/config', {
         headers: {
             host: '127.0.0.1:3000',

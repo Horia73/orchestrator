@@ -122,7 +122,7 @@ function isForwardedLoopbackHostClaim(request: Request, effectiveHostname: strin
         } catch {
             return true
         }
-        return !(isLoopbackHost(hostHostname) && isLoopbackHost(urlHostname))
+        return !(isLoopbackHost(hostHostname) || isLoopbackHost(urlHostname))
     }
 
     return !isLoopbackHost(extractHostname(clientIp))
