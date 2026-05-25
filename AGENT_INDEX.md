@@ -75,6 +75,20 @@ Use tools first:
 - Prompt assembly: `lib/ai/prompts/*`
 - Integration/subsystem exposure: `lib/integrations/exposure.ts`
 
+## Self Development
+
+- Policy prompt: `lib/ai/prompts/orchestrator/self-development.ts`
+- Generic external/new project prepare helper: `npm run project-run:prepare -- --kind existing-git|new --task "..." --json`
+- Generic run helper for status/commit/rebase/push/update/cleanup: `npm run project-run:run -- <command> --run-id <id>`
+- Generic project workflow docs: `docs/project-run-workflow.md`
+- Prepare isolated worktree + port + coder handoff: `npm run self-dev:prepare -- --task "..." --json`
+- Prepare script: `scripts/self-dev-prepare.mjs`
+- Explicit run helper for status/commit/rebase/push/update/cleanup: `npm run self-dev:run -- <command> --run-id <id>`
+- Run helper script: `scripts/self-dev-run.mjs`
+- Delegate to coder with `cwd` set to the prepared `repoDir`
+- Workflow docs: `docs/self-dev-workflow.md`
+- Managed update/restart confirmation: `lib/update/manager.ts`, `instrumentation.ts`, `scripts/update-runner.mjs`, `scripts/docker-update-bridge.py`
+
 ## Frontend
 
 - App routes: `app/*`

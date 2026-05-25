@@ -361,6 +361,8 @@ export interface ProviderSendOptions {
    * `executeTool` for every tool call it processes.
    */
   toolContext?: ToolExecutionContext
+  /** Optional process/thread working directory for CLI-backed providers. */
+  cwd?: string
   /** Abort signal from the client */
   signal?: AbortSignal
 }

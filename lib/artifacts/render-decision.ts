@@ -1,8 +1,8 @@
 import type { ArtifactDisplay, ArtifactRow } from './schema'
 
 /**
- * Decide where an artifact should render: inline (in the chat bubble) or in
- * the side panel.
+ * Decide where an artifact should render: inline (in the chat bubble), in
+ * the side panel, or from a dedicated full-screen route.
  *
  * Decision order:
  *   1. Explicit `display` attr on the artifact wins. The model chooses.
@@ -13,12 +13,12 @@ import type { ArtifactDisplay, ArtifactRow } from './schema'
  * The user can always click "↗ Expand" on an inline artifact to move it to
  * the panel.
  */
-type RenderTarget = 'inline' | 'panel'
+type RenderTarget = 'inline' | 'panel' | 'fullscreen'
 
 function decideRenderTarget(args: {
     display?: ArtifactDisplay | null
 }): RenderTarget {
-    if (args.display === 'inline' || args.display === 'panel') return args.display
+    if (args.display === 'inline' || args.display === 'panel' || args.display === 'fullscreen') return args.display
     return 'inline'
 }
 

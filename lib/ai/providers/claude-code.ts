@@ -186,6 +186,7 @@ export class ClaudeCodeProvider implements AIProvider {
             bin: spec.bin,
             args,
             model: options.model,
+            cwd: options.cwd,
             signal: options.signal,
             callbacks: cb,
             initialSessionId: sessionId,
@@ -259,13 +260,14 @@ interface RunClaudeArgs {
     bin: string
     args: string[]
     model: string
+    cwd?: string
     signal?: AbortSignal
     callbacks: StreamCallbacks
     initialSessionId?: string
     cleanup?: () => void
 }
 
-async function runClaudeStreamJson({ bin, args, model, signal, callbacks, initialSessionId, cleanup }: RunClaudeArgs): Promise<void> {
+async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, initialSessionId, cleanup }: RunClaudeArgs): Promise<void> {
     return new Promise<void>(resolve => {
         const finish = () => {
             try { cleanup?.() } catch { /* ignore */ }
@@ -278,7 +280,7 @@ async function runClaudeStreamJson({ bin, args, model, signal, callbacks, initia
             proc = spawn(resolved, args, {
                 stdio: ['ignore', 'pipe', 'pipe'],
                 env: augmentedEnv(),
-                cwd: AGENT_WORKSPACE_DIR,
+                cwd: cwd ?? AGENT_WORKSPACE_DIR,
             })
         } catch (err) {
             callbacks.onError(`Failed to spawn ${bin}: ${err instanceof Error ? err.message : 'unknown error'}`)

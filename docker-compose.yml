@@ -2,6 +2,9 @@ services:
   orchestrator:
     build:
       context: .
+      args:
+        ORCHESTRATOR_BUILD_COMMIT: ${ORCHESTRATOR_BUILD_COMMIT:-unknown}
+        ORCHESTRATOR_BUILD_REF: ${ORCHESTRATOR_BUILD_REF:-unknown}
     image: orchestrator:local
     restart: unless-stopped
     env_file:

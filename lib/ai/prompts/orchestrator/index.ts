@@ -5,6 +5,7 @@ import { ORCHESTRATOR_EXAMPLES } from './examples'
 import { ORCHESTRATOR_INTEGRATIONS } from './integrations'
 import { ORCHESTRATOR_MEMORY } from './memory'
 import { ORCHESTRATOR_OUTPUT_CONTRACT } from './output-contract'
+import { ORCHESTRATOR_SELF_DEVELOPMENT } from './self-development'
 
 // Static orchestrator prompt. Capability doctrines that used to live here
 // (maps, weather, watchlist, monitoring, scheduling) now live in
@@ -18,6 +19,7 @@ export const ORCHESTRATOR_PROMPT = [
     ORCHESTRATOR_MEMORY,
     ORCHESTRATOR_ACTION_POLICY,
     ORCHESTRATOR_INTEGRATIONS,
+    ORCHESTRATOR_SELF_DEVELOPMENT,
     ORCHESTRATOR_DELEGATION,
     ORCHESTRATOR_OUTPUT_CONTRACT,
     ORCHESTRATOR_EXAMPLES,

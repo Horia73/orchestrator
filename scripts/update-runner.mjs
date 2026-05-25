@@ -7,30 +7,59 @@ const projectDir = process.cwd()
 const stateDir = path.join(projectDir, '.orchestrator')
 const jobId = readArg('--job-id') || process.env.ORCHESTRATOR_UPDATE_JOB_ID || `manual-${Date.now()}`
 const targetTag = readArg('--target-tag')
-const targetVersion = readArg('--target-version') || normalizeVersion(targetTag) || targetTag
+const targetBranch = readArg('--target-branch')
+const targetVersionArg = readArg('--target-version')
+let targetVersion = targetVersionArg || normalizeVersion(targetTag) || '0.0.0'
 const statePath = path.join(stateDir, 'update-state.json')
 const logPath = path.join(stateDir, `update-${jobId}.log`)
 
-if (!targetTag || !targetVersion) {
-  console.error('Missing --target-tag / --target-version')
+if (!targetTag && !targetBranch) {
+  console.error('Missing --target-tag or --target-branch')
   process.exit(2)
 }
+if (targetBranch) assertSafeBranchName(targetBranch)
 
 fs.mkdirSync(stateDir, { recursive: true })
 const logFd = fs.openSync(logPath, 'a')
 
 try {
-  log(`Starting update ${jobId} -> ${targetTag}`)
-  writeState({ phase: 'updating', startedAt: Date.now(), waitReason: 'Installing update.', logPath })
+  const targetLabel = targetTag || `branch:${targetBranch}`
+  log(`Starting update ${jobId} -> ${targetLabel}`)
+  writeState({
+    phase: 'updating',
+    targetKind: targetBranch ? 'branch' : 'release',
+    targetTag: targetLabel,
+    targetBranch: targetBranch || null,
+    startedAt: Date.now(),
+    waitReason: 'Installing update.',
+    logPath,
+  })
 
   assertCleanWorktree()
-  run('git', ['fetch', '--tags', 'origin'])
-  run('git', ['checkout', '--detach', targetTag])
+  if (targetBranch) {
+    run('git', ['fetch', 'origin', targetBranch, '--tags'])
+    run('git', ['checkout', targetBranch])
+    run('git', ['pull', '--ff-only', 'origin', targetBranch])
+    targetVersion = readPackageVersion()
+  } else {
+    run('git', ['fetch', '--tags', 'origin'])
+    run('git', ['checkout', '--detach', targetTag])
+  }
+  const targetCommit = capture('git', ['rev-parse', '--short=12', 'HEAD'])
+  writeState({
+    phase: 'updating',
+    targetVersion,
+    targetTag: targetLabel,
+    targetBranch: targetBranch || null,
+    targetCommit,
+    waitReason: 'Installing update.',
+    logPath,
+  })
   run('npm', ['ci'])
   run('npm', ['run', 'browsers:install'])
   run('npm', ['run', 'build'])
 
-  writeState({ phase: 'restarting', waitReason: 'Restarting service.', logPath })
+  writeState({ phase: 'restarting', targetCommit, waitReason: 'Restarting service.', logPath })
   restartService()
 
   writeState({
@@ -67,15 +96,39 @@ function normalizeVersion(value) {
   return match?.[1] || null
 }
 
+function assertSafeBranchName(value) {
+  if (
+    !value ||
+    value.startsWith('/') ||
+    value.endsWith('/') ||
+    value.includes('..') ||
+    !/^[A-Za-z0-9._/-]+$/.test(value)
+  ) {
+    console.error(`Invalid --target-branch: ${value || '(empty)'}`)
+    process.exit(2)
+  }
+}
+
+function readPackageVersion() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(projectDir, 'package.json'), 'utf-8'))
+    return typeof parsed.version === 'string' && parsed.version ? parsed.version : targetVersion
+  } catch {
+    return targetVersion
+  }
+}
+
 function readState() {
   try {
     return JSON.parse(fs.readFileSync(statePath, 'utf-8'))
   } catch {
+    const targetLabel = targetTag || `branch:${targetBranch}`
     return {
       id: jobId,
       phase: 'updating',
       targetVersion,
-      targetTag,
+      targetTag: targetLabel,
+      targetBranch: targetBranch || null,
       queuedAt: Date.now(),
       updatedAt: Date.now(),
     }
@@ -84,11 +137,13 @@ function readState() {
 
 function writeState(patch) {
   const previous = readState()
+  const targetLabel = targetTag || `branch:${targetBranch}`
   const next = {
     ...previous,
     id: jobId,
     targetVersion,
-    targetTag,
+    targetTag: targetLabel,
+    targetBranch: targetBranch || null,
     ...patch,
     updatedAt: Date.now(),
   }

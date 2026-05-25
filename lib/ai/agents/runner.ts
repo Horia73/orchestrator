@@ -29,6 +29,11 @@ import {
     updateAgentThreadInteractionId,
 } from '@/lib/db'
 import {
+    buildAutoArtifactTag,
+    getDirectEmitArtifactData,
+    stripDirectEmitPayload,
+} from '@/lib/artifacts/direct-emit'
+import {
     logRequestStart,
     logRequestComplete,
     logRequestFail,
@@ -49,6 +54,7 @@ interface RunTextSubAgentArgs {
     prompt: string
     parentCtx: ToolExecutionContext
     agentThreadId?: string
+    cwd?: string
 }
 
 interface RunMediaSubAgentArgs {
@@ -71,7 +77,7 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
  * tree by joining on this column.
  */
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
-    const { target, prompt, parentCtx, agentThreadId } = args
+    const { target, prompt, parentCtx, agentThreadId, cwd } = args
     const runtime = resolveAgentRuntimeSettings(target)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
     if (agentThreadId) touchAgentThreadRuntime(agentThreadId, runtime.provider, runtime.model)
@@ -234,6 +240,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             builtins: agentBuiltins,
             prevSession,
             toolContext: subToolContext,
+            cwd,
             signal: parentCtx.signal,
         }, {
             onThinking(text) {
@@ -298,6 +305,26 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 })
             },
             onToolResult(toolCallId, toolName, result) {
+                const directEmit = result.success
+                    ? getDirectEmitArtifactData(result.data)
+                    : null
+                if (directEmit) {
+                    const tag = buildAutoArtifactTag({
+                        identifier: directEmit.identifier,
+                        type: directEmit.type,
+                        title: directEmit.title,
+                        display: directEmit.display ?? 'inline',
+                        body: directEmit.body,
+                    })
+                    if (tag.length > 0) streamMode = 'content'
+                    accContent += tag
+                    appendContent(contentSegments, phase, tag)
+                    emitAgent(parentCtx, { type: 'agent_content', runId: subRequestId, content: tag })
+                    result = {
+                        ...result,
+                        data: stripDirectEmitPayload(directEmit.source),
+                    }
+                }
                 const start = toolStartTimes.get(toolCallId)
                 const end = Date.now()
                 toolStartTimes.delete(toolCallId)

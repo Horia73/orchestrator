@@ -104,6 +104,8 @@ function extensionFor(type: string, language?: string | null): string {
         case 'application/vnd.ant.react': return 'tsx'
         case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
+        case 'application/vnd.ant.recipe': return 'json'
+        case 'application/vnd.ant.workout': return 'json'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
         case 'application/vnd.ant.code': return safePathPart(language ?? 'txt')
@@ -284,4 +286,35 @@ export function listVersionsForIdentifier(conversationId: string, identifier: st
         .prepare(`SELECT * FROM artifacts WHERE conversationId = ? AND identifier = ? ORDER BY version ASC`)
         .all(conversationId, identifier) as RawArtifactRow[]
     return rows.map(parseRow)
+}
+
+export function copyArtifactsForMessageMap(args: {
+    fromConversationId: string
+    toConversationId: string
+    messageIdMap: Map<string, string>
+}): ArtifactRow[] {
+    const copied: ArtifactRow[] = []
+    for (const [fromMessageId, toMessageId] of args.messageIdMap) {
+        const rows = db
+            .prepare(
+                `SELECT * FROM artifacts
+                  WHERE conversationId = ?
+                    AND messageId = ?
+                  ORDER BY identifier ASC, version ASC`
+            )
+            .all(args.fromConversationId, fromMessageId) as RawArtifactRow[]
+        for (const row of rows.map(parseRow)) {
+            copied.push(insertArtifact({
+                conversationId: args.toConversationId,
+                messageId: toMessageId,
+                identifier: row.identifier,
+                type: row.type,
+                title: row.title,
+                language: row.language,
+                display: row.display,
+                content: row.content,
+            }))
+        }
+    }
+    return copied
 }

@@ -6,8 +6,12 @@ import { randomUUID } from 'crypto'
 import { listActiveChatStreams } from '@/lib/chat-streams'
 import { getEnvValue } from '@/lib/config'
 import { shutdownBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
+import { createInboxConversation } from '@/lib/scheduling/store'
+import { sendInboxPushNotification } from '@/lib/push-notifications'
+import type { Message } from '@/lib/types'
 
 type UpdatePhase = 'idle' | 'queued' | 'updating' | 'restarting' | 'completed' | 'failed'
+type UpdateTargetKind = 'release' | 'branch'
 
 export interface ActiveRunInfo {
     conversationId: string
@@ -35,8 +39,11 @@ export interface LatestReleaseInfo {
 export interface UpdateJob {
     id: string
     phase: UpdatePhase
+    targetKind?: UpdateTargetKind
     targetVersion: string
     targetTag: string
+    targetBranch?: string | null
+    targetCommit?: string | null
     queuedAt: number
     updatedAt: number
     startedAt?: number
@@ -47,6 +54,11 @@ export interface UpdateJob {
     waitReason?: string
     error?: string
     logPath?: string
+    postRestartCheckedAt?: number
+    postRestartConfirmedAt?: number
+    postRestartCurrentCommit?: string | null
+    postRestartConfirmationError?: string
+    postRestartConfirmationConversationId?: string
 }
 
 export interface UpdateStatus {
@@ -69,6 +81,7 @@ export interface UpdateStatus {
 export interface HostUpdateResult {
     jobId: string
     phase: 'failed' | 'restarting' | 'completed'
+    targetCommit?: string
     error?: string
     waitReason?: string
 }
@@ -91,6 +104,7 @@ const REPO = `${REPO_OWNER}/${REPO_NAME}`
 const LATEST_CACHE_MS = 5 * 60 * 1000
 const MAINTENANCE_STALE_MS = 60 * 60 * 1000
 const IDLE_GRACE_MS = Number.parseInt(getEnvValue('ORCHESTRATOR_UPDATE_IDLE_GRACE_MS') || '10000', 10)
+const UPDATE_CONFIRMATION_TASK_ID = 'system:update'
 
 const globalForUpdates = globalThis as unknown as {
     __orchestratorUpdateState?: MemoryState
@@ -134,12 +148,33 @@ function git(args: string[]): string | null {
     }
 }
 
+function envBuildValue(name: string): string | null {
+    const value = getEnvValue(name)?.trim()
+    if (!value || value === 'unknown') return null
+    return value
+}
+
+function normalizeCommit(value: string | null | undefined): string | null {
+    const clean = value?.trim()
+    if (!clean || clean === 'unknown') return null
+    return /^[0-9a-f]{7,40}$/i.test(clean) ? clean : null
+}
+
+function commitsMatch(current: string | null | undefined, target: string | null | undefined): boolean {
+    const currentCommit = normalizeCommit(current)
+    const targetCommit = normalizeCommit(target)
+    if (!currentCommit || !targetCommit) return false
+    return currentCommit === targetCommit
+        || currentCommit.startsWith(targetCommit)
+        || targetCommit.startsWith(currentCommit)
+}
+
 function getCurrentInstall(): CurrentInstallInfo {
     const dirty = Boolean(git(['status', '--porcelain']))
     return {
         version: readPackageVersion(),
-        commit: git(['rev-parse', '--short', 'HEAD']),
-        branch: git(['branch', '--show-current']),
+        commit: git(['rev-parse', '--short=12', 'HEAD']) ?? envBuildValue('ORCHESTRATOR_BUILD_COMMIT'),
+        branch: git(['branch', '--show-current']) ?? envBuildValue('ORCHESTRATOR_BUILD_REF'),
         dirty,
     }
 }
@@ -218,6 +253,110 @@ function reconcilePersistedJob(current: CurrentInstallInfo): UpdateJob | null {
     }
 
     return job
+}
+
+async function postUpdateConfirmationInbox(args: {
+    ok: boolean
+    targetCommit: string
+    currentCommit: string | null
+    currentVersion: string
+    error?: string
+}): Promise<string> {
+    const title = args.ok
+        ? 'Orchestrator update confirmed'
+        : 'Orchestrator update needs attention'
+    const body = args.ok
+        ? [
+            'Orchestrator restarted and confirmed the running build.',
+            '',
+            `Target commit: \`${args.targetCommit}\``,
+            `Running commit: \`${args.currentCommit ?? 'unknown'}\``,
+            `Version: \`${args.currentVersion}\``,
+        ].join('\n')
+        : [
+            'Orchestrator restarted, but the running build could not be confirmed.',
+            '',
+            `Target commit: \`${args.targetCommit}\``,
+            `Running commit: \`${args.currentCommit ?? 'unknown'}\``,
+            `Version: \`${args.currentVersion}\``,
+            '',
+            args.error ?? 'Post-restart confirmation failed.',
+        ].join('\n')
+
+    const message: Message = {
+        id: `msg_${randomUUID()}`,
+        role: 'assistant',
+        content: body,
+        status: args.ok ? 'ok' : 'error',
+        timestamp: Date.now(),
+    }
+    const conversationId = createInboxConversation({
+        taskId: UPDATE_CONFIRMATION_TASK_ID,
+        title,
+        messages: [message],
+    })
+    await sendInboxPushNotification({ conversationId, title, body }).catch((err) => {
+        console.warn('[update] failed to send post-restart push notification', err)
+    })
+    return conversationId
+}
+
+export async function confirmPendingUpdateAfterRestart(): Promise<UpdateJob | null> {
+    if (process.env.ORCHESTRATOR_BUILD === '1' || process.env.NEXT_PHASE === 'phase-production-build') {
+        return null
+    }
+
+    const persisted = readPersistedJob()
+    if (persisted && (!memory.job || persisted.updatedAt > memory.job.updatedAt)) {
+        memory.job = persisted
+    }
+
+    const job = memory.job ?? persisted
+    const targetCommit = normalizeCommit(job?.targetCommit)
+    if (!job || !targetCommit || job.postRestartConfirmedAt) return job ?? null
+    if (job.phase !== 'restarting' && job.phase !== 'completed') return job
+
+    const current = getCurrentInstall()
+    const currentCommit = normalizeCommit(current.commit)
+    const ok = commitsMatch(currentCommit, targetCommit)
+    const now = Date.now()
+    const error = ok
+        ? undefined
+        : currentCommit
+            ? `Running commit ${currentCommit} does not match target ${targetCommit}.`
+            : 'Running commit is unavailable. Docker builds must pass ORCHESTRATOR_BUILD_COMMIT to confirm self-updates.'
+
+    let conversationId = job.postRestartConfirmationConversationId
+    if (!conversationId) {
+        try {
+            conversationId = await postUpdateConfirmationInbox({
+                ok,
+                targetCommit,
+                currentCommit,
+                currentVersion: current.version,
+                error,
+            })
+        } catch (err) {
+            console.warn('[update] failed to post restart confirmation inbox item', err)
+        }
+    }
+
+    const next: UpdateJob = {
+        ...job,
+        phase: ok ? 'completed' : job.phase,
+        completedAt: ok ? (job.completedAt ?? now) : job.completedAt,
+        updatedAt: now,
+        waitReason: ok
+            ? 'Update installed, service restarted, and running commit confirmed.'
+            : 'Post-restart confirmation failed.',
+        postRestartCheckedAt: now,
+        postRestartConfirmedAt: ok ? now : job.postRestartConfirmedAt,
+        postRestartCurrentCommit: currentCommit,
+        postRestartConfirmationError: error,
+        postRestartConfirmationConversationId: conversationId,
+    }
+    setJob(next)
+    return next
 }
 
 async function fetchLatestRelease(force = false): Promise<LatestReleaseInfo | null> {
@@ -426,6 +565,20 @@ function activeJob(job: UpdateJob | null): UpdateJob | null {
     return job.phase === 'queued' || job.phase === 'updating' || job.phase === 'restarting' ? job : null
 }
 
+function sanitizeBranchName(value: string): string {
+    const branch = value.trim()
+    if (
+        !branch ||
+        branch.startsWith('/') ||
+        branch.endsWith('/') ||
+        branch.includes('..') ||
+        !/^[A-Za-z0-9._/-]+$/.test(branch)
+    ) {
+        throw new Error(`Invalid update branch: ${value || '(empty)'}`)
+    }
+    return branch
+}
+
 async function startDockerHostUpdateRunner(job: UpdateJob) {
     const config = dockerHostUpdaterConfig()
     if (!config) {
@@ -448,6 +601,7 @@ async function startDockerHostUpdateRunner(job: UpdateJob) {
             body: JSON.stringify({
                 jobId: job.id,
                 targetTag: job.targetTag,
+                targetBranch: job.targetBranch,
                 targetVersion: job.targetVersion,
             }),
             cache: 'no-store',
@@ -497,15 +651,20 @@ async function startUpdateRunner() {
     }
 
     try {
-        const child = spawn(process.execPath, [
+        const runnerArgs = [
             UPDATE_RUNNER_PATH,
             '--job-id',
             next.id,
-            '--target-tag',
-            next.targetTag,
             '--target-version',
             next.targetVersion,
-        ], {
+        ]
+        if (next.targetKind === 'branch' && next.targetBranch) {
+            runnerArgs.push('--target-branch', next.targetBranch)
+        } else {
+            runnerArgs.push('--target-tag', next.targetTag)
+        }
+
+        const child = spawn(process.execPath, runnerArgs, {
             cwd: PROJECT_DIR,
             detached: true,
             stdio: 'ignore',
@@ -589,16 +748,19 @@ export async function getUpdateStatus(opts?: { refresh?: boolean }): Promise<Upd
     }
 }
 
-export async function queueUpdate(): Promise<UpdateStatus> {
-    const status = await getUpdateStatus({ refresh: true })
+export async function queueUpdate(opts?: { mode?: UpdateTargetKind; branch?: string }): Promise<UpdateStatus> {
+    const mode: UpdateTargetKind = opts?.mode === 'branch' ? 'branch' : 'release'
+    const status = await getUpdateStatus({ refresh: mode === 'release' })
     const currentActive = activeJob(status.job)
     if (currentActive) {
         if (currentActive.phase === 'queued') scheduleQueuedJob(currentActive.id)
         return status
     }
 
-    if (!status.latest) throw new Error(status.latestError || 'No release is available.')
-    if (!status.updateAvailable) throw new Error('The installed version is already up to date.')
+    if (mode === 'release') {
+        if (!status.latest) throw new Error(status.latestError || 'No release is available.')
+        if (!status.updateAvailable) throw new Error('The installed version is already up to date.')
+    }
     if (!status.config.managedInstall) {
         if (status.config.serviceManager === 'docker') {
             throw new Error('Docker one-click updates need the installer host update bridge. Re-run the installer on the server or run `orchestrator update` there.')
@@ -613,11 +775,16 @@ export async function queueUpdate(): Promise<UpdateStatus> {
     }
 
     const now = Date.now()
+    const targetBranch = mode === 'branch'
+        ? sanitizeBranchName(opts?.branch || status.current.branch || 'master')
+        : null
     const job: UpdateJob = {
         id: randomUUID(),
         phase: 'queued',
-        targetVersion: status.latest.version,
-        targetTag: status.latest.tag,
+        targetKind: mode,
+        targetVersion: mode === 'release' ? status.latest!.version : status.current.version,
+        targetTag: mode === 'release' ? status.latest!.tag : `branch:${targetBranch}`,
+        targetBranch,
         queuedAt: now,
         updatedAt: now,
         activeRunCount: status.activeRuns.length,
@@ -641,11 +808,13 @@ export function recordHostUpdateResult(result: HostUpdateResult): UpdateJob {
     if (!current || current.id !== result.jobId) {
         throw new Error('Update job is not active.')
     }
+    const targetCommit = normalizeCommit(result.targetCommit) ?? normalizeCommit(current.targetCommit)
 
     if (result.phase === 'failed') {
         const failed: UpdateJob = {
             ...current,
             phase: 'failed',
+            targetCommit,
             failedAt: Date.now(),
             updatedAt: Date.now(),
             error: result.error || 'Docker host update failed.',
@@ -659,6 +828,7 @@ export function recordHostUpdateResult(result: HostUpdateResult): UpdateJob {
         const completed: UpdateJob = {
             ...current,
             phase: 'completed',
+            targetCommit,
             completedAt: Date.now(),
             updatedAt: Date.now(),
             waitReason: result.waitReason || 'Update installed and Docker restart requested.',
@@ -670,6 +840,7 @@ export function recordHostUpdateResult(result: HostUpdateResult): UpdateJob {
     const restarting: UpdateJob = {
         ...current,
         phase: 'restarting',
+        targetCommit,
         updatedAt: Date.now(),
         waitReason: result.waitReason || 'Host updater is rebuilding and restarting the Docker stack.',
     }

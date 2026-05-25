@@ -25,9 +25,14 @@ FROM node:22-bookworm-slim AS runner
 
 WORKDIR /app
 
+ARG ORCHESTRATOR_BUILD_COMMIT=unknown
+ARG ORCHESTRATOR_BUILD_REF=unknown
+
 ENV NODE_ENV=production \
     ORCHESTRATOR_HOST=0.0.0.0 \
     ORCHESTRATOR_PORT=3000 \
+    ORCHESTRATOR_BUILD_COMMIT=${ORCHESTRATOR_BUILD_COMMIT} \
+    ORCHESTRATOR_BUILD_REF=${ORCHESTRATOR_BUILD_REF} \
     PORT=3000 \
     NPM_CONFIG_PREFIX=/home/node/.npm-global \
     PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \

@@ -1,3 +1,6 @@
+import fs from 'fs'
+import path from 'path'
+
 import type { AgentKind, ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
 import { getAgent } from '@/lib/ai/agents/registry'
@@ -34,6 +37,10 @@ export const delegateToTool: ToolDef = {
             thread_title: {
                 type: 'string',
                 description: 'Optional short title for a new thread. Ignored when thread_id is provided.',
+            },
+            cwd: {
+                type: 'string',
+                description: 'Optional absolute working directory for CLI-backed agents such as coder. Use for isolated project worktrees prepared by the orchestrator.',
             },
         },
         required: ['agent_id', 'prompt'],
@@ -74,6 +81,10 @@ export const delegateParallelTool: ToolDef = {
                         thread_title: {
                             type: 'string',
                             description: 'Optional short title for a new thread.',
+                        },
+                        cwd: {
+                            type: 'string',
+                            description: 'Optional absolute working directory for this job when invoking CLI-backed agents.',
                         },
                     },
                     required: ['agent_id', 'prompt'],
@@ -201,6 +212,7 @@ type PreparedDelegation =
         target: NonNullable<ReturnType<typeof getAgent>>
         prompt: string
         thread: AgentThread
+        cwd?: string
     }
 
 type DelegationPlan =
@@ -208,6 +220,7 @@ type DelegationPlan =
         ok: true
         target: NonNullable<ReturnType<typeof getAgent>>
         prompt: string
+        cwd?: string
         thread?: AgentThread
         newThread: {
             conversationId: string
@@ -237,6 +250,8 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
     const prompt = args.prompt
     const threadId = args.thread_id
     const threadTitle = args.thread_title
+    const cwdPlan = normalizeDelegationCwd(args.cwd)
+    if (!cwdPlan.ok) return { ok: false, error: cwdPlan.error }
     if (typeof agentId !== 'string' || typeof prompt !== 'string' || !prompt.trim()) {
         return { ok: false, error: 'delegate_to expects { agent_id: string, prompt: non-empty string }' }
     }
@@ -290,13 +305,14 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
         thread = existing
     }
 
-    return { ok: true, target, prompt: prompt.trim(), thread, newThread }
+    return { ok: true, target, prompt: prompt.trim(), cwd: cwdPlan.cwd, thread, newThread }
 }
 
 function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): PreparedDelegation {
     return {
         target: plan.target,
         prompt: plan.prompt,
+        cwd: plan.cwd,
         thread: plan.thread ?? createAgentThread(plan.newThread),
     }
 }
@@ -312,6 +328,7 @@ async function runPreparedDelegation(
             prompt: prepared.prompt,
             parentCtx: ctx,
             agentThreadId: prepared.thread.id,
+            cwd: prepared.cwd,
         })
         : runner.runMediaSubAgent({
             target: prepared.target,
@@ -323,6 +340,23 @@ async function runPreparedDelegation(
 
 function isTextRuntimeKind(kind: AgentKind): boolean {
     return kind === 'text' || kind === 'concierge'
+}
+
+function normalizeDelegationCwd(value: unknown): { ok: true; cwd?: string } | { ok: false; error: string } {
+    if (value === undefined || value === null || value === '') return { ok: true }
+    if (typeof value !== 'string') return { ok: false, error: 'cwd must be a string when provided.' }
+    const clean = value.trim()
+    if (!clean) return { ok: true }
+    if (!path.isAbsolute(clean)) return { ok: false, error: 'cwd must be an absolute path.' }
+
+    let stat: fs.Stats
+    try {
+        stat = fs.statSync(clean)
+    } catch {
+        return { ok: false, error: `cwd does not exist: ${clean}` }
+    }
+    if (!stat.isDirectory()) return { ok: false, error: `cwd is not a directory: ${clean}` }
+    return { ok: true, cwd: path.resolve(clean) }
 }
 
 async function mapWithConcurrency<T, R>(

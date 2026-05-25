@@ -18,6 +18,8 @@ import {
 } from "./store"
 import { sendInboxPushNotification } from "@/lib/push-notifications"
 import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
+import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
+import { appendMissingArtifactBlocks, stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 
 // Heavy AI modules (runner pulls in the whole tool/provider graph) are
 // imported lazily so the scheduler boot path and this module stay cheap and
@@ -438,7 +440,10 @@ export async function runScheduledTask(
   } else if (task.action.kind === "agent" || task.action.kind === "monitor") {
     if (notifications.length > 0) {
       surface = true
-      inboxBody = bodyFromNotifications(notifications)
+      inboxBody = appendMissingArtifactBlocks(
+        bodyFromNotifications(notifications),
+        assistantContent
+      )
     }
   } else if (task.action.kind === "tool") {
     surface = isOnce // one-shot tool → confirm; recurring tool success → silent
@@ -470,10 +475,21 @@ export async function runScheduledTask(
       title: inboxTitle,
       messages: [userMsg, assistantMsg],
     })
+    const persisted = persistArtifactsFromMessage({
+      conversationId,
+      messageId: assistantMsg.id,
+      content: assistantMsg.content,
+    })
+    if (persisted.errors.length > 0) {
+      console.warn(
+        `Failed to persist ${persisted.errors.length} scheduled-run artifact(s):`,
+        persisted.errors
+      )
+    }
     void sendInboxPushNotification({
       conversationId,
       title: inboxTitle,
-      body: inboxBody,
+      body: stripArtifactBlocksForPreview(inboxBody),
     })
   }
 

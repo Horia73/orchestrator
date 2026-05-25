@@ -228,6 +228,14 @@ import {
   WEATHER_SHOW_TOOL_ID,
   WEATHER_STATUS_TOOL_ID,
 } from "./weather"
+import {
+  executeGetExerciseHistory,
+  executeGetRecentWorkouts,
+  executeListExerciseHistory,
+  GET_EXERCISE_HISTORY_TOOL_ID,
+  GET_RECENT_WORKOUTS_TOOL_ID,
+  LIST_EXERCISE_HISTORY_TOOL_ID,
+} from "./workout-history"
 import { executeSetTaskState } from "./task-state"
 import { executeMonitorWakeFeedback } from "./smart-monitor-feedback"
 import {
@@ -454,6 +462,9 @@ const executors: Record<string, ToolExecutor> = {
   [WEATHER_SET_WHY_TOOL_ID]: executeWeatherSetWhy,
   [WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID]: executeWeatherSetCalendarContext,
   [WEATHER_STATUS_TOOL_ID]: executeWeatherStatus,
+  [GET_EXERCISE_HISTORY_TOOL_ID]: executeGetExerciseHistory,
+  [LIST_EXERCISE_HISTORY_TOOL_ID]: executeListExerciseHistory,
+  [GET_RECENT_WORKOUTS_TOOL_ID]: executeGetRecentWorkouts,
   WatchlistAddFinancialInstrument: executeWatchlistAddFinancialInstrument,
   WatchlistAddProduct: executeWatchlistAddProduct,
   WatchlistRemoveItem: executeWatchlistRemoveItem,
@@ -494,6 +505,9 @@ const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
   WEATHER_SET_OUTFIT_TOOL_ID,
   WEATHER_SET_WHY_TOOL_ID,
   WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
+  GET_EXERCISE_HISTORY_TOOL_ID,
+  LIST_EXERCISE_HISTORY_TOOL_ID,
+  GET_RECENT_WORKOUTS_TOOL_ID,
   "search_past_runs",
   "get_past_run",
   "search_agent_logs",

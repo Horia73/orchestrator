@@ -1,11 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { ExternalLink } from "lucide-react"
+import { Clock3, Dumbbell, ExternalLink, ListChecks, Maximize2 } from "lucide-react"
 
 import type { ArtifactOpenAttrs, ArtifactRow } from "@/lib/artifacts/schema"
 import { ArtifactParser } from "@/lib/artifacts/parser"
 import { decideRowRenderTarget } from "@/lib/artifacts/render-decision"
+import { parseWorkoutArtifact } from "@/lib/workout/parser"
 import { ArtifactInline } from "./artifact-inline"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { useConversationArtifacts } from "./use-conversation-artifacts"
@@ -125,11 +126,31 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                     content: seg.content,
                     createdAt: 0,
                 }
-                if (onExpand && decideRowRenderTarget(artifact) === "panel") {
+                const renderTarget = decideRowRenderTarget(artifact)
+                if (renderTarget !== "inline" && !realRow) {
                     return (
-                        <PanelArtifactButton
-                            key={`a-${i}-${artifact.id}`}
+                        <StreamingPlaceholder
+                            key={`p-${i}-${seg.attrs.identifier}`}
+                            type={seg.attrs.type}
+                            title={seg.attrs.title}
+                        />
+                    )
+                }
+                if (renderTarget === "fullscreen") {
+                    return (
+                        <ArtifactLaunchCard
+                            key={`f-${i}-${artifact.id}`}
                             artifact={artifact}
+                            target="fullscreen"
+                        />
+                    )
+                }
+                if (renderTarget === "panel") {
+                    return (
+                        <ArtifactLaunchCard
+                            key={`pnl-${i}-${artifact.id}`}
+                            artifact={artifact}
+                            target="panel"
                             onExpand={onExpand}
                         />
                     )
@@ -151,25 +172,100 @@ function SuppressedArtifactNotice({ title, type }: { title: string; type: string
     )
 }
 
-function PanelArtifactButton({
+function ArtifactLaunchCard({
     artifact,
+    target,
     onExpand,
 }: {
     artifact: ArtifactRow
-    onExpand: (a: ArtifactRow) => void
+    target: "panel" | "fullscreen"
+    onExpand?: (a: ArtifactRow) => void
 }) {
+    const workout = React.useMemo(
+        () => artifact.type === "application/vnd.ant.workout"
+            ? summarizeWorkoutArtifact(artifact.content)
+            : null,
+        [artifact.content, artifact.type]
+    )
+    const isFullscreen = target === "fullscreen"
+    const buttonLabel = artifact.type === "application/vnd.ant.workout"
+        ? "Open workout"
+        : isFullscreen
+            ? "Open full screen"
+            : "Open artifact"
+    const open = () => {
+        if (target === "panel" && onExpand) {
+            onExpand(artifact)
+            return
+        }
+        window.location.assign(`/artifact/${artifact.id}`)
+    }
+
     return (
         <button
             type="button"
-            onClick={() => onExpand(artifact)}
-            className="my-2 flex max-w-full items-center gap-2 rounded-lg border border-border/70 bg-muted/25 px-3 py-2 text-left text-sm text-foreground/80 transition-colors hover:border-border hover:bg-muted/45"
-            aria-label={`Open ${artifact.title} in side panel`}
-            title="Open in side panel"
+            onClick={open}
+            className="my-2 flex w-full max-w-full items-center gap-3 rounded-lg border border-border/70 bg-muted/25 px-3.5 py-3 text-left text-sm text-foreground/80 transition-colors hover:border-border hover:bg-muted/45"
+            aria-label={`${buttonLabel}: ${artifact.title}`}
+            title={buttonLabel}
         >
-            <ExternalLink className="size-4 shrink-0 text-muted-foreground" />
-            <span className="min-w-0 truncate">{artifact.title}</span>
+            <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]">
+                {artifact.type === "application/vnd.ant.workout"
+                    ? <Dumbbell className="size-5" />
+                    : isFullscreen
+                        ? <Maximize2 className="size-5" />
+                        : <ExternalLink className="size-5" />}
+            </span>
+            <span className="min-w-0 flex-1">
+                <span className="block truncate font-medium text-foreground">{artifact.title}</span>
+                {workout ? (
+                    <span className="mt-1 flex min-w-0 flex-wrap gap-x-3 gap-y-1 text-[12px] leading-5 text-muted-foreground">
+                        {typeof workout.minutes === "number" ? (
+                            <span className="inline-flex items-center gap-1">
+                                <Clock3 className="size-3.5" />
+                                {workout.minutes} min
+                            </span>
+                        ) : null}
+                        <span className="inline-flex items-center gap-1">
+                            <Dumbbell className="size-3.5" />
+                            {workout.exercises} exercises
+                        </span>
+                        <span className="inline-flex items-center gap-1">
+                            <ListChecks className="size-3.5" />
+                            {workout.sets} sets
+                        </span>
+                    </span>
+                ) : (
+                    <span className="mt-1 block truncate text-[12px] text-muted-foreground">
+                        {isFullscreen ? "Full-screen artifact" : "Panel artifact"}
+                    </span>
+                )}
+            </span>
+            <span className="shrink-0 rounded-md bg-background px-2.5 py-1 text-[12px] font-medium text-foreground/70 shadow-[inset_0_0_0_1px_hsl(var(--border))]">
+                {buttonLabel}
+            </span>
         </button>
     )
+}
+
+function summarizeWorkoutArtifact(content: string): { minutes?: number; exercises: number; sets: number } | null {
+    const parsed = parseWorkoutArtifact(content)
+    if (!parsed.ok) return null
+
+    let exercises = 0
+    let sets = 0
+    for (const group of parsed.value.groups) {
+        exercises += group.exercises.length
+        for (const exercise of group.exercises) {
+            sets += exercise.planned.length
+        }
+    }
+
+    return {
+        minutes: parsed.value.estimatedDurationMin,
+        exercises,
+        sets,
+    }
 }
 
 /**
@@ -184,6 +280,7 @@ const RUNTIME_TYPES = new Set([
     'application/vnd.ant.map',
     'application/vnd.ant.weather',
     'application/vnd.ant.recipe',
+    'application/vnd.ant.workout',
 ])
 
 /**
@@ -196,6 +293,7 @@ const PLACEHOLDER_TYPES = new Set([
     'application/vnd.ant.map',
     'application/vnd.ant.weather',
     'application/vnd.ant.recipe',
+    'application/vnd.ant.workout',
 ])
 
 function StreamingPlaceholder({ type, title }: { type: string; title: string }) {
@@ -215,6 +313,7 @@ const STREAMING_KIND_LABEL: Record<string, string> = {
     'application/vnd.ant.map': 'map',
     'application/vnd.ant.weather': 'weather',
     'application/vnd.ant.recipe': 'recipe',
+    'application/vnd.ant.workout': 'workout',
 }
 
 function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
@@ -226,6 +325,7 @@ function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
         case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.recipe': return 'json'
+        case 'application/vnd.ant.workout': return 'json'
         default: return null
     }
 }

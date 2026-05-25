@@ -20,11 +20,13 @@ import {
   Search,
   Trash2,
 } from "lucide-react"
-import { MarkdownRenderer } from "@/components/markdown-renderer"
+import { RenderMessageContent } from "@/components/artifacts/render-message-content"
+import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
+import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 import { cn } from "@/lib/utils"
 import type { InboxReplyAction, ReasoningEntry } from "@/lib/types"
 import type { InboxListItem } from "./use-inbox"
@@ -118,7 +120,7 @@ function initialsForMessage(message: DetailMessageData, index: number): string {
 }
 
 function messagePreview(content: string): string {
-  const singleLine = content.replace(/\s+/g, " ").trim()
+  const singleLine = stripArtifactBlocksForPreview(content)
   if (singleLine.length <= 140) return singleLine
   return `${singleLine.slice(0, 139).trimEnd()}...`
 }
@@ -531,7 +533,7 @@ function DetailMessage({
         </div>
       </header>
       <div className="px-4 pb-5 text-[14px] leading-7 text-slate-800 md:px-6 md:pl-[72px] dark:text-slate-100">
-        <MarkdownRenderer content={message.content} />
+        <RenderMessageContent content={message.content} messageId={message.id} />
         {assistant && (
           <QuickReplyActions
             actions={message.replyActions}
@@ -1000,39 +1002,41 @@ function InboxViewInner() {
                   </h2>
                 </div>
 
-                <div>
-                  {threadMessages.map((message, index) => {
-                    const latest = message.id === latestMessageId
-                    const expanded =
-                      latest || expandedMessageIds.has(message.id)
-                    return expanded ? (
-                      <DetailMessage
-                        key={message.id}
-                        message={{
-                          ...message,
-                          replyActions:
-                            message.replyActions?.length
-                              ? message.replyActions
-                              : inferQuickReplyActions(message),
-                        }}
-                        index={index}
-                        total={threadMessages.length}
-                        responding={responding}
-                        busyActionId={busyActionId}
-                        onQuickReply={(action) =>
-                          void onRespond(detail.id, action.value, action.id)
-                        }
-                      />
-                    ) : (
-                      <CollapsedDetailMessage
-                        key={message.id}
-                        message={message}
-                        index={index}
-                        onExpand={() => toggleMessageExpanded(message.id)}
-                      />
-                    )
-                  })}
-                </div>
+                <ConversationArtifactsProvider conversationId={detail.id}>
+                  <div>
+                    {threadMessages.map((message, index) => {
+                      const latest = message.id === latestMessageId
+                      const expanded =
+                        latest || expandedMessageIds.has(message.id)
+                      return expanded ? (
+                        <DetailMessage
+                          key={message.id}
+                          message={{
+                            ...message,
+                            replyActions:
+                              message.replyActions?.length
+                                ? message.replyActions
+                                : inferQuickReplyActions(message),
+                          }}
+                          index={index}
+                          total={threadMessages.length}
+                          responding={responding}
+                          busyActionId={busyActionId}
+                          onQuickReply={(action) =>
+                            void onRespond(detail.id, action.value, action.id)
+                          }
+                        />
+                      ) : (
+                        <CollapsedDetailMessage
+                          key={message.id}
+                          message={message}
+                          index={index}
+                          onExpand={() => toggleMessageExpanded(message.id)}
+                        />
+                      )
+                    })}
+                  </div>
+                </ConversationArtifactsProvider>
               </div>
             </div>
 

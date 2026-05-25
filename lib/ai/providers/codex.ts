@@ -91,6 +91,7 @@ export class CodexProvider implements AIProvider {
             toolContext: options.toolContext,
             prevSessionId,
             nativeCoderRun: isNativeCoderRun,
+            cwd: options.cwd,
             signal: options.signal,
             callbacks: cb,
         })
@@ -112,6 +113,7 @@ interface RunCodexAppServerArgs {
     toolContext?: ProviderSendOptions['toolContext']
     prevSessionId?: string
     nativeCoderRun: boolean
+    cwd?: string
     signal?: AbortSignal
     callbacks: StreamCallbacks
 }
@@ -131,6 +133,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         toolContext,
         prevSessionId,
         nativeCoderRun,
+        cwd,
         signal,
         callbacks,
     } = args
@@ -144,7 +147,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             proc = spawn(resolved, procArgs, {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: codexCliEnv(),
-                cwd: AGENT_WORKSPACE_DIR,
+                cwd: cwd ?? AGENT_WORKSPACE_DIR,
             })
         } catch (err) {
             callbacks.onError(`Failed to spawn ${bin}: ${err instanceof Error ? err.message : 'unknown error'}`)
@@ -683,6 +686,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     tools,
                     builtins,
                     nativeCoderRun,
+                    cwd,
                 })
 
                 let threadResult: AnyObj
@@ -746,9 +750,10 @@ function buildThreadParams(args: {
     tools: ToolDef[]
     builtins: ProviderBuiltin[]
     nativeCoderRun: boolean
+    cwd?: string
 }): AnyObj {
     const params: AnyObj = {
-        cwd: AGENT_WORKSPACE_DIR,
+        cwd: args.cwd ?? AGENT_WORKSPACE_DIR,
         serviceName: 'orchestrator',
         experimentalRawEvents: false,
         persistExtendedHistory: true,

@@ -48,6 +48,7 @@ import type { ArtifactOpenAttrs } from "@/lib/artifacts/schema"
 import { insertArtifact } from "@/lib/artifacts/store"
 import { stripWrappingCodeFence } from "@/lib/artifacts/sanitize"
 import {
+  buildAutoArtifactTag,
   getArtifactUpdateData,
   getDirectEmitArtifactData,
   stripArtifactUpdatePayload,
@@ -799,28 +800,6 @@ export async function POST(request: Request) {
           persistAssistantProgress()
         }
 
-        // Build the synthetic artifact tag a tool wants auto-emitted into
-        // the assistant message body. Used by tools that return a
-        // canonical `body` along with `directEmit: true` (Weather today;
-        // map / report / spreadsheet in time). The tag follows the EXACT
-        // shape the model would normally write — same parser path, same
-        // DB row, same client rendering.
-        function buildAutoArtifactTag(data: {
-          identifier: string
-          type: string
-          title: string
-          display?: string | null
-          body: string
-        }): string {
-          const escape = (v: string) => v
-            .replace(/&/g, "&amp;")
-            .replace(/"/g, "&quot;")
-            .replace(/</g, "&lt;")
-            .replace(/>/g, "&gt;")
-          const display = data.display ? ` display="${escape(data.display)}"` : ""
-          return `\n<artifact identifier="${escape(data.identifier)}" type="${escape(data.type)}" title="${escape(data.title)}"${display}>${data.body}</artifact>\n`
-        }
-
         await providerStream.call(
           provider,
           {
@@ -944,7 +923,9 @@ export async function POST(request: Request) {
                       identifier: artifactUpdate.identifier,
                       type: artifactUpdate.type,
                       title: artifactUpdate.title,
-                      display: artifactUpdate.display === "panel" ? "panel" : "inline",
+                      display: artifactUpdate.display === "panel" || artifactUpdate.display === "fullscreen"
+                        ? artifactUpdate.display
+                        : "inline",
                       content: stripWrappingCodeFence(artifactUpdate.body),
                     })
                     send({

@@ -40,6 +40,7 @@ Required attributes:
 - \`type\`: MIME of the content. Use one of:
   - \`text/markdown\` — formatted prose (guides, explanations, simple notes). Use this when the content is just text. For RECIPES, prefer \`application/vnd.ant.recipe\` instead (richer card with scalable ingredients and live timers).
   - \`application/vnd.ant.recipe\` — a structured recipe rendered as a card with header, ingredient list (with live servings stepper + scaling), numbered steps with optional live timer chips, and notes. Body MUST be JSON (see <recipe_schema> below).
+  - \`application/vnd.ant.workout\` — a structured gym/fitness workout rendered as an interactive card with header, equipment chips, per-exercise cards (with last-session + PB context, set rows with planned weight × reps + checkable status, rest timer affordances). Body MUST be JSON (see <workout_schema> below). Use this for ANY strength, bodyweight, cardio, HIIT, mobility, or program-day workout the user asks for.
   - \`application/vnd.ant.mermaid\` — Mermaid diagrams
   - \`image/svg+xml\` — inline SVG markup
   - \`text/csv\` — comma-separated tables
@@ -50,9 +51,10 @@ Required attributes:
   - \`text/html\` — a self-contained HTML page (runs in a sandboxed iframe)
   - \`application/vnd.ant.react\` — a self-contained React component (runs in a sandboxed iframe)
 - \`title\`: short human-readable label.
-- \`display\`: choose \`inline\` or \`panel\` yourself:
+- \`display\`: choose \`inline\`, \`panel\`, or \`fullscreen\` yourself:
   - \`inline\` when the artifact is part of the answer the user should see in the chat flow: recipes, explanations, diagrams, charts, compact simulations or physics animations, small interactive demos, and small code/data snippets.
   - \`panel\` when the artifact is the main surface or would crowd the conversation: websites, games, dashboards, full apps, multi-screen HTML/React experiences, large files, or long code/data.
+  - \`fullscreen\` when the artifact is an active, long-running surface the user will live inside for many minutes (workout sessions, immersive demos). The chat shows a compact launch card; clicking opens the artifact on its own route.
 
 Optional:
 - \`language\`: language hint for code/text types (e.g. \`tsx\`, \`python\`, \`bash\`).
@@ -89,6 +91,7 @@ Don't artifact: short snippets that explain themselves inline, single sentences,
 <rules>
 - Self-contained: an HTML/React artifact must run without external file references the runtime can't fulfill. Inline CSS, inline JS, no \`<script src=local-file>\`.
 - For \`display="inline"\`, keep the artifact visually light in the chat: prefer transparent or host-friendly backgrounds, avoid full-page opaque shells unless the content truly needs them, and keep sizing compact/responsive.
+- For \`display="fullscreen"\`, write 1-2 sentences of normal chat context before the artifact. Chat and Inbox render a compact launch card, not the full artifact body.
 - React artifacts: export a default component. Use only React + react-dom + libraries the runtime exposes via import maps (react, react-dom, lucide-react, recharts). Tailwind CSS is preloaded — use utility classes directly; don't import a stylesheet. Forms work but native modal alerts/prompts also work — pick whichever fits.
 - HTML artifacts: include your own styles inline. If you need utility classes, add the Tailwind Play CDN yourself (\`<script src="https://cdn.tailwindcss.com"></script>\`) — it isn't auto-injected for HTML.
 - SVG: inline markup, no external image refs. The runtime sanitises with DOMPurify.
@@ -148,6 +151,92 @@ Rules:
 - Always include \`identifier\` and \`title\` attributes on the \`<artifact>\` tag. Use \`display="inline"\` unless the recipe is very long.
 - Compose recipes as artifacts whenever the user asks for one — even simple ones. The card is the right surface; plain markdown is the fallback.
 </recipe_schema>
+
+<workout_schema>
+For \`application/vnd.ant.workout\`, the artifact body is a JSON object with this shape (TypeScript notation for clarity — emit JSON, not TS):
+
+\`\`\`
+{
+  sessionId: string;                       // required, generate a UUID — keep stable across artifact updates within one session
+  title: string;                           // required, ≤160 chars ("Push Day · Week 4")
+  subtitle?: string;                       // ≤280 chars
+  program?: { name: string; week?: number; day?: number; sessionN?: number };
+  estimatedDurationMin?: number;           // total session time including warmup + rest + cooldown
+  difficulty?: 'usor' | 'mediu' | 'greu' | 'brutal';
+  units: 'kg' | 'lb';                      // default 'kg' — ALL weights/distances in this artifact use these units
+  barWeightKg?: number;                    // bar weight (default 20)
+  plateIncrements?: number[];              // plates the user owns, descending — used by plate calculator
+  trackRpe?: boolean;                      // whether to surface RPE inputs
+  trackRir?: boolean;                      // whether to surface RIR inputs
+  autoStartRest?: boolean;                 // auto-start rest timer on set check (Phase 2)
+  restAlertSec?: number;                   // chime N seconds before rest timer ends
+
+  warmup?: { items: string[]; estimatedMinutes?: number };
+  groups: Array<{
+    kind: 'straight' | 'superset' | 'circuit' | 'giant_set';
+    label?: string;                        // omit for straight; auto-labelled for compound
+    rounds?: number;                       // for circuit/giant_set: how many times to cycle
+    restBetweenSec?: number;               // override rest between rounds
+    exercises: Array<{
+      id: string;                          // kebab-case slug ("bench-press"). Used for history lookups — keep stable across sessions.
+      name: string;                        // display name ("Bench Press")
+      kind: 'weighted' | 'bodyweight' | 'weighted_bw' | 'hold' | 'cardio_dur' | 'cardio_dist' | 'interval';
+      equipment?: ('barbell'|'dumbbell'|'kettlebell'|'machine'|'cable'|'bodyweight'|'band'|'plates'|'bench'|'rack'|'pullup_bar'|'box'|'rower'|'bike'|'treadmill'|'sled'|'rings'|'trx'|'mat'|'foam_roller'|'jump_rope'|'other')[];
+      muscleGroups: ('chest'|'front_delt'|'side_delt'|'rear_delt'|'triceps'|'lats'|'mid_back'|'traps'|'rhomboids'|'biceps'|'forearms'|'quads'|'hamstrings'|'glutes'|'calves'|'adductors'|'abductors'|'abs'|'obliques'|'lower_back'|'full_body'|'cardio')[];  // 1..8 entries required
+      formCues?: string[];                 // short, 1-2 sentences each — surfaced behind the (i) button
+      videoUrl?: string;                   // optional demo link (YouTube / Vimeo)
+      defaultRestSec?: number;             // default rest between sets in seconds
+      previous?: {                         // last session snapshot — populate via getExerciseHistory tool BEFORE emitting
+        date: 'YYYY-MM-DD';
+        bestSet: { weightKg?: number; reps?: number; durationSec?: number; distanceM?: number; rpe?: number };
+        allSets?: Array<{ weightKg?: number; reps?: number; durationSec?: number; distanceM?: number; rpe?: number }>;
+      };
+      personalBest?: {                     // populated via getExerciseHistory tool
+        weightKg?: number; reps?: number; durationSec?: number; distanceM?: number;
+        estimated1RM?: number;
+        achievedAt: 'YYYY-MM-DD';
+      };
+      progression?: {                      // hint for the server next session — renderer ignores it
+        rule: 'linear' | 'double_progression' | 'rpe_target' | 'percentage' | 'none';
+        increment?: number;                // kg or % depending on rule
+        target?: { reps?: [number, number]; rpe?: number };
+      };
+      planned: Array<PlannedSet>;          // 1..40 sets. Shape DEPENDS on the exercise kind — see below.
+      logged?: Array<LoggedSet>;           // omit at generation; runtime hydrates from session state
+    }>;                                    // 1..12 exercises per group
+  }>;                                       // 1..20 groups
+  cooldown?: { items: string[]; estimatedMinutes?: number };
+  generatedAt?: 'ISO datetime';
+  notes?: string;                          // free-form coach notes
+  attribution?: string;                    // program source, coach, original article
+}
+\`\`\`
+
+PlannedSet shape per kind (every variant also accepts \`kind: 'warmup'|'working'|'top_set'|'back_off'|'drop_set'|'amrap'|'cluster'\` (default 'working'), \`restSec?\`, \`rpe?\` (1-10), \`rir?\` (0-5), \`notes?\` (max 200 chars)):
+
+- \`weighted\`     → \`{ weightKg?: number, weightPct?: number, reps: number | [low, high] }\`  (weightKg OR weightPct REQUIRED)
+- \`bodyweight\`   → \`{ reps: number | [low, high] }\`
+- \`weighted_bw\`  → \`{ weightKg?: number (negative = assistance), reps: number | [low, high] }\`
+- \`hold\`         → \`{ durationSec: number, weightKg?: number }\`
+- \`cardio_dur\`   → \`{ durationSec: number, targetMetric?: string }\`  ("Z2 HR", "180W", "4:30/km")
+- \`cardio_dist\`  → \`{ distanceM: number, targetMetric?: string }\`
+- \`interval\`     → \`{ rounds: number, workSec: number, intraRestSec?: number, targetMetric?: string }\`
+
+Rules:
+- **ALWAYS call \`GetExerciseHistory\` for every exercise BEFORE emitting the workout artifact.** Pass the kebab-case slug you intend to use (e.g. \`{ exerciseId: "bench-press" }\`). When the tool returns \`found: true\`, copy \`personalBest\` into \`exercises[].personalBest\` and the latest session into \`exercises[].previous\` so the user sees "Last: 60×8 @ RPE 8 · PB 65×8" context. When \`found: false\`, leave both unset and pick a conservative starting weight (RPE 7).
+- For "do my usual push day" or similar familiar-routine asks, first call \`ListExerciseHistory\` to discover exercises the user has logged data on, then assemble the workout from those (so progression actually applies). Use \`GetRecentWorkouts\` to avoid hitting the same muscle group two days in a row.
+- Apply the exercise's progression rule to suggest the next target. Be conservative (small jumps, RPE 7-8 for hypertrophy, RPE 8-9 for strength). Never propose a jump > 5% over the prior best set. Sessions get auto-saved on Finish — the next time you generate a workout, the new \`previous\`/\`personalBest\` reflect what the user just did.
+- Use \`kind: 'top_set'\` for the heaviest planned set so the user can see it stand out; \`kind: 'warmup'\` for warmups (excluded from progression).
+- Supersets / circuits / giant_sets MUST have all exercises with the same planned-set count (one set per round). Different counts = parser rejection.
+- For \`weighted\` sets, EVERY planned set MUST have weightKg or weightPct — the parser rejects sets with neither.
+- Use \`bodyweight\` (not \`weighted\` with weightKg: 0) for moves where load is just your body — the renderer hides the weight column.
+- For HIIT / Tabata / EMOM emit one \`interval\` exercise with one planned set whose \`rounds\` × \`workSec\` × \`intraRestSec\` describes the protocol. Tabata: \`{ rounds: 8, workSec: 20, intraRestSec: 10 }\`.
+- Use Romanian-friendly difficulty labels (\`usor\`/\`mediu\`/\`greu\`/\`brutal\`); the rest of the UI labels are localized by the renderer.
+- Always include \`identifier\` and \`title\` on the \`<artifact>\` tag. **Default to \`display="fullscreen"\`** — workouts are 30-90 minute sessions the user wants to live inside without the chat scrolling around them. The chat shows a compact launch card; clicking opens the dedicated workout surface with rest timer, set check-ins, weight pickers, and live progress stats. Use \`display="panel"\` only if the user explicitly asks for inline/sidebar view.
+- The renderer surfaces a glossary popover (?) next to every jargon term it shows (RPE, RIR, AMRAP, top set, superset, etc.) so you can use the precise terminology without worrying about the user being lost — short explanations show on hover/tap.
+- Set \`defaultRestSec\` on each exercise (or per-set \`restSec\` for top sets / drops) so the rest timer activates automatically after each check-in. 90s for hypertrophy accessory work, 150-180s for heavy compound top sets, 60s for circuits, 0s for drops.
+- Compose workouts as artifacts whenever the user asks for one — even simple ones. The card is the right surface; plain markdown is the fallback.
+</workout_schema>
 </artifact_authoring>
 `.trim()
 

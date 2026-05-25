@@ -50,10 +50,16 @@ def set_state(**patch) -> None:
         state["updatedAt"] = int(time.time() * 1000)
 
 
-def run(command: list[str]) -> None:
+def run(command: list[str], env: Optional[dict[str, str]] = None) -> None:
     write_log("$ " + " ".join(command))
     with LOG_PATH.open("a", encoding="utf-8") as handle:
-        subprocess.run(command, cwd=APP_DIR, check=True, stdout=handle, stderr=handle)
+        subprocess.run(command, cwd=APP_DIR, check=True, stdout=handle, stderr=handle, env=env)
+
+
+def capture(command: list[str]) -> str:
+    write_log("$ " + " ".join(command))
+    result = subprocess.run(command, cwd=APP_DIR, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+    return result.stdout.strip()
 
 
 def compose_command() -> list[str]:
@@ -70,7 +76,13 @@ def compose_command() -> list[str]:
     raise RuntimeError("Docker Compose is not available.")
 
 
-def notify_app(job_id: str, phase: str, wait_reason: str, error: Optional[str] = None) -> None:
+def notify_app(
+    job_id: str,
+    phase: str,
+    wait_reason: str,
+    error: Optional[str] = None,
+    target_commit: Optional[str] = None,
+) -> None:
     try:
         payload = {
             "jobId": job_id,
@@ -79,6 +91,8 @@ def notify_app(job_id: str, phase: str, wait_reason: str, error: Optional[str] =
         }
         if error:
             payload["error"] = error
+        if target_commit:
+            payload["targetCommit"] = target_commit
 
         req = urllib.request.Request(
             f"http://127.0.0.1:{APP_PORT}/api/update/host-result",
@@ -107,21 +121,45 @@ def allowed_peer(host: str) -> bool:
     return first == 10 or (first == 172 and 16 <= second <= 31)
 
 
+def safe_branch(value: object) -> str:
+    branch = str(value or BRANCH).strip()
+    allowed = all(ch.isalnum() or ch in "._/-" for ch in branch)
+    if (
+        not branch
+        or branch.startswith("/")
+        or branch.endswith("/")
+        or ".." in branch
+        or not allowed
+    ):
+        raise RuntimeError(f"Invalid update branch: {branch or '(empty)'}")
+    return branch
+
+
 def update_stack(payload: dict) -> None:
     job_id = str(payload.get("jobId") or f"manual-{int(time.time())}")
     target_tag = str(payload.get("targetTag") or "")
+    branch = safe_branch(payload.get("targetBranch"))
     set_state(phase="updating", jobId=job_id, targetTag=target_tag, error=None)
-    write_log(f"Starting Docker update job={job_id} target={target_tag or 'latest branch'}")
+    write_log(f"Starting Docker update job={job_id} target={target_tag or branch}")
 
     try:
         if not (APP_DIR / ".git").exists():
             raise RuntimeError(f"{APP_DIR} is not a git checkout.")
 
-        run(["git", "-C", str(APP_DIR), "fetch", "origin", BRANCH, "--tags"])
-        run(["git", "-C", str(APP_DIR), "checkout", BRANCH])
-        run(["git", "-C", str(APP_DIR), "pull", "--ff-only", "origin", BRANCH])
-        notify_app(job_id, "restarting", "Host updater is rebuilding and restarting the Docker stack.")
-        run([*compose_command(), "up", "--build", "-d"])
+        run(["git", "-C", str(APP_DIR), "fetch", "origin", branch, "--tags"])
+        run(["git", "-C", str(APP_DIR), "checkout", branch])
+        run(["git", "-C", str(APP_DIR), "pull", "--ff-only", "origin", branch])
+        target_commit = capture(["git", "-C", str(APP_DIR), "rev-parse", "--short=12", "HEAD"])
+        notify_app(
+            job_id,
+            "restarting",
+            "Host updater is rebuilding and restarting the Docker stack.",
+            target_commit=target_commit,
+        )
+        compose_env = os.environ.copy()
+        compose_env["ORCHESTRATOR_BUILD_COMMIT"] = target_commit
+        compose_env["ORCHESTRATOR_BUILD_REF"] = branch
+        run([*compose_command(), "up", "--build", "-d"], env=compose_env)
         set_state(phase="completed", error=None)
         write_log(f"Completed Docker update job={job_id}")
     except Exception as exc:

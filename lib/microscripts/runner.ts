@@ -7,6 +7,8 @@ import { WORKSPACE_DIR } from '@/lib/runtime-paths'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
 import { normalizeInboxReplyActions } from '@/lib/ai/tools/notify'
+import { persistArtifactsFromMessage } from '@/lib/artifacts/persist-message'
+import { appendMissingArtifactBlocks, stripArtifactBlocksForPreview } from '@/lib/artifacts/text'
 import type { ToolExecutionContext } from '@/lib/ai/agents/types'
 import type { InboxReplyAction, Message } from '@/lib/types'
 
@@ -117,7 +119,7 @@ try:
     result = run(ctx)
     json.dumps(result)
     print(json.dumps({"ok": True, "result": result, "logs": logs}), flush=True)
-except BaseException as exc:
+except Exception as exc:
     fail(type(exc).__name__ + ": " + str(exc) + "\n" + traceback.format_exc(limit=4))
 `
 
@@ -542,6 +544,10 @@ async function executeAgentWake(
     }
     const data = result.data as { output?: unknown } | undefined
     const output = typeof data?.output === 'string' ? data.output : ''
+    if (notifications.length > notificationsBefore) {
+        const last = notifications[notifications.length - 1]
+        if (last) last.body = appendMissingArtifactBlocks(last.body, output)
+    }
     return {
         agent_id: request.agent_id,
         output,
@@ -640,10 +646,21 @@ function postMicroscriptInbox(script: Microscript, notifications: PendingNotific
         title,
         messages: [assistantMsg],
     })
+    const persisted = persistArtifactsFromMessage({
+        conversationId,
+        messageId: assistantMsg.id,
+        content: assistantMsg.content,
+    })
+    if (persisted.errors.length > 0) {
+        console.warn(
+            `Failed to persist ${persisted.errors.length} microscript artifact(s):`,
+            persisted.errors,
+        )
+    }
     void sendInboxPushNotification({
         conversationId,
         title,
-        body,
+        body: stripArtifactBlocksForPreview(body),
     })
     return conversationId
 }

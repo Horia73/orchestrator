@@ -66,4 +66,13 @@ export async function register(): Promise<void> {
     } catch (err) {
         console.error('[memory-offer] failed to check daily consolidation offer', err)
     }
+    // Confirm managed self-updates after the restarted process is alive. The
+    // update runner/host bridge records the expected commit before restart;
+    // this boot hook compares it to the running build and posts one Inbox item.
+    try {
+        const { confirmPendingUpdateAfterRestart } = await import('@/lib/update/manager')
+        void confirmPendingUpdateAfterRestart()
+    } catch (err) {
+        console.error('[update] failed to confirm post-restart state', err)
+    }
 }

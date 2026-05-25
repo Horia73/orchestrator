@@ -43,6 +43,7 @@ import {
     mapsStatusTool,
 } from './maps'
 import { weatherSetCalendarContextTool, weatherSetOutfitTool, weatherSetWhyTool, weatherShowTool, weatherStatusTool } from './weather'
+import { getExerciseHistoryTool, getRecentWorkoutsTool, listExerciseHistoryTool } from './workout-history'
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -198,3 +199,6 @@ registerTool(weatherShowTool)
 registerTool(weatherSetOutfitTool)
 registerTool(weatherSetWhyTool)
 registerTool(weatherSetCalendarContextTool)
+registerTool(getExerciseHistoryTool)
+registerTool(listExerciseHistoryTool)
+registerTool(getRecentWorkoutsTool)

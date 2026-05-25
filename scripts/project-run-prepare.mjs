@@ -1,0 +1,675 @@
+#!/usr/bin/env node
+import fs from 'fs'
+import net from 'net'
+import os from 'os'
+import path from 'path'
+import { randomUUID } from 'crypto'
+import { spawnSync } from 'child_process'
+
+const projectDir = process.cwd()
+const args = parseArgs(process.argv.slice(2))
+const kind = stringArg('kind') || (stringArg('source') ? 'existing-git' : 'new')
+const task = stringArg('task') || 'Project implementation run.'
+const name = sanitizeName(stringArg('name') || stringArg('project-name') || 'project')
+const template = stringArg('template') || (kind === 'new' ? 'empty' : null)
+const runId = sanitizeRunId(stringArg('run-id') || `${kindSlug(kind)}-${name}-${timestamp()}-${randomUUID().slice(0, 8)}`)
+const branch = sanitizeBranchName(stringArg('branch') || `agent/${runId}`)
+const baseBranchArg = stringArg('base-branch')
+const sourceArg = stringArg('source')
+const remoteArg = stringArg('remote')
+const scaffoldCommand = stringArg('scaffold-command')
+const packageManagerArg = stringArg('package-manager')
+const devCommandArg = stringArg('dev-command')
+const testCommandArg = stringArg('test-command')
+const buildCommandArg = stringArg('build-command')
+const deployTarget = stringArg('deploy-target') || 'none'
+const pushPolicy = stringArg('push-policy') || (kind === 'existing-git' ? 'agent-branch' : 'manual')
+const portStart = intArg('port-start', 3101)
+const portEnd = intArg('port-end', 3999)
+const requestedPort = intArg('port', null)
+const copyEnv = boolArg('copy-env')
+const jsonOutput = boolArg('json')
+
+const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
+const runDir = path.join(stateRoot, runId)
+const repoDir = path.join(runDir, 'repo')
+const portStatePath = path.join(stateRoot, 'ports.json')
+
+if (kind !== 'existing-git' && kind !== 'new') {
+  fail('kind must be existing-git or new.')
+}
+if (kind === 'existing-git' && !sourceArg) {
+  fail('existing-git runs require --source <git-url-or-local-path>.')
+}
+if (portStart < 1024 || portEnd < portStart || portEnd > 65535) {
+  fail(`Invalid port range: ${portStart}-${portEnd}`)
+}
+if (requestedPort !== null && (requestedPort < portStart || requestedPort > portEnd)) {
+  fail(`Requested port ${requestedPort} is outside ${portStart}-${portEnd}`)
+}
+if (fs.existsSync(runDir)) {
+  fail(`Run directory already exists: ${runDir}`)
+}
+
+fs.mkdirSync(runDir, { recursive: true })
+
+try {
+  const prepared = kind === 'existing-git'
+    ? prepareExistingGit()
+    : prepareNewProject()
+
+  const port = await reservePort(requestedPort)
+  const devUrl = `http://127.0.0.1:${port}`
+  const hints = detectProjectHints(repoDir, {
+    packageManager: packageManagerArg,
+    devCommand: devCommandArg,
+    testCommand: testCommandArg,
+    buildCommand: buildCommandArg,
+  })
+  const instructionsPath = path.join(repoDir, 'PROJECT_RUN_INSTRUCTIONS.md')
+  const statePath = path.join(runDir, 'run-state.json')
+
+  excludeLocalFile(repoDir, 'PROJECT_RUN_INSTRUCTIONS.md')
+  fs.writeFileSync(instructionsPath, buildInstructions({
+    ...prepared,
+    kind,
+    task,
+    runId,
+    repoDir,
+    projectDir,
+    branch,
+    port,
+    devUrl,
+    template,
+    deployTarget,
+    pushPolicy,
+    hints,
+  }), 'utf-8')
+
+  if (copyEnv) copyEnvFiles(prepared.envSourceDir)
+
+  const coderPrompt = buildCoderPrompt({
+    ...prepared,
+    kind,
+    task,
+    repoDir,
+    instructionsPath,
+    port,
+    devUrl,
+    template,
+    deployTarget,
+    pushPolicy,
+    hints,
+  })
+  const state = {
+    runId,
+    kind,
+    createdAt: new Date().toISOString(),
+    projectDir,
+    repoDir,
+    branch,
+    baseBranch: prepared.baseBranch,
+    baseRef: prepared.baseRef,
+    port,
+    devUrl,
+    instructionsPath,
+    task,
+    template,
+    source: prepared.source,
+    sourceType: prepared.sourceType,
+    sourcePath: prepared.sourcePath,
+    sourceRemoteUrl: prepared.sourceRemoteUrl,
+    sourceCurrentBranch: prepared.sourceCurrentBranch,
+    sourceDirty: prepared.sourceDirty,
+    clonedFrom: prepared.clonedFrom,
+    remote: prepared.remote,
+    deployTarget,
+    pushPolicy,
+    scaffoldCommand: scaffoldCommand || null,
+    copyEnv,
+    hints,
+    status: 'prepared',
+    coderPrompt,
+  }
+  fs.writeFileSync(statePath, `${JSON.stringify(state, null, 2)}\n`, 'utf-8')
+
+  if (jsonOutput) {
+    console.log(JSON.stringify(state, null, 2))
+  } else {
+    console.log(`Prepared project run ${runId}`)
+    console.log(`Kind: ${kind}`)
+    console.log(`Repo: ${repoDir}`)
+    console.log(`Branch: ${branch}`)
+    console.log(`Base: ${prepared.baseRef || '(none)'}`)
+    console.log(`Port: ${port}`)
+    console.log(`Dev URL: ${devUrl}`)
+    console.log(`Instructions: ${instructionsPath}`)
+    console.log(`State: ${statePath}`)
+    console.log('')
+    console.log('Coder prompt:')
+    console.log(coderPrompt)
+  }
+} catch (err) {
+  fs.rmSync(runDir, { recursive: true, force: true })
+  fail(err instanceof Error ? err.message : String(err))
+}
+
+function prepareExistingGit() {
+  const sourceInfo = resolveGitSource(sourceArg)
+  let clonedFrom = sourceInfo.cloneUrl
+  try {
+    run('git', ['clone', sourceInfo.cloneUrl, repoDir])
+  } catch (error) {
+    if (!sourceInfo.path || sourceInfo.cloneUrl === sourceInfo.path) throw error
+    fs.rmSync(repoDir, { recursive: true, force: true })
+    console.warn(`Remote clone failed; falling back to local source checkout: ${sourceInfo.path}`)
+    run('git', ['clone', sourceInfo.path, repoDir])
+    clonedFrom = sourceInfo.path
+  }
+
+  const baseBranch = baseBranchArg
+    || detectRemoteDefaultBranch(repoDir)
+    || capture('git', ['branch', '--show-current'], { cwd: repoDir, optional: true })
+    || sourceInfo.currentBranch
+    || 'main'
+  const baseRef = checkoutAgentBranch(repoDir, baseBranch, branch)
+
+  return {
+    source: sourceArg,
+    sourceType: sourceInfo.type,
+    sourcePath: sourceInfo.path,
+    sourceRemoteUrl: sourceInfo.remoteUrl,
+    sourceCurrentBranch: sourceInfo.currentBranch,
+    sourceDirty: sourceInfo.dirty,
+    clonedFrom,
+    remote: capture('git', ['remote', 'get-url', 'origin'], { cwd: repoDir, optional: true }) || null,
+    baseBranch,
+    baseRef,
+    envSourceDir: sourceInfo.path,
+  }
+}
+
+function prepareNewProject() {
+  const baseBranch = baseBranchArg || 'main'
+  fs.mkdirSync(repoDir, { recursive: true })
+
+  if (scaffoldCommand) {
+    runShell(scaffoldCommand
+      .replaceAll('{repoDir}', shellQuote(repoDir))
+      .replaceAll('{runDir}', shellQuote(runDir))
+      .replaceAll('{name}', shellQuote(name)), {
+      cwd: runDir,
+      env: {
+        ...process.env,
+        PROJECT_RUN_DIR: runDir,
+        PROJECT_REPO_DIR: repoDir,
+        PROJECT_NAME: name,
+      },
+    })
+  }
+
+  fs.mkdirSync(repoDir, { recursive: true })
+  if (!isOwnGitCheckout(repoDir)) {
+    run('git', ['init', '-b', branch], { cwd: repoDir })
+  } else {
+    run('git', ['checkout', '-B', branch], { cwd: repoDir })
+  }
+  if (remoteArg && !capture('git', ['remote', 'get-url', 'origin'], { cwd: repoDir, optional: true })) {
+    run('git', ['remote', 'add', 'origin', remoteArg], { cwd: repoDir })
+  }
+
+  return {
+    source: null,
+    sourceType: 'new',
+    sourcePath: null,
+    sourceRemoteUrl: null,
+    sourceCurrentBranch: null,
+    sourceDirty: false,
+    clonedFrom: null,
+    remote: remoteArg || capture('git', ['remote', 'get-url', 'origin'], { cwd: repoDir, optional: true }) || null,
+    baseBranch,
+    baseRef: null,
+    envSourceDir: null,
+  }
+}
+
+function checkoutAgentBranch(repoPath, baseBranch, targetBranch) {
+  let baseRef = null
+  if (baseBranch) {
+    run('git', ['fetch', 'origin', baseBranch, '--tags'], { cwd: repoPath, optional: true })
+    const remoteRef = `origin/${baseBranch}`
+    if (capture('git', ['rev-parse', '--verify', '--quiet', remoteRef], { cwd: repoPath, optional: true })) {
+      baseRef = remoteRef
+    } else if (capture('git', ['rev-parse', '--verify', '--quiet', baseBranch], { cwd: repoPath, optional: true })) {
+      baseRef = baseBranch
+    }
+  }
+
+  if (!baseRef) baseRef = 'HEAD'
+  run('git', ['checkout', '-B', targetBranch, baseRef], { cwd: repoPath })
+  return baseRef
+}
+
+function resolveGitSource(source) {
+  if (!looksLikeLocalPath(source)) {
+    return {
+      type: 'remote',
+      cloneUrl: source,
+      path: null,
+      remoteUrl: source,
+      currentBranch: null,
+      dirty: false,
+    }
+  }
+
+  const sourcePath = path.resolve(expandHome(source))
+  if (!fs.existsSync(sourcePath)) fail(`Source path does not exist: ${sourcePath}`)
+  const topLevel = capture('git', ['rev-parse', '--show-toplevel'], { cwd: sourcePath, optional: true })
+  if (!topLevel) fail(`Source path is not a git checkout: ${sourcePath}`)
+
+  const remoteUrl = capture('git', ['remote', 'get-url', 'origin'], { cwd: topLevel, optional: true }) || null
+  return {
+    type: 'local',
+    cloneUrl: remoteUrl || topLevel,
+    path: topLevel,
+    remoteUrl,
+    currentBranch: capture('git', ['branch', '--show-current'], { cwd: topLevel, optional: true }) || null,
+    dirty: Boolean(capture('git', ['status', '--porcelain'], { cwd: topLevel, optional: true })),
+  }
+}
+
+function detectRemoteDefaultBranch(repoPath) {
+  const ref = capture('git', ['symbolic-ref', '--quiet', '--short', 'refs/remotes/origin/HEAD'], {
+    cwd: repoPath,
+    optional: true,
+  })
+  return ref?.startsWith('origin/') ? ref.slice('origin/'.length) : null
+}
+
+function detectProjectHints(repoPath, overrides) {
+  const packageJsonPath = path.join(repoPath, 'package.json')
+  const scripts = {}
+  let packageManager = overrides.packageManager || null
+  let framework = null
+
+  if (fs.existsSync(packageJsonPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'))
+      Object.assign(scripts, parsed?.scripts && typeof parsed.scripts === 'object' ? parsed.scripts : {})
+      if (!packageManager && typeof parsed?.packageManager === 'string') {
+        packageManager = parsed.packageManager.split('@')[0]
+      }
+      const deps = { ...(parsed?.dependencies || {}), ...(parsed?.devDependencies || {}) }
+      if (deps.next) framework = 'next'
+      else if (deps.vite) framework = 'vite'
+    } catch {
+      // Ignore malformed package metadata; coder can inspect manually.
+    }
+  }
+
+  if (!packageManager) {
+    if (fs.existsSync(path.join(repoPath, 'pnpm-lock.yaml'))) packageManager = 'pnpm'
+    else if (fs.existsSync(path.join(repoPath, 'yarn.lock'))) packageManager = 'yarn'
+    else if (fs.existsSync(path.join(repoPath, 'bun.lockb')) || fs.existsSync(path.join(repoPath, 'bun.lock'))) packageManager = 'bun'
+    else if (fs.existsSync(packageJsonPath)) packageManager = 'npm'
+  }
+
+  return {
+    packageManager,
+    framework,
+    scripts,
+    devCommand: overrides.devCommand || null,
+    testCommand: overrides.testCommand || null,
+    buildCommand: overrides.buildCommand || null,
+  }
+}
+
+function buildInstructions(values) {
+  const packagePrefix = values.hints.packageManager || '<package-manager>'
+  const devCommand = values.hints.devCommand
+    || (values.hints.framework === 'next'
+      ? `${packagePrefix === 'npm' ? 'npx' : packagePrefix} next dev -H 127.0.0.1 -p ${values.port}`
+      : null)
+  const verificationHints = [
+    values.hints.testCommand,
+    values.hints.buildCommand,
+    values.hints.scripts?.test ? `${packagePrefix} ${packagePrefix === 'npm' ? 'run ' : ''}test`.trim() : null,
+    values.hints.scripts?.build ? `${packagePrefix} ${packagePrefix === 'npm' ? 'run ' : ''}build`.trim() : null,
+  ].filter(Boolean)
+
+  return [
+    '# Project Run Instructions',
+    '',
+    `Task: ${values.task}`,
+    '',
+    '## Workspace Boundary',
+    '',
+    'Work only in this isolated repository:',
+    '',
+    '```text',
+    values.repoDir,
+    '```',
+    '',
+    `This workspace was prepared by Orchestrator from kind \`${values.kind}\`. Do not edit unrelated repositories or the Orchestrator live checkout unless explicitly asked.`,
+    '',
+    values.sourcePath
+      ? [
+        'Source checkout on the host:',
+        '',
+        '```text',
+        values.sourcePath,
+        '```',
+        '',
+        values.sourceDirty
+          ? 'That source checkout had local uncommitted changes when this run was prepared. They are not part of this isolated run unless they were committed/pushed before cloning.'
+          : 'The isolated run is based on committed git state, not on future local edits in that source checkout.',
+        '',
+      ].join('\n')
+      : '',
+    'Do not commit or push unless the orchestrator explicitly asks you to. Leave the repository in a commit-ready state by default.',
+    '',
+    `Push policy hint: \`${values.pushPolicy}\`. Deployment target hint: \`${values.deployTarget}\`. Treat these as policy inputs for the orchestrator gate, not as permission to push or deploy on your own.`,
+    '',
+    '## Development Server',
+    '',
+    'Use the assigned port for local dev/testing:',
+    '',
+    '```text',
+    values.devUrl,
+    '```',
+    '',
+    'Bind dev servers to `127.0.0.1` when possible. Avoid port `3000` because it may be used by the running Orchestrator app.',
+    '',
+    devCommand
+      ? [
+        'Suggested dev command when it matches the project:',
+        '',
+        '```bash',
+        devCommand,
+        '```',
+        '',
+      ].join('\n')
+      : 'Inspect the project and choose the right dev command. If the tool accepts host/port flags, use the assigned host and port.\n',
+    'Stop any dev server you started before returning.',
+    '',
+    '## Verification',
+    '',
+    'Inspect the project and choose the checks that match the change. Prefer existing package scripts, framework checks, and targeted smoke tests.',
+    '',
+    verificationHints.length
+      ? [
+        'Known verification commands:',
+        '',
+        ...verificationHints.flatMap(command => ['```bash', command, '```', '']),
+      ].join('\n')
+      : 'No verification command was detected at prepare time. Find the appropriate checks from the project files.',
+    '',
+    'If checks fail because of unrelated pre-existing errors, report the exact failures and still verify your changed area as narrowly as possible.',
+    '',
+    '## Final Report',
+    '',
+    'Return a concise report with:',
+    '',
+    '- files changed;',
+    '- commands run;',
+    '- dev URL used, if any;',
+    '- blockers or residual risks.',
+    '',
+  ].join('\n')
+}
+
+function buildCoderPrompt(values) {
+  return [
+    `Task: ${values.task}`,
+    '',
+    `Work only in this isolated repository: ${values.repoDir}`,
+    '',
+    `Read and follow this file before changing anything: ${values.instructionsPath}`,
+    '',
+    'Run context:',
+    `- Kind: ${values.kind}`,
+    `- Branch: ${branch}`,
+    `- Base: ${values.baseRef || values.baseBranch || '(new project)'}`,
+    `- Assigned dev URL: ${values.devUrl}`,
+    `- Push policy hint: ${values.pushPolicy}`,
+    `- Deployment target hint: ${values.deployTarget}`,
+    values.clonedFrom ? `- Cloned from: ${values.clonedFrom}` : null,
+    values.sourceRemoteUrl ? `- Remote source: ${values.sourceRemoteUrl}` : null,
+    values.sourcePath ? `- Local source checkout: ${values.sourcePath}` : null,
+    values.sourceDirty ? '- The local source checkout had uncommitted changes that are not included in this isolated clone.' : null,
+    values.template ? `- Template hint: ${values.template}` : null,
+    '',
+    'You own implementation and testing. Inspect the repo yourself, choose the needed commands, fix failures you introduce, and stop any dev server before returning.',
+    '',
+    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, dev URL used if any, and blockers/risks.',
+  ].filter(Boolean).join('\n')
+}
+
+function parseArgs(argv) {
+  const out = new Map()
+  for (let i = 0; i < argv.length; i += 1) {
+    const raw = argv[i]
+    if (!raw.startsWith('--')) continue
+    const eq = raw.indexOf('=')
+    if (eq >= 0) {
+      out.set(raw.slice(2, eq), raw.slice(eq + 1))
+      continue
+    }
+    const key = raw.slice(2)
+    const next = argv[i + 1]
+    if (next && !next.startsWith('--')) {
+      out.set(key, next)
+      i += 1
+    } else {
+      out.set(key, 'true')
+    }
+  }
+  return out
+}
+
+function stringArg(name) {
+  const value = args.get(name)
+  return typeof value === 'string' && value.trim() ? value.trim() : null
+}
+
+function boolArg(name) {
+  return args.get(name) === 'true'
+}
+
+function intArg(name, fallback) {
+  const value = args.get(name)
+  if (value === undefined) return fallback
+  const parsed = Number.parseInt(String(value), 10)
+  return Number.isSafeInteger(parsed) ? parsed : fallback
+}
+
+function timestamp() {
+  return new Date().toISOString().replace(/[-:]/g, '').replace(/\..+$/, '').replace('T', '-')
+}
+
+function kindSlug(value) {
+  return value.replace(/[^A-Za-z0-9._-]+/g, '-')
+}
+
+function sanitizeRunId(value) {
+  const clean = value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  if (!clean) fail('run-id is empty after sanitization.')
+  return clean.slice(0, 100)
+}
+
+function sanitizeName(value) {
+  const clean = value.trim().replace(/[^A-Za-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '')
+  return clean || 'project'
+}
+
+function sanitizeBranchName(value) {
+  const clean = value.trim()
+  if (
+    !clean ||
+    clean.startsWith('/') ||
+    clean.endsWith('/') ||
+    clean.includes('..') ||
+    !/^[A-Za-z0-9._/-]+$/.test(clean)
+  ) {
+    fail(`Invalid branch name: ${value || '(empty)'}`)
+  }
+  return clean
+}
+
+function looksLikeLocalPath(value) {
+  return value.startsWith('/')
+    || value.startsWith('./')
+    || value.startsWith('../')
+    || value.startsWith('~')
+    || fs.existsSync(path.resolve(value))
+}
+
+function expandHome(value) {
+  if (value === '~') return os.homedir()
+  if (value.startsWith('~/')) return path.join(os.homedir(), value.slice(2))
+  return value
+}
+
+function isOwnGitCheckout(cwd) {
+  const topLevel = capture('git', ['rev-parse', '--show-toplevel'], { cwd, optional: true })
+  return Boolean(topLevel && path.resolve(topLevel) === path.resolve(cwd))
+}
+
+function run(command, commandArgs, options = {}) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: options.cwd || projectDir,
+    env: process.env,
+    stdio: options.stdio || 'inherit',
+    encoding: 'utf-8',
+  })
+  if (options.optional && result.status !== 0) return result
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`${command} ${commandArgs.join(' ')} exited with ${result.status}`)
+  }
+  return result
+}
+
+function runShell(command, options = {}) {
+  const result = spawnSync(command, {
+    cwd: options.cwd || projectDir,
+    env: options.env || process.env,
+    stdio: 'inherit',
+    encoding: 'utf-8',
+    shell: true,
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`${command} exited with ${result.status}`)
+  }
+}
+
+function capture(command, commandArgs, options = {}) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: options.cwd || projectDir,
+    env: process.env,
+    stdio: ['ignore', 'pipe', options.optional ? 'ignore' : 'inherit'],
+    encoding: 'utf-8',
+  })
+  if (result.error) {
+    if (options.optional) return ''
+    throw result.error
+  }
+  if (result.status !== 0) {
+    if (options.optional) return ''
+    throw new Error(`${command} ${commandArgs.join(' ')} exited with ${result.status}`)
+  }
+  return result.stdout.trim()
+}
+
+async function reservePort(preferredPort) {
+  const state = readPortState()
+  for (const port of Object.keys(state.allocations)) {
+    const allocation = state.allocations[port]
+    if (!allocation?.repoDir || fs.existsSync(allocation.repoDir)) continue
+    delete state.allocations[port]
+  }
+
+  const candidates = preferredPort !== null
+    ? [preferredPort]
+    : Array.from({ length: portEnd - portStart + 1 }, (_, index) => portStart + index)
+
+  for (const port of candidates) {
+    if (port === 3000) continue
+    if (state.allocations[String(port)]) continue
+    if (!(await isPortFree(port))) continue
+    state.allocations[String(port)] = {
+      runId,
+      repoDir,
+      assignedAt: new Date().toISOString(),
+    }
+    writePortState(state)
+    return port
+  }
+  if (preferredPort !== null) {
+    throw new Error(`Requested port ${preferredPort} is not available`)
+  }
+  throw new Error(`No free port in ${portStart}-${portEnd}`)
+}
+
+function readPortState() {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(portStatePath, 'utf-8'))
+    if (parsed && typeof parsed === 'object' && parsed.allocations && typeof parsed.allocations === 'object') {
+      return parsed
+    }
+  } catch {
+    // Missing or corrupt state: rewrite below.
+  }
+  return { version: 1, allocations: {} }
+}
+
+function writePortState(state) {
+  fs.mkdirSync(path.dirname(portStatePath), { recursive: true })
+  const tmp = `${portStatePath}.tmp`
+  fs.writeFileSync(tmp, `${JSON.stringify(state, null, 2)}\n`, 'utf-8')
+  fs.renameSync(tmp, portStatePath)
+}
+
+function isPortFree(port) {
+  return new Promise(resolve => {
+    const server = net.createServer()
+    server.once('error', () => resolve(false))
+    server.once('listening', () => {
+      server.close(() => resolve(true))
+    })
+    server.listen(port, '127.0.0.1')
+  })
+}
+
+function excludeLocalFile(repoPath, relativePath) {
+  const gitDir = capture('git', ['rev-parse', '--git-common-dir'], { cwd: repoPath })
+  const absoluteGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(repoPath, gitDir)
+  const excludePath = path.join(absoluteGitDir, 'info', 'exclude')
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true })
+  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf-8') : ''
+  const line = `/${relativePath}`
+  if (!existing.split('\n').includes(line)) {
+    fs.appendFileSync(excludePath, `${existing.endsWith('\n') || !existing ? '' : '\n'}${line}\n`, 'utf-8')
+  }
+}
+
+function copyEnvFiles(sourceDir) {
+  if (!sourceDir) return
+  for (const name of ['.env', '.env.local']) {
+    const source = path.join(sourceDir, name)
+    const target = path.join(repoDir, name)
+    if (!fs.existsSync(source) || fs.existsSync(target)) continue
+    fs.copyFileSync(source, target)
+    fs.chmodSync(target, 0o600)
+  }
+}
+
+function shellQuote(value) {
+  return `'${String(value).replaceAll("'", "'\\''")}'`
+}
+
+function fail(message) {
+  console.error(message)
+  process.exit(1)
+}

@@ -4,6 +4,8 @@ import db, { createConversation, deleteConversation } from "@/lib/db"
 import { emitAppEvent } from "@/lib/events"
 import { appendRuntimeRunIndex } from "@/lib/runtime-index"
 import type { Message } from "@/lib/types"
+import { copyArtifactsForMessageMap } from "@/lib/artifacts/store"
+import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 
 import {
   CreateScheduledTaskInputSchema,
@@ -834,7 +836,9 @@ export function createInboxConversation(args: {
       updatedAt: now,
       taskId: args.taskId,
       messageCount: args.messages.length,
-      lastMessagePreview: latestMessage?.content.slice(0, 240) ?? null,
+      lastMessagePreview: latestMessage
+        ? stripArtifactBlocksForPreview(latestMessage.content).slice(0, 240)
+        : null,
       lastMessageAt: latestMessage?.timestamp ?? null,
     })
 
@@ -911,7 +915,7 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
     lastMessageAt: r.lastMessageAt ?? null,
     readAt: r.readAt ?? null,
     scheduledTaskId: r.scheduledTaskId ?? null,
-    preview: (r.preview ?? "").slice(0, 240),
+    preview: stripArtifactBlocksForPreview(r.preview ?? "").slice(0, 240),
     messageCount: r.messageCount,
   }))
 }
@@ -959,7 +963,7 @@ export function findInboxConversationByTaskAndTitle(
     lastMessageAt: row.lastMessageAt ?? null,
     readAt: row.readAt ?? null,
     scheduledTaskId: row.scheduledTaskId ?? null,
-    preview: (row.preview ?? "").slice(0, 240),
+    preview: stripArtifactBlocksForPreview(row.preview ?? "").slice(0, 240),
     messageCount: row.messageCount,
   }
 }
@@ -1109,7 +1113,7 @@ export function appendInboxMessage(
       id: conversationId,
       updatedAt: Date.now(),
       messageDelta: existingMessage ? 0 : 1,
-      lastMessagePreview: message.content.slice(0, 240),
+      lastMessagePreview: stripArtifactBlocksForPreview(message.content).slice(0, 240),
       lastMessageAt: message.timestamp,
       readAt: message.role === "user" ? Date.now() : null,
     })
@@ -1184,11 +1188,16 @@ export function forkInboxToConversation(id: string): string | null {
 
   const now = Date.now()
   const newId = `conv_${randomUUID()}`
-  const messages: Message[] = inbox.messages.map((m, i) => ({
-    ...m,
-    id: `msg_${randomUUID()}`,
-    timestamp: now + i,
-  }))
+  const messageIdMap = new Map<string, string>()
+  const messages: Message[] = inbox.messages.map((m, i) => {
+    const nextId = `msg_${randomUUID()}`
+    messageIdMap.set(m.id, nextId)
+    return {
+      ...m,
+      id: nextId,
+      timestamp: now + i,
+    }
+  })
 
   createConversation({
     id: newId,
@@ -1200,6 +1209,12 @@ export function forkInboxToConversation(id: string): string | null {
   db.prepare(
     "UPDATE conversations SET origin = @origin, forkedFromConversationId = @from WHERE id = @id"
   ).run({ origin: "user", from: id, id: newId })
+
+  copyArtifactsForMessageMap({
+    fromConversationId: id,
+    toConversationId: newId,
+    messageIdMap,
+  })
 
   markInboxRead(id)
   return newId

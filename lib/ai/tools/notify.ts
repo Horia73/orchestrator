@@ -61,13 +61,14 @@ export const notifyInboxTool: ToolDef = {
         'Use `title` as an email-style Inbox subject whenever you surface something user-facing. Make it specific to the result, not a generic source label like "Smart monitor" or "Scheduled run".',
         'When asking the user to choose, include short `actions` buttons. Each action must be a safe user reply, not an autonomous external action; the model will continue in the same Inbox thread when clicked.',
         'If the message contains obvious next decisions such as archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review first, include `actions` so the user does not have to type the same decision manually.',
+        'If the surfaced result is a rich compact artifact, you may include an <artifact> block in `body`. For large or mobile-first artifacts such as workouts, use display="fullscreen" and keep the prose body short; Inbox will show a launch card.',
         'Errors are surfaced automatically; you do not need to call this for failures.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
             title: { type: 'string', description: 'Short email-style subject for the Inbox item. Be specific, e.g. "WhatsApp: today\'s schedule changed" or "Garage door left open".' },
-            body: { type: 'string', description: 'The concise message to show the user (markdown ok).' },
+            body: { type: 'string', description: 'The concise message to show the user (markdown ok). May include one artifact tag when the Inbox item needs a rich card or fullscreen launch surface.' },
             actions: {
                 type: 'array',
                 description: 'Optional quick-reply buttons shown under the Inbox message. Use for choices like archive/keep, summarize now/later, approve/skip. Max 8.',

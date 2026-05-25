@@ -4,12 +4,13 @@ import { z } from 'zod'
  * Render target chosen by the model:
  *   - 'inline' — render inside the chat message bubble
  *   - 'panel'  — render in the dedicated side panel
+ *   - 'fullscreen' — render from a dedicated full-screen route
  *
  * New prompts ask the model to always emit this as `display="..."` on the
  * artifact tag. The schema still allows it to be absent so older saved
  * messages and malformed outputs remain renderable.
  */
-const ArtifactDisplaySchema = z.enum(['inline', 'panel'])
+const ArtifactDisplaySchema = z.enum(['inline', 'panel', 'fullscreen'])
 export type ArtifactDisplay = z.infer<typeof ArtifactDisplaySchema>
 
 /**

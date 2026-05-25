@@ -18,6 +18,7 @@ export async function POST(request: Request) {
         const body = await request.json() as {
             jobId?: unknown
             phase?: unknown
+            targetCommit?: unknown
             error?: unknown
             waitReason?: unknown
         }
@@ -32,6 +33,7 @@ export async function POST(request: Request) {
         const job = recordHostUpdateResult({
             jobId: body.jobId,
             phase: body.phase,
+            targetCommit: typeof body.targetCommit === 'string' ? body.targetCommit : undefined,
             error: typeof body.error === 'string' ? body.error : undefined,
             waitReason: typeof body.waitReason === 'string' ? body.waitReason : undefined,
         })

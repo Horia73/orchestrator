@@ -27,6 +27,7 @@ async function main(): Promise<void> {
     } = await import('@/lib/microscripts/store')
     const { runMicroscript, validateMicroscriptCode } = await import('@/lib/microscripts/runner')
     const { listInboxConversations } = await import('@/lib/scheduling/store')
+    const { executeMicroscriptCreate } = await import('@/lib/ai/tools/microscripts')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -37,6 +38,24 @@ async function main(): Promise<void> {
 
     const rejected = await validateMicroscriptCode('import os\n\ndef run(ctx):\n    return {}')
     check('validator rejects imports', rejected.ok === false, rejected)
+
+    const validCode = 'def run(ctx):\n    return {"summary": "ok", "status": "complete"}'
+    const accepted = await validateMicroscriptCode(validCode)
+    check('validator accepts minimal valid script', accepted.ok === true, accepted)
+
+    const toolCreated = await executeMicroscriptCreate({
+        title: 'Smoke tool create',
+        code: validCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke create through tool',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    check('microscript_create tool accepts minimal valid script', toolCreated.success === true, toolCreated)
 
     const notifyCode = `
 def run(ctx):

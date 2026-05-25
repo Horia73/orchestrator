@@ -6,6 +6,8 @@ import { runTextSubAgent } from "@/lib/ai/agents/runner"
 import type { AgentRunEvent, ToolExecutionContext } from "@/lib/ai/agents/types"
 import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
 import type { InboxReplyAction, Message, ReasoningEntry } from "@/lib/types"
+import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
+import { appendMissingArtifactBlocks } from "@/lib/artifacts/text"
 import {
   appendInboxMessage,
   forkInboxToConversation,
@@ -130,7 +132,7 @@ async function continueInboxReply(args: {
     })
     const result = await runTextSubAgent({ target: agent, prompt, parentCtx })
     const done = topRunId ? doneByRun.get(topRunId) : undefined
-    const assistantContent = result.success
+    let assistantContent = result.success
       ? notifications.length > 0
         ? notifications
             .map((n) => (n.title ? `**${n.title}**\n\n${n.body}` : n.body))
@@ -142,7 +144,14 @@ async function continueInboxReply(args: {
           ).trim() || "(no output)"
       : `Scheduled Inbox reply failed.\n\n${result.error ?? "Unknown error"}`
 
-    appendInboxMessage(args.id, {
+    if (result.success && notifications.length > 0) {
+      assistantContent = appendMissingArtifactBlocks(
+        assistantContent,
+        String((result.data as { output?: unknown } | undefined)?.output ?? done?.content ?? "")
+      )
+    }
+
+    const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",
       content: assistantContent,
@@ -155,7 +164,20 @@ async function continueInboxReply(args: {
           ? notifications.flatMap((n) => n.actions ?? [])
           : undefined,
       timestamp: Date.now(),
+    }
+
+    appendInboxMessage(args.id, assistantMsg)
+    const persisted = persistArtifactsFromMessage({
+      conversationId: args.id,
+      messageId: assistantMsg.id,
+      content: assistantMsg.content,
     })
+    if (persisted.errors.length > 0) {
+      console.warn(
+        `Failed to persist ${persisted.errors.length} inbox-reply artifact(s):`,
+        persisted.errors
+      )
+    }
   } catch (error) {
     console.error("Failed to continue inbox reply", error)
     appendInboxMessage(args.id, {

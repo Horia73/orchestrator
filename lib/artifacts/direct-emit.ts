@@ -16,6 +16,22 @@ export interface ArtifactUpdateData {
   body: string
 }
 
+export function buildAutoArtifactTag(data: {
+  identifier: string
+  type: string
+  title: string
+  display?: string | null
+  body: string
+}): string {
+  const escape = (value: string) => value
+    .replace(/&/g, "&amp;")
+    .replace(/"/g, "&quot;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+  const display = data.display ? ` display="${escape(data.display)}"` : ""
+  return `\n<artifact identifier="${escape(data.identifier)}" type="${escape(data.type)}" title="${escape(data.title)}"${display}>${data.body}</artifact>\n`
+}
+
 /**
  * Provider adapters do not all preserve local tool results as objects.
  * Codex, for example, can surface dynamic tool results as a JSON string.
