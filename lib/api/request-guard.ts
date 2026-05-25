@@ -196,11 +196,16 @@ function extractHostname(host: string): string {
         const end = clean.indexOf(']')
         return end >= 0 ? clean.slice(1, end) : clean
     }
+    const colonCount = (clean.match(/:/g) || []).length
+    if (colonCount > 1) return clean
     return clean.split(':')[0] ?? clean
 }
 
 function isLoopbackHost(hostname: string): boolean {
     const host = hostname.trim().replace(/\.$/, '').toLowerCase()
+    if (host.startsWith('::ffff:')) {
+        return isLoopbackHost(host.slice('::ffff:'.length))
+    }
     return host === 'localhost'
         || host.endsWith('.localhost')
         || host === '::1'
