@@ -41,6 +41,21 @@ Use tools first:
 - UI: `components/monitor/*`
 - Doctrine: `lib/integrations/doctrines/monitoring.ts`
 
+## Microscripts
+
+- Runtime schema/store/runner/heartbeat: `lib/microscripts/*`
+- Agent tools: `lib/ai/tools/microscripts.ts`
+- Monitor-page API/UI: `app/api/monitor/microscripts/*`, `components/monitor/*`
+- Doctrine and docs: `lib/integrations/doctrines/microscripts.ts`, `MICROSCRIPTS.md`
+- `agent_wake` permission plus `agent.wake` operation let deterministic scripts escalate to a restricted text-agent wake after a concrete match.
+
+## Webhooks
+
+- Inbound webhook schema/store/auth/dispatch: `lib/webhooks/*`
+- Public ingress and management APIs: `app/api/webhooks/*`
+- Microscript webhook trigger context: `lib/microscripts/runner.ts`
+- Docs: `WEBHOOKS.md`
+
 ## Logs And Observability
 
 - Request/tool logging store: `lib/observability/store.ts`

@@ -60,6 +60,7 @@ export const notifyInboxTool: ToolDef = {
         'If nothing is noteworthy, do NOT call this — the run still gets recorded in Past runs, just silently. Default to staying silent.',
         'Use `title` as an email-style Inbox subject whenever you surface something user-facing. Make it specific to the result, not a generic source label like "Smart monitor" or "Scheduled run".',
         'When asking the user to choose, include short `actions` buttons. Each action must be a safe user reply, not an autonomous external action; the model will continue in the same Inbox thread when clicked.',
+        'If the message contains obvious next decisions such as archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review first, include `actions` so the user does not have to type the same decision manually.',
         'Errors are surfaced automatically; you do not need to call this for failures.',
     ].join(' '),
     input_schema: {

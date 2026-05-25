@@ -7,10 +7,11 @@ Use Microscripts when:
 - The logic is easier as a small state machine than as a recurring model prompt.
 - The work needs multiple cheap checks before interrupting the user.
 - The script should stop itself after success, expiry, or a small number of failures.
+- A deterministic gate can cheaply decide when model judgement is actually needed.
 
 Prefer other subsystems when:
 - A simple one-shot or fixed recurring reminder/action is enough: use Scheduled tasks.
-- The source is already covered by Smart Monitor and the user wants broad triage or judgement across messages/events/sources.
+- The recurring check itself requires broad triage, synthesis, judgement across messages/events/sources, or ongoing model-owned planning: use Smart Monitor.
 - The user needs a normal immediate answer, not ongoing runtime automation.
 
 Activation:
@@ -24,6 +25,7 @@ Runtime contract:
 - Return status="complete" when the job is done, status="pause" when it should stop but remain available, or omit/return status="continue" when it should keep running.
 - Store all durable private memory in returned state. Read current memory from ctx["state"].
 - To access external systems, return requests[]. The parent runtime enforces the manifest permissions and puts results in ctx["results"][request_id] on the next phase.
+- With explicit agent_wake permission, a script may request agent.wake after a deterministic condition matches. The woken text agent receives only the script's prompt context and a restricted tool surface; if allowNotifyInbox is true it may call notify_inbox, otherwise it returns an internal judgement.
 
 Safety and lifecycle:
 - Every production microscript needs a stop story. Prefer one or more of:
@@ -35,11 +37,12 @@ Safety and lifecycle:
 - Default temporary scripts expire after 24h when persistent=false and no expiresAt is set.
 - Pause/delete scripts as soon as the user no longer needs them.
 - Do not create always-on scripts casually. State what will run, how often, which permissions it has, and when it stops.
-- Service calls, writes, sends, account changes, or other side effects require explicit user approval of the permission boundary before creation.
+- Service calls, writes, sends, agent wakes, account changes, or other side effects require explicit user approval of the permission boundary before creation.
 - Keep permissions narrow: exact entities, exact service domains/services, exact host allowlists, and file access only when needed.
 
 Supported operation request kinds:
 - notify.inbox: requires notify_inbox permission.
+- agent.wake: requires agent_wake permission. Use after the script has already performed the cheap deterministic check and now needs model judgement or wording. Keep prompts compact and include the relevant observed facts.
 - home_assistant.get_state: requires home_assistant_read for that entity/domain.
 - home_assistant.list_states: requires home_assistant_read with allowList=true and matching domain boundary.
 - home_assistant.history: requires home_assistant_read with allowHistory=true for each entity.
@@ -75,9 +78,10 @@ Creation checklist:
 2. Decide stop policy before creating.
 3. Decide cadence and minimum interval.
 4. Declare permissions as narrowly as possible.
-5. Write a short run(ctx), no sleeps.
-6. Create with microscript_create.
-7. Optionally call microscript_run_now to test.
-8. Tell the user the script id, next run, expiry/stop condition, and how to pause it.
+5. If model judgement is needed, use agent_wake as an escalation after the condition is met; do not wake a model on ordinary quiet checks.
+6. Write a short run(ctx), no sleeps.
+7. Create with microscript_create.
+8. Optionally call microscript_run_now to test.
+9. Tell the user the script id, next run, expiry/stop condition, and how to pause it.
 </microscripts_capability>
 `.trim()

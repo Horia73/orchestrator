@@ -6,7 +6,9 @@ import { createHash, randomUUID } from 'crypto'
 import { WORKSPACE_DIR } from '@/lib/runtime-paths'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
-import type { Message } from '@/lib/types'
+import { normalizeInboxReplyActions } from '@/lib/ai/tools/notify'
+import type { ToolExecutionContext } from '@/lib/ai/agents/types'
+import type { InboxReplyAction, Message } from '@/lib/types'
 
 import {
     MicroscriptOperationSchema,
@@ -133,13 +135,29 @@ interface OperationResult {
 interface PendingNotification {
     title?: string
     body: string
+    actions?: InboxReplyAction[]
 }
 
 export interface RunMicroscriptOptions {
-    trigger: 'schedule' | 'manual'
+    trigger: 'schedule' | 'manual' | 'webhook'
     now?: number
     /** Used by Run now on paused scripts: test without re-enabling. */
     preserveEnabled?: boolean
+    /** Present when a generic inbound webhook triggered this run. */
+    webhook?: MicroscriptWebhookContext
+}
+
+export interface MicroscriptWebhookContext {
+    eventId: string
+    endpointId: string
+    slug: string
+    source: string
+    eventType: string
+    dedupeKey: string
+    occurredAt: number
+    receivedAt: number
+    payload: Record<string, unknown>
+    normalized: Record<string, unknown>
 }
 
 export interface RunMicroscriptResult {
@@ -177,6 +195,7 @@ export async function runMicroscript(
     const startedAt = options.now ?? Date.now()
     const operationResults: Record<string, OperationResult> = {}
     const pendingNotifications: PendingNotification[] = []
+    const inboxConversationId = `inbox_${randomUUID()}`
     let state: Record<string, unknown> = { ...script.state }
     let lastResponse: MicroscriptRunResponse = {}
     let phases = 0
@@ -193,6 +212,7 @@ export async function runMicroscript(
             const phaseResult = await runPythonPhase(script, {
                 now: Date.now(),
                 trigger: options.trigger,
+                webhook: options.webhook ?? null,
                 phase,
                 state,
                 results: operationResults,
@@ -218,7 +238,7 @@ export async function runMicroscript(
                 if (operationResults[key]) continue
                 newRequests += 1
                 operations += 1
-                const result = await executeOperation(script, request, pendingNotifications)
+                const result = await executeOperation(script, request, pendingNotifications, inboxConversationId)
                 operationResults[key] = result
                 recordMicroscriptEvent(script.id, result.ok ? 'operation_ok' : 'operation_error', {
                     key,
@@ -230,7 +250,7 @@ export async function runMicroscript(
         }
 
         if (pendingNotifications.length > 0) {
-            conversationId = postMicroscriptInbox(script, pendingNotifications)
+            conversationId = postMicroscriptInbox(script, pendingNotifications, inboxConversationId)
             surfaced = true
         }
 
@@ -405,14 +425,24 @@ async function executeOperation(
     script: Microscript,
     request: MicroscriptOperation,
     notifications: PendingNotification[],
+    conversationId: string,
 ): Promise<OperationResult> {
     try {
         const parsed = MicroscriptOperationSchema.parse(request)
         switch (parsed.kind) {
             case 'notify.inbox':
                 requirePermission(script, 'notify_inbox')
-                notifications.push({ title: parsed.title, body: parsed.body })
+                notifications.push({
+                    title: parsed.title,
+                    body: parsed.body,
+                    actions: normalizeInboxReplyActions(parsed.actions),
+                })
                 return { ok: true, data: { queued: true } }
+            case 'agent.wake':
+                return {
+                    ok: true,
+                    data: await executeAgentWake(script, parsed, notifications, conversationId),
+                }
             case 'home_assistant.get_state':
                 assertHomeAssistantRead(script, [parsed.entity_id], false, false)
                 return { ok: true, data: await homeAssistantGetState(parsed.entity_id) }
@@ -466,6 +496,78 @@ async function executeOperation(
     }
 }
 
+async function executeAgentWake(
+    script: Microscript,
+    request: Extract<MicroscriptOperation, { kind: 'agent.wake' }>,
+    notifications: PendingNotification[],
+    conversationId: string,
+): Promise<Record<string, unknown>> {
+    const permission = assertAgentWake(script, request)
+    const { getAgent } = await import('@/lib/ai/agents/registry')
+    const { runTextSubAgent } = await import('@/lib/ai/agents/runner')
+    const baseAgent = getAgent(request.agent_id)
+    if (!baseAgent) throw new Error(`Unknown agent: ${request.agent_id}`)
+    if (baseAgent.kind !== 'text') throw new Error(`Microscript agent.wake only supports text agents; ${request.agent_id} is kind=${baseAgent.kind}.`)
+
+    const target = {
+        ...baseAgent,
+        tools: permission.allowNotifyInbox ? ['notify_inbox'] : [],
+        builtins: [],
+        canCallAgents: [],
+    }
+    const prompt = buildAgentWakePrompt(script, request.prompt, permission.allowNotifyInbox)
+    const notificationsBefore = notifications.length
+
+    const parentCtx: ToolExecutionContext = {
+        callerAgentId: '__microscripts__',
+        depth: 0,
+        conversationId,
+        parentRequestId: `microscript_${script.id}_${randomUUID()}`,
+        onAgentEvent: (event) => {
+            if (event.type !== 'agent_tool_call' || event.toolCall?.name !== 'notify_inbox') return
+            const args = event.toolCall.arguments as { title?: unknown; body?: unknown; actions?: unknown }
+            const body = typeof args.body === 'string' ? args.body.trim() : ''
+            if (!body) return
+            notifications.push({
+                title: typeof args.title === 'string' ? args.title.trim() : undefined,
+                body,
+                actions: normalizeInboxReplyActions(args.actions),
+            })
+        },
+    }
+
+    const result = await runTextSubAgent({ target, prompt, parentCtx })
+    if (!result.success) {
+        throw new Error(result.error ?? `Agent ${request.agent_id} wake failed.`)
+    }
+    const data = result.data as { output?: unknown } | undefined
+    const output = typeof data?.output === 'string' ? data.output : ''
+    return {
+        agent_id: request.agent_id,
+        output,
+        notified: notifications.length > notificationsBefore,
+        notification_count: notifications.length - notificationsBefore,
+    }
+}
+
+function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyInbox: boolean): string {
+    return [
+        'You were woken by a Microscript after a deterministic runtime condition matched.',
+        'Use only the context supplied in this prompt. Do not assume you can perform source-side actions.',
+        allowNotifyInbox
+            ? 'If the user should be interrupted, call notify_inbox with a specific title and concise body. If the item is not worth interrupting the user about, do not call notify_inbox; return a short internal summary.'
+            : 'Do not notify the user. Return a short internal summary with your judgement.',
+        'When a notification asks for a decision, include notify_inbox actions with short labels and exact reply values.',
+        '',
+        `Microscript: ${script.title} (${script.id})`,
+        `Description: ${script.manifest.description}`,
+        '',
+        '<microscript_payload>',
+        prompt,
+        '</microscript_payload>',
+    ].join('\n')
+}
+
 function operationKey(operation: MicroscriptOperation, index: number): string {
     const raw = 'id' in operation && typeof operation.id === 'string'
         ? operation.id
@@ -516,27 +618,31 @@ function summaryForRun(
     ].join('\n')
 }
 
-function postMicroscriptInbox(script: Microscript, notifications: PendingNotification[]): string {
+function postMicroscriptInbox(script: Microscript, notifications: PendingNotification[], conversationId: string): string {
     const now = Date.now()
-    const conversationId = `inbox_${randomUUID()}`
     const body = notifications
         .map((n) => n.title ? `**${n.title}**\n\n${n.body}` : n.body)
         .join('\n\n---\n\n')
+    const actions = notifications.flatMap((n) => n.actions ?? [])
+    const title = notifications.length === 1 && notifications[0]?.title
+        ? notifications[0].title
+        : script.title
     const assistantMsg: Message = {
         id: `msg_${randomUUID()}`,
         role: 'assistant',
         content: body,
+        replyActions: actions.length > 0 ? actions : undefined,
         timestamp: now,
     }
     createInboxConversation({
         id: conversationId,
         taskId: script.id,
-        title: script.title,
+        title,
         messages: [assistantMsg],
     })
     void sendInboxPushNotification({
         conversationId,
-        title: script.title,
+        title,
         body,
     })
     return conversationId
@@ -545,6 +651,24 @@ function postMicroscriptInbox(script: Microscript, notifications: PendingNotific
 function requirePermission(script: Microscript, kind: MicroscriptPermission['kind']): MicroscriptPermission {
     const permission = script.manifest.permissions.find((p) => p.kind === kind)
     if (!permission) throw new Error(`Microscript ${script.id} lacks permission ${kind}.`)
+    return permission
+}
+
+function assertAgentWake(
+    script: Microscript,
+    request: Extract<MicroscriptOperation, { kind: 'agent.wake' }>,
+): Extract<MicroscriptPermission, { kind: 'agent_wake' }> {
+    const permission = script.manifest.permissions.find(
+        (p): p is Extract<MicroscriptPermission, { kind: 'agent_wake' }> =>
+            p.kind === 'agent_wake',
+    )
+    if (!permission) throw new Error(`Microscript ${script.id} lacks agent_wake permission.`)
+    if (!permission.agentIds.includes(request.agent_id)) {
+        throw new Error(`Microscript ${script.id} may not wake agent ${request.agent_id}.`)
+    }
+    if (request.prompt.length > permission.maxPromptChars) {
+        throw new Error(`agent.wake prompt exceeds permission limit of ${permission.maxPromptChars} characters.`)
+    }
     return permission
 }
 

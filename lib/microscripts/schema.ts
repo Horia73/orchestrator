@@ -54,10 +54,27 @@ export const MicroscriptLimitsSchema = z.object({
 export type MicroscriptLimits = z.infer<typeof MicroscriptLimitsSchema>
 
 const EntityIdPattern = z.string().regex(/^[a-z0-9_]+\.[a-z0-9_]+$/i, 'expected Home Assistant entity_id')
+const AgentIdPattern = z.string().min(1).max(64).regex(/^[a-z0-9_-]+$/i, 'expected agent id')
+
+const InboxReplyActionSchema = z.object({
+    id: z.string().min(1).max(64).regex(/^[a-zA-Z0-9_-]+$/).optional(),
+    label: z.string().min(1).max(80),
+    value: z.string().min(1).max(2_000),
+    style: z.enum(['primary', 'secondary', 'destructive']).optional(),
+})
 
 export const MicroscriptPermissionSchema = z.discriminatedUnion('kind', [
     z.object({
         kind: z.literal('notify_inbox'),
+    }),
+    z.object({
+        kind: z.literal('agent_wake'),
+        /** Agents this script may wake. Defaults to the orchestrator. */
+        agentIds: z.array(AgentIdPattern).min(1).max(20).default(['orchestrator']),
+        /** Upper bound for each prompt payload passed from Python to the model. */
+        maxPromptChars: z.number().int().min(200).max(20_000).default(4_000),
+        /** Let the woken agent call notify_inbox. Keep true for "model decides whether to surface" gates. */
+        allowNotifyInbox: z.boolean().default(true),
     }),
     z.object({
         kind: z.literal('home_assistant_read'),
@@ -172,6 +189,13 @@ export const MicroscriptOperationSchema = z.discriminatedUnion('kind', [
         id: z.string().min(1).max(120).optional(),
         title: z.string().min(1).max(160).optional(),
         body: z.string().min(1).max(8_000),
+        actions: z.array(InboxReplyActionSchema).max(8).optional(),
+    }),
+    z.object({
+        kind: z.literal('agent.wake'),
+        id: z.string().min(1).max(120),
+        agent_id: AgentIdPattern.default('orchestrator'),
+        prompt: z.string().min(1).max(20_000),
     }),
     z.object({
         kind: z.literal('home_assistant.get_state'),
@@ -244,7 +268,7 @@ export interface MicroscriptRunRecord {
     startedAt: number
     endedAt: number
     status: 'ok' | 'error'
-    trigger: 'schedule' | 'manual'
+    trigger: 'schedule' | 'manual' | 'webhook'
     summary: string
     error: string | null
     phases: number

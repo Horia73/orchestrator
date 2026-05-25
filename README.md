@@ -9,6 +9,8 @@ Orchestrator is designed to run on your own machine or a private Linux host. It 
 - Multi-agent chat with provider/model configuration.
 - Local CLI-backed agents, browser agent, artifacts, upload handling, and terminal output rendering.
 - Scheduling, recurring monitors, and an Inbox for silent/background runs.
+- Generic inbound webhooks with authenticated event logs and Microscript dispatch.
+- Microscripts for bounded deterministic checks, with optional restricted agent wake escalation after a concrete match.
 - Watchlist for financial instruments with optional Twelve Data quotes/history.
 - Integrations for Google Workspace, Gmail, Home Assistant, WhatsApp, and local tool execution.
 - Managed updater based on GitHub Releases for native services and installer-managed Docker.
@@ -25,6 +27,10 @@ direct loopback calls. Direct API calls to a non-loopback host must include
 `ORCHESTRATOR_API_TOKEN` as `Authorization: Bearer <token>` or
 `X-Orchestrator-API-Token: <token>`. OAuth callbacks and internal tokenized
 bridge endpoints are handled separately.
+
+Inbound webhook routes under `POST /api/webhooks/:slug` are intentionally
+cross-origin capable. They bypass the same-origin API guard and authenticate
+with the per-webhook secret configured in Orchestrator.
 
 ## Requirements
 

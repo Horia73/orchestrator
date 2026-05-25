@@ -4,6 +4,8 @@ export const MONITORING_DOCTRINE = `
 <smart_monitor_capability>
 Smart Monitor is the runtime surface for recurring model-owned work: persistent "tell me when X happens" monitoring, recurring summaries, and recurring maintenance. It can use connector-backed watches across Gmail, Google Calendar, WhatsApp, Home Assistant, Web, and Weather, or custom model-owned watches whose check is described by prompt.
 
+Use the lightest runtime that satisfies the accepted automation. If a small deterministic check can decide when attention is needed, prefer a Microscript gate and wake a model only on match. Use Smart Monitor when the recurring check itself needs model judgement, broad triage, synthesis, adaptive digesting, or ongoing model-owned planning.
+
 Important architecture:
 - There is ONE Smart Monitor scheduled agent wake. It defaults to 15 minutes.
 - Smart Monitor must have exactly one Scheduling runtime entry: the consolidated Smart monitor heartbeat. Do not create separate scheduled tasks for Smart Monitor digests, summaries, maintenance, source-specific wakeups, retries, or catch-up runs. Store cadence and check instructions as durable Smart Monitor preferences/specs in MONITORS.md and watch records, and store execution bookkeeping in the Smart Monitor task_state. On every heartbeat, use current runtime time to perform overdue still-useful work that has not already been completed, skipped, or deduplicated for the relevant period.
@@ -37,6 +39,7 @@ What belongs here:
 
 What does not belong here:
 - One-shot reminders, one-time deadlines, and bounded deferred actions: use schedule_task.
+- Deterministic narrow watchers that can cheaply gate model judgement: use Microscripts with agent_wake when a model is needed only after the gate matches.
 - Markets/stock/product-price monitoring: use Watchlist.
 - Simple one-off questions: answer directly.
 

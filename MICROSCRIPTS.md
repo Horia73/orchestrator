@@ -2,7 +2,7 @@
 
 Microscripts are bounded Python automations for small stateful watchers. They are meant for jobs that need a few cheap checks, tiny private state, and a clear stop condition.
 
-They are not background daemons. A microscript runs, returns JSON, and exits. If it needs to keep watching, it returns `nextCheckAfterMs` or `nextRunAt`.
+They are not background daemons. A microscript runs, returns JSON, and exits. If it needs to keep watching, it returns `nextCheckAfterMs` or `nextRunAt`. Microscripts can also be triggered by inbound Webhooks after the webhook subsystem has authenticated, deduped, persisted, and normalized the event.
 
 ## When To Use
 
@@ -12,8 +12,9 @@ Use Microscripts for:
 - Temporary automations that should stop after a success, expiry, or failure cap.
 - Small state machines where a full agent wake every time would be wasteful.
 - Checks that need a private watermark, counter, or debounce window.
+- Cheap deterministic gates that should wake a model only after a concrete condition is met.
 
-Use another subsystem for simple reminders, broad source triage, or normal one-off answers.
+Use another subsystem for simple reminders, broad source triage, recurring work whose check itself requires model judgement, or normal one-off answers.
 
 ## Runtime Contract
 
@@ -56,12 +57,15 @@ If `persistent=false` and no `expiresAt` is set, creation applies a 24 hour defa
 Supported permission kinds:
 
 - `notify_inbox`
+- `agent_wake`
 - `home_assistant_read`
 - `home_assistant_call_service`
 - `http_fetch`
 - `files`
 
 Keep permissions narrow. For Home Assistant writes, list the exact domain, service, and target entity IDs wherever possible.
+
+`agent_wake` lets a script request an `agent.wake` operation after its deterministic gate passes. The permission lists allowed agent ids, maximum prompt size, and whether the woken agent may call `notify_inbox`. The woken agent receives the script prompt as context and a restricted tool surface; use this for "cheap check first, model judgement only on match" workflows.
 
 ## Example
 
@@ -146,3 +150,29 @@ def run(ctx):
 - Track a counter/sensor until it crosses a threshold, then pause.
 - Monitor repeated automation failures and send context only after a pattern emerges.
 - Run a short temporary watch after starting a long local process.
+- Escalate a matched runtime condition to a model for concise judgement and optional Inbox notification.
+
+## Webhook Trigger Context
+
+When a webhook subscription targets a microscript, `run(ctx)` receives:
+
+```json
+{
+  "trigger": "webhook",
+  "webhook": {
+    "eventId": "whe_...",
+    "endpointId": "wh_...",
+    "slug": "example-events",
+    "source": "example",
+    "eventType": "thing.updated",
+    "dedupeKey": "upstream-event-id",
+    "occurredAt": 1779720000000,
+    "receivedAt": 1779720000123,
+    "payload": {},
+    "normalized": {}
+  },
+  "state": {}
+}
+```
+
+The microscript should treat `ctx["webhook"]["payload"]` as input, keep durable watermarks/debounce counters in `ctx["state"]`, and return `nextCheckAfterMs` only when it needs a follow-up check after the event.

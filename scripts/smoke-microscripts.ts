@@ -8,6 +8,7 @@
  *   - notify_inbox permission posts one Inbox item;
  *   - completeOnNotification completes/disables;
  *   - missing permission is denied in-band;
+ *   - agent wake requests require explicit permission;
  *   - file read/write operations stay inside script workspace.
  */
 import fs from 'fs'
@@ -108,6 +109,34 @@ def run(ctx):
     const deniedAfter = getMicroscript(denied.id)
     check('permission denial is in-band and run completes', deniedResult.ok && deniedAfter?.state.denied === true, deniedAfter)
     check('permission denial records operation_error', listMicroscriptEvents(denied.id).some((e) => e.kind === 'operation_error'))
+
+    const agentDeniedCode = `
+def run(ctx):
+    results = ctx.get("results", {})
+    if "agent" not in results:
+        return {
+            "requests": [
+                {"id": "agent", "kind": "agent.wake", "prompt": "This should not run."}
+            ]
+        }
+    result = results["agent"]
+    return {"summary": result.get("error", "missing error"), "status": "complete", "state": {"agent_denied": not result["ok"]}}
+`.trim()
+    const agentDenied = createMicroscript({
+        title: 'Smoke agent denied',
+        code: agentDeniedCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke agent wake permission denial test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const agentDeniedResult = await runMicroscript(agentDenied, { trigger: 'manual', preserveEnabled: true })
+    const agentDeniedAfter = getMicroscript(agentDenied.id)
+    check('agent wake permission denial is in-band', agentDeniedResult.ok && agentDeniedAfter?.state.agent_denied === true, agentDeniedAfter)
 
     const fileCode = `
 def run(ctx):

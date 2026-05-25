@@ -128,6 +128,13 @@ function normalizePermissions(raw: unknown): unknown[] {
                     : p.services
                 return { kind: p.kind, services }
             }
+            case 'agent_wake':
+                return {
+                    kind: p.kind,
+                    agentIds: p.agentIds ?? p.agent_ids,
+                    maxPromptChars: p.maxPromptChars ?? p.max_prompt_chars,
+                    allowNotifyInbox: p.allowNotifyInbox ?? p.allow_notify_inbox,
+                }
             case 'http_fetch':
                 return {
                     kind: p.kind,
@@ -177,9 +184,15 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
             contract: [
                 'Python code must define run(ctx) and return a JSON-serializable dict.',
                 'Runs are short-lived. Do not sleep or loop forever; return nextCheckAfterMs or nextRunAt.',
+                'Runs may be triggered manually, on an interval, or by an inbound webhook subscription.',
+                'A script with agent_wake permission may wake a text agent after its deterministic gate passes; the woken agent receives only the script prompt and notify_inbox if allowed.',
                 'The script cannot read env/secrets directly. It requests operations; the Node parent enforces permissions.',
                 'Use ctx["state"] for durable private state and return {"state": {...}} with the full next state.',
             ],
+            webhook_trigger: {
+                trigger: 'ctx["trigger"] == "webhook"',
+                context: 'ctx["webhook"] contains eventId, endpointId, slug, source, eventType, dedupeKey, occurredAt, receivedAt, payload, and normalized.',
+            },
             response_shape: {
                 summary: 'optional short run summary',
                 state: 'optional full state object for next run',
@@ -190,6 +203,7 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
             },
             operation_kinds: [
                 'notify.inbox',
+                'agent.wake',
                 'home_assistant.get_state',
                 'home_assistant.list_states',
                 'home_assistant.history',
@@ -215,6 +229,7 @@ export const microscriptCreateTool: ToolDef = {
     description: [
         'Create a production Microscript from Python code plus a manifest.',
         'Use only for short-lived or clearly bounded automation. Include an explicit stop policy: completeOnNotification, expiresAt, maxRuns, or persistent=true when the user really wants it ongoing.',
+        'Use agent_wake only when a cheap deterministic gate should escalate to model judgement after matching; keep agent ids and prompt size bounded.',
         'For Home Assistant writes, permissions must narrowly list allowed service domain/service and target entity IDs.',
     ].join(' '),
     input_schema: {

@@ -123,6 +123,48 @@ function messagePreview(content: string): string {
   return `${singleLine.slice(0, 139).trimEnd()}...`
 }
 
+function inferQuickReplyActions(message: DetailMessageData): InboxReplyAction[] {
+  if (message.role !== "assistant" || message.replyActions?.length) return []
+
+  const content = message.content.toLowerCase()
+  const mentionsGmail = /\bgmail\b/.test(content)
+  const hasArchiveCandidate =
+    /candidate(?:le|lor)?\s+(?:bun(?:e|i)?\s+)?de\s+arhivat/.test(content) ||
+    /candida(?:t|te|ti|ți).{0,80}arhiv/.test(content) ||
+    /archive candidate/.test(content)
+  const looksNonUrgentDigest =
+    /(toate|all).{0,80}non-urgent/.test(content) ||
+    /non-urgent.{0,80}(arhiv|archive)/.test(content)
+
+  if (!mentionsGmail || (!hasArchiveCandidate && !looksNonUrgentDigest)) {
+    return []
+  }
+
+  return [
+    {
+      id: "archive_gmail_candidates",
+      label: "Arhivează candidatele",
+      value:
+        "Arhivează mesajele Gmail marcate explicit ca non-urgente sau candidate de arhivat în acest rezumat. Confirm această acțiune pentru itemele enumerate aici; dacă un mesaj nu poate fi identificat fără ambiguitate, sari peste el și spune-mi.",
+      style: "primary",
+    },
+    {
+      id: "keep_gmail_candidates",
+      label: "Păstrează tot",
+      value:
+        "Nu arhiva niciun mesaj Gmail din acest rezumat. Păstrează-le în Inbox și ține cont că aceste tipuri pot fi tratate ca rutină pe viitor.",
+      style: "secondary",
+    },
+    {
+      id: "review_gmail_candidates",
+      label: "Revizuiește întâi",
+      value:
+        "Arată-mi detaliile mesajelor Gmail candidate de arhivat din acest rezumat înainte de orice acțiune.",
+      style: "secondary",
+    },
+  ]
+}
+
 function MarkdownPreviewLine({ content }: { content: string }) {
   const components = React.useMemo(
     () => ({
@@ -546,9 +588,7 @@ function CollapsedDetailMessage({
             {timeAgo(message.timestamp)}
           </span>
         </div>
-        <p className="mt-1 truncate text-[13px] text-slate-500 dark:text-slate-400">
-          {messagePreview(message.content)}
-        </p>
+        <MarkdownPreviewLine content={messagePreview(message.content)} />
       </div>
       <ChevronRight className="size-4 shrink-0 text-slate-400" />
     </button>
@@ -968,7 +1008,13 @@ function InboxViewInner() {
                     return expanded ? (
                       <DetailMessage
                         key={message.id}
-                        message={message}
+                        message={{
+                          ...message,
+                          replyActions:
+                            message.replyActions?.length
+                              ? message.replyActions
+                              : inferQuickReplyActions(message),
+                        }}
                         index={index}
                         total={threadMessages.length}
                         responding={responding}

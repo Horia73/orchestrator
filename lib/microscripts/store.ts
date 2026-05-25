@@ -422,9 +422,31 @@ export function claimMicroscriptForRun(id: string, now: number): Microscript | n
     return claimed
 }
 
+export function claimMicroscriptForWebhook(id: string, now: number): Microscript | null {
+    const tx = db.transaction((): Microscript | null => {
+        const row = db
+            .prepare('SELECT * FROM microscripts WHERE id = ?')
+            .get(id) as MicroscriptRow | undefined
+        if (!row) return null
+        if (row.enabled !== 1 || !['active', 'error'].includes(row.status)) return null
+        const script = scriptFromRow(row)
+        db.prepare(
+            `
+            UPDATE microscripts
+            SET status = 'running', nextRunAt = NULL, updatedAt = @now
+            WHERE id = @id
+            `,
+        ).run({ id, now })
+        return script
+    })
+    const claimed = tx()
+    if (claimed) emitMicroscriptsChanged(id, 'running')
+    return claimed
+}
+
 export interface FinishMicroscriptRunInput {
     ok: boolean
-    trigger: 'schedule' | 'manual'
+    trigger: 'schedule' | 'manual' | 'webhook'
     startedAt: number
     summary: string
     error?: string | null

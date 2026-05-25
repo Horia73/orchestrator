@@ -93,3 +93,61 @@ export interface WatchEvent {
     | "error"
   payload: Record<string, unknown> | null
 }
+
+export interface MicroscriptRow {
+  id: string
+  title: string
+  enabled: boolean
+  status:
+    | "active"
+    | "running"
+    | "paused"
+    | "completed"
+    | "expired"
+    | "error"
+  description: string
+  schedule: unknown
+  permission_count: number
+  next_run_at: number | null
+  last_run_at: number | null
+  last_run_status: "ok" | "error" | null
+  last_run_error: string | null
+  run_count: number
+  consecutive_failures: number
+  expires_at: number | null
+  created_by: string
+  created_at: number
+  updated_at: number
+}
+
+export interface MicroscriptRun {
+  id: string
+  scriptId: string
+  startedAt: number
+  endedAt: number
+  status: "ok" | "error"
+  trigger: "schedule" | "manual" | "webhook"
+  summary: string
+  error: string | null
+  phases: number
+  operations: number
+  surfaced: boolean
+  conversationId: string | null
+}
+
+export interface MicroscriptEvent {
+  id: string
+  scriptId: string
+  ts: number
+  kind: string
+  payload: Record<string, unknown> | null
+}
+
+export interface MicroscriptDetail extends MicroscriptRow {
+  code: string
+  code_hash: string
+  manifest: Record<string, unknown>
+  state: Record<string, unknown>
+  runs: MicroscriptRun[]
+  events: MicroscriptEvent[]
+}

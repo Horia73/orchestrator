@@ -48,6 +48,9 @@ export type AppEvent =
     // Microscripts lifecycle/run changes.
     | { type: 'microscripts.changed'; at: number; scriptId?: string; reason?: string }
     | { type: 'microscript_runs.changed'; at: number; scriptId?: string; runId?: string }
+    // Inbound webhooks lifecycle and dispatch history.
+    | { type: 'webhooks.changed'; at: number; endpointId?: string; reason?: string }
+    | { type: 'webhook_events.changed'; at: number; endpointId?: string; eventId?: string }
 
 export type AppEventType = AppEvent['type'];
 type WithOptionalAt<T extends { at: number }> = Omit<T, 'at'> & { at?: number };

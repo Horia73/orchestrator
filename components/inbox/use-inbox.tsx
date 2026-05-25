@@ -51,8 +51,13 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [detail, setDetail] = React.useState<InboxDetail | null>(null)
   const [detailLoading, setDetailLoading] = React.useState(false)
+  const selectedIdRef = React.useRef<string | null>(null)
 
-  const refresh = React.useCallback(async () => {
+  React.useEffect(() => {
+    selectedIdRef.current = selectedId
+  }, [selectedId])
+
+  const refreshList = React.useCallback(async () => {
     try {
       const res = await fetch("/api/inbox", { cache: "no-store" })
       if (!res.ok) throw new Error(`Failed to load inbox (${res.status})`)
@@ -67,31 +72,62 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
 
   const loadDetail = React.useCallback(async (id: string) => {
     const res = await fetch(`/api/inbox/${id}`, { cache: "no-store" })
+    if (res.status === 404) return null
     if (!res.ok) throw new Error(`Failed to open item (${res.status})`)
     const data = await res.json()
-    setDetail(data.item as InboxDetail)
+    const item = data.item as InboxDetail
+    if (selectedIdRef.current === id) setDetail(item)
+    return item
   }, [])
+
+  const refresh = React.useCallback(async () => {
+    const currentSelectedId = selectedIdRef.current
+    let detailError: unknown = null
+
+    if (currentSelectedId) {
+      try {
+        const item = await loadDetail(currentSelectedId)
+        if (!item && selectedIdRef.current === currentSelectedId) {
+          selectedIdRef.current = null
+          setSelectedId(null)
+          setDetail(null)
+        }
+      } catch (err) {
+        detailError = err
+      }
+    }
+
+    await refreshList()
+
+    if (detailError) {
+      setError(
+        detailError instanceof Error
+          ? detailError.message
+          : "Failed to refresh item"
+      )
+    }
+  }, [loadDetail, refreshList])
 
   useAppEvent(["inbox.changed"], (event) => {
     if (event.type !== "inbox.changed") return
     if (document.visibilityState !== "visible") return
     const eventConversationId = event.conversationId
-    if (!eventConversationId || eventConversationId !== selectedId) {
-      void refresh()
+    const currentSelectedId = selectedIdRef.current
+    if (!eventConversationId || eventConversationId !== currentSelectedId) {
+      void refreshList()
       return
     }
     if (event.action === "deleted") {
+      selectedIdRef.current = null
       setSelectedId(null)
       setDetail(null)
-      void refresh()
+      void refreshList()
       return
     }
     if (event.action === "changed") {
       void (async () => {
         try {
-          await loadDetail(eventConversationId)
           await refresh()
-          window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
         } catch (err) {
           setError(
             err instanceof Error ? err.message : "Failed to refresh item"
@@ -100,7 +136,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       })()
       return
     }
-    void refresh()
+    void refreshList()
   })
 
   React.useEffect(() => {
@@ -112,22 +148,38 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
     const onTick = () => {
       if (document.visibilityState === "visible") void refresh()
     }
+    const onFocus = () => {
+      if (document.visibilityState === "visible") void refresh()
+    }
     document.addEventListener("visibilitychange", onTick)
+    window.addEventListener("focus", onFocus)
+    window.addEventListener("pageshow", onFocus)
     window.addEventListener("orchestrator:inbox-updated", onTick)
     return () => {
       cancelled = true
       document.removeEventListener("visibilitychange", onTick)
+      window.removeEventListener("focus", onFocus)
+      window.removeEventListener("pageshow", onFocus)
       window.removeEventListener("orchestrator:inbox-updated", onTick)
     }
   }, [refresh])
 
   const open = React.useCallback(
     async (id: string) => {
+      selectedIdRef.current = id
       setSelectedId(id)
       setDetailLoading(true)
       try {
-        await loadDetail(id)
-        await refresh()
+        const item = await loadDetail(id)
+        if (!item) {
+          if (selectedIdRef.current === id) {
+            selectedIdRef.current = null
+            setSelectedId(null)
+            setDetail(null)
+          }
+          throw new Error("Inbox item not found")
+        }
+        await refreshList()
         window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
       } catch (err) {
         setError(err instanceof Error ? err.message : "Failed to open item")
@@ -135,22 +187,23 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
         setDetailLoading(false)
       }
     },
-    [loadDetail, refresh]
+    [loadDetail, refreshList]
   )
 
   const remove = React.useCallback(
     async (id: string) => {
       const res = await fetch(`/api/inbox/${id}`, { method: "DELETE" })
       if (res.ok) {
-        if (selectedId === id) {
+        if (selectedIdRef.current === id) {
+          selectedIdRef.current = null
           setSelectedId(null)
           setDetail(null)
         }
-        await refresh()
+        await refreshList()
         window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
       }
     },
-    [refresh, selectedId]
+    [refreshList]
   )
 
   const reply = React.useCallback(
@@ -158,13 +211,13 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`/api/inbox/${id}/reply`, { method: "POST" })
       if (!res.ok) return null
       const data = await res.json()
-      await refresh()
+      await refreshList()
       window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
       return typeof data.conversationId === "string"
         ? data.conversationId
         : null
     },
-    [refresh]
+    [refreshList]
   )
 
   const respond = React.useCallback(
@@ -203,14 +256,15 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       const data = await res.json()
       if (data.item) setDetail(data.item as InboxDetail)
       setError(null)
-      await refresh()
+      await refreshList()
       window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
       return true
     },
-    [refresh]
+    [refreshList]
   )
 
   const clear = React.useCallback(() => {
+    selectedIdRef.current = null
     setSelectedId(null)
     setDetail(null)
   }, [])
