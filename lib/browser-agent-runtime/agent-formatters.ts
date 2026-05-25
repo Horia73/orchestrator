@@ -1,90 +1,95 @@
 import type { BrowserDownloadFile } from './browser';
 import type { IterationLimitReview } from './prompts';
 import type { AgentAction } from './vision';
+import { formatBrowserAgentTextForLog } from './redaction';
+
+function reason(action: AgentAction): string {
+    return formatBrowserAgentTextForLog(action.reasoning, '', 220);
+}
 
 export function formatAction(action: AgentAction): string {
     switch (action.action) {
         case 'click': {
             const coords = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
             const count = action.clickCount && action.clickCount > 1 ? ' (Double Click)' : '';
-            return `Click ${coords}${count} - ${action.reasoning}`;
+            return `Click ${coords}${count} - ${reason(action)}`;
         }
         case 'hover': {
             const coords = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
-            return `Hover ${coords} - ${action.reasoning}`;
+            return `Hover ${coords} - ${reason(action)}`;
         }
         case 'inspectPage':
-            return `Inspect Full Page - ${action.reasoning}`;
+            return `Inspect Full Page - ${reason(action)}`;
         case 'findInPage':
-            return `Find "${action.text?.substring(0, 40) || ''}" - ${action.reasoning}`;
+            return `Find "${formatBrowserAgentTextForLog(action.text, action.reasoning, 40)}" - ${reason(action)}`;
         case 'screenshot':
-            return `Save screenshot - ${action.reasoning}`;
+            return `Save screenshot - ${reason(action)}`;
         case 'recordVideo': {
             const duration = action.durationMs ? ` for ${action.durationMs}ms` : '';
-            return `Record video${duration} - ${action.reasoning}`;
+            return `Record video${duration} - ${reason(action)}`;
         }
         case 'hold': {
             const coords = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
             const duration = action.durationMs ? ` for ${action.durationMs}ms` : '';
-            return `Hold ${coords}${duration} - ${action.reasoning}`;
+            return `Hold ${coords}${duration} - ${reason(action)}`;
         }
         case 'drag': {
             const start = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
             const end = action.coordinateEnd ? `[${action.coordinateEnd[0]}, ${action.coordinateEnd[1]}]` : '[?]';
             const duration = action.durationMs ? ` over ${action.durationMs}ms` : '';
-            return `Drag from ${start} to ${end}${duration} - ${action.reasoning}`;
+            return `Drag from ${start} to ${end}${duration} - ${reason(action)}`;
         }
         case 'type': {
             const coords = action.coordinate ? ` at [${action.coordinate[0]}, ${action.coordinate[1]}]` : '';
             const clear = action.clearBefore ? ' (Clear First)' : '';
             const enter = action.submit ? ' + Enter' : '';
-            return `Type "${action.text?.substring(0, 20)}..."${coords}${clear}${enter} - ${action.reasoning}`;
+            return `Type "${formatBrowserAgentTextForLog(action.text, action.reasoning, 20)}"${coords}${clear}${enter} - ${reason(action)}`;
         }
         case 'clear': {
             const coords = action.coordinate ? ` at [${action.coordinate[0]}, ${action.coordinate[1]}]` : '';
-            return `Clear Input${coords} - ${action.reasoning}`;
+            return `Clear Input${coords} - ${reason(action)}`;
         }
         case 'key':
-            return `Press ${action.key} - ${action.reasoning}`;
+            return `Press ${action.key} - ${reason(action)}`;
         case 'scroll': {
             const amount = action.scrollAmount ? ` by ${action.scrollAmount}px` : '';
-            return `Scroll ${action.scrollDirection}${amount} - ${action.reasoning}`;
+            return `Scroll ${action.scrollDirection}${amount} - ${reason(action)}`;
         }
         case 'wait': {
             const duration = action.durationMs ? ` for ${action.durationMs}ms` : '';
-            return `Wait${duration} - ${action.reasoning}`;
+            return `Wait${duration} - ${reason(action)}`;
         }
         case 'navigate':
-            return `Navigate to ${action.url} - ${action.reasoning}`;
+            return `Navigate to ${action.url} - ${reason(action)}`;
         case 'done':
-            return `Done - ${action.reasoning}`;
+            return `Done - ${reason(action)}`;
         case 'ask':
-            return `Ask User - ${action.reasoning}`;
+            return `Ask User - ${reason(action)}`;
         case 'escalate':
-            return `🚨 Escalate to Advanced AI - ${action.reasoning}`;
+            return `🚨 Escalate to Advanced AI - ${reason(action)}`;
         case 'yield_control':
-            return `🔙 Yield Control to Base AI - ${action.reasoning}`;
+            return `🔙 Yield Control to Base AI - ${reason(action)}`;
         case 'goBack':
-            return `Go Back - ${action.reasoning}`;
+            return `Go Back - ${reason(action)}`;
         case 'goForward':
-            return `Go Forward - ${action.reasoning}`;
+            return `Go Forward - ${reason(action)}`;
         case 'listTabs':
-            return `List Tabs - ${action.reasoning}`;
+            return `List Tabs - ${reason(action)}`;
         case 'switchTab':
-            return `Switch to Tab ${action.tabIndex ?? '?'} - ${action.reasoning}`;
+            return `Switch to Tab ${action.tabIndex ?? '?'} - ${reason(action)}`;
         case 'newTab':
-            return `New Tab${action.url ? ` (${action.url})` : ''} - ${action.reasoning}`;
+            return `New Tab${action.url ? ` (${action.url})` : ''} - ${reason(action)}`;
         case 'listDownloads':
-            return `List Downloads - ${action.reasoning}`;
+            return `List Downloads - ${reason(action)}`;
         case 'waitForDownloads': {
             const duration = action.durationMs ? ` up to ${action.durationMs}ms` : '';
             const expected = action.expectedFilename ? ` expecting "${action.expectedFilename}"` : '';
-            return `Wait for Downloads${duration}${expected} - ${action.reasoning}`;
+            return `Wait for Downloads${duration}${expected} - ${reason(action)}`;
         }
         case 'readClipboard':
-            return `Read Clipboard - ${action.reasoning}`;
+            return `Read Clipboard - ${reason(action)}`;
         default:
-            return `${action.action} - ${action.reasoning}`;
+            return `${action.action} - ${reason(action)}`;
     }
 }
 

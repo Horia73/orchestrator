@@ -322,10 +322,29 @@ export function useWorkoutSession(
         })
     }, [])
 
-    const addSet = React.useCallback<WorkoutSessionApi['addSet']>(() => {
-        // Phase 2 placeholder — full freestyle-add UX is in Phase 3.
-        // Schema allows ad-hoc sets; future picker collects values.
-    }, [])
+    const addSet = React.useCallback<WorkoutSessionApi['addSet']>(
+        (exercise, plannedSet) => {
+            const now = new Date().toISOString()
+            const defaults = plannedDefaults(plannedSet, exercise.kind)
+            setSession((s) => {
+                const prevLog = ensureLog(s, exercise.id)
+                const sets = prevLog.sets.slice()
+                // Append at the end. Index is sets.length (after push).
+                sets.push({ ...defaults, completed: true, completedAt: now, startedAt: now })
+                return {
+                    ...s,
+                    startedAt: s.startedAt ?? now,
+                    logsByExerciseId: {
+                        ...s.logsByExerciseId,
+                        [exercise.id]: { ...prevLog, sets },
+                    },
+                    // Don't auto-start rest — the user just confirmed the values;
+                    // they can start rest manually if they want it.
+                }
+            })
+        },
+        [],
+    )
 
     const startRest = React.useCallback<WorkoutSessionApi['startRest']>((durationSec, label) => {
         setSession((s) => ({

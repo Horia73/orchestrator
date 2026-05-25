@@ -71,6 +71,10 @@ function createSmokeVision(): VisionService {
             return null;
         },
 
+        async compactActionHistory(): Promise<string | null> {
+            return null;
+        },
+
         updateConfig(patch: Partial<VisionConfig>) {
             config = { ...config, ...patch };
         },

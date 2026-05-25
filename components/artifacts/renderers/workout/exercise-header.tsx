@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { History, Info, Trophy } from "lucide-react"
+import { History, Info, Replace, Trophy } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type { Exercise, WorkoutUnits } from "@/lib/workout/schema"
@@ -36,6 +36,7 @@ export function ExerciseHeader({
     className?: string
 }) {
     const cues = exercise.formCues ?? []
+    const alternatives = exercise.alternatives ?? []
     const hasContext = !!(exercise.previous || exercise.personalBest)
 
     return (
@@ -44,8 +45,8 @@ export function ExerciseHeader({
                 <h3 className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-foreground">
                     {exercise.name}
                 </h3>
-                {cues.length > 0 || exercise.videoUrl ? (
-                    <FormCuesPopover cues={cues} videoUrl={exercise.videoUrl} />
+                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl ? (
+                    <FormCuesPopover cues={cues} videoUrl={exercise.videoUrl} alternatives={alternatives} />
                 ) : null}
             </div>
             <MuscleChips muscles={exercise.muscleGroups} />
@@ -122,7 +123,16 @@ function PrBadge({
     )
 }
 
-function FormCuesPopover({ cues, videoUrl }: { cues: string[]; videoUrl?: string }) {
+function FormCuesPopover({
+    cues,
+    videoUrl,
+    alternatives,
+}: {
+    cues: string[]
+    videoUrl?: string
+    alternatives?: string[]
+}) {
+    const hasAlternatives = alternatives && alternatives.length > 0
     return (
         <details className="group/cues relative">
             <summary
@@ -136,15 +146,41 @@ function FormCuesPopover({ cues, videoUrl }: { cues: string[]; videoUrl?: string
             >
                 <Info className="size-3.5" strokeWidth={1.75} />
             </summary>
-            <div className="absolute right-0 top-full z-20 mt-1 w-72 rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-lg">
+            <div className="absolute right-0 top-full z-20 mt-1 w-80 rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-lg">
                 {cues.length > 0 ? (
-                    <ul className="flex flex-col gap-1.5 text-foreground/85">
-                        {cues.map((c, i) => (
-                            <li key={i} className="leading-relaxed">
-                                {c}
-                            </li>
-                        ))}
-                    </ul>
+                    <>
+                        <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55">
+                            Form cues
+                        </div>
+                        <ul className="flex flex-col gap-1.5 text-foreground/85">
+                            {cues.map((c, i) => (
+                                <li key={i} className="leading-relaxed">
+                                    {c}
+                                </li>
+                            ))}
+                        </ul>
+                    </>
+                ) : null}
+                {hasAlternatives ? (
+                    <>
+                        <div className={cn(
+                            "mb-1 inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55",
+                            cues.length > 0 && "mt-3",
+                        )}>
+                            <Replace className="size-3" strokeWidth={2} aria-hidden />
+                            Alternatives
+                        </div>
+                        <ul className="flex flex-col gap-1 text-foreground/85">
+                            {alternatives!.map((a, i) => (
+                                <li
+                                    key={i}
+                                    className="rounded bg-muted/55 px-2 py-1 text-[12px] leading-snug"
+                                >
+                                    {a}
+                                </li>
+                            ))}
+                        </ul>
+                    </>
                 ) : null}
                 {videoUrl ? (
                     <a
@@ -153,7 +189,7 @@ function FormCuesPopover({ cues, videoUrl }: { cues: string[]; videoUrl?: string
                         rel="noopener noreferrer"
                         className={cn(
                             "mt-2 inline-flex items-center gap-1 text-[11.5px] font-medium text-primary hover:underline",
-                            cues.length === 0 && "mt-0",
+                            cues.length === 0 && !hasAlternatives && "mt-0",
                         )}
                     >
                         Watch demo →

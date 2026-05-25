@@ -3,70 +3,95 @@
  *   - writeSessionLog → file exists, parses back as expected
  *   - writeExerciseHistory → file exists, merges correctly on second write
  *   - appendHistoryEntry → file created, line present, dedups by sessionId
- *   - listRecentSessionSlugs → newest first
+ *   - listRecentSessionSlugs → newest first (only the slugs this test wrote)
  *
- * Uses a temporary subdirectory under workspace to avoid clobbering real
- * user data; tears down on exit.
+ * Isolation: every write uses a `smoke-{sessionId}` prefix and a temp
+ * exercise id (`smoke-bench-press`), so we can clean up exactly what this
+ * test produced without touching the user's real workout history.
  *
  * Run: npx tsx scripts/smoke-workout-storage.ts
  */
 import fs from 'fs'
-import path from 'path'
-import os from 'os'
 
-// Override WORKSPACE_DIR before any storage imports
-const TMP_WORKSPACE = fs.mkdtempSync(path.join(os.tmpdir(), 'workout-storage-test-'))
-process.env.ORCH_WORKSPACE_DIR = TMP_WORKSPACE
+import { parseWorkoutArtifact } from '@/lib/workout/parser'
+import { buildSessionLog, formatHistoryEntryLine, formatSessionMarkdown, mergeExerciseHistory } from '@/lib/workout/save-session'
+import {
+    appendHistoryEntry,
+    historyMarkdownPath,
+    listRecentSessionSlugs,
+    readExerciseHistory,
+    readSessionLog,
+    sessionJsonPath,
+    sessionMarkdownPath,
+    exerciseHistoryPath,
+    writeExerciseHistory,
+    writeSessionLog,
+} from '@/lib/workout/storage'
 
-// Late-load so the override sticks.
-async function main() {
-    const { parseWorkoutArtifact } = await import('@/lib/workout/parser')
-    const { buildSessionLog, buildSessionSlug, formatHistoryEntryLine, formatSessionMarkdown, mergeExerciseHistory } = await import('@/lib/workout/save-session')
-    const {
-        appendHistoryEntry,
-        readExerciseHistory,
-        readSessionLog,
-        writeExerciseHistory,
-        writeSessionLog,
-        listRecentSessionSlugs,
-        historyMarkdownPath,
-        workoutsDir,
-    } = await import('@/lib/workout/storage')
+const TEST_EX_ID = 'smoke-bench-press'
+const TEST_SESSION_PREFIX = 'smoke-test-' + Date.now() + '-'
 
-    let failures = 0
-    function check(label: string, cond: unknown, detail?: unknown) {
-        const ok = Boolean(cond)
-        console.log(`${ok ? '✓' : '✗'} ${label}${ok ? '' : '  (' + JSON.stringify(detail) + ')'}`)
-        if (!ok) failures++
+const writtenSessionSlugs: string[] = []
+const writtenSessionIds: string[] = []
+
+let failures = 0
+function check(label: string, cond: unknown, detail?: unknown) {
+    const ok = Boolean(cond)
+    console.log(`${ok ? '✓' : '✗'} ${label}${ok ? '' : '  (' + JSON.stringify(detail) + ')'}`)
+    if (!ok) failures++
+}
+
+function cleanup() {
+    // Remove only what THIS test wrote. Never blow away the real workouts dir.
+    for (const slug of writtenSessionSlugs) {
+        try { fs.unlinkSync(sessionJsonPath(slug)) } catch { /* ignore */ }
+        try { fs.unlinkSync(sessionMarkdownPath(slug)) } catch { /* ignore */ }
     }
+    try { fs.unlinkSync(exerciseHistoryPath(TEST_EX_ID)) } catch { /* ignore */ }
+    // Strip any HISTORY.md lines we appended.
+    try {
+        const histPath = historyMarkdownPath()
+        if (fs.existsSync(histPath)) {
+            const content = fs.readFileSync(histPath, 'utf8')
+            const cleaned = content.split('\n').filter((l) => !writtenSessionIds.some((id) => l.includes(`session:${id}`))).join('\n')
+            if (cleaned !== content) fs.writeFileSync(histPath, cleaned, 'utf8')
+        }
+    } catch { /* ignore */ }
+}
 
-    console.log(`Using temp workspace: ${TMP_WORKSPACE}`)
+process.on('exit', cleanup)
+process.on('SIGINT', () => { cleanup(); process.exit(130) })
 
+try {
     const workoutJson = JSON.stringify({
-        sessionId: 'sess-001',
-        title: 'Test Push',
+        sessionId: TEST_SESSION_PREFIX + 'minimal',
+        title: 'Smoke Push',
         units: 'kg',
         groups: [{
             kind: 'straight',
             exercises: [{
-                id: 'bench-press',
-                name: 'Bench Press',
+                id: TEST_EX_ID,
+                name: 'Smoke Bench Press',
                 kind: 'weighted',
                 muscleGroups: ['chest'],
-                planned: [{ weightKg: 60, reps: 8 }, { weightKg: 60, reps: 8 }, { weightKg: 60, reps: 8 }],
+                planned: [
+                    { weightKg: 60, reps: 8 },
+                    { weightKg: 60, reps: 8 },
+                    { weightKg: 60, reps: 8 },
+                ],
             }],
         }],
     })
     const parsed = parseWorkoutArtifact(workoutJson)
-    if (!parsed.ok) throw new Error('fixture parse')
+    if (!parsed.ok) throw new Error(`fixture parse: ${parsed.error}`)
     const workout = parsed.value
 
-    const state = {
-        sessionId: 'sess-001',
+    const baseState = {
+        sessionId: TEST_SESSION_PREFIX + 'sess-001',
         startedAt: new Date(Date.now() - 1800_000).toISOString(),
         completedAt: new Date().toISOString(),
         logsByExerciseId: {
-            'bench-press': {
+            [TEST_EX_ID]: {
                 sets: [
                     { completed: true, actualWeightKg: 60, actualReps: 8, actualRpe: 7.5 },
                     { completed: true, actualWeightKg: 60, actualReps: 8, actualRpe: 8 },
@@ -77,63 +102,73 @@ async function main() {
         _v: 1 as const,
     }
 
-    const log = buildSessionLog(workout, state)
-    const slug = buildSessionSlug(workout, state)
-    const md = formatSessionMarkdown(log)
+    // Unique-per-run slug so two parallel CI processes don't collide.
+    const slug1 = TEST_SESSION_PREFIX + 'sess-001'
+    const log1 = buildSessionLog({ ...workout, sessionId: baseState.sessionId }, baseState)
+    const md = formatSessionMarkdown(log1)
 
     // === writeSessionLog ===
-    const { jsonPath, mdPath } = writeSessionLog(slug, log, md)
-    check('storage: session JSON file exists', fs.existsSync(jsonPath), jsonPath)
-    check('storage: session MD file exists', fs.existsSync(mdPath), mdPath)
-    const readBack = readSessionLog(slug)
-    check('storage: session reads back', readBack !== null && readBack.sessionId === 'sess-001')
-    check('storage: session preserves volume', readBack?.totalVolumeKg === log.totalVolumeKg)
+    const { jsonPath, mdPath } = writeSessionLog(slug1, log1, md)
+    writtenSessionSlugs.push(slug1)
+    writtenSessionIds.push(baseState.sessionId)
+    check('storage: session JSON file exists', fs.existsSync(jsonPath))
+    check('storage: session MD file exists', fs.existsSync(mdPath))
+    const readBack = readSessionLog(slug1)
+    check('storage: session reads back', readBack !== null && readBack.sessionId === baseState.sessionId)
+    check('storage: session preserves volume', readBack?.totalVolumeKg === log1.totalVolumeKg)
 
     // === writeExerciseHistory ===
-    const merged = mergeExerciseHistory(null, workout, log, log.exercises[0])
+    const merged = mergeExerciseHistory(null, workout, log1, log1.exercises[0])
     const exPath = writeExerciseHistory(merged)
     check('storage: exercise history file exists', fs.existsSync(exPath))
-    const readEx = readExerciseHistory('bench-press')
-    check('storage: exercise history reads back', readEx !== null && readEx.id === 'bench-press')
+    const readEx = readExerciseHistory(TEST_EX_ID)
+    check('storage: exercise history reads back', readEx !== null && readEx.id === TEST_EX_ID)
     check('storage: PB populated', readEx?.personalBest?.weightKg === 65 || readEx?.personalBest?.weightKg === 60)
 
     // === appendHistoryEntry ===
-    appendHistoryEntry(formatHistoryEntryLine(log), 'sess-001')
+    appendHistoryEntry(formatHistoryEntryLine(log1), baseState.sessionId)
     const histPath = historyMarkdownPath()
     check('storage: HISTORY.md created', fs.existsSync(histPath))
     const histContent = fs.readFileSync(histPath, 'utf8')
-    check('storage: HISTORY.md contains session line', histContent.includes('Test Push') && histContent.includes('sess-001'))
+    check('storage: HISTORY.md contains session line', histContent.includes('Smoke Push') && histContent.includes(baseState.sessionId))
 
-    // Idempotent: appending the same sessionId replaces the line, doesn't duplicate.
-    appendHistoryEntry(formatHistoryEntryLine(log), 'sess-001')
+    appendHistoryEntry(formatHistoryEntryLine(log1), baseState.sessionId)
     const histAfter = fs.readFileSync(histPath, 'utf8')
-    const occurrences = (histAfter.match(/sess-001/g) || []).length
+    const occurrences = (histAfter.match(new RegExp(baseState.sessionId, 'g')) || []).length
     check('storage: HISTORY.md dedupes same sessionId', occurrences === 1, `found ${occurrences} occurrences`)
 
     // === Second session merges into exercise history ===
-    const state2 = { ...state, sessionId: 'sess-002', startedAt: new Date(Date.now() - 86400_000).toISOString(), completedAt: new Date(Date.now() - 86400_000 + 1800_000).toISOString() }
-    const log2 = buildSessionLog({ ...workout, sessionId: 'sess-002' }, state2)
+    const sess2Id = TEST_SESSION_PREFIX + 'sess-002'
+    const slug2 = TEST_SESSION_PREFIX + 'sess-002'
+    const state2 = {
+        ...baseState,
+        sessionId: sess2Id,
+        startedAt: new Date(Date.now() - 86400_000).toISOString(),
+        completedAt: new Date(Date.now() - 86400_000 + 1800_000).toISOString(),
+    }
+    const log2 = buildSessionLog({ ...workout, sessionId: sess2Id }, state2)
     const merged2 = mergeExerciseHistory(readEx, workout, log2, log2.exercises[0])
     writeExerciseHistory(merged2)
-    const readEx2 = readExerciseHistory('bench-press')
+    const readEx2 = readExerciseHistory(TEST_EX_ID)
     check('storage: second session added to exercise history', (readEx2?.sessions.length ?? 0) === 2)
 
+    writeSessionLog(slug2, log2, formatSessionMarkdown(log2))
+    writtenSessionSlugs.push(slug2)
+    writtenSessionIds.push(sess2Id)
+
     // === listRecentSessionSlugs ===
-    writeSessionLog(buildSessionSlug({ ...workout, sessionId: 'sess-002' }, state2), log2, formatSessionMarkdown(log2))
-    const slugs = listRecentSessionSlugs(10)
-    check('storage: listRecentSessionSlugs returns 2 slugs', slugs.length === 2, slugs)
-    check('storage: slugs are sorted newest first', slugs[0] >= slugs[1])
-
-    // === cleanup ===
-    fs.rmSync(workoutsDir(), { recursive: true, force: true })
-
-    console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`)
-    process.exit(failures === 0 ? 0 : 1)
+    // Filter to only the slugs this test wrote — listRecent returns ALL files in
+    // the directory (the real user history could contain dozens), so we just
+    // verify our 2 slugs are present and ordered.
+    const allRecent = listRecentSessionSlugs(200)
+    const ourSlugs = allRecent.filter((s) => s.startsWith(TEST_SESSION_PREFIX) || writtenSessionSlugs.includes(s))
+    check('storage: our 2 slugs both appear in listRecent', ourSlugs.length === 2, ourSlugs)
+    check('storage: slugs are sorted newest first', ourSlugs[0] >= ourSlugs[1])
+} catch (e) {
+    console.error('Fatal:', e)
+    failures += 1
 }
 
-void main().catch((e) => {
-    console.error('Fatal:', e)
-    process.exit(1)
-}).finally(() => {
-    try { fs.rmSync(TMP_WORKSPACE, { recursive: true, force: true }) } catch { /* ignore */ }
-})
+console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`)
+// process.on('exit') will run cleanup before the process truly terminates.
+process.exit(failures === 0 ? 0 : 1)

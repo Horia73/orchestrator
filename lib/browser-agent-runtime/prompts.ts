@@ -5,6 +5,7 @@
 
 import type { RetrievedMemory } from './memory';
 import type { BrowserCoordinateSpace, BrowserDownloadFile } from './browser';
+import { formatBrowserAgentTextForLog, redactBrowserAgentText } from './redaction';
 
 export function buildSystemPrompt(
    memories: RetrievedMemory,
@@ -157,7 +158,8 @@ Manage tabs like a person would — check OPEN TABS before acting:
 1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Escalate to the advanced agent if you feel stuck.
 2. **Scroll if needed**: If you don't see what you need, SCROLL.
 3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, DO NOT interact with empty space. Search for a close button, a fallback option, or rethink the approach.
-4. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.
+4. **Long Task Continuity**: Treat earlier action summaries as completed work. Do not restart from the original checklist just because the task is long; verify the current file/page and continue from the latest unfinished step.
+5. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.
    - Example: "Search boxes on this site need a click before typing."
    - Only save reusable interaction rules or domain-specific UI behaviors.
    - Do not save one-off task outcomes, captcha-specific instructions, button labels, or temporary page states.
@@ -251,14 +253,17 @@ export interface IterationLimitReview {
    questionsForUser: string[];
 }
 
-function formatActionHistory(recentActions: ActionHistoryItem[]): string {
+const ACTION_HISTORY_PROMPT_LIMIT = 50;
+const EARLIER_ACTION_SUMMARY_LIMIT = 20;
+
+function formatActionHistory(recentActions: ActionHistoryItem[], totalActions = recentActions.length, startIndex = 0): string {
    if (recentActions.length === 0) {
       return '';
    }
 
    let historyText = '\n## 📜 ACTION HISTORY (newest last):\n' + recentActions
       .map((a, i) => {
-         const step = i + 1;
+         const step = startIndex + i + 1;
          let desc = `Step ${step}: ${a.action.toUpperCase()}`;
          if (a.coordinate) desc += ` at [${a.coordinate[0]}, ${a.coordinate[1]}]`;
          if (a.coordinateEnd) desc += ` → [${a.coordinateEnd[0]}, ${a.coordinateEnd[1]}]`;
@@ -266,18 +271,38 @@ function formatActionHistory(recentActions: ActionHistoryItem[]): string {
          if (a.scrollAmount) desc += ` ${a.scrollAmount}px`;
          if (a.clickCount && a.clickCount > 1) desc += ` (x${a.clickCount})`;
          if (a.tabIndex !== undefined) desc += ` tab[${a.tabIndex}]`;
-         if (a.text) desc += ` ("${a.text.substring(0, 30)}")`;
+         if (a.text) desc += ` ("${formatBrowserAgentTextForLog(a.text, a.reasoning, 30)}")`;
          if (a.submit) desc += ` + ENTER`;
          if (a.expectedFilename) desc += ` expected="${a.expectedFilename.substring(0, 60)}"`;
          desc += a.success ? ' ✓' : ' ✗ FAILED';
-         if (a.reasoning) desc += `\n         → Reason: "${a.reasoning.substring(0, 80)}"`;
-         if (a.observation) desc += `\n         → Result: "${a.observation.substring(0, 500)}"`;
+         if (a.reasoning) desc += `\n         → Reason: "${redactBrowserAgentText(a.reasoning).substring(0, 80)}"`;
+         if (a.observation) desc += `\n         → Result: "${redactBrowserAgentText(a.observation).substring(0, 500)}"`;
          return desc;
       })
       .join('\n');
 
-   historyText += `\n\n**Total actions so far: ${recentActions.length}**`;
+   historyText += `\n\n**Total actions so far: ${totalActions}; shown here: ${recentActions.length}.**`;
    return historyText;
+}
+
+function formatEarlierActionSummary(actions: ActionHistoryItem[], totalActions: number): string {
+   if (actions.length === 0) return '';
+
+   const omitted = Math.max(0, actions.length - EARLIER_ACTION_SUMMARY_LIMIT);
+   const shown = actions.slice(-EARLIER_ACTION_SUMMARY_LIMIT);
+   const lines = shown.map((a, i) => {
+      const step = omitted + i + 1;
+      const status = a.success ? 'ok' : 'failed';
+      const reason = a.reasoning ? ` - ${redactBrowserAgentText(a.reasoning).replace(/\s+/g, ' ').slice(0, 120)}` : '';
+      const text = a.text ? ` ("${formatBrowserAgentTextForLog(a.text, a.reasoning, 40)}")` : '';
+      return `Step ${step}: ${a.action}${text} ${status}${reason}`;
+   });
+
+   const header = omitted > 0
+      ? `\n## 📌 EARLIER ACTION SUMMARY (${actions.length} older actions; first ${omitted} compacted)\n`
+      : `\n## 📌 EARLIER ACTION SUMMARY (${actions.length} older actions)\n`;
+
+   return `${header}${lines.join('\n')}\n\nDo not repeat earlier completed setup steps unless the current page or file contents show they are missing.\nTotal actions so far: ${totalActions}.\n`;
 }
 
 function formatDownloadBytes(size: number | undefined): string {
@@ -308,7 +333,8 @@ export function buildActionPrompt(
    openTabs?: TabInfo[],
    downloads?: BrowserDownloadFile[]
 ): string {
-   const recentActions = actionHistory.slice(-15);
+   const recentActions = actionHistory.slice(-ACTION_HISTORY_PROMPT_LIMIT);
+   const earlierActions = actionHistory.slice(0, Math.max(0, actionHistory.length - ACTION_HISTORY_PROMPT_LIMIT));
 
    // Detect loops (simplified for coordinates)
    let loopWarning = '';
@@ -334,7 +360,12 @@ export function buildActionPrompt(
       }
    }
 
-   const historyText = formatActionHistory(recentActions);
+   const earlierSummary = formatEarlierActionSummary(earlierActions, actionHistory.length);
+   const historyText = formatActionHistory(
+      recentActions,
+      actionHistory.length,
+      Math.max(0, actionHistory.length - recentActions.length)
+   );
 
    let tabContext = '';
    if (openTabs && openTabs.length > 0) {
@@ -353,7 +384,7 @@ export function buildActionPrompt(
    const downloadContext = formatDownloadContext(downloads);
 
    return `## 🎯 GOAL: ${goal}
-${loopWarning}${tabContext}${downloadContext}${historyText}
+${loopWarning}${tabContext}${downloadContext}${earlierSummary}${historyText}
 
 ## ⚠️ BEFORE YOU ACT:
 1. Review history.
@@ -369,8 +400,14 @@ export function buildIterationLimitReviewPrompt(
    openTabs?: TabInfo[],
    downloads?: BrowserDownloadFile[]
 ): string {
-   const recentActions = actionHistory.slice(-20);
-   const historyText = formatActionHistory(recentActions);
+   const recentActions = actionHistory.slice(-ACTION_HISTORY_PROMPT_LIMIT);
+   const earlierActions = actionHistory.slice(0, Math.max(0, actionHistory.length - ACTION_HISTORY_PROMPT_LIMIT));
+   const earlierSummary = formatEarlierActionSummary(earlierActions, actionHistory.length);
+   const historyText = formatActionHistory(
+      recentActions,
+      actionHistory.length,
+      Math.max(0, actionHistory.length - recentActions.length)
+   );
 
    let tabContext = '';
    if (openTabs && openTabs.length > 0) {
@@ -394,7 +431,7 @@ Do NOT suggest another browser action. Do NOT return an automation action. Analy
 
 ## ORIGINAL GOAL
 ${goal}
-${tabContext}${downloadContext}${historyText}
+${tabContext}${downloadContext}${earlierSummary}${historyText}
 
 Return JSON only with this exact shape:
 {
@@ -416,6 +453,44 @@ Rules:
 - If a human could likely recover, explain what advantage the human has.
 - If no extra questions are needed, return an empty array for "questionsForUser".
 - Keep arrays short and high-signal.
+- JSON only.`;
+}
+
+export function buildActionHistoryCompactionPrompt(
+   goal: string,
+   actionsToCompact: ActionHistoryItem[],
+   conversationHistory: string[],
+   keepLastCount: number
+): string {
+   const historyText = formatActionHistory(actionsToCompact, actionsToCompact.length, 0);
+   const priorContext = conversationHistory.length > 0
+      ? `\n## EXISTING COMPACTED / CONVERSATION CONTEXT\n${conversationHistory.map((entry) => redactBrowserAgentText(entry)).join('\n')}\n`
+      : '';
+
+   return `## BROWSER ACTION HISTORY COMPACTION
+You are compacting older browser-agent action history so the agent can continue a long task.
+The live prompt will keep the latest ${keepLastCount} actions separately; summarize ONLY the older actions below.
+
+## ORIGINAL GOAL
+${redactBrowserAgentText(goal)}
+${priorContext}
+${historyText}
+
+Return JSON only with this exact shape:
+{
+  "summary": "<compact but specific paragraph>",
+  "completed": ["<important completed step>", "<important completed step>"],
+  "currentState": "<last known relevant page/file/state from this older history>",
+  "avoidRepeating": ["<step the agent should not redo unless verified missing>"],
+  "openRisks": ["<uncertainty, failed step, or thing still needing verification>"]
+}
+
+Rules:
+- Preserve task-critical facts: files opened or edited, buttons clicked to save, sections already searched, entities/forms/settings already touched, failed attempts, and any user-imposed boundaries.
+- For config/editor tasks, explicitly note which file or setting was already edited or saved if the action history supports that.
+- Do not include passwords, bearer tokens, API keys, webhook secrets, auth headers, or raw credential values. Write "[redacted]" if a secret was involved.
+- Do not invent success that the action history does not support; distinguish "typed/clicked save" from "verified saved" when verification is absent.
+- Keep it short enough to fit as durable context in future prompts.
 - JSON only.`;
 }
 

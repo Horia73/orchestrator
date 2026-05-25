@@ -83,7 +83,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
         maxConcurrent: 3,
     },
     runtime: {
-        maxIterations: 50,
+        maxIterations: 60,
         maxConversationHistory: 40,
         stepDelayMs: 500,
         actionSettleDelayMs: 1000,

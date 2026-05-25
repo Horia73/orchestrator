@@ -5,7 +5,7 @@
 
 import { GoogleGenAI, MediaResolution, type GenerateContentConfig } from '@google/genai';
 import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from './browser';
-import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
+import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, buildActionHistoryCompactionPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
 import { getMemories } from './memory';
 
 export interface AgentAction {
@@ -65,6 +65,12 @@ export interface VisionService {
         openTabs?: TabInfo[],
         downloads?: BrowserDownloadFile[]
     ): Promise<IterationLimitReview | null>;
+    compactActionHistory(
+        goal: string,
+        actionsToCompact: ActionHistoryItem[],
+        conversationHistory: string[],
+        keepLastCount: number
+    ): Promise<string | null>;
     updateConfig(patch: Partial<VisionConfig>): void;
     getConfig(): VisionConfig;
 }
@@ -442,6 +448,64 @@ export function createVisionService(
                     action: 'error',
                     reasoning: `API Error: ${error instanceof Error ? error.message : 'Unknown'}`,
                 }];
+            }
+        },
+
+        async compactActionHistory(
+            goal: string,
+            actionsToCompact: ActionHistoryItem[],
+            conversationHistory: string[] = [],
+            keepLastCount: number
+        ): Promise<string | null> {
+            if (actionsToCompact.length === 0) return null;
+
+            try {
+                const prompt = buildActionHistoryCompactionPrompt(
+                    goal,
+                    actionsToCompact,
+                    conversationHistory,
+                    keepLastCount
+                );
+                const response = await generateContentWithFallback(ai, state.model, state, [{ text: prompt }]);
+
+                const usage = extractUsage(getUsageMetadata(response));
+                if (typeof onUsage === 'function') {
+                    onUsage({
+                        model: state.model,
+                        ...usage,
+                    });
+                }
+
+                const text = response.text?.trim() || '';
+                const jsonText = extractJsonText(text);
+                const parsed = JSON.parse(jsonText) as {
+                    summary?: unknown;
+                    completed?: unknown;
+                    currentState?: unknown;
+                    avoidRepeating?: unknown;
+                    openRisks?: unknown;
+                };
+
+                const lines: string[] = [];
+                const summary = String(parsed.summary || '').trim();
+                if (summary) lines.push(`Summary: ${summary}`);
+
+                const completed = normalizeStringArray(parsed.completed);
+                if (completed.length > 0) lines.push(`Completed: ${completed.join(' | ')}`);
+
+                const currentState = String(parsed.currentState || '').trim();
+                if (currentState) lines.push(`Last known state: ${currentState}`);
+
+                const avoidRepeating = normalizeStringArray(parsed.avoidRepeating);
+                if (avoidRepeating.length > 0) lines.push(`Do not repeat unless verified missing: ${avoidRepeating.join(' | ')}`);
+
+                const openRisks = normalizeStringArray(parsed.openRisks);
+                if (openRisks.length > 0) lines.push(`Still uncertain / needs verification: ${openRisks.join(' | ')}`);
+
+                return lines.join('\n').trim() || null;
+            } catch (error) {
+                console.error('Vision action-history compaction error:', error);
+                return null;
             }
         },
 

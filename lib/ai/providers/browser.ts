@@ -13,6 +13,7 @@ import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
 import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type BrowserProfileMode, type MediaResolutionLevel } from '@/lib/browser-agent-runtime/config'
 import { resolveBrowserBackend } from '@/lib/browser-agent-backend'
+import { redactBrowserAgentText } from '@/lib/browser-agent-runtime/redaction'
 import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
 import { latestUserPromptWithPortableHistory } from './history'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
@@ -51,7 +52,7 @@ export class BrowserProvider implements AIProvider {
         let lastStatusMessage = ''
         const statusTranscript: string[] = []
         const recordStatus = (message: string) => {
-            const trimmed = message.trim()
+            const trimmed = redactBrowserAgentText(message).trim()
             if (!trimmed || statusTranscript[statusTranscript.length - 1] === trimmed) return false
             statusTranscript.push(trimmed)
             return true
@@ -78,8 +79,9 @@ export class BrowserProvider implements AIProvider {
             prevSession: options.prevSession,
             onStatus(message) {
                 if (!recordStatus(message)) return
-                lastStatusMessage = message
-                callbacks.onThinking(`${message}\n`)
+                const safeMessage = redactBrowserAgentText(message)
+                lastStatusMessage = safeMessage
+                callbacks.onThinking(`${safeMessage}\n`)
             },
             onEvidence(capture) {
                 saveEvidenceCapture(capture)

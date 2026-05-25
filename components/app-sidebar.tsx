@@ -5,8 +5,10 @@ import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
   Archive,
+  ArchiveRestore,
   CalendarClock,
   Inbox as InboxIcon,
+  Library as LibraryIcon,
   LineChart,
   MapPinned,
   Telescope,
@@ -230,6 +232,7 @@ export function AppSidebar() {
     selectConversation,
     prefetchConversationMessages,
     archiveConversation,
+    unarchiveConversation,
     deleteConversation,
   } = useChatStore()
   const {
@@ -249,13 +252,16 @@ export function AppSidebar() {
   const isOnMonitor = pathname?.startsWith("/monitor") ?? false
   const isOnMaps = pathname?.startsWith("/maps") ?? false
   const isOnInbox = pathname?.startsWith("/inbox") ?? false
+  // /workouts redirects to /library?tab=workouts — treat both as "Library" active.
+  const isOnLibrary = (pathname?.startsWith("/library") ?? false) || (pathname?.startsWith("/workouts") ?? false)
   const shouldConstrainTabletNav =
     isOnSettings ||
     isOnScheduling ||
     isOnWatchlist ||
     isOnMonitor ||
     isOnMaps ||
-    isOnInbox
+    isOnInbox ||
+    isOnLibrary
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
   const inboxUnread = useInboxUnread()
   const [searchActive, setSearchActive] = React.useState(false)
@@ -264,12 +270,19 @@ export function AppSidebar() {
     Conversation[] | null
   >(null)
   const [searchLoading, setSearchLoading] = React.useState(false)
+  const [archiveViewActive, setArchiveViewActive] = React.useState(false)
+  const [archivedConversations, setArchivedConversations] = React.useState<
+    Conversation[]
+  >([])
+  const [archivedLoading, setArchivedLoading] = React.useState(false)
+  const [archivedError, setArchivedError] = React.useState<string | null>(null)
   const [currentTime, setCurrentTime] = React.useState<number | null>(null)
   const deferredSearchQuery = React.useDeferredValue(searchQuery)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const { assistantName } = useRuntimeConfig()
   const normalizedSearchQuery = normalizeSearchText(deferredSearchQuery.trim())
   const isFiltering = normalizedSearchQuery.length > 0
+  const showArchiveView = archiveViewActive && !isFiltering
 
   const filteredConversations = React.useMemo(
     () =>
@@ -281,7 +294,18 @@ export function AppSidebar() {
     [isFiltering, normalizedSearchQuery, state.conversations]
   )
   const displayedConversations =
-    isFiltering && searchResults ? searchResults : filteredConversations
+    showArchiveView
+      ? archivedConversations
+      : isFiltering && searchResults
+        ? searchResults
+        : filteredConversations
+  const conversationsLoading =
+    state.isLoading || (showArchiveView && archivedLoading)
+  const conversationSectionLabel = isFiltering
+    ? "Search results"
+    : showArchiveView
+      ? "Archive"
+      : "Recents"
 
   React.useEffect(() => {
     const updateClock = () => setCurrentTime(Date.now())
@@ -325,8 +349,36 @@ export function AppSidebar() {
     }
   }, [deferredSearchQuery, isFiltering])
 
+  React.useEffect(() => {
+    if (!showArchiveView) return
+
+    const controller = new AbortController()
+    setArchivedLoading(true)
+    setArchivedError(null)
+    void fetch("/api/conversations?summary=1&archived=1", {
+      cache: "no-store",
+      signal: controller.signal,
+    })
+      .then((res) => {
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        return res.json() as Promise<Conversation[]>
+      })
+      .then((rows) => setArchivedConversations(rows))
+      .catch((err) => {
+        if (err instanceof DOMException && err.name === "AbortError") return
+        setArchivedError("Couldn't load archived chats.")
+        setArchivedConversations([])
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setArchivedLoading(false)
+      })
+
+    return () => controller.abort()
+  }, [showArchiveView])
+
   const openSidebarSearch = React.useCallback(() => {
     setOpen(true)
+    setArchiveViewActive(false)
     setSearchActive(true)
     window.setTimeout(() => searchInputRef.current?.focus(), 0)
   }, [setOpen])
@@ -425,6 +477,7 @@ export function AppSidebar() {
   }, [isMobile, pathname, router])
 
   const handleNewChat = React.useCallback(() => {
+    setArchiveViewActive(false)
     if (isMobile) setOpenMobile(false)
     newChat()
     navigateHome()
@@ -453,6 +506,12 @@ export function AppSidebar() {
       event.stopPropagation()
       const archivedAt = Date.now()
       archiveConversation(id)
+      setArchivedConversations((current) => [
+        ...state.conversations
+          .filter((conversation) => conversation.id === id)
+          .map((conversation) => ({ ...conversation, archivedAt })),
+        ...current.filter((conversation) => conversation.id !== id),
+      ])
       setSearchResults((current) =>
         current
           ? current.map((conversation) =>
@@ -465,7 +524,32 @@ export function AppSidebar() {
       if (isMobile) setOpenMobile(false)
       navigateHome()
     },
-    [archiveConversation, isMobile, navigateHome, setOpenMobile]
+    [
+      archiveConversation,
+      isMobile,
+      navigateHome,
+      setOpenMobile,
+      state.conversations,
+    ]
+  )
+
+  const handleRestoreConversation = React.useCallback(
+    (conversation: Conversation) => {
+      unarchiveConversation(conversation.id, conversation)
+      setArchivedConversations((current) =>
+        current.filter((item) => item.id !== conversation.id)
+      )
+      setSearchResults((current) =>
+        current
+          ? current.map((item) =>
+              item.id === conversation.id
+                ? { ...item, archivedAt: null }
+                : item
+            )
+          : current
+      )
+    },
+    [unarchiveConversation]
   )
 
   const handleDeleteConversation = React.useCallback(
@@ -475,6 +559,9 @@ export function AppSidebar() {
         current
           ? current.filter((conversation) => conversation.id !== id)
           : current
+      )
+      setArchivedConversations((current) =>
+        current.filter((conversation) => conversation.id !== id)
       )
     },
     [deleteConversation]
@@ -646,12 +733,33 @@ export function AppSidebar() {
         {!isCollapsed && (
           <>
             {/* Recents section */}
-            <SidebarGroup className="flex-1 py-0">
-              <SidebarGroupLabel className="text-[12px] tracking-wider text-foreground/50 uppercase">
-                {isFiltering ? "Search results" : "Recents"}
+            <SidebarGroup className="group/archive-section flex-1 py-0">
+              <SidebarGroupLabel className="justify-between text-[12px] tracking-wider text-foreground/50 uppercase">
+                <span>{conversationSectionLabel}</span>
+                {!isFiltering && (
+                  <button
+                    type="button"
+                    aria-label={
+                      showArchiveView ? "Show recents" : "Show archive"
+                    }
+                    title={showArchiveView ? "Recents" : "Archive"}
+                    onClick={() => setArchiveViewActive((active) => !active)}
+                    className={`flex size-6 items-center justify-center rounded-md transition-all hover:bg-[#e7e5dd] hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground/15 focus-visible:outline-none dark:hover:bg-white/[0.1] ${
+                      showArchiveView
+                        ? "bg-[#f0ede6] text-foreground dark:bg-muted"
+                        : "text-foreground/45 opacity-0 group-hover/archive-section:opacity-100 focus-visible:opacity-100"
+                    }`}
+                  >
+                    {showArchiveView ? (
+                      <ArchiveRestore className="size-3.5" />
+                    ) : (
+                      <Archive className="size-3.5" />
+                    )}
+                  </button>
+                )}
               </SidebarGroupLabel>
               <SidebarGroupContent>
-                {state.isLoading ? (
+                {conversationsLoading ? (
                   <SidebarMenu className="space-y-0.5 px-2">
                     {[1, 2, 3, 4, 5].map((i) => (
                       <SidebarMenuItem key={i}>
@@ -733,6 +841,18 @@ export function AppSidebar() {
                               >
                                 <DropdownMenuItem
                                   onClick={() =>
+                                    handleRestoreConversation(conv)
+                                  }
+                                  className="cursor-pointer gap-2 px-2 py-1.5 text-[14px]"
+                                >
+                                  <ArchiveRestore
+                                    className="size-4"
+                                    strokeWidth={1.5}
+                                  />
+                                  Restore
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() =>
                                     handleDeleteConversation(conv.id)
                                   }
                                   className="cursor-pointer gap-2 px-2 py-1.5 text-[14px] text-[#802020] focus:bg-red-50 focus:text-[#802020]"
@@ -782,6 +902,10 @@ export function AppSidebar() {
                       ? "Searching chats..."
                       : "No matching chats."}
                   </p>
+                ) : showArchiveView ? (
+                  <p className="px-2 text-[14px] whitespace-nowrap text-foreground/45">
+                    {archivedError ?? "No archived chats yet."}
+                  </p>
                 ) : (
                   <p className="px-2 text-[14px] whitespace-nowrap text-foreground/45">
                     No recent chats yet.
@@ -795,6 +919,23 @@ export function AppSidebar() {
 
       <SidebarFooter>
         <SidebarMenu>
+          <SidebarMenuItem>
+            <SidebarMenuButton
+              asChild
+              tooltip="Library"
+              isActive={isOnLibrary}
+              className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+            >
+              <Link
+                href="/library"
+                replace={isMobile}
+                onClick={closeMobileSidebar}
+              >
+                <LibraryIcon className="size-4" />
+                <span>Library</span>
+              </Link>
+            </SidebarMenuButton>
+          </SidebarMenuItem>
           <SidebarMenuItem>
             <SidebarMenuButton
               asChild

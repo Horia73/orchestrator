@@ -616,14 +616,21 @@ export function getConversationsWithMessages(): Conversation[] {
   }))
 }
 
-export function getConversationSummaries(search?: string): Conversation[] {
+export function getConversationSummaries(
+  search?: string,
+  archived = false
+): Conversation[] {
   const query = search?.trim()
   const like = query
     ? `%${query.replace(/[%_]/g, (char) => `\\${char}`)}%`
     : null
   const where = [
     "(c.origin IS NULL OR c.origin = 'user')",
-    like ? null : "c.archivedAt IS NULL",
+    archived
+      ? "c.archivedAt IS NOT NULL"
+      : like
+        ? null
+        : "c.archivedAt IS NULL",
     like
       ? `(c.title LIKE @like ESCAPE '\\' OR EXISTS (
           SELECT 1
@@ -759,6 +766,87 @@ export function getConversationMessagesPage(
         ? { timestamp: oldestRow.timestamp, id: oldestRow.id }
         : null,
   }
+}
+
+/**
+ * Lightweight scan of messages.attachments across all user conversations.
+ *
+ * Avoids loading message bodies — only pulls the `attachments` JSON blob,
+ * the parent conversation's title, the message id, and the timestamp. Used
+ * by the Library page to populate Media / Audio / Files tabs without
+ * pulling the entire chat history into memory.
+ *
+ * Filters out conversations where origin is not 'user' (matches the inbox/
+ * sidebar exclusion of system/agent-only threads).
+ */
+export interface AttachmentLibraryEntry {
+  /** Original Attachment fields, copied through. */
+  id: string
+  filename: string
+  mimeType: string
+  size: number
+  type: "image" | "pdf" | "document" | "audio" | "video" | "other"
+  /** Source conversation + message context for "view in chat" linking. */
+  conversationId: string
+  conversationTitle: string
+  messageId: string
+  messageTimestamp: number
+}
+
+export function listAllAttachments(): AttachmentLibraryEntry[] {
+  const rows = db
+    .prepare(
+      `
+        SELECT
+          m.id AS messageId,
+          m.timestamp,
+          m.attachments,
+          c.id AS conversationId,
+          c.title AS conversationTitle
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversationId
+        WHERE m.attachments IS NOT NULL
+          AND m.attachments != ''
+          AND (c.origin IS NULL OR c.origin = 'user')
+        ORDER BY m.timestamp DESC
+      `
+    )
+    .all() as Array<{
+      messageId: string
+      timestamp: number
+      attachments: string
+      conversationId: string
+      conversationTitle: string
+    }>
+
+  const out: AttachmentLibraryEntry[] = []
+  for (const row of rows) {
+    const attachments = parseJsonField<
+      Array<{
+        id: string
+        filename: string
+        mimeType: string
+        size: number
+        type: "image" | "pdf" | "document" | "audio" | "video" | "other"
+      }>
+    >(row.attachments)
+    if (!attachments || !Array.isArray(attachments)) continue
+    for (const a of attachments) {
+      if (!a || typeof a !== "object" || typeof a.id !== "string") continue
+      out.push({
+        id: a.id,
+        filename: a.filename,
+        mimeType: a.mimeType,
+        size: a.size,
+        type: a.type,
+        conversationId: row.conversationId,
+        conversationTitle: row.conversationTitle,
+        messageId: row.messageId,
+        messageTimestamp: row.timestamp,
+      })
+    }
+  }
+  return out
 }
 
 export function createConversation(conversation: Conversation) {

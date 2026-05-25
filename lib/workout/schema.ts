@@ -398,6 +398,13 @@ const ExerciseBaseSchema = z.object({
     muscleGroups: z.array(MuscleGroupSchema).min(1).max(8),
     /** Short form cues — shown in a popover behind the (i) button. */
     formCues: z.array(z.string().min(1).max(280)).max(8).optional(),
+    /** Optional alternative movements the user can swap in when the prescribed
+     *  exercise isn't available (no machine, injury, etc.). Renderer surfaces
+     *  these in the (i) popover under an "Alternatives" section. Each entry is
+     *  a short free-form label ("Dumbbell incline press · 3×10",
+     *  "Smith machine bench"). The model should pick alternatives that hit
+     *  the same primary muscle groups. */
+    alternatives: z.array(z.string().min(1).max(120)).max(5).optional(),
     /** Optional video URL (YouTube/Vimeo). Renderer shows a link-out with
      *  thumbnail; embed only on explicit user tap. */
     videoUrl: z.string().url().max(2048).optional(),

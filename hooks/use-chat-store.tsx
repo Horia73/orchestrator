@@ -69,6 +69,7 @@ interface ChatContextType {
   prefetchConversationMessages: (id: string) => Promise<void>
   loadOlderMessages: (id: string) => Promise<void>
   archiveConversation: (id: string) => void
+  unarchiveConversation: (id: string, conversation?: Conversation) => void
   deleteConversation: (id: string) => void
   sendMessage: (
     content: string,
@@ -1015,6 +1016,26 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     [applyConversationArchiveState, clearConversationUnread, detachStreaming]
   )
 
+  const unarchiveConversation = React.useCallback(
+    (id: string, conversation?: Conversation) => {
+      if (
+        conversation &&
+        !conversationsRef.current.some((item) => item.id === id)
+      ) {
+        dispatch({
+          type: "ADD_SYNCED_CONVERSATION",
+          conversation: { ...conversation, archivedAt: null },
+          full: false,
+        })
+      }
+      updateConversationArchiveState(id, false).catch((err) => {
+        console.error(err)
+      })
+      applyConversationArchiveState(id, null)
+    },
+    [applyConversationArchiveState]
+  )
+
   const sendMessageToConversation = React.useCallback(
     async (
       targetConversationId: string | null,
@@ -1937,6 +1958,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       prefetchConversationMessages: loadInitialMessages,
       loadOlderMessages,
       archiveConversation,
+      unarchiveConversation,
       deleteConversation,
       sendMessage,
       sendMessageToConversation,
@@ -1951,6 +1973,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       loadInitialMessages,
       loadOlderMessages,
       archiveConversation,
+      unarchiveConversation,
       deleteConversation,
       sendMessage,
       sendMessageToConversation,

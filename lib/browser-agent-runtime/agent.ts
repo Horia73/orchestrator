@@ -17,6 +17,7 @@ import {
     summarizeDownloads,
     summarizeDownloadWait,
 } from './agent-formatters';
+import { formatBrowserAgentTextForLog, isLikelySensitiveBrowserText } from './redaction';
 
 export interface SetTaskOptions {
     preserveContext?: boolean;
@@ -103,8 +104,9 @@ export function createAgentController(
     onStatusUpdate: (message: string) => void,
     options: AgentControllerOptions = {}
 ): AgentController {
-    const maxIterations = options.maxIterations ?? 50;
+    const maxIterations = options.maxIterations ?? 60;
     const maxConversationHistory = options.maxConversationHistory ?? 40;
+    const liveActionHistoryLimit = 50;
     const stepDelayMs = options.stepDelayMs ?? 500;
     const actionSettleDelayMs = options.actionSettleDelayMs ?? 1000;
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
@@ -120,6 +122,7 @@ export function createAgentController(
     let shouldStop = false;
     let isInterrupt = false;
     let actionHistory: ActionHistoryItem[] = [];
+    let compactedActionCount = 0;
     let conversationHistory: string[] = [];
     let clipboard: string | null = null;
     let pendingTrace: ActionTrace | null = null;
@@ -143,6 +146,44 @@ export function createAgentController(
         if (conversationHistory.length > maxConversationHistory) {
             conversationHistory = conversationHistory.slice(-maxConversationHistory);
         }
+    };
+
+    const compactActionHistoryIfNeeded = async () => {
+        const trimAlreadyCompactedHistory = () => {
+            const overflowCount = actionHistory.length - liveActionHistoryLimit;
+            if (overflowCount <= 0 || compactedActionCount < overflowCount) {
+                return;
+            }
+            actionHistory = actionHistory.slice(overflowCount);
+            compactedActionCount = Math.max(0, compactedActionCount - overflowCount);
+        };
+
+        const pendingActionCount = actionHistory.length - compactedActionCount;
+        if (pendingActionCount < liveActionHistoryLimit) {
+            trimAlreadyCompactedHistory();
+            return;
+        }
+
+        const actionsToCompact = actionHistory.slice(
+            compactedActionCount,
+            compactedActionCount + liveActionHistoryLimit
+        );
+        const llmSummary = await vision.compactActionHistory(
+            currentGoal || 'Current browser task',
+            actionsToCompact,
+            conversationHistory,
+            liveActionHistoryLimit
+        );
+        const summary = llmSummary || fallbackActionHistorySummary(actionsToCompact);
+
+        pushConversationHistory(
+            `SYSTEM: Compacted browser action history before the latest ${liveActionHistoryLimit} actions:\n${summary}`
+        );
+        compactedActionCount += actionsToCompact.length;
+
+        trimAlreadyCompactedHistory();
+
+        onStatusUpdate(`🧠 Compacted ${actionsToCompact.length} action(s) with Gemini; keeping latest ${Math.min(actionHistory.length, liveActionHistoryLimit)} live.`);
     };
 
     const restoreBaseModel = () => {
@@ -207,6 +248,7 @@ export function createAgentController(
             }
 
             actionHistory = [];
+            compactedActionCount = 0;
             pendingTrace = null;
             pendingSupplementalFrames = [];
             lastTerminalAction = null;
@@ -510,7 +552,7 @@ export function createAgentController(
                             action: action.action,
                             coordinate: action.coordinate,
                             coordinateEnd: action.coordinateEnd,
-                            text: action.text,
+                            text: shouldRedactActionText(action) ? '[redacted]' : action.text,
                             submit: action.submit,
                             clickCount: action.clickCount,
                             tabIndex: action.tabIndex,
@@ -542,6 +584,7 @@ export function createAgentController(
 
                     if (shouldBreak) break;
                     if (shouldRestartLoop) {
+                        await compactActionHistoryIfNeeded();
                         pendingTrace = null;
                         continue;
                     }
@@ -562,9 +605,7 @@ export function createAgentController(
                         });
                     }
 
-                    if (actionHistory.length > 25) {
-                        actionHistory = actionHistory.slice(-20);
-                    }
+                    await compactActionHistoryIfNeeded();
 
                     await sleep(stepDelayMs);
                 }
@@ -680,6 +721,7 @@ export function createAgentController(
             }
             if (clearActionHistory) {
                 actionHistory = [];
+                compactedActionCount = 0;
             }
             if (clearClipboard) {
                 clipboard = null;
@@ -811,6 +853,31 @@ interface ActionExecutionResult {
     trace: ActionTrace | null;
     supplementalFrames: BrowserFrameSnapshot[];
     observation?: string;
+}
+
+function shouldRedactActionText(action: AgentAction): boolean {
+    return action.action === 'type' && isLikelySensitiveBrowserText(action.text, action.reasoning);
+}
+
+function fallbackActionHistorySummary(actions: ActionHistoryItem[]): string {
+    const lines = actions.slice(-20).map((action, index) => {
+        const step = Math.max(1, actions.length - Math.min(actions.length, 20) + index + 1);
+        const status = action.success ? 'ok' : 'failed';
+        const text = action.text ? ` text="${formatBrowserAgentTextForLog(action.text, action.reasoning, 40)}"` : '';
+        const reason = action.reasoning
+            ? `; reason="${formatBrowserAgentTextForLog(action.reasoning, '', 120)}"`
+            : '';
+        const observation = action.observation
+            ? `; result="${formatBrowserAgentTextForLog(action.observation, '', 160)}"`
+            : '';
+        return `Step ${step}: ${action.action}${text} ${status}${reason}${observation}`;
+    });
+
+    const omitted = Math.max(0, actions.length - lines.length);
+    const prefix = omitted > 0
+        ? `Deterministic fallback summary. ${actions.length} older actions compacted; first ${omitted} omitted.`
+        : `Deterministic fallback summary. ${actions.length} older actions compacted.`;
+    return `${prefix}\n${lines.join('\n')}`;
 }
 
 async function executeAction(
@@ -963,7 +1030,7 @@ async function executeAction(
                         await sleep(timing.actionSettleDelayMs);
                     }
 
-                    onStatusUpdate(`⌨️  Typing: "${action.text}"`);
+                    onStatusUpdate(`⌨️  Typing: "${formatBrowserAgentTextForLog(action.text, action.reasoning)}"`);
                     await browser.type(action.text);
 
                     if (action.submit) {

@@ -11,8 +11,9 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url)
     const summary = searchParams.get("summary") === "1"
     const q = searchParams.get("q") ?? undefined
+    const archived = searchParams.get("archived") === "1"
     const conversations = summary
-      ? getConversationSummaries(q)
+      ? getConversationSummaries(q, archived)
       : getConversationsWithMessages()
     return NextResponse.json(conversations)
   } catch (error) {
