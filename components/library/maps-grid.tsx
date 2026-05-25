@@ -2,10 +2,11 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { Calendar, MapPin, MapPinned, Route, Spline } from "lucide-react"
+import { Calendar, MapPin, Route, Spline } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatRelativeTime } from "./use-attachments"
+import { OsmStaticMap } from "./osm-static-map"
 import type { LibraryMapRow } from "@/app/api/library/maps/route"
 
 /**
@@ -42,9 +43,13 @@ export function MapsGrid({
 }
 
 function MapCard({ map }: { map: LibraryMapRow }) {
+    const displayTitle = deriveMapTitle(map)
     return (
         <Link
-            href={`/?conversation=${encodeURIComponent(map.conversationId)}#message-artifact-${encodeURIComponent(map.identifier)}`}
+            // Open the map in Smart Maps so the user gets the full interactive
+            // surface (pan/zoom, day sidebar, pin popups) instead of jumping
+            // back to a chat bubble. The id matches what /maps/[id] reads.
+            href={`/maps/${encodeURIComponent(map.id)}`}
             className={cn(
                 "group/map-card flex h-full flex-col overflow-hidden rounded-xl border border-border/55 bg-card shadow-sm transition-all",
                 "hover:-translate-y-0.5 hover:border-border hover:shadow-md",
@@ -53,7 +58,7 @@ function MapCard({ map }: { map: LibraryMapRow }) {
             <MapThumbnail map={map} />
             <div className="flex flex-1 flex-col gap-2 px-3.5 py-3">
                 <div>
-                    <h3 className="line-clamp-1 text-sm font-semibold text-foreground">{map.title}</h3>
+                    <h3 className="line-clamp-1 text-sm font-semibold text-foreground">{displayTitle}</h3>
                     <p className="mt-0.5 text-[11px] text-muted-foreground tabular-nums">
                         {map.center[1].toFixed(3)}, {map.center[0].toFixed(3)}
                         {typeof map.zoom === 'number' ? ` · z${Math.round(map.zoom)}` : ''}
@@ -93,27 +98,62 @@ function MapCard({ map }: { map: LibraryMapRow }) {
 }
 
 function MapThumbnail({ map }: { map: LibraryMapRow }) {
-    const [failed, setFailed] = React.useState(false)
-    const thumbnailUrl = `/api/maps/static?artifactId=${encodeURIComponent(map.id)}&width=640&height=360`
+    // Try Google Static Maps first (cleaner visuals, satellite, styled pins).
+    // If the user's Maps API key doesn't have Static Maps API enabled (403
+    // is the common case for non-billing-enabled projects), the <img>
+    // onError handler swaps to the OSM tile preview. Both share the same
+    // 16:9 aspect ratio so the fallback is visually seamless.
+    const [googleFailed, setGoogleFailed] = React.useState(false)
+    const googleUrl = `/api/maps/static?artifactId=${encodeURIComponent(map.id)}&width=640&height=360`
 
-    if (failed) {
-        return (
-            <div className="flex aspect-[16/9] w-full items-center justify-center bg-gradient-to-br from-emerald-500/10 via-teal-500/10 to-sky-500/15">
-                <MapPinned className="size-8 text-foreground/35" strokeWidth={1.4} aria-hidden />
-            </div>
-        )
-    }
     return (
-        <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted/40">
-            <img
-                src={thumbnailUrl}
-                alt={`Map preview for ${map.title}`}
-                loading="lazy"
-                onError={() => setFailed(true)}
-                className="size-full object-cover transition-transform duration-300 group-hover/map-card:scale-[1.03]"
-            />
+        <div className="transition-transform duration-300 group-hover/map-card:scale-[1.03]">
+            {googleFailed ? (
+                <OsmStaticMap
+                    center={map.center}
+                    zoom={map.zoom ?? 12}
+                    pins={map.previewPins}
+                />
+            ) : (
+                <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted/40">
+                    <img
+                        src={googleUrl}
+                        alt={`Preview · ${map.title}`}
+                        loading="lazy"
+                        onError={() => setGoogleFailed(true)}
+                        className="size-full object-cover"
+                    />
+                </div>
+            )}
         </div>
     )
+}
+
+/**
+ * Pick a sensible display title:
+ *   1. Use the artifact title if it looks descriptive.
+ *   2. Otherwise, fall back to the first pin's label.
+ *   3. Last resort: a generic "Map · N pins" label.
+ *
+ * "Generic-looking" titles are ones the model uses by default before it
+ * learns better — anything that ends with " map" or matches a few known
+ * stems. We treat the artifact title as descriptive unless it's clearly
+ * a placeholder.
+ */
+function deriveMapTitle(map: LibraryMapRow): string {
+    const t = map.title?.trim() ?? ''
+    if (t && !looksGeneric(t)) return t
+    if (map.firstPinLabel?.trim()) {
+        return map.firstPinLabel.trim()
+    }
+    if (map.pinCount > 0) return `Map · ${map.pinCount} pin${map.pinCount === 1 ? '' : 's'}`
+    return t || 'Map'
+}
+
+const GENERIC_TITLE_RE = /^(map|new map|untitled map|smart map|codex (qa|test) (smart )?map|test map)$/i
+
+function looksGeneric(title: string): boolean {
+    return GENERIC_TITLE_RE.test(title)
 }
 
 function Chip({ icon, children }: { icon: React.ReactNode; children: React.ReactNode }) {

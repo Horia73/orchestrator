@@ -859,6 +859,12 @@ function shouldRedactActionText(action: AgentAction): boolean {
     return action.action === 'type' && isLikelySensitiveBrowserText(action.text, action.reasoning);
 }
 
+const PASTE_TEXT_THRESHOLD = 120;
+
+function shouldPasteText(text: string): boolean {
+    return text.length >= PASTE_TEXT_THRESHOLD || /[\r\n\t]/.test(text);
+}
+
 function fallbackActionHistorySummary(actions: ActionHistoryItem[]): string {
     const lines = actions.slice(-20).map((action, index) => {
         const step = Math.max(1, actions.length - Math.min(actions.length, 20) + index + 1);
@@ -1030,8 +1036,13 @@ async function executeAction(
                         await sleep(timing.actionSettleDelayMs);
                     }
 
-                    onStatusUpdate(`⌨️  Typing: "${formatBrowserAgentTextForLog(action.text, action.reasoning)}"`);
-                    await browser.type(action.text);
+                    if (shouldPasteText(action.text)) {
+                        onStatusUpdate(`📋 Pasting text (${action.text.length} chars): "${formatBrowserAgentTextForLog(action.text, action.reasoning)}"`);
+                        await browser.paste(action.text);
+                    } else {
+                        onStatusUpdate(`⌨️  Typing: "${formatBrowserAgentTextForLog(action.text, action.reasoning)}"`);
+                        await browser.type(action.text);
+                    }
 
                     if (action.submit) {
                         onStatusUpdate('↵  Pressing Enter (Submit)');
@@ -1059,6 +1070,16 @@ async function executeAction(
                 await browser.scroll(action.scrollDirection || 'down', action.scrollAmount);
                 return { success: true, trace: null, supplementalFrames: [] };
             }
+
+            case 'scrollToBottom':
+                onStatusUpdate('📜 Scrolling to bottom...');
+                await browser.scrollToBottom();
+                return { success: true, trace: null, supplementalFrames: [] };
+
+            case 'undo':
+                onStatusUpdate('↩️ Undoing last edit...');
+                await browser.undo();
+                return { success: true, trace: null, supplementalFrames: [] };
 
             case 'navigate':
                 if (action.url) {
@@ -1230,7 +1251,7 @@ async function executeAction(
                 }
 
                 onStatusUpdate(`📋 Pasting link: "${content}"`);
-                await browser.type(content);
+                await browser.paste(content);
                 return { success: true, trace: null, supplementalFrames: [] };
             }
         }

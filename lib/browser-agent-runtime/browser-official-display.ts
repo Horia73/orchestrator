@@ -536,6 +536,15 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             }
             await settleAfterAction();
         },
+        async scrollToBottom() {
+            await activateChromeWindow();
+            await pressShortcut('End');
+            await settleAfterAction();
+        },
+        async undo() {
+            await pressShortcut('Control+Z');
+            await settleAfterAction();
+        },
         async navigate(url: string) {
             await pressShortcut('Control+L');
             await setClipboard(url);

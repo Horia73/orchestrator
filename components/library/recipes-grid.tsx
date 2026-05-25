@@ -50,7 +50,12 @@ export function RecipesGrid({
 function RecipeCard({ recipe }: { recipe: LibraryRecipeRow }) {
     return (
         <Link
-            href={`/?conversation=${encodeURIComponent(recipe.conversationId)}#message-artifact-${encodeURIComponent(recipe.identifier)}`}
+            // Open the recipe artifact in its dedicated fullscreen viewer so
+            // the user can cook with the full card (servings stepper, live
+            // timers, prep mode) instead of scrolling back to a chat bubble.
+            // /artifact/[id] already exists and renders the same renderer
+            // in panel/fullscreen mode.
+            href={`/artifact/${encodeURIComponent(recipe.id)}`}
             className={cn(
                 "group/recipe-card flex h-full flex-col overflow-hidden rounded-xl border border-border/55 bg-card shadow-sm transition-all",
                 "hover:-translate-y-0.5 hover:border-border hover:shadow-md",

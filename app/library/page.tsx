@@ -94,7 +94,7 @@ function LibraryView() {
     }, [searchParams, active])
 
     return (
-        <div className="mx-auto flex w-full max-w-6xl flex-col gap-6 overflow-y-auto p-6">
+        <div className="library-scroll mx-auto flex w-full max-w-6xl flex-col gap-6 overflow-y-auto p-6">
             <header className="flex flex-wrap items-end justify-between gap-3">
                 <div>
                     <h1 className="inline-flex items-center gap-2 text-2xl font-semibold tracking-tight text-foreground">
@@ -108,7 +108,7 @@ function LibraryView() {
             </header>
 
             <Tabs value={active} onValueChange={handleChange}>
-                <TabsList className="-mb-2 overflow-x-auto">
+                <TabsList className="scrollbar-hide -mb-2 overflow-x-auto">
                     {TAB_DEFS.map(({ key, label, icon: Icon }) => (
                         <TabsTrigger key={key} value={key}>
                             <Icon className="size-4" strokeWidth={1.85} />

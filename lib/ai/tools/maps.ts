@@ -79,7 +79,7 @@ export const mapRenderTool: ToolDef = {
       },
       title: {
         type: "string",
-        description: "Short human-readable label shown on the artifact card.",
+        description: 'Short human-readable label shown on the artifact card AND in the Library. Be DESCRIPTIVE — name the place, purpose, or destination, not the file. Good: "Cluj weekend trip", "Restaurants near Ștefan cel Mare", "Bucharest → Sinaia drive", "Pickup points · Saturday brunch". Bad: "Map", "New map", "Smart map", "Codex QA map", "Untitled". The Library lists every map you ever made; the title is how users find it back months later.',
       },
       viewport: {
         type: "object",

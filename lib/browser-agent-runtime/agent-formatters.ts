@@ -55,6 +55,10 @@ export function formatAction(action: AgentAction): string {
             const amount = action.scrollAmount ? ` by ${action.scrollAmount}px` : '';
             return `Scroll ${action.scrollDirection}${amount} - ${reason(action)}`;
         }
+        case 'scrollToBottom':
+            return `Scroll to Bottom - ${reason(action)}`;
+        case 'undo':
+            return `Undo - ${reason(action)}`;
         case 'wait': {
             const duration = action.durationMs ? ` for ${action.durationMs}ms` : '';
             return `Wait${duration} - ${reason(action)}`;

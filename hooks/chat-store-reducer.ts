@@ -249,9 +249,12 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       )
       const mergedIncoming = action.conversations.map((conversation) => {
         const previous = previousById.get(conversation.id)
-        const previousIsFull =
-          state.conversationLoadState[conversation.id] === "full"
-        if (!action.full && previous && previousIsFull) {
+        if (
+          !action.full &&
+          previous &&
+          conversation.messages.length === 0 &&
+          previous.messages.length > 0
+        ) {
           return {
             ...conversation,
             messages: previous.messages,

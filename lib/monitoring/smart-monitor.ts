@@ -65,7 +65,6 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push('You are awake because the single Smart Monitor schedule fired. Your job is to inspect enabled watch intents that need model judgement, decide what matters, notify sparingly, update task state, and adjust your next cadence when useful.')
     lines.push('')
     lines.push('Operating model:')
-    lines.push('- Use the lightest runtime that can satisfy an automation. Cheap deterministic gates belong in Microscripts, which may wake a model only after their condition matches. Smart Monitor is for recurring checks that themselves need model judgement, broad triage, synthesis, adaptive digesting, or ongoing model-owned planning.')
     lines.push('- There is one consolidated Smart Monitor agent for recurring monitoring, recurring summaries, and recurring model-owned maintenance. Do not create separate scheduled tasks or extra agents for urgent/digest/noise tiers.')
     lines.push('- Smart Monitor must have exactly one Scheduling runtime entry: this consolidated Smart monitor heartbeat. Do not create separate scheduled tasks for Smart Monitor digests, summaries, maintenance, source-specific wakeups, retries, or catch-up runs.')
     lines.push('- Store durable recurring requirements as Smart Monitor watch specs in MONITORS.md, and store execution bookkeeping in this Smart Monitor task_state. On every heartbeat, use current runtime time to perform overdue still-useful work that has not already been completed, skipped, or deduplicated for the relevant period.')

@@ -377,6 +377,36 @@ button:not(:disabled),
     background: color-mix(in oklch, var(--foreground) 50%, transparent);
   }
 
+  /* Hide scrollbars entirely (used for tab strips and other linear
+     scrollable rails where the scroll affordance shouldn't be visible). */
+  .scrollbar-hide {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-hide::-webkit-scrollbar {
+    display: none;
+    width: 0;
+    height: 0;
+  }
+
+  /* Library page scroll surface — keep the scrollbar discreet and only
+     show the thumb on hover/scroll so it doesn't clutter the page. */
+  .library-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 180ms ease;
+  }
+  .library-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+    transition: background-color 180ms ease;
+  }
+  .library-scroll:hover {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 35%, transparent) transparent;
+  }
+  .library-scroll:hover::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 35%, transparent);
+  }
+
 }
 
 html[data-orch-settings-page="true"],

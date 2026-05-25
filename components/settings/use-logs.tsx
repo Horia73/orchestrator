@@ -20,6 +20,8 @@ interface LogsPageResponse {
     filters: FilterOptions
 }
 
+export type LiveTailStatus = "off" | "connecting" | "connected" | "disconnected"
+
 export interface LogsFilters {
     range: NonNullable<LogsQuery["range"]>
     status: LogsQuery["status"]
@@ -47,6 +49,12 @@ interface UseLogsResult {
     clearAll: () => Promise<void>
     liveTail: boolean
     setLiveTail: (next: boolean) => void
+    liveTailStatus: LiveTailStatus
+}
+
+interface PageSnapshot {
+    total: number
+    rowSignatures: string[]
 }
 
 export function useLogs(): UseLogsResult {
@@ -63,9 +71,11 @@ export function useLogs(): UseLogsResult {
     const [cursor, setCursor] = React.useState<number | null>(null)
     const [hasMore, setHasMore] = React.useState(false)
     const [liveTail, setLiveTail] = React.useState(true)
+    const [liveTailStatus, setLiveTailStatus] = React.useState<LiveTailStatus>("connecting")
 
     // Avoid race conditions when filters change while a fetch is in flight.
     const requestId = React.useRef(0)
+    const pageSnapshotRef = React.useRef<PageSnapshot>(makePageSnapshot([], 0))
 
     const buildUrl = React.useCallback((f: LogsFilters, c: number | null): string => {
         const sp = new URLSearchParams()
@@ -81,9 +91,14 @@ export function useLogs(): UseLogsResult {
     }, [])
 
     const fetchPage = React.useCallback(
-        async (mode: "reset" | "append", currentCursor: number | null) => {
+        async (
+            mode: "reset" | "append",
+            currentCursor: number | null,
+            options?: { showLoading?: boolean; skipUnchanged?: boolean }
+        ) => {
             const myRid = ++requestId.current
-            if (mode === "reset") setLoading(true)
+            const showLoading = options?.showLoading ?? mode === "reset"
+            if (showLoading) setLoading(true)
 
             try {
                 const res = await fetch(buildUrl(filters, currentCursor))
@@ -91,6 +106,14 @@ export function useLogs(): UseLogsResult {
                 const data = (await res.json()) as LogsPageResponse
                 if (myRid !== requestId.current) return // superseded
 
+                if (mode === "reset") {
+                    const nextSnapshot = makePageSnapshot(data.rows, data.total)
+                    if (options?.skipUnchanged && samePageSnapshot(pageSnapshotRef.current, nextSnapshot)) {
+                        setError(null)
+                        return
+                    }
+                    pageSnapshotRef.current = nextSnapshot
+                }
                 setFilterOptions(data.filters)
                 setTotal(data.total)
                 setCursor(data.nextCursor)
@@ -133,31 +156,79 @@ export function useLogs(): UseLogsResult {
         setTotal(0)
         setCursor(null)
         setHasMore(false)
+        pageSnapshotRef.current = makePageSnapshot([], 0)
     }, [])
 
     // Live tail via SSE — refetches the head when an event arrives.
     React.useEffect(() => {
-        if (!liveTail) return
+        if (!liveTail) {
+            setLiveTailStatus("off")
+            return
+        }
+
+        setLiveTailStatus("connecting")
         const es = new EventSource("/api/logs/stream")
-        let pending = false
+        let closed = false
+        let pendingTimer: number | null = null
+        let fallbackTimer: number | null = null
+
         const trigger = () => {
-            if (pending) return
-            pending = true
+            if (pendingTimer !== null) return
             // Coalesce bursts (e.g. start + complete fire close together).
-            setTimeout(() => {
-                pending = false
-                void fetchPage("reset", null)
+            pendingTimer = window.setTimeout(() => {
+                pendingTimer = null
+                void fetchPage("reset", null, { showLoading: false })
             }, 250)
+        }
+
+        es.onopen = () => {
+            if (!closed) setLiveTailStatus("connected")
+        }
+        es.onerror = () => {
+            if (closed) return
+            setLiveTailStatus(es.readyState === EventSource.CLOSED ? "disconnected" : "connecting")
         }
         es.onmessage = e => {
             try {
                 const data = JSON.parse(e.data)
+                if (data.type === "ready") {
+                    setLiveTailStatus("connected")
+                    // Catch rows inserted while the stream was connecting or reconnecting.
+                    void fetchPage("reset", null, { showLoading: false, skipUnchanged: true })
+                    return
+                }
                 if (data.type === "request_started" || data.type === "request_completed" || data.type === "logs_cleared") {
                     trigger()
                 }
             } catch { /* ignore */ }
         }
-        return () => { es.close() }
+
+        fallbackTimer = window.setInterval(() => {
+            if (document.visibilityState === "visible") {
+                void fetchPage("reset", null, { showLoading: false, skipUnchanged: true })
+            }
+        }, 10_000)
+
+        const refreshWhenVisible = () => {
+            if (document.visibilityState === "visible") {
+                void fetchPage("reset", null, { showLoading: false, skipUnchanged: true })
+            }
+        }
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") refreshWhenVisible()
+        }
+
+        window.addEventListener("focus", refreshWhenVisible)
+        document.addEventListener("visibilitychange", onVisibilityChange)
+
+        return () => {
+            closed = true
+            if (pendingTimer !== null) window.clearTimeout(pendingTimer)
+            if (fallbackTimer !== null) window.clearInterval(fallbackTimer)
+            window.removeEventListener("focus", refreshWhenVisible)
+            document.removeEventListener("visibilitychange", onVisibilityChange)
+            es.close()
+        }
     }, [liveTail, fetchPage])
 
     return {
@@ -174,7 +245,39 @@ export function useLogs(): UseLogsResult {
         clearAll,
         liveTail,
         setLiveTail,
+        liveTailStatus,
     }
+}
+
+function makePageSnapshot(rows: RequestLogRow[], total: number): PageSnapshot {
+    return {
+        total,
+        rowSignatures: rows.slice(0, PAGE_SIZE).map(rowSignature),
+    }
+}
+
+function samePageSnapshot(a: PageSnapshot, b: PageSnapshot): boolean {
+    if (a.total !== b.total || a.rowSignatures.length !== b.rowSignatures.length) return false
+    return a.rowSignatures.every((signature, index) => signature === b.rowSignatures[index])
+}
+
+function rowSignature(row: RequestLogRow): string {
+    return [
+        row.id,
+        row.status,
+        row.startedAt,
+        row.endedAt ?? "",
+        row.durationMs ?? "",
+        row.thinkingMs ?? "",
+        row.inputTokens ?? "",
+        row.outputTokens ?? "",
+        row.thinkingTokens ?? "",
+        row.cachedTokens ?? "",
+        row.toolUseTokens ?? "",
+        row.totalTokens ?? "",
+        row.toolCallCount,
+        row.errorMessage ?? "",
+    ].join("|")
 }
 
 function mergeRows(existing: RequestLogRow[], incoming: RequestLogRow[]): RequestLogRow[] {

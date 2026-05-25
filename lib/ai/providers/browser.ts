@@ -19,7 +19,7 @@ import { latestUserPromptWithPortableHistory } from './history'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
 
 const TASK_POLL_INTERVAL_MS = 500
-const TASK_TIMEOUT_MS = 10 * 60 * 1000
+const TASK_TIMEOUT_MS = parseOptionalTaskTimeoutMs(process.env.BROWSER_AGENT_TASK_TIMEOUT_MS)
 
 type BrowserThinkingLevel = 'minimal' | 'low' | 'medium' | 'high'
 type BrowserAdvancedThinkingLevel = 'low' | 'medium' | 'high'
@@ -122,7 +122,7 @@ export class BrowserProvider implements AIProvider {
                     callbacks.onError('Browser agent aborted.')
                     throw new Error('Browser agent aborted.')
                 }
-                if (Date.now() - startedAt > TASK_TIMEOUT_MS) {
+                if (TASK_TIMEOUT_MS !== null && Date.now() - startedAt > TASK_TIMEOUT_MS) {
                     runtime.stopTask()
                     callbacks.onError('Browser agent timed out.')
                     throw new Error('Browser agent timed out.')
@@ -245,6 +245,13 @@ function parseBrowserProfileModeEnv(value: string | undefined, fallback: Browser
 function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
     const parsed = Number(value)
     return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
+}
+
+function parseOptionalTaskTimeoutMs(value: string | undefined): number | null {
+    if (value === undefined || value.trim() === '') return null
+    const parsed = Number(value)
+    if (!Number.isFinite(parsed) || parsed <= 0) return null
+    return Math.floor(parsed)
 }
 
 function mapMediaResolution(value: ModelFeatureValue | undefined): MediaResolutionLevel {

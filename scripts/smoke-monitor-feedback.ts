@@ -3,7 +3,7 @@
  *
  * No model, no network. Validates:
  *   - model-led wake prompt includes watch id, rule, source strategy, and
- *     the lightest-runtime guidance;
+ *     avoids runtime-selection setup guidance;
  *   - executeMonitorWakeFeedback records feedback, optionally adds/removes
  *     suppress patterns, and validates source-compatible rules;
  *   - active suppress patterns and feedback history are injected into the
@@ -57,7 +57,7 @@ async function main(): Promise<void> {
         check('prompt includes rule description', prompt.includes('From contains: mom@example.com'))
         check('prompt includes recent decision history', prompt.includes('Recent watch decisions') && prompt.includes('Hello from Mom'))
         check('prompt instructs notify_inbox', prompt.includes('notify_inbox'))
-        check('prompt includes lightest-runtime guidance', prompt.includes('Cheap deterministic gates belong in Microscripts'))
+        check('prompt omits runtime-selection guidance', !prompt.includes('Cheap deterministic gates belong in Microscripts'))
     }
 
     {

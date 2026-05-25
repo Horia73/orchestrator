@@ -17,7 +17,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import type { RequestLogRow, RequestStatus } from "@/lib/observability/schema"
-import { useLogs, useRequestDetail, type LogsFilters } from "./use-logs"
+import { useLogs, useRequestDetail, type LiveTailStatus, type LogsFilters } from "./use-logs"
 
 const STATUS_LABELS: Record<RequestStatus, string> = {
     streaming: "Streaming",
@@ -60,6 +60,7 @@ export function LogsTab() {
         clearAll,
         liveTail,
         setLiveTail,
+        liveTailStatus,
     } = useLogs()
     const [expanded, setExpanded] = React.useState<string | null>(null)
     const [confirmingClear, setConfirmingClear] = React.useState(false)
@@ -71,6 +72,7 @@ export function LogsTab() {
                 setFilters={setFilters}
                 filterOptions={filterOptions}
                 liveTail={liveTail}
+                liveTailStatus={liveTailStatus}
                 setLiveTail={setLiveTail}
                 onRefresh={refresh}
                 onClear={() => setConfirmingClear(true)}
@@ -79,7 +81,7 @@ export function LogsTab() {
             <div className="flex items-baseline justify-between gap-3">
                 <p className="text-[12.5px] text-foreground/55 tabular-nums">
                     {loading && rows.length === 0 ? "Loading…" : `${total.toLocaleString()} ${total === 1 ? "request" : "requests"}`}
-                    {liveTail && <span className="ml-2 inline-flex items-center gap-1 text-emerald-600 dark:text-emerald-500"><span className="size-1.5 animate-pulse rounded-full bg-emerald-500" /> live</span>}
+                    {liveTail && <LiveTailLabel status={liveTailStatus} />}
                 </p>
             </div>
 
@@ -119,6 +121,7 @@ function FilterBar({
     setFilters,
     filterOptions,
     liveTail,
+    liveTailStatus,
     setLiveTail,
     onRefresh,
     onClear,
@@ -127,11 +130,21 @@ function FilterBar({
     setFilters: (next: LogsFilters | ((prev: LogsFilters) => LogsFilters)) => void
     filterOptions: { agents: string[]; providers: string[]; models: Array<{ provider: string; model: string }> }
     liveTail: boolean
+    liveTailStatus: LiveTailStatus
     setLiveTail: (next: boolean) => void
     onRefresh: () => void
     onClear: () => void
 }) {
     const [searchValue, setSearchValue] = React.useState(filters.q ?? "")
+
+    const toggleLiveTail = React.useCallback(() => {
+        if (liveTail && liveTailStatus === "disconnected") {
+            setLiveTail(false)
+            window.setTimeout(() => setLiveTail(true), 0)
+            return
+        }
+        setLiveTail(!liveTail)
+    }, [liveTail, liveTailStatus, setLiveTail])
 
     // Debounce free-text search.
     React.useEffect(() => {
@@ -185,17 +198,17 @@ function FilterBar({
 
             <div className="ml-0 flex items-center gap-1.5 sm:ml-auto">
                 <button
-                    onClick={() => setLiveTail(!liveTail)}
-                    title={liveTail ? "Stop live tail" : "Start live tail"}
+                    onClick={toggleLiveTail}
+                    title={liveTail ? liveTailStatusTitle(liveTailStatus) : "Start live tail"}
                     className={cn(
                         "inline-flex h-8 items-center gap-1.5 rounded-lg border px-2.5 text-[12.5px] font-medium transition-colors",
-                        liveTail
+                        liveTail && liveTailStatus !== "disconnected"
                             ? "border-emerald-500/40 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400"
                             : "border-border bg-background text-foreground/70 hover:bg-muted/60"
                     )}
                 >
-                    <Radio className="size-3.5" />
-                    Live
+                    <Radio className={cn("size-3.5", liveTail && liveTailStatus !== "disconnected" && "animate-pulse")} />
+                    {liveTail ? liveTailButtonLabel(liveTailStatus) : "Live"}
                 </button>
                 <button
                     onClick={onRefresh}
@@ -214,6 +227,33 @@ function FilterBar({
             </div>
         </div>
     )
+}
+
+function LiveTailLabel({ status }: { status: LiveTailStatus }) {
+    const connected = status === "connected"
+    return (
+        <span
+            className={cn(
+                "ml-2 inline-flex items-center gap-1",
+                connected ? "text-emerald-600 dark:text-emerald-500" : "text-amber-600 dark:text-amber-500"
+            )}
+        >
+            <span className={cn("size-1.5 rounded-full", connected ? "animate-pulse bg-emerald-500" : "bg-amber-500")} />
+            {connected ? "live" : status === "disconnected" ? "live disconnected" : "live connecting"}
+        </span>
+    )
+}
+
+function liveTailButtonLabel(status: LiveTailStatus) {
+    if (status === "connected") return "Live"
+    if (status === "disconnected") return "Reconnect"
+    return "Connecting"
+}
+
+function liveTailStatusTitle(status: LiveTailStatus) {
+    if (status === "connected") return "Stop live tail"
+    if (status === "disconnected") return "Reconnect live tail"
+    return "Live tail is connecting"
 }
 
 function Select({ value, onChange, options }: {

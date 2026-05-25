@@ -64,12 +64,11 @@ function TabsContent({
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      className={cn(
-        "outline-none data-[state=inactive]:hidden",
-        // Subtle fade-in for active panel
-        "data-[state=active]:animate-in data-[state=active]:fade-in-0 data-[state=active]:duration-150",
-        className
-      )}
+      // No enter animation — Radix toggles content synchronously, and an
+      // animate-in fade caused a visible flash between old/new tab content
+      // because the previous panel's exit and new panel's enter overlapped.
+      // Keep `hidden` on inactive panels so only one is in the DOM at a time.
+      className={cn("outline-none data-[state=inactive]:hidden", className)}
       {...props}
     />
   )

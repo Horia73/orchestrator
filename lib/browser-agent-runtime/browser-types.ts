@@ -128,6 +128,8 @@ export interface BrowserPageSession {
     pressKey(key: string): Promise<void>;
     findInPage(query: string, next?: boolean): Promise<void>;
     scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<void>;
+    scrollToBottom(): Promise<void>;
+    undo(): Promise<void>;
     navigate(url: string): Promise<void>;
     goBack(): Promise<void>;
     goForward(): Promise<void>;

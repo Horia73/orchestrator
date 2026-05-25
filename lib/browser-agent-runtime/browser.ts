@@ -273,6 +273,70 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
     };
 
+    const pressShortcut = async (page: Page, key: string) => {
+        const parts = key.split('+').map(part => part.trim()).filter(Boolean);
+        const modifierParts = parts.slice(0, -1);
+        const finalKey = parts[parts.length - 1];
+        if (!finalKey) return;
+
+        try {
+            for (const modifier of modifierParts) {
+                await page.keyboard.down(modifier);
+            }
+            await page.keyboard.press(finalKey);
+        } finally {
+            for (const modifier of modifierParts.reverse()) {
+                try {
+                    await page.keyboard.up(modifier);
+                } catch {
+                    // Ignore cleanup errors if the page closed while pressing a shortcut.
+                }
+            }
+        }
+    };
+
+    const insertTextDirectly = async (page: Page, text: string) => {
+        await page.evaluate((textToPaste) => {
+            const active = document.activeElement;
+            if (
+                active instanceof HTMLInputElement ||
+                active instanceof HTMLTextAreaElement
+            ) {
+                const start = active.selectionStart ?? active.value.length;
+                const end = active.selectionEnd ?? active.value.length;
+                active.value = `${active.value.slice(0, start)}${textToPaste}${active.value.slice(end)}`;
+                const cursor = start + textToPaste.length;
+                active.setSelectionRange(cursor, cursor);
+                active.dispatchEvent(new InputEvent('input', { bubbles: true, data: textToPaste, inputType: 'insertText' }));
+                active.dispatchEvent(new Event('change', { bubbles: true }));
+                return;
+            }
+
+            document.execCommand('insertText', false, textToPaste);
+        }, text);
+    };
+
+    const pasteTextIntoPage = async (page: Page, text: string) => {
+        await page.bringToFront();
+        await grantClipboardAccess(page);
+        const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+
+        try {
+            await page.evaluate(async (textToPaste) => {
+                if (!navigator.clipboard?.writeText) {
+                    throw new Error('navigator.clipboard.writeText is unavailable');
+                }
+                await navigator.clipboard.writeText(textToPaste);
+            }, text);
+            await pressShortcut(page, `${modifier}+v`);
+            return;
+        } catch (error) {
+            log(`⚠️ Clipboard paste failed; falling back to direct text insertion: ${formatBrowserError(error)}`);
+        }
+
+        await insertTextDirectly(page, text);
+    };
+
     const createSessionState = (requestedId?: string): BrowserSessionState => {
         const id = requestedId?.trim() || `browser_session_${++sessionSequence}`;
         if (sessions.has(id)) {
@@ -1328,25 +1392,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
             async paste(text: string) {
                 const activePage = await ensureActivePage(session);
-                await activePage.bringToFront();
-                await activePage.evaluate((textToPaste) => {
-                    const active = document.activeElement;
-                    if (
-                        active instanceof HTMLInputElement ||
-                        active instanceof HTMLTextAreaElement
-                    ) {
-                        const start = active.selectionStart ?? active.value.length;
-                        const end = active.selectionEnd ?? active.value.length;
-                        active.value = `${active.value.slice(0, start)}${textToPaste}${active.value.slice(end)}`;
-                        const cursor = start + textToPaste.length;
-                        active.setSelectionRange(cursor, cursor);
-                        active.dispatchEvent(new InputEvent('input', { bubbles: true, data: textToPaste, inputType: 'insertText' }));
-                        active.dispatchEvent(new Event('change', { bubbles: true }));
-                        return;
-                    }
-
-                    document.execCommand('insertText', false, textToPaste);
-                }, text);
+                await pasteTextIntoPage(activePage, text);
             },
 
             async readClipboard(): Promise<string | null> {
@@ -1403,6 +1449,65 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 const deltaX = direction === 'right' ? amount : direction === 'left' ? -amount : 0;
                 const deltaY = direction === 'down' ? amount : direction === 'up' ? -amount : 0;
                 await activePage.mouse.wheel(deltaX, deltaY);
+            },
+
+            async scrollToBottom() {
+                const activePage = await ensureActivePage(session);
+                const pointer = session.lastMousePosition;
+                await activePage.evaluate((lastPointer) => {
+                    const maxScrollTop = (element: Element) => Math.max(0, element.scrollHeight - element.clientHeight);
+                    const canScrollVertically = (element: Element) => {
+                        if (!(element instanceof HTMLElement)) return false;
+                        return maxScrollTop(element) > 1;
+                    };
+                    const scrollElementToBottom = (element: Element) => {
+                        if (element instanceof HTMLElement) {
+                            element.scrollTop = element.scrollHeight;
+                            element.dispatchEvent(new Event('scroll', { bubbles: true }));
+                        }
+                    };
+                    const scrollAncestorToBottom = (start: Element | null) => {
+                        let current: Element | null = start;
+                        while (current && current !== document.documentElement) {
+                            if (current === document.body && document.scrollingElement !== document.body) {
+                                current = current.parentElement;
+                                continue;
+                            }
+                            if (canScrollVertically(current)) {
+                                scrollElementToBottom(current);
+                                return true;
+                            }
+                            current = current.parentElement;
+                        }
+                        return false;
+                    };
+
+                    const candidates: Element[] = [];
+                    if (lastPointer) {
+                        const pointed = document.elementFromPoint(lastPointer.x, lastPointer.y);
+                        if (pointed) candidates.push(pointed);
+                    }
+                    if (document.activeElement) {
+                        candidates.push(document.activeElement);
+                    }
+
+                    for (const candidate of candidates) {
+                        if (scrollAncestorToBottom(candidate)) return;
+                    }
+
+                    const root = document.scrollingElement || document.documentElement;
+                    root.scrollTop = root.scrollHeight;
+                    window.scrollTo(0, Math.max(
+                        document.documentElement.scrollHeight,
+                        document.body?.scrollHeight || 0,
+                    ));
+                }, pointer);
+            },
+
+            async undo() {
+                const activePage = await ensureActivePage(session);
+                const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+                await pressShortcut(activePage, `${modifier}+z`);
             },
 
             async navigate(url: string) {
