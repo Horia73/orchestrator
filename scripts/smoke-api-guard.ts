@@ -18,8 +18,10 @@ async function main(): Promise<void> {
 
     const originalApiToken = process.env.ORCHESTRATOR_API_TOKEN
     const originalAccessToken = process.env.ORCHESTRATOR_ACCESS_TOKEN
+    const originalTrustedLoopbackForwarders = process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS
     delete process.env.ORCHESTRATOR_API_TOKEN
     delete process.env.ORCHESTRATOR_ACCESS_TOKEN
+    delete process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS
 
     check(
         'public webhook ingress skips API guard',
@@ -67,7 +69,7 @@ async function main(): Promise<void> {
         implicitForwardedLoopbackGuard?.status,
     )
 
-    const publicUrlImplicitForwardedLoopbackGuard = guardSensitiveRequest(new Request('https://orchestrator.lan/api/config', {
+    const publicUrlImplicitForwardedLoopbackGuard = guardSensitiveRequest(new Request('https://orchestrator.example.com/api/config', {
         headers: {
             host: '127.0.0.1:3000',
             'x-forwarded-host': '127.0.0.1:3000',
@@ -78,6 +80,19 @@ async function main(): Promise<void> {
         'implicit forwarded loopback request allows public runtime URL',
         publicUrlImplicitForwardedLoopbackGuard === null,
         publicUrlImplicitForwardedLoopbackGuard?.status,
+    )
+
+    const mismatchedForwardedLoopbackGuard = guardSensitiveRequest(new Request('https://orchestrator.example.com/api/config', {
+        headers: {
+            host: 'orchestrator.example.com',
+            'x-forwarded-host': '127.0.0.1:3000',
+            'x-forwarded-proto': 'http',
+        },
+    }))
+    check(
+        'mismatched public host and forwarded loopback host is blocked',
+        mismatchedForwardedLoopbackGuard?.status === 403,
+        mismatchedForwardedLoopbackGuard?.status,
     )
 
     const forwardedMappedLoopbackGuard = guardSensitiveRequest(new Request('http://127.0.0.1:3000/api/config', {
@@ -92,6 +107,35 @@ async function main(): Promise<void> {
         'forwarded mapped loopback client can use loopback host',
         forwardedMappedLoopbackGuard === null,
         forwardedMappedLoopbackGuard?.status,
+    )
+
+    process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS = '172.16.0.0/12'
+    const dockerBridgeLoopbackGuard = guardSensitiveRequest(new Request('https://orchestrator.example.com/api/config', {
+        headers: {
+            host: '127.0.0.1:3000',
+            'x-forwarded-host': '127.0.0.1:3000',
+            'x-forwarded-for': '172.24.0.1',
+            'x-forwarded-proto': 'http',
+        },
+    }))
+    check(
+        'configured Docker bridge forwarder can use loopback host',
+        dockerBridgeLoopbackGuard === null,
+        dockerBridgeLoopbackGuard?.status,
+    )
+
+    const untrustedPrivateLoopbackGuard = guardSensitiveRequest(new Request('https://orchestrator.example.com/api/config', {
+        headers: {
+            host: '127.0.0.1:3000',
+            'x-forwarded-host': '127.0.0.1:3000',
+            'x-forwarded-for': '192.168.1.50',
+            'x-forwarded-proto': 'http',
+        },
+    }))
+    check(
+        'unconfigured private forwarder cannot claim loopback host',
+        untrustedPrivateLoopbackGuard?.status === 403,
+        untrustedPrivateLoopbackGuard?.status,
     )
 
     const spoofedLoopbackGuard = guardSensitiveRequest(new Request('https://127.0.0.1:3000/api/config', {
@@ -112,6 +156,8 @@ async function main(): Promise<void> {
     else process.env.ORCHESTRATOR_API_TOKEN = originalApiToken
     if (originalAccessToken === undefined) delete process.env.ORCHESTRATOR_ACCESS_TOKEN
     else process.env.ORCHESTRATOR_ACCESS_TOKEN = originalAccessToken
+    if (originalTrustedLoopbackForwarders === undefined) delete process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS
+    else process.env.ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS = originalTrustedLoopbackForwarders
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)

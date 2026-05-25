@@ -18,6 +18,7 @@ const API_TOKEN_COOKIE_NAMES = [
     'orchestrator_api_token',
     'orchestrator_access_token',
 ]
+const TRUSTED_LOOPBACK_FORWARDERS_ENV_KEY = 'ORCHESTRATOR_TRUSTED_LOOPBACK_FORWARDERS'
 
 export function guardSensitiveRequest(request: Request): NextResponse | null {
     const message = getGuardFailureMessage(request)
@@ -115,6 +116,10 @@ function isForwardedLoopbackHostClaim(request: Request, effectiveHostname: strin
     const clientIp = firstHeaderValue(request.headers.get('x-forwarded-for'))
         || firstHeaderValue(request.headers.get('x-real-ip'))
     if (!clientIp) {
+        if (isLoopbackHost(extractHostname(firstHeaderValue(request.headers.get('x-forwarded-host')) || ''))) {
+            return false
+        }
+
         const hostHostname = extractHostname(request.headers.get('host') || '')
         let urlHostname = ''
         try {
@@ -125,7 +130,54 @@ function isForwardedLoopbackHostClaim(request: Request, effectiveHostname: strin
         return !(isLoopbackHost(hostHostname) || isLoopbackHost(urlHostname))
     }
 
-    return !isLoopbackHost(extractHostname(clientIp))
+    const clientHostname = extractHostname(clientIp)
+    if (isLoopbackHost(clientHostname)) return false
+    if (requestIdentifiesLoopback(request) && isTrustedLoopbackForwarder(clientHostname)) return false
+
+    return true
+}
+
+function requestIdentifiesLoopback(request: Request): boolean {
+    const candidates = [
+        extractHostname(request.headers.get('host') || ''),
+        extractHostname(firstHeaderValue(request.headers.get('x-forwarded-host')) || ''),
+    ]
+    try {
+        candidates.push(new URL(request.url).hostname)
+    } catch {
+        // Malformed request URLs are handled by the caller.
+    }
+    return candidates.some(isLoopbackHost)
+}
+
+function isTrustedLoopbackForwarder(hostname: string): boolean {
+    const host = normalizeIpAddress(hostname)
+    if (!host) return false
+
+    const configured = getEnvValue(TRUSTED_LOOPBACK_FORWARDERS_ENV_KEY) || ''
+    return configured
+        .split(/[\s,]+/)
+        .map(entry => entry.trim())
+        .filter(Boolean)
+        .some(entry => trustedForwarderEntryMatches(host, entry))
+}
+
+function trustedForwarderEntryMatches(host: string, entry: string): boolean {
+    const clean = normalizeIpAddress(entry)
+    if (!clean) return false
+
+    if (!clean.includes('/')) return host === clean
+
+    const [network, prefixText] = clean.split('/')
+    const networkInt = ipv4ToInt(network || '')
+    const hostInt = ipv4ToInt(host)
+    const prefix = Number.parseInt(prefixText || '', 10)
+    if (networkInt === null || hostInt === null || !Number.isInteger(prefix) || prefix < 0 || prefix > 32) {
+        return false
+    }
+
+    const mask = prefix === 0 ? 0 : (0xffffffff << (32 - prefix)) >>> 0
+    return (networkInt & mask) === (hostInt & mask)
 }
 
 function configuredApiTokens(): string[] {
@@ -220,4 +272,24 @@ function isLoopbackHost(hostname: string): boolean {
         || host === '::1'
         || host === '0:0:0:0:0:0:0:1'
         || /^127(?:\.\d{1,3}){3}$/.test(host)
+}
+
+function normalizeIpAddress(value: string): string {
+    const clean = value.trim().replace(/\.$/, '').replace(/^\[(.*)]$/, '$1').toLowerCase()
+    if (clean.startsWith('::ffff:')) return clean.slice('::ffff:'.length)
+    return clean
+}
+
+function ipv4ToInt(value: string): number | null {
+    const parts = value.split('.')
+    if (parts.length !== 4) return null
+
+    let result = 0
+    for (const part of parts) {
+        if (!/^\d{1,3}$/.test(part)) return null
+        const byte = Number.parseInt(part, 10)
+        if (byte < 0 || byte > 255) return null
+        result = ((result << 8) | byte) >>> 0
+    }
+    return result >>> 0
 }
