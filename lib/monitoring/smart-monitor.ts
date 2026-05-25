@@ -1,7 +1,11 @@
-// Smart Monitor — consolidated cheap tick across all user-configured watches.
+// Smart Monitor — model-led wake context for all user-configured watches.
 //
-// Runs at a FIXED cadence (the scheduled task's `every` schedule, 15 min,
-// aligned to quarter-hour slots). No model in the hot loop:
+// The active production path wakes the orchestrator directly from the single
+// Smart Monitor scheduled task. The cheap-pass engine below is retained for
+// legacy smoke tests and old audit tooling, but it is no longer the gate that
+// decides whether the model wakes.
+//
+// Legacy cheap-pass behavior:
 //   1. listDueWatches(now) — only enabled watches whose nextCheckAt has come due
 //   2. per watch: source-adapter availability check → cheapCheck → suppress
 //      patterns → quiet hours → adaptive cadence update → checkpoint persist
@@ -27,12 +31,14 @@ import type {
 import {
     incrementSuppressPatternMatch,
     listDueWatches,
+    listMonitorWatches,
     listWatchEvents,
     recordWatchEvent,
     setWatchCadenceCurrent,
     setWatchCheckpoint,
     setWatchState,
 } from '../monitor/store'
+import { listTaskRuns, type TaskRunRecord } from '../scheduling/store'
 import {
     getSourceAdapter,
     type MatchedCandidate,
@@ -535,10 +541,148 @@ function clipDetailJson(details: unknown, maxChars = 400): string {
     return `${s.slice(0, maxChars)}…`
 }
 
+function clipUnknownJson(value: unknown, maxChars = 4000): string {
+    let s: string
+    try {
+        s = JSON.stringify(value ?? {}, null, 2)
+    } catch {
+        return '(non-serializable state)'
+    }
+    if (s.length <= maxChars) return s
+    return `${s.slice(0, maxChars)}\n...(truncated)`
+}
+
+function clipLine(text: string, maxChars = 500): string {
+    const compact = text.replace(/\s+/g, ' ').trim()
+    if (compact.length <= maxChars) return compact
+    return `${compact.slice(0, maxChars)}...`
+}
+
+function renderTaskRunLine(run: TaskRunRecord): string {
+    const out = run.error || run.summary || '(no output)'
+    return [
+        new Date(run.startedAt).toISOString(),
+        run.status,
+        run.surfaced ? 'Inbox' : 'silent',
+        run.trigger,
+        clipLine(out),
+    ].join(' | ')
+}
+
+function buildRecentRunHistoryBlock(taskId: string, now: number): string[] {
+    const runs = listTaskRuns(taskId, 20)
+    const since = now - 24 * 60 * 60 * 1000
+    const lastDay = runs.filter((run) => run.startedAt >= since)
+    if (runs.length === 0) {
+        return ['Recent scheduled-run history: none yet.']
+    }
+    const lines = [
+        `Recent scheduled-run history: ${lastDay.length} run(s) in the last 24h; showing latest ${Math.min(10, runs.length)}.`,
+    ]
+    for (const run of runs.slice(0, 10)) lines.push(`  ${renderTaskRunLine(run)}`)
+    return lines
+}
+
 /** History kinds the model is interested in when judging this wake. We exclude
  *  raw `check` events (very noisy — one per tick) and `cadence_change` (engine
  *  bookkeeping). Wake/notify/suppress/feedback/match/action/error are signal. */
 const WAKE_HISTORY_KINDS = ['wake', 'notify', 'suppress', 'feedback', 'match', 'action', 'error'] as const
+
+export function buildSmartMonitorAgentPrompt(options: {
+    now: number
+    taskId: string
+    taskState: unknown
+}): string {
+    const { now, taskId, taskState } = options
+    const watches = listMonitorWatches({ enabled: true })
+    const lines: string[] = []
+
+    lines.push('You are the Smart Monitor agent wake.')
+    lines.push('The old cheap rule gate is NOT running for Smart Monitor anymore. You are awake because the single Smart Monitor schedule fired. Your job is to inspect the enabled watch intents directly, decide what matters, notify sparingly, update task state, and adjust your next cadence when useful.')
+    lines.push('')
+    lines.push('Operating model:')
+    lines.push('- There is one consolidated Smart Monitor agent for Gmail, Google Calendar, WhatsApp, Home Assistant, Web, and Weather. Do not create separate scheduled tasks or extra agents for urgent/digest/noise tiers.')
+    lines.push('- Watch records below are source boundaries and user-intent hints. Their structured rule is a fetch hint, not a preset notification rule and not proof that the user should be interrupted.')
+    lines.push('- Do not invent canned urgent keyword lists. Extract the user intent from the watch title/target/rule, the durable memory already in your prompt, and your task state. If the intent is too vague, stay conservative and mention the missing capability in your normal output without notifying unless there is a real issue.')
+    lines.push('- Use integration read tools to inspect only what is needed. Activate the specific integrations you need first: gmail, whatsapp, google-calendar, home-assistant, weather, maps, etc. If a direct tool is not visible after activation, use RunActivatedIntegrationTool with the target tool id.')
+    lines.push('- Notify Inbox only for things that are important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the watch intent.')
+    lines.push('- For non-urgent accumulated items, summarize only when the watch/user preference calls for it or the volume is meaningfully high. Otherwise stay silent.')
+    lines.push('- Digest behavior is model-owned, not a fixed watch policy. If items should be batched for a later summary, store a compact digestQueue/lastDigestAt in task_state and choose an appropriate future wake cadence.')
+    lines.push('- Never perform source-side write actions unless the watch allowed action explicitly permits it AND the user already approved the exact rule/action boundary. Notify-only remains the default.')
+    lines.push('')
+    lines.push('Cadence policy:')
+    lines.push(`- Current task id: ${taskId}. Default cadence is 15m.`)
+    lines.push('- You MAY call reschedule_task for this task to self-pace. Keep the 15m default when it still fits; tighten only for clearly time-sensitive periods; widen to 30m, 1h, 2h, or longer after sustained quiet periods, low-signal hours, or known inactive windows. Do not thrash; reschedule only on a clear tier change.')
+    lines.push('- Legacy quiet-hours fields are context only, not a hard upstream gate. Use local time, task history, and urgency to decide whether to notify now, defer, or widen cadence.')
+    lines.push('- Always call set_task_state with the full updated small state: per-source watermarks/lastSeen ids, quietRuns/activeRuns, lastNotifiedAt, cadenceTier, lastCheckedAt, digestQueue/lastDigestAt if useful, and any useful time-of-day signal.')
+    lines.push('')
+    lines.push(`Wake time: ${new Date(now).toISOString()}.`)
+    lines.push('')
+    lines.push('<task_state>')
+    lines.push(clipUnknownJson(taskState))
+    lines.push('</task_state>')
+    lines.push('')
+    lines.push('<recent_smart_monitor_runs>')
+    lines.push(...buildRecentRunHistoryBlock(taskId, now))
+    lines.push('</recent_smart_monitor_runs>')
+    lines.push('')
+
+    if (watches.length === 0) {
+        lines.push('No enabled Smart Monitor watches exist. Do not notify. Call set_task_state with lastCheckedAt and finish.')
+        return lines.join('\n')
+    }
+
+    lines.push('<smart_monitor_watches>')
+    lines.push(`Enabled watches: ${watches.length}`)
+    lines.push('')
+
+    for (const w of watches) {
+        lines.push(`## Watch ${w.id} - "${w.title}"`)
+        lines.push(`Source: ${w.source}`)
+        lines.push(`Target: ${w.target}`)
+        lines.push(`Intent/fetch hint: ${describeRule(w.rule)}`)
+        const allowed = w.allowedActions.length === 0
+            ? 'notify_inbox only'
+            : `notify_inbox plus: ${w.allowedActions.map(describeAction).join(', ')}`
+        lines.push(`Allowed actions: ${allowed}`)
+        if (w.notify.quietHours) {
+            lines.push(`Legacy quiet preference: ${w.notify.quietHours.from}-${w.notify.quietHours.to} ${w.notify.quietHours.timezone}`)
+        }
+        lines.push(`Legacy per-watch counters: quietRuns=${w.state.quietRuns}, activeRuns=${w.state.activeRuns}, lastCheckedAt=${w.lastCheckedAt ? new Date(w.lastCheckedAt).toISOString() : 'never'}, lastFiredAt=${w.lastFiredAt ? new Date(w.lastFiredAt).toISOString() : 'never'}`)
+
+        const recent = listWatchEvents(w.id, {
+            limit: 8,
+            kinds: [...WAKE_HISTORY_KINDS],
+        })
+        if (recent.length > 0) {
+            lines.push('Recent watch decisions:')
+            for (const ev of recent) lines.push(`  ${renderHistoryLine(ev)}`)
+        }
+
+        const active = w.suppressPatterns.filter((p) => p.expiresAt === null || p.expiresAt > now)
+        if (active.length > 0) {
+            lines.push('Learned suppress patterns to consider:')
+            for (const p of active) lines.push(`  - ${renderSuppressPattern(p)}`)
+        }
+        lines.push('')
+    }
+
+    lines.push('</smart_monitor_watches>')
+    lines.push('')
+    lines.push('Suggested source strategy:')
+    lines.push('- Gmail: search only the relevant query/scope, usually unread Primary or watch target. Read threads only for new or potentially important results. Compare message/thread ids with task_state before notifying.')
+    lines.push('- WhatsApp: start with WhatsAppUnreadSummary. For unread chats that match the watch intent or important contacts, read recent messages and compare message ids with task_state. For the current user preference, Anduța/Anduta is highest priority.')
+    lines.push('- Google Calendar: list upcoming bounded windows and RSVP-needed items. If there are no relevant events, stop that branch. Route-aware logic should first read Calendar; only then use location/routes if an event with a real location exists.')
+    lines.push('- Home Assistant/Web/Weather: read only the entities/URLs/locations implied by the watch. Avoid broad scans unless the watch explicitly asks for them.')
+    lines.push('')
+    lines.push('Finish criteria:')
+    lines.push('1. If nothing is noteworthy, do not call notify_inbox. Return a short internal summary only; it will stay in Past runs.')
+    lines.push('2. If something matters, call notify_inbox with one compact, specific message per real issue. Group related source findings.')
+    lines.push('3. Persist set_task_state every run, even when silent.')
+    lines.push('4. Optionally call reschedule_task if the next cadence should change based on the activity/time pattern. For this ongoing Smart Monitor task, use recurring timing such as when.every/daily_at/cron, not one-shot when.in/at.')
+
+    return lines.join('\n')
+}
 
 function renderHistoryLine(ev: WatchEvent): string {
     const ts = new Date(ev.ts).toISOString()
@@ -584,7 +728,7 @@ function buildBriefPrompt(
     now: number,
 ): string {
     const lines: string[] = []
-    lines.push('You are a Smart Monitor consolidated wake. The cheap tick produced matches across the user\'s active watches. Decide what to surface, and record feedback so future ticks get smarter.')
+    lines.push('You are a Smart Monitor consolidated wake. A legacy candidate pass produced matches across the user\'s active watches. Decide what to surface, and record feedback so future runs get smarter.')
     lines.push('Important operating model: this is one consolidated monitor wake, not one agent per source or one agent per urgency tier. You can evaluate many Gmail, Calendar, Home Assistant, WhatsApp, Web, and Weather candidates in this single turn. Group related items and notify sparingly.')
     lines.push('Work through the watch sections in order. For each watch: read the user intent from its title/rule/target, inspect all matches for that watch, decide notify vs suppress/summary/action within its allowed actions, then move to the next watch. After all watches are assessed, send the fewest useful Inbox notifications by grouping related items across watches, and record monitor_wake_feedback once per watch involved.')
     lines.push('For broad triage watches, treat the rule as the candidate feed, not as a reason to interrupt for every match. Interrupt only for matches that look important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the watch intent. Routine automated messages and repeated low-value matches are usually noise or summary material. If only notify_inbox is allowed, never perform source-side changes; only suggest choices in an Inbox note when useful and learn from feedback with narrow suppress patterns.')
@@ -605,7 +749,7 @@ function buildBriefPrompt(
             : w.allowedActions.map(describeAction).join(', ')
         lines.push(`Allowed actions: ${allowed}`)
         if (w.notify.quietHours) {
-            lines.push(`Quiet hours: ${w.notify.quietHours.from}-${w.notify.quietHours.to} ${w.notify.quietHours.timezone}`)
+            lines.push(`Legacy quiet context: ${w.notify.quietHours.from}-${w.notify.quietHours.to} ${w.notify.quietHours.timezone}`)
         }
         lines.push(`Cadence: ${w.cadence.current}s${w.cadence.adaptive ? ' (adaptive)' : ' (fixed)'}  ·  state.quietRuns=${w.state.quietRuns} state.activeRuns=${w.state.activeRuns}`)
 
@@ -649,7 +793,7 @@ function buildBriefPrompt(
     lines.push('   - `was_worth_it: false` when matches were noise/routine. In that case ALSO pass `add_suppress_pattern` with a structured MonitorRule that captures the noise (same predicate kinds the watch itself supports) so future ticks drop similar candidates BEFORE the model is woken. Use `expires_in_days` when you are not certain the pattern is permanent.')
     lines.push('   - If a previously-added suppress pattern is over-suppressing, retract it via `remove_suppress_pattern_id` in the same call.')
     lines.push('4) Do NOT schedule anything. Do NOT modify watches (no monitor_watch_* in a wake). The only tools you may call are `notify_inbox` and `monitor_wake_feedback`.')
-    lines.push('5) Quiet hours and existing suppress patterns have ALREADY filtered out their candidates — anything you see here passed those filters, so be sparing only based on intent, not redundancy.')
+    lines.push('5) Existing suppress patterns may have filtered candidates before this prompt. Be sparing based on intent and avoid treating legacy quiet-hour metadata as a hard gate.')
 
     return lines.join('\n')
 }

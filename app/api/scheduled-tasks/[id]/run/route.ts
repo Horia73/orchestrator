@@ -15,7 +15,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ id:
                 ? 404
                 : result.error === 'Task is already running.'
                     ? 409
-                    : 500
+                    : result.error === 'Smart Monitor runs automatically; manual checks are disabled.'
+                        ? 400
+                        : 500
         return NextResponse.json(result, { status })
     } catch (error) {
         console.error('Failed to run scheduled task', error)

@@ -19,7 +19,8 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 //
 // Cadence values are accepted as seconds (number) OR as a duration string
 // (e.g. "15m", "2h") for the model's ergonomics — same form used by
-// schedule_task. The internal storage is always seconds.
+// schedule_task. These fields are legacy watch metadata; the active Smart
+// Monitor wake cadence is owned by the single scheduled agent task.
 // ---------------------------------------------------------------------------
 
 // --- duration parsing ------------------------------------------------------
@@ -62,6 +63,18 @@ function normalizeCadenceInput(raw: unknown): Record<string, unknown> | undefine
     return out
 }
 
+function normalizeNotifyInput(raw: unknown): Record<string, unknown> | undefined {
+    if (raw === undefined || raw === null) return undefined
+    if (typeof raw !== 'object' || Array.isArray(raw)) return undefined
+    const input = raw as Record<string, unknown>
+    const out: Record<string, unknown> = {}
+    if (input.onMatch !== undefined) {
+        if (typeof input.onMatch !== 'boolean') throw new Error('notify.onMatch must be boolean.')
+        out.onMatch = input.onMatch
+    }
+    return Object.keys(out).length > 0 ? out : undefined
+}
+
 // ---------------------------------------------------------------------------
 // monitor_describe_sources
 // ---------------------------------------------------------------------------
@@ -97,9 +110,11 @@ export async function executeMonitorDescribeSources(): Promise<ToolResult> {
                 default: DEFAULT_CADENCE_SECONDS,
             },
             notes: [
-                'Cadence is expressed in seconds but quantized to 15-minute slots; you may give a string like "15m" or "2h" when creating/updating — both forms accepted.',
+                'Create broad source watches that express the user intent/candidate scope. Do not invent preset urgent keyword lists; use source predicates only as fetch hints.',
+                'For WhatsApp broad monitoring, wa_unread can represent new/unread WhatsApp candidates; narrow with wa_from only when the user explicitly scoped the watch to specific chats.',
+                'Cadence fields on watches are legacy metadata. The active Smart Monitor agent wake defaults to 15m and self-paces by rescheduling the single Smart Monitor scheduled task.',
                 'notify_inbox is implicitly allowed on every watch; everything else needs explicit user consent in allowedActions.',
-                'Gmail, Google Calendar, and WhatsApp watches PRIME on first tick (no history blast). Home Assistant watches do not prime — alert immediately if entity is already in the matching state.',
+                'Digest/quiet timing is model-owned at wake time via task_state and reschedule_task, not stored as fixed watch policy.',
                 'For the actual rule/action object schemas see lib/monitor/schema.ts on the project.',
             ],
         },
@@ -142,7 +157,7 @@ async function syncHeartbeatBestEffort(): Promise<void> {
         await syncSmartMonitorActivation()
     } catch {
         // Management tools should still return the watch mutation result; the
-        // status endpoint and boot hook also reconcile the heartbeat.
+        // status endpoint and boot hook also reconcile the system wake task.
     }
 }
 
@@ -276,10 +291,12 @@ export const monitorWatchAddTool: ToolDef = {
     name: 'monitor_watch_add',
     description: [
         'Create a Smart Monitor watch.',
-        'Use this when the user wants to subscribe to a periodic source check (Gmail VIPs, Google Calendar events/invites, HA sensors, web endpoint changes, weather thresholds, WhatsApp from specific contacts). Always ask the user for: WHAT to watch (source + target), the RULE that defines a match (translate plain language to a structured MonitorRule — call monitor_describe_sources first if unsure of supported predicates), the CADENCE (in seconds or a duration string like "15m"), the NOTIFY policy (immediate vs digest, quiet hours), and explicitly which ACTIONS the model is allowed to take beyond notify_inbox (default: notify-only).',
+        'Use this when the user wants to subscribe to a persistent source watch (Gmail, Google Calendar, WhatsApp, Home Assistant, web endpoint changes, weather thresholds). Extract the main user intent and translate it to a broad structured MonitorRule fetch hint; call monitor_describe_sources first if unsure of supported predicates.',
+        'Do not create canned preset rules or urgent keyword lists. For broad WhatsApp triage prefer wa_unread unless the user explicitly scoped contacts/chats; use wa_from only for a contact-specific watch.',
+        'Confirm only the source/scope, what the user cares about, and any non-notify actions they explicitly authorize. Digest timing and quiet/active windows are decided by the Smart Monitor agent at wake time using task_state, not encoded here.',
         'For connector integrations, use at most one watch per source: one Gmail watch, one Google Calendar watch, one WhatsApp watch, one Home Assistant watch. If a watch already exists for that integration, update it instead of adding another.',
-        'Watches start ENABLED unless the user explicitly asks to pause. Cadence defaults: 900s (15 min), min 900s, max 43200s (12h), adaptive=true; current/min/max must be multiples of 15 minutes.',
-        'Returns the new watch id. The Smart Monitor heartbeat system task auto-arms on first enabled watch.',
+        'Watches start ENABLED unless the user explicitly asks to pause. Cadence fields are legacy metadata; the single Smart Monitor scheduled agent task defaults to 15m and self-paces with reschedule_task.',
+        'Returns the new watch id. The Smart Monitor agent-wake system task auto-arms on first enabled watch.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -301,20 +318,9 @@ export const monitorWatchAddTool: ToolDef = {
             },
             notify: {
                 type: 'object',
-                description: 'Notify policy.',
+                description: 'Legacy notify metadata. Usually omit. Only onMatch is accepted; digest/quiet timing belongs in the agent task state.',
                 properties: {
-                    onMatch: { type: 'boolean', description: 'Surface to Inbox the moment a match survives suppress. Defaults to true.' },
-                    digestAt: { type: 'string', description: 'Optional "HH:MM" local daily digest emit time.' },
-                    quietHours: {
-                        type: 'object',
-                        description: 'Optional per-watch quiet window. wrap-around (e.g. "23:00"-"07:00") supported.',
-                        properties: {
-                            from: { type: 'string', description: '"HH:MM".' },
-                            to: { type: 'string', description: '"HH:MM".' },
-                            timezone: { type: 'string', description: 'IANA tz, e.g. "Europe/Bucharest".' },
-                        },
-                        required: ['from', 'to', 'timezone'],
-                    },
+                    onMatch: { type: 'boolean', description: 'Legacy flag; defaults true. The agent still decides whether to notify at wake time.' },
                 },
             },
             enabled: { type: 'boolean', description: 'Start enabled? Default true.' },
@@ -366,10 +372,14 @@ export async function executeMonitorWatchAdd(args: Record<string, unknown>): Pro
 
     let notify: Record<string, unknown> | undefined
     if (args.notify !== undefined) {
-        if (typeof args.notify !== 'object' || Array.isArray(args.notify)) {
-            return { success: false, error: 'notify must be an object.' }
+        let normalized: Record<string, unknown> | undefined
+        try {
+            normalized = normalizeNotifyInput(args.notify)
+        } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : 'Invalid notify.' }
         }
-        const parsedNotify = NotifyPolicySchema.safeParse(args.notify)
+        if (!normalized) normalized = {}
+        const parsedNotify = NotifyPolicySchema.safeParse(normalized)
         if (!parsedNotify.success) return { success: false, error: `notify is invalid: ${parsedNotify.error.message}` }
         notify = parsedNotify.data as unknown as Record<string, unknown>
     }
@@ -406,9 +416,9 @@ export const monitorWatchUpdateTool: ToolDef = {
     id: 'monitor_watch_update',
     name: 'monitor_watch_update',
     description: [
-        'Partial-update an existing Smart Monitor watch. Every field is optional — only the ones you pass are touched. Use this to change the rule, adjust cadence, tweak the notify policy, grant/revoke an allowed action, or pause/resume via `enabled`.',
+        'Partial-update an existing Smart Monitor watch. Every field is optional — only the ones you pass are touched. Use this to change the source-scope rule, grant/revoke an allowed action, or pause/resume via `enabled`.',
         'Source is immutable (would invalidate the rule). To switch source, remove + add. Suppress patterns are managed via monitor_wake_feedback, NOT here.',
-        'cadence accepts partial: e.g. {current: "30m"} alone widens the current cadence without changing min/max/adaptive.',
+        'cadence/notify are legacy metadata. Active wake cadence, digest batching, and quiet/active windows are owned by the Smart Monitor agent task state and reschedule_task.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -419,7 +429,7 @@ export const monitorWatchUpdateTool: ToolDef = {
             rule: { type: 'object', description: 'Full replacement rule. Must be source-compatible.' },
             allowed_actions: { type: 'array', description: 'Replacement list (not a delta). Pass [] to revoke all non-notify_inbox actions.' },
             cadence: { type: 'object', description: 'Partial cadence patch (any of current/min/max/adaptive). Values accept seconds or duration strings.' },
-            notify: { type: 'object', description: 'Partial notify patch (any of onMatch/digestAt/quietHours).' },
+            notify: { type: 'object', description: 'Legacy notify patch. Only onMatch is accepted; digest/quiet timing is model-owned task state.' },
             enabled: { type: 'boolean' },
         },
         required: ['watch_id'],
@@ -464,10 +474,14 @@ export async function executeMonitorWatchUpdate(args: Record<string, unknown>): 
         }
     }
     if (args.notify !== undefined) {
-        if (typeof args.notify !== 'object' || Array.isArray(args.notify)) {
-            return { success: false, error: 'notify must be an object.' }
+        let normalized: Record<string, unknown> | undefined
+        try {
+            normalized = normalizeNotifyInput(args.notify)
+        } catch (err) {
+            return { success: false, error: err instanceof Error ? err.message : 'Invalid notify.' }
         }
-        const parsed = NotifyPolicyPartialInputSchema.safeParse(args.notify)
+        if (!normalized) normalized = {}
+        const parsed = NotifyPolicyPartialInputSchema.safeParse(normalized)
         if (!parsed.success) return { success: false, error: `notify patch invalid: ${parsed.error.message}` }
         patch.notify = parsed.data
     }
@@ -496,7 +510,7 @@ export async function executeMonitorWatchUpdate(args: Record<string, unknown>): 
 export const monitorWatchRemoveTool: ToolDef = {
     id: 'monitor_watch_remove',
     name: 'monitor_watch_remove',
-    description: 'Delete a Smart Monitor watch by id. Suppress patterns, audit events, and private state are cascade-deleted with it. If this was the last enabled watch, the Smart Monitor heartbeat system task auto-pauses.',
+    description: 'Delete a Smart Monitor watch by id. Suppress patterns, audit events, and private state are cascade-deleted with it. If this was the last enabled watch, the Smart Monitor system wake task auto-pauses.',
     input_schema: {
         type: 'object',
         properties: { watch_id: { type: 'string' } },

@@ -3,19 +3,17 @@ import { z } from 'zod'
 // ---------------------------------------------------------------------------
 // Smart Monitor domain schema.
 //
-// A "watch" is one subscription to the consolidated Smart Monitor heartbeat:
+// A "watch" is one source/intention boundary for the Smart Monitor agent:
 //   - source + target: WHAT is being observed (a Gmail sender, an HA entity,
 //     a WhatsApp contact, a URL, etc.).
-//   - rule:            a deterministic predicate evaluated each tick by the
-//     engine (NO model in the hot loop). Composable via any_of/all_of.
+//   - rule:            a structured fetch/candidate-scope hint. The active
+//     agent wake decides importance; do not treat this as the final notify rule.
 //   - allowedActions:  permission boundary — what the model is allowed to do
 //     when the rule matches (notify_inbox is the only default; everything
 //     else is opt-in by the user, e.g. gmail_archive, ha_set_state).
-//   - cadence:         continuous adaptive cadence in seconds, bounded by
-//     [MIN, MAX]. Starts at DEFAULT (15m). The engine adjusts `current`
-//     between min/max based on activity if `adaptive: true`.
-//   - notify:          when matches are surfaced (immediate vs digest,
-//     plus per-watch quiet hours override).
+//   - cadence/notify:  legacy metadata retained for old rows/tools. The active
+//     Smart Monitor wake cadence, digest behavior, and quiet/active windows are
+//     agent-owned via the single scheduled task state.
 //   - state:           the watch's private memory between ticks (last-seen
 //     id, last value, quiet/noisy run counts, last-notified watermark, …).
 //   - suppressPatterns: noise filter the model accumulates over time via
@@ -44,14 +42,11 @@ export type WatchSource = z.infer<typeof WatchSourceSchema>
 
 // --- cadence ---------------------------------------------------------------
 
-/** Smart Monitor runs on shared quarter-hour slots. Per-watch adaptive
- *  cadence is also quantized to this step so one consolidated wake can handle
- *  all due integrations together. */
+/** Legacy per-watch cadence quantum. The active Smart Monitor agent task still
+ *  defaults to this 15 minute floor, then self-paces with reschedule_task. */
 export const MONITOR_CADENCE_STEP_SECONDS = 15 * 60
 
-/** Master tick floor & ceiling. 15 minutes is the minimum because the
- *  consolidated heartbeat also runs at this rate. 12h is the lazy ceiling —
- *  anything slower should really be a scheduled task/report. */
+/** Legacy per-watch bounds retained for existing watch rows. */
 export const MIN_CADENCE_SECONDS = MONITOR_CADENCE_STEP_SECONDS
 export const MAX_CADENCE_SECONDS = 12 * 60 * 60
 export const DEFAULT_CADENCE_SECONDS = 15 * 60
@@ -114,11 +109,9 @@ export type QuietHours = z.infer<typeof QuietHoursSchema>
 export const NotifyPolicySchema = z.object({
     /** Surface to Inbox as soon as the rule matches (subject to suppression). */
     onMatch: z.boolean().default(true),
-    /** Optional daily digest time "HH:MM" — accumulated quiet matches are
-     *  surfaced together. Independent of onMatch. */
+    /** Legacy only. Digest behavior is model-owned task_state. */
     digestAt: HHMM.optional(),
-    /** Optional per-watch quiet-hours override. If absent, the global Smart
-     *  Monitor quiet hours apply. */
+    /** Legacy only. Quiet/active timing is model-owned task_state. */
     quietHours: QuietHoursSchema.optional(),
 })
 export type NotifyPolicy = z.infer<typeof NotifyPolicySchema>
@@ -153,6 +146,7 @@ export type MonitorRule =
     | { kind: 'calendar_event_starts_within'; minutes: number; calendarIds?: string[]; lookaheadDays?: number }
     | { kind: 'calendar_event_query'; q: string; calendarIds?: string[]; lookaheadDays?: number }
     // whatsapp
+    | { kind: 'wa_unread' }
     | { kind: 'wa_from'; contacts: string[] }
     | { kind: 'wa_text_contains'; substrings: string[]; caseInsensitive?: boolean }
     | { kind: 'wa_mention'; mentions: string[] }
@@ -264,6 +258,9 @@ const LeafRuleSchema = z.discriminatedUnion('kind', [
         lookaheadDays: CalendarLookaheadDaysSchema,
     }),
     // whatsapp
+    z.object({
+        kind: z.literal('wa_unread'),
+    }),
     z.object({
         kind: z.literal('wa_from'),
         contacts: z.array(z.string().min(1).max(120)).min(1).max(64),

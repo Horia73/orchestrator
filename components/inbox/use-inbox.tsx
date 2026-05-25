@@ -33,6 +33,7 @@ interface InboxApi {
   selectedId: string | null
   detail: InboxDetail | null
   detailLoading: boolean
+  refresh: () => Promise<void>
   open: (id: string) => Promise<void>
   clear: () => void
   remove: (id: string) => Promise<void>
@@ -223,6 +224,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       selectedId,
       detail,
       detailLoading,
+      refresh,
       open,
       clear,
       remove,
@@ -237,6 +239,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       selectedId,
       detail,
       detailLoading,
+      refresh,
       open,
       clear,
       remove,

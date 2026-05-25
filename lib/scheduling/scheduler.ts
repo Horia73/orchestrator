@@ -159,6 +159,13 @@ export async function runTaskNow(id: string): Promise<{ ok: boolean; conversatio
     }
     const task = getScheduledTask(id)
     if (!task) return { ok: false, conversationId: null, error: 'Task not found.' }
+    if (task.action.kind === 'monitor' && task.action.monitorKind === 'smart') {
+        return {
+            ok: false,
+            conversationId: null,
+            error: 'Smart Monitor runs automatically; manual checks are disabled.',
+        }
+    }
 
     state.inFlight.add(id)
     try {

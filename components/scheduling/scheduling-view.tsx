@@ -94,6 +94,9 @@ function TaskDetail({
   const [busy, setBusy] = React.useState(false)
   const [note, setNote] = React.useState<string | null>(null)
   const now = useNow(1000)
+  const canRunNow = !(
+    task.action.kind === "monitor" && task.action.monitorKind === "smart"
+  )
 
   return (
     <>
@@ -122,29 +125,31 @@ function TaskDetail({
             {formatRelative(task.nextRunAt, now)}
           </div>
         </div>
-        <button
-          title="Run now"
-          disabled={busy}
-          onClick={async () => {
-            setBusy(true)
-            setNote("Running…")
-            const r = await runTask(task.id)
-            setBusy(false)
-            setNote(
-              r.ok
-                ? "Ran — see Inbox / Past runs."
-                : `Failed: ${r.error ?? "error"}`
-            )
-            setTab("runs")
-          }}
-          className="rounded-md p-2 text-foreground/55 hover:bg-[#f0ede6] hover:text-foreground disabled:opacity-50 dark:hover:bg-muted"
-        >
-          {busy ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Play className="size-4" />
-          )}
-        </button>
+        {canRunNow && (
+          <button
+            title="Run now"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true)
+              setNote("Running...")
+              const r = await runTask(task.id)
+              setBusy(false)
+              setNote(
+                r.ok
+                  ? "Ran - see Inbox / Past runs."
+                  : `Failed: ${r.error ?? "error"}`
+              )
+              setTab("runs")
+            }}
+            className="rounded-md p-2 text-foreground/55 hover:bg-[#f0ede6] hover:text-foreground disabled:opacity-50 dark:hover:bg-muted"
+          >
+            {busy ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Play className="size-4" />
+            )}
+          </button>
+        )}
         <button
           title="Delete"
           onClick={async () => {
@@ -195,7 +200,14 @@ function TaskDetail({
         ))}
       </div>
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div
+        className={cn(
+          "min-h-0 flex-1",
+          tab === "edit"
+            ? "overflow-y-auto px-5 py-5"
+            : "overflow-hidden px-3 py-3 sm:px-5 sm:py-5"
+        )}
+      >
         {tab === "edit" ? (
           <TaskForm
             task={task}

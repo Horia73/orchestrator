@@ -145,14 +145,15 @@ export async function runScheduledTask(
       let briefPrompt: string | undefined
       let summary: string
       if (task.action.monitorKind === "smart") {
-        const { runSmartMonitorCheapPass } = await import(
+        const { buildSmartMonitorAgentPrompt } = await import(
           "@/lib/monitoring/smart-monitor"
         )
-        const pass = await runSmartMonitorCheapPass({ now: firedAt })
-        summary = pass.summary
-        briefPrompt = pass.noteworthy ? pass.briefPrompt : undefined
-        // Smart Monitor manages its own per-watch state in lib/monitor/store;
-        // the scheduler task carries no extra state of its own.
+        summary = "Smart monitor agent wake completed."
+        briefPrompt = buildSmartMonitorAgentPrompt({
+          now: firedAt,
+          taskId: task.id,
+          taskState: getTaskState(task.id),
+        })
       } else {
         const { runMarketsCheapPass } = await import(
           "@/lib/monitoring/markets-heartbeat"
@@ -183,6 +184,7 @@ export async function runScheduledTask(
           assistantContent = `❌ ${error}`
         } else {
           let topRunId: string | null = null
+          let capturedState: unknown = undefined
           const doneByRun = new Map<
             string,
             Extract<AgentRunEvent, { type: "agent_done" }>
@@ -213,6 +215,18 @@ export async function runScheduledTask(
                     actions: normalizeInboxReplyActions(a.actions),
                   })
               }
+              if (
+                event.type === "agent_tool_call" &&
+                event.toolCall?.name === "set_task_state"
+              ) {
+                const a = event.toolCall.arguments as { state?: unknown }
+                if (
+                  a?.state &&
+                  typeof a.state === "object" &&
+                  !Array.isArray(a.state)
+                )
+                  capturedState = a.state
+              }
             },
           }
           const result = await runTextSubAgent({
@@ -234,6 +248,13 @@ export async function runScheduledTask(
             error = result.error
             assistantContent = `❌ ${task.action.monitorKind === "smart" ? "Smart" : "Markets"} monitor wake failed.\n\n${result.error ?? "Unknown error"}`
             reasoning = done?.reasoning
+          }
+          if (capturedState !== undefined) {
+            try {
+              setTaskState(task.id, capturedState)
+            } catch {
+              /* best-effort */
+            }
           }
         }
       }

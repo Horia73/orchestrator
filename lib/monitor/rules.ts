@@ -345,6 +345,8 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
             return containsAny(calendarEventText(candidate), [rule.q], true)
 
         // --- whatsapp ---
+        case 'wa_unread':
+            return candidate.source === 'whatsapp'
         case 'wa_from': {
             if (candidate.source !== 'whatsapp') return false
             const from = candidate.from.toLowerCase()
@@ -488,7 +490,7 @@ export const RULE_KINDS_BY_SOURCE = {
         'calendar_event_starts_within',
         'calendar_event_query',
     ] as const,
-    whatsapp: ['wa_from', 'wa_text_contains', 'wa_mention'] as const,
+    whatsapp: ['wa_unread', 'wa_from', 'wa_text_contains', 'wa_mention'] as const,
     home_assistant: ['ha_state_equals', 'ha_state_changes', 'ha_attribute_changes', 'ha_threshold'] as const,
     web: ['web_status', 'web_json_path', 'web_text_contains'] as const,
     weather: [

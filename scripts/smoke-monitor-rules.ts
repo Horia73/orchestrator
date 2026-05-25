@@ -561,7 +561,7 @@ check('RULE_KINDS_BY_SOURCE gmail count', RULE_KINDS_BY_SOURCE.gmail.length === 
 check('RULE_KINDS_BY_SOURCE google_calendar count', RULE_KINDS_BY_SOURCE.google_calendar.length === 7)
 check('RULE_KINDS_BY_SOURCE home_assistant count', RULE_KINDS_BY_SOURCE.home_assistant.length === 4)
 check('RULE_KINDS_BY_SOURCE web count', RULE_KINDS_BY_SOURCE.web.length === 3)
-check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 3)
+check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 4)
 check('RULE_KINDS_BY_SOURCE weather count', RULE_KINDS_BY_SOURCE.weather.length === 6)
 check('RULE_KINDS_BY_SOURCE custom is empty', RULE_KINDS_BY_SOURCE.custom.length === 0)
 

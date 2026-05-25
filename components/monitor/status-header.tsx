@@ -32,7 +32,7 @@ export function StatusHeader({
             )}
           />
           <span className="font-semibold text-foreground">
-            Smart monitor heartbeat
+            Smart monitor agent
           </span>
           <span>
             {loading
@@ -48,12 +48,12 @@ export function StatusHeader({
         </div>
         {hb && hb.enabled && (
           <span title={hb.next_run_at ? new Date(hb.next_run_at).toLocaleString() : ""}>
-            next tick {formatRelative(hb.next_run_at, now)}
+            next wake {formatRelative(hb.next_run_at, now)}
           </span>
         )}
         {hb?.last_run_at && (
           <span title={new Date(hb.last_run_at).toLocaleString()}>
-            last tick {formatPast(hb.last_run_at, now)}
+            last wake {formatPast(hb.last_run_at, now)}
             {hb.last_run_status === "error" ? " · errored" : ""}
           </span>
         )}

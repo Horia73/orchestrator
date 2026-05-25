@@ -35,6 +35,8 @@ export function describeRule(rule: MonitorRule): string {
         case 'calendar_event_query':
             return `Calendar event text contains: ${rule.q}${rule.calendarIds?.length ? ` on ${rule.calendarIds.join(', ')}` : ''}`
 
+        case 'wa_unread':
+            return 'WhatsApp unread/new incoming messages'
         case 'wa_from':
             return `WhatsApp from: ${rule.contacts.join(' OR ')}`
         case 'wa_text_contains':

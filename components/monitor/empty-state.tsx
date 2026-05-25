@@ -10,9 +10,9 @@ export function EmptyState() {
         No watches yet
       </h2>
       <p className="mt-2 text-[13px] text-foreground/60">
-        Smart Monitor checks things periodically in one cheap loop and only pings
-        you when something matters — Gmail VIPs, Home Assistant sensors, ticket
-        availability, anything you ask the orchestrator to watch.
+        Smart Monitor wakes one agent that checks the sources you care about and
+        only pings you when something matters: Gmail, WhatsApp, Calendar, Home
+        Assistant, Web, or Weather.
       </p>
       <p className="mt-3 text-[13px] text-foreground/60">
         Nothing is monitored by default. Ask in chat — for example,{" "}

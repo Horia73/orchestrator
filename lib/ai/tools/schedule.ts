@@ -269,7 +269,8 @@ export const rescheduleTaskTool: ToolDef = {
     name: 'reschedule_task',
     description: [
         'Change the cadence/timing of an existing scheduled task (keeps its history and state).',
-        'This is how a recurring monitor self-paces: start around 15m unless the user chose another cadence; after sustained quiet widen to 30m then 1h, use longer quiet-hour intervals, and tighten again when activity returns.',
+        'This is how an adaptive recurring agent task self-paces from its own task_state and recent runs. For Smart Monitor, the agent starts from the 15m default and chooses the next recurring cadence or wall-clock schedule itself.',
+        'For ongoing monitor tasks, use recurring timing (every/daily_at/weekly/cron), not one-shot in/at unless the user explicitly wants the task to stop after one more run.',
         'Use list_tasks to find the id; pass the same timing fields as schedule_task (in/at/daily_at/weekly/every/cron).',
     ].join(' '),
     input_schema: {

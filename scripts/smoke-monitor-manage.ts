@@ -82,7 +82,7 @@ async function main(): Promise<void> {
         check('cadence.current parsed from "15m" = 900s', w.cadence.current === 900)
         check('cadence.min parsed from "15m" = 900s', w.cadence.min === 900)
         check('cadence.max parsed from "6h" = 21600s', w.cadence.max === 21600)
-        check('quiet hours persisted', w.notify.quietHours?.from === '23:00')
+        check('legacy quiet hours ignored by manage tool', w.notify.quietHours === undefined)
     }
 
     // ============================================================================
@@ -194,9 +194,9 @@ async function main(): Promise<void> {
         check('cadence.current updated to 1800s', w.cadence.current === 1800)
         check('cadence.min preserved at 900s', w.cadence.min === 900)
         check('cadence.adaptive preserved at true', w.cadence.adaptive === true)
-        check('notify quiet hours preserved through cadence update', w.notify.quietHours?.from === '23:00')
+        check('legacy quiet hours remain unset through cadence update', w.notify.quietHours === undefined)
 
-        // Bump only notify.onMatch — quietHours must persist.
+        // Bump only notify.onMatch; digest/quiet timing is model-owned task state.
         const r2 = await executeMonitorWatchUpdate({
             watch_id: momWatchId,
             notify: { onMatch: false },
@@ -204,7 +204,7 @@ async function main(): Promise<void> {
         check('update partial notify succeeds', r2.success === true)
         const w2 = getMonitorWatch(momWatchId)!
         check('notify.onMatch flipped to false', w2.notify.onMatch === false)
-        check('notify.quietHours still present', w2.notify.quietHours?.from === '23:00')
+        check('notify.quietHours remains unset', w2.notify.quietHours === undefined)
 
         // Rule replace with compatible rule succeeds.
         const r3 = await executeMonitorWatchUpdate({

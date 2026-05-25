@@ -89,7 +89,7 @@ function extractMentions(message: { body: string }): string[] {
 
 export const whatsappSourceAdapter: SourceAdapter = {
     source: 'whatsapp',
-    supportedRuleKinds: ['wa_from', 'wa_text_contains', 'wa_mention'],
+    supportedRuleKinds: ['wa_unread', 'wa_from', 'wa_text_contains', 'wa_mention'],
     supportedActionKinds: ['notify_inbox', 'wa_send_reply'],
 
     async isAvailable(): Promise<AvailabilityResult> {

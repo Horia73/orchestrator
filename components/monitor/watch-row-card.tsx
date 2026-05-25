@@ -1,17 +1,11 @@
 "use client"
 
-import { Clock } from "lucide-react"
-
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
 import {
-  formatCadence,
-  formatPast,
-  formatRelative,
   sourceIcon,
   sourceLabel,
-  useNow,
 } from "./helpers"
 import type { WatchRow } from "./types"
 
@@ -28,7 +22,6 @@ export function WatchRowCard({
   onSelect: () => void
   onToggleEnabled: (enabled: boolean) => Promise<void>
 }) {
-  const now = useNow(1000)
   const hasError = watch.consecutive_errors > 0
 
   return (
@@ -75,21 +68,9 @@ export function WatchRowCard({
             {watch.rule_description}
           </div>
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-foreground/45">
-            <span title="cadence">
-              <Clock className="mr-1 inline size-3" />
-              every {formatCadence(watch.cadence_seconds)}
-              {watch.cadence_adaptive ? " · adaptive" : " · fixed"}
-            </span>
-            {watch.enabled && (
-              <span>next {formatRelative(watch.next_check_at, now)}</span>
-            )}
-            {watch.last_fired_at && (
-              <span title="last fired">
-                fired {formatPast(watch.last_fired_at, now)}
-              </span>
-            )}
+            <span>agent managed</span>
             {watch.suppress_pattern_count > 0 && (
-              <span>{watch.suppress_pattern_count} suppress</span>
+              <span>{watch.suppress_pattern_count} learned filter(s)</span>
             )}
             {watch.allowed_action_count > 0 && (
               <span>{watch.allowed_action_count} action(s)</span>

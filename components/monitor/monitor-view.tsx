@@ -6,7 +6,6 @@ import {
   Bell,
   CheckCircle2,
   Loader2,
-  Moon,
   Radar,
   Trash2,
   X,
@@ -18,11 +17,9 @@ import { cn } from "@/lib/utils"
 import { useAppEvent } from "@/hooks/use-app-events"
 
 import { EmptyState } from "./empty-state"
-import { GlobalSettingsPanel } from "./global-settings-panel"
 import {
   asError,
   eventKindBadgeClass,
-  formatCadence,
   formatPast,
   formatRelative,
   sourceIcon,
@@ -32,7 +29,6 @@ import {
 import { StatusHeader } from "./status-header"
 import type {
   HeartbeatStatus,
-  MonitorSettings,
   WatchDetail,
   WatchEvent,
   WatchRow,
@@ -167,7 +163,7 @@ function WatchDetailPanel({
       !(await confirm({
         title: `Delete "${watch.title}"?`,
         message:
-          "This removes the watch, its suppress patterns, and its audit history. The Smart Monitor heartbeat pauses automatically if this is your last watch.",
+          "This removes the watch, its learned filters, and its audit history. The Smart Monitor agent wake pauses automatically if this is your last watch.",
         destructive: true,
         confirmLabel: "Delete",
       }))
@@ -240,6 +236,10 @@ function WatchDetailPanel({
     )
   }
 
+  const decisionEvents = events.filter(
+    (event) => event.kind !== "check" && event.kind !== "cadence_change",
+  )
+
   return (
     <>
       {dialog}
@@ -302,40 +302,29 @@ function WatchDetailPanel({
       )}
 
       <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
-        <Section title="Rule">
-          <div className="rounded-md bg-foreground/5 px-3 py-2 font-mono text-[12px] text-foreground/75">
-            {watch.rule_description}
+        <Section title="Intent">
+          <div className="rounded-md border border-border/60 bg-background px-3 py-2">
+            <div className="text-[13px] text-foreground/80">
+              {watch.rule_description}
+            </div>
+            <div className="mt-1 text-[12px] text-foreground/45">
+              {sourceLabel(watch.source)} · {watch.target}
+            </div>
           </div>
         </Section>
 
-        <Section title="Cadence">
-          <KeyValueGrid
-            rows={[
-              ["Current", formatCadence(watch.cadence.current)],
-              ["Min", formatCadence(watch.cadence.min)],
-              ["Max", formatCadence(watch.cadence.max)],
-              ["Adaptive", watch.cadence.adaptive ? "yes (engine widens/tightens)" : "no (fixed)"],
-              ["Next check", formatRelative(watch.next_check_at, now)],
-              ["Last check", formatPast(watch.last_checked_at, now)],
-              ["Active runs", String(watch.state.activeRuns ?? watch.active_runs)],
-              ["Quiet runs", String(watch.state.quietRuns ?? watch.quiet_runs)],
-            ]}
-          />
-        </Section>
-
-        <Section title="Notify policy">
-          <KeyValueGrid
-            rows={[
-              ["On match", watch.notify.onMatch ? "surface to Inbox immediately" : "no immediate Inbox notify"],
-              ["Daily digest at", watch.notify.digestAt ?? "—"],
-              [
-                "Quiet hours",
-                watch.notify.quietHours
-                  ? `${watch.notify.quietHours.from}-${watch.notify.quietHours.to} (${watch.notify.quietHours.timezone})`
-                  : "—",
-              ],
-            ]}
-          />
+        <Section title="Agent wake">
+          <div className="space-y-1 text-[13px] text-foreground/70">
+            <p>
+              This watch is handled by the single Smart Monitor agent. It starts
+              at 15 minutes by default, then the agent adjusts future wakes from
+              task state and run history.
+            </p>
+            <p className="text-[12px] text-foreground/50">
+              Notifications and summaries are model decisions at wake time, not
+              fixed watch rules.
+            </p>
+          </div>
         </Section>
 
         <Section title="Allowed actions">
@@ -359,10 +348,11 @@ function WatchDetailPanel({
           )}
         </Section>
 
-        <Section title={`Suppress patterns (${watch.suppress_patterns.length})`}>
+        <Section title={`Learned filters (${watch.suppress_patterns.length})`}>
           {watch.suppress_patterns.length === 0 ? (
             <p className="text-[12px] text-foreground/55">
-              No patterns yet. The model will author them via wake feedback when matches turn out to be noise.
+              No learned filters yet. The agent can add narrow filters when
+              repeated candidates turn out to be noise.
             </p>
           ) : (
             <ul className="space-y-2">
@@ -405,43 +395,47 @@ function WatchDetailPanel({
           )}
         </Section>
 
-        <Section title="Recent activity">
+        <Section title="Recent decisions">
           {loadingEvents ? (
             <div className="flex items-center gap-2 text-[12px] text-foreground/55">
               <Loader2 className="size-3 animate-spin" /> Loading…
             </div>
-          ) : events.length === 0 ? (
+          ) : decisionEvents.length === 0 ? (
             <p className="text-[12px] text-foreground/55">
-              No events yet — the next master tick will start filling this log.
+              No decisions yet. Silent agent wakes are still recorded in
+              Scheduling Past runs.
             </p>
           ) : (
             <ul className="space-y-1">
-              {events.map((e) => (
-                <li
-                  key={e.id}
-                  className="flex items-start gap-2 rounded-md px-2 py-1 hover:bg-foreground/5"
-                >
-                  <span
-                    className={cn(
-                      "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                      eventKindBadgeClass(e.kind),
-                    )}
+              {decisionEvents.map((e) => {
+                const summary = watchEventSummary(e)
+                return (
+                  <li
+                    key={e.id}
+                    className="flex items-start gap-2 rounded-md px-2 py-1 hover:bg-foreground/5"
                   >
-                    {e.kind}
-                  </span>
-                  <div className="min-w-0 flex-1">
-                    <div className="text-[12px] text-foreground/55">
-                      {new Date(e.ts).toLocaleString()} ·{" "}
-                      {formatPast(e.ts, now)}
+                    <span
+                      className={cn(
+                        "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
+                        eventKindBadgeClass(e.kind),
+                      )}
+                    >
+                      {e.kind}
+                    </span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[12px] text-foreground/55">
+                        {new Date(e.ts).toLocaleString()} ·{" "}
+                        {formatPast(e.ts, now)}
+                      </div>
+                      {summary && (
+                        <div className="mt-0.5 text-[12px] text-foreground/70">
+                          {summary}
+                        </div>
+                      )}
                     </div>
-                    {e.payload && Object.keys(e.payload).length > 0 && (
-                      <pre className="mt-0.5 whitespace-pre-wrap break-all rounded bg-foreground/5 px-2 py-1 font-mono text-[11px] text-foreground/70">
-                        {JSON.stringify(e.payload, null, 2)}
-                      </pre>
-                    )}
-                  </div>
-                </li>
-              ))}
+                  </li>
+                )
+              })}
             </ul>
           )}
         </Section>
@@ -467,17 +461,23 @@ function Section({
   )
 }
 
-function KeyValueGrid({ rows }: { rows: Array<[string, string]> }) {
-  return (
-    <dl className="grid grid-cols-1 gap-y-1 sm:grid-cols-[140px_1fr]">
-      {rows.map(([k, v], i) => (
-        <React.Fragment key={i}>
-          <dt className="text-[12px] text-foreground/55">{k}</dt>
-          <dd className="text-[13px] text-foreground">{v}</dd>
-        </React.Fragment>
-      ))}
-    </dl>
-  )
+function watchEventSummary(event: WatchEvent): string | null {
+  const payload = event.payload ?? {}
+  const text = (key: string) =>
+    typeof payload[key] === "string" ? String(payload[key]) : null
+  if (event.kind === "match") return text("summary")
+  if (event.kind === "notify") return text("summary") ?? text("title")
+  if (event.kind === "suppress")
+    return text("reason") ?? text("patternReason") ?? text("summary")
+  if (event.kind === "feedback") return text("reason")
+  if (event.kind === "wake") {
+    const matches =
+      typeof payload.matches === "number" ? payload.matches : undefined
+    return matches === undefined ? "Agent wake" : `${matches} candidate(s)`
+  }
+  if (event.kind === "action") return text("kind")
+  if (event.kind === "error") return text("message")
+  return null
 }
 
 // ---------------------------------------------------------------------------
@@ -491,26 +491,20 @@ export function MonitorView() {
   const [error, setError] = React.useState<string | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [busyRowIds, setBusyRowIds] = React.useState<Set<string>>(new Set())
-  const [settingsOpen, setSettingsOpen] = React.useState(false)
-  const [settings, setSettings] = React.useState<MonitorSettings | null>(null)
   const detailRefreshRef = React.useRef<(() => void) | null>(null)
 
   const refresh = React.useCallback(async () => {
     try {
-      const [watchesRes, statusRes, settingsRes] = await Promise.all([
+      const [watchesRes, statusRes] = await Promise.all([
         fetch("/api/monitor/watches", { cache: "no-store" }),
         fetch("/api/monitor/status", { cache: "no-store" }),
-        fetch("/api/monitor/settings", { cache: "no-store" }),
       ])
       if (!watchesRes.ok) throw new Error(await asError(watchesRes))
       if (!statusRes.ok) throw new Error(await asError(statusRes))
-      if (!settingsRes.ok) throw new Error(await asError(settingsRes))
       const w = (await watchesRes.json()) as { watches: WatchRow[] }
       const s = (await statusRes.json()) as HeartbeatStatus
-      const cfg = (await settingsRes.json()) as { settings: MonitorSettings }
       setWatches(w.watches)
       setStatus(s)
-      setSettings(cfg.settings)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load")
@@ -586,32 +580,12 @@ export function MonitorView() {
         <div className="min-w-0 flex-1">
           <div className="text-[16px] font-semibold">Smart monitor</div>
           <div className="mt-0.5 text-[12px] text-foreground/55">
-            One consolidated heartbeat across Gmail, WhatsApp, Home Assistant, and
-            web endpoints. Add watches from chat — the orchestrator will set them up.
+            One agent wake across Gmail, WhatsApp, Calendar, Home Assistant,
+            Web, and Weather. Add watches from chat; the agent decides what
+            matters and how to pace itself.
           </div>
         </div>
-        <button
-          type="button"
-          onClick={() => setSettingsOpen((v) => !v)}
-          title="Global quiet hours"
-          className={cn(
-            "inline-flex h-8 items-center gap-1.5 rounded-md border border-border/60 px-2 text-[12px] text-foreground/65 hover:bg-[#f0ede6] hover:text-foreground dark:hover:bg-muted",
-            settingsOpen && "border-foreground/30 bg-[#f0ede6] text-foreground dark:bg-muted",
-            settings?.quietHours && !settingsOpen && "border-foreground/20 text-foreground",
-          )}
-        >
-          <Moon className="size-3.5" />
-          {settings?.quietHours
-            ? `Quiet ${settings.quietHours.from}-${settings.quietHours.to}`
-            : "Quiet hours"}
-        </button>
       </header>
-
-      <GlobalSettingsPanel
-        open={settingsOpen}
-        onClose={() => setSettingsOpen(false)}
-        onChanged={() => void refresh()}
-      />
 
       <StatusHeader status={status} loading={loading} />
 
