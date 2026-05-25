@@ -587,8 +587,7 @@ export function getConversationsWithMessages(): Conversation[] {
         WHERE (origin IS NULL OR origin = 'user')
           AND archivedAt IS NULL
         ORDER BY
-          MAX(COALESCE(readAt, 0), COALESCE(lastMessageAt, 0), COALESCE(updatedAt, 0), createdAt) DESC,
-          updatedAt DESC,
+          COALESCE(lastMessageAt, createdAt) DESC,
           createdAt DESC
       `
     )
@@ -666,8 +665,7 @@ export function getConversationSummaries(search?: string): Conversation[] {
         FROM conversations c
         WHERE ${where}
         ORDER BY
-          MAX(COALESCE(c.readAt, 0), COALESCE(c.lastMessageAt, 0), COALESCE(c.updatedAt, 0), c.createdAt) DESC,
-          c.updatedAt DESC,
+          COALESCE(c.lastMessageAt, c.createdAt) DESC,
           c.createdAt DESC
       `
     )

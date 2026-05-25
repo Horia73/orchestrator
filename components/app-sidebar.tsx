@@ -71,12 +71,10 @@ function truncate(value: string, length = 120): string {
   return `${singleLine.slice(0, length - 1).trimEnd()}...`
 }
 
-function getConversationActivityAt(conversation: Conversation): number | null {
+function getConversationLastMessageAt(conversation: Conversation): number | null {
   const timestamps = [
-    conversation.readAt,
     conversation.lastMessageAt,
-    conversation.updatedAt,
-    conversation.createdAt,
+    conversation.messages.at(-1)?.timestamp,
   ].filter(
     (value): value is number =>
       typeof value === "number" && Number.isFinite(value) && value > 0
@@ -109,7 +107,7 @@ function formatConversationActivityAge(
 
 function formatConversationActivityTitle(timestamp: number | null): string {
   if (!timestamp) return ""
-  return `Last used ${new Date(timestamp).toLocaleString([], {
+  return `Last message ${new Date(timestamp).toLocaleString([], {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -681,7 +679,7 @@ export function AppSidebar() {
                         !isOnMonitor &&
                         !isOnMaps &&
                         !isOnInbox
-                      const activityAt = getConversationActivityAt(conv)
+                      const activityAt = getConversationLastMessageAt(conv)
                       const activityLabel = formatConversationActivityAge(
                         activityAt,
                         currentTime

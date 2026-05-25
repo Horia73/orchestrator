@@ -189,8 +189,7 @@ function getConversationUnreadActivityAt(
 
   if (!hasMessages) return null
 
-  const updatedAt = validTimestamp(conversation.updatedAt)
-  return Math.max(lastMessageAt ?? 0, updatedAt ?? 0)
+  return lastMessageAt
 }
 
 export function isConversationUnread(

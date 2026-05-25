@@ -182,10 +182,11 @@ export type ChatAction =
     }
 
 function getConversationActivityAt(conversation: Conversation): number {
+  const lastLoadedMessageAt = conversation.messages.at(-1)?.timestamp
+
   return Math.max(
-    conversation.readAt ?? 0,
     conversation.lastMessageAt ?? 0,
-    conversation.updatedAt ?? 0,
+    lastLoadedMessageAt ?? 0,
     conversation.createdAt ?? 0
   )
 }
@@ -197,10 +198,6 @@ function sortConversationsByActivity(
     const activityDelta =
       getConversationActivityAt(b) - getConversationActivityAt(a)
     if (activityDelta !== 0) return activityDelta
-
-    const updatedDelta =
-      (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)
-    if (updatedDelta !== 0) return updatedDelta
 
     return b.createdAt - a.createdAt
   })
@@ -895,12 +892,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "SET_CONVERSATION_READ_STATE":
       return {
         ...state,
-        conversations: sortConversationsByActivity(
-          state.conversations.map((conv) =>
-            conv.id === action.conversationId
-              ? { ...conv, readAt: action.readAt }
-              : conv
-          )
+        conversations: state.conversations.map((conv) =>
+          conv.id === action.conversationId
+            ? { ...conv, readAt: action.readAt }
+            : conv
         ),
       }
     case "SET_CONVERSATION_ARCHIVE_STATE": {
