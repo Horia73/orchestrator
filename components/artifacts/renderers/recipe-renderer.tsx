@@ -83,7 +83,7 @@ function RecipeView({
             )}
             aria-label={title || recipe.title}
         >
-            <RecipeImages images={recipe.images} imageQuery={recipe.imageQuery} />
+            <RecipeImages images={recipe.images} imageQuery={recipe.imageQuery ?? recipe.title} />
             <RecipeHeader recipe={recipe} />
             <RecipeActionBar
                 servings={recipe.servings}

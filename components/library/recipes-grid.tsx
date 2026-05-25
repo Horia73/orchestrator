@@ -103,6 +103,7 @@ function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
     const [failed, setFailed] = React.useState(false)
 
     React.useEffect(() => {
+        setFailed(false)
         // If the recipe ships a direct imageUrl, use it. Otherwise hit the
         // Wikimedia search via /api/recipe-images for the imageQuery. We
         // request just 1 image — for the card thumbnail nothing more is needed.
@@ -139,6 +140,7 @@ function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
                 src={resolvedSrc}
                 alt=""
                 loading="lazy"
+                referrerPolicy="no-referrer"
                 onError={() => setFailed(true)}
                 className="size-full object-cover transition-transform duration-300 group-hover/recipe-card:scale-[1.03]"
             />

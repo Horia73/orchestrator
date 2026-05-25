@@ -51,9 +51,14 @@ export default function ArtifactFullscreenPage() {
         )
     }
 
+    const opensInFullscreen =
+        artifact.display === "fullscreen" ||
+        artifact.type === "application/vnd.ant.workout" ||
+        artifact.type === "application/vnd.ant.recipe"
+
     return (
         <ConversationArtifactsProvider conversationId={artifact.conversationId}>
-            {artifact.display === "fullscreen" || artifact.type === "application/vnd.ant.workout" ? (
+            {opensInFullscreen ? (
                 <FullscreenArtifact artifact={artifact} onClose={handleClose} />
             ) : (
                 <div className="h-dvh w-screen bg-background">
@@ -77,15 +82,19 @@ function FullscreenArtifact({
     onClose: () => void
 }) {
     const isWorkout = artifact.type === "application/vnd.ant.workout"
+    const isRecipe = artifact.type === "application/vnd.ant.recipe"
     return (
         <main
             className={cn(
                 "flex h-dvh w-screen flex-col overflow-hidden bg-background text-foreground",
-                isWorkout && "touch-pan-y"
+                (isWorkout || isRecipe) && "touch-pan-y"
             )}
         >
             <header className="sticky top-0 z-20 border-b border-border/70 bg-background/95 px-3 pt-[calc(0.5rem+env(safe-area-inset-top))] pb-2 backdrop-blur">
-                <div className="mx-auto flex h-11 w-full max-w-4xl items-center gap-2">
+                <div className={cn(
+                    "mx-auto flex h-11 w-full items-center gap-2",
+                    isRecipe ? "max-w-3xl" : "max-w-4xl",
+                )}>
                     <button
                         type="button"
                         onClick={onClose}
@@ -117,7 +126,8 @@ function FullscreenArtifact({
             <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
                 <div className={cn(
                     "mx-auto w-full max-w-4xl px-3 py-3 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-4 sm:py-4",
-                    isWorkout && "max-w-3xl"
+                    (isWorkout || isRecipe) && "max-w-3xl",
+                    isRecipe && "sm:py-6"
                 )}>
                     <ArtifactBody artifact={artifact} mode="panel" />
                 </div>

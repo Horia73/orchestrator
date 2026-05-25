@@ -83,53 +83,137 @@ async function staticMapResponse(input: unknown): Promise<Response> {
     )
   }
 
+  const primary = await loadStaticMapImage(built)
+  if (primary.ok) {
+    return imageResponse(primary.bytes, primary.contentType, built, primary.cacheStatus)
+  }
+
+  if (shouldRetryAsRoadmap(built, primary)) {
+    try {
+      const fallbackBuilt = buildGoogleStaticMapUrl(withRoadmapBasemap(input), key)
+      const fallback = await loadStaticMapImage(fallbackBuilt)
+      if (fallback.ok) {
+        return imageResponse(
+          fallback.bytes,
+          fallback.contentType,
+          fallbackBuilt,
+          fallback.cacheStatus,
+          ["Satellite/hybrid Static Maps unavailable for this account/region; rendered Google roadmap preview."]
+        )
+      }
+    } catch {
+      // Keep the primary Static Maps error below. The original failure tells
+      // the user which Google API surface is blocked.
+    }
+  }
+
+  return NextResponse.json(
+    { error: primary.error },
+    { status: primary.responseStatus, headers: NO_STORE }
+  )
+}
+
+type StaticMapLoadResult =
+  | {
+      ok: true
+      bytes: Buffer
+      contentType: string
+      cacheStatus: "HIT" | "MISS"
+    }
+  | {
+      ok: false
+      error: string
+      responseStatus: number
+      upstreamStatus?: number
+      upstreamBody?: string
+    }
+
+async function loadStaticMapImage(
+  built: ReturnType<typeof buildGoogleStaticMapUrl>
+): Promise<StaticMapLoadResult> {
   const cached = readStaticMapCache(built.url)
   if (cached) {
-    return imageResponse(cached.bytes, cached.contentType, built, "HIT")
+    return {
+      ok: true,
+      bytes: cached.bytes,
+      contentType: cached.contentType,
+      cacheStatus: "HIT",
+    }
   }
 
   let upstream: globalThis.Response
   try {
     upstream = await fetch(built.url, { cache: "no-store" })
   } catch (error) {
-    return NextResponse.json(
-      {
-        error:
-          error instanceof Error
-            ? `Static Maps request failed: ${error.message}`
-            : "Static Maps request failed.",
-      },
-      { status: 502, headers: NO_STORE }
-    )
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? `Static Maps request failed: ${error.message}`
+          : "Static Maps request failed.",
+      responseStatus: 502,
+    }
   }
 
   if (!upstream.ok) {
-    return NextResponse.json(
-      { error: `Static Maps API returned HTTP ${upstream.status}.` },
-      { status: 502, headers: NO_STORE }
-    )
+    const body = await upstream.text().catch(() => "")
+    return {
+      ok: false,
+      error: `Static Maps API returned HTTP ${upstream.status}.`,
+      responseStatus: 502,
+      upstreamStatus: upstream.status,
+      upstreamBody: body.slice(0, 1000),
+    }
   }
 
   const contentType = upstream.headers.get("content-type") || "image/png"
   const bytes = Buffer.from(await upstream.arrayBuffer())
   writeStaticMapCache(built.url, bytes, contentType)
 
-  return imageResponse(bytes, contentType, built, "MISS")
+  return {
+    ok: true,
+    bytes,
+    contentType,
+    cacheStatus: "MISS",
+  }
+}
+
+function shouldRetryAsRoadmap(
+  built: ReturnType<typeof buildGoogleStaticMapUrl>,
+  result: StaticMapLoadResult
+): boolean {
+  if (result.ok) return false
+  if (built.mapType !== "satellite" && built.mapType !== "hybrid") return false
+  if (result.upstreamStatus !== 403) return false
+  return /satellite and hybrid map types are not available/i.test(result.upstreamBody ?? "")
+}
+
+function withRoadmapBasemap(input: unknown): unknown {
+  if (!input || typeof input !== "object" || Array.isArray(input)) {
+    return input
+  }
+  return {
+    ...(input as Record<string, unknown>),
+    basemap: "roadmap",
+  }
 }
 
 function imageResponse(
   bytes: Buffer,
   contentType: string,
   built: ReturnType<typeof buildGoogleStaticMapUrl>,
-  cacheStatus: "HIT" | "MISS"
+  cacheStatus: "HIT" | "MISS",
+  extraWarnings: string[] = []
 ): Response {
   const headers = new Headers(NO_STORE)
   headers.set("Content-Type", contentType)
   headers.set("X-Orch-Static-Map-Cache", cacheStatus)
+  headers.set("X-Orch-Static-Map-Type", built.mapType)
   headers.set("X-Orch-Static-Map-Markers", String(built.markerCount))
   headers.set("X-Orch-Static-Map-Paths", String(built.pathCount))
-  if (built.warnings.length > 0) {
-    headers.set("X-Orch-Static-Map-Warnings", built.warnings.join(" | "))
+  const warnings = [...built.warnings, ...extraWarnings]
+  if (warnings.length > 0) {
+    headers.set("X-Orch-Static-Map-Warnings", warnings.join(" | "))
   }
 
   return new Response(new Uint8Array(bytes), { status: 200, headers })

@@ -44,6 +44,7 @@ type ParsedStaticMapRequest = Required<
 
 export interface StaticMapBuildResult {
   url: string
+  mapType: z.infer<typeof StaticMapBasemapSchema>
   markerCount: number
   pathCount: number
   warnings: string[]
@@ -70,7 +71,8 @@ export function buildGoogleStaticMapUrl(
   params.set("format", "png")
   params.set("size", `${request.width}x${request.height}`)
   params.set("scale", String(request.scale))
-  params.set("maptype", resolveStaticMapType(request, scene.artifact))
+  const mapType = resolveStaticMapType(request, scene.artifact)
+  params.set("maptype", mapType)
 
   const markers = scene.pins.slice(0, MAX_STATIC_MARKERS)
   if (scene.pins.length > markers.length) {
@@ -112,6 +114,7 @@ export function buildGoogleStaticMapUrl(
 
   return {
     url,
+    mapType,
     markerCount: markers.length,
     pathCount,
     warnings,

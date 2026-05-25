@@ -55,7 +55,7 @@ export async function GET(request: Request) {
             servingsDefault: recipe.servings.default,
             servingsLabel: recipe.servings.unitLabel,
             imageUrl: recipe.images?.[0]?.url,
-            imageQuery: recipe.imageQuery,
+            imageQuery: recipe.imageQuery ?? recipe.title,
             conversationId: r.conversationId,
             conversationTitle: r.conversationTitle,
             createdAt: r.createdAt,
