@@ -5,6 +5,8 @@ import {
   ArrowLeft,
   Bell,
   CheckCircle2,
+  Clock3,
+  Infinity as InfinityIcon,
   Loader2,
   Radar,
   Trash2,
@@ -67,10 +69,17 @@ function WatchDetailPanel({
         cache: "no-store",
       })
       if (!res.ok) throw new Error(await asError(res))
-      const data = (await res.json()) as { watch: WatchDetail & { allowed_actions: Array<{ raw: unknown; description: string }> } }
+      const data = (await res.json()) as {
+        watch: WatchDetail & {
+          allowed_actions: Array<{ raw: unknown; description: string }>
+        }
+      }
       // Server uses `allowed_actions` for the rich form here; map into the
       // shape our component expects without losing the compact label list.
-      const detailedActions = (data.watch.allowed_actions as unknown as Array<{ raw: unknown; description: string }>)
+      const detailedActions = data.watch.allowed_actions as unknown as Array<{
+        raw: unknown
+        description: string
+      }>
       const mapped: WatchDetail = {
         ...(data.watch as unknown as WatchDetail),
         allowed_actions: detailedActions.map((a) => a.description),
@@ -88,7 +97,7 @@ function WatchDetailPanel({
     try {
       const res = await fetch(
         `/api/monitor/watches/${watchId}/events?limit=60`,
-        { cache: "no-store" },
+        { cache: "no-store" }
       )
       if (!res.ok) throw new Error(await asError(res))
       const data = (await res.json()) as { events: WatchEvent[] }
@@ -126,7 +135,7 @@ function WatchDetailPanel({
       if (targetId !== null && targetId !== watchId) return
       if (event.type === "monitor_watches.changed") void fetchDetail()
       if (event.type === "monitor_watch_events.changed") void fetchEvents()
-    },
+    }
   )
 
   // Let the parent trigger a refresh after it mutates.
@@ -154,7 +163,7 @@ function WatchDetailPanel({
         setBusy(false)
       }
     },
-    [watchId, fetchDetail],
+    [watchId, fetchDetail]
   )
 
   const removeWatch = React.useCallback(async () => {
@@ -198,17 +207,44 @@ function WatchDetailPanel({
       try {
         const res = await fetch(
           `/api/monitor/watches/${watchId}/patterns/${patternId}`,
-          { method: "DELETE" },
+          { method: "DELETE" }
         )
         if (!res.ok) throw new Error(await asError(res))
         await fetchDetail()
       } catch (err) {
-        setError(err instanceof Error ? err.message : "Failed to remove pattern")
+        setError(
+          err instanceof Error ? err.message : "Failed to remove pattern"
+        )
       } finally {
         setBusy(false)
       }
     },
-    [watchId, fetchDetail, confirm],
+    [watchId, fetchDetail, confirm]
+  )
+
+  const makePatternPermanent = React.useCallback(
+    async (patternId: string) => {
+      setBusy(true)
+      try {
+        const res = await fetch(
+          `/api/monitor/watches/${watchId}/patterns/${patternId}`,
+          {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ expires_at: null }),
+          }
+        )
+        if (!res.ok) throw new Error(await asError(res))
+        await fetchDetail()
+      } catch (err) {
+        setError(
+          err instanceof Error ? err.message : "Failed to update pattern"
+        )
+      } finally {
+        setBusy(false)
+      }
+    },
+    [watchId, fetchDetail]
   )
 
   if (loading) {
@@ -237,26 +273,30 @@ function WatchDetailPanel({
   }
 
   const decisionEvents = events.filter(
-    (event) => event.kind !== "check" && event.kind !== "cadence_change",
+    (event) => event.kind !== "check" && event.kind !== "cadence_change"
   )
 
   return (
     <>
       {dialog}
-      <header className="flex items-center gap-3 border-b border-border/60 px-5 py-4">
+      <header className="flex min-w-0 items-center gap-2 border-b border-border/60 px-4 py-3 md:gap-3 md:px-5 md:py-4">
         <button
           onClick={onBack}
-          className="rounded-md p-1.5 text-foreground/55 hover:bg-[#f0ede6] md:hidden dark:hover:bg-muted"
+          className="shrink-0 rounded-md p-1.5 text-foreground/55 hover:bg-[#f0ede6] md:hidden dark:hover:bg-muted"
         >
           <ArrowLeft className="size-4" />
         </button>
-        <div className="shrink-0 text-foreground/55">{sourceIcon(watch.source, "size-5")}</div>
+        <div className="shrink-0 text-foreground/55">
+          {sourceIcon(watch.source, "size-5")}
+        </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[16px] font-semibold">{watch.title}</span>
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-[16px] font-semibold">
+              {watch.title}
+            </span>
             {watch.consecutive_errors > 0 && (
               <span
-                className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-[#802020] dark:bg-red-950/30 dark:text-red-300"
+                className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-[#802020] dark:bg-red-950/30 dark:text-red-300"
                 title={watch.last_error ?? ""}
               >
                 error
@@ -277,14 +317,14 @@ function WatchDetailPanel({
           title="Delete watch"
           disabled={busy}
           onClick={() => void removeWatch()}
-          className="rounded-md p-2 text-[#802020] hover:bg-red-50 disabled:opacity-50"
+          className="shrink-0 rounded-md p-2 text-[#802020] hover:bg-red-50 disabled:opacity-50"
         >
           <Trash2 className="size-4" />
         </button>
         <button
           title="Close"
           onClick={onClose}
-          className="hidden rounded-md p-2 text-foreground/55 hover:bg-[#f0ede6] md:inline-flex dark:hover:bg-muted"
+          className="hidden shrink-0 rounded-md p-2 text-foreground/55 hover:bg-[#f0ede6] md:inline-flex dark:hover:bg-muted"
         >
           <X className="size-4" />
         </button>
@@ -301,10 +341,10 @@ function WatchDetailPanel({
         </div>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto px-5 py-5">
+      <div className="min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-4 py-4 md:px-5 md:py-5">
         <Section title="Intent">
-          <div className="rounded-md border border-border/60 bg-background px-3 py-2">
-            <div className="text-[13px] text-foreground/80">
+          <div className="min-w-0 rounded-md border border-border/60 bg-background px-3 py-2">
+            <div className="text-[13px] break-words text-foreground/80">
               {watch.rule_description}
             </div>
             <div className="mt-1 text-[12px] text-foreground/45">
@@ -314,7 +354,7 @@ function WatchDetailPanel({
         </Section>
 
         <Section title="Agent wake">
-          <div className="space-y-1 text-[13px] text-foreground/70">
+          <div className="space-y-1 text-[13px] break-words text-foreground/70">
             <p>
               This watch is handled by the single Smart Monitor agent. It starts
               at 15 minutes by default, then the agent adjusts future wakes from
@@ -330,18 +370,21 @@ function WatchDetailPanel({
         <Section title="Allowed actions">
           {watch.allowed_actions_detailed.length === 0 ? (
             <p className="text-[12px] text-foreground/55">
-              Notify only. The model cannot take any other action on matches for this watch.
+              Notify only. The model cannot take any other action on matches for
+              this watch.
             </p>
           ) : (
             <ul className="space-y-1 text-[13px]">
               <li className="flex items-start gap-2">
-                <Bell className="mt-0.5 size-3.5 text-foreground/55" />
-                <span>notify Inbox (always allowed)</span>
+                <Bell className="mt-0.5 size-3.5 shrink-0 text-foreground/55" />
+                <span className="min-w-0 break-words">
+                  notify Inbox (always allowed)
+                </span>
               </li>
               {watch.allowed_actions_detailed.map((a, i) => (
                 <li key={i} className="flex items-start gap-2">
-                  <CheckCircle2 className="mt-0.5 size-3.5 text-foreground/55" />
-                  <span>{a.description}</span>
+                  <CheckCircle2 className="mt-0.5 size-3.5 shrink-0 text-foreground/55" />
+                  <span className="min-w-0 break-words">{a.description}</span>
                 </li>
               ))}
             </ul>
@@ -359,27 +402,49 @@ function WatchDetailPanel({
               {watch.suppress_patterns.map((p) => (
                 <li
                   key={p.id}
-                  className="rounded-md border border-border/60 bg-background px-3 py-2"
+                  className="min-w-0 rounded-md border border-border/60 bg-background px-3 py-2"
                 >
                   <div className="flex items-start gap-2">
                     <div className="min-w-0 flex-1">
-                      <div className="text-[13px] font-medium text-foreground">
+                      <div className="text-[13px] font-medium break-words text-foreground">
                         {p.reason}
                       </div>
-                      <div className="mt-0.5 break-all font-mono text-[11px] text-foreground/55">
+                      <div className="mt-0.5 max-w-full font-mono text-[11px] [overflow-wrap:anywhere] break-words text-foreground/55">
                         {p.rule_description}
                       </div>
                       <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[11px] text-foreground/45">
                         <span>added {formatPast(p.created_at, now)}</span>
                         <span>{p.match_count} hit(s)</span>
                         {p.last_matched_at && (
-                          <span>last hit {formatPast(p.last_matched_at, now)}</span>
+                          <span>
+                            last hit {formatPast(p.last_matched_at, now)}
+                          </span>
                         )}
-                        {p.expires_at && (
-                          <span>expires {formatRelative(p.expires_at, now)}</span>
+                        {p.expires_at ? (
+                          <span
+                            className="inline-flex items-center gap-1"
+                            title={`Temporary learned filter. It stops suppressing matches on ${new Date(p.expires_at).toLocaleString()}.`}
+                          >
+                            <Clock3 className="size-3" />
+                            temporary · expires{" "}
+                            {formatRelative(p.expires_at, now)}
+                          </span>
+                        ) : (
+                          <span>permanent</span>
                         )}
                       </div>
                     </div>
+                    {p.expires_at && (
+                      <button
+                        title="Make learned filter permanent"
+                        aria-label="Make learned filter permanent"
+                        disabled={busy}
+                        onClick={() => void makePatternPermanent(p.id)}
+                        className="shrink-0 rounded-md p-1 text-foreground/45 hover:bg-foreground/5 hover:text-foreground disabled:opacity-50"
+                      >
+                        <InfinityIcon className="size-3.5" />
+                      </button>
+                    )}
                     <button
                       title="Remove pattern"
                       disabled={busy}
@@ -412,12 +477,12 @@ function WatchDetailPanel({
                 return (
                   <li
                     key={e.id}
-                    className="flex items-start gap-2 rounded-md px-2 py-1 hover:bg-foreground/5"
+                    className="flex min-w-0 items-start gap-2 rounded-md px-2 py-1 hover:bg-foreground/5"
                   >
                     <span
                       className={cn(
-                        "mt-0.5 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wider",
-                        eventKindBadgeClass(e.kind),
+                        "mt-0.5 shrink-0 rounded px-1.5 py-0.5 text-[10px] font-semibold tracking-wider uppercase",
+                        eventKindBadgeClass(e.kind)
                       )}
                     >
                       {e.kind}
@@ -428,7 +493,7 @@ function WatchDetailPanel({
                         {formatPast(e.ts, now)}
                       </div>
                       {summary && (
-                        <div className="mt-0.5 text-[12px] text-foreground/70">
+                        <div className="mt-0.5 text-[12px] break-words text-foreground/70">
                           {summary}
                         </div>
                       )}
@@ -452,8 +517,8 @@ function Section({
   children: React.ReactNode
 }) {
   return (
-    <section className="mb-6">
-      <h3 className="mb-2 text-[11px] font-semibold uppercase tracking-wider text-foreground/45">
+    <section className="mb-6 min-w-0">
+      <h3 className="mb-2 text-[11px] font-semibold tracking-wider text-foreground/45 uppercase">
         {title}
       </h3>
       {children}
@@ -512,7 +577,10 @@ export function MonitorView() {
   }, [])
 
   useAppEvent(["monitor_watches.changed"], () => {
-    if (typeof document === "undefined" || document.visibilityState === "visible") {
+    if (
+      typeof document === "undefined" ||
+      document.visibilityState === "visible"
+    ) {
       void refresh()
     }
   })
@@ -555,7 +623,7 @@ export function MonitorView() {
         })
       }
     },
-    [refresh],
+    [refresh]
   )
 
   const handleDeleted = React.useCallback(() => {
@@ -569,17 +637,17 @@ export function MonitorView() {
 
   const selected = React.useMemo(
     () => watches.find((w) => w.id === selectedId) ?? null,
-    [watches, selectedId],
+    [watches, selectedId]
   )
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex items-center gap-3 border-b border-border/60 px-5 py-4">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
+      <header className="flex min-w-0 items-start gap-3 border-b border-border/60 px-4 py-3 md:items-center md:px-5 md:py-4">
         <SidebarTrigger className="md:hidden" />
-        <Radar className="size-5 text-foreground/55" />
+        <Radar className="mt-0.5 size-5 shrink-0 text-foreground/55 md:mt-0" />
         <div className="min-w-0 flex-1">
           <div className="text-[16px] font-semibold">Smart monitor</div>
-          <div className="mt-0.5 text-[12px] text-foreground/55">
+          <div className="mt-0.5 text-[12px] leading-5 break-words text-foreground/55">
             One agent wake across Gmail, WhatsApp, Calendar, Home Assistant,
             Web, and Weather. Add watches from chat; the agent decides what
             matters and how to pace itself.
@@ -595,11 +663,12 @@ export function MonitorView() {
         </div>
       )}
 
-      <div className="flex min-h-0 flex-1">
+      <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
         <div
           className={cn(
-            "min-h-0 flex-1 overflow-y-auto px-3 py-3",
-            selected && "hidden md:block md:max-w-[420px] md:border-r md:border-border/60",
+            "min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto px-3 py-3",
+            selected &&
+              "hidden md:block md:max-w-[420px] md:border-r md:border-border/60"
           )}
         >
           {loading ? (
@@ -626,7 +695,7 @@ export function MonitorView() {
         </div>
 
         {selected && (
-          <div className="flex min-h-0 flex-1 flex-col bg-background">
+          <div className="flex min-h-0 min-w-0 flex-1 flex-col bg-background">
             <WatchDetailPanel
               key={selected.id}
               watchId={selected.id}

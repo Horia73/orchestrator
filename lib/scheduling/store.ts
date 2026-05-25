@@ -2,6 +2,7 @@ import { randomUUID } from "crypto"
 
 import db, { createConversation, deleteConversation } from "@/lib/db"
 import { emitAppEvent } from "@/lib/events"
+import { appendRuntimeRunIndex } from "@/lib/runtime-index"
 import type { Message } from "@/lib/types"
 
 import {
@@ -468,7 +469,24 @@ export interface TaskRunFilters {
   surfaced?: boolean
 }
 
+export interface TaskRunSearchFilters extends TaskRunFilters {
+  taskId?: string
+  taskTitle?: string
+  startedAfter?: number
+  q?: string
+  limit?: number
+}
+
+export interface TaskRunSearchRecord extends TaskRunRecord {
+  taskTitle: string | null
+  taskAction: ScheduledAction | null
+}
+
 type TaskRunRow = Omit<TaskRunRecord, "surfaced"> & { surfaced: number }
+type TaskRunSearchRow = TaskRunRow & {
+  taskTitle: string | null
+  taskAction: string | null
+}
 
 function runFromRow(r: TaskRunRow): TaskRunRecord {
   return {
@@ -476,6 +494,22 @@ function runFromRow(r: TaskRunRow): TaskRunRecord {
     surfaced: r.surfaced === 1,
     conversationId: r.conversationId ?? null,
     error: r.error ?? null,
+  }
+}
+
+function searchRunFromRow(r: TaskRunSearchRow): TaskRunSearchRecord {
+  let taskAction: ScheduledAction | null = null
+  if (r.taskAction) {
+    try {
+      taskAction = ScheduledActionSchema.parse(JSON.parse(r.taskAction))
+    } catch {
+      taskAction = null
+    }
+  }
+  return {
+    ...runFromRow(r),
+    taskTitle: r.taskTitle ?? null,
+    taskAction,
   }
 }
 
@@ -516,6 +550,8 @@ export function recordTaskRun(run: {
   error?: string | null
 }): void {
   const id = `run_${randomUUID()}`
+  const endedAt = Date.now()
+  const task = getScheduledTask(run.taskId)
   db.prepare(
     `
         INSERT INTO scheduled_task_runs (
@@ -528,7 +564,7 @@ export function recordTaskRun(run: {
     id,
     taskId: run.taskId,
     startedAt: run.startedAt,
-    endedAt: Date.now(),
+    endedAt,
     status: run.status,
     trigger: run.trigger,
     surfaced: run.surfaced ? 1 : 0,
@@ -536,7 +572,104 @@ export function recordTaskRun(run: {
     summary: run.summary,
     error: run.error ?? null,
   })
+  appendRuntimeRunIndex({
+    id,
+    taskId: run.taskId,
+    taskTitle: task?.title ?? null,
+    startedAt: run.startedAt,
+    endedAt,
+    status: run.status,
+    trigger: run.trigger,
+    surfaced: run.surfaced,
+    conversationId: run.conversationId,
+    summary: run.summary,
+    error: run.error ?? null,
+  })
   emitTaskRunsChanged(run.taskId, id)
+}
+
+export function getTaskRun(runId: string): TaskRunRecord | null {
+  const row = db
+    .prepare("SELECT * FROM scheduled_task_runs WHERE id = ?")
+    .get(runId) as TaskRunRow | undefined
+  return row ? runFromRow(row) : null
+}
+
+export function getTaskRunWithTask(runId: string): TaskRunSearchRecord | null {
+  const row = db
+    .prepare(
+      `
+        SELECT r.*, t.title as taskTitle, t.action as taskAction
+        FROM scheduled_task_runs r
+        LEFT JOIN scheduled_tasks t ON t.id = r.taskId
+        WHERE r.id = ?
+    `
+    )
+    .get(runId) as TaskRunSearchRow | undefined
+  return row ? searchRunFromRow(row) : null
+}
+
+export function searchTaskRuns(filters: TaskRunSearchFilters): {
+  runs: TaskRunSearchRecord[]
+  total: number
+} {
+  const where: string[] = []
+  const params: unknown[] = []
+
+  if (filters.taskId) {
+    where.push("r.taskId = ?")
+    params.push(filters.taskId)
+  }
+  if (filters.taskTitle) {
+    where.push("t.title LIKE ?")
+    params.push(`%${filters.taskTitle}%`)
+  }
+  if (filters.startedAfter !== undefined) {
+    where.push("r.startedAt >= ?")
+    params.push(filters.startedAfter)
+  }
+  if (filters.status) {
+    where.push("r.status = ?")
+    params.push(filters.status)
+  }
+  if (filters.trigger) {
+    where.push("r.trigger = ?")
+    params.push(filters.trigger)
+  }
+  if (filters.surfaced !== undefined) {
+    where.push("r.surfaced = ?")
+    params.push(filters.surfaced ? 1 : 0)
+  }
+  if (filters.q) {
+    where.push("(r.summary LIKE ? OR r.error LIKE ? OR t.title LIKE ?)")
+    params.push(`%${filters.q}%`, `%${filters.q}%`, `%${filters.q}%`)
+  }
+
+  const whereSql = where.length > 0 ? `WHERE ${where.join(" AND ")}` : ""
+  const limit = clampRunHistoryLimit(filters.limit)
+  const rows = db
+    .prepare(
+      `
+        SELECT r.*, t.title as taskTitle, t.action as taskAction
+        FROM scheduled_task_runs r
+        LEFT JOIN scheduled_tasks t ON t.id = r.taskId
+        ${whereSql}
+        ORDER BY r.startedAt DESC, r.id DESC
+        LIMIT ?
+    `
+    )
+    .all(...params, limit) as TaskRunSearchRow[]
+  const totalRow = db
+    .prepare(
+      `
+        SELECT COUNT(*) as c
+        FROM scheduled_task_runs r
+        LEFT JOIN scheduled_tasks t ON t.id = r.taskId
+        ${whereSql}
+    `
+    )
+    .get(...params) as { c: number }
+  return { runs: rows.map(searchRunFromRow), total: totalRow.c }
 }
 
 export function listTaskRunsPage(

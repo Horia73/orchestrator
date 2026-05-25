@@ -17,6 +17,17 @@ export function updateConversationReadState(
   })
 }
 
+export function updateConversationArchiveState(
+  conversationId: string,
+  archived: boolean
+) {
+  return fetch(`/api/conversations/${encodeURIComponent(conversationId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ archived }),
+  })
+}
+
 export function stopChatStream(conversationId: string) {
   return fetch("/api/chat/stop", {
     method: "POST",

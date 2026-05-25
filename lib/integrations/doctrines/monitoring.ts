@@ -6,6 +6,7 @@ Smart Monitor is the runtime surface for persistent "tell me when X happens at <
 
 Important architecture:
 - There is ONE Smart Monitor scheduled agent wake. It defaults to 15 minutes.
+- Smart Monitor must have exactly one Scheduling runtime entry: the consolidated Smart monitor heartbeat. Do not create separate scheduled tasks for Smart Monitor digests, summaries, route-aware checks, source-specific wakeups, retries, or catch-up runs. Store timed requirements as durable Smart Monitor preferences/specs in MONITORS.md, and store execution bookkeeping in the Smart Monitor task_state. On every heartbeat, use current runtime time to perform overdue still-useful work that has not already been completed, skipped, or deduplicated for the relevant period.
 - The agent, not a deterministic rule engine, owns cadence after that. At each wake it can keep 15m, widen to 30m/1h/2h/etc., or move to a wall-clock schedule by calling reschedule_task on the Smart Monitor task.
 - Watches are source boundaries and user-intent hints. A watch rule is a fetch/candidate-scope hint, not a preset notification rule and not proof that the user should be interrupted.
 - Do not create separate scheduled tasks, separate agents, or separate urgent/digest/noise tiers for the same source. One Smart Monitor wake should inspect the relevant sources and make the judgment.
@@ -33,7 +34,7 @@ What belongs here:
 - Broad triage watches where the agent decides what is important at wake time.
 
 What does not belong here:
-- One-shot reminders or fixed reports: use schedule_task.
+- One-shot reminders or fixed reports outside Smart Monitor: use schedule_task.
 - Markets/stock/product-price monitoring: use Watchlist.
 - Simple one-off questions: answer directly.
 

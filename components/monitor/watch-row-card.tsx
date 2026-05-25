@@ -3,10 +3,7 @@
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 
-import {
-  sourceIcon,
-  sourceLabel,
-} from "./helpers"
+import { sourceIcon, sourceLabel } from "./helpers"
 import type { WatchRow } from "./types"
 
 export function WatchRowCard({
@@ -36,27 +33,27 @@ export function WatchRowCard({
         }
       }}
       className={cn(
-        "group w-full cursor-pointer rounded-lg border border-border/60 bg-background px-3 py-3 text-left transition-colors hover:bg-[#f0ede6]/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 dark:hover:bg-muted",
+        "group w-full min-w-0 cursor-pointer rounded-lg border border-border/60 bg-background px-3 py-3 text-left transition-colors hover:bg-[#f0ede6]/60 focus:outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 dark:hover:bg-muted",
         selected && "border-foreground/40 bg-[#f0ede6] dark:bg-muted",
-        !watch.enabled && "opacity-65",
+        !watch.enabled && "opacity-65"
       )}
     >
-      <div className="flex items-start gap-3">
+      <div className="flex min-w-0 items-start gap-3">
         <div className="mt-0.5 shrink-0 text-foreground/55">
           {sourceIcon(watch.source)}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2">
-            <span className="truncate text-[14px] font-semibold text-foreground">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="min-w-0 truncate text-[14px] font-semibold text-foreground">
               {watch.title}
             </span>
             {hasError && (
-              <span className="rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-[#802020] dark:bg-red-950/30 dark:text-red-300">
+              <span className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-[#802020] dark:bg-red-950/30 dark:text-red-300">
                 error
               </span>
             )}
             {!watch.enabled && (
-              <span className="rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px] text-foreground/65">
+              <span className="shrink-0 rounded-full bg-foreground/10 px-1.5 py-0.5 text-[10px] text-foreground/65">
                 paused
               </span>
             )}

@@ -186,6 +186,13 @@ import {
   executeRescheduleTask,
   executeScheduleTask,
 } from "./schedule"
+import {
+  executeGetAgentLog,
+  executeGetPastRun,
+  executeReadRuntimeIndex,
+  executeSearchAgentLogs,
+  executeSearchPastRuns,
+} from "./observability"
 import { executeNotifyInbox } from "./notify"
 import {
   executeMapsCurrentLocation,
@@ -238,6 +245,18 @@ import {
   executeWatchlistRecordProductPrice,
   executeWatchlistRemoveItem,
 } from "./watchlist"
+import {
+  executeMicroscriptCreate,
+  executeMicroscriptDelete,
+  executeMicroscriptDescribeCapabilities,
+  executeMicroscriptGet,
+  executeMicroscriptGetRun,
+  executeMicroscriptList,
+  executeMicroscriptPause,
+  executeMicroscriptResume,
+  executeMicroscriptRunNow,
+  executeMicroscriptUpdate,
+} from "./microscripts"
 
 /**
  * Executor signature: tools may be sync or async, and may consult an
@@ -413,6 +432,11 @@ const executors: Record<string, ToolExecutor> = {
   list_tasks: executeListTasks,
   cancel_task: executeCancelTask,
   reschedule_task: executeRescheduleTask,
+  search_past_runs: executeSearchPastRuns,
+  get_past_run: executeGetPastRun,
+  search_agent_logs: executeSearchAgentLogs,
+  get_agent_log: executeGetAgentLog,
+  read_runtime_index: executeReadRuntimeIndex,
   notify_inbox: executeNotifyInbox,
   set_task_state: executeSetTaskState,
   [MAP_RENDER_TOOL_ID]: executeMapRender,
@@ -442,6 +466,16 @@ const executors: Record<string, ToolExecutor> = {
   monitor_watch_add: executeMonitorWatchAdd,
   monitor_watch_update: executeMonitorWatchUpdate,
   monitor_watch_remove: executeMonitorWatchRemove,
+  microscript_describe_capabilities: executeMicroscriptDescribeCapabilities,
+  microscript_create: executeMicroscriptCreate,
+  microscript_list: executeMicroscriptList,
+  microscript_get: executeMicroscriptGet,
+  microscript_update: executeMicroscriptUpdate,
+  microscript_pause: executeMicroscriptPause,
+  microscript_resume: executeMicroscriptResume,
+  microscript_delete: executeMicroscriptDelete,
+  microscript_run_now: executeMicroscriptRunNow,
+  microscript_get_run: executeMicroscriptGetRun,
 }
 
 const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
@@ -460,6 +494,11 @@ const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
   WEATHER_SET_OUTFIT_TOOL_ID,
   WEATHER_SET_WHY_TOOL_ID,
   WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
+  "search_past_runs",
+  "get_past_run",
+  "search_agent_logs",
+  "get_agent_log",
+  "read_runtime_index",
 ])
 
 async function executeRunActivatedIntegrationTool(

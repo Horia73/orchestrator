@@ -164,6 +164,12 @@ export function ChatView() {
     }
     return null
   }, [activeConversation?.messages])
+  const activeStreamingMessageId =
+    isStreamingThisConversation && conversationId
+      ? (state.streamingMessageId ??
+          state.activeChatStreams[conversationId]?.messageId ??
+          latestAssistantMessageId)
+      : null
   const hasStreamingPayload = React.useMemo(
     () =>
       isStreamingThisConversation &&
@@ -179,14 +185,24 @@ export function ChatView() {
       state.streamingReasoning,
     ]
   )
-  const hasInProgressAssistantProgress = React.useMemo(() => {
+  const activeInProgressAssistantMessage = React.useMemo(() => {
     const messages = activeConversation?.messages ?? []
     const lastMessage = messages[messages.length - 1]
     if (!isAssistantMessageInProgress(lastMessage)) {
-      return false
+      return null
     }
-    return hasAssistantProgress(lastMessage)
+    return hasAssistantProgress(lastMessage) ? lastMessage : null
   }, [activeConversation?.messages])
+  const hasInProgressAssistantProgress = Boolean(
+    activeInProgressAssistantMessage
+  )
+  const shouldUseStreamingBubbleForActiveAssistant = Boolean(
+    isStreamingThisConversation &&
+      hasStreamingPayload &&
+      activeInProgressAssistantMessage &&
+      activeStreamingMessageId &&
+      activeInProgressAssistantMessage.id === activeStreamingMessageId
+  )
   const showInitialStreamingCursor =
     isStreamingThisConversation &&
     !hasStreamingPayload &&
@@ -858,6 +874,7 @@ export function ChatView() {
       minHeightMsgId !== null
     )
       return
+    if (shouldUseStreamingBubbleForActiveAssistant) return
     const messages = activeConversation?.messages ?? []
     const lastMsg = messages[messages.length - 1]
     const previousMsg = messages[messages.length - 2]
@@ -900,23 +917,34 @@ export function ChatView() {
     minHeight,
     minHeightMsgId,
     scheduleMessageTopAnchor,
+    shouldUseStreamingBubbleForActiveAssistant,
   ])
 
   React.useLayoutEffect(() => {
-    if (!conversationId || !isStreamingThisConversation || minHeightMsgId !== null) return
+    if (!conversationId || !isStreamingThisConversation) return
+    if (minHeightMsgId !== null && !shouldUseStreamingBubbleForActiveAssistant)
+      return
     const messages = activeConversation?.messages ?? []
     const lastMsg = messages[messages.length - 1]
-    if (lastMsg?.role !== "user") return
+    const previousMsg = messages[messages.length - 2]
+    const tailUserMessage = shouldUseStreamingBubbleForActiveAssistant
+      ? previousMsg
+      : lastMsg
+    if (tailUserMessage?.role !== "user") return
 
     const nextMinHeight = getTailResponseMinHeight(
-      lastMsg.id,
+      tailUserMessage.id,
       streamingBubbleContainerRef.current
     )
     minHeightActiveRef.current = nextMinHeight > 0
-    if (Math.abs(nextMinHeight - minHeight) <= TAIL_SPACER_UPDATE_THRESHOLD_PX) {
+    if (
+      minHeightMsgId === null &&
+      Math.abs(nextMinHeight - minHeight) <= TAIL_SPACER_UPDATE_THRESHOLD_PX
+    ) {
       return
     }
 
+    if (minHeightMsgId !== null) setMinHeightMsgId(null)
     setMinHeight(nextMinHeight)
     localStorage.setItem(
       `chat:minHeight:${conversationId}`,
@@ -926,13 +954,23 @@ export function ChatView() {
         viewportHeight: window.innerHeight,
       })
     )
+    if (
+      shouldUseStreamingBubbleForActiveAssistant &&
+      restoredScrollConversationRef.current === conversationId &&
+      isMessageNearTopAnchor(tailUserMessage.id)
+    ) {
+      scheduleMessageTopAnchor(tailUserMessage.id)
+    }
   }, [
     activeConversation?.messages,
     conversationId,
     getTailResponseMinHeight,
+    isMessageNearTopAnchor,
     isStreamingThisConversation,
     minHeight,
     minHeightMsgId,
+    scheduleMessageTopAnchor,
+    shouldUseStreamingBubbleForActiveAssistant,
     state.streamingContent,
     state.streamingContentSegments,
     state.streamingReasoning,
@@ -1881,30 +1919,42 @@ export function ChatView() {
                         </div>
                       )}
 
-                      {activeConversation.messages.map((message, index) => (
-                        <div
-                          key={message.id}
-                          id={`message-${message.id}`}
-                          className="scroll-mt-6 md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
-                          style={
-                            message.id === minHeightMsgId &&
-                            index === activeConversation.messages.length - 1
-                              ? { paddingBottom: minHeight }
-                              : undefined
-                          }
-                        >
-                          <MessageBubble
-                            message={message}
-                            isLatestAssistantMessage={
-                              message.id === latestAssistantMessageId
+                      {activeConversation.messages.map((message, index) => {
+                        if (
+                          shouldUseStreamingBubbleForActiveAssistant &&
+                          message.id === activeInProgressAssistantMessage?.id
+                        ) {
+                          return null
+                        }
+
+                        return (
+                          <div
+                            key={message.id}
+                            id={`message-${message.id}`}
+                            className="scroll-mt-6 md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
+                            style={
+                              message.id === minHeightMsgId &&
+                              index === activeConversation.messages.length - 1
+                                ? { paddingBottom: minHeight }
+                                : undefined
                             }
-                            onArtifactClick={handleArtifactClick}
-                            onArtifactExpand={handleArtifactExpand}
-                            onAttachmentClick={setPreviewAttachment}
-                            onAgentOpen={handleAgentOpen}
-                          />
-                        </div>
-                      ))}
+                          >
+                            <MessageBubble
+                              message={message}
+                              isLatestAssistantMessage={
+                                message.id === latestAssistantMessageId
+                              }
+                              isStreamingMessage={
+                                message.id === activeStreamingMessageId
+                              }
+                              onArtifactClick={handleArtifactClick}
+                              onArtifactExpand={handleArtifactExpand}
+                              onAttachmentClick={setPreviewAttachment}
+                              onAgentOpen={handleAgentOpen}
+                            />
+                          </div>
+                        )
+                      })}
 
                       {showStreamingBubble && (
                         <div

@@ -1,4 +1,5 @@
 import db from '@/lib/db'
+import { appendRuntimeRequestLogIndex } from '@/lib/runtime-index'
 import { emitObservabilityEvent } from './events'
 import {
     type RequestLogRow,
@@ -179,6 +180,7 @@ export function logRequestComplete(args: CompleteArgs): void {
             interactionId: args.interactionId ?? null,
             outputText: truncate(args.outputText),
         })
+        indexRequestLog(args.requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId: args.requestId })
     })
 }
@@ -206,6 +208,7 @@ export function logRequestFail(requestId: string, errorMessage: string, endedAt:
             errorMessage,
             outputText: truncate(outputText),
         })
+        indexRequestLog(requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId })
     })
 }
@@ -223,8 +226,14 @@ export function logRequestAbort(requestId: string, endedAt: number, outputText?:
             errorMessage: null,
             outputText: truncate(outputText),
         })
+        indexRequestLog(requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId })
     })
+}
+
+function indexRequestLog(requestId: string): void {
+    const row = getRequestLog(requestId)
+    if (row) appendRuntimeRequestLogIndex(row)
 }
 
 // ---------------------------------------------------------------------------
@@ -273,7 +282,7 @@ export function queryLogs(q: LogsQuery): LogsPage {
         params.model = q.model
     }
     if (q.q) {
-        where.push(`(errorMessage LIKE @q OR conversationId LIKE @q OR interactionId LIKE @q)`)
+        where.push(`(errorMessage LIKE @q OR conversationId LIKE @q OR interactionId LIKE @q OR inputText LIKE @q OR outputText LIKE @q)`)
         params.q = `%${q.q}%`
     }
 

@@ -224,7 +224,7 @@ write(path.join('MEMORY_DAY', `${today}.md`), [
     '',
     `Daily working memory for ${today} (UTC).`,
     '',
-    'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design and is consolidated into MEMORY.md periodically.',
+    'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design and may be consolidated opportunistically by a model-owned scheduled/monitor wake after local midnight when that preference is recorded.',
     '',
 ].join('\n'))
 

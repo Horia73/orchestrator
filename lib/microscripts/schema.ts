@@ -1,0 +1,254 @@
+import { z } from 'zod'
+
+// ---------------------------------------------------------------------------
+// Microscripts domain schema.
+//
+// A microscript is a short Python function plus a manifest. It is not a
+// daemon: every run must finish quickly, return state, and choose whether it
+// should continue, pause, or complete. Runtime permissions are declared up
+// front and enforced by the Node parent process before any integration/file/
+// network operation executes.
+// ---------------------------------------------------------------------------
+
+export const MicroscriptStatusSchema = z.enum([
+    'active',
+    'running',
+    'paused',
+    'completed',
+    'expired',
+    'error',
+])
+export type MicroscriptStatus = z.infer<typeof MicroscriptStatusSchema>
+
+export const MicroscriptCreatedBySchema = z.enum(['user', 'orchestrator', 'system'])
+export type MicroscriptCreatedBy = z.infer<typeof MicroscriptCreatedBySchema>
+
+export const MicroscriptScheduleSchema = z.discriminatedUnion('kind', [
+    z.object({
+        kind: z.literal('manual'),
+    }),
+    z.object({
+        kind: z.literal('interval'),
+        /** Fixed interval between runs. The script may ask for a later next run,
+         *  but never earlier than limits.minIntervalMs. */
+        everyMs: z.number().int().min(60_000),
+        startAt: z.number().int().positive().optional(),
+    }),
+])
+export type MicroscriptSchedule = z.infer<typeof MicroscriptScheduleSchema>
+
+export const MicroscriptLimitsSchema = z.object({
+    /** Hard process timeout for one Python phase. */
+    timeoutMs: z.number().int().min(500).max(60_000).default(5_000),
+    /** Max request/response phases in one run. Prevents request loops. */
+    maxPhases: z.number().int().min(1).max(8).default(4),
+    /** Shortest allowed delay before the next automatic run. */
+    minIntervalMs: z.number().int().min(60_000).max(24 * 60 * 60_000).default(60_000),
+    /** Max captured stdout/stderr bytes from the Python process. */
+    maxOutputBytes: z.number().int().min(1_000).max(512_000).default(64_000),
+    /** Auto-pause after repeated failures. */
+    maxConsecutiveFailures: z.number().int().min(1).max(20).default(5),
+    /** Optional total run cap. */
+    maxRuns: z.number().int().min(1).max(100_000).optional(),
+})
+export type MicroscriptLimits = z.infer<typeof MicroscriptLimitsSchema>
+
+const EntityIdPattern = z.string().regex(/^[a-z0-9_]+\.[a-z0-9_]+$/i, 'expected Home Assistant entity_id')
+
+export const MicroscriptPermissionSchema = z.discriminatedUnion('kind', [
+    z.object({
+        kind: z.literal('notify_inbox'),
+    }),
+    z.object({
+        kind: z.literal('home_assistant_read'),
+        /** Exact entities this script may read. Empty/omitted means use domains. */
+        entityIds: z.array(EntityIdPattern).max(200).optional(),
+        /** Entity domains this script may read/list, e.g. sensor, binary_sensor. */
+        domains: z.array(z.string().min(1).max(64).regex(/^[a-z0-9_]+$/i)).max(50).optional(),
+        allowList: z.boolean().default(false),
+        allowHistory: z.boolean().default(false),
+    }),
+    z.object({
+        kind: z.literal('home_assistant_call_service'),
+        services: z.array(z.object({
+            domain: z.string().min(1).max(64).regex(/^[a-z0-9_]+$/i),
+            /** Omit service to allow any service in the domain. Prefer exact service in production scripts. */
+            service: z.string().min(1).max(96).regex(/^[a-z0-9_]+$/i).optional(),
+            /** Optional target entity boundary. Omit only for service calls that do not target entities. */
+            entityIds: z.array(EntityIdPattern).max(200).optional(),
+        })).min(1).max(50),
+    }),
+    z.object({
+        kind: z.literal('http_fetch'),
+        /** Host allowlist. Supports exact hosts and "*.example.com". */
+        allowedHosts: z.array(z.string().min(1).max(253)).min(1).max(100),
+        methods: z.array(z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])).min(1).max(5).default(['GET']),
+        allowPrivateNetwork: z.boolean().default(false),
+        maxBytes: z.number().int().min(1_000).max(2_000_000).default(200_000),
+    }),
+    z.object({
+        kind: z.literal('files'),
+        read: z.boolean().default(true),
+        write: z.boolean().default(false),
+        maxBytes: z.number().int().min(1_000).max(5_000_000).default(500_000),
+    }),
+])
+export type MicroscriptPermission = z.infer<typeof MicroscriptPermissionSchema>
+
+export const MicroscriptStopPolicySchema = z.object({
+    /** Default for one-shot alert scripts: after a notification is posted,
+     *  mark the script completed unless it explicitly returns status=continue. */
+    completeOnNotification: z.boolean().default(false),
+    /** If set, the script expires at this absolute epoch ms. */
+    expiresAt: z.number().int().positive().nullable().default(null),
+    /** Allow truly long-lived scripts. When false and expiresAt is omitted,
+     *  creation applies a default 24h expiry. */
+    persistent: z.boolean().default(false),
+})
+export type MicroscriptStopPolicy = z.infer<typeof MicroscriptStopPolicySchema>
+
+export const MicroscriptManifestSchema = z.object({
+    description: z.string().min(1).max(2_000),
+    schedule: MicroscriptScheduleSchema.default({ kind: 'manual' }),
+    permissions: z.array(MicroscriptPermissionSchema).max(100).default([]),
+    limits: MicroscriptLimitsSchema.default({
+        timeoutMs: 5_000,
+        maxPhases: 4,
+        minIntervalMs: 60_000,
+        maxOutputBytes: 64_000,
+        maxConsecutiveFailures: 5,
+    }),
+    stop: MicroscriptStopPolicySchema.default({
+        completeOnNotification: false,
+        expiresAt: null,
+        persistent: false,
+    }),
+})
+export type MicroscriptManifest = z.infer<typeof MicroscriptManifestSchema>
+
+export const MicroscriptSchema = z.object({
+    id: z.string().min(1),
+    title: z.string().min(1).max(200),
+    enabled: z.boolean(),
+    status: MicroscriptStatusSchema,
+    code: z.string().min(1).max(60_000),
+    codeHash: z.string().min(1),
+    manifest: MicroscriptManifestSchema,
+    state: z.record(z.string(), z.unknown()).default({}),
+    nextRunAt: z.number().int().positive().nullable(),
+    lastRunAt: z.number().int().positive().nullable(),
+    lastRunStatus: z.enum(['ok', 'error']).nullable(),
+    lastRunError: z.string().nullable(),
+    runCount: z.number().int().nonnegative(),
+    consecutiveFailures: z.number().int().nonnegative(),
+    createdBy: MicroscriptCreatedBySchema,
+    createdAt: z.number().int().positive(),
+    updatedAt: z.number().int().positive(),
+})
+export type Microscript = z.infer<typeof MicroscriptSchema>
+
+export const CreateMicroscriptInputSchema = z.object({
+    title: z.string().min(1).max(200),
+    code: z.string().min(1).max(60_000),
+    manifest: MicroscriptManifestSchema,
+    enabled: z.boolean().default(true),
+    createdBy: MicroscriptCreatedBySchema.default('orchestrator'),
+    initialState: z.record(z.string(), z.unknown()).default({}),
+})
+export type CreateMicroscriptInput = z.input<typeof CreateMicroscriptInputSchema>
+
+export const UpdateMicroscriptInputSchema = z.object({
+    title: z.string().min(1).max(200).optional(),
+    code: z.string().min(1).max(60_000).optional(),
+    manifest: MicroscriptManifestSchema.optional(),
+    enabled: z.boolean().optional(),
+    state: z.record(z.string(), z.unknown()).optional(),
+})
+export type UpdateMicroscriptInput = z.infer<typeof UpdateMicroscriptInputSchema>
+
+export const MicroscriptOperationSchema = z.discriminatedUnion('kind', [
+    z.object({
+        kind: z.literal('notify.inbox'),
+        id: z.string().min(1).max(120).optional(),
+        title: z.string().min(1).max(160).optional(),
+        body: z.string().min(1).max(8_000),
+    }),
+    z.object({
+        kind: z.literal('home_assistant.get_state'),
+        id: z.string().min(1).max(120),
+        entity_id: EntityIdPattern,
+    }),
+    z.object({
+        kind: z.literal('home_assistant.list_states'),
+        id: z.string().min(1).max(120),
+        domain: z.string().min(1).max(64).regex(/^[a-z0-9_]+$/i).optional(),
+        query: z.string().min(1).max(120).optional(),
+        include_attributes: z.boolean().optional(),
+        max_results: z.number().int().min(1).max(1_000).optional(),
+    }),
+    z.object({
+        kind: z.literal('home_assistant.history'),
+        id: z.string().min(1).max(120),
+        entity_ids: z.array(EntityIdPattern).min(1).max(25),
+        start_time: z.string().min(1).max(80).optional(),
+        end_time: z.string().min(1).max(80).optional(),
+        max_state_changes: z.number().int().min(1).max(1_000).optional(),
+    }),
+    z.object({
+        kind: z.literal('home_assistant.call_service'),
+        id: z.string().min(1).max(120),
+        domain: z.string().min(1).max(64).regex(/^[a-z0-9_]+$/i),
+        service: z.string().min(1).max(96).regex(/^[a-z0-9_]+$/i),
+        target: z.record(z.string(), z.unknown()).optional(),
+        data: z.record(z.string(), z.unknown()).optional(),
+        reason: z.string().min(1).max(500).optional(),
+        return_response: z.boolean().optional(),
+    }),
+    z.object({
+        kind: z.literal('http.fetch'),
+        id: z.string().min(1).max(120),
+        url: z.string().url(),
+        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
+        headers: z.record(z.string(), z.string()).optional(),
+        body: z.string().max(100_000).optional(),
+    }),
+    z.object({
+        kind: z.literal('file.read'),
+        id: z.string().min(1).max(120),
+        path: z.string().min(1).max(300),
+    }),
+    z.object({
+        kind: z.literal('file.write'),
+        id: z.string().min(1).max(120),
+        path: z.string().min(1).max(300),
+        content: z.string().max(1_000_000),
+        append: z.boolean().optional(),
+    }),
+])
+export type MicroscriptOperation = z.infer<typeof MicroscriptOperationSchema>
+
+export const MicroscriptRunResponseSchema = z.object({
+    summary: z.string().max(2_000).optional(),
+    state: z.record(z.string(), z.unknown()).optional(),
+    requests: z.array(MicroscriptOperationSchema).max(25).optional(),
+    status: z.enum(['continue', 'pause', 'complete']).optional(),
+    reason: z.string().max(1_000).optional(),
+    nextRunAt: z.number().int().positive().optional(),
+    nextCheckAfterMs: z.number().int().positive().optional(),
+})
+export type MicroscriptRunResponse = z.infer<typeof MicroscriptRunResponseSchema>
+
+export interface MicroscriptRunRecord {
+    id: string
+    scriptId: string
+    startedAt: number
+    endedAt: number
+    status: 'ok' | 'error'
+    trigger: 'schedule' | 'manual'
+    summary: string
+    error: string | null
+    phases: number
+    operations: number
+    surfaced: boolean
+    conversationId: string | null
+}

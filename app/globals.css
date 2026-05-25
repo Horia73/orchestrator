@@ -2,6 +2,76 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 
+@plugin "@tailwindcss/typography";
+
+/* ---------------------------------------------------------------------------
+ * Recipe print stylesheet.
+ *
+ * When a user clicks the Print button on a recipe card, the card is tagged
+ * with `recipe-print-active` for the duration of the print job (see
+ * RecipeActionBar). At print time, we hide everything in the document except
+ * that one recipe, force a light-on-white render so the printout doesn't
+ * dump black ink, and avoid awkward page breaks inside an ingredient or
+ * step.
+ *
+ * Hidden inside the active card too: the action bar (stepper, copy, print
+ * buttons), since printable paper has no use for live interactivity, and the
+ * image carousel — saves toner and dodges the inevitable "image too wide"
+ * scroll bar that some browsers render in print preview.
+ * --------------------------------------------------------------------------*/
+@media print {
+    /* Hide everything by default... */
+    body * {
+        visibility: hidden !important;
+    }
+    /* ...then make the active recipe and all its descendants visible again. */
+    .recipe-print-active, .recipe-print-active * {
+        visibility: visible !important;
+    }
+    /* Promote the active recipe to fill the page. */
+    .recipe-print-active {
+        position: absolute !important;
+        inset: 0 !important;
+        margin: 0 !important;
+        padding: 16mm !important;
+        background: white !important;
+        color: black !important;
+        max-width: none !important;
+        overflow: visible !important;
+        font-family: Georgia, "Times New Roman", serif !important;
+    }
+    .recipe-print-active * {
+        background: transparent !important;
+        color: black !important;
+        border-color: #999 !important;
+        box-shadow: none !important;
+        text-shadow: none !important;
+    }
+    /* Hide interactive chrome and decorative images inside the recipe. */
+    .recipe-print-active .recipe-print-hide,
+    .recipe-print-active [aria-label="Imagini din rețetă"],
+    .recipe-print-active [aria-label*="Imagini din rețetă"] {
+        display: none !important;
+    }
+    /* Avoid mid-step / mid-ingredient page breaks. */
+    .recipe-print-active li,
+    .recipe-print-active section {
+        break-inside: avoid;
+        page-break-inside: avoid;
+    }
+    .recipe-print-active h1, .recipe-print-active h2, .recipe-print-active h3 {
+        break-after: avoid;
+        page-break-after: avoid;
+    }
+    /* Tighter line height for paper. */
+    .recipe-print-active {
+        line-height: 1.45 !important;
+    }
+    @page {
+        margin: 0;
+    }
+}
+
 @custom-variant dark (&:is(.dark *));
 
 :root {

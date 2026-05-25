@@ -46,7 +46,8 @@ db.exec(`
         contextUsage TEXT,
         messageCount INTEGER NOT NULL DEFAULT 0,
         lastMessagePreview TEXT,
-        lastMessageAt INTEGER
+        lastMessageAt INTEGER,
+        archivedAt INTEGER
     );
 
     CREATE TABLE IF NOT EXISTS messages (
@@ -291,6 +292,11 @@ try {
   /* column already exists */
 }
 try {
+  db.exec(`ALTER TABLE conversations ADD COLUMN archivedAt INTEGER`)
+} catch {
+  /* column already exists */
+}
+try {
   db.exec(`ALTER TABLE conversations ADD COLUMN forkedFromConversationId TEXT`)
 } catch {
   /* column already exists */
@@ -465,6 +471,7 @@ interface ConversationRow {
   lastMessagePreview: string | null
   lastMessageAt: number | null
   readAt: number | null
+  archivedAt: number | null
 }
 
 interface ConversationSummaryRow extends ConversationRow {
@@ -574,7 +581,16 @@ export function getConversationsWithMessages(): Conversation[] {
   // scheduling store — keep them out of the normal chat recents list.
   const convRows = db
     .prepare(
-      "SELECT * FROM conversations WHERE origin IS NULL OR origin = 'user' ORDER BY updatedAt DESC"
+      `
+        SELECT *
+        FROM conversations
+        WHERE (origin IS NULL OR origin = 'user')
+          AND archivedAt IS NULL
+        ORDER BY
+          MAX(COALESCE(readAt, 0), COALESCE(lastMessageAt, 0), COALESCE(updatedAt, 0), createdAt) DESC,
+          updatedAt DESC,
+          createdAt DESC
+      `
     )
     .all() as ConversationRow[]
   const allMessagesRows = db
@@ -597,6 +613,7 @@ export function getConversationsWithMessages(): Conversation[] {
     messages: messagesByConv.get(row.id) || [],
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
     readAt: row.readAt ?? null,
+    archivedAt: row.archivedAt ?? null,
   }))
 }
 
@@ -607,6 +624,7 @@ export function getConversationSummaries(search?: string): Conversation[] {
     : null
   const where = [
     "(c.origin IS NULL OR c.origin = 'user')",
+    like ? null : "c.archivedAt IS NULL",
     like
       ? `(c.title LIKE @like ESCAPE '\\' OR EXISTS (
           SELECT 1
@@ -631,7 +649,8 @@ export function getConversationSummaries(search?: string): Conversation[] {
           c.messageCount,
           c.lastMessagePreview,
           c.lastMessageAt,
-          c.readAt
+          c.readAt,
+          c.archivedAt
           ${
             like
               ? `, (
@@ -646,7 +665,10 @@ export function getConversationSummaries(search?: string): Conversation[] {
           }
         FROM conversations c
         WHERE ${where}
-        ORDER BY c.updatedAt DESC
+        ORDER BY
+          MAX(COALESCE(c.readAt, 0), COALESCE(c.lastMessageAt, 0), COALESCE(c.updatedAt, 0), c.createdAt) DESC,
+          c.updatedAt DESC,
+          c.createdAt DESC
       `
     )
     .all(like ? { like } : {}) as ConversationSummaryRow[]
@@ -662,6 +684,7 @@ export function getConversationSummaries(search?: string): Conversation[] {
     lastMessagePreview: compactPreview(row.lastMessagePreview),
     lastMessageAt: row.lastMessageAt ?? undefined,
     readAt: row.readAt ?? null,
+    archivedAt: row.archivedAt ?? null,
     searchMatchPreview: compactPreview(row.searchMatchContent),
   }))
 }
@@ -687,6 +710,7 @@ export function getConversation(id: string): Conversation | null {
     messages,
     contextUsage: parseJsonField<ContextUsageSnapshot>(row.contextUsage),
     readAt: row.readAt ?? null,
+    archivedAt: row.archivedAt ?? null,
   }
 }
 
@@ -757,10 +781,10 @@ export function createConversation(conversation: Conversation) {
   // them. INSERT OR IGNORE preserves whichever winner inserted first.
   const insertConv = db.prepare(`
         INSERT OR IGNORE INTO conversations (
-          id, title, createdAt, updatedAt, messageCount, lastMessagePreview, lastMessageAt, readAt
+          id, title, createdAt, updatedAt, messageCount, lastMessagePreview, lastMessageAt, readAt, archivedAt
         )
         VALUES (
-          @id, @title, @createdAt, @updatedAt, @messageCount, @lastMessagePreview, @lastMessageAt, @readAt
+          @id, @title, @createdAt, @updatedAt, @messageCount, @lastMessagePreview, @lastMessageAt, @readAt, @archivedAt
         )
     `)
 
@@ -805,6 +829,7 @@ export function createConversation(conversation: Conversation) {
       lastMessagePreview: compactPreview(latestMessage?.content),
       lastMessageAt: latestMessage?.timestamp ?? null,
       readAt: initialReadAt,
+      archivedAt: conversation.archivedAt ?? null,
     })
 
     for (const msg of conv.messages) {
@@ -852,9 +877,44 @@ export function createConversation(conversation: Conversation) {
         lastMessagePreview: compactPreview(latestMessage?.content),
         lastMessageAt: latestMessage?.timestamp ?? undefined,
         readAt: initialReadAt,
+        archivedAt: conversation.archivedAt ?? null,
       },
     })
   }
+}
+
+export function setConversationArchived(
+  id: string,
+  archived: boolean,
+  archivedAt = Date.now()
+): number | null {
+  const nextArchivedAt = archived ? archivedAt : null
+
+  db.prepare(
+    `
+        UPDATE conversations
+        SET archivedAt = @archivedAt
+        WHERE id = @id
+          AND (origin IS NULL OR origin = 'user')
+    `
+  ).run({ id, archivedAt: nextArchivedAt })
+
+  const row = db
+    .prepare(
+      "SELECT archivedAt FROM conversations WHERE id = ? AND (origin IS NULL OR origin = 'user')"
+    )
+    .get(id) as { archivedAt: number | null } | undefined
+  const storedArchivedAt = row?.archivedAt ?? null
+
+  emitChatEvent({
+    type: "conversation_archive_state",
+    payload: {
+      conversationId: id,
+      archivedAt: storedArchivedAt,
+    },
+  })
+
+  return storedArchivedAt
 }
 
 export function markConversationRead(
@@ -863,10 +923,16 @@ export function markConversationRead(
 ): number | null {
   const current = db
     .prepare(
-      "SELECT lastMessageAt FROM conversations WHERE id = ? AND (origin IS NULL OR origin = 'user')"
+      "SELECT lastMessageAt, updatedAt FROM conversations WHERE id = ? AND (origin IS NULL OR origin = 'user')"
     )
-    .get(id) as { lastMessageAt: number | null } | undefined
-  const targetReadAt = Math.max(readAt, current?.lastMessageAt ?? readAt)
+    .get(id) as
+    | { lastMessageAt: number | null; updatedAt: number | null }
+    | undefined
+  const targetReadAt = Math.max(
+    readAt,
+    current?.lastMessageAt ?? readAt,
+    current?.updatedAt ?? readAt
+  )
 
   db.prepare(
     `

@@ -2,22 +2,22 @@
 
 import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
+import ReactMarkdown from "react-markdown"
+import remarkGfm from "remark-gfm"
 import {
   Archive,
+  ArrowUp,
   ArrowLeft,
   Bell,
-  CalendarClock,
   CheckCircle2,
   ChevronRight,
   Clock3,
-  Inbox as InboxIcon,
   Loader2,
   Mail,
   MailOpen,
   RefreshCw,
   Reply,
   Search,
-  Send,
   Trash2,
 } from "lucide-react"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
@@ -32,7 +32,6 @@ import { InboxProvider, useInbox } from "./use-inbox"
 
 type FolderFilter = "inbox" | "unread" | "read" | "scheduled"
 
-type IconComponent = React.ComponentType<{ className?: string }>
 type DetailMessageData = {
   id: string
   role: "user" | "assistant"
@@ -104,7 +103,7 @@ function senderForItem(item: InboxListItem): string {
 function itemMatchesFilter(item: InboxListItem, filter: FolderFilter): boolean {
   if (filter === "unread") return isUnread(item)
   if (filter === "read") return !isUnread(item)
-  if (filter === "scheduled") return true
+  if (filter === "scheduled") return Boolean(item.scheduledTaskId)
   return true
 }
 
@@ -122,6 +121,58 @@ function messagePreview(content: string): string {
   const singleLine = content.replace(/\s+/g, " ").trim()
   if (singleLine.length <= 140) return singleLine
   return `${singleLine.slice(0, 139).trimEnd()}...`
+}
+
+function MarkdownPreviewLine({ content }: { content: string }) {
+  const components = React.useMemo(
+    () => ({
+      p: ({ children }: { children?: React.ReactNode }) => (
+        <span>{children}</span>
+      ),
+      strong: ({ children }: { children?: React.ReactNode }) => (
+        <strong className="font-semibold text-slate-700 dark:text-slate-200">
+          {children}
+        </strong>
+      ),
+      em: ({ children }: { children?: React.ReactNode }) => <em>{children}</em>,
+      ul: ({ children }: { children?: React.ReactNode }) => (
+        <span>{children}</span>
+      ),
+      ol: ({ children }: { children?: React.ReactNode }) => (
+        <span>{children}</span>
+      ),
+      li: ({ children }: { children?: React.ReactNode }) => (
+        <span> - {children}</span>
+      ),
+      code: ({ children }: { children?: React.ReactNode }) => (
+        <code className="rounded bg-slate-100 px-1 text-[12px] dark:bg-white/10">
+          {children}
+        </code>
+      ),
+      a: ({ children }: { children?: React.ReactNode }) => (
+        <span className="text-[#b76440]">{children}</span>
+      ),
+      h1: ({ children }: { children?: React.ReactNode }) => (
+        <span className="font-semibold">{children}</span>
+      ),
+      h2: ({ children }: { children?: React.ReactNode }) => (
+        <span className="font-semibold">{children}</span>
+      ),
+      h3: ({ children }: { children?: React.ReactNode }) => (
+        <span className="font-semibold">{children}</span>
+      ),
+      br: () => <span> </span>,
+    }),
+    []
+  )
+
+  return (
+    <div className="mt-0.5 line-clamp-2 min-w-0 text-[13px] leading-5 text-slate-500 dark:text-slate-400 [&_*]:inline">
+      <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
+        {content || "No preview available."}
+      </ReactMarkdown>
+    </div>
+  )
 }
 
 function TraceSummary({ reasoning }: { reasoning: ReasoningEntry[] }) {
@@ -185,10 +236,10 @@ function QuickReplyActions({
             className={cn(
               "inline-flex min-h-8 max-w-full items-center rounded-md border px-3 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-60",
               primary
-                ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700"
+                ? "border-[#b76440] bg-[#b76440] text-white hover:bg-[#a55837]"
                 : destructive
                   ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200"
-                  : "border-slate-200 bg-white text-slate-700 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-200 dark:hover:bg-white/[0.07]"
+                  : "border-border/70 bg-background text-foreground/70 hover:bg-[#f0ede6] hover:text-foreground dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
             )}
             title={action.value}
           >
@@ -240,52 +291,14 @@ function InboxPushButton() {
   )
 }
 
-function FolderButton({
-  icon: Icon,
-  label,
-  count,
-  active,
-  onClick,
-}: {
-  icon: IconComponent
-  label: string
-  count: number
-  active: boolean
-  onClick: () => void
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={cn(
-        "flex h-9 w-full items-center gap-2 rounded-md px-2.5 text-left text-[13px] font-medium transition-colors",
-        active
-          ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
-          : "text-slate-600 hover:bg-slate-100 hover:text-slate-950 dark:text-slate-300 dark:hover:bg-white/[0.05] dark:hover:text-white"
-      )}
-    >
-      <Icon className="size-4 shrink-0" />
-      <span className="min-w-0 flex-1 truncate">{label}</span>
-      <span
-        className={cn(
-          "shrink-0 rounded-full px-1.5 text-[11px] leading-5",
-          active
-            ? "bg-blue-100 text-blue-700 dark:bg-blue-500/20 dark:text-blue-100"
-            : "text-slate-400"
-        )}
-      >
-        {count}
-      </span>
-    </button>
-  )
-}
-
 function FilterChip({
   active,
+  count,
   children,
   onClick,
 }: {
   active: boolean
+  count?: number
   children: React.ReactNode
   onClick: () => void
 }) {
@@ -294,13 +307,23 @@ function FilterChip({
       type="button"
       onClick={onClick}
       className={cn(
-        "h-8 rounded-md border px-3 text-[13px] font-medium transition-colors",
+        "inline-flex h-8 shrink-0 items-center rounded-md border px-2.5 text-[12.5px] font-medium whitespace-nowrap transition-colors",
         active
-          ? "border-blue-200 bg-blue-50 text-blue-700 dark:border-blue-500/30 dark:bg-blue-500/15 dark:text-blue-200"
-          : "border-slate-200 bg-white text-slate-600 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-300 dark:hover:bg-white/[0.07]"
+          ? "border-border bg-[#f0ede6] text-foreground dark:bg-muted"
+          : "border-border/70 bg-background text-foreground/70 hover:bg-[#f0ede6]/65 hover:text-foreground dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
       )}
     >
-      {children}
+      <span>{children}</span>
+      {typeof count === "number" && (
+        <span
+          className={cn(
+            "ml-1.5 inline-flex min-w-4 justify-center rounded-full px-1 text-[11px] leading-5",
+            active ? "bg-[#e7e5dd] dark:bg-white/10" : "text-foreground/50"
+          )}
+        >
+          {count}
+        </span>
+      )}
     </button>
   )
 }
@@ -345,17 +368,17 @@ function MessageRow({
       type="button"
       onClick={onOpen}
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 border-b border-slate-200/75 px-4 py-3 text-left transition-colors focus-visible:bg-blue-50 focus-visible:outline-none dark:border-white/10 dark:focus-visible:bg-blue-500/10",
+        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 border-b border-border/60 px-4 py-2.5 text-left transition-colors focus-visible:bg-[#f0ede6] focus-visible:outline-none dark:border-white/10 dark:focus-visible:bg-muted",
         active
-          ? "bg-blue-50/85 dark:bg-blue-500/10"
-          : "bg-white hover:bg-slate-50 dark:bg-transparent dark:hover:bg-white/[0.04]"
+          ? "bg-[#f0ede6] dark:bg-muted"
+          : "bg-background hover:bg-[#f0ede6]/60 dark:bg-transparent dark:hover:bg-white/[0.04]"
       )}
     >
       <div className="pt-1.5">
         <span
           className={cn(
             "block size-2 rounded-full",
-            unread ? "bg-blue-600" : "bg-transparent"
+            unread ? "bg-[#b76440]" : "bg-transparent"
           )}
         />
       </div>
@@ -376,36 +399,31 @@ function MessageRow({
             {item.messageCount} msg{item.messageCount === 1 ? "" : "s"}
           </span>
         </div>
-        <div
-          className={cn(
-            "mt-1 truncate text-[14px]",
-            unread
-              ? "font-semibold text-slate-950 dark:text-white"
-              : "font-medium text-slate-700 dark:text-slate-200"
-          )}
-        >
-          {item.title}
+        <div className="mt-0.5 flex min-w-0 items-baseline gap-2">
+          <span
+            className={cn(
+              "min-w-0 truncate text-[14px]",
+              unread
+                ? "font-semibold text-slate-950 dark:text-white"
+                : "font-medium text-slate-800 dark:text-slate-200"
+            )}
+          >
+            {item.title}
+          </span>
         </div>
-        <p className="mt-1 truncate text-[13px] leading-5 text-slate-500 dark:text-slate-400">
-          {item.preview || "No preview available."}
-        </p>
+        <MarkdownPreviewLine content={item.preview} />
       </div>
       <div className="flex flex-col items-end gap-2 pt-0.5">
         <span
           className={cn(
             "text-[12px]",
             unread
-              ? "font-semibold text-blue-700 dark:text-blue-300"
-              : "text-slate-400"
+              ? "font-semibold text-[#b76440] dark:text-[#d78a66]"
+              : "text-muted-foreground"
           )}
         >
           {timeAgo(activityAt)}
         </span>
-        {active && (
-          <span className="rounded-full bg-blue-600 px-1.5 text-[10px] leading-5 font-semibold text-white">
-            Open
-          </span>
-        )}
       </div>
     </button>
   )
@@ -434,40 +452,43 @@ function DetailMessage({
   return (
     <article
       className={cn(
-        "rounded-lg border bg-white dark:bg-white/[0.03]",
-        newest
-          ? "border-slate-300 shadow-sm shadow-slate-200/50 dark:border-white/15 dark:shadow-none"
-          : "border-slate-200 dark:border-white/10"
+        "border-b border-border/60 bg-background dark:border-white/10",
+        newest && "bg-background"
       )}
     >
-      <header className="flex items-center gap-3 border-b border-slate-100 px-4 py-3 dark:border-white/10">
+      <header className="flex items-start gap-3 px-4 py-3 md:px-6">
         <div
           className={cn(
-            "flex size-8 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold",
+            "flex size-9 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold",
             assistant
-              ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
+              ? "bg-[#f0ede6] text-[#b76440] dark:bg-white/[0.08] dark:text-[#d78a66]"
               : "bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"
           )}
         >
           {initials}
         </div>
         <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-center gap-2">
-            <span className="truncate text-[13px] font-semibold text-slate-900 dark:text-white">
-              {sender}
-            </span>
-            {assistant && (
-              <span className="rounded bg-slate-100 px-1.5 text-[11px] leading-5 font-medium text-slate-500 dark:bg-white/[0.06] dark:text-slate-300">
-                Result
+          <div className="flex min-w-0 items-start gap-2">
+            <div className="min-w-0 flex-1">
+              <span className="truncate text-[14px] font-semibold text-slate-900 dark:text-white">
+                {sender}
               </span>
-            )}
-          </div>
-          <div className="truncate text-[12px] text-slate-400">
-            {fullDate(message.timestamp)}
+              {assistant && (
+                <span className="ml-2 rounded bg-slate-100 px-1.5 text-[11px] leading-5 font-medium text-slate-500 dark:bg-white/[0.06] dark:text-slate-300">
+                  Result
+                </span>
+              )}
+              <div className="truncate text-[12px] text-slate-500 dark:text-slate-400">
+                to me
+              </div>
+            </div>
+            <span className="shrink-0 text-[12px] text-slate-500 dark:text-slate-400">
+              {fullDate(message.timestamp)}
+            </span>
           </div>
         </div>
       </header>
-      <div className="px-4 py-4 text-[14px] leading-7 text-slate-800 dark:text-slate-100">
+      <div className="px-4 pb-5 text-[14px] leading-7 text-slate-800 md:px-6 md:pl-[72px] dark:text-slate-100">
         <MarkdownRenderer content={message.content} />
         {assistant && (
           <QuickReplyActions
@@ -499,13 +520,13 @@ function CollapsedDetailMessage({
     <button
       type="button"
       onClick={onExpand}
-      className="flex w-full min-w-0 items-center gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-left transition-colors hover:border-slate-300 hover:bg-slate-50 dark:border-white/10 dark:bg-white/[0.03] dark:hover:bg-white/[0.06]"
+      className="flex w-full min-w-0 items-center gap-3 border-b border-border/60 bg-background px-4 py-3 text-left transition-colors hover:bg-[#f0ede6]/60 dark:border-white/10 dark:hover:bg-white/[0.06]"
     >
       <div
         className={cn(
-          "flex size-8 shrink-0 items-center justify-center rounded-md text-[11px] font-semibold",
+          "flex size-9 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold",
           assistant
-            ? "bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200"
+            ? "bg-[#f0ede6] text-[#b76440] dark:bg-white/[0.08] dark:text-[#d78a66]"
             : "bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"
         )}
       >
@@ -573,11 +594,12 @@ function InboxViewInner() {
 
   const counts = React.useMemo(() => {
     const read = items.filter((item) => !isUnread(item)).length
+    const scheduled = items.filter((item) => item.scheduledTaskId).length
     return {
       inbox: items.length,
       unread,
       read,
-      scheduled: items.length,
+      scheduled,
     }
   }, [items, unread])
 
@@ -695,93 +717,31 @@ function InboxViewInner() {
   }, [selectedId])
 
   return (
-    <div className="flex h-full min-h-0 bg-slate-100/70 text-slate-950 dark:bg-background dark:text-slate-50">
+    <div className="flex h-full min-h-0 bg-background text-foreground">
       {dialog}
       <div
         className={cn(
-          "min-h-0 w-full shrink-0 flex-col border-r border-slate-200 bg-white md:flex md:w-[430px] xl:w-[620px] dark:border-white/10 dark:bg-background",
+          "min-h-0 w-full shrink-0 flex-col border-r border-border/60 bg-background md:flex md:w-[430px] xl:w-[520px] dark:border-white/10",
           selectedId ? "hidden md:flex" : "flex"
         )}
       >
         <div className="flex min-h-0 flex-1">
-          <aside className="hidden w-[188px] shrink-0 flex-col border-r border-slate-200 bg-slate-50/80 px-3 py-4 lg:flex dark:border-white/10 dark:bg-white/[0.03]">
-            <div className="mb-4 flex items-center gap-2 px-1">
-              <SidebarTrigger className="hidden size-8 text-slate-500 hover:text-slate-950 lg:flex dark:hover:text-white" />
-              <div className="flex size-8 items-center justify-center rounded-md bg-blue-600 text-white">
-                <Mail className="size-4" />
-              </div>
-              <div className="min-w-0">
-                <div className="truncate text-[13px] font-semibold text-slate-900 dark:text-white">
-                  Mail
-                </div>
-                <div className="truncate text-[11px] text-slate-500 dark:text-slate-400">
-                  Automations
-                </div>
-              </div>
-            </div>
-            <nav className="space-y-1">
-              <FolderButton
-                icon={InboxIcon}
-                label="Inbox"
-                count={counts.inbox}
-                active={folderFilter === "inbox"}
-                onClick={() => setFolderFilter("inbox")}
-              />
-              <FolderButton
-                icon={Mail}
-                label="Unread"
-                count={counts.unread}
-                active={folderFilter === "unread"}
-                onClick={() => setFolderFilter("unread")}
-              />
-              <FolderButton
-                icon={MailOpen}
-                label="Read"
-                count={counts.read}
-                active={folderFilter === "read"}
-                onClick={() => setFolderFilter("read")}
-              />
-              <FolderButton
-                icon={CalendarClock}
-                label="Scheduled"
-                count={counts.scheduled}
-                active={folderFilter === "scheduled"}
-                onClick={() => setFolderFilter("scheduled")}
-              />
-            </nav>
-            <div className="mt-6 border-t border-slate-200 pt-4 dark:border-white/10">
-              <div className="mb-2 px-2 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase">
-                Labels
-              </div>
-              <div className="space-y-1">
-                <div className="flex h-8 items-center gap-2 rounded-md px-2 text-[13px] text-slate-500 dark:text-slate-400">
-                  <span className="size-2 rounded-full bg-emerald-500" />
-                  Today
-                </div>
-                <div className="flex h-8 items-center gap-2 rounded-md px-2 text-[13px] text-slate-500 dark:text-slate-400">
-                  <span className="size-2 rounded-full bg-amber-500" />
-                  Follow up
-                </div>
-              </div>
-            </div>
-          </aside>
-
           <section className="flex min-w-0 flex-1 flex-col">
-            <header className="border-b border-slate-200 bg-white px-4 pt-[calc(0.875rem+env(safe-area-inset-top))] pb-3 md:pt-4 dark:border-white/10 dark:bg-background">
+            <header className="border-b border-border/60 bg-background px-4 pt-[calc(0.875rem+env(safe-area-inset-top))] pb-3 md:pt-4 dark:border-white/10">
               <div className="flex items-center gap-3">
-                <SidebarTrigger className="-ml-1 size-10 shrink-0 text-slate-500 hover:text-slate-950 lg:hidden dark:hover:text-white" />
+                <SidebarTrigger className="-ml-1 size-10 shrink-0 text-foreground/55 hover:text-foreground md:hidden" />
                 <div className="min-w-0 flex-1">
                   <div className="flex min-w-0 items-center gap-2">
-                    <h1 className="truncate text-[20px] font-semibold tracking-[-0.01em] text-slate-950 dark:text-white">
+                    <h1 className="truncate text-[20px] font-semibold tracking-[-0.01em] text-foreground">
                       Inbox
                     </h1>
                     {unread > 0 && (
-                      <span className="shrink-0 rounded-full bg-blue-50 px-2 text-[12px] leading-6 font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
+                      <span className="shrink-0 rounded-full bg-[#b76440]/10 px-2 text-[12px] leading-6 font-semibold text-[#8b4a32] dark:text-[#d78a66]">
                         {unread} unread
                       </span>
                     )}
                   </div>
-                  <p className="mt-0.5 truncate text-[12px] text-slate-500 dark:text-slate-400">
+                  <p className="mt-0.5 truncate text-[12px] text-foreground/55">
                     Scheduled run mail, replies, and handoffs
                   </p>
                 </div>
@@ -791,7 +751,7 @@ function InboxViewInner() {
                   disabled={refreshing}
                   title="Refresh inbox"
                   aria-label="Refresh inbox"
-                  className="flex size-9 shrink-0 items-center justify-center rounded-md border border-transparent text-slate-500 transition-colors hover:border-slate-200 hover:bg-slate-50 hover:text-slate-950 disabled:pointer-events-none disabled:opacity-50 dark:hover:border-white/10 dark:hover:bg-white/[0.05] dark:hover:text-white"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-full border border-transparent text-foreground/55 transition-colors hover:bg-[#f0ede6] hover:text-foreground disabled:pointer-events-none disabled:opacity-50 dark:hover:bg-white/[0.05]"
                 >
                   <RefreshCw
                     className={cn("size-4", refreshing && "animate-spin")}
@@ -802,34 +762,44 @@ function InboxViewInner() {
 
               <div className="mt-3 flex items-center gap-2">
                 <div className="relative min-w-0 flex-1">
-                  <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-slate-400" />
+                  <Search className="pointer-events-none absolute top-1/2 left-3 size-4 -translate-y-1/2 text-foreground/40" />
                   <input
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                     placeholder="Search inbox"
-                    className="h-9 w-full rounded-md border border-slate-200 bg-slate-50 pr-3 pl-9 text-[14px] text-slate-900 transition-colors outline-none placeholder:text-slate-400 focus:border-blue-300 focus:bg-white focus:ring-2 focus:ring-blue-100 dark:border-white/10 dark:bg-white/[0.04] dark:text-white dark:focus:border-blue-500/40 dark:focus:bg-white/[0.06] dark:focus:ring-blue-500/10"
+                    className="h-10 w-full rounded-lg border border-transparent bg-[#f0ede6]/70 pr-3 pl-9 text-[14px] text-foreground transition-shadow outline-none placeholder:text-foreground/50 focus:bg-white focus:shadow-[0_0_0_0.5px_rgba(93,72,57,0.52)] dark:border-white/10 dark:bg-white/[0.04] dark:focus:bg-white/[0.06]"
                   />
                 </div>
               </div>
 
-              <div className="mt-3 flex gap-2 overflow-x-auto pb-0.5 lg:hidden">
+              <div className="mt-3 flex gap-1.5 overflow-x-auto pb-0.5">
                 <FilterChip
                   active={folderFilter === "inbox"}
+                  count={counts.inbox}
                   onClick={() => setFolderFilter("inbox")}
                 >
                   Inbox
                 </FilterChip>
                 <FilterChip
                   active={folderFilter === "unread"}
+                  count={counts.unread}
                   onClick={() => setFolderFilter("unread")}
                 >
                   Unread
                 </FilterChip>
                 <FilterChip
                   active={folderFilter === "read"}
+                  count={counts.read}
                   onClick={() => setFolderFilter("read")}
                 >
                   Read
+                </FilterChip>
+                <FilterChip
+                  active={folderFilter === "scheduled"}
+                  count={counts.scheduled}
+                  onClick={() => setFolderFilter("scheduled")}
+                >
+                  Scheduled
                 </FilterChip>
               </div>
             </header>
@@ -840,17 +810,17 @@ function InboxViewInner() {
               </div>
             )}
 
-            <div className="min-h-0 flex-1 overflow-y-auto bg-white dark:bg-background">
+            <div className="min-h-0 flex-1 overflow-y-auto bg-background">
               {loading && items.length === 0 ? (
-                <div className="divide-y divide-slate-200 dark:divide-white/10">
+                <div className="divide-y divide-border/60 dark:divide-white/10">
                   {[1, 2, 3, 4, 5].map((i) => (
                     <div key={i} className="px-4 py-3">
                       <div className="flex items-start gap-3">
-                        <div className="mt-1 size-2 animate-pulse rounded-full bg-slate-200 dark:bg-white/10" />
+                        <div className="mt-1 size-2 animate-pulse rounded-full bg-[#e6e1db] dark:bg-white/10" />
                         <div className="min-w-0 flex-1 space-y-2">
-                          <div className="h-3 w-32 animate-pulse rounded bg-slate-200 dark:bg-white/10" />
-                          <div className="h-4 w-2/3 animate-pulse rounded bg-slate-200 dark:bg-white/10" />
-                          <div className="h-3 w-full animate-pulse rounded bg-slate-100 dark:bg-white/[0.06]" />
+                          <div className="h-3 w-32 animate-pulse rounded bg-[#e6e1db] dark:bg-white/10" />
+                          <div className="h-4 w-2/3 animate-pulse rounded bg-[#e6e1db] dark:bg-white/10" />
+                          <div className="h-3 w-full animate-pulse rounded bg-[#f0ede6] dark:bg-white/[0.06]" />
                         </div>
                       </div>
                     </div>
@@ -862,7 +832,7 @@ function InboxViewInner() {
                 <div>
                   {groupedItems.map((group) => (
                     <section key={group.label}>
-                      <div className="sticky top-0 z-10 border-b border-slate-200 bg-slate-50/95 px-4 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-slate-400 uppercase backdrop-blur dark:border-white/10 dark:bg-background/95">
+                      <div className="sticky top-0 z-10 border-b border-border/60 bg-background/95 px-4 py-1.5 text-[11px] font-semibold tracking-[0.08em] text-foreground/45 uppercase backdrop-blur dark:border-white/10">
                         {group.label}
                       </div>
                       <div>
@@ -886,37 +856,37 @@ function InboxViewInner() {
 
       <div
         className={cn(
-          "min-w-0 flex-1 flex-col bg-slate-50 md:flex dark:bg-background",
+          "min-w-0 flex-1 flex-col bg-background md:flex",
           selectedId ? "flex" : "hidden md:flex"
         )}
       >
         {!selectedId ? (
           <div className="flex h-full items-center justify-center px-6 text-center">
             <div>
-              <div className="mx-auto flex size-14 items-center justify-center rounded-lg border border-slate-200 bg-white text-slate-400 dark:border-white/10 dark:bg-white/[0.04]">
+              <div className="mx-auto flex size-14 items-center justify-center rounded-full border border-border/60 bg-background text-foreground/40 dark:border-white/10 dark:bg-white/[0.04]">
                 <Archive className="size-6" />
               </div>
-              <p className="mt-4 text-[15px] font-medium text-slate-700 dark:text-slate-200">
+              <p className="mt-4 text-[15px] font-medium text-foreground/75">
                 Select a message to read it.
               </p>
-              <p className="mt-1 text-[13px] text-slate-500 dark:text-slate-400">
+              <p className="mt-1 text-[13px] text-foreground/55">
                 Inbox threads open here like a regular email client.
               </p>
             </div>
           </div>
         ) : detailLoading && !detail ? (
-          <div className="flex h-full items-center justify-center text-[14px] text-slate-500">
+          <div className="flex h-full items-center justify-center text-[14px] text-foreground/55">
             <Loader2 className="mr-2 size-4 animate-spin" />
             Loading message...
           </div>
         ) : detail ? (
           <>
-            <header className="border-b border-slate-200 bg-white dark:border-white/10 dark:bg-background">
-              <div className="flex h-14 items-center gap-2 px-4 md:px-6">
+            <header className="border-b border-border/60 bg-background dark:border-white/10">
+              <div className="flex h-14 items-center gap-1 px-3 md:px-5">
                 <button
                   type="button"
                   onClick={clear}
-                  className="flex size-9 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-slate-100 hover:text-slate-950 md:hidden dark:hover:bg-white/[0.05] dark:hover:text-white"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-full text-foreground/60 transition-colors hover:bg-[#f0ede6] hover:text-foreground md:hidden dark:hover:bg-white/[0.05]"
                   aria-label="Back to inbox"
                 >
                   <ArrowLeft className="size-4" />
@@ -925,7 +895,7 @@ function InboxViewInner() {
                   type="button"
                   onClick={() => void onReply(detail.id)}
                   disabled={replying}
-                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-md bg-blue-600 px-3 text-[13px] font-semibold text-white transition-colors hover:bg-blue-700 disabled:pointer-events-none disabled:opacity-60"
+                  className="inline-flex h-9 shrink-0 items-center gap-2 rounded-full px-3 text-[13px] font-medium text-foreground/75 transition-colors hover:bg-[#f0ede6] hover:text-foreground disabled:pointer-events-none disabled:opacity-60 dark:hover:bg-white/[0.05]"
                 >
                   {replying ? (
                     <Loader2 className="size-4 animate-spin" />
@@ -947,13 +917,13 @@ function InboxViewInner() {
                       void remove(detail.id)
                     }
                   }}
-                  className="flex size-9 shrink-0 items-center justify-center rounded-md text-slate-500 transition-colors hover:bg-red-50 hover:text-red-700 dark:hover:bg-red-950/30 dark:hover:text-red-200"
+                  className="flex size-9 shrink-0 items-center justify-center rounded-full text-foreground/60 transition-colors hover:bg-[#f0ede6] hover:text-foreground dark:hover:bg-white/[0.05]"
                   title="Delete"
                   aria-label="Delete"
                 >
                   <Trash2 className="size-4" />
                 </button>
-                <div className="ml-auto flex items-center gap-2 text-[12px] text-slate-500 dark:text-slate-400">
+                <div className="ml-auto flex items-center gap-2 text-[12px] text-foreground/55">
                   <Clock3 className="size-4" />
                   <span className="hidden sm:inline">
                     {fullDate(
@@ -966,49 +936,31 @@ function InboxViewInner() {
               </div>
             </header>
 
-            <div className="min-h-0 flex-1 overflow-y-auto">
-              <div className="mx-auto w-full max-w-[860px] px-4 py-6 md:px-8">
-                <div className="mb-5 rounded-lg border border-slate-200 bg-white px-5 py-5 dark:border-white/10 dark:bg-white/[0.03]">
-                  <div className="flex flex-col gap-4 sm:flex-row sm:items-start">
-                    <div className="flex size-10 shrink-0 items-center justify-center rounded-md bg-blue-50 text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
-                      <CalendarClock className="size-5" />
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <div className="flex flex-wrap items-center gap-2">
-                        <span className="rounded bg-slate-100 px-1.5 text-[11px] leading-5 font-semibold text-slate-600 dark:bg-white/[0.06] dark:text-slate-300">
-                          Scheduled run
-                        </span>
-                        {selectedItem && isUnread(selectedItem) ? (
-                          <span className="inline-flex items-center gap-1 rounded bg-blue-50 px-1.5 text-[11px] leading-5 font-semibold text-blue-700 dark:bg-blue-500/15 dark:text-blue-200">
-                            <Mail className="size-3" />
-                            Unread
-                          </span>
-                        ) : (
-                          <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 text-[11px] leading-5 font-semibold text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
-                            <CheckCircle2 className="size-3" />
-                            Read
-                          </span>
-                        )}
-                      </div>
-                      <h2 className="mt-3 text-[24px] leading-tight font-semibold tracking-[-0.02em] text-slate-950 dark:text-white">
-                        {detail.title}
-                      </h2>
-                      <div className="mt-3 grid gap-1 text-[13px] text-slate-500 sm:grid-cols-2 dark:text-slate-400">
-                        <div>
-                          From{" "}
-                          <span className="font-medium text-slate-700 dark:text-slate-200">
-                            Scheduled run
-                          </span>
-                        </div>
-                        <div className="sm:text-right">
-                          {fullDate(detail.createdAt)}
-                        </div>
-                      </div>
-                    </div>
+            <div className="min-h-0 flex-1 overflow-y-auto bg-background">
+              <div className="mx-auto w-full max-w-[920px]">
+                <div className="border-b border-border/60 bg-background px-4 py-4 md:px-6 dark:border-white/10">
+                  <div className="mb-2 flex flex-wrap items-center gap-2">
+                    <span className="rounded bg-[#f0ede6] px-1.5 text-[11px] leading-5 font-medium text-foreground/70 dark:bg-white/[0.06]">
+                      Scheduled run
+                    </span>
+                    {selectedItem && isUnread(selectedItem) ? (
+                      <span className="inline-flex items-center gap-1 rounded bg-[#b76440]/10 px-1.5 text-[11px] leading-5 font-medium text-[#8b4a32] dark:text-[#d78a66]">
+                        <Mail className="size-3" />
+                        Unread
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 rounded bg-emerald-50 px-1.5 text-[11px] leading-5 font-medium text-emerald-700 dark:bg-emerald-500/15 dark:text-emerald-200">
+                        <CheckCircle2 className="size-3" />
+                        Read
+                      </span>
+                    )}
                   </div>
+                  <h2 className="text-[22px] leading-snug font-normal tracking-[-0.01em] text-foreground md:text-[24px]">
+                    {detail.title}
+                  </h2>
                 </div>
 
-                <div className="space-y-4">
+                <div>
                   {threadMessages.map((message, index) => {
                     const latest = message.id === latestMessageId
                     const expanded =
@@ -1039,38 +991,45 @@ function InboxViewInner() {
             </div>
 
             <form
-              className="border-t border-slate-200 bg-white px-4 py-3 md:px-8 dark:border-white/10 dark:bg-background"
+              className="border-t border-border/60 bg-background px-3 py-3 md:px-6 dark:border-white/10"
               onSubmit={(event) => {
                 event.preventDefault()
                 void onRespond(detail.id, draft)
               }}
             >
-              <div className="mx-auto flex w-full max-w-[860px] items-end gap-3">
-                <div className="min-w-0 flex-1 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 focus-within:border-blue-300 focus-within:bg-white focus-within:ring-2 focus-within:ring-blue-100 dark:border-white/10 dark:bg-white/[0.04] dark:focus-within:border-blue-500/40 dark:focus-within:bg-white/[0.06] dark:focus-within:ring-blue-500/10">
-                  <div className="mb-1 flex items-center gap-2 text-[12px] font-medium text-slate-500 dark:text-slate-400">
-                    <Reply className="size-3.5" />
-                    Reply
-                  </div>
+              <div className="mx-auto w-full max-w-[920px]">
+                <div className="relative w-full rounded-2xl border border-transparent bg-white shadow-[0_0_0_0.5px_rgba(93,72,57,0.42)] transition-shadow duration-200 ease-out focus-within:shadow-[0_0_0_0.5px_rgba(93,72,57,0.52)] dark:bg-card dark:shadow-[0_0_0_0.5px_rgba(255,255,255,0.22)] dark:focus-within:shadow-[0_0_0_0.5px_rgba(255,255,255,0.3)]">
                   <textarea
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}
                     disabled={responding}
                     placeholder="Write a reply..."
-                    className="max-h-40 min-h-14 w-full resize-none bg-transparent text-[14px] leading-6 text-slate-900 outline-none placeholder:text-slate-400 disabled:opacity-60 dark:text-white"
+                    rows={1}
+                    className="max-h-40 min-h-[46px] w-full resize-none bg-transparent px-5 pt-3.5 pr-14 pb-2 text-[15px] leading-6 text-foreground outline-none placeholder:font-medium placeholder:text-foreground/55 disabled:opacity-60"
                   />
+                  <div className="flex items-center justify-between px-3 pb-3">
+                    <div className="flex min-w-0 items-center gap-2 text-[12px] font-medium text-foreground/55">
+                      <Reply className="size-3.5 shrink-0" />
+                      <span className="truncate">Reply</span>
+                    </div>
+                    <button
+                      type="submit"
+                      disabled={responding || !draft.trim()}
+                      className={cn(
+                        "flex size-8 shrink-0 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837]",
+                        (responding || !draft.trim()) &&
+                          "cursor-not-allowed opacity-50 hover:bg-[#b76440]"
+                      )}
+                      aria-label="Send reply"
+                    >
+                      {responding && !busyActionId ? (
+                        <Loader2 className="size-[15px] animate-spin" />
+                      ) : (
+                        <ArrowUp className="size-[17px] stroke-[2.5]" />
+                      )}
+                    </button>
+                  </div>
                 </div>
-                <button
-                  type="submit"
-                  disabled={responding || !draft.trim()}
-                  className="flex h-10 shrink-0 items-center gap-2 rounded-md bg-blue-600 px-4 text-[13px] font-semibold text-white transition-colors hover:bg-blue-700 disabled:pointer-events-none disabled:opacity-50"
-                >
-                  {responding && !busyActionId ? (
-                    <Loader2 className="size-4 animate-spin" />
-                  ) : (
-                    <Send className="size-4" />
-                  )}
-                  Send
-                </button>
               </div>
             </form>
           </>

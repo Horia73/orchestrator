@@ -38,7 +38,7 @@ export const monitorWakeFeedbackTool: ToolDef = {
                 properties: {
                     reason: { type: 'string', description: 'Plain-English explanation shown next to the pattern in the UI.' },
                     rule: { type: 'object', description: 'A MonitorRule (any predicate kind supported by the watch\'s source, plus any_of/all_of composition).' },
-                    expires_in_days: { type: 'number', description: 'Optional auto-expiry. Use when you are not confident the pattern is permanent.' },
+                    expires_in_days: { type: 'number', description: 'Optional auto-expiry. Omit for stable recurring noise. Use only for clearly temporary or uncertain filters, and mention why the filter is temporary in reason.' },
                 },
                 required: ['reason', 'rule'],
             },

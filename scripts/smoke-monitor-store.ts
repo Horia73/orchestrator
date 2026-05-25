@@ -7,7 +7,7 @@
  *   - schema rejects bad input (cadence range, rule depth)
  *   - SQLite tables can be created, inserted, updated, queried, deleted
  *   - partial cadence update merges + re-validates
- *   - suppress patterns add/remove cycle works
+ *   - suppress patterns add/update/remove cycle works
  *   - watch events append, prune, and list correctly
  *   - listDueWatches returns null-nextCheckAt entries
  *
@@ -40,6 +40,7 @@ async function main(): Promise<void> {
         setWatchCheckpoint,
         setWatchEnabled,
         setWatchState,
+        updateSuppressPatternExpiry,
         updateMonitorWatch,
     } = await import('@/lib/monitor/store')
 
@@ -227,6 +228,13 @@ async function main(): Promise<void> {
 
     const withPattern = getMonitorWatch(created.id)
     check('suppress pattern persisted', withPattern?.suppressPatterns.length === 1)
+
+    const expiresAt = Date.now() + 7 * 86_400_000
+    const updatedExpiry = updateSuppressPatternExpiry(created.id, pattern!.id, expiresAt)
+    check('updateSuppressPatternExpiry sets expiry', updatedExpiry?.expiresAt === expiresAt)
+
+    const madePermanent = updateSuppressPatternExpiry(created.id, pattern!.id, null)
+    check('updateSuppressPatternExpiry can make permanent', madePermanent?.expiresAt === null)
 
     incrementSuppressPatternMatch(created.id, pattern!.id)
     incrementSuppressPatternMatch(created.id, pattern!.id)

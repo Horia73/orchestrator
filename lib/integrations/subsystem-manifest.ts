@@ -1,6 +1,7 @@
 import { MONITORING_DOCTRINE } from '@/lib/integrations/doctrines/monitoring'
 import { SCHEDULING_DOCTRINE } from '@/lib/integrations/doctrines/scheduling'
 import { WATCHLIST_DOCTRINE } from '@/lib/integrations/doctrines/watchlist'
+import { MICROSCRIPTS_DOCTRINE } from '@/lib/integrations/doctrines/microscripts'
 
 // ---------------------------------------------------------------------------
 // Subsystem manifest — orchestrator-native capabilities that mirror the
@@ -19,7 +20,7 @@ import { WATCHLIST_DOCTRINE } from '@/lib/integrations/doctrines/watchlist'
 // builders pick it up automatically.
 // ---------------------------------------------------------------------------
 
-export type SubsystemId = 'watchlist' | 'monitoring' | 'scheduling'
+export type SubsystemId = 'watchlist' | 'monitoring' | 'scheduling' | 'microscripts'
 
 export interface SubsystemManifestEntry {
     /** Stable id used by ActivateIntegrationTools and the activation store. */
@@ -50,6 +51,12 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
         label: 'Scheduled tasks',
         capability: 'Real runtime automation for "do X at/in/every <time>" — one-shot or recurring. Two action types: "tool" (cheap, no model at fire time) or "agent" (wakes a model with your prompt). Runs are silent by default; results reach the Inbox only via notify_inbox or errors.',
         doctrine: SCHEDULING_DOCTRINE,
+    },
+    {
+        id: 'microscripts',
+        label: 'Microscripts',
+        capability: 'Bounded Python automations for small stateful watchers: run short checks, request permitted operations through the parent runtime, notify or act when conditions are met, then pause/complete/expire so they do not run forever.',
+        doctrine: MICROSCRIPTS_DOCTRINE,
     },
 ]
 

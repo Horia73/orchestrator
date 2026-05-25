@@ -626,6 +626,38 @@ export function removeSuppressPattern(id: string, patternId: string): boolean {
     return true
 }
 
+export function updateSuppressPatternExpiry(
+    id: string,
+    patternId: string,
+    expiresAt: number | null,
+): SuppressPattern | null {
+    const existing = getMonitorWatch(id)
+    if (!existing) return null
+    let updated: SuppressPattern | null = null
+    const next = existing.suppressPatterns.map((p) => {
+        if (p.id !== patternId) return p
+        updated = SuppressPatternSchema.parse({
+            ...p,
+            expiresAt,
+        })
+        return updated
+    })
+    if (!updated) return null
+    db.prepare(
+        `UPDATE monitor_watches SET suppressPatterns = @sp, updatedAt = @updatedAt WHERE id = @id`,
+    ).run({
+        id,
+        sp: JSON.stringify(next),
+        updatedAt: Date.now(),
+    })
+    recordWatchEvent(id, 'feedback', {
+        updated_suppress: patternId,
+        expires_at: expiresAt,
+    })
+    emitWatchesChanged(id, expiresAt === null ? 'suppress_made_permanent' : 'suppress_expiry_updated')
+    return updated
+}
+
 /** Engine-side: a suppress pattern just dropped a candidate; bump its counters
  *  so the UI can show "this pattern suppressed N events". */
 export function incrementSuppressPatternMatch(id: string, patternId: string): void {

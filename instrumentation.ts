@@ -39,4 +39,31 @@ export async function register(): Promise<void> {
     } catch (err) {
         console.error('[monitoring] failed to wire smart monitor', err)
     }
+    // Arm the Microscripts heartbeat. The heartbeat itself is a single
+    // scheduled system task; it runs only while at least one microscript is
+    // enabled/runnable and then executes due scripts with their own budgets.
+    try {
+        const { wireMicroscripts, syncMicroscriptsActivation } = await import(
+            '@/lib/microscripts/heartbeat'
+        )
+        await wireMicroscripts()
+        const { appEventEmitter } = await import('@/lib/events')
+        appEventEmitter.on('app:update', (event) => {
+            if (event?.type !== 'microscripts.changed') return
+            syncMicroscriptsActivation().catch((syncErr) => {
+                console.error('[microscripts] sync after change failed', syncErr)
+            })
+        })
+    } catch (err) {
+        console.error('[microscripts] failed to wire heartbeat', err)
+    }
+    // Offer model-owned daily memory consolidation as Inbox setup, if the
+    // preference is not already recorded. This only posts a setup card; it
+    // does not create a dedicated scheduled task or edit memory by itself.
+    try {
+        const { maybeOfferDailyMemoryConsolidation } = await import('@/lib/memory/daily-consolidation-offer')
+        void maybeOfferDailyMemoryConsolidation()
+    } catch (err) {
+        console.error('[memory-offer] failed to check daily consolidation offer', err)
+    }
 }

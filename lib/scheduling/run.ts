@@ -139,9 +139,9 @@ export async function runScheduledTask(
         )
       }
     } else if (task.action.kind === "monitor") {
-      // Two consolidated monitor heartbeats today: Watchlist's markets tick
-      // and Smart Monitor's cross-source tick. Each produces the same shape
-      // (noteworthy + summary + briefPrompt) so the wake path below is shared.
+      // Consolidated monitor heartbeats: Watchlist markets, Smart Monitor,
+      // and Microscripts. Only markets/smart may wake a model from here;
+      // Microscripts execute their own due scripts and surface directly.
       let briefPrompt: string | undefined
       let summary: string
       if (task.action.monitorKind === "smart") {
@@ -154,6 +154,13 @@ export async function runScheduledTask(
           taskId: task.id,
           taskState: getTaskState(task.id),
         })
+      } else if (task.action.monitorKind === "microscripts") {
+        const { runMicroscriptsHeartbeat } = await import(
+          "@/lib/microscripts/heartbeat"
+        )
+        const pass = await runMicroscriptsHeartbeat({ now: firedAt })
+        summary = pass.summary
+        briefPrompt = undefined
       } else {
         const { runMarketsCheapPass } = await import(
           "@/lib/monitoring/markets-heartbeat"

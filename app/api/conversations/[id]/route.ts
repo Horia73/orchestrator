@@ -1,5 +1,11 @@
 import { NextResponse } from 'next/server';
-import { getConversation, deleteConversation, markConversationRead, markConversationUnread } from '@/lib/db';
+import {
+    getConversation,
+    deleteConversation,
+    markConversationRead,
+    markConversationUnread,
+    setConversationArchived,
+} from '@/lib/db';
 
 export async function GET(
     request: Request,
@@ -39,6 +45,10 @@ export async function PATCH(
     try {
         const { id } = await params;
         const body = await request.json().catch(() => ({}));
+        if (typeof body?.archived === "boolean") {
+            const archivedAt = setConversationArchived(id, body.archived);
+            return NextResponse.json({ success: true, archivedAt });
+        }
         const readAt = body?.read === false
             ? markConversationUnread(id)
             : markConversationRead(id);

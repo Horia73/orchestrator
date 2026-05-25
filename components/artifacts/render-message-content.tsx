@@ -183,6 +183,7 @@ const RUNTIME_TYPES = new Set([
     'application/vnd.ant.mermaid',
     'application/vnd.ant.map',
     'application/vnd.ant.weather',
+    'application/vnd.ant.recipe',
 ])
 
 /**
@@ -194,10 +195,11 @@ const RUNTIME_TYPES = new Set([
 const PLACEHOLDER_TYPES = new Set([
     'application/vnd.ant.map',
     'application/vnd.ant.weather',
+    'application/vnd.ant.recipe',
 ])
 
 function StreamingPlaceholder({ type, title }: { type: string; title: string }) {
-    const kind = type === 'application/vnd.ant.weather' ? 'weather' : 'map'
+    const kind = STREAMING_KIND_LABEL[type] ?? 'artifact'
     return (
         <div className="my-2 flex items-center gap-3 rounded-xl border border-border/60 bg-muted/30 px-4 py-3 text-sm">
             <div className="size-2 animate-pulse rounded-full bg-blue-500" aria-hidden />
@@ -209,6 +211,12 @@ function StreamingPlaceholder({ type, title }: { type: string; title: string }) 
     )
 }
 
+const STREAMING_KIND_LABEL: Record<string, string> = {
+    'application/vnd.ant.map': 'map',
+    'application/vnd.ant.weather': 'weather',
+    'application/vnd.ant.recipe': 'recipe',
+}
+
 function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
     if (attrs.language) return attrs.language
     switch (attrs.type) {
@@ -217,6 +225,7 @@ function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {
         case 'application/vnd.ant.mermaid': return 'text'
         case 'application/vnd.ant.map': return 'json'
         case 'application/vnd.ant.weather': return 'json'
+        case 'application/vnd.ant.recipe': return 'json'
         default: return null
     }
 }

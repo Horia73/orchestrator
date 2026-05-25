@@ -204,6 +204,14 @@ export const SCHEDULING_TOOL_IDS: string[] = [
     'set_task_state',
 ]
 
+export const OBSERVABILITY_TOOL_IDS: string[] = [
+    'search_past_runs',
+    'get_past_run',
+    'search_agent_logs',
+    'get_agent_log',
+    'read_runtime_index',
+]
+
 export const WATCHLIST_TOOL_IDS: string[] = [
     'WatchlistAddFinancialInstrument',
     'WatchlistAddProduct',
@@ -226,6 +234,19 @@ export const MONITORING_TOOL_IDS: string[] = [
     'monitor_watch_update',
     'monitor_watch_remove',
     'monitor_wake_feedback',
+]
+
+export const MICROSCRIPT_TOOL_IDS: string[] = [
+    'microscript_describe_capabilities',
+    'microscript_create',
+    'microscript_list',
+    'microscript_get',
+    'microscript_update',
+    'microscript_pause',
+    'microscript_resume',
+    'microscript_delete',
+    'microscript_run_now',
+    'microscript_get_run',
 ]
 
 // Map artifact authoring — orchestrator-only by design. Other agents that

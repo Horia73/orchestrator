@@ -4,6 +4,7 @@ import * as React from "react"
 import Link from "next/link"
 import { usePathname, useRouter } from "next/navigation"
 import {
+  Archive,
   CalendarClock,
   Inbox as InboxIcon,
   LineChart,
@@ -48,7 +49,6 @@ const TABLET_NAV_MEDIA =
   "(min-width: 768px) and (max-width: 1180px), (pointer: coarse) and (min-width: 768px) and (max-width: 1366px)"
 const SEARCH_DEBOUNCE_MS = 180
 const MOBILE_CONVERSATION_PREFETCH_COUNT = 4
-const MAPS_CONFIG_CHANGED_EVENT = "orch:maps-config-changed"
 
 type WindowWithIdleCallback = Window & {
   requestIdleCallback?: (
@@ -69,6 +69,53 @@ function truncate(value: string, length = 120): string {
   const singleLine = value.replace(/\s+/g, " ").trim()
   if (singleLine.length <= length) return singleLine
   return `${singleLine.slice(0, length - 1).trimEnd()}...`
+}
+
+function getConversationActivityAt(conversation: Conversation): number | null {
+  const timestamps = [
+    conversation.readAt,
+    conversation.lastMessageAt,
+    conversation.updatedAt,
+    conversation.createdAt,
+  ].filter(
+    (value): value is number =>
+      typeof value === "number" && Number.isFinite(value) && value > 0
+  )
+
+  return timestamps.length > 0 ? Math.max(...timestamps) : null
+}
+
+function formatConversationActivityAge(
+  timestamp: number | null,
+  currentTime: number | null
+): string {
+  if (!timestamp || !currentTime) return ""
+
+  const diff = Math.max(0, currentTime - timestamp)
+  const minute = 60_000
+  const hour = 60 * minute
+  const day = 24 * hour
+
+  if (diff < minute) return "now"
+  if (diff < hour) return `${Math.floor(diff / minute)}m`
+  if (diff < day) return `${Math.floor(diff / hour)}h`
+  if (diff < 7 * day) return `${Math.floor(diff / day)}d`
+
+  return new Date(timestamp).toLocaleDateString([], {
+    month: "short",
+    day: "numeric",
+  })
+}
+
+function formatConversationActivityTitle(timestamp: number | null): string {
+  if (!timestamp) return ""
+  return `Last used ${new Date(timestamp).toLocaleString([], {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  })}`
 }
 
 function getSearchPreview(
@@ -136,43 +183,6 @@ function conversationMatches(
   )
 }
 
-function useMapsConfigured(): boolean {
-  const [configured, setConfigured] = React.useState(false)
-
-  const refresh = React.useCallback(async () => {
-    try {
-      const res = await fetch("/api/integrations/maps/config", {
-        cache: "no-store",
-      })
-      const body = (await res.json().catch(() => ({}))) as {
-        maps?: { configured?: unknown }
-      }
-      if (!res.ok) throw new Error(`HTTP ${res.status}`)
-      setConfigured(body.maps?.configured === true)
-    } catch {
-      setConfigured(false)
-    }
-  }, [])
-
-  React.useEffect(() => {
-    void refresh()
-
-    const onMapsConfigChanged = () => void refresh()
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") void refresh()
-    }
-
-    window.addEventListener(MAPS_CONFIG_CHANGED_EVENT, onMapsConfigChanged)
-    document.addEventListener("visibilitychange", onVisibilityChange)
-    return () => {
-      window.removeEventListener(MAPS_CONFIG_CHANGED_EVENT, onMapsConfigChanged)
-      document.removeEventListener("visibilitychange", onVisibilityChange)
-    }
-  }, [refresh])
-
-  return configured
-}
-
 interface SidebarSearchFieldProps {
   value: string
   inputRef: React.RefObject<HTMLInputElement | null>
@@ -221,6 +231,7 @@ export function AppSidebar() {
     newChat,
     selectConversation,
     prefetchConversationMessages,
+    archiveConversation,
     deleteConversation,
   } = useChatStore()
   const {
@@ -239,10 +250,14 @@ export function AppSidebar() {
   const isOnWatchlist = pathname?.startsWith("/watchlist") ?? false
   const isOnMonitor = pathname?.startsWith("/monitor") ?? false
   const isOnMaps = pathname?.startsWith("/maps") ?? false
-  const mapsConfigured = useMapsConfigured()
   const isOnInbox = pathname?.startsWith("/inbox") ?? false
   const shouldConstrainTabletNav =
-    isOnSettings || isOnScheduling || isOnWatchlist || isOnMonitor || isOnMaps || isOnInbox
+    isOnSettings ||
+    isOnScheduling ||
+    isOnWatchlist ||
+    isOnMonitor ||
+    isOnMaps ||
+    isOnInbox
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
   const inboxUnread = useInboxUnread()
   const [searchActive, setSearchActive] = React.useState(false)
@@ -251,6 +266,7 @@ export function AppSidebar() {
     Conversation[] | null
   >(null)
   const [searchLoading, setSearchLoading] = React.useState(false)
+  const [currentTime, setCurrentTime] = React.useState<number | null>(null)
   const deferredSearchQuery = React.useDeferredValue(searchQuery)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
   const { assistantName } = useRuntimeConfig()
@@ -259,13 +275,22 @@ export function AppSidebar() {
 
   const filteredConversations = React.useMemo(
     () =>
-      state.conversations.filter((conversation) =>
-        conversationMatches(conversation, normalizedSearchQuery)
+      state.conversations.filter(
+        (conversation) =>
+          (isFiltering || !conversation.archivedAt) &&
+          conversationMatches(conversation, normalizedSearchQuery)
       ),
-    [normalizedSearchQuery, state.conversations]
+    [isFiltering, normalizedSearchQuery, state.conversations]
   )
   const displayedConversations =
     isFiltering && searchResults ? searchResults : filteredConversations
+
+  React.useEffect(() => {
+    const updateClock = () => setCurrentTime(Date.now())
+    updateClock()
+    const timer = window.setInterval(updateClock, 30_000)
+    return () => window.clearInterval(timer)
+  }, [])
 
   React.useEffect(() => {
     if (!isFiltering) {
@@ -408,20 +433,53 @@ export function AppSidebar() {
   }, [isMobile, navigateHome, newChat, setOpenMobile])
 
   const handleSelectConversation = React.useCallback(
-    (id: string) => {
+    (conversation: Conversation) => {
       if (isMobile) {
         setOpenMobile(false)
         window.requestAnimationFrame(() => {
-          selectConversation(id)
+          selectConversation(conversation.id, conversation)
           navigateHome()
         })
         return
       }
 
-      selectConversation(id)
+      selectConversation(conversation.id, conversation)
       navigateHome()
     },
     [isMobile, navigateHome, selectConversation, setOpenMobile]
+  )
+
+  const handleArchiveConversation = React.useCallback(
+    (event: React.MouseEvent, id: string) => {
+      event.preventDefault()
+      event.stopPropagation()
+      const archivedAt = Date.now()
+      archiveConversation(id)
+      setSearchResults((current) =>
+        current
+          ? current.map((conversation) =>
+              conversation.id === id
+                ? { ...conversation, archivedAt }
+                : conversation
+            )
+          : current
+      )
+      if (isMobile) setOpenMobile(false)
+      navigateHome()
+    },
+    [archiveConversation, isMobile, navigateHome, setOpenMobile]
+  )
+
+  const handleDeleteConversation = React.useCallback(
+    (id: string) => {
+      deleteConversation(id)
+      setSearchResults((current) =>
+        current
+          ? current.filter((conversation) => conversation.id !== id)
+          : current
+      )
+    },
+    [deleteConversation]
   )
 
   const closeMobileSidebar = React.useCallback(() => {
@@ -544,25 +602,23 @@ export function AppSidebar() {
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
-              {mapsConfigured && (
-                <SidebarMenuItem>
-                  <SidebarMenuButton
-                    asChild
-                    tooltip="Smart Maps"
-                    isActive={isOnMaps}
-                    className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  tooltip="Smart Maps"
+                  isActive={isOnMaps}
+                  className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+                >
+                  <Link
+                    href="/maps"
+                    replace={isMobile}
+                    onClick={closeMobileSidebar}
                   >
-                    <Link
-                      href="/maps"
-                      replace={isMobile}
-                      onClick={closeMobileSidebar}
-                    >
-                      <MapPinned className="size-4" />
-                      <span>Smart Maps</span>
-                    </Link>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              )}
+                    <MapPinned className="size-4" />
+                    <span>Smart Maps</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
@@ -611,12 +667,12 @@ export function AppSidebar() {
                   <SidebarMenu className="space-y-0.5">
                     {displayedConversations.map((conv) => {
                       const unread = unreadConversationIds.has(conv.id)
+                      const isArchived = typeof conv.archivedAt === "number"
                       const isRunning =
                         Boolean(state.activeChatStreams[conv.id]) ||
                         (state.activeConversationId === conv.id &&
                           state.isStreaming &&
                           state.streamingConversationId === conv.id)
-                      const hasStatusSlot = isRunning || unread
                       const isActiveConversationRow =
                         state.activeConversationId === conv.id &&
                         !isOnSettings &&
@@ -625,12 +681,17 @@ export function AppSidebar() {
                         !isOnMonitor &&
                         !isOnMaps &&
                         !isOnInbox
+                      const activityAt = getConversationActivityAt(conv)
+                      const activityLabel = formatConversationActivityAge(
+                        activityAt,
+                        currentTime
+                      )
                       return (
                         <SidebarMenuItem key={conv.id}>
                           <SidebarMenuButton
                             tooltip={conv.title}
                             isActive={isActiveConversationRow}
-                            onClick={() => handleSelectConversation(conv.id)}
+                            onClick={() => handleSelectConversation(conv)}
                             onFocus={() => {
                               void prefetchConversationMessages(conv.id)
                             }}
@@ -654,41 +715,65 @@ export function AppSidebar() {
                               )}
                             </span>
                           </SidebarMenuButton>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <SidebarMenuAction
-                                aria-label="Conversation actions"
-                                showOnHover={
-                                  !hasStatusSlot && !isActiveConversationRow
-                                }
-                                className="!top-0 !right-0 !bottom-0 !h-full !w-[34px] !rounded-md text-foreground hover:bg-[#e7e5dd] focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none data-[state=open]:bg-[#e7e5dd] dark:hover:bg-white/[0.1] dark:data-[state=open]:bg-white/[0.1]"
+                          {isArchived ? (
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <SidebarMenuAction
+                                  type="button"
+                                  aria-label="Archived conversation actions"
+                                  className="!top-0 !right-0 !bottom-0 !h-full !w-[42px] !rounded-md text-foreground hover:bg-[#e7e5dd] focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none data-[state=open]:bg-[#e7e5dd] dark:hover:bg-white/[0.1] dark:data-[state=open]:bg-white/[0.1]"
+                                >
+                                  <MoreHorizontal className="!size-[20px]" />
+                                </SidebarMenuAction>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent
+                                side="bottom"
+                                align="end"
+                                sideOffset={6}
+                                onCloseAutoFocus={(e) => e.preventDefault()}
+                                className="w-36 rounded-xl border-border/50 p-1 shadow-md"
                               >
-                                {isRunning ? (
-                                  <LoaderCircle className="!size-[16px] animate-spin text-foreground/45 group-hover/menu-item:hidden group-focus-within/menu-item:hidden group-has-[[data-state=open]]/menu-item:hidden" />
-                                ) : unread ? (
-                                  <span className="size-2 rounded-full bg-[#b76440] group-hover/menu-item:hidden group-focus-within/menu-item:hidden group-has-[[data-state=open]]/menu-item:hidden" />
-                                ) : null}
-                                <MoreHorizontal
-                                  className={`!size-[20px] ${hasStatusSlot ? "hidden group-hover/menu-item:block group-focus-within/menu-item:block group-has-[[data-state=open]]/menu-item:block" : ""}`}
-                                />
-                              </SidebarMenuAction>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent
-                              side="bottom"
-                              align="end"
-                              sideOffset={6}
-                              onCloseAutoFocus={(e) => e.preventDefault()}
-                              className="w-36 rounded-xl border-border/50 p-1 shadow-md"
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    handleDeleteConversation(conv.id)
+                                  }
+                                  className="cursor-pointer gap-2 px-2 py-1.5 text-[14px] text-[#802020] focus:bg-red-50 focus:text-[#802020]"
+                                >
+                                  <Trash
+                                    className="size-4"
+                                    strokeWidth={1.5}
+                                  />
+                                  Delete
+                                </DropdownMenuItem>
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          ) : (
+                            <SidebarMenuAction
+                              type="button"
+                              aria-label="Archive conversation"
+                              title="Archive"
+                              onClick={(event) =>
+                                handleArchiveConversation(event, conv.id)
+                              }
+                              className="!top-0 !right-0 !bottom-0 !h-full !w-[42px] !rounded-md text-foreground hover:bg-[#e7e5dd] focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none dark:hover:bg-white/[0.1]"
                             >
-                              <DropdownMenuItem
-                                onClick={() => deleteConversation(conv.id)}
-                                className="cursor-pointer gap-2 px-2 py-1.5 text-[14px] text-[#802020] focus:bg-red-50 focus:text-[#802020]"
-                              >
-                                <Trash className="size-4" strokeWidth={1.5} />
-                                Delete
-                              </DropdownMenuItem>
-                            </DropdownMenuContent>
-                          </DropdownMenu>
+                              {isRunning ? (
+                                <LoaderCircle className="!size-[16px] animate-spin text-foreground/45 group-hover/menu-item:hidden group-focus-within/menu-item:hidden" />
+                              ) : activityLabel ? (
+                                <span
+                                  className={`w-full truncate text-center text-[12px] tabular-nums group-hover/menu-item:hidden group-focus-within/menu-item:hidden ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
+                                  title={formatConversationActivityTitle(
+                                    activityAt
+                                  )}
+                                >
+                                  {activityLabel}
+                                </span>
+                              ) : unread ? (
+                                <span className="size-2 rounded-full bg-[#b76440] group-hover/menu-item:hidden group-focus-within/menu-item:hidden" />
+                              ) : null}
+                              <Archive className="hidden !size-[17px] group-hover/menu-item:block group-focus-within/menu-item:block" />
+                            </SidebarMenuAction>
+                          )}
                         </SidebarMenuItem>
                       )
                     })}

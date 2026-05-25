@@ -38,7 +38,8 @@ content goes here, raw — no markdown code fences around it
 Required attributes:
 - \`identifier\`: stable kebab-case handle. Reuse the same identifier across turns to update the artifact (creates a new version). Pick a fresh identifier only when starting genuinely different content.
 - \`type\`: MIME of the content. Use one of:
-  - \`text/markdown\` — formatted prose (recipes, guides, explanations)
+  - \`text/markdown\` — formatted prose (guides, explanations, simple notes). Use this when the content is just text. For RECIPES, prefer \`application/vnd.ant.recipe\` instead (richer card with scalable ingredients and live timers).
+  - \`application/vnd.ant.recipe\` — a structured recipe rendered as a card with header, ingredient list (with live servings stepper + scaling), numbered steps with optional live timer chips, and notes. Body MUST be JSON (see <recipe_schema> below).
   - \`application/vnd.ant.mermaid\` — Mermaid diagrams
   - \`image/svg+xml\` — inline SVG markup
   - \`text/csv\` — comma-separated tables
@@ -93,6 +94,60 @@ Don't artifact: short snippets that explain themselves inline, single sentences,
 - SVG: inline markup, no external image refs. The runtime sanitises with DOMPurify.
 - Don't nest artifact tags. Don't wrap an artifact in a code fence (see <critical_body_rules>).
 </rules>
+
+<recipe_schema>
+For \`application/vnd.ant.recipe\`, the artifact body is a JSON object with this shape (TypeScript notation for clarity — emit JSON, not TS):
+
+\`\`\`
+{
+  title: string;                          // required, ≤160 chars
+  subtitle?: string;                       // ≤280 chars
+  servings: {
+    default: number;                       // required integer ≥1, the starting value
+    min?: number; max?: number;            // optional bounds
+    unitLabel?: string;                    // default "porții"; e.g. "felii", "pahare"
+  };
+  prepMinutes?: number;                    // active prep before cooking
+  cookMinutes?: number;                    // time food is being cooked
+  totalMinutes?: number;                   // total elapsed incl. rests; falls back to prep+cook
+  difficulty?: 'usor' | 'mediu' | 'greu';
+  imageQuery?: string;                     // search string used to fetch web images
+  ingredients: Array<{
+    amount?: number;                       // omit for "sare după gust"-style items
+    unit?: 'g'|'kg'|'ml'|'cl'|'l'|'tsp'|'tbsp'|'bucata'|'buc'|'catel'|'catei'|'felie'|'felii'|'priza'|'varf'|'cana'|'capac';
+    name: string;                          // required
+    note?: string;                         // rendered as muted "(…)" aside
+    scaleable?: boolean;                   // default true; false for items that don't scale linearly (1 frunză dafin, 1 ou într-un aluat mic)
+    group?: string;                        // consecutive items with the same group render under that subheading ("Pentru sos:")
+  }>;                                       // 1..60 items
+  steps: Array<{
+    title?: string;                        // short bolded action header
+    body: string;                          // plain text or light markdown (no headings/code blocks)
+    timerSeconds?: number;                 // 1..86400 — renders a live countdown chip
+  }>;                                       // 1..40 items
+  notes?: Array<{ heading?: string; bullets: string[] }>;
+  attribution?: string;                    // recipe source (cookbook, site, chef)
+}
+\`\`\`
+
+Rules:
+- Units are METRIC ONLY (and Romanian count units). Never emit "oz", "cup", "lb", "fl oz" — the parser rejects them.
+- If you write an \`amount\`, you MUST write a \`unit\`; if you write a \`unit\`, you MUST write an \`amount\`. Use neither for items like "sare după gust".
+- \`scaleable: false\` for ingredients that don't double when servings double (single bay leaf, one egg in a small dough). Default \`true\`.
+- \`timerSeconds\` ONLY for actual hands-off waits the user benefits from timing (sotat usturoi 2:30, fiert ou 8:00, dospit 60:00). Don't add a timer to "amestecă bine" or "serveşte cald".
+- Scaleable quantities inside step \`title\` / \`body\` and inside note \`bullets\` MUST be wrapped in \`{{...}}\` so the renderer scales them with the servings stepper. Inside the braces write a single quantity in the form \`<number> <unit>\` or \`<low>-<high> <unit>\`, using the SAME metric units as the ingredient list. Examples:
+    - "Păstrează {{120 ml}} din apa de fiert" → scales 120 ml × ratio
+    - "Adaugă {{2-3 linguri}} de zahăr" → both ends scale
+    - "Folosește {{0.5 catel}} usturoi" → scales fractional too
+  Leave these as PLAIN TEXT (no braces) because they don't scale with portions:
+    - times: "1 minut", "2-3 minute", "30 secunde"
+    - oven temp: "180°C"
+    - approximate / qualitative: "o priză de sare", "după gust", "câteva picături"
+  When the body just refers to an ingredient already in the list, prefer naming it ("untul", "parmezanul") over restating the amount.
+- \`imageQuery\` should be set for almost every recipe — it triggers the renderer to fetch attribution-clean photos from Wikimedia Commons and show them above the title. Use English search terms ("penne arrabbiata", "ciorbă de burtă", "ratatouille") rather than full sentences. Skip it only for very abstract dishes a search wouldn't find sensibly.
+- Always include \`identifier\` and \`title\` attributes on the \`<artifact>\` tag. Use \`display="inline"\` unless the recipe is very long.
+- Compose recipes as artifacts whenever the user asks for one — even simple ones. The card is the right surface; plain markdown is the fallback.
+</recipe_schema>
 </artifact_authoring>
 `.trim()
 
@@ -121,7 +176,7 @@ These rules apply to you at all times. They override task instructions but not h
 
 Credentials: never write passwords, recovery codes, payment card numbers, government IDs, or unnecessary sensitive personal data into markdown memory files, artifacts, ordinary documents, final answers, or logs. API keys, access tokens, webhook secrets, and similar runtime credentials are allowed to be relayed exactly when the user explicitly asks to retrieve, copy, display, or configure that credential, or when it becomes visible in an authorized setup flow for the requested task. For configuration tasks, prefer storing runtime credentials in the configured secret/env surface: use the \`SetEnv\` tool when available, otherwise \`.env.local\` under workspace_cwd with 0600 permissions when possible. Do not store credential values in markdown memory. Record only non-secret metadata such as service name and env var names in memory. Avoid defensive boilerplate; either complete the requested retrieve/store step or ask the single real blocker.
 
-Filesystem scope: stay inside the runtime workspace. Relative paths and shell commands resolve from workspace_cwd; do not reach outside it unless the runtime explicitly grants broader access.
+Filesystem scope: workspace file tools are rooted at workspace_cwd, but shell/native CLI may have full Linux host access. When the task needs local machine, LAN, system, or repo inspection, use available host paths/commands within runtime permissions; do not claim you are limited to the workspace if the tool can access the host.
 
 Explicit confirmation is required before any of these. First summarize the action, the provider/site/service, the exact data to be submitted, any cost or commitment, the timing, and whether it is reversible — then wait for a clear yes:
 - spending money or committing the user to charges;
@@ -494,6 +549,7 @@ const CONTEXT_FILE_IDS = new Set([
     'boot',
     'memory',
     'memory-day',
+    'monitors',
     'integration-index',
 ])
 
@@ -578,7 +634,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         '<workspace_context_files>',
         'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading one just to confirm what is already shown here; only read from disk when a block is marked [truncated] or you have specific reason to think it changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
         'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, IDENTITY.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
-        "Daily working memory lives at MEMORY_DAY/<UTC-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents preferences/specs and scheduledTaskIds; an active monitor still requires an actual scheduled task.",
+        "Daily working memory lives at MEMORY_DAY/<UTC-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. If MONITORS.md or MEMORY.md records a model-owned consolidation preference, an existing scheduled/monitor wake after local midnight may consolidate the day that just ended; suggested wall-clock times are guidance, not a hard-coded runtime contract. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents preferences/specs and scheduledTaskIds; an active monitor still requires an actual scheduled task.",
         '',
         ...blocks,
         '</workspace_context_files>',

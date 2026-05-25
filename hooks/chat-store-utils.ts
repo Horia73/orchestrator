@@ -171,14 +171,26 @@ export function writeUnreadConversationIds(ids: Set<string>) {
   localStorage.setItem(CHAT_UNREAD_IDS_KEY, JSON.stringify(Array.from(ids)))
 }
 
-function getConversationLastMessageAt(
+function validTimestamp(value: number | null | undefined): number | null {
+  return typeof value === "number" && Number.isFinite(value) && value > 0
+    ? value
+    : null
+}
+
+function getConversationUnreadActivityAt(
   conversation: Conversation
 ): number | null {
-  return (
-    conversation.lastMessageAt ??
-    conversation.messages.at(-1)?.timestamp ??
-    null
-  )
+  const lastMessageAt =
+    validTimestamp(conversation.lastMessageAt) ??
+    validTimestamp(conversation.messages.at(-1)?.timestamp)
+  const hasMessages =
+    typeof lastMessageAt === "number" ||
+    (conversation.messageCount ?? conversation.messages.length) > 0
+
+  if (!hasMessages) return null
+
+  const updatedAt = validTimestamp(conversation.updatedAt)
+  return Math.max(lastMessageAt ?? 0, updatedAt ?? 0)
 }
 
 export function isConversationUnread(
@@ -187,12 +199,12 @@ export function isConversationUnread(
 ): boolean {
   if (conversation.id === visibleActiveConversationId) return false
 
-  const lastMessageAt = getConversationLastMessageAt(conversation)
-  if (typeof lastMessageAt !== "number") return false
+  const unreadActivityAt = getConversationUnreadActivityAt(conversation)
+  if (typeof unreadActivityAt !== "number") return false
 
   return (
     typeof conversation.readAt !== "number" ||
-    conversation.readAt < lastMessageAt
+    conversation.readAt < unreadActivityAt
   )
 }
 

@@ -23,11 +23,13 @@ import { googleSlidesTools } from './google-slides'
 import { homeAssistantTools } from './home-assistant'
 import { whatsappTools } from './whatsapp'
 import { scheduleTools } from './schedule'
+import { observabilityTools } from './observability'
 import { notifyInboxTool } from './notify'
 import { setTaskStateTool } from './task-state'
 import { watchlistTools } from './watchlist'
 import { monitorWakeFeedbackTool } from './smart-monitor-feedback'
 import { smartMonitorManageTools } from './smart-monitor-manage'
+import { microscriptTools } from './microscripts'
 import {
     mapRenderTool,
     mapsCurrentLocationTool,
@@ -174,11 +176,13 @@ for (const tool of googleSlidesTools) registerTool(tool)
 for (const tool of whatsappTools) registerTool(tool)
 for (const tool of homeAssistantTools) registerTool(tool)
 for (const tool of scheduleTools) registerTool(tool)
+for (const tool of observabilityTools) registerTool(tool)
 registerTool(notifyInboxTool)
 registerTool(setTaskStateTool)
 for (const tool of watchlistTools) registerTool(tool)
 registerTool(monitorWakeFeedbackTool)
 for (const tool of smartMonitorManageTools) registerTool(tool)
+for (const tool of microscriptTools) registerTool(tool)
 registerTool(mapsStatusTool)
 registerTool(mapsCurrentLocationTool)
 registerTool(mapsListLocationSourcesTool)

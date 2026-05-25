@@ -45,6 +45,12 @@ const MONITOR_INFO: Record<MonitorKind, { label: string; checks: string; executi
         execution: "Wakes the orchestrator directly. The agent inspects relevant sources, updates its task state, and may reschedule this single task based on history.",
         output: "Runs stay in Past runs. Inbox is used only when the agent decides something matters or intentionally emits a summary.",
     },
+    microscripts: {
+        label: "Microscripts",
+        checks: "Enabled Microscripts whose next run time is due.",
+        execution: "Runs bounded Python scripts through the Microscripts runtime with manifest permissions, timeouts, and stop policies.",
+        output: "Silent checks are recorded in each script's run history. Scripts can post to Inbox when their manifest permits it.",
+    },
 }
 
 function toLocalInput(ms: number): string {

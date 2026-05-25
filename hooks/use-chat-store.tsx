@@ -21,6 +21,7 @@ import {
   fetchConversationSummaries,
   startChatStreamRequest,
   stopChatStream,
+  updateConversationArchiveState,
   updateConversationReadState,
   uploadChatAttachments,
 } from "./chat-store-api"
@@ -64,9 +65,10 @@ interface ChatContextType {
   // page.tsx uses this to fade the committed view while the next one prepares.
   isSwitchingConversation: boolean
   newChat: () => void
-  selectConversation: (id: string) => void
+  selectConversation: (id: string, conversation?: Conversation) => void
   prefetchConversationMessages: (id: string) => Promise<void>
   loadOlderMessages: (id: string) => Promise<void>
+  archiveConversation: (id: string) => void
   deleteConversation: (id: string) => void
   sendMessage: (
     content: string,
@@ -126,6 +128,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const initialMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(
     new Map()
   )
+  const summaryRefreshPromiseRef = React.useRef<Promise<void> | null>(null)
 
   React.useEffect(() => {
     activeConversationIdRef.current = state.activeConversationId
@@ -230,6 +233,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         }
         return current
       })
+    },
+    [updateUnreadConversationIds]
+  )
+
+  const applyConversationArchiveState = React.useCallback(
+    (id: string, archivedAt: number | null) => {
+      dispatch({
+        type: "SET_CONVERSATION_ARCHIVE_STATE",
+        conversationId: id,
+        archivedAt,
+      })
+      if (archivedAt != null) {
+        updateUnreadConversationIds((current) => {
+          current.delete(id)
+          return current
+        })
+      }
     },
     [updateUnreadConversationIds]
   )
@@ -366,6 +386,36 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       })
     }
   }, [])
+
+  const reconcileConversationSummaries = React.useCallback(
+    (reason: string) => {
+      if (summaryRefreshPromiseRef.current) return
+
+      const refresh = refreshConversationSummaries()
+        .catch((err) => {
+          console.warn(`Failed to refresh conversations ${reason}`, err)
+        })
+        .finally(() => {
+          if (summaryRefreshPromiseRef.current === refresh) {
+            summaryRefreshPromiseRef.current = null
+          }
+        })
+
+      summaryRefreshPromiseRef.current = refresh
+    },
+    [refreshConversationSummaries]
+  )
+
+  const reconcileUnknownConversation = React.useCallback(
+    (conversationId: unknown, reason: string) => {
+      if (typeof conversationId !== "string" || !conversationId) return
+      const known = conversationsRef.current.some(
+        (conversation) => conversation.id === conversationId
+      )
+      if (!known) reconcileConversationSummaries(reason)
+    },
+    [reconcileConversationSummaries]
+  )
 
   // --- Fetch conversations on mount ---
   // Retries on transient network failures — the most common one is the Next
@@ -721,6 +771,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     const eventSource = new EventSource("/api/sync")
 
+    eventSource.onopen = () => {
+      reconcileConversationSummaries("after chat sync reconnect")
+    }
+
     eventSource.onmessage = (event) => {
       try {
         const data = JSON.parse(event.data)
@@ -737,10 +791,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               lastMessagePreview: data.payload.lastMessagePreview,
               lastMessageAt: data.payload.lastMessageAt,
               readAt: data.payload.readAt ?? null,
+              archivedAt: data.payload.archivedAt ?? null,
             },
           })
         } else if (data.type === "add_message") {
           const msg = data.payload.message
+          reconcileUnknownConversation(
+            data.payload.conversationId,
+            "after message for unknown conversation"
+          )
           if (msg.role === "user") {
             dispatch({
               type: "ADD_USER_MESSAGE",
@@ -777,6 +836,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             }
           }
         } else if (data.type === "context_usage") {
+          reconcileUnknownConversation(
+            data.payload?.conversationId,
+            "after context update for unknown conversation"
+          )
           if (data.payload?.conversationId && data.payload?.contextUsage) {
             dispatch({
               type: "UPDATE_CONTEXT_USAGE",
@@ -785,6 +848,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             })
           }
         } else if (data.type === "conversation_read_state") {
+          reconcileUnknownConversation(
+            data.payload?.conversationId,
+            "after read-state update for unknown conversation"
+          )
           if (typeof data.payload?.conversationId === "string") {
             applyConversationReadState(
               data.payload.conversationId,
@@ -793,9 +860,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 : null
             )
           }
+        } else if (data.type === "conversation_archive_state") {
+          reconcileUnknownConversation(
+            data.payload?.conversationId,
+            "after archive-state update for unknown conversation"
+          )
+          if (typeof data.payload?.conversationId === "string") {
+            applyConversationArchiveState(
+              data.payload.conversationId,
+              typeof data.payload.archivedAt === "number"
+                ? data.payload.archivedAt
+                : null
+            )
+            reconcileConversationSummaries("after archive-state update")
+          }
         } else if (data.type === "delete_conversation") {
           dispatch({ type: "DELETE_CONVERSATION", id: data.payload.id })
         } else if (data.type === "chat_stream_started") {
+          reconcileUnknownConversation(
+            data.payload.conversationId,
+            "after stream start for unknown conversation"
+          )
           dispatch({
             type: "CHAT_STREAM_STARTED",
             stream: {
@@ -810,6 +895,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             conversationId: data.payload.conversationId,
             messageId: data.payload.messageId,
           })
+          reconcileConversationSummaries("after stream end")
         }
       } catch (err) {
         console.error("Failed to parse SSE event", err)
@@ -822,7 +908,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     }
 
     return () => eventSource.close()
-  }, [applyConversationReadState, handleAssistantFinished])
+  }, [
+    applyConversationReadState,
+    applyConversationArchiveState,
+    handleAssistantFinished,
+    reconcileConversationSummaries,
+    reconcileUnknownConversation,
+  ])
 
   const newChat = React.useCallback(() => {
     detachStreaming()
@@ -836,10 +928,20 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [detachStreaming])
 
   const selectConversation = React.useCallback(
-    (id: string) => {
+    (id: string, conversation?: Conversation) => {
       // Re-clicking the active chat would otherwise schedule a no-op
       // transition and fade the current view for one frame.
       if (activeConversationIdRef.current === id) return
+      if (
+        conversation &&
+        !conversationsRef.current.some((item) => item.id === id)
+      ) {
+        dispatch({
+          type: "ADD_SYNCED_CONVERSATION",
+          conversation,
+          full: false,
+        })
+      }
       detachStreaming()
       markConversationRead(id)
       void loadInitialMessages(id)
@@ -896,6 +998,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       dispatch({ type: "DELETE_CONVERSATION", id })
     },
     [clearConversationUnread, stopStreaming]
+  )
+
+  const archiveConversation = React.useCallback(
+    (id: string) => {
+      const archivedAt = Date.now()
+      if (activeConversationIdRef.current === id) {
+        detachStreaming()
+      }
+      updateConversationArchiveState(id, true).catch((err) => {
+        console.error(err)
+      })
+      clearConversationUnread(id)
+      applyConversationArchiveState(id, archivedAt)
+    },
+    [applyConversationArchiveState, clearConversationUnread, detachStreaming]
   )
 
   const sendMessageToConversation = React.useCallback(
@@ -1819,6 +1936,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       selectConversation,
       prefetchConversationMessages: loadInitialMessages,
       loadOlderMessages,
+      archiveConversation,
       deleteConversation,
       sendMessage,
       sendMessageToConversation,
@@ -1832,6 +1950,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       selectConversation,
       loadInitialMessages,
       loadOlderMessages,
+      archiveConversation,
       deleteConversation,
       sendMessage,
       sendMessageToConversation,

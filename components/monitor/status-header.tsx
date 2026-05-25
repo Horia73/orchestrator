@@ -18,20 +18,20 @@ export function StatusHeader({
   const enabledWatches = status?.counts.enabled ?? 0
 
   return (
-    <div className="border-b border-border/60 px-5 py-3 text-[12px] text-foreground/65">
-      <div className="flex flex-wrap items-center gap-x-4 gap-y-1">
-        <div className="flex items-center gap-1.5">
+    <div className="border-b border-border/60 px-4 py-3 text-[12px] text-foreground/65 md:px-5">
+      <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
+        <div className="flex min-w-0 items-center gap-1.5">
           <span
             className={cn(
-              "size-2 rounded-full",
+              "size-2 shrink-0 rounded-full",
               loading
                 ? "bg-foreground/30"
                 : armed
                   ? "bg-emerald-500"
-                  : "bg-foreground/30",
+                  : "bg-foreground/30"
             )}
           />
-          <span className="font-semibold text-foreground">
+          <span className="min-w-0 truncate font-semibold text-foreground">
             Smart monitor agent
           </span>
           <span>
@@ -47,7 +47,11 @@ export function StatusHeader({
           </span>
         </div>
         {hb && hb.enabled && (
-          <span title={hb.next_run_at ? new Date(hb.next_run_at).toLocaleString() : ""}>
+          <span
+            title={
+              hb.next_run_at ? new Date(hb.next_run_at).toLocaleString() : ""
+            }
+          >
             next wake {formatRelative(hb.next_run_at, now)}
           </span>
         )}

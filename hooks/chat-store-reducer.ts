@@ -157,6 +157,11 @@ export type ChatAction =
       conversationId: string
       readAt: number | null
     }
+  | {
+      type: "SET_CONVERSATION_ARCHIVE_STATE"
+      conversationId: string
+      archivedAt: number | null
+    }
   | { type: "SET_THINKING_DONE"; seconds: number }
   | { type: "SET_THINKING_SECONDS"; seconds: number }
   | {
@@ -170,7 +175,36 @@ export type ChatAction =
       conversationId: string
       timestamp: number
     }
-  | { type: "ADD_SYNCED_CONVERSATION"; conversation: Conversation }
+  | {
+      type: "ADD_SYNCED_CONVERSATION"
+      conversation: Conversation
+      full?: boolean
+    }
+
+function getConversationActivityAt(conversation: Conversation): number {
+  return Math.max(
+    conversation.readAt ?? 0,
+    conversation.lastMessageAt ?? 0,
+    conversation.updatedAt ?? 0,
+    conversation.createdAt ?? 0
+  )
+}
+
+function sortConversationsByActivity(
+  conversations: Conversation[]
+): Conversation[] {
+  return [...conversations].sort((a, b) => {
+    const activityDelta =
+      getConversationActivityAt(b) - getConversationActivityAt(a)
+    if (activityDelta !== 0) return activityDelta
+
+    const updatedDelta =
+      (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)
+    if (updatedDelta !== 0) return updatedDelta
+
+    return b.createdAt - a.createdAt
+  })
+}
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
@@ -195,9 +229,16 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         return state
       const activeChatStreams = { ...state.activeChatStreams }
       delete activeChatStreams[action.conversationId]
+      const shouldClearStreaming =
+        state.isStreaming &&
+        state.streamingConversationId === action.conversationId &&
+        (!action.messageId ||
+          !state.streamingMessageId ||
+          state.streamingMessageId === action.messageId)
       return {
         ...state,
         activeChatStreams,
+        ...(shouldClearStreaming ? stoppedStreamState : {}),
       }
     }
     case "INIT_CONVERSATIONS": {
@@ -222,9 +263,10 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }
         return conversation
       })
-      const merged = [...locallyCreated, ...mergedIncoming].sort(
-        (a, b) => b.createdAt - a.createdAt
-      )
+      const merged = sortConversationsByActivity([
+        ...locallyCreated,
+        ...mergedIncoming,
+      ])
       const conversationLoadState = { ...state.conversationLoadState }
       const conversationLoadErrors = { ...state.conversationLoadErrors }
       const conversationMessagePages = { ...state.conversationMessagePages }
@@ -282,25 +324,24 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       )
       return {
         ...state,
-        conversations: (exists
-          ? state.conversations.map((conversation) =>
-              conversation.id === action.conversation.id
-                ? {
-                    ...conversation,
-                    ...action.conversation,
-                    messageCount: action.conversation.messages.length,
-                    lastMessagePreview:
-                      action.conversation.messages.at(-1)?.content ??
-                      conversation.lastMessagePreview,
-                    lastMessageAt:
-                      action.conversation.messages.at(-1)?.timestamp ??
-                      conversation.lastMessageAt,
-                  }
-                : conversation
-            )
-          : [action.conversation, ...state.conversations]
-        ).sort(
-          (a, b) => (b.updatedAt ?? b.createdAt) - (a.updatedAt ?? a.createdAt)
+        conversations: sortConversationsByActivity(
+          exists
+            ? state.conversations.map((conversation) =>
+                conversation.id === action.conversation.id
+                  ? {
+                      ...conversation,
+                      ...action.conversation,
+                      messageCount: action.conversation.messages.length,
+                      lastMessagePreview:
+                        action.conversation.messages.at(-1)?.content ??
+                        conversation.lastMessagePreview,
+                      lastMessageAt:
+                        action.conversation.messages.at(-1)?.timestamp ??
+                        conversation.lastMessageAt,
+                    }
+                  : conversation
+              )
+            : [action.conversation, ...state.conversations]
         ),
         conversationLoadState: {
           ...state.conversationLoadState,
@@ -503,12 +544,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "ADD_SYNCED_CONVERSATION": {
       if (state.conversations.some((c) => c.id === action.conversation.id))
         return state
+      const loadedCount = action.conversation.messages.length
+      const total = action.conversation.messageCount ?? loadedCount
+      const isFull = action.full ?? (loadedCount > 0 && loadedCount >= total)
       return {
         ...state,
         conversations: [action.conversation, ...state.conversations],
         conversationLoadState: {
           ...state.conversationLoadState,
-          [action.conversation.id]: "full",
+          [action.conversation.id]: isFull ? "full" : "summary",
         },
         conversationLoadErrors: {
           ...state.conversationLoadErrors,
@@ -517,9 +561,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         conversationMessagePages: {
           ...state.conversationMessagePages,
           [action.conversation.id]: {
-            total: action.conversation.messages.length,
-            loadedCount: action.conversation.messages.length,
-            hasMore: false,
+            total,
+            loadedCount,
+            hasMore: total > loadedCount,
             nextCursor: null,
             isLoadingOlder: false,
           },
@@ -536,25 +580,29 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const page = state.conversationMessagePages[action.conversationId]
       return {
         ...state,
-        conversations: state.conversations.map((conv) =>
-          conv.id === action.conversationId
-            ? {
-                ...conv,
-                updatedAt: action.message.timestamp,
-                messageCount:
-                  (conv.messageCount ?? conv.messages.length) +
-                  (conv.messages.some((m) => m.id === action.message.id)
-                    ? 0
-                    : 1),
-                lastMessagePreview: action.message.content,
-                lastMessageAt: action.message.timestamp,
-                messages: conv.messages.some((m) => m.id === action.message.id)
-                  ? conv.messages.map((m) =>
-                      m.id === action.message.id ? action.message : m
-                    )
-                  : [...conv.messages, action.message],
-              }
-            : conv
+        conversations: sortConversationsByActivity(
+          state.conversations.map((conv) =>
+            conv.id === action.conversationId
+              ? {
+                  ...conv,
+                  updatedAt: action.message.timestamp,
+                  messageCount:
+                    (conv.messageCount ?? conv.messages.length) +
+                    (conv.messages.some((m) => m.id === action.message.id)
+                      ? 0
+                      : 1),
+                  lastMessagePreview: action.message.content,
+                  lastMessageAt: action.message.timestamp,
+                  messages: conv.messages.some(
+                    (m) => m.id === action.message.id
+                  )
+                    ? conv.messages.map((m) =>
+                        m.id === action.message.id ? action.message : m
+                      )
+                    : [...conv.messages, action.message],
+                }
+              : conv
+          )
         ),
         conversationMessagePages:
           page && isNewMessage
@@ -847,12 +895,42 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
     case "SET_CONVERSATION_READ_STATE":
       return {
         ...state,
-        conversations: state.conversations.map((conv) =>
-          conv.id === action.conversationId
-            ? { ...conv, readAt: action.readAt }
-            : conv
+        conversations: sortConversationsByActivity(
+          state.conversations.map((conv) =>
+            conv.id === action.conversationId
+              ? { ...conv, readAt: action.readAt }
+              : conv
+          )
         ),
       }
+    case "SET_CONVERSATION_ARCHIVE_STATE": {
+      const nextActiveId =
+        action.archivedAt != null &&
+        state.activeConversationId === action.conversationId
+          ? null
+          : state.activeConversationId
+
+      if (typeof window !== "undefined") {
+        if (nextActiveId) localStorage.setItem("chat:active-id", nextActiveId)
+        else localStorage.removeItem("chat:active-id")
+      }
+
+      return {
+        ...state,
+        conversations: sortConversationsByActivity(
+          state.conversations.map((conv) =>
+            conv.id === action.conversationId
+              ? { ...conv, archivedAt: action.archivedAt }
+              : conv
+          )
+        ),
+        activeConversationId: nextActiveId,
+        ...(state.activeConversationId === action.conversationId &&
+        action.archivedAt != null
+          ? stoppedStreamState
+          : {}),
+      }
+    }
     case "SET_THINKING_DONE":
       return {
         ...state,
@@ -874,25 +952,29 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       const page = state.conversationMessagePages[action.conversationId]
       const nextState = {
         ...state,
-        conversations: state.conversations.map((conv) =>
-          conv.id === action.conversationId
-            ? {
-                ...conv,
-                updatedAt: action.message.timestamp,
-                messageCount:
-                  (conv.messageCount ?? conv.messages.length) +
-                  (conv.messages.some((m) => m.id === action.message.id)
-                    ? 0
-                    : 1),
-                lastMessagePreview: action.message.content,
-                lastMessageAt: action.message.timestamp,
-                messages: conv.messages.some((m) => m.id === action.message.id)
-                  ? conv.messages.map((m) =>
-                      m.id === action.message.id ? action.message : m
-                    )
-                  : [...conv.messages, action.message],
-              }
-            : conv
+        conversations: sortConversationsByActivity(
+          state.conversations.map((conv) =>
+            conv.id === action.conversationId
+              ? {
+                  ...conv,
+                  updatedAt: action.message.timestamp,
+                  messageCount:
+                    (conv.messageCount ?? conv.messages.length) +
+                    (conv.messages.some((m) => m.id === action.message.id)
+                      ? 0
+                      : 1),
+                  lastMessagePreview: action.message.content,
+                  lastMessageAt: action.message.timestamp,
+                  messages: conv.messages.some(
+                    (m) => m.id === action.message.id
+                  )
+                    ? conv.messages.map((m) =>
+                        m.id === action.message.id ? action.message : m
+                      )
+                    : [...conv.messages, action.message],
+                }
+              : conv
+          )
         ),
         conversationMessagePages:
           page && isNewMessage
@@ -988,26 +1070,30 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       return {
         ...state,
         activeChatStreams,
-        conversations: state.conversations.map((conv) =>
-          conv.id === action.conversationId
-            ? {
-                ...conv,
-                updatedAt: partialMessage.timestamp,
-                messageCount:
-                  (conv.messageCount ?? conv.messages.length) +
-                  (conv.messages.some((m) => m.id === partialMessage.id)
-                    ? 0
-                    : 1),
-                lastMessagePreview:
-                  partialMessage.content || conv.lastMessagePreview,
-                lastMessageAt: partialMessage.timestamp,
-                messages: conv.messages.some((m) => m.id === partialMessage.id)
-                  ? conv.messages.map((m) =>
-                      m.id === partialMessage.id ? partialMessage : m
-                    )
-                  : [...conv.messages, partialMessage],
-              }
-            : conv
+        conversations: sortConversationsByActivity(
+          state.conversations.map((conv) =>
+            conv.id === action.conversationId
+              ? {
+                  ...conv,
+                  updatedAt: partialMessage.timestamp,
+                  messageCount:
+                    (conv.messageCount ?? conv.messages.length) +
+                    (conv.messages.some((m) => m.id === partialMessage.id)
+                      ? 0
+                      : 1),
+                  lastMessagePreview:
+                    partialMessage.content || conv.lastMessagePreview,
+                  lastMessageAt: partialMessage.timestamp,
+                  messages: conv.messages.some(
+                    (m) => m.id === partialMessage.id
+                  )
+                    ? conv.messages.map((m) =>
+                        m.id === partialMessage.id ? partialMessage : m
+                      )
+                    : [...conv.messages, partialMessage],
+                }
+              : conv
+          )
         ),
         conversationMessagePages:
           page && isNewMessage

@@ -852,6 +852,7 @@ function TerminalMessageStatusLine({ status }: { status?: Message["status"] }) {
 interface MessageBubbleProps {
     message: Message
     isLatestAssistantMessage?: boolean
+    isStreamingMessage?: boolean
     compact?: boolean
     suppressArtifactTypes?: string[]
     onArtifactClick?: (artifact: ArtifactPayload) => void
@@ -865,7 +866,17 @@ interface MessageBubbleProps {
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
 }
 
-function MessageBubbleComponent({ message, isLatestAssistantMessage, compact = false, suppressArtifactTypes, onArtifactClick, onArtifactExpand, onAttachmentClick, onAgentOpen }: MessageBubbleProps) {
+function MessageBubbleComponent({
+    message,
+    isLatestAssistantMessage,
+    isStreamingMessage,
+    compact = false,
+    suppressArtifactTypes,
+    onArtifactClick,
+    onArtifactExpand,
+    onAttachmentClick,
+    onAgentOpen,
+}: MessageBubbleProps) {
     const [copied, setCopied] = React.useState(false)
     const [hovered, setHovered] = React.useState(false)
     const {
@@ -957,6 +968,7 @@ function MessageBubbleComponent({ message, isLatestAssistantMessage, compact = f
     const lastReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
     const lastContentPhase = contentSegments.length > 0 ? contentSegments[contentSegments.length - 1].phase : null
     const isInProgressReasoning = Boolean(
+        isStreamingMessage &&
         isLatestAssistantMessage &&
         hasReasoning &&
         lastReasoningPhase !== null &&

@@ -82,8 +82,9 @@ export const ScheduledActionSchema = z.discriminatedUnion('kind', [
         kind: z.literal('monitor'),
         /** Which consolidated monitor this heartbeat drives. System-managed.
          *  - `markets` → Watchlist's market-data tick (lib/monitoring/markets-heartbeat.ts)
-         *  - `smart`   → Smart Monitor scheduled agent wake across all watches */
-        monitorKind: z.enum(['markets', 'smart']),
+         *  - `smart`        → Smart Monitor scheduled agent wake across all watches
+         *  - `microscripts` → Microscripts due-run heartbeat */
+        monitorKind: z.enum(['markets', 'smart', 'microscripts']),
     }),
 ])
 export type ScheduledAction = z.infer<typeof ScheduledActionSchema>
