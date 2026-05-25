@@ -781,7 +781,7 @@ install_nginx_orchestrator_site() {
 server {
     listen 80;
     server_name $domain;
-    return 301 https://\$host\$request_uri;
+    return 301 https://$domain\$request_uri;
 }
 
 server {
@@ -796,6 +796,10 @@ server {
     location /vnc/ {
         proxy_pass http://127.0.0.1:$VNC_PORT/;
         proxy_http_version 1.1;
+        proxy_set_header Host $domain;
+        proxy_set_header X-Forwarded-Host $domain;
+        proxy_set_header X-Forwarded-Proto https;
+        proxy_set_header X-Forwarded-Port 443;
         proxy_set_header Upgrade \$http_upgrade;
         proxy_set_header Connection "upgrade";
         proxy_read_timeout 3600s;
@@ -805,10 +809,10 @@ server {
     location / {
         proxy_pass http://127.0.0.1:$PORT;
         proxy_http_version 1.1;
-        proxy_set_header Host \$host;
+        proxy_set_header Host $domain;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Host $domain;
         proxy_set_header X-Forwarded-Proto https;
         proxy_set_header X-Forwarded-Port 443;
         proxy_set_header Upgrade \$http_upgrade;

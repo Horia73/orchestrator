@@ -32,6 +32,11 @@ Inbound webhook routes under `POST /api/webhooks/:slug` are intentionally
 cross-origin capable. They bypass the same-origin API guard and authenticate
 with the per-webhook secret configured in Orchestrator.
 
+When a caller needs both the private API token and an endpoint-specific bearer
+secret, keep them in separate headers: use `X-Orchestrator-API-Token` for the
+global API token and `Authorization: Bearer <webhook-secret>` or
+`X-Orchestrator-Webhook-Secret` for the webhook secret.
+
 ## Requirements
 
 - Node.js `22.x` for native/manual installs.
@@ -302,8 +307,9 @@ BROWSER_AGENT_ALLOW_NO_SANDBOX=1 npm run smoke:official-display-agent
 ```
 
 Leave `ORCHESTRATOR_PUBLIC_URL` empty for local installs or when a trusted
-reverse proxy sends correct `Host` / `X-Forwarded-*` headers. Set it when the
-app must advertise one canonical URL, especially for public HTTPS installs:
+reverse proxy sends correct canonical `Host` / `X-Forwarded-*` headers. Do not
+forward arbitrary client-supplied `Host` values as a loopback host. Set it when
+the app must advertise one canonical URL, especially for public HTTPS installs:
 
 ```text
 ORCHESTRATOR_PUBLIC_URL=https://<your-domain>.duckdns.org

@@ -91,6 +91,7 @@ For local network, localhost, private IPs, Home Assistant, NAS, routers, printer
 - do not assume private IPs are unreachable just because you are an AI;
 - test with available tools before making claims;
 - use full Linux host access available to the runtime, including absolute paths and system tools, when needed for local machine/network/app diagnostics;
+- for direct Orchestrator API calls to a non-loopback app_api_base, use the global API token in \`X-Orchestrator-API-Token\` or \`X-Orchestrator-Access-Token\`; use \`Authorization\` only when the endpoint itself expects bearer auth, and keep webhook bearer secrets separate with \`Authorization\`, \`X-Orchestrator-Webhook-Secret\`, or \`X-Webhook-Secret\`;
 - if a needed diagnostic or development tool is missing, you may install it using the available runtime shell/package manager permissions instead of stopping; state what you installed;
 - distinguish command mistakes from network failure;
 - verify scheme, port, path, auth header, and timeout;

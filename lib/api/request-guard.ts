@@ -51,6 +51,11 @@ function getGuardFailureMessage(request: Request): string | null {
     const effectiveProtocol = (forwardedProto || requestUrl.protocol.replace(':', '')).toLowerCase()
     const effectiveOrigin = `${effectiveProtocol}://${effectiveHost}`
     const validApiToken = hasValidApiToken(request)
+    const effectiveHostname = extractHostname(effectiveHost)
+
+    if (isForwardedLoopbackHostClaim(request, effectiveHostname)) {
+        return 'Forwarded requests cannot claim a loopback host.'
+    }
 
     const origin = request.headers.get('origin')?.trim()
     if (!origin) {
@@ -58,7 +63,7 @@ function getGuardFailureMessage(request: Request): string | null {
         if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
             return 'Cross-origin requests are not allowed.'
         }
-        if (fetchSite !== 'same-origin' && !isLoopbackHost(extractHostname(effectiveHost)) && !validApiToken) {
+        if (fetchSite !== 'same-origin' && !isLoopbackHost(effectiveHostname) && !validApiToken) {
             return 'Direct API requests to non-loopback hosts require ORCHESTRATOR_API_TOKEN.'
         }
         return null
@@ -94,6 +99,24 @@ function firstHeaderValue(value: string | null): string | null {
 
 function normalizeHost(host: string): string {
     return host.trim().replace(/\.$/, '').toLowerCase()
+}
+
+function isForwardedLoopbackHostClaim(request: Request, effectiveHostname: string): boolean {
+    if (!isLoopbackHost(effectiveHostname)) return false
+
+    const hasForwardedHeaders = Boolean(
+        firstHeaderValue(request.headers.get('x-forwarded-host'))
+        || firstHeaderValue(request.headers.get('x-forwarded-proto'))
+        || firstHeaderValue(request.headers.get('x-forwarded-for'))
+        || firstHeaderValue(request.headers.get('x-real-ip'))
+    )
+    if (!hasForwardedHeaders) return false
+
+    const clientIp = firstHeaderValue(request.headers.get('x-forwarded-for'))
+        || firstHeaderValue(request.headers.get('x-real-ip'))
+    if (!clientIp) return true
+
+    return !isLoopbackHost(extractHostname(clientIp))
 }
 
 function configuredApiTokens(): string[] {

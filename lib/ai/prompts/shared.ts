@@ -566,6 +566,9 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     if (appOrigin) {
         lines.push(`app_origin: ${appOrigin}`)
         lines.push(`app_api_base: ${appOrigin}/api`)
+        lines.push('app_api_auth: private Orchestrator API routes allow same-origin browser calls and direct loopback calls. Direct non-browser calls to a non-loopback app_api_base require ORCHESTRATOR_API_TOKEN or ORCHESTRATOR_ACCESS_TOKEN; prefer X-Orchestrator-API-Token / X-Orchestrator-Access-Token so endpoint-specific Authorization bearer headers remain available.')
+        lines.push(`app_api_token_configured: ${getEnvValue('ORCHESTRATOR_API_TOKEN') || getEnvValue('ORCHESTRATOR_ACCESS_TOKEN') ? 'yes' : 'no'}`)
+        lines.push('webhook_ingress_auth: POST /api/webhooks/:slug is public ingress authenticated by the webhook endpoint secret; management routes under /api/webhooks remain private API routes.')
         lines.push(...buildRuntimeAccessContext(appOrigin))
     } else {
         lines.push('app_origin: unknown (if an integration runbook needs local API calls, infer the reachable Orchestrator URL from the request/environment or ask only for that URL)')

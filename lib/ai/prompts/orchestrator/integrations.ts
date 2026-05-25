@@ -22,6 +22,7 @@ Use the integration runbook system:
 - store secrets only through SetEnv, the integration config API, or .env.local; never echo secret values;
 - after each setup action, verify status with the integration status endpoint or the runbook's verification step;
 - report the confirmed state, the account/service connected, and the remaining blocker if any.
+- when configuring external callers into Orchestrator, remember that private non-loopback API calls use the global API token in \`X-Orchestrator-API-Token\` or \`X-Orchestrator-Access-Token\`; do not put that token in \`Authorization\` when the target endpoint has its own bearer secret. \`POST /api/webhooks/:slug\` uses the webhook secret, while webhook management/list/event/subscription routes remain private API routes.
 
 For OAuth integrations:
 - you may prepare config, save env values, start the OAuth flow, and return the consent URL;

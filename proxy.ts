@@ -10,7 +10,7 @@ const API_GUARD_EXEMPT_PATHS = new Set([
 ])
 
 export function proxy(request: NextRequest) {
-  if (shouldGuardApiRequest(request.nextUrl.pathname)) {
+  if (shouldGuardApiRequest(request.nextUrl.pathname, request.method)) {
     const guard = guardSensitiveRequest(request)
     if (guard) return guard
   }
@@ -18,9 +18,17 @@ export function proxy(request: NextRequest) {
   return NextResponse.next()
 }
 
-function shouldGuardApiRequest(pathname: string): boolean {
+export function shouldGuardApiRequest(pathname: string, method = "GET"): boolean {
   if (!pathname.startsWith("/api/")) return false
+  if (isPublicWebhookIngress(pathname, method)) return false
   return !API_GUARD_EXEMPT_PATHS.has(pathname)
+}
+
+function isPublicWebhookIngress(pathname: string, method: string): boolean {
+  if (method.toUpperCase() !== "POST") return false
+
+  const segments = pathname.replace(/\/+$/, "").split("/").filter(Boolean)
+  return segments.length === 3 && segments[0] === "api" && segments[1] === "webhooks"
 }
 
 export const config = {

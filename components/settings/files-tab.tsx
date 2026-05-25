@@ -716,7 +716,8 @@ function StatusBadge({
     if (!dirty) return null
     return <span className="text-[11.5px] text-amber-700 dark:text-amber-500">Unsaved changes</span>
   }
-  return <span className="text-[11.5px] text-foreground/45">{dirty ? "Unsaved" : "Auto-save on"}</span>
+  if (!dirty) return null
+  return <span className="text-[11.5px] text-foreground/45">Unsaved</span>
 }
 
 function FileIcon({ kind, className }: { kind: FileKind; className?: string }) {

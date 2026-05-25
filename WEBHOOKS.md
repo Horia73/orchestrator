@@ -16,6 +16,8 @@ Inbound webhooks are the generic event ingress for Orchestrator. The webhook sub
 
 Management routes use the normal private API guard. The public ingress route does not use same-origin protection; it authenticates with the webhook endpoint secret.
 
+If a deployment still requires the global Orchestrator API token for an external caller or a caller is using webhook management routes, send that token in `X-Orchestrator-API-Token` or `X-Orchestrator-Access-Token`. Keep webhook bearer auth separate in `Authorization`, `X-Orchestrator-Webhook-Secret`, or `X-Webhook-Secret`.
+
 ## Auth
 
 Endpoint `authMode` values:
