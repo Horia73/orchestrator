@@ -134,6 +134,16 @@ export interface WeatherCandidate {
     windowHours: number
 }
 
+/** A model-owned recurring instruction. There is no external candidate feed;
+ *  the Smart Monitor wake reads the prompt and uses its normal tool surface. */
+export interface CustomCandidate {
+    source: 'custom'
+    watchId: string
+    target: string
+    prompt: string
+    firedAt: number
+}
+
 /** Union of all candidate shapes. The adapter narrows by the `source` tag. */
 export type EvalCandidate =
     | GmailCandidate
@@ -142,6 +152,7 @@ export type EvalCandidate =
     | WhatsAppCandidate
     | WebCandidate
     | WeatherCandidate
+    | CustomCandidate
 
 // --- helpers --------------------------------------------------------------
 
@@ -464,7 +475,12 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
             const wanted = new Set<string>(rule.conditions)
             return candidate.conditions.some((condition) => wanted.has(condition))
         }
+
+        // --- model-owned/internal ---
+        case 'custom_prompt':
+            return candidate.source === 'custom'
     }
+    return false
 }
 
 function calendarIdMatches(ruleCalendarIds: string[] | undefined, candidateCalendarId: string): boolean {
@@ -501,7 +517,7 @@ export const RULE_KINDS_BY_SOURCE = {
         'weather_aqi',
         'weather_condition',
     ] as const,
-    custom: [] as const,
+    custom: ['custom_prompt'] as const,
 } satisfies Record<string, ReadonlyArray<MonitorRule['kind']>>
 
 /** Walk a (possibly composed) rule and return true if every leaf predicate is

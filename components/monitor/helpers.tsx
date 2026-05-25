@@ -83,7 +83,7 @@ export function sourceLabel(source: WatchSource): string {
     case "weather":
       return "Weather"
     case "custom":
-      return "Custom"
+      return "Model-owned"
   }
 }
 

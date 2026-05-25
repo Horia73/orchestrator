@@ -67,9 +67,9 @@ export function hasDailyMemoryConsolidationPreference(): boolean {
 
 function offerBody(): string {
     return [
-        'I can add a model-owned memory maintenance preference: when an existing scheduled/monitor wake happens after local midnight, it may review the daily working memory from the day that just ended and promote only durable facts into long-term memory.',
+        'I can add a model-owned Smart Monitor maintenance watch: after local midnight, the consolidated Smart Monitor wake may review the daily working memory from the day that just ended and promote only durable facts into long-term memory.',
         '',
-        'This would not create a separate scheduled task. A suggested time like 00:30 is only guidance for the model when it is already awake.',
+        'This would not create a separate scheduled task. The cadence and check instruction live in Smart Monitor and MONITORS.md; a suggested time like 00:30 is guidance for the consolidated wake.',
         '',
         'What it should promote:',
         '- stable user preferences and decision criteria',
@@ -91,7 +91,7 @@ const OFFER_ACTIONS = [
         label: 'Enable',
         value: [
             'Enable model-owned daily memory consolidation.',
-            'Write a concise preference to MONITORS.md or MEMORY.md: no dedicated scheduled task; if an existing model-owned scheduled/monitor wake happens after local midnight, it may consolidate the just-ended MEMORY_DAY file into USER.md/MEMORY.md/MONITORS.md/IDENTITY.md only when there is durable signal; 00:30 is guidance, not a hard schedule; run at most once per local day; stay silent unless there is an error.',
+            'Create or update a Smart Monitor custom watch for this recurring maintenance; do not create a separate scheduled task. Store the check instruction in the watch rule as custom_prompt and document the durable spec in MONITORS.md with watchId, cadence/check timing, source/scope, notify rule, and silence rule. The watch may consolidate the just-ended MEMORY_DAY file into USER.md/MEMORY.md/MONITORS.md/IDENTITY.md only when there is durable signal; 00:30 is guidance, not a hard schedule; run at most once per local day; stay silent unless there is an error.',
         ].join(' '),
         style: 'primary' as const,
     },

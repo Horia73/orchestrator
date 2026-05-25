@@ -83,11 +83,11 @@ const files: Array<{ path: string; content: string; resetByDefault: boolean }> =
         content: [
             '# MONITORS',
             '',
-            'Document proactive monitoring preferences, candidate monitor specs, and active scheduled task ids here.',
+            'Document proactive monitoring preferences, candidate monitor specs, recurring check prompts, and active Smart Monitor watch ids here.',
             '',
-            'A monitor is active only when it has a scheduledTaskId from the Scheduling runtime. Notes in this file are not automation by themselves.',
+            'A Smart Monitor entry is active only when it has a runtime watchId. Notes in this file are not automation by themselves. The only scheduledTaskId expected here is the single consolidated Smart Monitor heartbeat when useful for audit.',
             '',
-            'Each entry should define status, scheduledTaskId when active, what to check, cadence, sources/connectors, notify threshold, whether the user wants important-only Inbox messages or timed summaries, and when to stay silent.',
+            'Each entry should define status, watchId when active, what to check, cadence/check timing, sources/connectors or custom scope, check prompt, notify threshold, whether the user wants important-only Inbox messages or timed summaries, and when to stay silent.',
             '',
         ].join('\n'),
     },
@@ -224,7 +224,7 @@ write(path.join('MEMORY_DAY', `${today}.md`), [
     '',
     `Daily working memory for ${today} (UTC).`,
     '',
-    'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design and may be consolidated opportunistically by a model-owned scheduled/monitor wake after local midnight when that preference is recorded.',
+    'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design and may be consolidated opportunistically by a model-owned Smart Monitor maintenance watch after local midnight when that preference is recorded.',
     '',
 ].join('\n'))
 

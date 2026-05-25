@@ -58,13 +58,14 @@ export const notifyInboxTool: ToolDef = {
     description: [
         'Surface a message to the user\'s Inbox. Use inside a scheduled run only when the result meets the task\'s notify criteria (something changed, something needs the user, an error), or inside an inline Inbox follow-up when you need quick-reply buttons.',
         'If nothing is noteworthy, do NOT call this — the run still gets recorded in Past runs, just silently. Default to staying silent.',
+        'Use `title` as an email-style Inbox subject whenever you surface something user-facing. Make it specific to the result, not a generic source label like "Smart monitor" or "Scheduled run".',
         'When asking the user to choose, include short `actions` buttons. Each action must be a safe user reply, not an autonomous external action; the model will continue in the same Inbox thread when clicked.',
         'Errors are surfaced automatically; you do not need to call this for failures.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
-            title: { type: 'string', description: 'Optional short headline for the Inbox item.' },
+            title: { type: 'string', description: 'Short email-style subject for the Inbox item. Be specific, e.g. "WhatsApp: today\'s schedule changed" or "Garage door left open".' },
             body: { type: 'string', description: 'The concise message to show the user (markdown ok).' },
             actions: {
                 type: 'array',

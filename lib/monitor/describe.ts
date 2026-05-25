@@ -73,11 +73,15 @@ export function describeRule(rule: MonitorRule): string {
         case 'weather_condition':
             return `Weather ${rule.location ?? 'target'} condition in next ${rule.windowHours ?? 24}h: ${rule.conditions.join(' OR ')}`
 
+        case 'custom_prompt':
+            return `Model-owned instruction: ${rule.prompt.replace(/\s+/g, ' ').trim().slice(0, 240)}${rule.prompt.length > 240 ? '...' : ''}`
+
         case 'any_of':
             return `ANY of: { ${rule.rules.map(describeRule).join(' | ')} }`
         case 'all_of':
             return `ALL of: { ${rule.rules.map(describeRule).join(' & ')} }`
     }
+    return `Unknown rule: ${(rule as { kind?: string }).kind ?? 'unknown'}`
 }
 
 export function describeAction(action: MonitorAction): string {

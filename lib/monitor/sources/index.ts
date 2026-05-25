@@ -57,7 +57,6 @@ export function listSourceCapabilities(): SourceCapability[] {
  *  Used at create/update time before the watch lands in the store — produces
  *  a friendly error instead of a tick-time runtime failure. */
 export function assertRuleMatchesSource(rule: MonitorRule, source: WatchSource): void {
-    if (source === 'custom') return // adapter-less; nothing to validate yet.
     if (!ruleMatchesSource(rule, source)) {
         throw new Error(
             `Rule contains predicate(s) not supported by source "${source}". Allowed kinds: ${getSourceAdapter(source).supportedRuleKinds.join(', ')}.`,

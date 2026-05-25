@@ -4,39 +4,71 @@ import type {
     CheapCheckResult,
     SourceAdapter,
 } from './types'
+import { evaluateRule, type CustomCandidate } from '../rules'
+import type { MonitorRule } from '../schema'
 
 // ---------------------------------------------------------------------------
-// Reserved-slot custom source adapter.
+// Model-owned custom source adapter.
 //
-// `custom` exists in the WatchSource union as an escape hatch for future
-// adapters that don't fit the existing sources (e.g., custom HTTP webhooks,
-// IoT MQTT subscriptions, third-party services). Today it is intentionally
-// unimplemented — creating a watch with source: 'custom' is allowed by the
-// schema but cheap-check reports it unavailable, so the engine skips it.
-//
-// When a real custom source ships, replace this stub with the concrete
-// adapter and register it in lib/monitor/sources/index.ts.
+// `custom` watches let Smart Monitor carry recurring model-owned work whose
+// check is described by prompt rather than by a connector-specific predicate.
+// The active Smart Monitor path wakes the model on the consolidated heartbeat
+// and includes the custom prompt in the watch list. The cheap-check below keeps
+// the legacy pass usable by emitting one due candidate per custom watch tick.
 // ---------------------------------------------------------------------------
+
+function collectCustomPrompts(rule: MonitorRule): string[] {
+    if (rule.kind === 'custom_prompt') return [rule.prompt]
+    if (rule.kind === 'any_of' || rule.kind === 'all_of') {
+        return rule.rules.flatMap(collectCustomPrompts)
+    }
+    return []
+}
 
 export const customSourceAdapter: SourceAdapter = {
     source: 'custom',
-    supportedRuleKinds: [],
+    supportedRuleKinds: ['custom_prompt'],
     supportedActionKinds: ['notify_inbox'],
 
     async isAvailable(): Promise<AvailabilityResult> {
-        return {
-            available: false,
-            reason: 'Custom source has no adapter yet. Pick gmail / google_calendar / whatsapp / home_assistant / web / weather.',
-        }
+        return { available: true }
     },
 
     async cheapCheck(input: CheapCheckInput): Promise<CheapCheckResult> {
+        const prompts = collectCustomPrompts(input.watch.rule)
+        const prompt = prompts.join('\n\n').trim() || input.watch.target
+        const candidate: CustomCandidate = {
+            source: 'custom',
+            watchId: input.watch.id,
+            target: input.watch.target,
+            prompt,
+            firedAt: input.now,
+        }
+        const matches = evaluateRule(input.watch.rule, candidate)
+            ? [{
+                candidate,
+                summary: `Model-owned check due: ${input.watch.title}`,
+                externalId: `${input.watch.id}:${input.now}`,
+                details: {
+                    target: input.watch.target,
+                    prompt,
+                },
+            }]
+            : []
+
         return {
-            ok: false,
-            error: 'Custom source has no adapter yet.',
-            matches: [],
-            candidatesSeen: 0,
-            stateUpdate: {},
+            ok: true,
+            matches,
+            candidatesSeen: 1,
+            stateUpdate: {
+                lastFetchedAt: input.now,
+                lastSeenId: `${input.watch.id}:${input.now}`,
+                extra: {
+                    custom: {
+                        lastDueAt: input.now,
+                    },
+                },
+            },
             fetchedAt: input.now,
         }
     },

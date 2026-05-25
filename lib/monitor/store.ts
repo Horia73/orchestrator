@@ -326,8 +326,6 @@ function applyNotifyDefaults(partial: NotifyPolicy | undefined): NotifyPolicy {
 }
 
 function assertRuleSourceCompat(rule: MonitorRule, source: WatchSource): void {
-    // `custom` slot is intentionally unconstrained — adapter-less today.
-    if (source === 'custom') return
     if (!ruleMatchesSource(rule, source)) {
         const allowed = (RULE_KINDS_BY_SOURCE[source] as readonly MonitorRule['kind'][]).join(', ')
         throw new Error(

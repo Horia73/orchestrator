@@ -771,7 +771,7 @@ export function AppSidebar() {
                               ) : unread ? (
                                 <span className="size-2 rounded-full bg-[#b76440] group-hover/menu-item:hidden group-focus-within/menu-item:hidden" />
                               ) : null}
-                              <Archive className="hidden !size-[17px] group-hover/menu-item:block group-focus-within/menu-item:block" />
+                              <Archive className="hidden !size-[15px] group-hover/menu-item:block group-focus-within/menu-item:block" />
                             </SidebarMenuAction>
                           )}
                         </SidebarMenuItem>

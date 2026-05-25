@@ -75,6 +75,48 @@ interface NotifyRequest {
   actions?: InboxReplyAction[]
 }
 
+function normalizeInboxSubject(value: unknown): string | undefined {
+  const subject =
+    typeof value === "string" ? value.replace(/\s+/g, " ").trim() : ""
+  if (!subject) return undefined
+  return subject.length > 120
+    ? `${subject.slice(0, 117).trimEnd()}...`
+    : subject
+}
+
+function subjectFromNotifications(
+  notifications: NotifyRequest[],
+  fallback: string
+): string {
+  const subjects = notifications
+    .map((notification) => normalizeInboxSubject(notification.title))
+    .filter((subject): subject is string => Boolean(subject))
+  if (subjects.length === 0) return fallback
+
+  const uniqueSubjects = Array.from(new Set(subjects))
+  if (uniqueSubjects.length === 1) return uniqueSubjects[0]
+
+  const suffix = ` + ${uniqueSubjects.length - 1} more`
+  const first = uniqueSubjects[0]
+  const base =
+    first.length + suffix.length > 120
+      ? `${first.slice(0, Math.max(1, 120 - suffix.length - 3)).trimEnd()}...`
+      : first
+  return `${base}${suffix}`
+}
+
+function bodyFromNotifications(notifications: NotifyRequest[]): string {
+  if (notifications.length === 1) return notifications[0].body
+  return notifications
+    .map((notification) => {
+      const subject = normalizeInboxSubject(notification.title)
+      return subject
+        ? `**${subject}**\n\n${notification.body}`
+        : notification.body
+    })
+    .join("\n\n---\n\n")
+}
+
 /**
  * Execute a fired task. The run is ALWAYS recorded in Past runs (audit). It
  * only reaches the user's Inbox when it explicitly surfaces:
@@ -217,7 +259,7 @@ export async function runScheduledTask(
                 const body = typeof a?.body === "string" ? a.body.trim() : ""
                 if (body)
                   notifications.push({
-                    title: typeof a?.title === "string" ? a.title : undefined,
+                    title: normalizeInboxSubject(a?.title),
                     body,
                     actions: normalizeInboxReplyActions(a.actions),
                   })
@@ -301,7 +343,7 @@ export async function runScheduledTask(
               const body = typeof a?.body === "string" ? a.body.trim() : ""
               if (body)
                 notifications.push({
-                  title: typeof a?.title === "string" ? a.title : undefined,
+                  title: normalizeInboxSubject(a?.title),
                   body,
                   actions: normalizeInboxReplyActions(a.actions),
                 })
@@ -396,9 +438,7 @@ export async function runScheduledTask(
   } else if (task.action.kind === "agent" || task.action.kind === "monitor") {
     if (notifications.length > 0) {
       surface = true
-      inboxBody = notifications
-        .map((n) => (n.title ? `**${n.title}**\n\n${n.body}` : n.body))
-        .join("\n\n---\n\n")
+      inboxBody = bodyFromNotifications(notifications)
     }
   } else if (task.action.kind === "tool") {
     surface = isOnce // one-shot tool → confirm; recurring tool success → silent
@@ -407,6 +447,10 @@ export async function runScheduledTask(
   let inboxConversationId: string | null = null
   if (surface) {
     inboxConversationId = conversationId
+    const inboxTitle =
+      notifications.length > 0
+        ? subjectFromNotifications(notifications, task.title)
+        : task.title
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",
@@ -423,12 +467,12 @@ export async function runScheduledTask(
     createInboxConversation({
       id: conversationId,
       taskId: task.id,
-      title: task.title,
+      title: inboxTitle,
       messages: [userMsg, assistantMsg],
     })
     void sendInboxPushNotification({
       conversationId,
-      title: task.title,
+      title: inboxTitle,
       body: inboxBody,
     })
   }

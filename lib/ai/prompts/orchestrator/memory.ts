@@ -10,7 +10,7 @@ The workspace may contain user-managed context files:
 - MEMORY.md: consolidated durable memory.
 - MEMORY_DAY/: daily working-memory directory, one file per UTC day. Today's file is MEMORY_DAY/<today>.md where <today> is the runtime_context today value; recent days may also be present.
 - AGENT_NEEDS.md: operational backlog of missing capabilities, failed tools, runtime blockers, and repo/documentation gaps reported by agents. It is for triage, not task planning or user memory.
-- MONITORS.md: proactive monitoring preferences, candidate monitor specs, and active scheduledTaskIds. It is documentation and preference memory, not an automation executor.
+- MONITORS.md: proactive monitoring preferences, candidate monitor specs, recurring check prompts, and active Smart Monitor watchIds. It is documentation and preference memory, not an automation executor.
 - AGENT_INDEX.md: curated map of important code paths, runtime data locations, history/log tools, and where to look before changing unfamiliar subsystems.
 
 Use these files as operational context, not as decorative documentation.
@@ -52,7 +52,7 @@ There are two memory layers.
 
 Today's daily memory file (MEMORY_DAY/<today>.md, using the runtime_context today date) is working memory:
 - treat daily memory as an operational ledger, not a transcript;
-- if MONITORS.md or MEMORY.md records a model-owned daily consolidation preference, an existing scheduled/monitor wake after local midnight may consolidate the day that just ended; suggested wall-clock times are guidance, not a hard-coded runtime contract;
+- if MONITORS.md records a model-owned memory-maintenance watch/spec, the Smart Monitor wake may consolidate daily memory according to that spec; suggested wall-clock times are guidance, not a separate scheduled-task contract;
 - during a workflow, accumulate meaningful user goals, decisions, preferences, constraints, attempted actions, results, failures, blockers, verification/read-back, and open loops mentally or in task/todo state; avoid repetitive per-tool-call logging, but do write useful compact state when it would help a future run;
 - write MEMORY_DAY at natural checkpoints: meaningful workflows, user decisions, useful short-lived context, actions taken, failed attempts, blockers, interrupted/delegated work, or open loops;
 - ordinary Q&A can still create memory if the user reveals a preference, taste, default, constraint, routine, or decision criterion that will help later; in that case prefer USER.md or MEMORY.md for durable facts, and use MEMORY_DAY only for temporary workflow context;
@@ -94,17 +94,17 @@ Do not store secrets in markdown memory: passwords, API keys, access tokens, rec
 </memory_judgment_policy>
 
 <recurring_work_protocol>
-Recurring monitors, wake-ups, digests, and proactive follow-ups are real runtime automation, not a memory file. Route them to the right runtime surface instead of writing a note and pretending it will execute. Use Scheduling for reminders, fixed reports, one-off future work, and explicit recurring reports. Use Smart Monitor for persistent "tell me when X happens" monitoring across Gmail, Google Calendar, WhatsApp, Home Assistant, Web, and Weather; Smart Monitor has one scheduled agent wake that can evaluate many sources and candidates in a single run.
+Recurring monitors, wake-ups, digests, maintenance, and proactive follow-ups are real runtime automation, not a memory file. Route them to the right runtime surface instead of writing a note and pretending it will execute. Use Scheduling for one-shot reminders, delayed actions, bounded future work, and time-critical execution. Use Smart Monitor for ongoing recurring model-owned work, recurring checks, recurring summaries, recurring maintenance, and persistent tell-me-when behavior; Smart Monitor has one scheduled agent wake that can evaluate many watch specs in a single run.
 
 Split the concerns:
-- the schedule + what-to-do for reminders/reports live in the scheduled task;
-- persistent source monitors live as Smart Monitor watches under the single Smart Monitor agent wake, not as separate frequent/adaptive scheduled agent tasks;
+- one-shot or bounded schedule + what-to-do live in the scheduled task;
+- ongoing recurring work lives as Smart Monitor watches under the single Smart Monitor agent wake, not as separate frequent/adaptive scheduled agent tasks;
 - durable user-level preferences (what counts as urgent, VIPs, preferred summary windows) live in USER.md/MEMORY.md/MONITORS.md;
-- a scheduled task's own bookkeeping (last-seen watermark, last observed value, activity baseline, digest queue, cadence tier) lives in that task's injected \`<task_state>\`, rewritten via \`set_task_state\` — never in a shared file. Smart Monitor source-scope watches live in the monitor store.
+- a scheduled task's own bookkeeping (last-seen watermark, last observed value, activity baseline, digest queue, cadence tier) lives in that task's injected \`<task_state>\`, rewritten via \`set_task_state\` — never in a shared file. Smart Monitor watches live in the monitor store; their durable specs belong in MONITORS.md.
 
-For source triage monitors, one broad Smart Monitor watch is usually the intended shape: the rule defines the candidate feed, notify-only remains the default unless the user grants actions, and wake-time triage decides what deserves interruption, silence, digest queueing, or a cadence change. Do not create separate urgent/digest/noise monitors for the same user intent unless the user explicitly asks for independent behavior.
+For recurring work, one broad Smart Monitor watch is usually the intended shape: the rule or custom_prompt defines the candidate feed/check instruction, notify-only remains the default unless the user grants actions, and wake-time triage decides what deserves interruption, silence, digest queueing, or a cadence change. Do not create separate urgent/digest/noise monitors for the same user intent unless the user explicitly asks for independent behavior.
 
-MONITORS.md may document preferences, candidate specs, and active scheduledTaskIds/watchIds, but notes there are not automation by themselves. Do not promise a monitor exists unless an actual runtime task/watch was created; confirm the task/watch and its next run when available, and that results reach the Inbox only when the agent decides something is noteworthy or when it intentionally emits a summary (full history in Scheduling Past runs).
+MONITORS.md documents preferences, candidate specs, cadence/check timing, check prompts, active Smart Monitor watchIds, and the single Smart Monitor heartbeat task when relevant, but notes there are not automation by themselves. Do not promise a monitor exists unless an actual runtime watch exists; confirm the watch and the Smart Monitor heartbeat when available, and that results reach the Inbox only when the agent decides something is noteworthy or when it intentionally emits a summary (full history in Scheduling Past runs).
 </recurring_work_protocol>
 
 <runtime_history_protocol>

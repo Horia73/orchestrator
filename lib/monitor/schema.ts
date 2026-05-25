@@ -4,16 +4,16 @@ import { z } from 'zod'
 // Smart Monitor domain schema.
 //
 // A "watch" is one source/intention boundary for the Smart Monitor agent:
-//   - source + target: WHAT is being observed (a Gmail sender, an HA entity,
-//     a WhatsApp contact, a URL, etc.).
-//   - rule:            a structured fetch/candidate-scope hint. The active
-//     agent wake decides importance; do not treat this as the final notify rule.
+//   - source + target: WHAT is being observed or maintained.
+//   - rule:            a structured fetch/candidate-scope hint or custom
+//     model-owned prompt. The active agent wake decides importance; do not
+//     treat this as the final notify rule.
 //   - allowedActions:  permission boundary — what the model is allowed to do
 //     when the rule matches (notify_inbox is the only default; everything
-//     else is opt-in by the user, e.g. gmail_archive, ha_set_state).
-//   - cadence/notify:  legacy metadata retained for old rows/tools. The active
-//     Smart Monitor wake cadence, digest behavior, and quiet/active windows are
-//     agent-owned via the single scheduled task state.
+//     else is opt-in by the user.
+//   - cadence/notify:  desired watch pacing and notification metadata. The
+//     active Smart Monitor wake, digest behavior, and quiet/active windows are
+//     agent-owned via the single scheduled task state and MONITORS.md specs.
 //   - state:           the watch's private memory between ticks (last-seen
 //     id, last value, quiet/noisy run counts, last-notified watermark, …).
 //   - suppressPatterns: noise filter the model accumulates over time via
@@ -27,8 +27,9 @@ import { z } from 'zod'
 // --- sources ---------------------------------------------------------------
 
 /** Pluggable source kinds. Adding a new source = a new value here + a new
- *  adapter in lib/monitor/sources/. The `custom` slot is an escape hatch for
- *  future ad-hoc HTTP/RSS observers without expanding the enum. */
+ *  adapter in lib/monitor/sources/. The `custom` slot is for model-owned
+ *  recurring work that is described by a prompt instead of an external
+ *  connector predicate. */
 export const WatchSourceSchema = z.enum([
     'gmail',
     'google_calendar',
@@ -128,9 +129,10 @@ export type NotifyPolicyPartialInput = z.infer<typeof NotifyPolicyPartialInputSc
 
 // --- rules (recursive discriminated union) --------------------------------
 
-/** Deterministic predicates per source. Evaluated by lib/monitor/rules.ts
- *  inside the cheap tick — NO model involved. Composition via any_of (OR) /
- *  all_of (AND). */
+/** Predicates/instructions per source. Connector rules are evaluated by
+ *  lib/monitor/rules.ts inside the cheap tick with NO model involved.
+ *  `custom_prompt` is a model-owned recurring instruction consumed by the
+ *  Smart Monitor wake. Composition via any_of (OR) / all_of (AND). */
 export type MonitorRule =
     // gmail
     | { kind: 'gmail_from'; senders: string[] }
@@ -166,6 +168,8 @@ export type MonitorRule =
     | { kind: 'weather_uv'; location?: string; windowHours?: number; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
     | { kind: 'weather_aqi'; location?: string; op: '>' | '<' | '>=' | '<=' | '==' | '!='; value: number }
     | { kind: 'weather_condition'; location?: string; windowHours?: number; conditions: Array<'clear' | 'partly-cloudy' | 'cloudy' | 'overcast' | 'fog' | 'drizzle' | 'rain' | 'heavy-rain' | 'sleet' | 'snow' | 'heavy-snow' | 'hail' | 'thunderstorm' | 'windy' | 'unknown'> }
+    // model-owned/internal
+    | { kind: 'custom_prompt'; prompt: string }
     // composition
     | { kind: 'any_of'; rules: MonitorRule[] }
     | { kind: 'all_of'; rules: MonitorRule[] }
@@ -355,6 +359,11 @@ const LeafRuleSchema = z.discriminatedUnion('kind', [
         location: WeatherRuleLocationSchema,
         windowHours: WeatherWindowHoursSchema,
         conditions: z.array(WeatherMonitorConditionSchema).min(1).max(16),
+    }),
+    // model-owned/internal
+    z.object({
+        kind: z.literal('custom_prompt'),
+        prompt: z.string().min(1).max(8000),
     }),
 ])
 

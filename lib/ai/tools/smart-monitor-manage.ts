@@ -13,14 +13,14 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 //                                 kinds, action kinds). Read-only.
 //   - monitor_watch_list       : compact list of every watch with status.
 //   - monitor_watch_get        : full detail of one watch, incl. state.
-//   - monitor_watch_add        : create a new watch (rule + cadence + notify).
+//   - monitor_watch_add        : create a new watch (rule/prompt + cadence + notify).
 //   - monitor_watch_update     : partial patch of an existing watch.
 //   - monitor_watch_remove     : delete a watch by id.
 //
 // Cadence values are accepted as seconds (number) OR as a duration string
-// (e.g. "15m", "2h") for the model's ergonomics — same form used by
-// schedule_task. These fields are legacy watch metadata; the active Smart
-// Monitor wake cadence is owned by the single scheduled agent task.
+// for the model's ergonomics — same form used by schedule_task. These fields
+// describe desired per-watch pacing; the active
+// Smart Monitor wake is still one consolidated scheduled agent task.
 // ---------------------------------------------------------------------------
 
 // --- duration parsing ------------------------------------------------------
@@ -49,7 +49,7 @@ function normalizeCadenceInput(raw: unknown): Record<string, unknown> | undefine
         if (input[key] !== undefined) {
             const secs = parseDurationSeconds(input[key])
             if (secs === null) {
-                throw new Error(`cadence.${key} must be a positive number of seconds or a duration string like "15m" / "2h".`)
+                throw new Error(`cadence.${key} must be a positive number of seconds or a duration string.`)
             }
             out[key] = secs
         }
@@ -83,8 +83,8 @@ export const monitorDescribeSourcesTool: ToolDef = {
     id: 'monitor_describe_sources',
     name: 'monitor_describe_sources',
     description: [
-        'List every Smart Monitor source and its capabilities: which MonitorRule predicate kinds it supports (gmail_from, ha_threshold, web_status, …) and which MonitorAction kinds the user may grant for watches on that source.',
-        'Call this BEFORE proposing a watch to the user so you propose only predicates / actions the source actually understands. The any_of/all_of composition is allowed for every source.',
+        'List every Smart Monitor source and its capabilities: which MonitorRule predicate kinds or model-owned instruction kinds it supports, and which MonitorAction kinds the user may grant for watches on that source.',
+        'Call this BEFORE proposing a watch to the user so you propose only predicates / actions the source actually understands. The any_of/all_of composition is allowed for every source. Use custom/custom_prompt for recurring checks described by instructions instead of a connector predicate.',
         'Read-only; safe to call as often as needed.',
     ].join(' '),
     input_schema: { type: 'object', properties: {} },
@@ -110,9 +110,9 @@ export async function executeMonitorDescribeSources(): Promise<ToolResult> {
                 default: DEFAULT_CADENCE_SECONDS,
             },
             notes: [
-                'Create broad source watches that express the user intent/candidate scope. Do not invent preset urgent keyword lists; use source predicates only as fetch hints.',
-                'For WhatsApp broad monitoring, wa_unread can represent new/unread WhatsApp candidates; narrow with wa_from only when the user explicitly scoped the watch to specific chats.',
-                'Cadence fields on watches are legacy metadata. The active Smart Monitor agent wake defaults to 15m and self-paces by rescheduling the single Smart Monitor scheduled task.',
+                'Create broad watches that express the user intent, candidate scope, and recurring check instructions. Connector predicates are fetch hints; custom_prompt is the direct model-owned check instruction.',
+                'For recurring work, record cadence and check instructions in the watch and document the durable preference/spec in MONITORS.md. Do not create a separate recurring scheduled task for the same ongoing monitor.',
+                'Cadence fields on watches describe desired pacing. The active Smart Monitor agent wake starts from the consolidated heartbeat and may self-pace by rescheduling the single Smart Monitor scheduled task.',
                 'notify_inbox is implicitly allowed on every watch; everything else needs explicit user consent in allowedActions.',
                 'Digest/quiet timing is model-owned at wake time via task_state and reschedule_task, not stored as fixed watch policy.',
                 'For the actual rule/action object schemas see lib/monitor/schema.ts on the project.',
@@ -291,26 +291,27 @@ export const monitorWatchAddTool: ToolDef = {
     name: 'monitor_watch_add',
     description: [
         'Create a Smart Monitor watch.',
-        'Use this when the user wants to subscribe to a persistent source watch (Gmail, Google Calendar, WhatsApp, Home Assistant, web endpoint changes, weather thresholds). Extract the main user intent and translate it to a broad structured MonitorRule fetch hint; call monitor_describe_sources first if unsure of supported predicates.',
-        'Do not create canned preset rules or urgent keyword lists. For broad WhatsApp triage prefer wa_unread unless the user explicitly scoped contacts/chats; use wa_from only for a contact-specific watch.',
-        'Confirm only the source/scope, what the user cares about, and any non-notify actions they explicitly authorize. Digest timing and quiet/active windows are decided by the Smart Monitor agent at wake time using task_state, not encoded here.',
-        'For connector integrations, use at most one watch per source: one Gmail watch, one Google Calendar watch, one WhatsApp watch, one Home Assistant watch. If a watch already exists for that integration, update it instead of adding another.',
-        'Watches start ENABLED unless the user explicitly asks to pause. Cadence fields are legacy metadata; the single Smart Monitor scheduled agent task defaults to 15m and self-paces with reschedule_task.',
+        'Use this for ongoing recurring monitoring, recurring summaries, and model-owned recurring maintenance. Extract the main user intent and translate it either to a source predicate or to a custom_prompt instruction; call monitor_describe_sources first if unsure of supported predicates.',
+        'Do not create canned preset rules or fixed keyword tiers. Use source predicates as broad candidate hints, and let the Smart Monitor wake decide what deserves notification, silence, digesting, or a cadence change.',
+        'Confirm only the source/scope, what the user cares about, desired cadence/check timing, and any non-notify actions they explicitly authorize. Digest timing and quiet/active windows are decided by the Smart Monitor agent at wake time using task_state.',
+        'For connector integrations, use at most one watch per source by default. If a watch already exists for that integration, update it instead of adding another unless the user wants separate behavior. Custom model-owned watches may be separate when they represent distinct recurring instructions.',
+        'After creating or updating a watch, document the durable spec in MONITORS.md: watchId, status, cadence, source/scope, check prompt, notify rule, and silence rule.',
+        'Watches start ENABLED unless the user explicitly asks to pause. The single Smart Monitor scheduled agent task defaults to the consolidated heartbeat and self-paces with reschedule_task.',
         'Returns the new watch id. The Smart Monitor agent-wake system task auto-arms on first enabled watch.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
-            title: { type: 'string', description: 'Short human-readable label shown in /monitor and the wake brief. e.g. "Mom @ Gmail" or "Garage door sensor".' },
-            source: { type: 'string', description: 'One of: gmail, google_calendar, whatsapp, home_assistant, web, weather. (custom is reserved.)' },
-            target: { type: 'string', description: 'Source-specific identifier for the thing being watched. Gmail: address or query; Google Calendar: primary, all, selected, or comma-separated calendar ids; WhatsApp: contact name; HA: entity_id; Web: URL; Weather: location.' },
-            rule: { type: 'object', description: 'Structured MonitorRule. Predicate kinds must match the source — call monitor_describe_sources to see which are valid. Use any_of / all_of for composition.' },
+            title: { type: 'string', description: 'Short human-readable label shown in /monitor and the wake brief.' },
+            source: { type: 'string', description: 'One of: gmail, google_calendar, whatsapp, home_assistant, web, weather, custom. Use custom for model-owned recurring instructions.' },
+            target: { type: 'string', description: 'Human-readable scope of the thing being watched. Format is source-specific; for custom, describe the recurring responsibility.' },
+            rule: { type: 'object', description: 'Structured MonitorRule. Predicate kinds must match the source; for custom use custom_prompt with the check instructions. Use any_of / all_of for composition.' },
             allowed_actions: { type: 'array', description: 'MonitorAction[] the model is permitted to execute when matches survive. notify_inbox is implicit and need NOT be listed; everything else requires explicit user consent (gmail_archive, gmail_mark_read, gmail_label_add, ha_call_service, wa_send_reply).' },
             cadence: {
                 type: 'object',
-                description: 'Cadence policy. Accepts {current, min, max} as numbers (seconds) OR strings ("15m"/"2h"/"1d"), plus {adaptive: bool}.',
+                description: 'Cadence policy. Accepts {current, min, max} as numbers (seconds) OR duration strings, plus {adaptive: bool}.',
                 properties: {
-                    current: { type: 'string', description: 'Default cadence (number seconds or "15m"). Defaults to 900s.' },
+                    current: { type: 'string', description: 'Default cadence as seconds or a duration string. Defaults to 900s.' },
                     min: { type: 'string', description: 'Lower bound for adaptive widening. Defaults to 900s.' },
                     max: { type: 'string', description: 'Upper bound for adaptive widening. Defaults to 43200s (12h).' },
                     adaptive: { type: 'boolean', description: 'Whether the engine may widen on quiet runs / tighten on activity. Defaults to true.' },
@@ -416,9 +417,9 @@ export const monitorWatchUpdateTool: ToolDef = {
     id: 'monitor_watch_update',
     name: 'monitor_watch_update',
     description: [
-        'Partial-update an existing Smart Monitor watch. Every field is optional — only the ones you pass are touched. Use this to change the source-scope rule, grant/revoke an allowed action, or pause/resume via `enabled`.',
+        'Partial-update an existing Smart Monitor watch. Every field is optional — only the ones you pass are touched. Use this to change the source-scope rule or custom_prompt, grant/revoke an allowed action, adjust cadence, or pause/resume via `enabled`.',
         'Source is immutable (would invalidate the rule). To switch source, remove + add. Suppress patterns are managed via monitor_wake_feedback, NOT here.',
-        'cadence/notify are legacy metadata. Active wake cadence, digest batching, and quiet/active windows are owned by the Smart Monitor agent task state and reschedule_task.',
+        'After materially updating a watch, update its MONITORS.md durable spec so the prompt-facing documentation matches runtime.',
     ].join(' '),
     input_schema: {
         type: 'object',

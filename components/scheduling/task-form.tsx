@@ -41,7 +41,7 @@ const MONITOR_INFO: Record<MonitorKind, { label: string; checks: string; executi
     },
     smart: {
         label: "Smart monitor",
-        checks: "All enabled Smart Monitor watches across Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather.",
+        checks: "All enabled Smart Monitor watches, including connector-backed and model-owned recurring checks.",
         execution: "Wakes the orchestrator directly. The agent inspects relevant sources, updates its task state, and may reschedule this single task based on history.",
         output: "Runs stay in Past runs. Inbox is used only when the agent decides something matters or intentionally emits a summary.",
     },

@@ -43,13 +43,13 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     {
         id: 'monitoring',
         label: 'Smart Monitor',
-        capability: '"Tell me when X happens at <source>" subscriptions. One consolidated scheduled agent wake defaults to 15 minutes across Gmail / Google Calendar / WhatsApp / Home Assistant / Web / Weather; the agent decides what to inspect, notify, digest, and how to self-pace from history.',
+        capability: 'Ongoing recurring model-owned work: persistent source monitoring, recurring summaries, recurring maintenance, and tell-me-when subscriptions. One consolidated scheduled agent wake handles connector-backed and custom prompt-backed watches; the agent decides what to inspect, notify, digest, and how to self-pace from history.',
         doctrine: MONITORING_DOCTRINE,
     },
     {
         id: 'scheduling',
         label: 'Scheduled tasks',
-        capability: 'Real runtime automation for "do X at/in/every <time>" — one-shot or recurring. Two action types: "tool" (cheap, no model at fire time) or "agent" (wakes a model with your prompt). Runs are silent by default; results reach the Inbox only via notify_inbox or errors.',
+        capability: 'Real runtime automation for one-shot, delayed, bounded, and time-critical future work. Two action types: "tool" (cheap, no model at fire time) or "agent" (wakes a model with your prompt). Ongoing recurring model-owned work belongs in Smart Monitor.',
         doctrine: SCHEDULING_DOCTRINE,
     },
     {

@@ -23,6 +23,7 @@ import {
     ruleMatchesSource,
     RULE_KINDS_BY_SOURCE,
     type EvalCandidate,
+    type CustomCandidate,
     type GmailCandidate,
     type GoogleCalendarCandidate,
     type HomeAssistantCandidate,
@@ -515,7 +516,7 @@ check('registry returns web adapter', getSourceAdapter('web').source === 'web')
 check('registry returns ha adapter', getSourceAdapter('home_assistant').source === 'home_assistant')
 check('registry returns wa adapter', getSourceAdapter('whatsapp').source === 'whatsapp')
 check('registry returns weather adapter', getSourceAdapter('weather').source === 'weather')
-check('registry returns custom adapter (stub)', getSourceAdapter('custom').source === 'custom')
+check('registry returns custom adapter', getSourceAdapter('custom').source === 'custom')
 
 const caps = listSourceCapabilities()
 check('listSourceCapabilities covers all sources', caps.length === 7)
@@ -550,6 +551,27 @@ check('ruleMatchesSource accepts calendar rule on google_calendar', ruleMatchesS
     { kind: 'calendar_event_query', q: 'onboarding' },
     'google_calendar',
 ))
+check('ruleMatchesSource accepts custom_prompt on custom', ruleMatchesSource(
+    { kind: 'custom_prompt', prompt: 'Run the configured model-owned recurring check.' },
+    'custom',
+))
+{
+    const candidate: CustomCandidate = {
+        source: 'custom',
+        watchId: 'mw_custom',
+        target: 'model-owned maintenance',
+        prompt: 'Run the configured model-owned recurring check.',
+        firedAt: Date.now(),
+    }
+    check('custom_prompt evaluates on custom candidate', evaluateRule(
+        { kind: 'custom_prompt', prompt: 'Run the configured model-owned recurring check.' },
+        candidate,
+    ))
+}
+check('ruleMatchesSource rejects web rule on custom', !ruleMatchesSource(
+    { kind: 'web_status', url: 'https://x', op: 'equals', value: 200 },
+    'custom',
+))
 
 expectThrow('assertRuleMatchesSource throws on mismatch', () => assertRuleMatchesSource(
     { kind: 'web_status', url: 'https://x', op: 'equals', value: 200 },
@@ -563,7 +585,7 @@ check('RULE_KINDS_BY_SOURCE home_assistant count', RULE_KINDS_BY_SOURCE.home_ass
 check('RULE_KINDS_BY_SOURCE web count', RULE_KINDS_BY_SOURCE.web.length === 3)
 check('RULE_KINDS_BY_SOURCE whatsapp count', RULE_KINDS_BY_SOURCE.whatsapp.length === 4)
 check('RULE_KINDS_BY_SOURCE weather count', RULE_KINDS_BY_SOURCE.weather.length === 6)
-check('RULE_KINDS_BY_SOURCE custom is empty', RULE_KINDS_BY_SOURCE.custom.length === 0)
+check('RULE_KINDS_BY_SOURCE custom count', RULE_KINDS_BY_SOURCE.custom.length === 1)
 
 console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
 process.exit(failures === 0 ? 0 : 1)
