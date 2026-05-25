@@ -7,7 +7,9 @@ import { z } from 'zod'
 // daemon: every run must finish quickly, return state, and choose whether it
 // should continue, pause, or complete. Runtime permissions are declared up
 // front and enforced by the Node parent process before any integration/file/
-// network operation executes.
+// app-mediated operation executes. In trusted_python mode, ordinary Python
+// stdlib work is allowed directly while the runtime still controls lifecycle,
+// timeout, workspace confinement, notifications, app tools, and audit.
 // ---------------------------------------------------------------------------
 
 export const MicroscriptStatusSchema = z.enum([
@@ -36,6 +38,25 @@ export const MicroscriptScheduleSchema = z.discriminatedUnion('kind', [
     }),
 ])
 export type MicroscriptSchedule = z.infer<typeof MicroscriptScheduleSchema>
+
+export const MicroscriptRuntimeSchema = z.literal('trusted_python')
+export type MicroscriptRuntime = z.infer<typeof MicroscriptRuntimeSchema>
+
+export const MicroscriptTrustedPythonPolicySchema = z.object({
+    /** Allow normal Python imports. Dangerous modules are still blocked unless allowShell is true. */
+    allowImports: z.boolean().default(true),
+    /** Allow direct Python networking such as urllib/http.client/socket. */
+    allowNetwork: z.boolean().default(true),
+    /** Direct network may reach private/internal hosts when allowNetwork is true. */
+    allowPrivateNetwork: z.boolean().default(true),
+    /** Allow Python file APIs, confined to the microscript workspace. */
+    allowWorkspaceFiles: z.boolean().default(true),
+    /** Expose only the sanitized process env. Real app/user secrets are never passed to Python. */
+    allowEnvironment: z.boolean().default(false),
+    /** Allow subprocess/shell execution. Default stays false for autonomous recurring scripts. */
+    allowShell: z.boolean().default(false),
+})
+export type MicroscriptTrustedPythonPolicy = z.infer<typeof MicroscriptTrustedPythonPolicySchema>
 
 export const MicroscriptLimitsSchema = z.object({
     /** Hard process timeout for one Python phase. */
@@ -78,6 +99,8 @@ export const MicroscriptPermissionSchema = z.discriminatedUnion('kind', [
     }),
     z.object({
         kind: z.literal('home_assistant_read'),
+        /** Broad read mode for trusted scripts. Allows any entity/list/history permitted by flags. */
+        allowAll: z.boolean().default(false),
         /** Exact entities this script may read. Empty/omitted means use domains. */
         entityIds: z.array(EntityIdPattern).max(200).optional(),
         /** Entity domains this script may read/list, e.g. sensor, binary_sensor. */
@@ -87,21 +110,37 @@ export const MicroscriptPermissionSchema = z.discriminatedUnion('kind', [
     }),
     z.object({
         kind: z.literal('home_assistant_call_service'),
+        /** Broad write mode for trusted scripts. Prefer domains/services unless user explicitly approves this. */
+        allowAll: z.boolean().default(false),
+        /** Allow any service in these domains. */
+        domains: z.array(z.string().min(1).max(64).regex(/^[a-z0-9_]+$/i)).max(50).optional(),
         services: z.array(z.object({
             domain: z.string().min(1).max(64).regex(/^[a-z0-9_]+$/i),
             /** Omit service to allow any service in the domain. Prefer exact service in production scripts. */
             service: z.string().min(1).max(96).regex(/^[a-z0-9_]+$/i).optional(),
             /** Optional target entity boundary. Omit only for service calls that do not target entities. */
             entityIds: z.array(EntityIdPattern).max(200).optional(),
-        })).min(1).max(50),
+        })).max(50).default([]),
     }),
     z.object({
         kind: z.literal('http_fetch'),
         /** Host allowlist. Supports exact hosts and "*.example.com". */
         allowedHosts: z.array(z.string().min(1).max(253)).min(1).max(100),
-        methods: z.array(z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE'])).min(1).max(5).default(['GET']),
+        methods: z.array(z.enum(['HEAD', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'])).min(1).max(6).default(['GET']),
         allowPrivateNetwork: z.boolean().default(false),
         maxBytes: z.number().int().min(1_000).max(2_000_000).default(200_000),
+    }),
+    z.object({
+        kind: z.literal('tool_call'),
+        /** Exact app tool ids this script may call through ctx.call_tool/tool.call. */
+        toolIds: z.array(z.string().min(1).max(160)).max(200).optional(),
+        /** Glob patterns for tool ids, e.g. "HomeAssistant*" or "GoogleCalendarList*". */
+        toolPatterns: z.array(z.string().min(1).max(160)).max(50).optional(),
+        /** Permit connected integration operational tools without listing every id. */
+        allowIntegrationTools: z.boolean().default(true),
+        /** Allow tools marked orchestrator-only. Keep false unless the script needs that surface. */
+        allowOrchestratorOnly: z.boolean().default(false),
+        maxCallsPerRun: z.number().int().min(1).max(100).default(20),
     }),
     z.object({
         kind: z.literal('files'),
@@ -126,6 +165,15 @@ export type MicroscriptStopPolicy = z.infer<typeof MicroscriptStopPolicySchema>
 
 export const MicroscriptManifestSchema = z.object({
     description: z.string().min(1).max(2_000),
+    runtime: MicroscriptRuntimeSchema.default('trusted_python'),
+    trustedPython: MicroscriptTrustedPythonPolicySchema.default({
+        allowImports: true,
+        allowNetwork: true,
+        allowPrivateNetwork: true,
+        allowWorkspaceFiles: true,
+        allowEnvironment: false,
+        allowShell: false,
+    }),
     schedule: MicroscriptScheduleSchema.default({ kind: 'manual' }),
     permissions: z.array(MicroscriptPermissionSchema).max(100).default([]),
     limits: MicroscriptLimitsSchema.default({
@@ -232,9 +280,15 @@ export const MicroscriptOperationSchema = z.discriminatedUnion('kind', [
         kind: z.literal('http.fetch'),
         id: z.string().min(1).max(120),
         url: z.string().url(),
-        method: z.enum(['GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
+        method: z.enum(['HEAD', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE']).default('GET'),
         headers: z.record(z.string(), z.string()).optional(),
         body: z.string().max(100_000).optional(),
+    }),
+    z.object({
+        kind: z.literal('tool.call'),
+        id: z.string().min(1).max(120),
+        tool_id: z.string().min(1).max(160),
+        arguments: z.record(z.string(), z.unknown()).default({}),
     }),
     z.object({
         kind: z.literal('file.read'),

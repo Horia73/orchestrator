@@ -4,6 +4,8 @@ Microscripts are bounded Python automations for small stateful watchers. They ar
 
 They are not background daemons. A microscript runs, returns JSON, and exits. If it needs to keep watching, it returns `nextCheckAfterMs` or `nextRunAt`. Microscripts can also be triggered by inbound Webhooks after the webhook subsystem has authenticated, deduped, persisted, and normalized the event.
 
+The default runtime is `trusted_python`: normal Python with stdlib imports, direct networking, and workspace-confined file access. The app still controls lifecycle, timeout, output size, state persistence, app-tool permissions, notifications, and audit logs.
+
 ## When To Use
 
 Use Microscripts for:
@@ -31,13 +33,48 @@ def run(ctx):
     }
 ```
 
+`ctx` is dict-like and also exposes helper methods:
+
+- `ctx.notify(body, title=None, actions=None)`
+- `ctx.http_fetch(url, method="GET", headers=None, body=None, id="http_fetch")`
+- `ctx.file_read(path)` and `ctx.file_write(path, content, append=False)`
+- `ctx.call_tool(tool_id, arguments, id=None)`
+- `ctx.continue_after(seconds=60)`, `ctx.complete()`, and `ctx.pause()`
+
 Allowed statuses:
 
 - `continue`: keep active and schedule another run.
 - `pause`: stop running but keep the script and history.
 - `complete`: mark done and disable future runs.
 
-The script cannot read environment variables or secrets directly. External work is requested through `requests`; the parent runtime enforces the manifest permissions and returns results in `ctx["results"][request_id]` on the next phase.
+In `trusted_python`, the script may use normal Python libraries for local logic and direct HTTP/network checks. App-mediated actions such as Inbox notification, waking an agent, integration calls, and `ctx.call_tool` still go through the parent runtime and require manifest permissions.
+
+Direct Python file access is confined to the script workspace. Relative paths are allowed; absolute paths and path traversal are blocked. Environment variables are sanitized, and app/user secrets are not passed to Python. Shell/process control is blocked by default.
+
+## Blocked Actions
+
+When the runtime blocks an action, the error must include:
+
+- What was blocked.
+- Why it was blocked.
+- A safe alternative.
+- What implementation or permission change would be needed.
+
+Agent behavior on a real blocker:
+
+- Explain the blocker to the user in plain language.
+- Use the safe alternative if it satisfies the task.
+- If the task genuinely needs the blocked capability, ask the user to approve the manifest/runtime change.
+- Record the missing capability in `AGENT_NEEDS.md` via `ReportAgentNeed` so it is not lost.
+
+Default blocked surfaces:
+
+- Shell/subprocess/process control, unless `trustedPython.allowShell=true`.
+- Absolute/global filesystem access.
+- Path traversal outside the script workspace.
+- Reading app/user secrets from environment variables.
+- Native memory/process escape modules such as `ctypes` and `subprocess` when shell is not approved.
+- App tools outside the `tool_call` permission boundary.
 
 ## Stop Policy
 
@@ -61,23 +98,28 @@ Supported permission kinds:
 - `home_assistant_read`
 - `home_assistant_call_service`
 - `http_fetch`
+- `tool_call`
 - `files`
 
-Keep permissions narrow. For Home Assistant writes, list the exact domain, service, and target entity IDs wherever possible.
+`trusted_python` direct networking and workspace files are available by default. Permissions are still required for parent-mediated app actions.
+
+For broad app-tool access, use `tool_call` with exact `toolIds`, `toolPatterns`, or `allowIntegrationTools=true`. The runtime blocks host mutation tools such as shell, raw workspace edit tools, activation tools, and recursive microscript lifecycle calls from `ctx.call_tool`.
+
+Home Assistant permissions support both narrow and broad modes:
+
+- Reads can use `allowAll=true`, domains, or exact entity ids.
+- Service calls can use `allowAll=true`, domains, or exact domain/service/entity boundaries.
 
 `agent_wake` lets a script request an `agent.wake` operation after its deterministic gate passes. The permission lists allowed agent ids, maximum prompt size, and whether the woken agent may call `notify_inbox`. The woken agent receives the script prompt as context and a restricted tool surface; use this for "cheap check first, model judgement only on match" workflows.
 
-## Example
+## Example: Direct Python Network Watch
 
 ```json
 {
-  "description": "Notify once if the garage door stays open across two checks.",
+  "description": "Notify once when a temporary web check recovers twice in a row.",
+  "runtime": "trusted_python",
   "schedule": { "kind": "interval", "every": "2m" },
   "permissions": [
-    {
-      "kind": "home_assistant_read",
-      "entity_ids": ["binary_sensor.garage_door"]
-    },
     { "kind": "notify_inbox" }
   ],
   "stop": {
@@ -92,53 +134,27 @@ Keep permissions narrow. For Home Assistant writes, list the exact domain, servi
 ```
 
 ```python
+import urllib.request
+
 def run(ctx):
     state = ctx.get("state", {})
-    results = ctx.get("results", {})
+    successes = state.get("successes", 0)
 
-    if "door" not in results:
-        return {
-            "requests": [
-                {
-                    "id": "door",
-                    "kind": "home_assistant.get_state",
-                    "entity_id": "binary_sensor.garage_door"
-                }
-            ],
-            "state": state,
-            "nextCheckAfterMs": 120000
-        }
+    try:
+        req = urllib.request.Request("https://example.com", method="HEAD")
+        with urllib.request.urlopen(req, timeout=5) as response:
+            ok = 200 <= response.status < 400
+    except Exception:
+        ok = False
 
-    door = results["door"]
-    if not door["ok"]:
-        return {
-            "summary": "Could not read garage door state.",
-            "state": state,
-            "nextCheckAfterMs": 300000
-        }
+    successes = successes + 1 if ok else 0
+    ctx.state["successes"] = successes
 
-    is_open = door["data"]["state"] in ["on", "open"]
-    open_runs = state.get("open_runs", 0) + 1 if is_open else 0
+    if successes >= 2:
+        ctx.notify("The watched site recovered across two checks.", title="Site recovered")
+        return ctx.complete("Recovery notification sent.")
 
-    if open_runs >= 2:
-        return {
-            "requests": [
-                {
-                    "id": "notify",
-                    "kind": "notify.inbox",
-                    "title": "Garage door",
-                    "body": "Garage door is still open."
-                }
-            ],
-            "state": {"open_runs": open_runs},
-            "status": "complete"
-        }
-
-    return {
-        "summary": "Garage door check completed.",
-        "state": {"open_runs": open_runs},
-        "nextCheckAfterMs": 120000
-    }
+    return ctx.continue_after(minutes=2, summary="Still watching.")
 ```
 
 ## Useful Scenarios
@@ -147,6 +163,7 @@ def run(ctx):
 - Verify that a smart-home action actually produced the expected state.
 - Watch a local file until a job writes a final result.
 - Check an internal endpoint for a specific anomaly and wake only on failures.
+- Watch a public or internal status page until it returns a healthy response twice.
 - Track a counter/sensor until it crosses a threshold, then pause.
 - Monitor repeated automation failures and send context only after a pattern emerges.
 - Run a short temporary watch after starting a long local process.

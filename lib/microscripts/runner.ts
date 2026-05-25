@@ -1,12 +1,14 @@
 import fs from 'fs'
 import path from 'path'
 import { spawn } from 'child_process'
+import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
 
 import { WORKSPACE_DIR } from '@/lib/runtime-paths'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
 import { normalizeInboxReplyActions } from '@/lib/ai/tools/notify'
+import { operationalIntegrationFor } from '@/lib/integrations/manifest'
 import { persistArtifactsFromMessage } from '@/lib/artifacts/persist-message'
 import { appendMissingArtifactBlocks, stripArtifactBlocksForPreview } from '@/lib/artifacts/text'
 import type { ToolExecutionContext } from '@/lib/ai/agents/types'
@@ -30,95 +32,409 @@ import {
 // Python runner.
 // ---------------------------------------------------------------------------
 
-const PYTHON_WRAPPER = String.raw`
-import ast
+const TRUSTED_PYTHON_WRAPPER = String.raw`
+import builtins
+import contextlib
+import importlib
+import io
+import ipaddress
 import json
+import os
+import pathlib
+import socket
+import stat
 import sys
 import traceback
 
-FORBIDDEN_NODES = (
-    ast.Import,
-    ast.ImportFrom,
-    ast.AsyncFunctionDef,
-    ast.ClassDef,
-    ast.With,
-    ast.AsyncWith,
-)
-FORBIDDEN_NAMES = {
-    "open", "input", "eval", "exec", "compile", "__import__",
-    "globals", "locals", "vars", "dir", "getattr", "setattr", "delattr",
-    "breakpoint", "help", "memoryview",
+ORIGINAL_STDOUT = sys.stdout
+ORIGINAL_STDERR = sys.stderr
+ORIGINAL_IMPORT = builtins.__import__
+ORIGINAL_OPEN = builtins.open
+ORIGINAL_IO_OPEN = io.open
+ORIGINAL_MAKEDIRS = os.makedirs
+ORIGINAL_MKDIR = os.mkdir
+ORIGINAL_STAT = os.stat
+
+BLOCKED_MODULE_ROOTS = {
+    "_posixsubprocess",
+    "ctypes",
+    "multiprocessing",
+    "posix",
+    "pty",
+    "subprocess",
+}
+
+SHELL_ATTR_PREFIXES = ("execl", "execle", "execlp", "execlpe", "execv", "execve", "execvp", "execvpe", "spawn")
+SHELL_ATTRS = {
+    "fork", "forkpty", "kill", "killpg", "popen", "posix_spawn", "posix_spawnp",
+    "system", "wait", "wait3", "wait4", "waitid", "waitpid",
+}
+FILE_ATTRS = {
+    "chdir", "chmod", "chown", "lchmod", "lchown", "link", "listdir", "mkdir",
+    "makedirs", "open", "remove", "removedirs", "rename", "replace", "rmdir",
+    "scandir", "stat", "symlink", "truncate", "unlink", "utime",
 }
 
 logs = []
+pending_requests = []
 
-def safe_print(*args, **kwargs):
-    sep = kwargs.get("sep", " ")
-    end = kwargs.get("end", "\n")
-    logs.append(sep.join(str(a) for a in args) + end)
-
-SAFE_BUILTINS = {
-    "abs": abs,
-    "all": all,
-    "any": any,
-    "bool": bool,
-    "dict": dict,
-    "enumerate": enumerate,
-    "Exception": Exception,
-    "float": float,
-    "int": int,
-    "isinstance": isinstance,
-    "len": len,
-    "list": list,
-    "max": max,
-    "min": min,
-    "pow": pow,
-    "print": safe_print,
-    "range": range,
-    "round": round,
-    "set": set,
-    "sorted": sorted,
-    "str": str,
-    "sum": sum,
-    "tuple": tuple,
-    "ValueError": ValueError,
-    "zip": zip,
-}
+def blocked_message(action, reason, safe_alternative, implementation_request):
+    return (
+        "Blocked microscript action: " + action + ".\n"
+        "Reason: " + reason + "\n"
+        "Safe alternative: " + safe_alternative + "\n"
+        "If this is genuinely required, ask the user to approve/implement the capability and record an AGENT_NEEDS.md entry with ReportAgentNeed."
+        + (" Needed change: " + implementation_request if implementation_request else "")
+    )
 
 def fail(message):
-    print(json.dumps({"ok": False, "error": message, "logs": logs}), flush=True)
+    print(json.dumps({"ok": False, "error": message, "logs": logs}), file=ORIGINAL_STDOUT, flush=True)
+
+class PendingOperation(Exception):
+    pass
+
+class MicroscriptContext(dict):
+    def __init__(self, data):
+        super().__init__(data)
+        self.state = data.get("state") if isinstance(data.get("state"), dict) else {}
+        self.results = data.get("results") if isinstance(data.get("results"), dict) else {}
+        self.phase = data.get("phase")
+        self.now = data.get("now")
+        self.trigger = data.get("trigger")
+        self.webhook = data.get("webhook")
+        self.script = data.get("script")
+        self.manifest = data.get("manifest")
+
+    def _result_or_pending(self, request):
+        request_id = request.get("id")
+        if request_id in self.results:
+            result = self.results[request_id]
+            if isinstance(result, dict) and result.get("ok") is False:
+                return result
+            return result
+        pending_requests.append(request)
+        raise PendingOperation()
+
+    def request(self, kind, id=None, **kwargs):
+        request_id = id or kind.replace(".", "_")
+        request = {"kind": kind, "id": request_id}
+        request.update(kwargs)
+        return self._result_or_pending(request)
+
+    def notify(self, body, title=None, actions=None, id="notify"):
+        request = {"kind": "notify.inbox", "id": id, "body": str(body)}
+        if title is not None:
+            request["title"] = str(title)
+        if actions is not None:
+            request["actions"] = actions
+        return self._result_or_pending(request)
+
+    def http_fetch(self, url, method="GET", headers=None, body=None, id="http_fetch"):
+        request = {
+            "kind": "http.fetch",
+            "id": id,
+            "url": url,
+            "method": str(method).upper(),
+        }
+        if headers is not None:
+            request["headers"] = headers
+        if body is not None:
+            request["body"] = body
+        return self._result_or_pending(request)
+
+    def file_read(self, path, id="file_read"):
+        return self._result_or_pending({"kind": "file.read", "id": id, "path": path})
+
+    def file_write(self, path, content, append=False, id="file_write"):
+        return self._result_or_pending({
+            "kind": "file.write",
+            "id": id,
+            "path": path,
+            "content": content,
+            "append": bool(append),
+        })
+
+    def call_tool(self, tool_id, arguments=None, id=None):
+        return self._result_or_pending({
+            "kind": "tool.call",
+            "id": id or ("tool_" + str(tool_id).replace(".", "_").replace("-", "_")),
+            "tool_id": str(tool_id),
+            "arguments": arguments or {},
+        })
+
+    def continue_after(self, *, milliseconds=None, seconds=None, minutes=None, state=None, summary=None):
+        delay = milliseconds
+        if delay is None and seconds is not None:
+            delay = int(float(seconds) * 1000)
+        if delay is None and minutes is not None:
+            delay = int(float(minutes) * 60 * 1000)
+        result = {"status": "continue", "state": state if state is not None else self.state}
+        if delay is not None:
+            result["nextCheckAfterMs"] = int(delay)
+        if summary is not None:
+            result["summary"] = str(summary)
+        return result
+
+    def complete(self, summary=None, state=None):
+        result = {"status": "complete", "state": state if state is not None else self.state}
+        if summary is not None:
+            result["summary"] = str(summary)
+        return result
+
+    def pause(self, summary=None, state=None):
+        result = {"status": "pause", "state": state if state is not None else self.state}
+        if summary is not None:
+            result["summary"] = str(summary)
+        return result
+
+    def wait(self, **kwargs):
+        return self.continue_after(**kwargs)
+
+def ensure_relative_path(value):
+    raw = os.fspath(value)
+    if os.path.isabs(raw):
+        raise RuntimeError(blocked_message(
+            "absolute filesystem path",
+            "Trusted Python file access is confined to the microscript workspace so recurring scripts cannot read or overwrite arbitrary user/app files.",
+            "Use a relative path inside the script workspace, or use an app tool/approved integration that exposes the needed data.",
+            "Add an explicit reviewed permission/path bridge if this workflow truly needs that external path.",
+        ))
+    root = os.path.abspath(os.getcwd())
+    resolved = os.path.abspath(os.path.join(root, raw))
+    if resolved != root and not resolved.startswith(root + os.sep):
+        raise RuntimeError(blocked_message(
+            "filesystem path escaping workspace",
+            "Path traversal would leave the microscript workspace.",
+            "Keep reads/writes under the private workspace and pass durable state through ctx.state.",
+            "Add a reviewed path-specific bridge if an external file is required.",
+        ))
+    return resolved
+
+def safe_open(file, mode="r", *args, **kwargs):
+    if not POLICY.get("allowWorkspaceFiles", True):
+        raise RuntimeError(blocked_message(
+            "Python file open",
+            "trustedPython.allowWorkspaceFiles is false for this script.",
+            "Use ctx.state for small durable data, or enable workspace files in the manifest.",
+            "Request a manifest update from the user if file access is necessary.",
+        ))
+    resolved = ensure_relative_path(file)
+    if any(flag in str(mode) for flag in ("w", "a", "x", "+")):
+        make_dirs_absolute(os.path.dirname(resolved))
+    return ORIGINAL_OPEN(resolved, mode, *args, **kwargs)
+
+def absolute_is_dir(value):
+    try:
+        return stat.S_ISDIR(ORIGINAL_STAT(value).st_mode)
+    except FileNotFoundError:
+        return False
+
+def make_dirs_absolute(directory):
+    if not directory or absolute_is_dir(directory):
+        return
+    pending = []
+    current = directory
+    while current and not absolute_is_dir(current):
+        pending.append(current)
+        parent = os.path.dirname(current)
+        if parent == current:
+            break
+        current = parent
+    for item in reversed(pending):
+        try:
+            ORIGINAL_MKDIR(item)
+        except FileExistsError:
+            pass
+
+def safe_path_method(name, original):
+    def wrapper(self, *args, **kwargs):
+        return original(pathlib.Path(ensure_relative_path(self)), *args, **kwargs)
+    return wrapper
+
+def block_function(action, reason, safe_alternative, implementation_request=""):
+    def blocked(*args, **kwargs):
+        raise RuntimeError(blocked_message(action, reason, safe_alternative, implementation_request))
+    return blocked
+
+def patch_os_module(module):
+    if not POLICY.get("allowShell", False):
+        for attr in dir(module):
+            if attr in SHELL_ATTRS or attr.startswith(SHELL_ATTR_PREFIXES):
+                try:
+                    setattr(module, attr, block_function(
+                        "shell/subprocess/process control",
+                        "Autonomous microscripts may run repeatedly; shell and process control can escape runtime limits, leak data, or mutate the host outside audit.",
+                        "Use normal Python libraries, ctx.http_fetch for HTTP, ctx.call_tool for app integrations, or request a dedicated app capability.",
+                        "Add an explicitly reviewed shell permission with command/path constraints.",
+                    ))
+                except Exception:
+                    pass
+    for attr in FILE_ATTRS:
+        if hasattr(module, attr):
+            original = getattr(module, attr)
+            def make_file_wrapper(fn_name, fn):
+                def wrapped(path, *args, **kwargs):
+                    resolved = ensure_relative_path(path)
+                    return fn(resolved, *args, **kwargs)
+                return wrapped
+            try:
+                setattr(module, attr, make_file_wrapper(attr, original))
+            except Exception:
+                pass
+
+def patch_socket_module(module):
+    if POLICY.get("allowNetwork", True):
+        if POLICY.get("allowPrivateNetwork", True):
+            return
+        original_create_connection = module.create_connection
+        original_socket = module.socket
+
+        def assert_public_address(address):
+            host = address[0] if isinstance(address, tuple) and address else address
+            if not isinstance(host, str):
+                return
+            if host in ("localhost",):
+                raise RuntimeError(blocked_message(
+                    "direct Python private-network connection",
+                    "trustedPython.allowPrivateNetwork is false and localhost is private.",
+                    "Use a public host or set allowPrivateNetwork=true after user approval.",
+                    "Approve private-network access for this microscript.",
+                ))
+            try:
+                infos = module.getaddrinfo(host, None)
+            except Exception:
+                infos = []
+            for info in infos:
+                ip = info[4][0]
+                try:
+                    parsed = ipaddress.ip_address(ip)
+                except Exception:
+                    continue
+                if parsed.is_private or parsed.is_loopback or parsed.is_link_local or parsed.is_multicast:
+                    raise RuntimeError(blocked_message(
+                        "direct Python private-network connection",
+                        "trustedPython.allowPrivateNetwork is false and the host resolves to a private/internal address.",
+                        "Use a public host or set allowPrivateNetwork=true after user approval.",
+                        "Approve private-network access for this microscript.",
+                    ))
+
+        def safe_create_connection(address, *args, **kwargs):
+            assert_public_address(address)
+            return original_create_connection(address, *args, **kwargs)
+
+        class SafeSocket(original_socket):
+            def connect(self, address):
+                assert_public_address(address)
+                return super().connect(address)
+
+        module.create_connection = safe_create_connection
+        module.socket = SafeSocket
+        return
+    blocked = block_function(
+        "direct Python networking",
+        "trustedPython.allowNetwork is false for this script.",
+        "Use ctx.http_fetch with an http_fetch permission or enable trusted Python networking in the manifest.",
+        "Request a manifest update if this watch requires direct sockets.",
+    )
+    for attr in ["create_connection", "socket", "fromfd", "socketpair"]:
+        if hasattr(module, attr):
+            try:
+                setattr(module, attr, blocked)
+            except Exception:
+                pass
+
+def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
+    root = name.split(".")[0]
+    if not POLICY.get("allowImports", True):
+        raise RuntimeError(blocked_message(
+            "Python import",
+            "trustedPython.allowImports is false for this script.",
+            "Use plain Python builtins or enable imports in the manifest.",
+            "Request a manifest update if imports are required.",
+        ))
+    if root in BLOCKED_MODULE_ROOTS and not POLICY.get("allowShell", False):
+        raise RuntimeError(blocked_message(
+            "Python import " + name,
+            "This module can spawn processes, load native memory, or bypass the runtime filesystem/network controls.",
+            "Use stdlib/network/file APIs that stay inside the microscript runtime, ctx.call_tool for app capabilities, or ask for a dedicated safe bridge.",
+            "Request a reviewed runtime permission/implementation if there is no safe bridge.",
+        ))
+    module = ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
+    if root == "os":
+        patch_os_module(module)
+    if root == "socket":
+        patch_socket_module(module)
+    return module
 
 try:
     payload = json.loads(sys.stdin.read())
     code = payload["code"]
-    ctx = payload["ctx"]
+    raw_ctx = payload.get("ctx") or {}
+    POLICY = (((raw_ctx.get("manifest") or {}).get("trustedPython")) or {})
     validate_only = bool(payload.get("validateOnly"))
-    tree = ast.parse(code, filename="<microscript>", mode="exec")
-    for node in ast.walk(tree):
-        if isinstance(node, FORBIDDEN_NODES):
-            fail(f"Forbidden Python construct: {type(node).__name__}")
-            sys.exit(0)
-        if isinstance(node, ast.Name):
-            if node.id.startswith("__") or node.id in FORBIDDEN_NAMES:
-                fail(f"Forbidden Python name: {node.id}")
-                sys.exit(0)
-        if isinstance(node, ast.Attribute):
-            if node.attr.startswith("__"):
-                fail(f"Forbidden Python attribute: {node.attr}")
-                sys.exit(0)
+
+    if not POLICY.get("allowEnvironment", False):
+        os.environ.clear()
+    builtins.__import__ = guarded_import
+    builtins.open = safe_open
+    io.open = safe_open
+    patch_os_module(os)
+    patch_socket_module(socket)
+    pathlib.Path.open = safe_path_method("open", pathlib.Path.open)
+
     if validate_only:
-        print(json.dumps({"ok": True, "result": {}, "logs": logs}), flush=True)
+        compile(code, "<microscript>", "exec")
+        print(json.dumps({"ok": True, "result": {}, "logs": logs}), file=ORIGINAL_STDOUT, flush=True)
         sys.exit(0)
-    globals_dict = {"__builtins__": SAFE_BUILTINS, "__name__": "microscript"}
+
+    stdout_buffer = io.StringIO()
+    stderr_buffer = io.StringIO()
+    globals_dict = {
+        "__builtins__": builtins,
+        "__name__": "microscript",
+        "ctx": None,
+    }
     locals_dict = {}
-    exec(compile(tree, "<microscript>", "exec"), globals_dict, locals_dict)
-    run = locals_dict.get("run") or globals_dict.get("run")
-    if not callable(run):
-        fail("Microscript must define run(ctx).")
-        sys.exit(0)
-    result = run(ctx)
+    ctx = MicroscriptContext(raw_ctx)
+    globals_dict["ctx"] = ctx
+
+    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+        exec(compile(code, "<microscript>", "exec"), globals_dict, locals_dict)
+        run = locals_dict.get("run") or globals_dict.get("run")
+        if not callable(run):
+            raise RuntimeError("Microscript must define run(ctx).")
+        try:
+            result = run(ctx)
+        except PendingOperation:
+            result = {
+                "summary": "Waiting for parent-mediated microscript operation.",
+                "state": ctx.state,
+                "requests": pending_requests,
+            }
+
+    out = stdout_buffer.getvalue()
+    err = stderr_buffer.getvalue()
+    if out:
+        logs.append(out)
+    if err:
+        logs.append(err)
+    if result is None:
+        result = {"state": ctx.state}
+    if not isinstance(result, dict):
+        result = {"summary": str(result), "state": ctx.state}
+    if pending_requests:
+        existing = result.get("requests")
+        merged = []
+        if isinstance(existing, list):
+            merged.extend(existing)
+        for request in pending_requests:
+            if request not in merged:
+                merged.append(request)
+        result["requests"] = merged
+    if "state" not in result:
+        result["state"] = ctx.state
     json.dumps(result)
-    print(json.dumps({"ok": True, "result": result, "logs": logs}), flush=True)
+    print(json.dumps({"ok": True, "result": result, "logs": logs}), file=ORIGINAL_STDOUT, flush=True)
 except Exception as exc:
     fail(type(exc).__name__ + ": " + str(exc) + "\n" + traceback.format_exc(limit=4))
 `
@@ -138,6 +454,21 @@ interface PendingNotification {
     title?: string
     body: string
     actions?: InboxReplyAction[]
+}
+
+interface RunPolicyCounters {
+    toolCalls: number
+}
+
+function defaultTrustedPythonPolicy(): Record<string, boolean> {
+    return {
+        allowImports: true,
+        allowNetwork: true,
+        allowPrivateNetwork: true,
+        allowWorkspaceFiles: true,
+        allowEnvironment: false,
+        allowShell: false,
+    }
 }
 
 export interface RunMicroscriptOptions {
@@ -175,7 +506,7 @@ export async function validateMicroscriptCode(code: string): Promise<{ ok: true 
         fs.mkdirSync(WORKSPACE_DIR, { recursive: true })
         const raw = await spawnPython(JSON.stringify({
             code,
-            ctx: {},
+            ctx: { manifest: { trustedPython: defaultTrustedPythonPolicy() } },
             validateOnly: true,
         }), {
             cwd: WORKSPACE_DIR,
@@ -207,6 +538,7 @@ export async function runMicroscript(
     let error: string | undefined
     let surfaced = false
     let conversationId: string | null = null
+    const counters: RunPolicyCounters = { toolCalls: 0 }
 
     try {
         for (let phase = 1; phase <= script.manifest.limits.maxPhases; phase++) {
@@ -240,7 +572,7 @@ export async function runMicroscript(
                 if (operationResults[key]) continue
                 newRequests += 1
                 operations += 1
-                const result = await executeOperation(script, request, pendingNotifications, inboxConversationId)
+                const result = await executeOperation(script, request, pendingNotifications, inboxConversationId, counters)
                 operationResults[key] = result
                 recordMicroscriptEvent(script.id, result.ok ? 'operation_ok' : 'operation_error', {
                     key,
@@ -327,8 +659,10 @@ async function runPythonPhase(
                 description: script.manifest.description,
             },
             manifest: {
+                runtime: script.manifest.runtime,
                 schedule: script.manifest.schedule,
                 stop: script.manifest.stop,
+                trustedPython: script.manifest.trustedPython,
             },
             ...ctx,
         },
@@ -365,14 +699,15 @@ function spawnPython(
     options: { cwd: string; timeoutMs: number; maxOutputBytes: number },
 ): Promise<{ stdout: string; stderr: string }> {
     return new Promise((resolve, reject) => {
-        const child = spawn('python3', ['-I', '-S', '-c', PYTHON_WRAPPER], {
+        const env: NodeJS.ProcessEnv = {
+            NODE_ENV: process.env.NODE_ENV ?? 'production',
+            PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin',
+            PYTHONIOENCODING: 'utf-8',
+            PYTHONDONTWRITEBYTECODE: '1',
+        }
+        const child: ChildProcessWithoutNullStreams = spawn('python3', ['-I', '-c', TRUSTED_PYTHON_WRAPPER], {
             cwd: options.cwd,
-            env: {
-                ...process.env,
-                PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin',
-                PYTHONIOENCODING: 'utf-8',
-                PYTHONDONTWRITEBYTECODE: '1',
-            },
+            env,
             stdio: 'pipe',
         })
         let stdout = ''
@@ -428,6 +763,7 @@ async function executeOperation(
     request: MicroscriptOperation,
     notifications: PendingNotification[],
     conversationId: string,
+    counters: RunPolicyCounters,
 ): Promise<OperationResult> {
     try {
         const parsed = MicroscriptOperationSchema.parse(request)
@@ -488,6 +824,8 @@ async function executeOperation(
                 }
             case 'http.fetch':
                 return { ok: true, data: await executeHttpFetch(script, parsed) }
+            case 'tool.call':
+                return { ok: true, data: await executeToolCall(script, parsed, conversationId, counters) }
             case 'file.read':
                 return { ok: true, data: executeFileRead(script, parsed.path) }
             case 'file.write':
@@ -554,6 +892,129 @@ async function executeAgentWake(
         notified: notifications.length > notificationsBefore,
         notification_count: notifications.length - notificationsBefore,
     }
+}
+
+async function executeToolCall(
+    script: Microscript,
+    request: Extract<MicroscriptOperation, { kind: 'tool.call' }>,
+    conversationId: string,
+    counters: RunPolicyCounters,
+): Promise<Record<string, unknown>> {
+    const permission = assertToolCall(script, request, counters)
+    const [{ getTool }, { executeTool }] = await Promise.all([
+        import('@/lib/ai/tools/registry'),
+        import('@/lib/ai/tools/executor'),
+    ])
+    const tool = getTool(request.tool_id)
+    if (!tool) {
+        throw new Error(blockedActionMessage(
+            `tool.call ${request.tool_id}`,
+            'No app tool with that id is registered in this runtime.',
+            'Use an existing tool id, direct Python stdlib code, or a narrower built-in ctx helper.',
+            `Implement/register tool ${request.tool_id}, then allow it in this microscript manifest.`,
+        ))
+    }
+
+    const callerAgentId = permission.allowOrchestratorOnly ? 'orchestrator' : '__microscripts__'
+    const ctx: ToolExecutionContext = {
+        callerAgentId,
+        depth: 0,
+        conversationId,
+        parentRequestId: `microscript_${script.id}_${randomUUID()}`,
+    }
+    const result = await executeTool(tool, request.arguments, ctx)
+    return {
+        tool_id: request.tool_id,
+        success: result.success,
+        ...(result.data !== undefined ? { data: result.data } : {}),
+        ...(result.error ? { error: result.error } : {}),
+    }
+}
+
+const HARD_BLOCKED_TOOL_IDS = new Set([
+    'ActivateIntegrationTools',
+    'RunActivatedIntegrationTool',
+    'Bash',
+    'Read',
+    'Write',
+    'Edit',
+    'SetEnv',
+    'delegate_to',
+    'delegate_parallel',
+])
+
+const ORCHESTRATOR_ONLY_MICROSCRIPT_TOOL_IDS = new Set([
+    'search_past_runs',
+    'get_past_run',
+    'search_agent_logs',
+    'get_agent_log',
+    'read_runtime_index',
+])
+
+function assertToolCall(
+    script: Microscript,
+    request: Extract<MicroscriptOperation, { kind: 'tool.call' }>,
+    counters: RunPolicyCounters,
+): Extract<MicroscriptPermission, { kind: 'tool_call' }> {
+    const permission = script.manifest.permissions.find(
+        (p): p is Extract<MicroscriptPermission, { kind: 'tool_call' }> => p.kind === 'tool_call',
+    )
+    if (!permission) {
+        throw new Error(blockedActionMessage(
+            `tool.call ${request.tool_id}`,
+            'The script does not declare tool_call permission.',
+            'Use direct Python for local logic/network checks, ctx.notify for Inbox alerts, or add tool_call with exact toolIds/toolPatterns.',
+            `Approve a tool_call permission for ${request.tool_id}.`,
+        ))
+    }
+    if (HARD_BLOCKED_TOOL_IDS.has(request.tool_id) || request.tool_id.startsWith('microscript_')) {
+        throw new Error(blockedActionMessage(
+            `tool.call ${request.tool_id}`,
+            'This tool can mutate the host runtime, recursively manage microscripts, or bypass lifecycle/audit boundaries.',
+            'Use the dedicated microscript helpers, direct Python stdlib, or ask the orchestrator/user to perform the action outside the recurring script.',
+            `Design a narrow safe bridge for ${request.tool_id} if recurring scripts truly need it.`,
+        ))
+    }
+    if (ORCHESTRATOR_ONLY_MICROSCRIPT_TOOL_IDS.has(request.tool_id) && !permission.allowOrchestratorOnly) {
+        throw new Error(blockedActionMessage(
+            `tool.call ${request.tool_id}`,
+            'The tool is marked orchestrator-only and this microscript permission does not opt into that surface.',
+            'Return structured data from the script and let the orchestrator use the tool, or set allowOrchestratorOnly after user approval.',
+            `Approve allowOrchestratorOnly for ${request.tool_id}.`,
+        ))
+    }
+    counters.toolCalls += 1
+    if (counters.toolCalls > permission.maxCallsPerRun) {
+        throw new Error(blockedActionMessage(
+            'too many tool.call operations',
+            `The script exceeded maxCallsPerRun=${permission.maxCallsPerRun}.`,
+            'Batch work, cache state in ctx.state, or reduce the cadence.',
+            'Increase maxCallsPerRun only after reviewing cost and side effects.',
+        ))
+    }
+    if (toolAllowedByPermission(request.tool_id, permission)) return permission
+    throw new Error(blockedActionMessage(
+        `tool.call ${request.tool_id}`,
+        'The tool is outside the microscript tool_call permission boundary.',
+        'Use one of the allowed toolIds/toolPatterns, or direct Python for non-app work.',
+        `Approve ${request.tool_id} in toolIds/toolPatterns or add a safe dedicated bridge.`,
+    ))
+}
+
+function toolAllowedByPermission(
+    toolId: string,
+    permission: Extract<MicroscriptPermission, { kind: 'tool_call' }>,
+): boolean {
+    if (permission.toolIds?.includes(toolId)) return true
+    if (permission.toolPatterns?.some((pattern) => globPatternMatches(pattern, toolId))) return true
+    return permission.allowIntegrationTools && Boolean(operationalIntegrationFor(toolId))
+}
+
+function globPatternMatches(pattern: string, value: string): boolean {
+    const escaped = pattern
+        .replace(/[|\\{}()[\]^$+?.]/g, '\\$&')
+        .replace(/\*/g, '.*')
+    return new RegExp(`^${escaped}$`).test(value)
 }
 
 function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyInbox: boolean): string {
@@ -665,9 +1126,30 @@ function postMicroscriptInbox(script: Microscript, notifications: PendingNotific
     return conversationId
 }
 
+function blockedActionMessage(
+    action: string,
+    reason: string,
+    safeAlternative: string,
+    implementationRequest: string,
+): string {
+    return [
+        `Blocked microscript action: ${action}.`,
+        `Reason: ${reason}`,
+        `Safe alternative: ${safeAlternative}`,
+        `If this is genuinely required, ask the user to approve/implement the capability and record an AGENT_NEEDS.md entry with ReportAgentNeed. Needed change: ${implementationRequest}`,
+    ].join('\n')
+}
+
 function requirePermission(script: Microscript, kind: MicroscriptPermission['kind']): MicroscriptPermission {
     const permission = script.manifest.permissions.find((p) => p.kind === kind)
-    if (!permission) throw new Error(`Microscript ${script.id} lacks permission ${kind}.`)
+    if (!permission) {
+        throw new Error(blockedActionMessage(
+            kind,
+            `Microscript ${script.id} does not declare this parent-mediated permission.`,
+            'Update the manifest with the smallest permission that covers the operation, or use trusted Python direct stdlib APIs when that is enough.',
+            `Add/approve permission kind ${kind} for microscript ${script.id}.`,
+        ))
+    }
     return permission
 }
 
@@ -679,12 +1161,27 @@ function assertAgentWake(
         (p): p is Extract<MicroscriptPermission, { kind: 'agent_wake' }> =>
             p.kind === 'agent_wake',
     )
-    if (!permission) throw new Error(`Microscript ${script.id} lacks agent_wake permission.`)
+    if (!permission) throw new Error(blockedActionMessage(
+        'agent wake',
+        `Microscript ${script.id} lacks agent_wake permission.`,
+        'Keep the deterministic check inside Python and notify directly, or add an agent_wake permission with allowed agent ids and prompt limits.',
+        'Approve agent_wake for this microscript, or implement a narrower model-escalation bridge.',
+    ))
     if (!permission.agentIds.includes(request.agent_id)) {
-        throw new Error(`Microscript ${script.id} may not wake agent ${request.agent_id}.`)
+        throw new Error(blockedActionMessage(
+            `wake agent ${request.agent_id}`,
+            'The requested agent is outside the agent_wake permission boundary.',
+            `Use one of the allowed agents: ${permission.agentIds.join(', ')}.`,
+            'Approve the target agent id in this microscript manifest.',
+        ))
     }
     if (request.prompt.length > permission.maxPromptChars) {
-        throw new Error(`agent.wake prompt exceeds permission limit of ${permission.maxPromptChars} characters.`)
+        throw new Error(blockedActionMessage(
+            'large agent wake prompt',
+            `The prompt exceeds the permission limit of ${permission.maxPromptChars} characters.`,
+            'Summarize the observed facts before waking the agent.',
+            'Raise maxPromptChars only if the use case truly needs larger payloads.',
+        ))
     }
     return permission
 }
@@ -701,15 +1198,27 @@ function assertHomeAssistantRead(
     domain?: string,
 ): void {
     const permissions = homeAssistantReadPermissions(script)
-    if (permissions.length === 0) throw new Error(`Microscript ${script.id} lacks home_assistant_read permission.`)
+    if (permissions.length === 0) throw new Error(blockedActionMessage(
+        'Home Assistant read',
+        `Microscript ${script.id} lacks home_assistant_read permission.`,
+        'Use ctx.call_tool with an approved tool_call permission, or add home_assistant_read with allowAll/domains/entityIds.',
+        'Approve a Home Assistant read boundary for this script.',
+    ))
     for (const permission of permissions) {
         if (list && !permission.allowList) continue
         if (history && !permission.allowHistory) continue
+        if (permission.allowAll) return
         if (domain && !domainAllowed(permission, domain)) continue
         if (entityIds.length > 0 && entityIds.every((entityId) => entityAllowed(permission, entityId))) return
-        if (entityIds.length === 0) return
+        if (entityIds.length === 0 && domain) return
+        if (entityIds.length === 0 && !list && !history) return
     }
-    throw new Error('Home Assistant read request is outside the microscript permission boundary.')
+    throw new Error(blockedActionMessage(
+        'Home Assistant read',
+        'The requested entity/domain/list/history operation is outside the microscript permission boundary.',
+        'Use an allowed entity/domain, or declare allowAll/allowList/allowHistory after user approval.',
+        'Update the Home Assistant read permission for this script.',
+    ))
 }
 
 function assertHomeAssistantWrite(
@@ -720,7 +1229,14 @@ function assertHomeAssistantWrite(
         (p): p is Extract<MicroscriptPermission, { kind: 'home_assistant_call_service' }> =>
             p.kind === 'home_assistant_call_service',
     )
-    if (!permission) throw new Error(`Microscript ${script.id} lacks home_assistant_call_service permission.`)
+    if (!permission) throw new Error(blockedActionMessage(
+        'Home Assistant service call',
+        `Microscript ${script.id} lacks home_assistant_call_service permission.`,
+        'Use ctx.call_tool with approved tool_call permission, or add home_assistant_call_service with allowAll/domains/services.',
+        'Approve the Home Assistant service-call boundary for this script.',
+    ))
+    if (permission.allowAll) return
+    if (permission.domains?.includes(request.domain)) return
     const requestedEntities = entityIdsFromTarget(request.target)
     const allowed = permission.services.some((service) => {
         if (service.domain !== request.domain) return false
@@ -728,13 +1244,19 @@ function assertHomeAssistantWrite(
         if (!service.entityIds?.length) return true
         return requestedEntities.length > 0 && requestedEntities.every((entityId) => service.entityIds?.includes(entityId))
     })
-    if (!allowed) throw new Error('Home Assistant service call is outside the microscript permission boundary.')
+    if (!allowed) throw new Error(blockedActionMessage(
+        'Home Assistant service call',
+        'The requested domain/service/target is outside the microscript permission boundary.',
+        'Use an allowed service target, or broaden to domains/allowAll only after user approval.',
+        'Update the Home Assistant call-service permission for this script.',
+    ))
 }
 
 function entityAllowed(
     permission: Extract<MicroscriptPermission, { kind: 'home_assistant_read' }>,
     entityId: string,
 ): boolean {
+    if (permission.allowAll) return true
     if (permission.entityIds?.includes(entityId)) return true
     const domain = entityId.split('.')[0]
     return domainAllowed(permission, domain)
@@ -744,6 +1266,7 @@ function domainAllowed(
     permission: Extract<MicroscriptPermission, { kind: 'home_assistant_read' }>,
     domain: string,
 ): boolean {
+    if (permission.allowAll) return true
     return Boolean(permission.domains?.includes(domain))
 }
 
@@ -758,16 +1281,31 @@ async function executeHttpFetch(
     script: Microscript,
     request: Extract<MicroscriptOperation, { kind: 'http.fetch' }>,
 ): Promise<Record<string, unknown>> {
-    const permission = requirePermission(script, 'http_fetch') as Extract<MicroscriptPermission, { kind: 'http_fetch' }>
+    const permission = httpFetchPermission(script)
     const url = new URL(request.url)
     if (!hostAllowed(url.hostname, permission.allowedHosts)) {
-        throw new Error(`Host ${url.hostname} is not in the microscript HTTP allowlist.`)
+        throw new Error(blockedActionMessage(
+            `HTTP ${request.method} ${url.hostname}`,
+            `Host ${url.hostname} is not in the microscript HTTP allowlist.`,
+            'Use a host in allowedHosts, set allowedHosts=["*"] for trusted broad HTTP, or use direct Python networking when trustedPython.allowNetwork=true.',
+            'Approve a broader http_fetch permission for this script.',
+        ))
     }
     if (!permission.methods.includes(request.method)) {
-        throw new Error(`HTTP method ${request.method} is not allowed for this microscript.`)
+        throw new Error(blockedActionMessage(
+            `HTTP method ${request.method}`,
+            'The method is outside the http_fetch permission boundary.',
+            `Use one of: ${permission.methods.join(', ')}.`,
+            'Approve a broader HTTP method list for this script.',
+        ))
     }
     if (!permission.allowPrivateNetwork && isPrivateHost(url.hostname)) {
-        throw new Error(`Private/internal host ${url.hostname} requires allowPrivateNetwork=true.`)
+        throw new Error(blockedActionMessage(
+            `HTTP private/internal host ${url.hostname}`,
+            'Private/internal hosts require allowPrivateNetwork=true.',
+            'Use a public host, or explicitly approve private-network access in the manifest.',
+            'Approve allowPrivateNetwork=true for this script.',
+        ))
     }
 
     const controller = new AbortController()
@@ -776,7 +1314,7 @@ async function executeHttpFetch(
         const resp = await fetch(url, {
             method: request.method,
             headers: request.headers,
-            body: request.body,
+            body: request.method === 'HEAD' ? undefined : request.body,
             signal: controller.signal,
         })
         const text = await readResponseText(resp, permission.maxBytes)
@@ -789,6 +1327,23 @@ async function executeHttpFetch(
     } finally {
         clearTimeout(timer)
     }
+}
+
+function httpFetchPermission(script: Microscript): Extract<MicroscriptPermission, { kind: 'http_fetch' }> {
+    const permission = script.manifest.permissions.find(
+        (p): p is Extract<MicroscriptPermission, { kind: 'http_fetch' }> => p.kind === 'http_fetch',
+    )
+    if (permission) return permission
+    if (script.manifest.runtime === 'trusted_python' && script.manifest.trustedPython.allowNetwork) {
+        return {
+            kind: 'http_fetch',
+            allowedHosts: ['*'],
+            methods: ['HEAD', 'GET', 'POST', 'PUT', 'PATCH', 'DELETE'],
+            allowPrivateNetwork: script.manifest.trustedPython.allowPrivateNetwork,
+            maxBytes: 2_000_000,
+        }
+    }
+    return requirePermission(script, 'http_fetch') as Extract<MicroscriptPermission, { kind: 'http_fetch' }>
 }
 
 async function readResponseText(resp: Response, maxBytes: number): Promise<string> {
@@ -811,7 +1366,7 @@ async function readResponseText(resp: Response, maxBytes: number): Promise<strin
 }
 
 function executeFileRead(script: Microscript, relPath: string): { path: string; content: string } {
-    const permission = requirePermission(script, 'files') as Extract<MicroscriptPermission, { kind: 'files' }>
+    const permission = filePermission(script)
     if (!permission.read) throw new Error('Microscript file read permission is disabled.')
     const resolved = resolveScriptFile(script.id, relPath)
     const stat = fs.statSync(resolved)
@@ -821,7 +1376,7 @@ function executeFileRead(script: Microscript, relPath: string): { path: string; 
 }
 
 function executeFileWrite(script: Microscript, relPath: string, content: string, append: boolean): { path: string; bytes: number } {
-    const permission = requirePermission(script, 'files') as Extract<MicroscriptPermission, { kind: 'files' }>
+    const permission = filePermission(script)
     if (!permission.write) throw new Error('Microscript file write permission is disabled.')
     if (Buffer.byteLength(content, 'utf-8') > permission.maxBytes) {
         throw new Error(`File write exceeds ${permission.maxBytes} bytes.`)
@@ -831,6 +1386,22 @@ function executeFileWrite(script: Microscript, relPath: string, content: string,
     if (append) fs.appendFileSync(resolved, content, 'utf-8')
     else fs.writeFileSync(resolved, content, 'utf-8')
     return { path: relPath, bytes: Buffer.byteLength(content, 'utf-8') }
+}
+
+function filePermission(script: Microscript): Extract<MicroscriptPermission, { kind: 'files' }> {
+    const permission = script.manifest.permissions.find(
+        (p): p is Extract<MicroscriptPermission, { kind: 'files' }> => p.kind === 'files',
+    )
+    if (permission) return permission
+    if (script.manifest.runtime === 'trusted_python' && script.manifest.trustedPython.allowWorkspaceFiles) {
+        return {
+            kind: 'files',
+            read: true,
+            write: true,
+            maxBytes: 5_000_000,
+        }
+    }
+    return requirePermission(script, 'files') as Extract<MicroscriptPermission, { kind: 'files' }>
 }
 
 function resolveScriptFile(scriptId: string, relPath: string): string {
@@ -852,6 +1423,7 @@ function hostAllowed(host: string, allowedHosts: string[]): boolean {
     const h = host.toLowerCase()
     return allowedHosts.some((raw) => {
         const pattern = raw.toLowerCase().trim()
+        if (pattern === '*') return true
         if (pattern.startsWith('*.')) {
             const suffix = pattern.slice(1)
             return h.endsWith(suffix) && h.length > suffix.length

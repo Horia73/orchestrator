@@ -78,9 +78,22 @@ function normalizeManifest(raw: unknown): MicroscriptManifest {
     const stopRaw = input.stop && typeof input.stop === 'object' && !Array.isArray(input.stop)
         ? input.stop as Record<string, unknown>
         : {}
+    const trustedCandidate = input.trustedPython ?? input.trusted_python
+    const trustedRaw = trustedCandidate && typeof trustedCandidate === 'object' && !Array.isArray(trustedCandidate)
+        ? trustedCandidate as Record<string, unknown>
+        : {}
     const expiresAt = parseOptionalDateMs(stopRaw.expiresAt ?? stopRaw.expires_at)
     const parsed = MicroscriptManifestSchema.parse({
         description: typeof input.description === 'string' ? input.description : '',
+        runtime: input.runtime ?? input.mode ?? input.executionMode ?? input.execution_mode,
+        trustedPython: {
+            allowImports: boolAlias(trustedRaw, 'allowImports', 'allow_imports'),
+            allowNetwork: boolAlias(trustedRaw, 'allowNetwork', 'allow_network'),
+            allowPrivateNetwork: boolAlias(trustedRaw, 'allowPrivateNetwork', 'allow_private_network'),
+            allowWorkspaceFiles: boolAlias(trustedRaw, 'allowWorkspaceFiles', 'allow_workspace_files'),
+            allowEnvironment: boolAlias(trustedRaw, 'allowEnvironment', 'allow_environment'),
+            allowShell: boolAlias(trustedRaw, 'allowShell', 'allow_shell'),
+        },
         schedule,
         permissions: normalizePermissions(input.permissions),
         limits: {
@@ -109,6 +122,7 @@ function normalizePermissions(raw: unknown): unknown[] {
             case 'home_assistant_read':
                 return {
                     kind: p.kind,
+                    allowAll: p.allowAll ?? p.allow_all,
                     entityIds: p.entityIds ?? p.entity_ids,
                     domains: p.domains,
                     allowList: p.allowList ?? p.allow_list,
@@ -126,8 +140,22 @@ function normalizePermissions(raw: unknown): unknown[] {
                         }
                     })
                     : p.services
-                return { kind: p.kind, services }
+                return {
+                    kind: p.kind,
+                    allowAll: p.allowAll ?? p.allow_all,
+                    domains: p.domains,
+                    services,
+                }
             }
+            case 'tool_call':
+                return {
+                    kind: p.kind,
+                    toolIds: p.toolIds ?? p.tool_ids,
+                    toolPatterns: p.toolPatterns ?? p.tool_patterns,
+                    allowIntegrationTools: p.allowIntegrationTools ?? p.allow_integration_tools,
+                    allowOrchestratorOnly: p.allowOrchestratorOnly ?? p.allow_orchestrator_only,
+                    maxCallsPerRun: p.maxCallsPerRun ?? p.max_calls_per_run,
+                }
             case 'agent_wake':
                 return {
                     kind: p.kind,
@@ -157,6 +185,7 @@ function compactScript(script: Microscript): Record<string, unknown> {
         title: script.title,
         enabled: script.enabled,
         status: script.status,
+        runtime: script.manifest.runtime,
         schedule: script.manifest.schedule,
         permission_count: script.manifest.permissions.length,
         next_run: script.nextRunAt ? new Date(script.nextRunAt).toISOString() : null,
@@ -172,7 +201,7 @@ function compactScript(script: Microscript): Record<string, unknown> {
 export const microscriptDescribeCapabilitiesTool: ToolDef = {
     id: 'microscript_describe_capabilities',
     name: 'microscript_describe_capabilities',
-    description: 'Describe the Microscripts subsystem: Python contract, supported permissions, operation request shapes, lifecycle defaults, and stop policies.',
+    description: 'Describe the Microscripts subsystem: trusted Python runtime, supported permissions, helper APIs, blocked-action guidance, lifecycle defaults, and stop policies.',
     input_schema: { type: 'object', properties: {} },
     tags: ['microscripts'],
 }
@@ -182,11 +211,14 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
         success: true,
         data: {
             contract: [
-                'Python code must define run(ctx) and return a JSON-serializable dict.',
+                'Default runtime is trusted_python: Python code defines run(ctx), may use normal stdlib imports, and returns a JSON-serializable dict.',
                 'Runs are short-lived. Do not sleep or loop forever; return nextCheckAfterMs or nextRunAt.',
                 'Runs may be triggered manually, on an interval, or by an inbound webhook subscription.',
+                'ctx is dict-like and also exposes helpers: ctx.notify, ctx.http_fetch, ctx.file_read, ctx.file_write, ctx.call_tool, ctx.continue_after, ctx.complete, ctx.pause.',
+                'trusted_python direct networking is allowed by default; direct file access is confined to the script workspace; env secrets and shell/process control are blocked by default.',
                 'A script with agent_wake permission may wake a text agent after its deterministic gate passes; the woken agent receives only the script prompt and notify_inbox if allowed.',
-                'The script cannot read env/secrets directly. It requests operations; the Node parent enforces permissions.',
+                'Parent-mediated helpers still enforce manifest permissions when they touch app integrations, Inbox notifications, or app tools.',
+                'Any blocked action error includes why it was blocked, a safe alternative, and instructions to ask the user/record AGENT_NEEDS.md if implementation is needed.',
                 'Use ctx["state"] for durable private state and return {"state": {...}} with the full next state.',
             ],
             webhook_trigger: {
@@ -201,6 +233,14 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
                 nextCheckAfterMs: 'optional delay before next run',
                 nextRunAt: 'optional absolute epoch ms',
             },
+            trusted_python_policy: {
+                allowImports: 'default true',
+                allowNetwork: 'default true',
+                allowPrivateNetwork: 'default true',
+                allowWorkspaceFiles: 'default true, confined to script workspace',
+                allowEnvironment: 'default false; app/user secrets are never passed to Python',
+                allowShell: 'default false',
+            },
             operation_kinds: [
                 'notify.inbox',
                 'agent.wake',
@@ -209,6 +249,7 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
                 'home_assistant.history',
                 'home_assistant.call_service',
                 'http.fetch',
+                'tool.call',
                 'file.read',
                 'file.write',
             ],
@@ -228,9 +269,10 @@ export const microscriptCreateTool: ToolDef = {
     name: 'microscript_create',
     description: [
         'Create a production Microscript from Python code plus a manifest.',
+        'The only runtime is trusted_python: normal Python controlled by app lifecycle, sandbox policy, and manifest permissions.',
         'Use only for short-lived or clearly bounded automation. Include an explicit stop policy: completeOnNotification, expiresAt, maxRuns, or persistent=true when the user really wants it ongoing.',
         'Use agent_wake only when a cheap deterministic gate should escalate to model judgement after matching; keep agent ids and prompt size bounded.',
-        'For Home Assistant writes, permissions must narrowly list allowed service domain/service and target entity IDs.',
+        'If an action is blocked, tell the user why, suggest the safe alternative, and request a manifest/runtime implementation change when truly needed.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -251,14 +293,14 @@ export async function executeMicroscriptCreate(args: Record<string, unknown>): P
     const code = typeof args.code === 'string' ? args.code : ''
     if (!title) return { success: false, error: 'title is required.' }
     if (!code.trim()) return { success: false, error: 'code is required.' }
-    const validation = await validateMicroscriptCode(code)
-    if (!validation.ok) return { success: false, error: validation.error }
     let manifest: MicroscriptManifest
     try {
         manifest = normalizeManifest(args.manifest)
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Invalid manifest.' }
     }
+    const validation = await validateMicroscriptCode(code)
+    if (!validation.ok) return { success: false, error: validation.error }
     const initialState = args.initial_state && typeof args.initial_state === 'object' && !Array.isArray(args.initial_state)
         ? args.initial_state as Record<string, unknown>
         : {}
@@ -356,16 +398,18 @@ export const microscriptUpdateTool: ToolDef = {
 export async function executeMicroscriptUpdate(args: Record<string, unknown>): Promise<ToolResult> {
     const id = typeof args.script_id === 'string' ? args.script_id.trim() : ''
     if (!id) return { success: false, error: 'script_id is required.' }
+    const existing = getMicroscript(id)
+    if (!existing) return { success: false, error: `No microscript with id ${id}.` }
     const patch: Parameters<typeof updateMicroscript>[1] = {}
     if (typeof args.title === 'string' && args.title.trim()) patch.title = args.title.trim()
+    if (args.manifest !== undefined) {
+        try { patch.manifest = normalizeManifest(args.manifest) }
+        catch (err) { return { success: false, error: err instanceof Error ? err.message : 'Invalid manifest.' } }
+    }
     if (typeof args.code === 'string') {
         const validation = await validateMicroscriptCode(args.code)
         if (!validation.ok) return { success: false, error: validation.error }
         patch.code = args.code
-    }
-    if (args.manifest !== undefined) {
-        try { patch.manifest = normalizeManifest(args.manifest) }
-        catch (err) { return { success: false, error: err instanceof Error ? err.message : 'Invalid manifest.' } }
     }
     if (typeof args.enabled === 'boolean') patch.enabled = args.enabled
     if (args.state && typeof args.state === 'object' && !Array.isArray(args.state)) {

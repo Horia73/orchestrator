@@ -2,14 +2,15 @@
  * Smoke test for Microscripts.
  *
  * Runs against a temporary DB/workspace. Validates:
- *   - code validation rejects imports;
+ *   - trusted Python validation accepts normal imports;
  *   - create/get/list round-trip;
  *   - phase-based operation execution;
  *   - notify_inbox permission posts one Inbox item;
  *   - completeOnNotification completes/disables;
  *   - missing permission is denied in-band;
+ *   - blocked actions explain AGENT_NEEDS.md escalation;
  *   - agent wake requests require explicit permission;
- *   - file read/write operations stay inside script workspace.
+ *   - direct trusted Python file access stays inside script workspace.
  */
 import fs from 'fs'
 import os from 'os'
@@ -36,8 +37,11 @@ async function main(): Promise<void> {
         if (!ok) failures++
     }
 
-    const rejected = await validateMicroscriptCode('import os\n\ndef run(ctx):\n    return {}')
-    check('validator rejects imports', rejected.ok === false, rejected)
+    const acceptedImport = await validateMicroscriptCode('import json\n\ndef run(ctx):\n    return {"summary": json.dumps({"ok": True}), "status": "complete"}')
+    check('validator accepts trusted Python imports', acceptedImport.ok === true, acceptedImport)
+
+    const rejectedSyntax = await validateMicroscriptCode('def run(ctx):\n    return {')
+    check('validator rejects syntax errors', rejectedSyntax.ok === false, rejectedSyntax)
 
     const validCode = 'def run(ctx):\n    return {"summary": "ok", "status": "complete"}'
     const accepted = await validateMicroscriptCode(validCode)
@@ -56,6 +60,52 @@ async function main(): Promise<void> {
         },
     })
     check('microscript_create tool accepts minimal valid script', toolCreated.success === true, toolCreated)
+
+    const directFileCode = `
+def run(ctx):
+    with open("notes/hello.txt", "w") as f:
+        f.write("hello")
+    with open("notes/hello.txt", "r") as f:
+        content = f.read()
+    return ctx.complete(state={"content": content}, summary="direct file ok")
+`.trim()
+    const directFile = createMicroscript({
+        title: 'Smoke trusted direct files',
+        code: directFileCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke trusted Python direct file test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const directFileResult = await runMicroscript(directFile, { trigger: 'manual', preserveEnabled: true })
+    const directFileAfter = getMicroscript(directFile.id)
+    check('trusted Python direct file access works inside workspace', directFileResult.ok && directFileAfter?.state.content === 'hello', directFileAfter)
+
+    const blockedShellCode = `
+import subprocess
+
+def run(ctx):
+    subprocess.run(["echo", "nope"])
+    return ctx.complete()
+`.trim()
+    const blockedShell = createMicroscript({
+        title: 'Smoke blocked shell',
+        code: blockedShellCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke blocked shell guidance test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const blockedShellResult = await runMicroscript(blockedShell, { trigger: 'manual', preserveEnabled: true })
+    check('blocked shell explains AGENT_NEEDS.md escalation', blockedShellResult.ok === false && blockedShellResult.error?.includes('AGENT_NEEDS.md'), blockedShellResult)
 
     const notifyCode = `
 def run(ctx):
