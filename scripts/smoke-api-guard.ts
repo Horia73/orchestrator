@@ -54,6 +54,19 @@ async function main(): Promise<void> {
     check('X-Orchestrator-API-Token satisfies public API guard', tokenGuard === null, tokenGuard?.status)
 
     delete process.env.ORCHESTRATOR_API_TOKEN
+    const implicitForwardedLoopbackGuard = guardSensitiveRequest(new Request('http://127.0.0.1:3000/api/config', {
+        headers: {
+            host: '127.0.0.1:3000',
+            'x-forwarded-host': '127.0.0.1:3000',
+            'x-forwarded-proto': 'http',
+        },
+    }))
+    check(
+        'implicit forwarded loopback request without client IP is allowed',
+        implicitForwardedLoopbackGuard === null,
+        implicitForwardedLoopbackGuard?.status,
+    )
+
     const forwardedMappedLoopbackGuard = guardSensitiveRequest(new Request('http://127.0.0.1:3000/api/config', {
         headers: {
             host: '127.0.0.1:3000',

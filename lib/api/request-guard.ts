@@ -114,7 +114,16 @@ function isForwardedLoopbackHostClaim(request: Request, effectiveHostname: strin
 
     const clientIp = firstHeaderValue(request.headers.get('x-forwarded-for'))
         || firstHeaderValue(request.headers.get('x-real-ip'))
-    if (!clientIp) return true
+    if (!clientIp) {
+        const hostHostname = extractHostname(request.headers.get('host') || '')
+        let urlHostname = ''
+        try {
+            urlHostname = new URL(request.url).hostname
+        } catch {
+            return true
+        }
+        return !(isLoopbackHost(hostHostname) && isLoopbackHost(urlHostname))
+    }
 
     return !isLoopbackHost(extractHostname(clientIp))
 }
@@ -202,7 +211,7 @@ function extractHostname(host: string): string {
 }
 
 function isLoopbackHost(hostname: string): boolean {
-    const host = hostname.trim().replace(/\.$/, '').toLowerCase()
+    const host = hostname.trim().replace(/\.$/, '').replace(/^\[(.*)]$/, '$1').toLowerCase()
     if (host.startsWith('::ffff:')) {
         return isLoopbackHost(host.slice('::ffff:'.length))
     }
