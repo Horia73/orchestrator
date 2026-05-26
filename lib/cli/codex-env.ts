@@ -5,9 +5,10 @@ import path from 'path'
 import { PRIVATE_STATE_DIR } from '@/lib/config'
 import { augmentedEnv } from './resolve-bin'
 
-const RUNTIME_HOME = path.join(PRIVATE_STATE_DIR, 'codex-runtime-home')
-const RUNTIME_CODEX_HOME = path.join(RUNTIME_HOME, '.codex')
-const RUNTIME_CONFIG_PATH = path.join(RUNTIME_CODEX_HOME, 'config.toml')
+export const CODEX_RUNTIME_HOME = path.join(PRIVATE_STATE_DIR, 'codex-runtime-home')
+export const CODEX_RUNTIME_CODEX_HOME = path.join(CODEX_RUNTIME_HOME, '.codex')
+export const CODEX_RUNTIME_AUTH_PATH = path.join(CODEX_RUNTIME_CODEX_HOME, 'auth.json')
+const RUNTIME_CONFIG_PATH = path.join(CODEX_RUNTIME_CODEX_HOME, 'config.toml')
 
 const SANITIZED_CONFIG = [
     '# Managed by Orchestrator.',
@@ -31,10 +32,10 @@ export function codexCliEnv(extra?: Record<string, string | undefined>): NodeJS.
 }
 
 export function prepareCodexRuntimeHome(): string {
-    fs.mkdirSync(RUNTIME_CODEX_HOME, { recursive: true })
+    fs.mkdirSync(CODEX_RUNTIME_CODEX_HOME, { recursive: true })
     writeSanitizedConfig()
     syncAuthFile()
-    return RUNTIME_HOME
+    return CODEX_RUNTIME_HOME
 }
 
 function writeSanitizedConfig(): void {
@@ -52,7 +53,7 @@ function writeSanitizedConfig(): void {
 
 function syncAuthFile(): void {
     const source = path.join(os.homedir(), '.codex', 'auth.json')
-    const target = path.join(RUNTIME_CODEX_HOME, 'auth.json')
+    const target = CODEX_RUNTIME_AUTH_PATH
     if (source === target || !fs.existsSync(source)) return
 
     try {

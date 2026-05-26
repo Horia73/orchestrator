@@ -20,6 +20,7 @@ import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import { resolveBin, augmentedEnv } from './resolve-bin'
+import { CODEX_RUNTIME_AUTH_PATH, prepareCodexRuntimeHome } from './codex-env'
 
 export interface CliQuotaWindow {
     /** Percent of the window used, 0–100. */
@@ -441,7 +442,7 @@ function sleep(ms: number): Promise<void> {
 // Codex — chatgpt.com/backend-api/wham/usage (same endpoint codex /status polls)
 // ---------------------------------------------------------------------------
 
-const CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json')
+const USER_CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json')
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
 
 interface CodexAuthFile {
@@ -466,9 +467,22 @@ interface CodexUsageResponse {
 }
 
 function readCodexAuth(): { token: string; accountId: string } | null {
-    if (!existsSync(CODEX_AUTH_PATH)) return null
+    prepareCodexRuntimeHome()
+    const paths = CODEX_RUNTIME_AUTH_PATH === USER_CODEX_AUTH_PATH
+        ? [CODEX_RUNTIME_AUTH_PATH]
+        : [CODEX_RUNTIME_AUTH_PATH, USER_CODEX_AUTH_PATH]
+
+    for (const authPath of paths) {
+        if (!existsSync(authPath)) continue
+        const parsed = readCodexAuthFile(authPath)
+        if (parsed) return parsed
+    }
+    return null
+}
+
+function readCodexAuthFile(authPath: string): { token: string; accountId: string } | null {
     try {
-        const raw = readFileSync(CODEX_AUTH_PATH, 'utf-8')
+        const raw = readFileSync(authPath, 'utf-8')
         const parsed = JSON.parse(raw) as CodexAuthFile
         const token = parsed.tokens?.access_token
         const accountId = parsed.tokens?.account_id
@@ -496,7 +510,7 @@ async function getCodexQuota(): Promise<CliQuotaSnapshot> {
         return {
             cliId: 'codex',
             available: false,
-            error: 'Not logged in (no ~/.codex/auth.json).',
+            error: 'Not logged in (no Codex auth in Orchestrator runtime or ~/.codex/auth.json).',
             source: 'none',
             fetchedAt,
         }

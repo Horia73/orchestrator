@@ -34,6 +34,7 @@ ENV NODE_ENV=production \
     ORCHESTRATOR_BUILD_COMMIT=${ORCHESTRATOR_BUILD_COMMIT} \
     ORCHESTRATOR_BUILD_REF=${ORCHESTRATOR_BUILD_REF} \
     PORT=3000 \
+    HOME=/home/node \
     NPM_CONFIG_PREFIX=/home/node/.npm-global \
     PATH=/home/node/.npm-global/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin \
     PATCHRIGHT_BROWSERS_PATH=/ms-playwright \

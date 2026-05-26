@@ -597,14 +597,14 @@ function ByToolTable({ rows }: { rows: UsageByTool[] }) {
             {rows.length === 0 ? (
                 <p className="px-4 py-6 text-center text-[13px] text-foreground/45">No tool calls in this range.</p>
             ) : (
-                <div className="max-w-full overflow-x-auto md:overflow-visible">
+                <div className="max-h-[420px] max-w-full overflow-auto">
                     <table className="min-w-[420px] w-full text-[13px] md:min-w-0">
-                        <thead>
+                        <thead className="sticky top-0 z-10 bg-card">
                             <tr className="border-b border-border/50 text-left text-[11px] font-medium uppercase tracking-wider text-foreground/55">
-                                <th className="px-4 py-2">Tool</th>
-                                <th className="px-3 py-2 text-right">Calls</th>
-                                <th className="px-3 py-2 text-right">Failures</th>
-                                <th className="px-3 py-2 text-right">Avg duration</th>
+                                <th className="bg-card px-4 py-2">Tool</th>
+                                <th className="bg-card px-3 py-2 text-right">Calls</th>
+                                <th className="bg-card px-3 py-2 text-right">Failures</th>
+                                <th className="bg-card px-3 py-2 text-right">Avg duration</th>
                             </tr>
                         </thead>
                         <tbody>
