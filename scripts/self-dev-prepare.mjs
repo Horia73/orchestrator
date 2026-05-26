@@ -183,6 +183,7 @@ function resolveSourceDir() {
     ['--source-dir', stringArg('source-dir')],
     ['ORCHESTRATOR_SELF_DEV_SOURCE_DIR', process.env.ORCHESTRATOR_SELF_DEV_SOURCE_DIR],
     ['ORCHESTRATOR_SOURCE_DIR', process.env.ORCHESTRATOR_SOURCE_DIR],
+    ['default Docker source mount', '/orchestrator-source'],
     ['cwd', appDir],
   ]
   const seen = new Set()

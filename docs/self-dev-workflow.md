@@ -31,7 +31,9 @@ In Docker installs, `/app` is a built image copy and normally has no `.git`
 metadata. The compose stack mounts the host checkout at `/orchestrator-source`
 and sets `ORCHESTRATOR_SELF_DEV_SOURCE_DIR=/orchestrator-source`, so the helper
 uses that git checkout while keeping run state under `/app/.orchestrator`. For
-manual or unusual layouts, pass `--source-dir <git-checkout>`.
+manual or unusual layouts, pass `--source-dir <git-checkout>`. The helper also
+checks `/orchestrator-source` directly, so self-development still works when the
+mount exists but the environment variable is missing.
 
 Use `--copy-env` only when a local dev run genuinely needs env values. The copied `.env` / `.env.local` files stay ignored by git.
 

@@ -1527,10 +1527,20 @@ export function ChatView() {
     if (artifactOpen && artifact) return `legacy:${artifactKey(artifact)}`
     return null
   }, [activePanelAgentRun, artifact, artifactOpen, genArtifact])
+  // Hide the message list until scroll is restored. Without this we'd show
+  // an empty list while messages load, then fade it out + fade it back in
+  // once `messageCount` flips past 0 — perceived as a second flash after the
+  // outer wrapper's initial fade-in.
+  const conversationLoadStatus = conversationId
+    ? state.conversationLoadState[conversationId]
+    : null
+  const isAwaitingInitialMessages =
+    conversationLoadStatus === "summary" ||
+    conversationLoadStatus === "loading"
   const isAwaitingInitialScrollRestore = Boolean(
     conversationId &&
-      messageCount > 0 &&
-      restoredScrollConversationId !== conversationId
+      restoredScrollConversationId !== conversationId &&
+      (messageCount > 0 || isAwaitingInitialMessages)
   )
   const isRestoringInitialFrame =
     isAwaitingInitialScrollRestore || isRestoringScroll

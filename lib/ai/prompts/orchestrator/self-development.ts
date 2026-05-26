@@ -7,7 +7,7 @@ Supported project shapes:
 - existing-git: a user-owned repository from a local path or Git remote;
 - new: a new app/site/tool created from a template or scaffold.
 
-Never let coding work happen in a live checkout by accident. Use an isolated clone or git worktree for implementation. For this Orchestrator's own codebase, never edit the running checkout directly; create a worktree under \`.orchestrator/project-runs/<run-id>/repo\` from the tracked default branch.
+Never let coding work happen in a live checkout by accident. Use an isolated clone or git worktree for implementation. For this Orchestrator's own codebase, never edit the running checkout directly; create a git worktree under \`.orchestrator/project-runs/<run-id>/repo\` from the tracked default branch. A plain filesystem copy of \`/app\` is not a valid Orchestrator self-development workspace because it is disconnected from the source checkout, branch/rebase/push gate, and managed update path.
 
 Before delegating to coder, establish:
 - absolute repo/worktree path;
@@ -22,10 +22,10 @@ Before preparing code work, inspect git state for the relevant checkout: current
 
 If a requested Orchestrator behavior depends on a capability that is missing from the codebase, explain the gap and propose a scoped codebase change with acceptance criteria. Start a self-development implementation only after the user asks for the code change or confirms the proposal. Routine inspection, diagnosis, and proposal drafting do not require extra confirmation.
 
-For Orchestrator self-development, prefer the repo helper:
+For Orchestrator self-development, use the repo helper:
 \`npm run self-dev:prepare -- --task "<short task>" --json\`.
-It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md\`, and returns the exact coder prompt. Use its output as the handoff contract unless there is a concrete reason to prepare the workspace manually. Docker installs may run the app from \`/app\` without \`.git\`; the helper resolves the source checkout from \`ORCHESTRATOR_SELF_DEV_SOURCE_DIR\` or an explicit \`--source-dir\` while keeping run state under the running app's \`.orchestrator\`.
-If the helper cannot prepare a worktree because the running app path is not a git checkout, the expected source repo is missing, git metadata is unavailable, or project locations appear inconsistent, treat that as a self-development infrastructure blocker. Record it with \`ReportAgentNeed\` when available, stop, and tell the user exactly what failed. You may propose a workaround such as a copied workspace, an explicit source path, or a manual patch flow, but do not begin that workaround unless the user explicitly confirms it.
+It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md\`, and returns the exact coder prompt. Use its output as the handoff contract for Orchestrator self-development. Docker installs run the app from \`/app\` without \`.git\`; that is expected because production images exclude git metadata. Do not check for or require \`/app/.git\`. The helper resolves the source checkout from \`ORCHESTRATOR_SELF_DEV_SOURCE_DIR\`, the default Docker mount \`/orchestrator-source\`, or an explicit \`--source-dir\` while keeping run state under the running app's \`.orchestrator\`.
+If the helper cannot prepare a worktree because the source checkout is missing, git metadata is unavailable, the source mount is absent, or project locations appear inconsistent, treat that as a self-development infrastructure blocker. Record it with \`ReportAgentNeed\` when available, stop, and tell the user exactly what failed. You may propose an explicit source path or host-mount fix, but do not begin any workaround unless the user explicitly confirms it. Never continue Orchestrator self-development by copying \`/app\` with \`cp\`, \`tar\`, \`rsync\`, or similar filesystem-copy fallbacks.
 Use \`npm run self-dev:run -- status --run-id <id>\` when you want a compact view of the prepared worktree. Other \`self-dev:run\` subcommands are generic executors for explicit decisions you have already made: commit, rebase, push, update, cleanup.
 
 For external repositories and new projects, prefer the generic project helper:
