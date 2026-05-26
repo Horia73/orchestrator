@@ -10,7 +10,7 @@ INSTALL_MODE="${ORCHESTRATOR_INSTALL_MODE:-auto}"
 # the data dir grow with uploads without bloating the source checkout.
 APP_DIR="${ORCHESTRATOR_APP_DIR:-$HOME/orchestrator}"
 ORCH_HOME="${ORCHESTRATOR_HOME:-$HOME/.orchestrator}"
-NODE_HOME_DIR="${ORCHESTRATOR_NODE_HOME_DIR:-$HOME/.orchestrator-node-home}"
+NODE_HOME_DIR="${ORCHESTRATOR_NODE_HOME:-$HOME/.orchestrator-node-home}"
 PORT="${ORCHESTRATOR_PORT:-3000}"
 HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
 PUBLIC_URL="${ORCHESTRATOR_PUBLIC_URL:-}"

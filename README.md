@@ -47,7 +47,7 @@ global API token and `Authorization: Bearer <webhook-secret>` or
 
 ## One-Line Linux Install
 
-On Linux, the installer uses Docker by default. It installs/verifies Docker and Compose, starts the Docker daemon where supported, clones or updates the repo under `~/.orchestrator/app`, creates `.env` if missing, installs the local Docker update bridge, builds the image, and starts the stack detached.
+On Linux, the installer uses Docker by default. It installs/verifies Docker and Compose, starts the Docker daemon where supported, clones or updates the repo under `~/orchestrator/`, sets up `~/.orchestrator/` for runtime data (bind-mounted into the container so files are owned by your host user and visible on the host filesystem), creates `.env` if missing, installs the local Docker update bridge, builds the image, and starts the stack detached.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | bash
@@ -228,7 +228,7 @@ curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts
 
 The native installer:
 
-- clones or updates the app under `~/.orchestrator/app`;
+- clones or updates the app under `~/orchestrator/`;
 - installs Node 22 with `nvm` if needed;
 - installs Linux build/browser dependencies where possible;
 - runs `npm ci`;
@@ -272,7 +272,7 @@ Important variables:
 - `BROWSER_AGENT_LIVE_VIEW`: enables live browser view on Linux/Docker.
 - `BROWSER_AGENT_BACKEND`: optional browser-agent backend override. Leave empty to use the Settings default (`Auto`); set `patchright`, `official-display`, or `auto` only when a deployment should ignore the saved UI setting.
 
-For native installs, runtime workspace state is stored at `~/.orchestrator/state` and exposed to the app through `~/.orchestrator/app/.orchestrator`. For Docker installs, persistent app data lives in the `orchestrator-data` Docker volume mounted at `/app/.orchestrator`.
+For native installs, runtime workspace state is stored at `~/.orchestrator/state` and exposed to the app through `~/orchestrator/.orchestrator` (a symlink). For Docker installs, persistent app data lives directly at `~/.orchestrator/` on the host (bind-mounted into the container at `/app/.orchestrator`), and the container cache lives at `~/.orchestrator-node-home/` (bind-mounted at `/home/node`). Both paths are owned by your host user (`ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` in `.env`), so backups are a simple `cp -a ~/.orchestrator/ <dest>`.
 
 ## Browser Agent Live View
 

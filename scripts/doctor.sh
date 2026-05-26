@@ -24,8 +24,9 @@ set -uo pipefail
 
 # ---------- Config (env-overridable) ----------
 
+APP_DIR="${ORCHESTRATOR_APP_DIR:-$HOME/orchestrator}"
 ORCH_HOME="${ORCHESTRATOR_HOME:-$HOME/.orchestrator}"
-APP_DIR="${ORCHESTRATOR_APP_DIR:-$ORCH_HOME/app}"
+NODE_HOME_DIR="${ORCHESTRATOR_NODE_HOME:-$HOME/.orchestrator-node-home}"
 LOG_DIR="${ORCHESTRATOR_LOG_DIR:-$ORCH_HOME/logs}"
 DOCTOR_LOG_DIR="$LOG_DIR/doctor"
 
@@ -1192,6 +1193,10 @@ uninstall_app_dir() {
       log_info "Purging $ORCH_HOME (data and logs)"
       rm -rf "$ORCH_HOME"
     }
+    [ -d "$NODE_HOME_DIR" ] && {
+      log_info "Purging $NODE_HOME_DIR (container cache)"
+      rm -rf "$NODE_HOME_DIR"
+    }
   else
     rm -f "$ORCH_HOME/update-bridge-token" "$ORCH_HOME/update-bridge.pid" 2>/dev/null || true
     if [ -d "$ORCH_HOME/duckdns" ]; then rm -rf "$ORCH_HOME/duckdns"; fi
@@ -1223,8 +1228,9 @@ run_uninstall() {
   if [ "$purge" = "1" ]; then
     log_warn "  - docker orchestrator volumes and image"
     log_warn "  - $ORCH_HOME (data + logs) — PURGED"
+    log_warn "  - $NODE_HOME_DIR (container cache) — PURGED"
   else
-    log_warn "  Keeping: $ORCH_HOME data/logs and docker volumes. Pass --purge to remove."
+    log_warn "  Keeping: $ORCH_HOME data/logs, $NODE_HOME_DIR cache, and docker volumes. Pass --purge to remove."
   fi
 
   confirm "Proceed with uninstall?" "n" || { log_info "Aborted."; return 1; }

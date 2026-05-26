@@ -5,7 +5,7 @@
 # and a checkout of this repo at $SRC. Run as a non-root user (default 'test').
 #
 # Suggested driver (run on a Linux host with docker):
-#   tar -czf /tmp/orch.tgz --exclude=node_modules --exclude=.next --exclude=.orchestrator .
+#   tar -czf /tmp/orch.tgz --exclude=node_modules --exclude=.next --exclude=.orchestrator --exclude=.orchestrator-data --exclude=.orchestrator-node-home .
 #   docker run -d --name orch-test -v /tmp/orch.tgz:/tmp/orch.tgz:ro \
 #     --hostname orch-test debian:12 sleep infinity
 #   docker exec orch-test bash -c '
@@ -25,7 +25,8 @@ set -uo pipefail
 
 SRC=${SRC:-/home/test/src}
 ORCH_HOME=${ORCH_HOME:-/home/test/.orchestrator}
-APP_DIR=$ORCH_HOME/app
+APP_DIR=${APP_DIR:-/home/test/orchestrator}
+NODE_HOME_DIR=${NODE_HOME_DIR:-/home/test/.orchestrator-node-home}
 PASS=0; FAIL=0
 
 red()   { printf '\033[31m%s\033[0m\n' "$*"; }
@@ -37,7 +38,7 @@ nope() { red   "  FAIL: $*"; FAIL=$((FAIL+1)); }
 assert_eq() { if [ "$2" = "$3" ]; then ok "$1 = $3"; else nope "$1: expected '$2' got '$3'"; fi; }
 assert_grep() { if echo "$3" | grep -qE "$2"; then ok "$1"; else nope "$1: pattern '$2' not in output"; echo "---tail---"; echo "$3" | tail -20; fi; }
 
-cleanup() { rm -rf "$ORCH_HOME" /home/test/.local/bin/orchestrator 2>/dev/null || true; }
+cleanup() { rm -rf "$ORCH_HOME" "$APP_DIR" "$NODE_HOME_DIR" /home/test/.local/bin/orchestrator 2>/dev/null || true; }
 make_stale_state() {
   cleanup; mkdir -p "$APP_DIR"
   git clone -q file://$SRC "$APP_DIR" 2>/dev/null
