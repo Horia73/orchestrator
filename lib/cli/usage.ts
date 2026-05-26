@@ -76,6 +76,9 @@ interface ClaudeUsageRaw {
  */
 async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: string }> {
     const claudeBin = resolveBin('claude')
+    if (claudeBin === 'claude') {
+        return { error: 'Claude Code CLI is not installed.' }
+    }
 
     // Run from a directory claude has already trusted — the orchestrator's own
     // cwd (process.cwd()) is being used interactively right now, so it's the
