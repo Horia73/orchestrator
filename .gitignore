@@ -26,7 +26,11 @@ monitor-refactor-check.png
 
 # local app/runtime state
 /.orchestrator/
+/.orchestrator-data/
+/.orchestrator-node-home/
 /.wwebjs_cache/
+# per-checkout compose override (e.g. for custom bind mount paths)
+docker-compose.override.yml
 /data.db
 /data.db-*
 *.sqlite

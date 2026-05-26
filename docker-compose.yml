@@ -7,6 +7,10 @@ services:
         ORCHESTRATOR_BUILD_REF: ${ORCHESTRATOR_BUILD_REF:-unknown}
     image: orchestrator:local
     restart: unless-stopped
+    # Run as the host user so bind-mounted files are owned by the user, not by
+    # uid 1000. install.sh sets ORCHESTRATOR_UID/GID; defaults to 1000:1000
+    # (the `node` user baked into the image) for standalone dev.
+    user: "${ORCHESTRATOR_UID:-1000}:${ORCHESTRATOR_GID:-1000}"
     env_file:
       - .env
     environment:
@@ -31,10 +35,8 @@ services:
       - "127.0.0.1:${BROWSER_AGENT_VNC_WS_PORT:-6080}:6080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Bind mounts to host paths set by install.sh. Defaults are relative to the
+    # compose file for standalone dev (both paths are gitignored).
     volumes:
-      - orchestrator-data:/app/.orchestrator
-      - orchestrator-node-home:/home/node
-
-volumes:
-  orchestrator-data:
-  orchestrator-node-home:
+      - ${ORCHESTRATOR_DATA_DIR:-./.orchestrator-data}:/app/.orchestrator
+      - ${ORCHESTRATOR_NODE_HOME:-./.orchestrator-node-home}:/home/node

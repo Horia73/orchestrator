@@ -4,8 +4,13 @@ set -euo pipefail
 REPO_URL="${ORCHESTRATOR_REPO_URL:-https://github.com/Horia73/orchestrator.git}"
 BRANCH="${ORCHESTRATOR_BRANCH:-master}"
 INSTALL_MODE="${ORCHESTRATOR_INSTALL_MODE:-auto}"
+# Layout: code at $APP_DIR, runtime data at $ORCH_HOME (bind-mounted into the
+# Docker container at /app/.orchestrator), container caches at $NODE_HOME_DIR.
+# Separating code from data lets users back up data without the repo and lets
+# the data dir grow with uploads without bloating the source checkout.
+APP_DIR="${ORCHESTRATOR_APP_DIR:-$HOME/orchestrator}"
 ORCH_HOME="${ORCHESTRATOR_HOME:-$HOME/.orchestrator}"
-APP_DIR="${ORCHESTRATOR_APP_DIR:-$ORCH_HOME/app}"
+NODE_HOME_DIR="${ORCHESTRATOR_NODE_HOME_DIR:-$HOME/.orchestrator-node-home}"
 PORT="${ORCHESTRATOR_PORT:-3000}"
 HOST="${ORCHESTRATOR_HOST:-127.0.0.1}"
 PUBLIC_URL="${ORCHESTRATOR_PUBLIC_URL:-}"
@@ -448,7 +453,9 @@ checkout_app() {
     git -C "$APP_DIR" checkout "$BRANCH"
     git -C "$APP_DIR" pull --ff-only origin "$BRANCH"
   elif [ -e "$APP_DIR" ] && [ "$(find "$APP_DIR" -mindepth 1 -maxdepth 1 2>/dev/null | wc -l | tr -d ' ')" != "0" ]; then
-    backup_dir="$ORCH_HOME/app.backup.$(date +%Y%m%d%H%M%S)"
+    # Backup goes next to the app dir, not inside the data dir — the data dir
+    # is bind-mounted into the container and shouldn't contain code backups.
+    backup_dir="$(dirname "$APP_DIR")/$(basename "$APP_DIR").backup.$(date +%Y%m%d%H%M%S)"
     log "$APP_DIR exists but is not a git checkout; moving it to $backup_dir"
     mv "$APP_DIR" "$backup_dir"
     log "Cloning $REPO_URL"
@@ -654,6 +661,13 @@ ensure_docker_env_file() {
   upsert_env_value "$env_file" BROWSER_AGENT_LIVE_VIEW "1"
   upsert_env_value "$env_file" BROWSER_AGENT_VNC_WS_PORT "$VNC_PORT"
   upsert_env_value "$env_file" BROWSER_AGENT_VNC_WS_PUBLIC_URL "${BROWSER_AGENT_VNC_WS_PUBLIC_URL:-ws://127.0.0.1:$VNC_PORT}"
+  # Bind mount paths + container uid/gid so docker compose creates host-owned
+  # files in the right place (see docker-compose.yml volumes section).
+  upsert_env_value "$env_file" ORCHESTRATOR_DATA_DIR "$ORCH_HOME"
+  upsert_env_value "$env_file" ORCHESTRATOR_NODE_HOME "$NODE_HOME_DIR"
+  upsert_env_value "$env_file" ORCHESTRATOR_UID "$(id -u)"
+  upsert_env_value "$env_file" ORCHESTRATOR_GID "$(id -g)"
+  mkdir -p "$ORCH_HOME" "$NODE_HOME_DIR"
 }
 
 install_duckdns_updater() {
