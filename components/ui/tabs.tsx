@@ -59,16 +59,19 @@ function TabsTrigger({
 
 function TabsContent({
   className,
+  hideInactive = true,
   ...props
-}: React.ComponentProps<typeof TabsPrimitive.Content>) {
+}: React.ComponentProps<typeof TabsPrimitive.Content> & {
+  hideInactive?: boolean
+}) {
   return (
     <TabsPrimitive.Content
       data-slot="tabs-content"
-      // No enter animation — Radix toggles content synchronously, and an
-      // animate-in fade caused a visible flash between old/new tab content
-      // because the previous panel's exit and new panel's enter overlapped.
-      // Keep `hidden` on inactive panels so only one is in the DOM at a time.
-      className={cn("outline-none data-[state=inactive]:hidden", className)}
+      className={cn(
+        "outline-none",
+        hideInactive && "data-[state=inactive]:hidden",
+        className
+      )}
       {...props}
     />
   )

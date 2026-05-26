@@ -6,6 +6,7 @@ import { Calendar, MapPin, Route, Spline } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatRelativeTime } from "./use-attachments"
+import { LibraryLoadableImage } from "./loadable-thumbnail"
 import { OsmStaticMap } from "./osm-static-map"
 import type { LibraryMapRow } from "@/app/api/library/maps/route"
 
@@ -116,7 +117,7 @@ function MapThumbnail({ map }: { map: LibraryMapRow }) {
                 />
             ) : (
                 <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted/40">
-                    <img
+                    <LibraryLoadableImage
                         src={googleUrl}
                         alt={`Preview · ${map.title}`}
                         loading="lazy"

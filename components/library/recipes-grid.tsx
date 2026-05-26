@@ -6,6 +6,7 @@ import { ChefHat, Clock, Flame, Users } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatRelativeTime } from "./use-attachments"
+import { LibraryLoadableImage } from "./loadable-thumbnail"
 import type { LibraryRecipeRow } from "@/app/api/library/recipes/route"
 
 const DIFFICULTY_LABEL: Record<NonNullable<LibraryRecipeRow['difficulty']>, string> = {
@@ -136,13 +137,13 @@ function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
     }
     return (
         <div className="relative aspect-[16/9] w-full overflow-hidden bg-muted/40">
-            <img
+            <LibraryLoadableImage
                 src={resolvedSrc}
                 alt=""
                 loading="lazy"
                 referrerPolicy="no-referrer"
                 onError={() => setFailed(true)}
-                className="size-full object-cover transition-transform duration-300 group-hover/recipe-card:scale-[1.03]"
+                className="size-full object-cover group-hover/recipe-card:scale-[1.03]"
             />
         </div>
     )

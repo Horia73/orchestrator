@@ -293,6 +293,10 @@ button:not(:disabled),
     animation: searchTextSweep 1.35s ease-in-out infinite;
   }
 
+  .library-media-shimmer {
+    animation: libraryMediaShimmer 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
+  }
+
   @keyframes thoughtTitleSwap {
     from { opacity: 0.55; }
     to { opacity: 1; }
@@ -323,6 +327,22 @@ button:not(:disabled),
     100% {
       background-position: -120% 0;
       opacity: 0.72;
+    }
+  }
+
+  @keyframes libraryMediaShimmer {
+    from {
+      transform: translateX(-120%);
+    }
+    to {
+      transform: translateX(420%);
+    }
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .library-media-shimmer {
+      animation: none;
+      opacity: 0.55;
     }
   }
 

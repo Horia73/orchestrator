@@ -5,6 +5,7 @@ import Link from "next/link"
 import { Image as ImageIcon, MessageSquare, Play, X } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { LibraryLoadableImage } from "./loadable-thumbnail"
 import { formatBytes, formatRelativeTime, type LibraryAttachment } from "./use-attachments"
 
 /**
@@ -72,11 +73,11 @@ export function MediaGrid({
                             aria-label={`Open ${a.filename}`}
                         >
                             {a.type === 'image' ? (
-                                <img
+                                <LibraryLoadableImage
                                     src={`/api/uploads/${encodeURIComponent(a.id)}`}
                                     alt={a.filename}
                                     loading="lazy"
-                                    className="size-full object-cover transition-transform group-hover/tile:scale-[1.03]"
+                                    className="size-full object-cover group-hover/tile:scale-[1.03]"
                                 />
                             ) : (
                                 <>
@@ -182,11 +183,15 @@ function Lightbox({
                         className="max-h-[78vh] max-w-full rounded-lg bg-black"
                     />
                 ) : (
-                    <img
-                        src={`/api/uploads/${encodeURIComponent(attachment.id)}`}
-                        alt={attachment.filename}
-                        className="max-h-[78vh] max-w-full rounded-lg object-contain"
-                    />
+                    <div className="relative inline-flex min-h-40 min-w-64 max-w-full items-center justify-center overflow-hidden rounded-lg bg-white/5">
+                        <LibraryLoadableImage
+                            src={`/api/uploads/${encodeURIComponent(attachment.id)}`}
+                            alt={attachment.filename}
+                            loading="eager"
+                            className="max-h-[78vh] max-w-full object-contain"
+                            skeletonClassName="bg-white/10"
+                        />
+                    </div>
                 )}
                 <div className="flex w-full flex-wrap items-center justify-between gap-3 text-[12.5px] text-white/85">
                     <div className="flex min-w-0 flex-col">

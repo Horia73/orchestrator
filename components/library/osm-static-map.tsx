@@ -1,9 +1,12 @@
 "use client"
 
+/* eslint-disable @next/next/no-img-element */
+
 import * as React from "react"
 import { MapPinned } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { LibraryImageLoadingOverlay } from "./loadable-thumbnail"
 
 /**
  * OpenStreetMap-based static map preview. No API key needed — uses the
@@ -189,6 +192,7 @@ export function OsmStaticMap({
                 aria-hidden
                 className="pointer-events-none absolute inset-0 shadow-[inset_0_0_30px_rgba(0,0,0,0.10)]"
             />
+            <LibraryImageLoadingOverlay hidden={allLoaded} />
 
             {/* Pin overlay */}
             {pins.length > 0 ? (

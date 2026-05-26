@@ -16,6 +16,7 @@ import { AppSidebar } from "@/components/app-sidebar"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkoutsHistory } from "@/components/workouts/workouts-history"
+import { cn } from "@/lib/utils"
 import { AttachmentsTab } from "@/components/library/attachments-tab"
 import { MediaGrid } from "@/components/library/media-grid"
 import { AudioList } from "@/components/library/audio-list"
@@ -77,10 +78,19 @@ function LibraryView() {
     const searchParams = useSearchParams()
     const initialTab = searchParams ? searchParams.get('tab') : null
     const [active, setActive] = React.useState<TabKey>(isTabKey(initialTab) ? initialTab : 'workouts')
+    const [visitedTabs, setVisitedTabs] = React.useState<ReadonlySet<TabKey>>(
+        () => new Set([isTabKey(initialTab) ? initialTab : 'workouts'])
+    )
 
     const handleChange = React.useCallback((next: string) => {
         if (!isTabKey(next)) return
         setActive(next)
+        setVisitedTabs((current) => {
+            if (current.has(next)) return current
+            const nextSet = new Set(current)
+            nextSet.add(next)
+            return nextSet
+        })
         const params = new URLSearchParams(window.location.search)
         params.set('tab', next)
         router.replace(`/library?${params.toString()}`, { scroll: false })
@@ -90,8 +100,20 @@ function LibraryView() {
         const fromUrl = searchParams ? searchParams.get('tab') : null
         if (isTabKey(fromUrl) && fromUrl !== active) {
             setActive(fromUrl)
+            setVisitedTabs((current) => {
+                if (current.has(fromUrl)) return current
+                const nextSet = new Set(current)
+                nextSet.add(fromUrl)
+                return nextSet
+            })
         }
     }, [searchParams, active])
+
+    const mountedTabs = React.useMemo(() => {
+        const next = new Set(visitedTabs)
+        next.add(active)
+        return next
+    }, [active, visitedTabs])
 
     return (
         <div className="library-scroll mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-5 overflow-y-auto px-3 py-4 sm:gap-6 sm:p-6">
@@ -117,51 +139,140 @@ function LibraryView() {
                     ))}
                 </TabsList>
 
-                <TabsContent value="workouts" className="mt-6">
-                    <WorkoutsHistory />
-                </TabsContent>
+                <LibraryTabViewport active={active}>
+                    <LibraryTabPanel value="workouts" active={active} mounted={mountedTabs.has('workouts')}>
+                        <WorkoutsHistory />
+                    </LibraryTabPanel>
 
-                <TabsContent value="recipes" className="mt-6">
-                    <RecipesTab />
-                </TabsContent>
+                    <LibraryTabPanel value="recipes" active={active} mounted={mountedTabs.has('recipes')}>
+                        <RecipesTab />
+                    </LibraryTabPanel>
 
-                <TabsContent value="maps" className="mt-6">
-                    <MapsTab />
-                </TabsContent>
+                    <LibraryTabPanel value="maps" active={active} mounted={mountedTabs.has('maps')}>
+                        <MapsTab />
+                    </LibraryTabPanel>
 
-                <TabsContent value="media" className="mt-6">
-                    <AttachmentsTab
-                        type="media"
-                        description="Toate imaginile și videourile din conversațiile tale, într-o galerie."
-                        emptyIcon={ImageIcon}
-                        emptyTitle="Niciun media salvat încă"
-                        emptyDescription="Imaginile și videourile pe care le trimiți în chat apar aici automat. Trage un fișier într-o conversație ca să-l adaugi."
-                        renderItems={(items) => <MediaGrid attachments={items} />}
-                    />
-                </TabsContent>
+                    <LibraryTabPanel value="media" active={active} mounted={mountedTabs.has('media')}>
+                        <AttachmentsTab
+                            type="media"
+                            description="Toate imaginile și videourile din conversațiile tale, într-o galerie."
+                            emptyIcon={ImageIcon}
+                            emptyTitle="Niciun media salvat încă"
+                            emptyDescription="Imaginile și videourile pe care le trimiți în chat apar aici automat. Trage un fișier într-o conversație ca să-l adaugi."
+                            renderItems={(items) => <MediaGrid attachments={items} />}
+                        />
+                    </LibraryTabPanel>
 
-                <TabsContent value="audio" className="mt-6">
-                    <AttachmentsTab
-                        type="audio"
-                        description="Fișiere audio din conversațiile tale, cu player inline."
-                        emptyIcon={Music}
-                        emptyTitle="Niciun fișier audio încă"
-                        emptyDescription="Voice notes, podcasts, muzică — orice atașament audio apare aici cu buton de play."
-                        renderItems={(items) => <AudioList attachments={items} />}
-                    />
-                </TabsContent>
+                    <LibraryTabPanel value="audio" active={active} mounted={mountedTabs.has('audio')}>
+                        <AttachmentsTab
+                            type="audio"
+                            description="Fișiere audio din conversațiile tale, cu player inline."
+                            emptyIcon={Music}
+                            emptyTitle="Niciun fișier audio încă"
+                            emptyDescription="Voice notes, podcasts, muzică — orice atașament audio apare aici cu buton de play."
+                            renderItems={(items) => <AudioList attachments={items} />}
+                        />
+                    </LibraryTabPanel>
 
-                <TabsContent value="files" className="mt-6">
-                    <AttachmentsTab
-                        type="files"
-                        description="Documente, PDF-uri, foi de calcul, cod și alte fișiere non-media."
-                        emptyIcon={FileIcon}
-                        emptyTitle="Niciun fișier încă"
-                        emptyDescription="PDF-urile, documentele Word, foile Excel, fișierele JSON / CSV / cod pe care le trimiți în chat apar aici."
-                        renderItems={(items) => <FilesList attachments={items} />}
-                    />
-                </TabsContent>
+                    <LibraryTabPanel value="files" active={active} mounted={mountedTabs.has('files')}>
+                        <AttachmentsTab
+                            type="files"
+                            description="Documente, PDF-uri, foi de calcul, cod și alte fișiere non-media."
+                            emptyIcon={FileIcon}
+                            emptyTitle="Niciun fișier încă"
+                            emptyDescription="PDF-urile, documentele Word, foile Excel, fișierele JSON / CSV / cod pe care le trimiți în chat apar aici."
+                            renderItems={(items) => <FilesList attachments={items} />}
+                        />
+                    </LibraryTabPanel>
+                </LibraryTabViewport>
             </Tabs>
         </div>
+    )
+}
+
+function LibraryTabViewport({
+    active,
+    children,
+}: {
+    active: TabKey
+    children: React.ReactNode
+}) {
+    const rootRef = React.useRef<HTMLDivElement | null>(null)
+    const [height, setHeight] = React.useState<number | null>(null)
+
+    React.useLayoutEffect(() => {
+        const root = rootRef.current
+        if (!root) return
+
+        let frame = 0
+        const findActivePanel = () =>
+            root.querySelector<HTMLElement>('[data-library-tab-panel][data-state="active"]')
+        const updateHeight = () => {
+            const panel = findActivePanel()
+            if (!panel) return
+            setHeight(Math.ceil(panel.getBoundingClientRect().height))
+        }
+
+        updateHeight()
+        const panel = findActivePanel()
+        const observer = panel && typeof ResizeObserver !== 'undefined'
+            ? new ResizeObserver(() => {
+                window.cancelAnimationFrame(frame)
+                frame = window.requestAnimationFrame(updateHeight)
+            })
+            : null
+
+        if (panel && observer) observer.observe(panel)
+        window.addEventListener('resize', updateHeight)
+
+        return () => {
+            window.cancelAnimationFrame(frame)
+            observer?.disconnect()
+            window.removeEventListener('resize', updateHeight)
+        }
+    }, [active])
+
+    return (
+        <div
+            ref={rootRef}
+            className="relative min-w-0 overflow-hidden transition-[height] duration-300 ease-out motion-reduce:transition-none"
+            style={height === null ? undefined : { height }}
+        >
+            {children}
+        </div>
+    )
+}
+
+function LibraryTabPanel({
+    value,
+    active,
+    mounted,
+    children,
+}: {
+    value: TabKey
+    active: TabKey
+    mounted: boolean
+    children: React.ReactNode
+}) {
+    if (!mounted) return null
+
+    const isActive = active === value
+
+    return (
+        <TabsContent
+            value={value}
+            forceMount
+            hideInactive={false}
+            data-library-tab-panel
+            aria-hidden={!isActive}
+            inert={isActive ? undefined : true}
+            className={cn(
+                "mt-6 min-w-0 transition-[opacity,transform] duration-200 ease-out motion-reduce:transition-none",
+                "data-[state=active]:relative data-[state=active]:z-10 data-[state=active]:translate-y-0 data-[state=active]:opacity-100",
+                "data-[state=inactive]:pointer-events-none data-[state=inactive]:absolute data-[state=inactive]:inset-x-0 data-[state=inactive]:top-0 data-[state=inactive]:z-0 data-[state=inactive]:translate-y-2 data-[state=inactive]:select-none data-[state=inactive]:opacity-0",
+            )}
+        >
+            {children}
+        </TabsContent>
     )
 }

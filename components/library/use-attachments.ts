@@ -16,24 +16,53 @@ export interface LibraryAttachment {
 
 export type LibraryAttachmentType = 'media' | 'audio' | 'files'
 
+const attachmentCache = new Map<LibraryAttachmentType, LibraryAttachment[]>()
+const attachmentRequests = new Map<LibraryAttachmentType, Promise<LibraryAttachment[]>>()
+
+async function fetchAttachments(type: LibraryAttachmentType, force = false) {
+    if (!force) {
+        const inFlight = attachmentRequests.get(type)
+        if (inFlight) return inFlight
+    }
+
+    const request = fetch(`/api/library/attachments?type=${encodeURIComponent(type)}`)
+        .then(async (r) => {
+            if (!r.ok) throw new Error(`HTTP ${r.status}`)
+            const j = await r.json() as { attachments: LibraryAttachment[] }
+            attachmentCache.set(type, j.attachments)
+            return j.attachments
+        })
+        .finally(() => {
+            attachmentRequests.delete(type)
+        })
+
+    attachmentRequests.set(type, request)
+    return request
+}
+
 /**
  * Fetch attachments of a given type from /api/library/attachments. Returns
  * a stable shape `{ data, loading, error, reload }` so each tab can plug it
  * in identically. Auto-fetches on mount and when `type` changes.
  */
 export function useAttachments(type: LibraryAttachmentType) {
-    const [data, setData] = React.useState<LibraryAttachment[] | null>(null)
-    const [loading, setLoading] = React.useState(true)
+    const [data, setData] = React.useState<LibraryAttachment[] | null>(() => attachmentCache.get(type) ?? null)
+    const [loading, setLoading] = React.useState(() => !attachmentCache.has(type))
     const [error, setError] = React.useState<string | null>(null)
 
-    const load = React.useCallback(async () => {
+    const load = React.useCallback(async (force = false) => {
+        const cached = attachmentCache.get(type)
+        if (cached && !force) {
+            setData(cached)
+            setError(null)
+            setLoading(false)
+            return
+        }
+
         setLoading(true)
         setError(null)
         try {
-            const r = await fetch(`/api/library/attachments?type=${encodeURIComponent(type)}`)
-            if (!r.ok) throw new Error(`HTTP ${r.status}`)
-            const j = await r.json() as { attachments: LibraryAttachment[] }
-            setData(j.attachments)
+            setData(await fetchAttachments(type, force))
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))
         } finally {
@@ -45,7 +74,9 @@ export function useAttachments(type: LibraryAttachmentType) {
         void load()
     }, [load])
 
-    return { data, loading, error, reload: load }
+    const reload = React.useCallback(() => load(true), [load])
+
+    return { data, loading, error, reload }
 }
 
 /** Format bytes as "1.2 MB" / "340 KB" / "12 B". */
