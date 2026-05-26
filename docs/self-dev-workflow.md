@@ -4,7 +4,8 @@ This workflow lets Orchestrator edit its own source without touching the live ch
 
 ## Prepare
 
-Run from the live repo:
+Run from the live repo, or from the running app directory when
+`ORCHESTRATOR_SELF_DEV_SOURCE_DIR` points at the source checkout:
 
 ```bash
 git status --short
@@ -19,12 +20,18 @@ Use this preflight to see whether the live checkout is dirty, behind, ahead, or 
 The script:
 
 - fetches the default branch from origin;
-- creates a git worktree under `.orchestrator/project-runs/<run-id>/repo`;
+- creates a git worktree under the running app state's `.orchestrator/project-runs/<run-id>/repo`;
 - creates an `agent/<run-id>` branch;
 - reserves a dev port from `3101-3199`;
 - writes `SELF_DEV_INSTRUCTIONS.md` inside the worktree;
 - writes run metadata under `.orchestrator/project-runs/<run-id>/run-state.json`;
 - prints a coder handoff prompt.
+
+In Docker installs, `/app` is a built image copy and normally has no `.git`
+metadata. The compose stack mounts the host checkout at `/orchestrator-source`
+and sets `ORCHESTRATOR_SELF_DEV_SOURCE_DIR=/orchestrator-source`, so the helper
+uses that git checkout while keeping run state under `/app/.orchestrator`. For
+manual or unusual layouts, pass `--source-dir <git-checkout>`.
 
 Use `--copy-env` only when a local dev run genuinely needs env values. The copied `.env` / `.env.local` files stay ignored by git.
 

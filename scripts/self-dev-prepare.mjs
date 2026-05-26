@@ -5,8 +5,9 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
 
-const projectDir = process.cwd()
+const appDir = process.cwd()
 const args = parseArgs(process.argv.slice(2))
+const projectDir = resolveSourceDir()
 const currentBranch = capture('git', ['branch', '--show-current'], { optional: true }) || 'master'
 const baseBranch = stringArg('base-branch') || currentBranch || 'master'
 const baseRef = stringArg('base-ref') || `origin/${baseBranch}`
@@ -18,8 +19,9 @@ const portEnd = intArg('port-end', 3199)
 const requestedPort = intArg('port', null)
 const copyEnv = boolArg('copy-env')
 const jsonOutput = boolArg('json')
+const commandStdio = jsonOutput ? ['ignore', 'ignore', 'inherit'] : 'inherit'
 
-const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
+const stateRoot = path.join(appDir, '.orchestrator', 'project-runs')
 const runDir = path.join(stateRoot, runId)
 const repoDir = path.join(runDir, 'repo')
 const portStatePath = path.join(stateRoot, 'ports.json')
@@ -40,8 +42,8 @@ if (requestedPort !== null && (requestedPort < portStart || requestedPort > port
 fs.mkdirSync(runDir, { recursive: true })
 
 try {
-  run('git', ['fetch', 'origin', baseBranch, '--tags'])
-  run('git', ['worktree', 'add', repoDir, '-b', branch, baseRef])
+  run('git', ['fetch', 'origin', baseBranch, '--tags'], { stdio: commandStdio })
+  run('git', ['worktree', 'add', repoDir, '-b', branch, baseRef], { stdio: commandStdio })
 
   const port = await reservePort(requestedPort)
   const devUrl = `http://127.0.0.1:${port}`
@@ -51,7 +53,8 @@ try {
   excludeLocalFile(repoDir, 'SELF_DEV_INSTRUCTIONS.md')
   fs.writeFileSync(instructionsPath, buildInstructions({
     repoDir,
-    projectDir,
+    appDir,
+    sourceDir: projectDir,
     runId,
     branch,
     baseRef,
@@ -73,7 +76,9 @@ try {
     runId,
     kind: 'self',
     createdAt: new Date().toISOString(),
+    appDir,
     projectDir,
+    sourceDir: projectDir,
     repoDir,
     branch,
     baseRef,
@@ -173,6 +178,42 @@ function isGitCheckout(cwd) {
   return capture('git', ['rev-parse', '--is-inside-work-tree'], { cwd, optional: true }) === 'true'
 }
 
+function resolveSourceDir() {
+  const candidates = [
+    ['--source-dir', stringArg('source-dir')],
+    ['ORCHESTRATOR_SELF_DEV_SOURCE_DIR', process.env.ORCHESTRATOR_SELF_DEV_SOURCE_DIR],
+    ['ORCHESTRATOR_SOURCE_DIR', process.env.ORCHESTRATOR_SOURCE_DIR],
+    ['cwd', appDir],
+  ]
+  const seen = new Set()
+  const attempts = []
+
+  for (const [label, raw] of candidates) {
+    if (!raw || typeof raw !== 'string' || !raw.trim()) continue
+    const candidate = path.resolve(expandHome(raw.trim()))
+    if (seen.has(candidate)) continue
+    seen.add(candidate)
+
+    if (!fs.existsSync(candidate)) {
+      attempts.push(`${label}: ${candidate} (missing)`)
+      if (label === '--source-dir') break
+      continue
+    }
+
+    const topLevel = captureAt('git', ['rev-parse', '--show-toplevel'], { cwd: candidate, optional: true })
+    if (topLevel) return path.resolve(topLevel)
+    attempts.push(`${label}: ${candidate} (not a git checkout)`)
+    if (label === '--source-dir') break
+  }
+
+  fail([
+    'No git source checkout found for self-development.',
+    `Running app directory: ${appDir}`,
+    `Checked: ${attempts.join('; ') || '(none)'}`,
+    'In Docker installs, mount the host checkout and set ORCHESTRATOR_SELF_DEV_SOURCE_DIR to the mounted path, usually /orchestrator-source.',
+  ].join('\n'))
+}
+
 function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     cwd: options.cwd || projectDir,
@@ -203,6 +244,30 @@ function capture(command, commandArgs, options = {}) {
     throw new Error(`${command} ${commandArgs.join(' ')} exited with ${result.status}`)
   }
   return result.stdout.trim()
+}
+
+function captureAt(command, commandArgs, options = {}) {
+  const result = spawnSync(command, commandArgs, {
+    cwd: options.cwd,
+    env: process.env,
+    stdio: ['ignore', 'pipe', options.optional ? 'ignore' : 'inherit'],
+    encoding: 'utf-8',
+  })
+  if (result.error) {
+    if (options.optional) return ''
+    throw result.error
+  }
+  if (result.status !== 0) {
+    if (options.optional) return ''
+    throw new Error(`${command} ${commandArgs.join(' ')} exited with ${result.status}`)
+  }
+  return result.stdout.trim()
+}
+
+function expandHome(value) {
+  if (value === '~') return process.env.HOME || value
+  if (value.startsWith('~/')) return path.join(process.env.HOME || '', value.slice(2))
+  return value
 }
 
 async function reservePort(preferredPort) {
@@ -301,12 +366,22 @@ function buildInstructions(values) {
     values.repoDir,
     '```',
     '',
-    `Do not edit the live checkout:`,
+    `Do not edit the source checkout:`,
     '',
     '```text',
-    values.projectDir,
+    values.sourceDir,
     '```',
     '',
+    values.appDir !== values.sourceDir
+      ? [
+        'Do not edit the running app directory either:',
+        '',
+        '```text',
+        values.appDir,
+        '```',
+        '',
+      ].join('\n')
+      : '',
     'Do not commit or push. Leave the repository in a commit-ready state; the orchestrator performs the final gate, commit, rebase, push, and update.',
     '',
     '## Git Preflight',
@@ -373,7 +448,8 @@ function buildCoderPrompt(values) {
     `Read and follow this file before changing anything: ${values.instructionsPath}`,
     '',
     'Hard boundaries:',
-    `- Do not modify ${projectDir}.`,
+    `- Do not modify the source checkout ${projectDir}.`,
+    ...(appDir !== projectDir ? [`- Do not modify the running app directory ${appDir}.`] : []),
     '- Before editing, run `git branch --show-current` and `git status --short` in the isolated worktree.',
     '- Do not commit or push.',
     '- Do not use port 3000.',

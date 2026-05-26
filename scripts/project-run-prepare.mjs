@@ -29,6 +29,7 @@ const portEnd = intArg('port-end', 3999)
 const requestedPort = intArg('port', null)
 const copyEnv = boolArg('copy-env')
 const jsonOutput = boolArg('json')
+const commandStdio = jsonOutput ? ['ignore', 'ignore', 'inherit'] : 'inherit'
 
 const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
 const runDir = path.join(stateRoot, runId)
@@ -552,7 +553,7 @@ function run(command, commandArgs, options = {}) {
   const result = spawnSync(command, commandArgs, {
     cwd: options.cwd || projectDir,
     env: process.env,
-    stdio: options.stdio || 'inherit',
+    stdio: options.stdio || commandStdio,
     encoding: 'utf-8',
   })
   if (options.optional && result.status !== 0) return result
@@ -567,7 +568,7 @@ function runShell(command, options = {}) {
   const result = spawnSync(command, {
     cwd: options.cwd || projectDir,
     env: options.env || process.env,
-    stdio: 'inherit',
+    stdio: options.stdio || commandStdio,
     encoding: 'utf-8',
     shell: true,
   })

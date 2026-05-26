@@ -665,6 +665,7 @@ ensure_docker_env_file() {
   # files in the right place (see docker-compose.yml volumes section).
   upsert_env_value "$env_file" ORCHESTRATOR_DATA_DIR "$ORCH_HOME"
   upsert_env_value "$env_file" ORCHESTRATOR_NODE_HOME "$NODE_HOME_DIR"
+  upsert_env_value "$env_file" ORCHESTRATOR_SELF_DEV_HOST_SOURCE_DIR "$APP_DIR"
   upsert_env_value "$env_file" ORCHESTRATOR_UID "$(id -u)"
   upsert_env_value "$env_file" ORCHESTRATOR_GID "$(id -g)"
   mkdir -p "$ORCH_HOME" "$NODE_HOME_DIR"

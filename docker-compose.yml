@@ -20,6 +20,7 @@ services:
       ORCHESTRATOR_HOST: 0.0.0.0
       ORCHESTRATOR_PORT: "3000"
       ORCHESTRATOR_PUBLIC_URL: ${ORCHESTRATOR_PUBLIC_URL:-}
+      ORCHESTRATOR_SELF_DEV_SOURCE_DIR: /orchestrator-source
       PORT: "3000"
       NPM_CONFIG_PREFIX: /home/node/.npm-global
       PATCHRIGHT_BROWSERS_PATH: /ms-playwright
@@ -40,3 +41,4 @@ services:
     volumes:
       - ${ORCHESTRATOR_DATA_DIR:-./.orchestrator-data}:/app/.orchestrator
       - ${ORCHESTRATOR_NODE_HOME:-./.orchestrator-node-home}:/home/node
+      - ${ORCHESTRATOR_SELF_DEV_HOST_SOURCE_DIR:-.}:/orchestrator-source

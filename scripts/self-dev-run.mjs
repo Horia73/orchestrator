@@ -187,7 +187,8 @@ function cleanupRun(context) {
   const deleteBranch = boolArg('delete-branch')
   const removeState = boolArg('remove-state')
   const repoDir = context.state.repoDir
-  const linkedWorktree = isLinkedWorktree(repoDir)
+  const worktreeControlDir = sourceControlDir(context)
+  const linkedWorktree = isLinkedWorktree(repoDir, worktreeControlDir)
   let deletedBranch = false
 
   if (fs.existsSync(repoDir)) {
@@ -199,14 +200,14 @@ function cleanupRun(context) {
       const commandArgs = ['worktree', 'remove']
       if (force) commandArgs.push('--force')
       commandArgs.push(repoDir)
-      gitRun(commandArgs, { cwd: projectDir })
+      gitRun(commandArgs, { cwd: worktreeControlDir })
     } else {
       fs.rmSync(repoDir, { recursive: true, force: true })
     }
   }
 
   if (deleteBranch && context.state.branch && linkedWorktree) {
-    gitRun(['branch', '-D', context.state.branch], { cwd: projectDir })
+    gitRun(['branch', '-D', context.state.branch], { cwd: worktreeControlDir })
     deletedBranch = true
   }
 
@@ -234,9 +235,24 @@ function cleanupRun(context) {
   )
 }
 
-function isLinkedWorktree(repoDir) {
+function sourceControlDir(context) {
+  const candidates = [
+    context.state.sourceDir,
+    context.state.projectDir,
+    projectDir,
+  ].filter(value => typeof value === 'string' && value)
+
+  for (const candidate of candidates) {
+    if (fs.existsSync(candidate) && gitCapture(['rev-parse', '--is-inside-work-tree'], { cwd: candidate, optional: true }) === 'true') {
+      return candidate
+    }
+  }
+  return projectDir
+}
+
+function isLinkedWorktree(repoDir, cwd) {
   const resolved = path.resolve(repoDir)
-  const raw = gitCapture(['worktree', 'list', '--porcelain'], { cwd: projectDir, optional: true })
+  const raw = gitCapture(['worktree', 'list', '--porcelain'], { cwd, optional: true })
   return raw.split('\n').some(line => {
     if (!line.startsWith('worktree ')) return false
     return path.resolve(line.slice('worktree '.length)) === resolved
@@ -394,7 +410,7 @@ function gitRun(commandArgs, options = {}) {
   const result = spawnSync('git', commandArgs, {
     cwd: options.cwd || projectDir,
     env: process.env,
-    stdio: 'inherit',
+    stdio: options.stdio || (jsonOutput ? ['ignore', 'ignore', 'inherit'] : 'inherit'),
     encoding: 'utf-8',
   })
   if (result.error) throw result.error

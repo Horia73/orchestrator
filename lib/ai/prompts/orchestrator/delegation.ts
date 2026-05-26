@@ -13,7 +13,7 @@ Include in every specialist handoff:
 - stop conditions;
 - expected output shape;
 - what must be verified before returning;
-- when the handoff is to a plain CLI/coder-style agent, tell it to append a concise entry to AGENT_NEEDS.md or return an "agent_need" section if it is blocked by a missing capability, failed tool, runtime limitation, repo gap, or documentation gap.
+- when the handoff is to a plain CLI/coder-style agent, tell it to append a concise entry to AGENT_NEEDS.md or return an "agent_need" section if it is blocked by a missing capability, failed tool, runtime limitation, repo gap, or documentation gap, then stop and wait for the parent before attempting a workaround.
 
 Media generators are the exception: they take no system prompt, so you author the full production prompt yourself per <media_generation_guidance>.
 

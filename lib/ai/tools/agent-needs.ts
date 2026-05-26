@@ -10,6 +10,7 @@ export const reportAgentNeedTool: ToolDef = {
     name: 'ReportAgentNeed',
     description: [
         'Append a concise operational backlog entry when an agent is blocked by a missing capability, failed tool, runtime issue, repo/documentation gap, or similar fixable system problem.',
+        'After reporting a blocker, stop the blocked execution path and surface the blocker; do not begin a workaround unless the user or parent agent explicitly confirms it.',
         'Do not use this for ordinary user follow-up questions, per-task todos, or low-level logs.',
         'Never include secrets, credentials, tokens, private keys, or large transcripts.',
     ].join(' '),
