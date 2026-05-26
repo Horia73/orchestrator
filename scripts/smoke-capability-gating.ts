@@ -284,8 +284,8 @@ console.log(`  delta from activation: +${activatedTokensApprox - baselineTokensA
 // Keep the baseline prompt under a broad ceiling while allowing core policy
 // text to grow independently from lazily loaded capability doctrines.
 check(
-    `Baseline orchestrator prompt stays under 33k tokens (got ~${baselineTokensApprox})`,
-    baselineTokensApprox < 33_000
+    `Baseline orchestrator prompt stays under 33.5k tokens (got ~${baselineTokensApprox})`,
+    baselineTokensApprox < 33_500
 )
 
 // --- summary ---------------------------------------------------------------

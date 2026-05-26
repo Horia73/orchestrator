@@ -6,6 +6,7 @@ import {
     type ToolLogRow,
     type RequestStatus,
     type ModalityBreakdown,
+    type BillingUsageEntry,
     type LogsQuery,
     type UsageRange,
     type UsageReport,
@@ -17,7 +18,7 @@ import {
     LOG_TEXT_MAX_CHARS,
 } from './schema'
 import { normalizeUsage } from './usage-mapper'
-import { estimateCost } from './cost'
+import { estimateCost, type PricingState } from './cost'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 
 // ---------------------------------------------------------------------------
@@ -45,7 +46,24 @@ interface StartArgs {
     inputText?: string | null
 }
 
-    const insertStartStmt = db.prepare(`
+const globalForObservabilityStore = globalThis as unknown as {
+    __orchestratorActiveRequestLogIds?: Set<string>
+    __orchestratorRequestLogBootSealDone?: boolean
+}
+
+const activeRequestLogIds =
+    globalForObservabilityStore.__orchestratorActiveRequestLogIds ?? new Set<string>()
+
+if (!globalForObservabilityStore.__orchestratorActiveRequestLogIds) {
+    globalForObservabilityStore.__orchestratorActiveRequestLogIds = activeRequestLogIds
+}
+
+const processStartedAt = Date.now() - Math.round(process.uptime() * 1000)
+
+const INTERRUPTED_STREAM_ERROR_MESSAGE =
+    'Request was interrupted before completion, likely because the server process restarted.'
+
+const insertStartStmt = db.prepare(`
     INSERT INTO request_logs (
         id, conversationId, agentId, agentThreadId, parentRequestId, depth,
         provider, model, thinkingLevel,
@@ -86,6 +104,7 @@ export function logRequestStart(args: StartArgs): void {
             statefulMode: args.statefulMode ? 1 : 0,
             inputText: truncate(args.inputText),
         })
+        activeRequestLogIds.add(args.requestId)
         emitObservabilityEvent({ type: 'request_started', requestId: args.requestId })
     })
 }
@@ -151,6 +170,7 @@ const updateCompleteStmt = db.prepare(`
         toolUseTokens = @toolUseTokens,
         totalTokens = @totalTokens,
         modalityBreakdown = @modalityBreakdown,
+        billingBreakdown = @billingBreakdown,
         interactionId = @interactionId,
         errorMessage = NULL,
         outputText = COALESCE(@outputText, outputText)
@@ -177,12 +197,14 @@ export function logRequestComplete(args: CompleteArgs): void {
             toolUseTokens: usage.toolUseTokens,
             totalTokens: usage.totalTokens,
             modalityBreakdown: usage.modalityBreakdown ? JSON.stringify(usage.modalityBreakdown) : null,
+            billingBreakdown: usage.billingBreakdown ? JSON.stringify(usage.billingBreakdown) : null,
             interactionId: args.interactionId ?? null,
             outputText: truncate(args.outputText),
         })
         indexRequestLog(args.requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId: args.requestId })
     })
+    activeRequestLogIds.delete(args.requestId)
 }
 
 const updateFailStmt = db.prepare(`
@@ -211,6 +233,7 @@ export function logRequestFail(requestId: string, errorMessage: string, endedAt:
         indexRequestLog(requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId })
     })
+    activeRequestLogIds.delete(requestId)
 }
 
 export function logRequestAbort(requestId: string, endedAt: number, outputText?: string | null): void {
@@ -229,6 +252,68 @@ export function logRequestAbort(requestId: string, endedAt: number, outputText?:
         indexRequestLog(requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId })
     })
+    activeRequestLogIds.delete(requestId)
+}
+
+const selectStreamingRequestsStmt = db.prepare(`
+    SELECT id, startedAt FROM request_logs WHERE status = 'streaming'
+`)
+
+const sealStreamingRequestStmt = db.prepare(`
+    UPDATE request_logs SET
+        status = 'aborted',
+        endedAt = @endedAt,
+        durationMs = @durationMs,
+        errorMessage = COALESCE(errorMessage, @errorMessage)
+    WHERE id = @id AND status = 'streaming'
+`)
+
+export function sealInterruptedStreamingRequestLogs(options?: {
+    now?: number
+    activeRequestIds?: ReadonlySet<string>
+    startedBefore?: number | null
+}): number {
+    const now = options?.now ?? Date.now()
+    const activeIds = options?.activeRequestIds ?? activeRequestLogIds
+    const startedBefore = options?.startedBefore ?? processStartedAt
+    const sealedIds: string[] = []
+
+    try {
+        const tx = db.transaction(() => {
+            const rows = selectStreamingRequestsStmt.all() as Array<{ id: string; startedAt: number }>
+            for (const row of rows) {
+                if (activeIds.has(row.id)) continue
+                if (startedBefore !== null && row.startedAt >= startedBefore) continue
+                const durationMs = Math.max(0, now - row.startedAt)
+                const result = sealStreamingRequestStmt.run({
+                    id: row.id,
+                    endedAt: now,
+                    durationMs,
+                    errorMessage: INTERRUPTED_STREAM_ERROR_MESSAGE,
+                })
+                if (result.changes > 0) {
+                    sealedIds.push(row.id)
+                    activeRequestLogIds.delete(row.id)
+                }
+            }
+        })
+        tx()
+    } catch (err) {
+        console.error('[observability] failed to seal interrupted streams:', err)
+        return 0
+    }
+
+    for (const requestId of sealedIds) {
+        indexRequestLog(requestId)
+        emitObservabilityEvent({ type: 'request_completed', requestId })
+    }
+
+    return sealedIds.length
+}
+
+if (!globalForObservabilityStore.__orchestratorRequestLogBootSealDone) {
+    globalForObservabilityStore.__orchestratorRequestLogBootSealDone = true
+    sealInterruptedStreamingRequestLogs()
 }
 
 function indexRequestLog(requestId: string): void {
@@ -390,6 +475,78 @@ export function buildUsageReport(range: UsageRange): UsageReport {
     }
 }
 
+type EffectiveRegistrySnapshot = ReturnType<typeof getEffectiveRegistry>
+
+interface RowCostSummary {
+    usd: number
+    hasUnknown: boolean
+    hasSubscription: boolean
+}
+
+type ModelUsageEntry = BillingUsageEntry & {
+    inputTokens: number
+    outputTokens: number
+    thinkingTokens: number
+    cachedTokens: number
+    toolUseTokens: number
+}
+
+function estimateRowCost(row: RequestLogRow, registry: EffectiveRegistrySnapshot): RowCostSummary {
+    const entries = modelUsageEntries(row)
+    let usd = 0
+    let hasUnknown = false
+    let hasSubscription = false
+
+    for (const entry of entries) {
+        const pricing = registry[entry.provider]?.models[entry.model]?.pricing ?? null
+        const cost = estimateCost(pricing, entry)
+        usd += cost.usd
+        if (cost.state === 'unknown') hasUnknown = true
+        if (cost.state === 'subscription') hasSubscription = true
+    }
+
+    return { usd, hasUnknown, hasSubscription }
+}
+
+function modelUsageEntries(row: RequestLogRow): ModelUsageEntry[] {
+    if (row.billingBreakdown && row.billingBreakdown.length > 0) {
+        return row.billingBreakdown.map(entry => normalizeBillingEntry(entry))
+    }
+
+    return [{
+        provider: row.provider,
+        model: row.model,
+        requests: 1,
+        inputTokens: row.inputTokens ?? 0,
+        outputTokens: row.outputTokens ?? 0,
+        thinkingTokens: row.thinkingTokens ?? 0,
+        cachedTokens: row.cachedTokens ?? 0,
+        toolUseTokens: row.toolUseTokens ?? 0,
+        totalTokens: row.totalTokens ?? 0,
+    }]
+}
+
+function normalizeBillingEntry(entry: BillingUsageEntry): ModelUsageEntry {
+    return {
+        provider: entry.provider,
+        model: entry.model,
+        requests: Math.max(1, Math.floor(entry.requests || 0)),
+        inputTokens: Math.max(0, Math.floor(entry.inputTokens || 0)),
+        outputTokens: Math.max(0, Math.floor(entry.outputTokens || 0)),
+        thinkingTokens: Math.max(0, Math.floor(entry.thinkingTokens || 0)),
+        cachedTokens: Math.max(0, Math.floor(entry.cachedTokens || 0)),
+        toolUseTokens: Math.max(0, Math.floor(entry.toolUseTokens || 0)),
+        totalTokens: Math.max(0, Math.floor(entry.totalTokens || 0)),
+    }
+}
+
+function mergePricingState(a: PricingState, b: PricingState): PricingState {
+    if (a === b) return a
+    if (a === 'unknown' || b === 'unknown') return 'unknown'
+    if (a === 'priced' || b === 'priced') return 'priced'
+    return 'subscription'
+}
+
 function computeTotals(rows: RequestLogRow[]): UsageTotals {
     const registry = getEffectiveRegistry()
     let estimatedCostUsd = 0
@@ -416,18 +573,10 @@ function computeTotals(rows: RequestLogRow[]): UsageTotals {
         toolUseTokens += row.toolUseTokens ?? 0
         totalTokens += row.totalTokens ?? 0
 
-        const pricing = registry[row.provider]?.models[row.model]?.pricing ?? null
-        const cost = estimateCost(pricing, {
-            provider: row.provider,
-            inputTokens: row.inputTokens,
-            outputTokens: row.outputTokens,
-            thinkingTokens: row.thinkingTokens,
-            cachedTokens: row.cachedTokens,
-            toolUseTokens: row.toolUseTokens,
-        })
+        const cost = estimateRowCost(row, registry)
         estimatedCostUsd += cost.usd
-        if (cost.state === 'unknown') uncostedRequests++
-        if (cost.state === 'subscription') subscriptionRequests++
+        if (cost.hasUnknown) uncostedRequests++
+        if (cost.hasSubscription) subscriptionRequests++
     }
 
     return {
@@ -490,15 +639,7 @@ function computeDaily(
         bucket.outputTokens += row.outputTokens ?? 0
         bucket.thinkingTokens += row.thinkingTokens ?? 0
         bucket.cachedTokens += row.cachedTokens ?? 0
-        const pricing = registry[row.provider]?.models[row.model]?.pricing ?? null
-        const cost = estimateCost(pricing, {
-            provider: row.provider,
-            inputTokens: row.inputTokens,
-            outputTokens: row.outputTokens,
-            thinkingTokens: row.thinkingTokens,
-            cachedTokens: row.cachedTokens,
-            toolUseTokens: row.toolUseTokens,
-        })
+        const cost = estimateRowCost(row, registry)
         bucket.estimatedCostUsd += cost.usd
         buckets.set(key, bucket)
     }
@@ -510,48 +651,44 @@ function computeByModel(rows: RequestLogRow[]): UsageByModel[] {
     const registry = getEffectiveRegistry()
     const map = new Map<string, UsageByModel & { _thinkingMsSum: number; _thinkingMsCount: number }>()
     for (const row of rows) {
-        const key = `${row.provider}:${row.model}`
-        const existing = map.get(key)
-        const pricing = registry[row.provider]?.models[row.model]?.pricing ?? null
-        const cost = estimateCost(pricing, {
-            provider: row.provider,
-            inputTokens: row.inputTokens,
-            outputTokens: row.outputTokens,
-            thinkingTokens: row.thinkingTokens,
-            cachedTokens: row.cachedTokens,
-            toolUseTokens: row.toolUseTokens,
-        })
+        for (const usage of modelUsageEntries(row)) {
+            const key = `${usage.provider}:${usage.model}`
+            const existing = map.get(key)
+            const pricing = registry[usage.provider]?.models[usage.model]?.pricing ?? null
+            const cost = estimateCost(pricing, usage)
 
-        if (!existing) {
-            map.set(key, {
-                provider: row.provider,
-                model: row.model,
-                displayName: registry[row.provider]?.models[row.model]?.name ?? row.model,
-                requests: 1,
-                errors: row.status === 'error' ? 1 : 0,
-                inputTokens: row.inputTokens ?? 0,
-                outputTokens: row.outputTokens ?? 0,
-                thinkingTokens: row.thinkingTokens ?? 0,
-                cachedTokens: row.cachedTokens ?? 0,
-                estimatedCostUsd: cost.usd,
-                avgThinkingMs: 0,
-                lastUsedAt: row.startedAt,
-                pricingState: cost.state,
-                _thinkingMsSum: row.thinkingMs ?? 0,
-                _thinkingMsCount: row.thinkingMs !== null ? 1 : 0,
-            })
-        } else {
-            existing.requests++
-            if (row.status === 'error') existing.errors++
-            existing.inputTokens += row.inputTokens ?? 0
-            existing.outputTokens += row.outputTokens ?? 0
-            existing.thinkingTokens += row.thinkingTokens ?? 0
-            existing.cachedTokens += row.cachedTokens ?? 0
-            existing.estimatedCostUsd += cost.usd
-            existing.lastUsedAt = Math.max(existing.lastUsedAt, row.startedAt)
-            if (row.thinkingMs !== null) {
-                existing._thinkingMsSum += row.thinkingMs
-                existing._thinkingMsCount++
+            if (!existing) {
+                map.set(key, {
+                    provider: usage.provider,
+                    model: usage.model,
+                    displayName: registry[usage.provider]?.models[usage.model]?.name ?? usage.model,
+                    requests: usage.requests,
+                    errors: row.status === 'error' ? 1 : 0,
+                    inputTokens: usage.inputTokens ?? 0,
+                    outputTokens: usage.outputTokens ?? 0,
+                    thinkingTokens: usage.thinkingTokens ?? 0,
+                    cachedTokens: usage.cachedTokens ?? 0,
+                    estimatedCostUsd: cost.usd,
+                    avgThinkingMs: 0,
+                    lastUsedAt: row.startedAt,
+                    pricingState: cost.state,
+                    _thinkingMsSum: row.thinkingMs ?? 0,
+                    _thinkingMsCount: row.thinkingMs !== null ? 1 : 0,
+                })
+            } else {
+                existing.requests += usage.requests
+                if (row.status === 'error') existing.errors++
+                existing.inputTokens += usage.inputTokens ?? 0
+                existing.outputTokens += usage.outputTokens ?? 0
+                existing.thinkingTokens += usage.thinkingTokens ?? 0
+                existing.cachedTokens += usage.cachedTokens ?? 0
+                existing.estimatedCostUsd += cost.usd
+                existing.pricingState = mergePricingState(existing.pricingState, cost.state)
+                existing.lastUsedAt = Math.max(existing.lastUsedAt, row.startedAt)
+                if (row.thinkingMs !== null) {
+                    existing._thinkingMsSum += row.thinkingMs
+                    existing._thinkingMsCount++
+                }
             }
         }
     }
@@ -568,15 +705,7 @@ function computeByAgent(rows: RequestLogRow[]): UsageByAgent[] {
     const map = new Map<string, UsageByAgent>()
     for (const row of rows) {
         const existing = map.get(row.agentId)
-        const pricing = registry[row.provider]?.models[row.model]?.pricing ?? null
-        const cost = estimateCost(pricing, {
-            provider: row.provider,
-            inputTokens: row.inputTokens,
-            outputTokens: row.outputTokens,
-            thinkingTokens: row.thinkingTokens,
-            cachedTokens: row.cachedTokens,
-            toolUseTokens: row.toolUseTokens,
-        })
+        const cost = estimateRowCost(row, registry)
         if (!existing) {
             map.set(row.agentId, {
                 agentId: row.agentId,
@@ -670,6 +799,7 @@ interface RawRequestLogRow {
     toolUseTokens: number | null
     totalTokens: number | null
     modalityBreakdown: string | null
+    billingBreakdown: string | null
     toolCallCount: number
     interactionId: string | null
     statefulMode: number
@@ -697,7 +827,16 @@ function parseRequestLogRow(r: RawRequestLogRow): RequestLogRow {
             modalityBreakdown = null
         }
     }
-    const inputTokens = normalizeStoredInputTokens(r.provider, r.inputTokens, r.cachedTokens)
+    const billingBreakdown = parseBillingBreakdown(r.billingBreakdown)
+        ?? legacyBrowserBillingBreakdown(r.provider, r.outputText)
+    const legacyTotals = billingBreakdown && r.provider === 'browser'
+        ? sumBillingBreakdown(billingBreakdown)
+        : null
+    const inputTokens = normalizeStoredInputTokens(
+        r.provider,
+        r.inputTokens ?? legacyTotals?.inputTokens ?? null,
+        r.cachedTokens ?? legacyTotals?.cachedTokens ?? null
+    )
     return {
         id: r.id,
         conversationId: r.conversationId,
@@ -714,12 +853,13 @@ function parseRequestLogRow(r: RawRequestLogRow): RequestLogRow {
         durationMs: r.durationMs,
         thinkingMs: r.thinkingMs,
         inputTokens,
-        outputTokens: r.outputTokens,
-        thinkingTokens: r.thinkingTokens,
-        cachedTokens: r.cachedTokens,
-        toolUseTokens: r.toolUseTokens,
-        totalTokens: r.totalTokens,
+        outputTokens: r.outputTokens ?? legacyTotals?.outputTokens ?? null,
+        thinkingTokens: r.thinkingTokens ?? legacyTotals?.thinkingTokens ?? null,
+        cachedTokens: r.cachedTokens ?? legacyTotals?.cachedTokens ?? null,
+        toolUseTokens: r.toolUseTokens ?? legacyTotals?.toolUseTokens ?? null,
+        totalTokens: r.totalTokens ?? legacyTotals?.totalTokens ?? null,
         modalityBreakdown,
+        billingBreakdown,
         toolCallCount: r.toolCallCount,
         interactionId: r.interactionId,
         statefulMode: r.statefulMode === 1,
@@ -741,6 +881,90 @@ function normalizeStoredInputTokens(provider: string, inputTokens: number | null
     }
 
     return inputTokens
+}
+
+function parseBillingBreakdown(value: string | null): BillingUsageEntry[] | null {
+    if (!value) return null
+    try {
+        const parsed = JSON.parse(value) as unknown
+        if (!Array.isArray(parsed)) return null
+        const entries = parsed
+            .map(parseBillingEntry)
+            .filter((entry): entry is BillingUsageEntry => entry !== null)
+        return entries.length > 0 ? entries : null
+    } catch {
+        return null
+    }
+}
+
+function parseBillingEntry(value: unknown): BillingUsageEntry | null {
+    if (!value || typeof value !== 'object') return null
+    const raw = value as Record<string, unknown>
+    const provider = typeof raw.provider === 'string' ? raw.provider.trim() : ''
+    const model = typeof raw.model === 'string' ? raw.model.trim() : ''
+    if (!provider || !model) return null
+    return {
+        provider,
+        model,
+        requests: nonNegativeInt(raw.requests, 1),
+        inputTokens: nonNegativeInt(raw.inputTokens, 0),
+        outputTokens: nonNegativeInt(raw.outputTokens, 0),
+        thinkingTokens: nonNegativeInt(raw.thinkingTokens, 0),
+        cachedTokens: nonNegativeInt(raw.cachedTokens, 0),
+        toolUseTokens: nonNegativeInt(raw.toolUseTokens, 0),
+        totalTokens: nonNegativeInt(raw.totalTokens, 0),
+    }
+}
+
+function legacyBrowserBillingBreakdown(provider: string, outputText: string | null): BillingUsageEntry[] | null {
+    if (provider !== 'browser' || !outputText) return null
+    const matches = [...outputText.matchAll(
+        /Usage \([^)]+\): task\[prompt=(\d+), output=(\d+), thoughts=(\d+), total=(\d+), requests=(\d+)\].*?\|\s*model=([^|\n]+?)\s*\|/g
+    )]
+    const match = matches[matches.length - 1]
+    if (!match) return null
+
+    const model = match[6]?.trim()
+    if (!model) return null
+    return [{
+        provider: 'google',
+        model,
+        inputTokens: nonNegativeInt(Number(match[1]), 0),
+        outputTokens: nonNegativeInt(Number(match[2]), 0),
+        thinkingTokens: nonNegativeInt(Number(match[3]), 0),
+        cachedTokens: 0,
+        toolUseTokens: 0,
+        totalTokens: nonNegativeInt(Number(match[4]), 0),
+        requests: nonNegativeInt(Number(match[5]), 1),
+    }]
+}
+
+function sumBillingBreakdown(entries: BillingUsageEntry[]): Omit<BillingUsageEntry, 'provider' | 'model'> {
+    return entries.reduce(
+        (acc, entry) => ({
+            requests: acc.requests + entry.requests,
+            inputTokens: acc.inputTokens + entry.inputTokens,
+            outputTokens: acc.outputTokens + entry.outputTokens,
+            thinkingTokens: acc.thinkingTokens + entry.thinkingTokens,
+            cachedTokens: acc.cachedTokens + entry.cachedTokens,
+            toolUseTokens: acc.toolUseTokens + entry.toolUseTokens,
+            totalTokens: acc.totalTokens + entry.totalTokens,
+        }),
+        {
+            requests: 0,
+            inputTokens: 0,
+            outputTokens: 0,
+            thinkingTokens: 0,
+            cachedTokens: 0,
+            toolUseTokens: 0,
+            totalTokens: 0,
+        }
+    )
+}
+
+function nonNegativeInt(value: unknown, fallback: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback
+    return Math.floor(value)
 }
 
 function parseToolLogRow(r: RawToolLogRow): ToolLogRow {

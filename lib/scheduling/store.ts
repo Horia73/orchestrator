@@ -486,6 +486,9 @@ export interface TaskRunRecord {
   surfaced: boolean
   conversationId: string | null
   summary: string
+  contentSegments?: Message["contentSegments"]
+  reasoning?: Message["reasoning"]
+  attachments?: Message["attachments"]
   error: string | null
 }
 
@@ -523,7 +526,15 @@ export interface TaskRunSearchRecord extends TaskRunRecord {
   taskAction: ScheduledAction | null
 }
 
-type TaskRunRow = Omit<TaskRunRecord, "surfaced"> & { surfaced: number }
+type TaskRunRow = Omit<
+  TaskRunRecord,
+  "surfaced" | "contentSegments" | "reasoning" | "attachments"
+> & {
+  surfaced: number
+  contentSegments: string | null
+  reasoning: string | null
+  attachments: string | null
+}
 type TaskRunSearchRow = TaskRunRow & {
   taskTitle: string | null
   taskAction: string | null
@@ -534,6 +545,9 @@ function runFromRow(r: TaskRunRow): TaskRunRecord {
     ...r,
     surfaced: r.surfaced === 1,
     conversationId: r.conversationId ?? null,
+    contentSegments: parseJson<Message["contentSegments"]>(r.contentSegments),
+    reasoning: parseJson<Message["reasoning"]>(r.reasoning),
+    attachments: parseJson<Message["attachments"]>(r.attachments),
     error: r.error ?? null,
   }
 }
@@ -588,6 +602,9 @@ export function recordTaskRun(run: {
   surfaced: boolean
   conversationId: string | null
   summary: string
+  contentSegments?: Message["contentSegments"]
+  reasoning?: Message["reasoning"]
+  attachments?: Message["attachments"]
   error?: string | null
 }): void {
   const id = `run_${randomUUID()}`
@@ -596,9 +613,11 @@ export function recordTaskRun(run: {
   db.prepare(
     `
         INSERT INTO scheduled_task_runs (
-            id, taskId, startedAt, endedAt, status, trigger, surfaced, conversationId, summary, error
+            id, taskId, startedAt, endedAt, status, trigger, surfaced, conversationId,
+            summary, contentSegments, reasoning, attachments, error
         ) VALUES (
-            @id, @taskId, @startedAt, @endedAt, @status, @trigger, @surfaced, @conversationId, @summary, @error
+            @id, @taskId, @startedAt, @endedAt, @status, @trigger, @surfaced, @conversationId,
+            @summary, @contentSegments, @reasoning, @attachments, @error
         )
     `
   ).run({
@@ -611,6 +630,11 @@ export function recordTaskRun(run: {
     surfaced: run.surfaced ? 1 : 0,
     conversationId: run.conversationId,
     summary: run.summary,
+    contentSegments: run.contentSegments?.length
+      ? JSON.stringify(run.contentSegments)
+      : null,
+    reasoning: run.reasoning?.length ? JSON.stringify(run.reasoning) : null,
+    attachments: run.attachments?.length ? JSON.stringify(run.attachments) : null,
     error: run.error ?? null,
   })
   appendRuntimeRunIndex({
@@ -842,6 +866,17 @@ const insertInboxMessage = db.prepare(`
     VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
 `)
 
+const SCHEDULED_TRIGGER_PREFIX = "⏰ Scheduled task "
+
+function isScheduledTriggerMessage(
+  message: Pick<Message, "role" | "content">
+): boolean {
+  return (
+    message.role === "user" &&
+    message.content.startsWith(SCHEDULED_TRIGGER_PREFIX)
+  )
+}
+
 export function createInboxConversation(args: {
   taskId: string
   title: string
@@ -925,7 +960,7 @@ export function listInboxConversations(limit = 200): InboxListItem[] {
     .prepare(
       `
         SELECT c.id, c.title, c.createdAt, c.updatedAt, c.lastMessageAt, c.readAt, c.scheduledTaskId,
-               (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
+               (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id AND NOT (m.role = 'user' AND m.content LIKE '⏰ Scheduled task %')) AS messageCount,
                (SELECT m2.content FROM messages m2 WHERE m2.conversationId = c.id ORDER BY m2.timestamp DESC LIMIT 1) AS preview
         FROM conversations c
         WHERE c.origin = 'inbox'
@@ -967,7 +1002,7 @@ export function findInboxConversationByTaskAndTitle(
     .prepare(
       `
         SELECT c.id, c.title, c.createdAt, c.updatedAt, c.lastMessageAt, c.readAt, c.scheduledTaskId,
-               (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id) AS messageCount,
+               (SELECT COUNT(*) FROM messages m WHERE m.conversationId = c.id AND NOT (m.role = 'user' AND m.content LIKE '⏰ Scheduled task %')) AS messageCount,
                (SELECT m2.content FROM messages m2 WHERE m2.conversationId = c.id ORDER BY m2.timestamp DESC LIMIT 1) AS preview
         FROM conversations c
         WHERE c.origin = 'inbox'
@@ -1085,20 +1120,24 @@ export function getInboxConversation(
     createdAt: row.createdAt,
     readAt: row.readAt ?? null,
     scheduledTaskId: row.scheduledTaskId ?? null,
-    messages: msgRows.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      status: m.status ?? undefined,
-      contentSegments: parseJson<Message["contentSegments"]>(m.contentSegments),
-      reasoning: parseJson<Message["reasoning"]>(m.reasoning),
-      thinking: m.thinking || undefined,
-      thinkingDuration: m.thinkingDuration ?? undefined,
-      toolCalls: parseJson<Message["toolCalls"]>(m.toolCalls),
-      attachments: parseJson<Message["attachments"]>(m.attachments),
-      replyActions: parseJson<Message["replyActions"]>(m.replyActions),
-      timestamp: m.timestamp,
-    })),
+    messages: msgRows
+      .map((m) => ({
+        id: m.id,
+        role: m.role,
+        content: m.content,
+        status: m.status ?? undefined,
+        contentSegments: parseJson<Message["contentSegments"]>(
+          m.contentSegments
+        ),
+        reasoning: parseJson<Message["reasoning"]>(m.reasoning),
+        thinking: m.thinking || undefined,
+        thinkingDuration: m.thinkingDuration ?? undefined,
+        toolCalls: parseJson<Message["toolCalls"]>(m.toolCalls),
+        attachments: parseJson<Message["attachments"]>(m.attachments),
+        replyActions: parseJson<Message["replyActions"]>(m.replyActions),
+        timestamp: m.timestamp,
+      }))
+      .filter((message) => !isScheduledTriggerMessage(message)),
   }
 }
 
@@ -1152,7 +1191,10 @@ export function appendInboxMessage(
       id: conversationId,
       updatedAt: Date.now(),
       messageDelta: existingMessage ? 0 : 1,
-      lastMessagePreview: stripArtifactBlocksForPreview(message.content).slice(0, 240),
+      lastMessagePreview: stripArtifactBlocksForPreview(message.content).slice(
+        0,
+        240
+      ),
       lastMessageAt: message.timestamp,
       readAt: message.role === "user" ? Date.now() : null,
     })

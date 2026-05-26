@@ -5,9 +5,11 @@
  * 7-day window on top of any per-request rate limiting.
  *
  *   - claude-code → spawn the CLI in a PTY, type `/usage`, scrape the rendered
- *     TUI panel. There is no public `--usage --json` flag and the
- *     undocumented OAuth usage endpoint is heavily rate-limited from third
- *     parties, so we mirror what a human would do.
+ *     TUI panel. Docker installs prefer the token-protected host bridge so the
+ *     TUI runs where the user's Claude subscription login actually lives. There
+ *     is no public `--usage --json` flag and the undocumented OAuth usage
+ *     endpoint is heavily rate-limited from third parties, so we mirror what a
+ *     human would do.
  *
  *   - codex → chatgpt.com/backend-api/wham/usage with the OAuth token from
  *     ~/.codex/auth.json (this is the endpoint codex's own `/status` panel
@@ -42,7 +44,7 @@ export interface CliQuotaSnapshot {
     /** Sonnet-specific 7-day window — Claude Code only. */
     weeklySonnet?: CliQuotaWindow
     /** Where this snapshot came from, surfaced for the UI's "source" line. */
-    source: 'api' | 'log' | 'tui' | 'none'
+    source: 'api' | 'host-bridge' | 'log' | 'tui' | 'none'
     /** Unix ms when the snapshot was captured. */
     fetchedAt: number
     /**
@@ -63,12 +65,20 @@ const CLAUDE_CREDENTIALS_PATH = join(homedir(), '.claude', '.credentials.json')
 const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
 const CLAUDE_USAGE_DOCKER_TUI_ENABLED = process.env.CLAUDE_USAGE_DOCKER_TUI === '1'
+const CLAUDE_USAGE_HOST_BRIDGE_TIMEOUT_MS = 35_000
 
 interface ClaudeUsageRaw {
     /** Cleaned-up plain text of the /usage panel. */
     text: string
     /** Raw PTY bytes (after ANSI strip) for debugging. */
     raw: string
+}
+
+interface ClaudeUsageBridgeResponse {
+    ok?: boolean
+    text?: string
+    raw?: string
+    error?: string
 }
 
 /**
@@ -169,6 +179,74 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
             }
         }, 250)
     })
+}
+
+async function captureClaudeUsagePanelFromHostBridge(): Promise<ClaudeUsageRaw | { error: string } | null> {
+    const url = claudeUsageHostBridgeUrl()
+    if (!url) return null
+
+    const token = process.env.ORCHESTRATOR_HOST_BRIDGE_TOKEN
+        || process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN
+        || process.env.ORCHESTRATOR_HOST_UPDATE_TOKEN
+    if (!token) return { error: 'Docker host bridge token is not configured.' }
+
+    try {
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), CLAUDE_USAGE_HOST_BRIDGE_TIMEOUT_MS)
+        const res = await fetch(url, {
+            method: 'GET',
+            headers: {
+                Authorization: `Bearer ${token}`,
+                'X-Orchestrator-Host-Bridge-Token': token,
+                Accept: 'application/json',
+            },
+            signal: controller.signal,
+        }).finally(() => clearTimeout(timer))
+
+        const json = (await res.json().catch(() => ({}))) as ClaudeUsageBridgeResponse
+        if (!res.ok) {
+            const detail = typeof json.error === 'string' && json.error.trim() ? `: ${json.error}` : ''
+            return { error: `Docker host bridge returned HTTP ${res.status}${detail}.` }
+        }
+
+        if (json.ok && typeof json.text === 'string' && json.text.trim()) {
+            return { text: json.text, raw: typeof json.raw === 'string' ? json.raw : json.text }
+        }
+        return { error: json.error || 'Docker host bridge did not return Claude usage data.' }
+    } catch (err) {
+        return { error: err instanceof Error ? `Docker host bridge failed: ${err.message}` : 'Docker host bridge failed.' }
+    }
+}
+
+function claudeUsageHostBridgeUrl(): string | null {
+    const explicitUsage = process.env.ORCHESTRATOR_CLAUDE_USAGE_BRIDGE_URL?.trim()
+    if (explicitUsage) return normalizeClaudeUsageBridgeUrl(explicitUsage, true)
+
+    const hostBridge = process.env.ORCHESTRATOR_HOST_BRIDGE_URL?.trim()
+    if (hostBridge) return normalizeClaudeUsageBridgeUrl(hostBridge)
+
+    const updateBridge = (
+        process.env.ORCHESTRATOR_DOCKER_UPDATE_URL
+        || process.env.ORCHESTRATOR_HOST_UPDATE_URL
+        || ''
+    ).trim()
+    if (updateBridge) return normalizeClaudeUsageBridgeUrl(updateBridge)
+
+    return null
+}
+
+function normalizeClaudeUsageBridgeUrl(value: string, exact = false): string | null {
+    try {
+        const url = new URL(value)
+        if (!exact && (!url.pathname || url.pathname === '/' || url.pathname === '/update' || url.pathname === '/status')) {
+            url.pathname = '/claude-usage'
+            url.search = ''
+            url.hash = ''
+        }
+        return url.toString()
+    } catch {
+        return null
+    }
 }
 
 /**
@@ -391,7 +469,9 @@ function nowDayInTz(tz: string, when: Date): number {
 
 async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
     const fetchedAt = Date.now()
-    if (!existsSync(CLAUDE_CREDENTIALS_PATH)) {
+    const runningInDocker = process.env.ORCHESTRATOR_SERVICE_MANAGER === 'docker'
+    const hasLocalCredentials = existsSync(CLAUDE_CREDENTIALS_PATH)
+    if (!runningInDocker && !hasLocalCredentials) {
         return {
             cliId: 'claude-code',
             available: false,
@@ -400,17 +480,39 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
             fetchedAt,
         }
     }
-    if (process.env.ORCHESTRATOR_SERVICE_MANAGER === 'docker' && !CLAUDE_USAGE_DOCKER_TUI_ENABLED) {
+    let captured: ClaudeUsageRaw | { error: string } | null = null
+    let source: CliQuotaSnapshot['source'] = 'tui'
+
+    if (runningInDocker) {
+        captured = await captureClaudeUsagePanelFromHostBridge()
+        if (captured && !('error' in captured)) source = 'host-bridge'
+    }
+
+    if (runningInDocker && (!captured || 'error' in captured) && !CLAUDE_USAGE_DOCKER_TUI_ENABLED) {
+        const bridgeError = captured && 'error' in captured ? ` Host bridge error: ${captured.error}` : ''
         return {
             cliId: 'claude-code',
             available: false,
-            error: 'Claude Code usage scraping is disabled in Docker to avoid hanging the usage page. Set CLAUDE_USAGE_DOCKER_TUI=1 to opt in.',
+            error: `Claude Code usage scraping is disabled in Docker to avoid hanging the usage page.${bridgeError} Set CLAUDE_USAGE_DOCKER_TUI=1 to opt in.`,
             source: 'none',
             fetchedAt,
         }
     }
 
-    let captured = await captureClaudeUsagePanel()
+    if (!hasLocalCredentials) {
+        return {
+            cliId: 'claude-code',
+            available: false,
+            error: 'Not logged in (no ~/.claude/.credentials.json).',
+            source: 'none',
+            fetchedAt,
+        }
+    }
+
+    if (!captured || 'error' in captured) {
+        captured = await captureClaudeUsagePanel()
+        source = 'tui'
+    }
     if ('error' in captured && captured.error.includes('Timed out')) {
         await sleep(CLAUDE_USAGE_RETRY_DELAY_MS)
         captured = await captureClaudeUsagePanel()
@@ -420,7 +522,7 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
             cliId: 'claude-code',
             available: false,
             error: captured.error,
-            source: 'tui',
+            source,
             fetchedAt,
         }
     }
@@ -431,7 +533,7 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
             cliId: 'claude-code',
             available: false,
             error: 'Couldn\'t parse the /usage panel — claude\'s output may have changed.',
-            source: 'tui',
+            source,
             fetchedAt,
         }
     }
@@ -441,7 +543,7 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
         fiveHour: parsed.fiveHour,
         weekly: parsed.weekly,
         weeklySonnet: parsed.weeklySonnet,
-        source: 'tui',
+        source,
         fetchedAt,
         dataTimestamp: fetchedAt,
     }

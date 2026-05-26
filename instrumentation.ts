@@ -4,7 +4,7 @@
 // run in the Edge runtime, and the scheduler itself is idempotent.
 export async function register(): Promise<void> {
     if (process.env.NEXT_RUNTIME !== 'nodejs') return
-    if (process.env.ORCHESTRATOR_PREVIEW === '1') return
+    if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
     // Connect the consolidated markets monitor to the watchlist data layer and
@@ -76,4 +76,15 @@ export async function register(): Promise<void> {
     } catch (err) {
         console.error('[update] failed to confirm post-restart state', err)
     }
+}
+
+function backgroundWorkDisabled(): boolean {
+    return (
+        process.env.ORCHESTRATOR_PREVIEW === '1' ||
+        process.env.ORCHESTRATOR_DISABLE_BACKGROUND === '1' ||
+        process.env.ORCHESTRATOR_DISABLE_SCHEDULER === '1' ||
+        process.env.ORCHESTRATOR_DISABLE_MONITORS === '1' ||
+        process.env.ORCHESTRATOR_DISABLE_MICROSCRIPTS === '1' ||
+        process.env.ORCHESTRATOR_DISABLE_UPDATE_CONFIRMATION === '1'
+    )
 }

@@ -450,6 +450,14 @@ function DetailMessage({
   const sender = senderForMessage(message, chronologicalIndex)
   const initials = initialsForMessage(message, chronologicalIndex)
   const newest = index === 0
+  const displayMessage: Message = {
+    ...message,
+    reasoning: undefined,
+    contentSegments: undefined,
+    thinking: undefined,
+    thinkingDuration: undefined,
+    toolCalls: undefined,
+  }
 
   return (
     <article
@@ -491,7 +499,7 @@ function DetailMessage({
         </div>
       </header>
       <div className="px-4 pb-5 text-[14px] leading-7 text-slate-800 md:px-6 md:pl-[72px] dark:text-slate-100">
-        <MessageBubble message={message} compact />
+        <MessageBubble message={displayMessage} compact />
         {assistant && (
           <QuickReplyActions
             actions={message.replyActions}

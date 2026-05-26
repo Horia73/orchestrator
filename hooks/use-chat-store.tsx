@@ -11,6 +11,10 @@ import type {
   Message,
   ToolStreamDelta,
 } from "@/lib/types"
+import {
+  appendBoundedToolDelta,
+  sanitizeReasoningForPersistence,
+} from "@/lib/ai/reasoning-limits"
 import { generateId, generateTitle } from "@/lib/utils-chat"
 import {
   addConversationMessageRequest,
@@ -40,6 +44,7 @@ import {
   isConversationUnread,
   isLikelyStreamInterruption,
   isTerminalAssistantMessage,
+  markReasoningStopped,
   readUnreadConversationIds,
   showChatCompletionNotification,
   sleep,
@@ -636,6 +641,33 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             handleAssistantFinished(conversationId, recoveredMessage)
             return "final"
           }
+
+          const hasProgress =
+            recoveredMessage.content.trim().length > 0 ||
+            (recoveredMessage.reasoning?.length ?? 0) > 0 ||
+            recoveredMessage.contentSegments?.some(
+              (segment) => segment.content.length > 0
+            )
+          if (attempt === STREAM_RECOVERY_ATTEMPTS - 1 && hasProgress) {
+            const abortedMessage: Message = {
+              ...recoveredMessage,
+              status: "aborted",
+              reasoning: markReasoningStopped(
+                recoveredMessage.reasoning,
+                Date.now()
+              ),
+              thinkingDuration: recoveredMessage.thinkingDuration ?? 0,
+            }
+            dispatch({
+              type: "ADD_ASSISTANT_MESSAGE",
+              conversationId,
+              message: abortedMessage,
+            })
+            addConversationMessageRequest(conversationId, abortedMessage).catch(
+              console.error
+            )
+            return "final"
+          }
         }
 
         if (activeStream) {
@@ -1133,7 +1165,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         })
         markConversationRead(conversationId)
 
-        // Build messages array from current state + new user message
+        // Build messages array from current state + new user message.
+        // startChatStreamRequest keeps this full payload unless it nears the
+        // platform request-size limit, where it strips only UI-only metadata.
         const conv = state.conversations.find((c) => c.id === conversationId)
         allMessages = [...(conv?.messages ?? []), userMessage]
       }
@@ -1171,7 +1205,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         },
       })
 
-      // Call the streaming API — pass messages directly to avoid DB race condition
+      // Pass the full local conversation for normal turns; the request helper
+      // falls back to a provider-relevant slim shape only near size limits.
       startChatStreamRequest({
         conversationId: finalConvId,
         messageId: assistantMsgId,
@@ -1370,7 +1405,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                         item.toolCallId === toolCallId
                     )
                     if (entry?.type === "tool_call") {
-                      entry.deltas = [...(entry.deltas ?? []), delta]
+                      entry.deltas = appendBoundedToolDelta(
+                        entry.deltas,
+                        delta
+                      )
                       entry.status = "running"
                     }
                     dispatch({
@@ -1610,7 +1648,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                           )
                         : undefined
                     if (toolEntry?.type === "tool_call") {
-                      toolEntry.deltas = [...(toolEntry.deltas ?? []), delta]
+                      toolEntry.deltas = appendBoundedToolDelta(
+                        toolEntry.deltas,
+                        delta
+                      )
                       toolEntry.status = "running"
                     }
                     dispatch({
@@ -1673,7 +1714,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       if (Array.isArray(data.contentSegments))
                         agent.contentSegments = data.contentSegments
                       if (Array.isArray(data.reasoning))
-                        agent.reasoning = data.reasoning
+                        agent.reasoning = sanitizeReasoningForPersistence(
+                          data.reasoning
+                        )
                       if (Array.isArray(data.attachments))
                         agent.attachments = data.attachments
                       if (typeof data.error === "string")
@@ -1698,7 +1741,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                         ? data.contentSegments
                         : undefined,
                       reasoning: Array.isArray(data.reasoning)
-                        ? data.reasoning
+                        ? sanitizeReasoningForPersistence(data.reasoning)
                         : undefined,
                       attachments: Array.isArray(data.attachments)
                         ? data.attachments

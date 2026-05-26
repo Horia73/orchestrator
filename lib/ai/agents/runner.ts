@@ -15,6 +15,11 @@ import { MAX_AGENT_DEPTH } from './types'
 import { getAgent } from './registry'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
+import {
+    appendBoundedToolDelta,
+    sanitizeReasoningForPersistence,
+    sanitizeToolCallSummaries,
+} from '@/lib/ai/reasoning-limits'
 import { getApiKey, getEffectiveAgentSettings } from '@/lib/config'
 import { getEffectiveModel } from '@/lib/models/registry'
 import { getToolsForAgent, getToolsForBuiltins, resolveProviderToolSurface } from '@/lib/ai/tools/registry'
@@ -294,7 +299,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             onToolDelta(toolCallId, toolName, delta) {
                 const entry = reasoning.find(item => item.type === 'tool_call' && item.toolCallId === toolCallId)
                 if (entry?.type === 'tool_call') {
-                    entry.deltas = [...(entry.deltas ?? []), delta]
+                    entry.deltas = appendBoundedToolDelta(entry.deltas, delta)
                     entry.status = 'running'
                 }
                 emitAgent(parentCtx, {
@@ -339,7 +344,9 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 })
                 const entry = reasoning.find(item => item.type === 'tool_call' && item.toolCallId === toolCallId)
                 if (entry?.type === 'tool_call') {
-                    entry.content = stringifyToolResult(result)
+                    entry.content = sanitizeToolCallSummaries([
+                        { text: entry.title, content: stringifyToolResult(result) },
+                    ])?.[0]?.content ?? stringifyToolResult(result)
                     entry.success = result.success
                     entry.status = result.success ? 'ok' : 'error'
                     entry.endedAt = Date.now()
@@ -353,6 +360,10 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 })
             },
             onDone(meta) {
+                if (parentCtx.signal?.aborted) {
+                    logRequestAbort(subRequestId, Date.now(), accContent || null)
+                    return
+                }
                 finalUsage = meta.usage
                 finalThinkingDuration = meta.thinkingDuration
                 finalAttachments = meta.attachments ?? []
@@ -371,7 +382,11 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             },
             onError(err) {
                 providerError = err
-                logRequestFail(subRequestId, err, Date.now(), accContent || null)
+                if (parentCtx.signal?.aborted) {
+                    logRequestAbort(subRequestId, Date.now(), accContent || null)
+                } else {
+                    logRequestFail(subRequestId, err, Date.now(), accContent || null)
+                }
             },
         })
     } catch (err) {
@@ -384,7 +399,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 status: 'aborted',
                 endedAt: Date.now(),
                 content: accContent,
-                reasoning,
+                reasoning: sanitizeReasoningForPersistence(reasoning),
                 contentSegments,
                 error: `Sub-agent ${target.id} aborted`,
             })
@@ -397,11 +412,25 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             status: 'error',
             endedAt: Date.now(),
             content: accContent,
-            reasoning,
+            reasoning: sanitizeReasoningForPersistence(reasoning),
             contentSegments,
             error: msg,
         })
         return { success: false, error: `Sub-agent ${target.id} failed: ${msg}` }
+    }
+
+    if (parentCtx.signal?.aborted) {
+        emitAgent(parentCtx, {
+            type: 'agent_done',
+            runId: subRequestId,
+            status: 'aborted',
+            endedAt: Date.now(),
+            content: accContent,
+            reasoning: sanitizeReasoningForPersistence(reasoning),
+            contentSegments,
+            error: `Sub-agent ${target.id} aborted`,
+        })
+        return { success: false, error: `Sub-agent ${target.id} aborted` }
     }
 
     if (providerError) {
@@ -411,7 +440,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             status: 'error',
             endedAt: Date.now(),
             content: accContent,
-            reasoning,
+            reasoning: sanitizeReasoningForPersistence(reasoning),
             contentSegments,
             error: providerError,
         })
@@ -425,7 +454,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             status: 'error',
             endedAt: Date.now(),
             content: accContent,
-            reasoning,
+            reasoning: sanitizeReasoningForPersistence(reasoning),
             contentSegments,
             error: `Sub-agent ${target.id} produced no content.`,
         })
@@ -452,7 +481,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         status: 'ok',
         endedAt: Date.now(),
         content: accContent,
-        reasoning,
+        reasoning: sanitizeReasoningForPersistence(reasoning),
         contentSegments,
         attachments: finalAttachments.length > 0 ? finalAttachments : undefined,
         usage: finalUsage,

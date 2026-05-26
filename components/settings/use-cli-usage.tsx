@@ -14,7 +14,7 @@ export interface CliQuotaSnapshot {
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
     weeklySonnet?: CliQuotaWindow
-    source: "api" | "log" | "tui" | "none"
+    source: "api" | "host-bridge" | "log" | "tui" | "none"
     fetchedAt: number
     dataTimestamp?: number
 }

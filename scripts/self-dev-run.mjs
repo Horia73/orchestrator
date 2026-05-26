@@ -13,7 +13,7 @@ const command = argv[0]
 const args = parseArgs(argv.slice(1))
 const jsonOutput = boolArg('json')
 
-const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'commit', 'rebase', 'push', 'update', 'cleanup'])
+const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'seed', 'commit', 'rebase', 'push', 'update', 'cleanup'])
 const PREVIEW_TOKEN_BYTES = 24
 const PREVIEW_START_TIMEOUT_MS = 90_000
 const PREVIEW_POLL_MS = 750
@@ -44,6 +44,8 @@ async function main() {
       return printPreview(context)
     case 'logs':
       return printLogs(context)
+    case 'seed':
+      return seedPreview(context)
     case 'commit':
       return commitRun(context)
     case 'rebase':
@@ -89,8 +91,26 @@ async function startPreview(context) {
     fail(`Run state has invalid preview port: ${context.state.port ?? '(missing)'}`)
   }
 
+  let preview = ensurePreviewMetadata(context)
+  const healthPath = normalizeHealthPath(stringArg('health-path') || preview.healthPath || '/')
+  if (preview.healthPath !== healthPath) {
+    updatePreviewState(context, { healthPath })
+    preview = ensurePreviewMetadata(context)
+  }
+
   const current = previewInfo(context)
   if (current.running) {
+    try {
+      await waitForPreview(context, port, preview.basePath, healthPath)
+    } catch (error) {
+      updatePreviewState(context, {
+        status: 'unhealthy',
+        pid: current.pid,
+        checkedAt: new Date().toISOString(),
+        lastError: error instanceof Error ? error.message : String(error),
+      })
+      throw error
+    }
     updatePreviewState(context, {
       status: 'running',
       pid: current.pid,
@@ -99,7 +119,6 @@ async function startPreview(context) {
     return output(previewOutput(context, { running: true }), previewSummary(context, true))
   }
 
-  const preview = ensurePreviewMetadata(context)
   const refreshState = boolArg('refresh-state')
   if (refreshState || !fs.existsSync(preview.stateDir)) {
     await snapshotPreviewState(context, preview.stateDir)
@@ -126,6 +145,11 @@ async function startPreview(context) {
       ORCHESTRATOR_HOST: '127.0.0.1',
       ORCHESTRATOR_PORT: String(port),
       ORCHESTRATOR_PREVIEW: '1',
+      ORCHESTRATOR_DISABLE_BACKGROUND: '1',
+      ORCHESTRATOR_DISABLE_SCHEDULER: '1',
+      ORCHESTRATOR_DISABLE_MONITORS: '1',
+      ORCHESTRATOR_DISABLE_MICROSCRIPTS: '1',
+      ORCHESTRATOR_DISABLE_UPDATE_CONFIRMATION: '1',
       ORCHESTRATOR_STATE_DIR: preview.stateDir,
       ORCHESTRATOR_PREVIEW_RUN_ID: context.state.runId,
       ORCHESTRATOR_PREVIEW_BASE_PATH: preview.basePath,
@@ -141,11 +165,12 @@ async function startPreview(context) {
     startedAt: new Date().toISOString(),
     stoppedAt: null,
     exitCode: null,
+    healthPath,
     command: `${nextBin} ${commandArgs.join(' ')}`,
   })
 
   try {
-    await waitForPreview(context, port, preview.basePath)
+    await waitForPreview(context, port, preview.basePath, healthPath)
   } catch (error) {
     const alive = child.pid ? isPidAlive(child.pid) : false
     updatePreviewState(context, {
@@ -224,6 +249,66 @@ function printLogs(context) {
   const lines = intArg('lines', LOG_TAIL_DEFAULT_LINES)
   const body = tailFile(preview.logPath, Math.max(1, lines))
   output({ runId: context.state.runId, logPath: preview.logPath, lines, body }, body || `No preview log found at ${preview.logPath}.`)
+}
+
+async function seedPreview(context) {
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+
+  const preview = ensurePreviewMetadata(context)
+  if (!fs.existsSync(preview.stateDir)) {
+    await snapshotPreviewState(context, preview.stateDir)
+  } else {
+    ensurePreviewStateDirs(preview.stateDir)
+  }
+
+  const patches = []
+  const profiles = splitCommaList(stringArg('profile'))
+  for (const profile of profiles) {
+    if (profile === 'location-intelligence') {
+      patches.push(locationIntelligenceSeedPatch())
+      continue
+    }
+    fail(`Unknown preview seed profile: ${profile}`)
+  }
+
+  const configJson = stringArg('config-json')
+  if (configJson) patches.push(parseJsonObject(configJson, '--config-json'))
+
+  const configPatch = stringArg('config-patch')
+  if (configPatch) patches.push(readConfigPatch(configPatch, context))
+
+  if (!patches.length) {
+    fail('seed requires --profile location-intelligence, --config-json <json>, or --config-patch <path-or-json>.')
+  }
+
+  const configPath = path.join(preview.stateDir, 'workspace', 'config.json')
+  const current = fs.existsSync(configPath) ? readJson(configPath) : {}
+  if (!isPlainObject(current)) fail(`Preview config is not a JSON object: ${configPath}`)
+
+  const next = patches.reduce((acc, patch) => deepMerge(acc, patch), current)
+  next.updatedAt = Date.now()
+  writeJsonAtomic(configPath, next)
+
+  updatePreviewState(context, {
+    seededAt: new Date().toISOString(),
+    seedProfiles: profiles,
+    configPath,
+  })
+
+  output(
+    {
+      runId: context.state.runId,
+      stateDir: preview.stateDir,
+      configPath,
+      profiles,
+      appliedPatches: patches.length,
+    },
+    [
+      `Seeded preview state for ${context.state.runId}.`,
+      profiles.length ? `Profiles: ${profiles.join(', ')}` : null,
+      `Config: ${configPath}`,
+    ].filter(Boolean).join('\n'),
+  )
 }
 
 function commitRun(context) {
@@ -519,6 +604,7 @@ function ensurePreviewMetadata(context) {
     logPath: typeof existing.logPath === 'string' && path.isAbsolute(existing.logPath)
       ? existing.logPath
       : path.join(context.runDir, 'preview.log'),
+    healthPath: normalizeHealthPath(typeof existing.healthPath === 'string' ? existing.healthPath : '/'),
     status: typeof existing.status === 'string' ? existing.status : 'prepared',
     pid: Number.isInteger(existing.pid) ? existing.pid : null,
   }
@@ -591,6 +677,7 @@ function previewOutput(context, overrides = {}) {
     localUrl: preview.localUrl,
     publicUrl: preview.publicUrl,
     basePath: preview.basePath,
+    healthPath: preview.healthPath ?? '/',
     stateDir: preview.stateDir,
     logPath: preview.logPath,
   }
@@ -602,6 +689,7 @@ function previewSummary(context, running) {
     `Preview for ${context.state.runId}: ${running ? 'running' : (preview.status || 'stopped')}`,
     `Local URL: ${preview.localUrl}`,
     preview.publicUrl ? `Public URL: ${preview.publicUrl}` : 'Public URL: unavailable; set ORCHESTRATOR_PUBLIC_URL to enable /dev-preview links.',
+    `Health: ${preview.healthPath ?? '/'}`,
     `Log: ${preview.logPath}`,
     `State: ${preview.stateDir}`,
   ].join('\n')
@@ -648,6 +736,67 @@ function ensurePreviewStateDirs(stateDir) {
   fs.mkdirSync(path.join(stateDir, 'private'), { recursive: true })
 }
 
+function splitCommaList(value) {
+  if (!value) return []
+  return value.split(',').map(item => item.trim()).filter(Boolean)
+}
+
+function locationIntelligenceSeedPatch() {
+  const entityId = stringArg('entity-id') || stringArg('home-assistant-entity') || 'person.preview_user'
+  if (!/^[a-z0-9_]+\.[a-z0-9_]+$/i.test(entityId)) {
+    fail(`Invalid Home Assistant entity id for location-intelligence seed: ${entityId}`)
+  }
+  const label = stringArg('label') || 'Preview User'
+  return {
+    smartMonitor: {
+      liveLocationSource: {
+        provider: 'home-assistant',
+        entityId,
+        confirmedAt: Date.now(),
+        ...(label ? { label } : {}),
+      },
+    },
+  }
+}
+
+function readConfigPatch(value, context) {
+  const candidates = [
+    path.resolve(projectDir, value),
+    path.resolve(context.state.repoDir, value),
+  ]
+  const filePath = candidates.find(candidate => fs.existsSync(candidate) && fs.statSync(candidate).isFile())
+  const text = filePath ? fs.readFileSync(filePath, 'utf-8') : value
+  return parseJsonObject(text, filePath ? `--config-patch ${filePath}` : '--config-patch')
+}
+
+function parseJsonObject(value, label) {
+  let parsed
+  try {
+    parsed = JSON.parse(value)
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error)
+    fail(`${label} must be a JSON object: ${detail}`)
+  }
+  if (!isPlainObject(parsed)) fail(`${label} must be a JSON object.`)
+  return parsed
+}
+
+function deepMerge(base, patch) {
+  const next = isPlainObject(base) ? { ...base } : {}
+  for (const [key, value] of Object.entries(patch)) {
+    if (isPlainObject(value) && isPlainObject(next[key])) {
+      next[key] = deepMerge(next[key], value)
+    } else {
+      next[key] = value
+    }
+  }
+  return next
+}
+
+function isPlainObject(value) {
+  return Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+}
+
 async function backupSqliteDatabase(source, target) {
   const { default: Database } = await import('better-sqlite3')
   const db = new Database(source, { readonly: true, fileMustExist: true, timeout: 10_000 })
@@ -669,6 +818,7 @@ function copyDirIfExists(source, target) {
 
 function ensureNodeModulesLink(context) {
   const target = path.join(context.state.repoDir, 'node_modules')
+  excludeLocalFile(context.state.repoDir, 'node_modules')
   if (fs.existsSync(target)) return
 
   const candidates = [
@@ -681,6 +831,20 @@ function ensureNodeModulesLink(context) {
     fail('Cannot start preview: no node_modules directory found in appDir, sourceDir, or current project.')
   }
   fs.symlinkSync(source, target, 'dir')
+  excludeLocalFile(context.state.repoDir, 'node_modules')
+}
+
+function excludeLocalFile(repoPath, relativePath) {
+  const gitDir = gitCapture(['rev-parse', '--git-common-dir'], { cwd: repoPath, optional: true })
+  if (!gitDir) return
+  const absoluteGitDir = path.isAbsolute(gitDir) ? gitDir : path.join(repoPath, gitDir)
+  const excludePath = path.join(absoluteGitDir, 'info', 'exclude')
+  fs.mkdirSync(path.dirname(excludePath), { recursive: true })
+  const existing = fs.existsSync(excludePath) ? fs.readFileSync(excludePath, 'utf-8') : ''
+  const line = `/${relativePath}`
+  if (!existing.split('\n').includes(line)) {
+    fs.appendFileSync(excludePath, `${existing.endsWith('\n') || !existing ? '' : '\n'}${line}\n`, 'utf-8')
+  }
 }
 
 function resolveNextBin(context) {
@@ -710,9 +874,9 @@ function isPortFree(port) {
   })
 }
 
-async function waitForPreview(context, port, basePath) {
+async function waitForPreview(context, port, basePath, healthPath) {
   const deadline = Date.now() + PREVIEW_START_TIMEOUT_MS
-  const url = `http://127.0.0.1:${port}${basePath}/`
+  const url = previewHealthUrl(port, basePath, healthPath)
   let lastError = ''
 
   while (Date.now() < deadline) {
@@ -721,8 +885,8 @@ async function waitForPreview(context, port, basePath) {
       throw new Error(`Preview process ${pid} exited before becoming ready. Check ${context.state.preview?.logPath}.`)
     }
     try {
-      const response = await fetch(url, { cache: 'no-store', redirect: 'manual' })
-      if (response.status >= 200 && response.status < 500) return
+      const response = await fetch(url, { cache: 'no-store', redirect: 'follow' })
+      if (response.status === 200) return
       lastError = `HTTP ${response.status}`
     } catch (error) {
       lastError = error instanceof Error ? error.message : String(error)
@@ -731,6 +895,25 @@ async function waitForPreview(context, port, basePath) {
   }
 
   throw new Error(`Preview did not become ready at ${url}: ${lastError || 'timeout'}`)
+}
+
+function previewHealthUrl(port, basePath, healthPath) {
+  const cleanPath = normalizeHealthPath(healthPath)
+  return `http://127.0.0.1:${port}${basePath}${cleanPath === '/' ? '/' : cleanPath}`
+}
+
+function normalizeHealthPath(value) {
+  const raw = String(value || '/').trim()
+  if (!raw) return '/'
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(raw) || raw.startsWith('//')) {
+    fail('Health path must be a relative app path such as / or /api/config.')
+  }
+  const withSlash = raw.startsWith('/') ? raw : `/${raw}`
+  if (withSlash.startsWith('/dev-preview/')) {
+    fail('Health path should be relative to the preview app, not include /dev-preview/<run-id>.')
+  }
+  const parsed = new URL(withSlash, 'http://preview.local')
+  return `${parsed.pathname}${parsed.search}` || '/'
 }
 
 function isPidAlive(pid) {
@@ -858,6 +1041,13 @@ function readJson(filePath, options = {}) {
   }
 }
 
+function writeJsonAtomic(filePath, value) {
+  fs.mkdirSync(path.dirname(filePath), { recursive: true })
+  const tmp = `${filePath}.tmp`
+  fs.writeFileSync(tmp, `${JSON.stringify(value, null, 2)}\n`, 'utf-8')
+  fs.renameSync(tmp, filePath)
+}
+
 function splitLines(value) {
   return value ? value.split('\n').filter(Boolean) : []
 }
@@ -921,11 +1111,12 @@ function usage(exitCode) {
   const text = [
     'Usage:',
     `  ${prefix} status [--run-id <id>|--state <path>] [--json]`,
-    `  ${prefix} start --run-id <id> [--refresh-state] [--json]`,
+    `  ${prefix} start --run-id <id> [--refresh-state] [--health-path /|/api/config] [--json]`,
     `  ${prefix} stop --run-id <id> [--force] [--json]`,
-    `  ${prefix} restart --run-id <id> [--refresh-state] [--json]`,
+    `  ${prefix} restart --run-id <id> [--refresh-state] [--health-path /|/api/config] [--json]`,
     `  ${prefix} preview [--run-id <id>|--state <path>] [--json]`,
     `  ${prefix} logs [--run-id <id>|--state <path>] [--lines 120] [--json]`,
+    `  ${prefix} seed --run-id <id> [--profile location-intelligence] [--config-json '{...}'|--config-patch <path-or-json>]`,
     `  ${prefix} commit --run-id <id> --message "<message>"`,
     `  ${prefix} rebase --run-id <id> [--base origin/master]`,
     `  ${prefix} push --run-id <id> --target-branch master`,

@@ -275,6 +275,40 @@ type ToolExecutor = (
   ctx?: ToolExecutionContext
 ) => ToolResult | Promise<ToolResult>
 
+const TOOL_ABORT_ERROR = "Tool execution aborted by stop request."
+
+function toolAbortResult(): ToolResult {
+  return { success: false, error: TOOL_ABORT_ERROR }
+}
+
+function normalizeToolError(err: unknown): ToolResult {
+  return {
+    success: false,
+    error:
+      err instanceof Error ? err.message : "Unknown error executing tool",
+  }
+}
+
+async function runWithAbort(
+  execution: Promise<ToolResult>,
+  signal: AbortSignal
+): Promise<ToolResult> {
+  if (signal.aborted) return toolAbortResult()
+
+  let cleanup: (() => void) | undefined
+  const aborted = new Promise<ToolResult>((resolve) => {
+    const onAbort = () => resolve(toolAbortResult())
+    signal.addEventListener("abort", onAbort, { once: true })
+    cleanup = () => signal.removeEventListener("abort", onAbort)
+  })
+
+  try {
+    return await Promise.race([execution, aborted])
+  } finally {
+    cleanup?.()
+  }
+}
+
 const executeBashLazy: ToolExecutor = async (args, ctx) => {
   const { executeBash } = await import("./bash")
   return executeBash(args, ctx)
@@ -625,13 +659,11 @@ export async function executeTool(
     }
   }
 
-  try {
-    return await executor(args, ctx)
-  } catch (err) {
-    return {
-      success: false,
-      error:
-        err instanceof Error ? err.message : "Unknown error executing tool",
-    }
-  }
+  if (ctx?.signal?.aborted) return toolAbortResult()
+
+  const execution = Promise.resolve()
+    .then(() => executor(args, ctx))
+    .catch(normalizeToolError)
+
+  return ctx?.signal ? runWithAbort(execution, ctx.signal) : execution
 }

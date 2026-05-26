@@ -64,6 +64,12 @@ import { getProviderReadiness } from "@/lib/provider-readiness"
 import { resolveRequestOrigin } from "@/lib/app-origin"
 import { sendChatCompletionPushNotification } from "@/lib/push-notifications"
 import {
+  appendBoundedToolDelta,
+  sanitizeMessageForPersistence,
+  sanitizeReasoningForPersistence,
+  sanitizeToolCallSummaries,
+} from "@/lib/ai/reasoning-limits"
+import {
   appendPromptContext,
   buildAttachmentContext,
   buildFinalContextUsageSnapshot,
@@ -79,6 +85,47 @@ import {
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
+
+type ChatRequestBody = {
+  conversationId?: unknown
+  messageId?: unknown
+  newMessage?: unknown
+  messages?: unknown
+  promptContext?: unknown
+  activateIntegrations?: unknown
+}
+
+function isRequestMessage(value: unknown): value is Message {
+  if (!value || typeof value !== "object") return false
+  const candidate = value as Partial<Message>
+  return (
+    typeof candidate.id === "string" &&
+    (candidate.role === "user" || candidate.role === "assistant") &&
+    typeof candidate.content === "string" &&
+    typeof candidate.timestamp === "number" &&
+    Number.isFinite(candidate.timestamp)
+  )
+}
+
+function slimRequestMessage(message: Message): Message {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    attachments: Array.isArray(message.attachments)
+      ? message.attachments
+      : undefined,
+    timestamp: message.timestamp,
+  }
+}
+
+function requestMessagesFromBody(body: ChatRequestBody): Message[] {
+  if (isRequestMessage(body.newMessage)) {
+    return [slimRequestMessage(body.newMessage)]
+  }
+  if (!Array.isArray(body.messages)) return []
+  return body.messages.filter(isRequestMessage).map(slimRequestMessage)
+}
 
 export async function POST(request: Request) {
   const requestOrigin = resolveRequestOrigin(request)
@@ -124,23 +171,29 @@ export async function POST(request: Request) {
     registry[agentSettings.provider]?.models[agentSettings.model]
       ?.contextWindow ?? null
 
-  let body: {
-    conversationId: string
-    messageId: string
-    messages: Message[]
-    promptContext?: string
-    activateIntegrations?: string[]
-  }
+  let body: ChatRequestBody
   try {
     body = await request.json()
   } catch {
-    return new Response(JSON.stringify({ error: "Invalid request body" }), {
-      status: 400,
-    })
+    return new Response(
+      JSON.stringify({
+        error: "Invalid request body",
+        chatMessage:
+          "The chat request was invalid or truncated before it reached the model runtime. Please try sending the message again.",
+        code: "invalid_request_body",
+      }),
+      {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      }
+    )
   }
 
-  const { conversationId, messageId, messages } = body
-  if (!conversationId || !messageId || !messages?.length) {
+  const conversationId =
+    typeof body.conversationId === "string" ? body.conversationId : ""
+  const messageId = typeof body.messageId === "string" ? body.messageId : ""
+  const requestMessages = requestMessagesFromBody(body)
+  if (!conversationId || !messageId || requestMessages.length === 0) {
     return new Response(
       JSON.stringify({
         error: "Missing conversationId, messageId, or messages",
@@ -153,9 +206,12 @@ export async function POST(request: Request) {
   // in parallel, but /api/chat may arrive first). Do this before runtime
   // validation so setup failures still persist as normal assistant messages.
   const existingConversation = getConversation(conversationId)
+  // Merge browser-supplied history with persisted history. The client normally
+  // sends the full local conversation; near request-size limits it may strip
+  // UI-only metadata while preserving all role/content/attachments context.
   const messagesForProvider = mergeMessagesForProvider(
     existingConversation?.messages ?? [],
-    messages
+    requestMessages
   )
   const promptContext = sanitizePromptContext(body.promptContext)
   const promptContextMessageId = promptContext
@@ -381,20 +437,23 @@ export async function POST(request: Request) {
       return
     lastProgressPersistAt = now
 
-    addMessage(conversationId, {
-      id: messageId,
-      role: "assistant",
-      content: accContent || "",
-      status: opts?.status ?? terminalMessageStatus ?? undefined,
-      contentSegments: accContentSegments,
-      reasoning: accReasoning,
-      thinking: accThinking || "",
-      thinkingDuration: opts?.thinkingDuration,
-      toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
-      attachments: accAttachments.length > 0 ? accAttachments : undefined,
-      // Keep stable ordering for this assistant message.
-      timestamp: assistantMsg.timestamp,
-    })
+    addMessage(
+      conversationId,
+      sanitizeMessageForPersistence({
+        id: messageId,
+        role: "assistant",
+        content: accContent || "",
+        status: opts?.status ?? terminalMessageStatus ?? undefined,
+        contentSegments: accContentSegments,
+        reasoning: accReasoning,
+        thinking: accThinking || "",
+        thinkingDuration: opts?.thinkingDuration,
+        toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
+        attachments: accAttachments.length > 0 ? accAttachments : undefined,
+        // Keep stable ordering for this assistant message.
+        timestamp: assistantMsg.timestamp,
+      })
+    )
   }
 
   const appendThinkingChunk = (chunk: string) => {
@@ -498,7 +557,7 @@ export async function POST(request: Request) {
       (item) => item.type === "tool_call" && item.toolCallId === toolCallId
     )
     if (entry?.type === "tool_call") {
-      entry.deltas = [...(entry.deltas ?? []), delta]
+      entry.deltas = appendBoundedToolDelta(entry.deltas, delta)
       entry.status = "running"
     }
     send({ type: "tool_delta", toolCallId, toolName, delta })
@@ -604,7 +663,10 @@ export async function POST(request: Request) {
             )
           : undefined
       if (toolEntry?.type === "tool_call") {
-        toolEntry.deltas = [...(toolEntry.deltas ?? []), event.delta]
+        toolEntry.deltas = appendBoundedToolDelta(
+          toolEntry.deltas,
+          event.delta
+        )
         toolEntry.status = "running"
       }
     } else if (event.type === "agent_tool_result") {
@@ -630,7 +692,8 @@ export async function POST(request: Request) {
         entry.endedAt = event.endedAt
         if (typeof event.content === "string") entry.content = event.content
         if (event.contentSegments) entry.contentSegments = event.contentSegments
-        if (event.reasoning) entry.reasoning = event.reasoning
+        if (event.reasoning)
+          entry.reasoning = sanitizeReasoningForPersistence(event.reasoning)
         if (event.attachments) entry.attachments = event.attachments
         if (event.error) entry.error = event.error
         if (event.thinkingDuration)
@@ -989,15 +1052,19 @@ export async function POST(request: Request) {
                 reasoningToolCall?.type === "tool_call"
                   ? reasoningToolCall.title
                   : buildToolTitle(toolName, fallbackArgs)
+              const displaySummary =
+                sanitizeToolCallSummaries([
+                  { text: displayText, content: displayContent },
+                ])?.[0] ?? { text: displayText, content: displayContent }
 
               if (reasoningToolCall && reasoningToolCall.type === "tool_call") {
-                reasoningToolCall.content = displayContent
+                reasoningToolCall.content = displaySummary.content
                 reasoningToolCall.success = result.success
                 reasoningToolCall.status = result.success ? "ok" : "error"
                 reasoningToolCall.endedAt = Date.now()
               }
 
-              accToolCalls.push({ text: displayText, content: displayContent })
+              accToolCalls.push(displaySummary)
               persistAssistantProgress({ force: true })
 
               const toolStart = toolStartTimes.get(toolCallId)
@@ -1018,8 +1085,8 @@ export async function POST(request: Request) {
                 toolName,
                 result: {
                   success: result.success,
-                  text: displayText,
-                  content: displayContent,
+                  text: displaySummary.text,
+                  content: displaySummary.content,
                 },
               })
             },
@@ -1057,6 +1124,18 @@ export async function POST(request: Request) {
             },
             onDone(meta) {
               if (terminalStreamError) return
+              if (serverAbortController.signal.aborted) {
+                terminalStreamError = "Aborted"
+                terminalMessageStatus = "aborted"
+                logRequestAbort(messageId, Date.now(), accContent || null)
+                persistAssistantProgress({
+                  force: true,
+                  thinkingDuration: 0,
+                  status: "aborted",
+                })
+                send({ type: "stopped", messageId })
+                return
+              }
 
               accAttachments = meta.attachments ?? []
               // Flush any trailing parser state (unterminated tags

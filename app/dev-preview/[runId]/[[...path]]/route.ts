@@ -150,6 +150,13 @@ function upstreamRequestHeaders(headers: Headers): Headers {
   next.delete('accept-encoding')
   next.delete('origin')
   next.delete('referer')
+  next.delete('forwarded')
+  next.delete('x-forwarded-host')
+  next.delete('x-forwarded-proto')
+  next.delete('x-forwarded-port')
+  next.delete('x-forwarded-for')
+  next.delete('x-vercel-forwarded-for')
+  next.delete('x-real-ip')
   next.set('X-Orchestrator-Preview-Proxy', '1')
   return next
 }

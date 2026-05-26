@@ -3,6 +3,7 @@ import path from 'path'
 import { spawn as spawnProcess } from 'child_process'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
+import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
 import { AGENT_WORKSPACE_DIR, WORKSPACE_DIR } from '@/lib/runtime-paths'
 import { displayPath } from './sandbox'
 export { bashTool } from './bash-def'
@@ -94,18 +95,48 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
         let outputTruncated = false
         let finished = false
         let timedOut = false
+        let streamedDeltaChars = 0
+        let streamTruncatedNoticeSent = false
         const signal = ctx?.signal
         const toolCallId = ctx?.currentToolCallId
         let proc: ReturnType<typeof ptySpawn>
 
-        const emit = (text: string) => {
-            if (toolCallId && text) {
+        const emitToolDelta = (text: string) => {
+            if (!toolCallId || !text) return
+
+            const remaining = MAX_TOOL_DELTA_TEXT_CHARS - streamedDeltaChars
+            if (remaining <= 0) {
+                if (!streamTruncatedNoticeSent) {
+                    streamTruncatedNoticeSent = true
+                    void ctx?.onToolDelta?.(toolCallId, 'Bash', {
+                        stream: 'message',
+                        text: '\n\n...[live tool output truncated to keep chat history small]...\n\n',
+                        timestamp: Date.now(),
+                    })
+                }
+                return
+            }
+
+            const emitted = text.length > remaining ? text.slice(0, remaining) : text
+            streamedDeltaChars += emitted.length
+            void ctx?.onToolDelta?.(toolCallId, 'Bash', {
+                stream: 'pty',
+                text: emitted,
+                timestamp: Date.now(),
+            })
+
+            if (text.length > remaining && !streamTruncatedNoticeSent) {
+                streamTruncatedNoticeSent = true
                 void ctx?.onToolDelta?.(toolCallId, 'Bash', {
-                    stream: 'pty',
-                    text,
+                    stream: 'message',
+                    text: '\n\n...[live tool output truncated to keep chat history small]...\n\n',
                     timestamp: Date.now(),
                 })
             }
+        }
+
+        const emit = (text: string) => {
+            emitToolDelta(text)
             const next = appendBounded(output, text)
             output = next.text
             outputTruncated ||= next.truncated

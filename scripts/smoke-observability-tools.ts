@@ -19,7 +19,14 @@ async function main(): Promise<void> {
         executeSearchPastRuns,
     } = await import('@/lib/ai/tools/observability')
     const { createScheduledTask, recordTaskRun } = await import('@/lib/scheduling/store')
-    const { logRequestComplete, logRequestStart, logToolCall } = await import('@/lib/observability/store')
+    const {
+        buildUsageReport,
+        getRequestLog,
+        logRequestComplete,
+        logRequestStart,
+        logToolCall,
+        sealInterruptedStreamingRequestLogs,
+    } = await import('@/lib/observability/store')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -96,6 +103,100 @@ async function main(): Promise<void> {
     const logData = log.data as { output_text: string; tool_logs: unknown[] }
     check('get_agent_log returns output text', logData.output_text.includes('Runtime history'))
     check('get_agent_log returns tool logs', logData.tool_logs.length === 1)
+
+    const browserRequestId = 'req_observability_browser_usage'
+    logRequestStart({
+        requestId: browserRequestId,
+        conversationId: 'conv_observability_smoke',
+        agentId: 'browser_agent',
+        provider: 'browser',
+        model: 'default',
+        thinkingLevel: 'medium',
+        statefulMode: true,
+        startedAt: now - 900,
+        inputText: 'Run a browser smoke task.',
+    })
+    logRequestComplete({
+        requestId: browserRequestId,
+        endedAt: now - 800,
+        provider: 'browser',
+        usage: {
+            model: 'gemini-3-flash-preview',
+            totals: {
+                promptTokens: 100,
+                outputTokens: 10,
+                thoughtsTokens: 5,
+                totalTokens: 115,
+                requests: 2,
+            },
+            byModel: {
+                'gemini-3-flash-preview': {
+                    promptTokens: 100,
+                    outputTokens: 10,
+                    thoughtsTokens: 5,
+                    totalTokens: 115,
+                    requests: 2,
+                },
+            },
+        },
+        outputText: 'Browser usage smoke.',
+    })
+    const browserLog = getRequestLog(browserRequestId)
+    check('browser usage maps prompt tokens', browserLog?.inputTokens === 100, browserLog)
+    check('browser usage maps billing model', browserLog?.billingBreakdown?.[0]?.model === 'gemini-3-flash-preview', browserLog)
+
+    const legacyBrowserRequestId = 'req_observability_legacy_browser_usage'
+    logRequestStart({
+        requestId: legacyBrowserRequestId,
+        conversationId: 'conv_observability_smoke',
+        agentId: 'browser_agent',
+        provider: 'browser',
+        model: 'default',
+        thinkingLevel: 'medium',
+        statefulMode: true,
+        startedAt: now - 850,
+        inputText: 'Run a legacy browser smoke task.',
+    })
+    logRequestComplete({
+        requestId: legacyBrowserRequestId,
+        endedAt: now - 750,
+        provider: 'browser',
+        outputText: [
+            'Browser agent finished.',
+            '📊 Usage (completed): task[prompt=40, output=4, thoughts=2, total=46, requests=1] | session[prompt=40, output=4, thoughts=2, total=46, requests=1] | model=gemini-3.1-flash-lite | thinking=medium',
+        ].join('\n'),
+    })
+    const legacyBrowserLog = getRequestLog(legacyBrowserRequestId)
+    check('legacy browser output usage is read back', legacyBrowserLog?.totalTokens === 46, legacyBrowserLog)
+    check('legacy browser billing model is inferred', legacyBrowserLog?.billingBreakdown?.[0]?.model === 'gemini-3.1-flash-lite', legacyBrowserLog)
+
+    const usage = buildUsageReport('all')
+    const geminiUsage = usage.byModel.find((row) => row.provider === 'google' && row.model === 'gemini-3-flash-preview')
+    check('usage report expands browser model calls', geminiUsage?.requests === 2, usage.byModel)
+    const browserAgentUsage = usage.byAgent.find((row) => row.agentId === 'browser_agent')
+    check('usage report attributes browser tokens to browser_agent', browserAgentUsage?.inputTokens === 140, usage.byAgent)
+
+    const staleRequestId = 'req_observability_stale_stream'
+    logRequestStart({
+        requestId: staleRequestId,
+        conversationId: 'conv_observability_smoke',
+        agentId: 'orchestrator',
+        provider: 'openai',
+        model: 'gpt-smoke',
+        thinkingLevel: 'low',
+        statefulMode: false,
+        startedAt: now - 5_000,
+        inputText: 'This request simulates a process restart before completion.',
+    })
+    const sealed = sealInterruptedStreamingRequestLogs({
+        now,
+        activeRequestIds: new Set<string>(),
+        startedBefore: now + 1,
+    })
+    const staleLog = getRequestLog(staleRequestId)
+    check('stale streaming request is sealed', sealed === 1)
+    check('sealed request becomes aborted', staleLog?.status === 'aborted', staleLog)
+    check('sealed request records restart hint', staleLog?.errorMessage?.includes('server process restarted'), staleLog)
 
     const index = await executeReadRuntimeIndex({ section: 'overview' })
     check('read_runtime_index overview succeeds', index.success === true)

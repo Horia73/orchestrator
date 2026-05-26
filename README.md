@@ -343,13 +343,13 @@ Keep `6080` bound to `127.0.0.1` unless it is protected by the same private acce
 
 ## Updates
 
-Installer-managed Docker installs use a local host update bridge:
+Installer-managed Docker installs use a local host bridge:
 
 ```bash
 orchestrator update
 ```
 
-The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, runs `git pull --ff-only`, then rebuilds/restarts Docker Compose.
+The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, and exposes narrow host-only operations. It runs managed updates (`git pull --ff-only`, rebuild, restart) and reads Claude Code subscription usage from the host Claude CLI so Docker installs do not need to scrape Claude's interactive TUI inside the container.
 
 Managed installs use GitHub Releases as the update source:
 

@@ -55,6 +55,7 @@ try {
   const statePath = path.join(runDir, 'run-state.json')
 
   excludeLocalFile(repoDir, 'SELF_DEV_INSTRUCTIONS.md')
+  excludeLocalFile(repoDir, 'node_modules')
   fs.writeFileSync(instructionsPath, buildInstructions({
     repoDir,
     appDir,
@@ -103,6 +104,7 @@ try {
       publicUrl: publicPreviewUrl,
       stateDir: path.join(runDir, 'preview-state'),
       logPath: path.join(runDir, 'preview.log'),
+      healthPath: '/',
       status: 'prepared',
       pid: null,
     },
@@ -454,7 +456,13 @@ function buildInstructions(values) {
     'If the preview is down or stale, restart only the managed preview helper:',
     '',
     '```bash',
-    `node ${path.join(values.appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath}`,
+    `node ${path.join(values.appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath} --health-path /`,
+    '```',
+    '',
+    'If the task needs config that is not deployed in the live snapshot yet, ask the orchestrator to seed the preview snapshot, for example:',
+    '',
+    '```bash',
+    `node ${path.join(values.appDir, 'scripts', 'self-dev-run.mjs')} seed --state ${values.statePath} --profile location-intelligence`,
     '```',
     '',
     'Do not use port 3000. Do not stop the preview before returning; the orchestrator keeps it alive for user review and stops it during cleanup.',
@@ -503,7 +511,8 @@ function buildCoderPrompt(values) {
     '- Do not run `npm run dev`, `next dev`, or another web server for this repo. The orchestrator owns the managed preview lifecycle.',
     `- Local preview URL: ${values.localPreviewUrl}`,
     values.publicPreviewUrl ? `- Public preview URL: ${values.publicPreviewUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
-    `- If the preview is down, restart only the managed helper: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath}`,
+    `- If the preview is down, restart only the managed helper: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath} --health-path /`,
+    `- If missing snapshot config blocks verification, ask for an orchestrator-owned seed such as: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} seed --state ${values.statePath} --profile location-intelligence`,
     '- Do not stop the preview before returning; the orchestrator keeps it alive for user review.',
     '',
     'You own implementation and testing. Inspect the repo yourself, choose the needed checks, and fix failures you introduce.',

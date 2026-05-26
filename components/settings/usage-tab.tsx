@@ -108,7 +108,7 @@ export function UsageTab() {
 const CLI_LABELS: Record<string, { name: string; description: string }> = {
     "claude-code": {
         name: "Claude Code",
-        description: "Anthropic subscription. Scraped live from claude's /usage panel.",
+        description: "Anthropic subscription. Scraped live from the host claude /usage panel.",
     },
     "codex": {
         name: "Codex CLI",

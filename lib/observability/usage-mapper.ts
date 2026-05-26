@@ -1,4 +1,4 @@
-import type { ModalityBreakdown, ModalityTokens } from './schema'
+import type { BillingUsageEntry, ModalityBreakdown, ModalityTokens } from './schema'
 
 // ---------------------------------------------------------------------------
 // Provider-agnostic usage shape persisted in `request_logs`.
@@ -14,6 +14,7 @@ export interface NormalizedUsage {
     toolUseTokens: number | null
     totalTokens: number | null
     modalityBreakdown: ModalityBreakdown | null
+    billingBreakdown: BillingUsageEntry[] | null
 }
 
 const EMPTY: NormalizedUsage = {
@@ -24,6 +25,7 @@ const EMPTY: NormalizedUsage = {
     toolUseTokens: null,
     totalTokens: null,
     modalityBreakdown: null,
+    billingBreakdown: null,
 }
 
 /**
@@ -46,6 +48,8 @@ export function normalizeUsage(provider: string, raw: unknown): NormalizedUsage 
             return mapOpenAI(raw as Record<string, unknown>)
         case 'codex':
             return mapCodex(raw as Record<string, unknown>)
+        case 'browser':
+            return mapBrowser(raw as Record<string, unknown>)
         default:
             return mapGeneric(raw as Record<string, unknown>)
     }
@@ -69,6 +73,7 @@ function mapOpenAI(raw: Record<string, unknown>): NormalizedUsage {
         toolUseTokens: null,
         totalTokens: numOrNull(u.total_tokens),
         modalityBreakdown: null,
+        billingBreakdown: null,
     }
 }
 
@@ -109,6 +114,7 @@ function mapAnthropic(raw: Record<string, unknown>): NormalizedUsage {
         toolUseTokens: null,
         totalTokens: total,
         modalityBreakdown: null,
+        billingBreakdown: null,
     }
 }
 
@@ -155,6 +161,7 @@ function mapGemini(raw: Record<string, unknown>): NormalizedUsage {
         toolUseTokens: numOrNull(u.total_tool_use_tokens),
         totalTokens: numOrNull(u.total_tokens),
         modalityBreakdown: hasAny(breakdown) ? breakdown : null,
+        billingBreakdown: null,
     }
 }
 
@@ -167,6 +174,85 @@ function mapCodex(raw: Record<string, unknown>): NormalizedUsage {
         toolUseTokens: null,
         totalTokens: pickFirst(raw, ['totalTokens', 'total_tokens']),
         modalityBreakdown: null,
+        billingBreakdown: null,
+    }
+}
+
+interface BrowserUsageTotals {
+    promptTokens?: number
+    outputTokens?: number
+    thoughtsTokens?: number
+    cachedTokens?: number
+    toolUseTokens?: number
+    totalTokens?: number
+    requests?: number
+}
+
+interface BrowserTaskUsage {
+    model?: string
+    totals?: BrowserUsageTotals
+    byModel?: Record<string, BrowserUsageTotals>
+}
+
+function mapBrowser(raw: Record<string, unknown>): NormalizedUsage {
+    const task = raw as BrowserTaskUsage
+    const totals = isBrowserUsageTotals(task.totals)
+        ? task.totals
+        : isBrowserUsageTotals(raw)
+            ? raw as BrowserUsageTotals
+            : null
+    if (!totals) return mapGeneric(raw)
+
+    return {
+        inputTokens: numOrNull(totals.promptTokens),
+        outputTokens: numOrNull(totals.outputTokens),
+        thinkingTokens: numOrNull(totals.thoughtsTokens),
+        cachedTokens: numOrNull(totals.cachedTokens),
+        toolUseTokens: numOrNull(totals.toolUseTokens),
+        totalTokens: numOrNull(totals.totalTokens),
+        modalityBreakdown: null,
+        billingBreakdown: buildBrowserBillingBreakdown(task, totals),
+    }
+}
+
+function isBrowserUsageTotals(value: unknown): value is BrowserUsageTotals {
+    if (!value || typeof value !== 'object') return false
+    const raw = value as Record<string, unknown>
+    return ['promptTokens', 'outputTokens', 'thoughtsTokens', 'totalTokens', 'requests']
+        .some(key => typeof raw[key] === 'number' && Number.isFinite(raw[key]))
+}
+
+function buildBrowserBillingBreakdown(
+    task: BrowserTaskUsage,
+    fallbackTotals: BrowserUsageTotals
+): BillingUsageEntry[] | null {
+    const entries: BillingUsageEntry[] = []
+    if (task.byModel && typeof task.byModel === 'object') {
+        for (const [model, totals] of Object.entries(task.byModel)) {
+            const entry = browserBillingEntry(model, totals)
+            if (entry) entries.push(entry)
+        }
+    }
+    if (entries.length > 0) return entries
+
+    const model = typeof task.model === 'string' ? task.model : ''
+    const fallback = browserBillingEntry(model, fallbackTotals)
+    return fallback ? [fallback] : null
+}
+
+function browserBillingEntry(model: string, totals: BrowserUsageTotals): BillingUsageEntry | null {
+    const cleanModel = model.trim()
+    if (!cleanModel || !isBrowserUsageTotals(totals)) return null
+    return {
+        provider: 'google',
+        model: cleanModel,
+        requests: nonNegativeInteger(totals.requests, 1),
+        inputTokens: nonNegativeInteger(totals.promptTokens, 0),
+        outputTokens: nonNegativeInteger(totals.outputTokens, 0),
+        thinkingTokens: nonNegativeInteger(totals.thoughtsTokens, 0),
+        cachedTokens: nonNegativeInteger(totals.cachedTokens, 0),
+        toolUseTokens: nonNegativeInteger(totals.toolUseTokens, 0),
+        totalTokens: nonNegativeInteger(totals.totalTokens, 0),
     }
 }
 
@@ -184,6 +270,7 @@ function mapGeneric(raw: Record<string, unknown>): NormalizedUsage {
         toolUseTokens: pickFirst(raw, ['toolUseTokens', 'tool_use_tokens', 'total_tool_use_tokens']),
         totalTokens: pickFirst(raw, ['totalTokens', 'total_tokens', 'totalTokenCount']),
         modalityBreakdown: null,
+        billingBreakdown: null,
     }
 }
 
@@ -203,6 +290,11 @@ function pickFirst(raw: Record<string, unknown>, keys: string[]): number | null 
         if (typeof v === 'number' && Number.isFinite(v) && v >= 0) return v
     }
     return null
+}
+
+function nonNegativeInteger(value: unknown, fallback: number): number {
+    if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return fallback
+    return Math.floor(value)
 }
 
 function mapModality(entries: GeminiModalityEntry[] | undefined): ModalityTokens[] | null {

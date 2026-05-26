@@ -4,6 +4,7 @@ import * as React from "react"
 import { AlertCircle, Bot, CheckCircle2, CircleDotDashed, FileSearch, Loader2, X } from "lucide-react"
 
 import { StreamingBubble } from "@/components/message-bubble"
+import { appendBoundedToolDelta } from "@/lib/ai/reasoning-limits"
 import { cn } from "@/lib/utils"
 import type { AgentKind } from "@/lib/ai/agents/types"
 import type { AgentCallReasoningEntry, ContentSegment, ReasoningEntry, ToolCallReasoningEntry, ToolStreamDelta } from "@/lib/types"
@@ -683,7 +684,7 @@ function applyAgentRunEvent(state: AgentTranscriptState, event: Record<string, u
       ...entry,
       toolName: entry.toolName ?? stringValue(event.toolName),
       status: "running",
-      deltas: [...(entry.deltas ?? []), delta],
+      deltas: appendBoundedToolDelta(entry.deltas, delta),
     })) }
   }
 

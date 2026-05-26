@@ -50,16 +50,27 @@ export function estimateCost(pricing: ModelPricing | null, inputs: CostInputs): 
     if (pricing.kind === 'subscription') return ZERO_SUBSCRIPTION
     if (pricing.kind === 'unit') return ZERO_UNKNOWN
 
-    const inputRate = pricing.inputPerMillion
-    const outputRate = pricing.outputPerMillion
+    const totalInput = inputs.inputTokens ?? 0
+    const useLargeContextRates =
+        typeof pricing.largeContextThreshold === 'number' &&
+        totalInput > pricing.largeContextThreshold
+
+    const inputRate = useLargeContextRates && typeof pricing.inputPerMillionLarge === 'number'
+        ? pricing.inputPerMillionLarge
+        : pricing.inputPerMillion
+    const outputRate = useLargeContextRates && typeof pricing.outputPerMillionLarge === 'number'
+        ? pricing.outputPerMillionLarge
+        : pricing.outputPerMillion
 
     const cachedDiscount = CACHED_TOKEN_DISCOUNT[inputs.provider] ?? 1.0
     const cached = inputs.cachedTokens ?? 0
+    const cachedRate = typeof pricing.cachedInputPerMillion === 'number'
+        ? pricing.cachedInputPerMillion
+        : inputRate * cachedDiscount
 
     // Real input = total input minus the cached portion (cached is counted in
     // total_input_tokens upstream). If the provider's totals are incomplete and
     // cached > input, clamp to 0 to avoid negative spend.
-    const totalInput = inputs.inputTokens ?? 0
     const billableInput = Math.max(0, totalInput - cached)
 
     const output = inputs.outputTokens ?? 0
@@ -70,7 +81,7 @@ export function estimateCost(pricing: ModelPricing | null, inputs: CostInputs): 
     // input across providers is the safe default — every provider currently
     // counts tool roundtrips against input pricing.
     const inputPortion = (billableInput + toolUse) * inputRate
-    const cachedPortion = cached * inputRate * cachedDiscount
+    const cachedPortion = cached * cachedRate
     const outputPortion = (output + thinking) * outputRate
 
     const usd = (inputPortion + cachedPortion + outputPortion) / 1_000_000

@@ -47,7 +47,7 @@ npm run self-dev:run -- status --run-id <run-id>
 Start the managed preview before delegating implementation:
 
 ```bash
-npm run self-dev:run -- start --run-id <run-id>
+npm run self-dev:run -- start --run-id <run-id> --health-path /
 npm run self-dev:run -- preview --run-id <run-id>
 ```
 
@@ -56,8 +56,9 @@ The preview helper:
 - starts `next dev` as a detached process, not inside the coder/tool session;
 - binds only to `127.0.0.1:<assigned-port>`;
 - exposes it through the live app at `/dev-preview/<run-id>/`;
+- waits for HTTP `200` on the configured health path instead of accepting `404` or other non-500 responses;
 - writes logs to `.orchestrator/project-runs/<run-id>/preview.log`;
-- runs with `ORCHESTRATOR_PREVIEW=1`, so schedulers, Smart Monitor, microscripts, and update confirmation are not armed;
+- runs with `ORCHESTRATOR_PREVIEW=1` and explicit `ORCHESTRATOR_DISABLE_*` background flags, so schedulers, Smart Monitor, microscripts, and update confirmation are not armed;
 - runs with `ORCHESTRATOR_STATE_DIR=<run-dir>/preview-state`, a snapshot of live `data.db`, `workspace`, and `uploads`. Private browser/WhatsApp/integration state is not copied.
 
 Use these helpers for lifecycle:
@@ -69,6 +70,15 @@ npm run self-dev:run -- stop --run-id <run-id>
 ```
 
 Use `start --refresh-state` or `restart --refresh-state` when you deliberately want to replace the preview snapshot with current live state.
+
+Use `seed` when the worktree needs config that is not yet present in the live snapshot. The seed changes only the preview snapshot:
+
+```bash
+npm run self-dev:run -- seed --run-id <run-id> --profile location-intelligence --entity-id person.horia --label Horia
+npm run self-dev:run -- restart --run-id <run-id> --health-path /maps
+```
+
+For one-off config changes, pass `--config-json '{"smartMonitor":{...}}'` or `--config-patch <json-file-or-inline-json>`.
 
 ## Delegate
 

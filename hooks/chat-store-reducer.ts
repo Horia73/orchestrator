@@ -7,6 +7,10 @@ import type {
   ToolStreamDelta,
 } from "@/lib/types"
 import {
+  appendBoundedToolDelta,
+  sanitizeReasoningForPersistence,
+} from "@/lib/ai/reasoning-limits"
+import {
   appendAgentContent,
   appendAgentThought,
   markReasoningStopped,
@@ -720,7 +724,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 ...entry,
                 toolName: entry.toolName ?? action.toolName,
                 status: "running",
-                deltas: [...(entry.deltas ?? []), action.delta],
+                deltas: appendBoundedToolDelta(entry.deltas, action.delta),
               }
             : entry
         ),
@@ -829,7 +833,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                     ...item,
                     toolName: item.toolName ?? action.toolName,
                     status: "running",
-                    deltas: [...(item.deltas ?? []), action.delta],
+                    deltas: appendBoundedToolDelta(item.deltas, action.delta),
                   }
                 : item
             ),
@@ -874,7 +878,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             endedAt: action.endedAt,
             content: action.content ?? entry.content,
             contentSegments: action.contentSegments ?? entry.contentSegments,
-            reasoning: action.reasoning ?? entry.reasoning,
+            reasoning: action.reasoning
+              ? sanitizeReasoningForPersistence(action.reasoning)
+              : entry.reasoning,
             attachments: action.attachments ?? entry.attachments,
             error: action.error ?? entry.error,
             thinkingDuration: action.thinkingDuration ?? entry.thinkingDuration,

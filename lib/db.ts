@@ -9,6 +9,7 @@ import type {
   Message,
   Attachment,
 } from "@/lib/types"
+import { sanitizeMessageForPersistence } from "@/lib/ai/reasoning-limits"
 import { emitChatEvent } from "./events"
 import { ARTIFACTS_DIR, ORCHESTRATOR_STATE_DIR, UPLOADS_DIR } from "./config"
 
@@ -92,6 +93,7 @@ db.exec(`
         toolUseTokens INTEGER,
         totalTokens INTEGER,
         modalityBreakdown TEXT,
+        billingBreakdown TEXT,
         toolCallCount INTEGER NOT NULL DEFAULT 0,
         interactionId TEXT,
         statefulMode INTEGER NOT NULL DEFAULT 0,
@@ -203,6 +205,9 @@ db.exec(`
         surfaced INTEGER NOT NULL DEFAULT 0,
         conversationId TEXT,             -- inbox conversation when surfaced
         summary TEXT NOT NULL,           -- full run output (audit, even when silent)
+        contentSegments TEXT,            -- JSON Message.contentSegments for rich Past runs rendering
+        reasoning TEXT,                  -- JSON Message.reasoning for rich Past runs rendering
+        attachments TEXT,                -- JSON Message.attachments for rich Past runs rendering
         error TEXT
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_task_runs_task ON scheduled_task_runs(taskId, startedAt DESC);
@@ -315,6 +320,21 @@ try {
   /* column already exists */
 }
 try {
+  db.exec(`ALTER TABLE scheduled_task_runs ADD COLUMN contentSegments TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(`ALTER TABLE scheduled_task_runs ADD COLUMN reasoning TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(`ALTER TABLE scheduled_task_runs ADD COLUMN attachments TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
   db.exec(`ALTER TABLE messages ADD COLUMN thinkingDuration INTEGER`)
 } catch {
   /* column already exists */
@@ -343,6 +363,40 @@ try {
   db.exec(`ALTER TABLE messages ADD COLUMN replyActions TEXT`)
 } catch {
   /* column already exists */
+}
+try {
+  db.exec(`
+    UPDATE scheduled_task_runs
+    SET
+      contentSegments = COALESCE(contentSegments, (
+        SELECT m.contentSegments
+        FROM messages m
+        WHERE m.conversationId = scheduled_task_runs.conversationId
+          AND m.role = 'assistant'
+        ORDER BY m.timestamp ASC, m.id ASC
+        LIMIT 1
+      )),
+      reasoning = COALESCE(reasoning, (
+        SELECT m.reasoning
+        FROM messages m
+        WHERE m.conversationId = scheduled_task_runs.conversationId
+          AND m.role = 'assistant'
+        ORDER BY m.timestamp ASC, m.id ASC
+        LIMIT 1
+      )),
+      attachments = COALESCE(attachments, (
+        SELECT m.attachments
+        FROM messages m
+        WHERE m.conversationId = scheduled_task_runs.conversationId
+          AND m.role = 'assistant'
+        ORDER BY m.timestamp ASC, m.id ASC
+        LIMIT 1
+      ))
+    WHERE conversationId IS NOT NULL
+      AND (contentSegments IS NULL OR reasoning IS NULL OR attachments IS NULL)
+  `)
+} catch {
+  /* best-effort scheduled run transcript backfill */
 }
 try {
   db.exec(`ALTER TABLE artifacts ADD COLUMN filePath TEXT`)
@@ -426,6 +480,11 @@ try {
 }
 try {
   db.exec(`ALTER TABLE request_logs ADD COLUMN agentThreadId TEXT`)
+} catch {
+  /* column already exists */
+}
+try {
+  db.exec(`ALTER TABLE request_logs ADD COLUMN billingBreakdown TEXT`)
 } catch {
   /* column already exists */
 }
@@ -516,7 +575,7 @@ function parseJsonField<T>(value: string | null): T | undefined {
 }
 
 function messageFromRow(msgRow: MessageRow): Message {
-  return {
+  return sanitizeMessageForPersistence({
     id: msgRow.id,
     role: msgRow.role,
     content: msgRow.content,
@@ -531,7 +590,7 @@ function messageFromRow(msgRow: MessageRow): Message {
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
     replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
     timestamp: msgRow.timestamp,
-  }
+  })
 }
 
 function compactPreview(
@@ -542,6 +601,47 @@ function compactPreview(
   if (singleLine.length <= maxLength) return singleLine
   return `${singleLine.slice(0, maxLength - 1).trimEnd()}...`
 }
+
+function compactOversizedMessageMetadata(): void {
+  const oversizedRows = db
+    .prepare(
+      `
+        SELECT *
+        FROM messages
+        WHERE length(COALESCE(reasoning, '')) > 1000000
+           OR length(COALESCE(toolCalls, '')) > 1000000
+      `
+    )
+    .all() as MessageRow[]
+
+  if (oversizedRows.length === 0) return
+
+  const update = db.prepare(`
+    UPDATE messages
+    SET reasoning = @reasoning,
+        toolCalls = @toolCalls
+    WHERE id = @id
+  `)
+
+  const transaction = db.transaction((rows: MessageRow[]) => {
+    for (const row of rows) {
+      const message = messageFromRow(row)
+      update.run({
+        id: row.id,
+        reasoning: message.reasoning ? JSON.stringify(message.reasoning) : null,
+        toolCalls: message.toolCalls ? JSON.stringify(message.toolCalls) : null,
+      })
+    }
+  })
+
+  try {
+    transaction(oversizedRows)
+  } catch (error) {
+    console.warn("Failed to compact oversized message metadata", error)
+  }
+}
+
+compactOversizedMessageMetadata()
 
 export type AgentThreadStatus = "active" | "archived"
 
@@ -1009,7 +1109,8 @@ export function createConversation(conversation: Conversation) {
       archivedAt: conversation.archivedAt ?? null,
     })
 
-    for (const msg of conv.messages) {
+    for (const rawMsg of conv.messages) {
+      const msg = sanitizeMessageForPersistence(rawMsg)
       insertMsg.run({
         id: msg.id,
         conversationId: conv.id,
@@ -1165,9 +1266,10 @@ export function markConversationUnread(id: string): number {
 }
 
 export function addMessage(conversationId: string, message: Message) {
+  const storedMessage = sanitizeMessageForPersistence(message)
   const existingMessage = db
     .prepare("SELECT id FROM messages WHERE id = ?")
-    .get(message.id) as { id: string } | undefined
+    .get(storedMessage.id) as { id: string } | undefined
   const insertMsg = db.prepare(`
         INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, replyActions, timestamp)
         VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
@@ -1235,13 +1337,13 @@ export function addMessage(conversationId: string, message: Message) {
     })
   })
 
-  transaction(conversationId, message)
+  transaction(conversationId, storedMessage)
 
   emitChatEvent({
     type: "add_message",
     payload: {
       conversationId,
-      message,
+      message: storedMessage,
     },
   })
 

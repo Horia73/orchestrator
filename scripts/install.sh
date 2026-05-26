@@ -656,6 +656,8 @@ ensure_docker_env_file() {
     upsert_env_value "$env_file" ORCHESTRATOR_HOST_LAN_IP "$lan_ip"
   fi
   upsert_env_value "$env_file" ORCHESTRATOR_SERVICE_MANAGER "docker"
+  upsert_env_value "$env_file" ORCHESTRATOR_HOST_BRIDGE_URL "http://host.docker.internal:$UPDATE_BRIDGE_PORT"
+  upsert_env_value "$env_file" ORCHESTRATOR_HOST_BRIDGE_TOKEN "$(cat "$UPDATE_BRIDGE_TOKEN_FILE")"
   upsert_env_value "$env_file" ORCHESTRATOR_DOCKER_UPDATE_URL "http://host.docker.internal:$UPDATE_BRIDGE_PORT/update"
   upsert_env_value "$env_file" ORCHESTRATOR_DOCKER_UPDATE_TOKEN "$(cat "$UPDATE_BRIDGE_TOKEN_FILE")"
   upsert_env_value "$env_file" BROWSER_AGENT_LIVE_VIEW "1"
@@ -905,6 +907,7 @@ start_update_bridge_background() {
     ORCHESTRATOR_UPDATE_TOKEN_FILE="$UPDATE_BRIDGE_TOKEN_FILE" \
     ORCHESTRATOR_PORT="$PORT" \
     ORCHESTRATOR_UPDATE_LOG_DIR="$LOG_DIR" \
+    PATH="$NPM_GLOBAL_PREFIX/bin:$PATH" \
       nohup "$python_bin" "$APP_DIR/scripts/docker-update-bridge.py" >/dev/null 2>&1 &
     printf '%s\n' "$!" > "$pid_file"
   )
@@ -915,7 +918,7 @@ install_docker_update_bridge() {
   python_bin="$(command -v python3)"
   service_dir="$HOME/.config/systemd/user"
   service_file="$service_dir/$UPDATE_BRIDGE_SERVICE_NAME.service"
-  path_value="$(dirname "$python_bin"):/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
+  path_value="$(dirname "$python_bin"):$NPM_GLOBAL_PREFIX/bin:/usr/local/bin:/usr/bin:/bin:$HOME/.local/bin"
 
   ensure_update_bridge_token
 

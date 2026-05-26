@@ -23,6 +23,18 @@ export const ModalityBreakdownSchema = z.object({
 })
 export type ModalityBreakdown = z.infer<typeof ModalityBreakdownSchema>
 
+export interface BillingUsageEntry {
+    provider: string
+    model: string
+    requests: number
+    inputTokens: number
+    outputTokens: number
+    thinkingTokens: number
+    cachedTokens: number
+    toolUseTokens: number
+    totalTokens: number
+}
+
 export interface RequestLogRow {
     id: string
     conversationId: string
@@ -48,6 +60,7 @@ export interface RequestLogRow {
     toolUseTokens: number | null
     totalTokens: number | null
     modalityBreakdown: ModalityBreakdown | null
+    billingBreakdown: BillingUsageEntry[] | null
     toolCallCount: number
     interactionId: string | null
     statefulMode: boolean

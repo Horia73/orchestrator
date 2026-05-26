@@ -91,6 +91,10 @@ export class AnthropicProvider implements AIProvider {
                         ? { ...options.toolContext, currentToolCallId: call.id }
                         : undefined)
                     : { success: false, error: `Unknown tool: ${call.name}` }
+                if (options.signal?.aborted) {
+                    cb.onError('Aborted')
+                    return
+                }
                 cb.onToolResult(call.id, call.name, toolResult)
                 toolResults.push({
                     type: 'tool_result',
@@ -99,7 +103,16 @@ export class AnthropicProvider implements AIProvider {
                     is_error: !toolResult.success,
                 })
             }
+            if (options.signal?.aborted) {
+                cb.onError('Aborted')
+                return
+            }
             messages.push({ role: 'user', content: toolResults })
+        }
+
+        if (options.signal?.aborted) {
+            cb.onError('Aborted')
+            return
         }
 
         cb.onError(`Anthropic tool loop exceeded ${MAX_TOOL_ROUNDS} rounds`)

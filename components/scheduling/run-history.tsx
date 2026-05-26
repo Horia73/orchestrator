@@ -3,6 +3,8 @@
 import * as React from "react"
 import Link from "next/link"
 import { ArrowLeft, ExternalLink, ListFilter, Loader2, X } from "lucide-react"
+import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
+import { MessageBubble } from "@/components/message-bubble"
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -14,6 +16,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { useAppEvent } from "@/hooks/use-app-events"
+import type { Message } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import {
   useScheduling,
@@ -318,6 +321,18 @@ function RunDetailPane({
   }
 
   const output = run.error || run.summary || "(no output)"
+  const runMessage: Message = {
+    id: `scheduled-run-${run.id}`,
+    role: "assistant",
+    content: output,
+    status: run.status,
+    contentSegments: run.contentSegments?.length
+      ? run.contentSegments
+      : undefined,
+    reasoning: run.reasoning?.length ? run.reasoning : undefined,
+    attachments: run.attachments?.length ? run.attachments : undefined,
+    timestamp: run.endedAt,
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -377,16 +392,18 @@ function RunDetailPane({
             </dd>
           </div>
         </dl>
-        <div
-          className={cn(
-            "rounded-md border p-3 text-[13px] leading-relaxed break-words whitespace-pre-wrap",
-            run.status === "error"
-              ? "border-red-200 bg-red-50 text-[#802020] dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-300"
-              : "border-border/70 bg-background text-foreground/75"
-          )}
-        >
-          {output}
-        </div>
+        <ConversationArtifactsProvider conversationId={run.conversationId ?? ""}>
+          <div
+            className={cn(
+              "rounded-md border p-3",
+              run.status === "error"
+                ? "border-red-200 bg-red-50 dark:border-red-900/60 dark:bg-red-950/30"
+                : "border-border/70 bg-background"
+            )}
+          >
+            <MessageBubble message={runMessage} compact />
+          </div>
+        </ConversationArtifactsProvider>
         {run.conversationId && (
           <Link
             href={`/inbox?item=${encodeURIComponent(run.conversationId)}`}

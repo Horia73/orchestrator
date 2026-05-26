@@ -1,7 +1,7 @@
 import dns from 'dns/promises'
 import net from 'net'
 
-import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
+import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { clamp, numberArg, stringArg, truncateText } from './helpers'
 
 const FETCH_TIMEOUT_MS = 20_000
@@ -28,15 +28,19 @@ export const webFetchTool: ToolDef = {
     tags: ['read', 'web'],
 }
 
-export async function executeWebFetch(args: Record<string, unknown>): Promise<ToolResult> {
+export async function executeWebFetch(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const url = stringArg(args, ['url'])
     if (!url) return { success: false, error: 'Missing required parameter: url' }
+    if (ctx?.signal?.aborted) return { success: false, error: 'Tool execution aborted by stop request.' }
     const safety = await validatePublicHttpUrl(url)
     if (!safety.ok) return { success: false, error: safety.error }
+    if (ctx?.signal?.aborted) return { success: false, error: 'Tool execution aborted by stop request.' }
 
     const maxChars = clamp(Math.floor(numberArg(args, ['max_chars'], DEFAULT_MAX_CHARS)), 1_000, 200_000)
     const controller = new AbortController()
     const timer = setTimeout(() => controller.abort(), FETCH_TIMEOUT_MS)
+    const onAbort = () => controller.abort()
+    ctx?.signal?.addEventListener('abort', onAbort, { once: true })
     try {
         const response = await safeFetch(safety.url, controller.signal)
         const contentType = response.headers.get('content-type') ?? ''
@@ -61,6 +65,7 @@ export async function executeWebFetch(args: Record<string, unknown>): Promise<To
         return { success: false, error: err instanceof Error ? err.message : 'Unknown web fetch error' }
     } finally {
         clearTimeout(timer)
+        ctx?.signal?.removeEventListener('abort', onAbort)
     }
 }
 

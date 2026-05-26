@@ -478,6 +478,20 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
                         </div>
                     </div>
                 )}
+
+                {row.billingBreakdown && row.billingBreakdown.length > 0 && (
+                    <div className="mt-1">
+                        <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50">Billing models</h4>
+                        <div className="space-y-1 text-[12px] text-foreground/70">
+                            {row.billingBreakdown.map((entry) => (
+                                <div key={`${entry.provider}:${entry.model}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                                    <span className="min-w-0 truncate">{entry.provider} · {entry.model}</span>
+                                    <span className="tabular-nums">{entry.totalTokens.toLocaleString()} tok · {entry.requests.toLocaleString()} req</span>
+                                </div>
+                            ))}
+                        </div>
+                    </div>
+                )}
             </div>
 
             <div className="flex flex-col gap-3">

@@ -19,7 +19,10 @@ import {
 import { sendInboxPushNotification } from "@/lib/push-notifications"
 import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
 import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
-import { appendMissingArtifactBlocks, stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
+import {
+  appendMissingArtifactBlocks,
+  stripArtifactBlocksForPreview,
+} from "@/lib/artifacts/text"
 
 // Heavy AI modules (runner pulls in the whole tool/provider graph) are
 // imported lazily so the scheduler boot path and this module stay cheap and
@@ -189,9 +192,8 @@ export async function runScheduledTask(
       let briefPrompt: string | undefined
       let summary: string
       if (task.action.monitorKind === "smart") {
-        const { buildSmartMonitorAgentPrompt } = await import(
-          "@/lib/monitoring/smart-monitor"
-        )
+        const { buildSmartMonitorAgentPrompt } =
+          await import("@/lib/monitoring/smart-monitor")
         summary = "Smart monitor agent wake completed."
         briefPrompt = buildSmartMonitorAgentPrompt({
           now: firedAt,
@@ -199,16 +201,14 @@ export async function runScheduledTask(
           taskState: getTaskState(task.id),
         })
       } else if (task.action.monitorKind === "microscripts") {
-        const { runMicroscriptsHeartbeat } = await import(
-          "@/lib/microscripts/heartbeat"
-        )
+        const { runMicroscriptsHeartbeat } =
+          await import("@/lib/microscripts/heartbeat")
         const pass = await runMicroscriptsHeartbeat({ now: firedAt })
         summary = pass.summary
         briefPrompt = undefined
       } else {
-        const { runMarketsCheapPass } = await import(
-          "@/lib/monitoring/markets-heartbeat"
-        )
+        const { runMarketsCheapPass } =
+          await import("@/lib/monitoring/markets-heartbeat")
         const pass = await runMarketsCheapPass({
           priorState: getTaskState(task.id),
           now: firedAt,
@@ -292,8 +292,7 @@ export async function runScheduledTask(
             ok = true
             const data = result.data as { output?: string } | undefined
             assistantContent =
-              (data?.output ?? done?.content ?? summary).trim() ||
-              summary
+              (data?.output ?? done?.content ?? summary).trim() || summary
             reasoning = done?.reasoning
             contentSegments = done?.contentSegments
           } else {
@@ -376,7 +375,8 @@ export async function runScheduledTask(
         // user explicitly chose ("daily at 8am", "every 30 minutes") must NOT be
         // told it can self-pace — that previously caused tasks like "check price
         // once a day" to be retuned to 15m by the model. Default is stay-on-cadence.
-        const adaptive = task.action.kind === "agent" && task.action.adaptive === true
+        const adaptive =
+          task.action.kind === "agent" && task.action.adaptive === true
         const cadenceLine = !recurring
           ? "This is a one-shot task; do not reschedule it."
           : adaptive
@@ -456,28 +456,27 @@ export async function runScheduledTask(
   let inboxConversationId: string | null = null
   if (surface) {
     inboxConversationId = conversationId
-    const inboxTitle =
-      notifications.length > 0
-        ? subjectFromNotifications(notifications, task.title)
-        : task.title
+    const notificationSurface = notifications.length > 0
+    const inboxTitle = notificationSurface
+      ? subjectFromNotifications(notifications, task.title)
+      : task.title
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",
       content: inboxBody,
-      reasoning,
-      contentSegments,
-      attachments,
-      replyActions:
-        notifications.length > 0
-          ? notifications.flatMap((n) => n.actions ?? [])
-          : undefined,
+      reasoning: notificationSurface ? undefined : reasoning,
+      contentSegments: notificationSurface ? undefined : contentSegments,
+      attachments: notificationSurface ? undefined : attachments,
+      replyActions: notificationSurface
+        ? notifications.flatMap((n) => n.actions ?? [])
+        : undefined,
       timestamp: Date.now(),
     }
     createInboxConversation({
       id: conversationId,
       taskId: task.id,
       title: inboxTitle,
-      messages: [userMsg, assistantMsg],
+      messages: notificationSurface ? [assistantMsg] : [userMsg, assistantMsg],
     })
     const persisted = persistArtifactsFromMessage({
       conversationId,
@@ -505,6 +504,9 @@ export async function runScheduledTask(
     surfaced: surface,
     conversationId: inboxConversationId,
     summary: assistantContent,
+    reasoning,
+    contentSegments,
+    attachments,
     error: error ?? null,
   })
 

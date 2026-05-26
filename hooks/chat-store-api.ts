@@ -6,6 +6,40 @@ import type {
   MessagePageResponse,
 } from "./chat-store-utils"
 
+const CHAT_REQUEST_BODY_SOFT_LIMIT_BYTES = 7_500_000
+
+function requestBodySize(body: string): number {
+  return new TextEncoder().encode(body).byteLength
+}
+
+function slimMessageForChatRequest(message: Message): Message {
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    attachments: message.attachments,
+    timestamp: message.timestamp,
+  }
+}
+
+function buildChatStreamRequestBody(input: {
+  conversationId: string
+  messageId: string
+  messages: Message[]
+  promptContext?: string
+  activateIntegrations?: string[]
+}) {
+  const fullBody = JSON.stringify(input)
+  if (requestBodySize(fullBody) <= CHAT_REQUEST_BODY_SOFT_LIMIT_BYTES) {
+    return fullBody
+  }
+
+  return JSON.stringify({
+    ...input,
+    messages: input.messages.map(slimMessageForChatRequest),
+  })
+}
+
 export function updateConversationReadState(
   conversationId: string,
   read: boolean
@@ -157,7 +191,7 @@ export function startChatStreamRequest({
   return fetch("/api/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
+    body: buildChatStreamRequestBody({
       conversationId,
       messageId,
       messages,

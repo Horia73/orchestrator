@@ -319,13 +319,26 @@ export class GoogleProvider implements AIProvider {
             thinkingDoneSent = true
         }
 
+        const abortStream = () => {
+            emitThinkingDone()
+            cb.onError('Aborted')
+        }
+
         // Tool call loop — model may request tools multiple times
         let round = 0
         while (round < MAX_TOOL_ROUNDS) {
+            if (options.signal?.aborted) {
+                abortStream()
+                return
+            }
+
             round++
             const pendingToolCalls: ToolCallInfo[] = []
 
-            const streamResult = await this.client.interactions.create(params) as unknown as AsyncIterable<Record<string, unknown>>
+            const streamResult = await this.client.interactions.create(
+                params,
+                { signal: options.signal }
+            ) as unknown as AsyncIterable<Record<string, unknown>>
 
             for await (const chunk of streamResult) {
                 if (options.signal?.aborted) break
@@ -433,7 +446,10 @@ export class GoogleProvider implements AIProvider {
                 }
             }
 
-            if (options.signal?.aborted) break
+            if (options.signal?.aborted) {
+                abortStream()
+                return
+            }
 
             // If no tool calls were made, we're done — model gave a final response
             if (pendingToolCalls.length === 0) {
@@ -445,6 +461,11 @@ export class GoogleProvider implements AIProvider {
             const functionResults: any[] = []
 
             for (const tc of pendingToolCalls) {
+                if (options.signal?.aborted) {
+                    abortStream()
+                    return
+                }
+
                 const toolDef = runtimeTools.find(t => t.name === tc.name || t.id === tc.name)
                 if (!toolDef) {
                     const result = { success: false, error: `Unknown tool: ${tc.name}` }
@@ -461,6 +482,10 @@ export class GoogleProvider implements AIProvider {
                 const result = await executeTool(toolDef, tc.arguments, options.toolContext
                     ? { ...options.toolContext, currentToolCallId: tc.id }
                     : undefined)
+                if (options.signal?.aborted) {
+                    abortStream()
+                    return
+                }
                 cb.onToolResult(tc.id, tc.name, result)
 
                 functionResults.push({
@@ -474,6 +499,11 @@ export class GoogleProvider implements AIProvider {
             // Send tool results back to the model using previous_interaction_id
             params.previous_interaction_id = interactionId
             params.input = functionResults
+        }
+
+        if (options.signal?.aborted) {
+            abortStream()
+            return
         }
 
         // Final done

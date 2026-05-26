@@ -124,6 +124,11 @@ export class OpenAIProvider implements AIProvider {
                         ? { ...options.toolContext, currentToolCallId: toolCall.id }
                         : undefined)
                     : { success: false, error: `Unknown tool: ${toolCall.name}` }
+                if (options.signal?.aborted) {
+                    stopThinking()
+                    cb.onError('Aborted')
+                    return
+                }
                 cb.onToolResult(toolCall.id, toolCall.name, result)
                 toolOutputs.push({
                     type: 'function_call_output',
@@ -132,7 +137,19 @@ export class OpenAIProvider implements AIProvider {
                 })
             }
 
+            if (options.signal?.aborted) {
+                stopThinking()
+                cb.onError('Aborted')
+                return
+            }
+
             input = toolOutputs
+        }
+
+        if (options.signal?.aborted) {
+            stopThinking()
+            cb.onError('Aborted')
+            return
         }
 
         cb.onError(`OpenAI tool loop exceeded ${MAX_TOOL_ROUNDS} rounds`)
