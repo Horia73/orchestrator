@@ -2,7 +2,7 @@
 import fs from 'fs'
 import net from 'net'
 import path from 'path'
-import { randomUUID } from 'crypto'
+import { randomBytes, randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
 
 const appDir = process.cwd()
@@ -47,6 +47,10 @@ try {
 
   const port = await reservePort(requestedPort)
   const devUrl = `http://127.0.0.1:${port}`
+  const previewToken = randomBytes(24).toString('base64url')
+  const previewBasePath = `/dev-preview/${encodeURIComponent(runId)}`
+  const publicPreviewUrl = buildPublicPreviewUrl(previewBasePath, previewToken)
+  const localPreviewUrl = `${devUrl}${previewBasePath}/`
   const instructionsPath = path.join(repoDir, 'SELF_DEV_INSTRUCTIONS.md')
   const statePath = path.join(runDir, 'run-state.json')
 
@@ -60,6 +64,10 @@ try {
     baseRef,
     port,
     devUrl,
+    localPreviewUrl,
+    publicPreviewUrl,
+    previewBasePath,
+    statePath,
     task,
   }), 'utf-8')
 
@@ -70,6 +78,10 @@ try {
     instructionsPath,
     port,
     devUrl,
+    localPreviewUrl,
+    publicPreviewUrl,
+    statePath,
+    runId,
     task,
   })
   const state = {
@@ -84,6 +96,16 @@ try {
     baseRef,
     port,
     devUrl,
+    preview: {
+      token: previewToken,
+      basePath: previewBasePath,
+      localUrl: localPreviewUrl,
+      publicUrl: publicPreviewUrl,
+      stateDir: path.join(runDir, 'preview-state'),
+      logPath: path.join(runDir, 'preview.log'),
+      status: 'prepared',
+      pid: null,
+    },
     instructionsPath,
     task,
     copyEnv,
@@ -101,6 +123,7 @@ try {
     console.log(`Base: ${baseRef}`)
     console.log(`Port: ${port}`)
     console.log(`Dev URL: ${devUrl}`)
+    console.log(`Preview URL: ${publicPreviewUrl || localPreviewUrl}`)
     console.log(`Instructions: ${instructionsPath}`)
     console.log(`State: ${statePath}`)
     console.log('')
@@ -271,6 +294,26 @@ function expandHome(value) {
   return value
 }
 
+function buildPublicPreviewUrl(basePath, token) {
+  const origin = publicOrigin()
+  if (!origin) return null
+  const url = new URL(`${basePath}/`, origin)
+  url.searchParams.set('preview_token', token)
+  return url.toString()
+}
+
+function publicOrigin() {
+  const raw = process.env.ORCHESTRATOR_PUBLIC_URL
+    || process.env.ORCHESTRATOR_APP_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`).origin
+  } catch {
+    return null
+  }
+}
+
 async function reservePort(preferredPort) {
   const state = readPortState()
   for (const port of Object.keys(state.allocations)) {
@@ -401,19 +444,22 @@ function buildInstructions(values) {
     '',
     'Port 3000 is reserved for the live Orchestrator app.',
     '',
-    'Do not run `npm run dev` in this repository because this project script kills port 3000 before starting.',
+    'The orchestrator owns the preview server lifecycle for this worktree. Do not run `npm run dev`, `next dev`, or another web server for this repo.',
     '',
-    'If you need a Next.js dev server, run:',
+    'The preview should already be running before implementation starts. Use these URLs for testing:',
+    '',
+    `- Local preview: ${values.localPreviewUrl}`,
+    values.publicPreviewUrl ? `- Public preview: ${values.publicPreviewUrl}` : '- Public preview: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+    '',
+    'If the preview is down or stale, restart only the managed preview helper:',
     '',
     '```bash',
-    `npx next dev --turbopack -H 127.0.0.1 -p ${values.port}`,
+    `node ${path.join(values.appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath}`,
     '```',
     '',
-    `Use this URL for testing: ${values.devUrl}`,
+    'Do not use port 3000. Do not stop the preview before returning; the orchestrator keeps it alive for user review and stops it during cleanup.',
     '',
-    'For non-Next tools, bind to `127.0.0.1` and use the assigned port. Do not use port 3000.',
-    '',
-    'Stop any dev server you started before returning.',
+    'The preview uses an isolated snapshot of `.orchestrator` state. Treat it as test data: do not rely on writes there becoming live user data.',
     '',
     '## Verification',
     '',
@@ -454,13 +500,15 @@ function buildCoderPrompt(values) {
     '- Before editing, run `git branch --show-current` and `git status --short` in the isolated worktree.',
     '- Do not commit or push.',
     '- Do not use port 3000.',
-    '- Do not run `npm run dev`; if you need a Next.js dev server, use:',
-    `  npx next dev --turbopack -H 127.0.0.1 -p ${values.port}`,
-    `- Test URL: ${values.devUrl}`,
+    '- Do not run `npm run dev`, `next dev`, or another web server for this repo. The orchestrator owns the managed preview lifecycle.',
+    `- Local preview URL: ${values.localPreviewUrl}`,
+    values.publicPreviewUrl ? `- Public preview URL: ${values.publicPreviewUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+    `- If the preview is down, restart only the managed helper: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath}`,
+    '- Do not stop the preview before returning; the orchestrator keeps it alive for user review.',
     '',
-    'You own implementation and testing. Inspect the repo yourself, choose the needed checks, fix failures you introduce, and stop any dev server before returning.',
+    'You own implementation and testing. Inspect the repo yourself, choose the needed checks, and fix failures you introduce.',
     '',
-    'When done, report files changed, checks run, dev URL used if any, and blockers/risks.',
+    'When done, report files changed, checks run, preview URL used, and blockers/risks.',
   ].join('\n')
 }
 

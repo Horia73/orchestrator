@@ -13,7 +13,7 @@ Before delegating to coder, establish:
 - absolute repo/worktree path;
 - default branch and whether pushes may go directly there;
 - assigned dev port, never 3000;
-- test URL, if a dev server is needed;
+- managed preview URL for user/coder verification;
 - package manager and obvious test/build commands when known;
 - deployment target: none, git-only, vercel, docker, or custom;
 - confirmation/push policy.
@@ -24,9 +24,12 @@ If a requested Orchestrator behavior depends on a capability that is missing fro
 
 For Orchestrator self-development, use the repo helper:
 \`npm run self-dev:prepare -- --task "<short task>" --json\`.
-It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md\`, and returns the exact coder prompt. Use its output as the handoff contract for Orchestrator self-development. Docker installs run the app from \`/app\` without \`.git\`; that is expected because production images exclude git metadata. Do not check for or require \`/app/.git\`. The helper resolves the source checkout from \`ORCHESTRATOR_SELF_DEV_SOURCE_DIR\`, the default Docker mount \`/orchestrator-source\`, or an explicit \`--source-dir\` while keeping run state under the running app's \`.orchestrator\`.
+It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md\`, prepares a tokened \`/dev-preview/<run-id>/\` URL, and returns the exact coder prompt. Use its output as the handoff contract for Orchestrator self-development. Docker installs run the app from \`/app\` without \`.git\`; that is expected because production images exclude git metadata. Do not check for or require \`/app/.git\`. The helper resolves the source checkout from \`ORCHESTRATOR_SELF_DEV_SOURCE_DIR\`, the default Docker mount \`/orchestrator-source\`, or an explicit \`--source-dir\` while keeping run state under the running app's \`.orchestrator\`.
 If the helper cannot prepare a worktree because the source checkout is missing, git metadata is unavailable, the source mount is absent, or project locations appear inconsistent, treat that as a self-development infrastructure blocker. Record it with \`ReportAgentNeed\` when available, stop, and tell the user exactly what failed. You may propose an explicit source path or host-mount fix, but do not begin any workaround unless the user explicitly confirms it. Never continue Orchestrator self-development by copying \`/app\` with \`cp\`, \`tar\`, \`rsync\`, or similar filesystem-copy fallbacks.
-Use \`npm run self-dev:run -- status --run-id <id>\` when you want a compact view of the prepared worktree. Other \`self-dev:run\` subcommands are generic executors for explicit decisions you have already made: commit, rebase, push, update, cleanup.
+After preparing, start the managed preview before delegating:
+\`npm run self-dev:run -- start --run-id <id>\`.
+Then give the user the preview URL from \`npm run self-dev:run -- preview --run-id <id>\` before or alongside the coder handoff, so the user can inspect progress directly. The preview is a detached process managed by the helper, bound to loopback and reverse-proxied through the live app. It runs with \`ORCHESTRATOR_PREVIEW=1\` and \`ORCHESTRATOR_STATE_DIR=<run-dir>/preview-state\`, so it uses a snapshot of user-facing data without arming schedulers, monitors, microscripts, or update confirmation.
+Use \`npm run self-dev:run -- status --run-id <id>\` when you want a compact view of the prepared worktree. Use \`restart\`, \`logs\`, and \`stop\` only for the managed preview lifecycle. Other \`self-dev:run\` subcommands are generic executors for explicit decisions you have already made: commit, rebase, push, update, cleanup.
 
 For external repositories and new projects, prefer the generic project helper:
 \`npm run project-run:prepare -- --kind existing-git --source "<git-url-or-local-path>" --task "<short task>" --json\`
@@ -45,12 +48,13 @@ Before calling coder, create a local \`SELF_DEV_INSTRUCTIONS.md\` in the isolate
 - do not edit the live checkout or unrelated repositories;
 - check \`git status --short\` and branch before editing;
 - port 3000 is reserved for the live Orchestrator app;
-- do not run \`npm run dev\` when that script may kill/rebind port 3000;
-- if a Next.js dev server is needed, run \`npx next dev --turbopack -H 127.0.0.1 -p <assigned-port>\`;
-- use \`http://127.0.0.1:<assigned-port>\` for manual testing;
+- the managed preview server is already started by Orchestrator;
+- do not run \`npm run dev\`, \`next dev\`, or another web server for this repo;
+- use the managed preview URL for manual testing;
+- if the preview is down, restart only the managed helper command from the instructions file;
 - run relevant checks before finishing;
-- stop dev servers before returning;
-- report files changed, checks run, dev URL used, and blockers/risks.
+- leave the preview running before returning so the user can review it;
+- report files changed, checks run, preview URL used, and blockers/risks.
 
 The coder prompt should not micromanage implementation. Give the desired outcome, acceptance criteria, hard boundaries, repo path, assigned port, and verification expectations. Then let coder inspect, implement, test, and fix failures.
 
@@ -79,8 +83,11 @@ For Orchestrator self-updates:
 - work in a git worktree under \`.orchestrator/project-runs/<run-id>/repo\`;
 - use a branch such as \`agent/<run-id>\`;
 - assign a dev port from a safe range such as 3101-3199;
+- start the managed preview with \`npm run self-dev:run -- start --run-id <id>\` before delegating;
+- give the user the \`/dev-preview/<run-id>/\` URL for inspection;
 - never use port 3000 for development testing;
 - never run the repo's \`npm run dev\` in a way that can kill the live app;
+- stop the managed preview only after the user approves the result or during cleanup;
 - after checks pass, commit, rebase onto \`origin/master\`, and push only if there are no conflicts;
 - before triggering restart/rebuild, record the target commit for post-restart confirmation;
 - after restart, the app must confirm that the running build matches the target commit and surface the result to the Inbox.

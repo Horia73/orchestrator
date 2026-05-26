@@ -23,6 +23,7 @@ The script:
 - creates a git worktree under the running app state's `.orchestrator/project-runs/<run-id>/repo`;
 - creates an `agent/<run-id>` branch;
 - reserves a dev port from `3101-3199`;
+- prepares a managed preview URL under `/dev-preview/<run-id>/`;
 - writes `SELF_DEV_INSTRUCTIONS.md` inside the worktree;
 - writes run metadata under `.orchestrator/project-runs/<run-id>/run-state.json`;
 - prints a coder handoff prompt.
@@ -43,6 +44,32 @@ You can inspect a prepared run without entering the worktree:
 npm run self-dev:run -- status --run-id <run-id>
 ```
 
+Start the managed preview before delegating implementation:
+
+```bash
+npm run self-dev:run -- start --run-id <run-id>
+npm run self-dev:run -- preview --run-id <run-id>
+```
+
+The preview helper:
+
+- starts `next dev` as a detached process, not inside the coder/tool session;
+- binds only to `127.0.0.1:<assigned-port>`;
+- exposes it through the live app at `/dev-preview/<run-id>/`;
+- writes logs to `.orchestrator/project-runs/<run-id>/preview.log`;
+- runs with `ORCHESTRATOR_PREVIEW=1`, so schedulers, Smart Monitor, microscripts, and update confirmation are not armed;
+- runs with `ORCHESTRATOR_STATE_DIR=<run-dir>/preview-state`, a snapshot of live `data.db`, `workspace`, and `uploads`. Private browser/WhatsApp/integration state is not copied.
+
+Use these helpers for lifecycle:
+
+```bash
+npm run self-dev:run -- restart --run-id <run-id>
+npm run self-dev:run -- logs --run-id <run-id> --lines 200
+npm run self-dev:run -- stop --run-id <run-id>
+```
+
+Use `start --refresh-state` or `restart --refresh-state` when you deliberately want to replace the preview snapshot with current live state.
+
 ## Delegate
 
 Send the generated coder prompt to the coder agent. Coder owns implementation and testing, but must:
@@ -52,9 +79,10 @@ Send the generated coder prompt to the coder agent. Coder owns implementation an
 - check git branch/status before editing;
 - not commit or push;
 - not use port `3000`;
-- not run `npm run dev` for this repo;
-- use the assigned port for any dev server;
-- stop any dev server before returning.
+- not run `npm run dev`, `next dev`, or any other dev server for this repo;
+- use the managed preview URL that Orchestrator started;
+- restart only the managed preview helper if the preview is down;
+- leave the preview running for user review.
 
 When delegating, pass the prepared repo as the working directory:
 
@@ -87,6 +115,12 @@ If the investigation shows that the requested behavior is not implemented yet, O
 
 If the gate passes:
 
+Stop the preview after the user has approved the visible result and before push/update cleanup:
+
+```bash
+npm run self-dev:run -- stop --run-id <run-id>
+```
+
 ```bash
 npm run self-dev:run -- commit --run-id <run-id> --message "<message>"
 npm run self-dev:run -- rebase --run-id <run-id> --base origin/master
@@ -110,5 +144,7 @@ After the update result is confirmed and no more inspection is needed:
 ```bash
 npm run self-dev:run -- cleanup --run-id <run-id> --delete-branch
 ```
+
+`cleanup` also stops any still-running managed preview for the run.
 
 Use `--force` only when deliberately discarding an uncommitted worktree.

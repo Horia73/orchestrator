@@ -28,10 +28,10 @@ export function updateAgentEntry(
 
 export function appendAgentThought(
   entry: AgentCallReasoningEntry,
-  chunk: string
+  chunk: string,
+  phase = entry.contentSegments?.at(-1)?.phase ?? 0
 ): AgentCallReasoningEntry {
   const reasoning = [...(entry.reasoning ?? [])]
-  const phase = entry.contentSegments?.at(-1)?.phase ?? 0
   const last = reasoning[reasoning.length - 1]
   if (last?.type === "thought" && last.phase === phase) {
     reasoning[reasoning.length - 1] = { ...last, content: last.content + chunk }
@@ -48,11 +48,12 @@ export function appendAgentThought(
 
 export function appendAgentContent(
   entry: AgentCallReasoningEntry,
-  chunk: string
+  chunk: string,
+  phase = entry.contentSegments?.at(-1)?.phase ?? 0
 ): AgentCallReasoningEntry {
   const contentSegments = [...(entry.contentSegments ?? [])]
   const last = contentSegments[contentSegments.length - 1]
-  if (last) {
+  if (last && last.phase === phase) {
     contentSegments[contentSegments.length - 1] = {
       ...last,
       content: last.content + chunk,

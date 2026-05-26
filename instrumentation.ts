@@ -4,6 +4,7 @@
 // run in the Edge runtime, and the scheduler itself is idempotent.
 export async function register(): Promise<void> {
     if (process.env.NEXT_RUNTIME !== 'nodejs') return
+    if (process.env.ORCHESTRATOR_PREVIEW === '1') return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
     // Connect the consolidated markets monitor to the watchlist data layer and

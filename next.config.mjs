@@ -11,8 +11,11 @@ const localTraceExcludes = [
   "README.md",
 ]
 
+const previewBasePath = normalizePreviewBasePath(process.env.ORCHESTRATOR_PREVIEW_BASE_PATH)
+
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  ...(previewBasePath ? { basePath: previewBasePath, assetPrefix: previewBasePath } : {}),
   // Native modules that ship .node binaries — keep them out of the bundler so
   // the runtime loads them via require(), not via webpack/turbopack inlining.
   serverExternalPackages: [
@@ -44,3 +47,13 @@ const nextConfig = {
 }
 
 export default nextConfig
+
+function normalizePreviewBasePath(value) {
+  if (!value) return null
+  const clean = String(value).trim().replace(/\/+$/, '')
+  if (!clean) return null
+  if (!/^\/dev-preview\/[A-Za-z0-9._~-]+$/.test(clean)) {
+    throw new Error(`Invalid ORCHESTRATOR_PREVIEW_BASE_PATH: ${value}`)
+  }
+  return clean
+}

@@ -1,7 +1,9 @@
 #!/usr/bin/env node
 import fs from 'fs'
+import net from 'net'
 import path from 'path'
-import { spawnSync } from 'child_process'
+import { randomBytes } from 'crypto'
+import { spawn, spawnSync } from 'child_process'
 
 const projectDir = process.cwd()
 const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
@@ -11,7 +13,11 @@ const command = argv[0]
 const args = parseArgs(argv.slice(1))
 const jsonOutput = boolArg('json')
 
-const commands = new Set(['status', 'commit', 'rebase', 'push', 'update', 'cleanup'])
+const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'commit', 'rebase', 'push', 'update', 'cleanup'])
+const PREVIEW_TOKEN_BYTES = 24
+const PREVIEW_START_TIMEOUT_MS = 90_000
+const PREVIEW_POLL_MS = 750
+const LOG_TAIL_DEFAULT_LINES = 120
 
 if (!command || command === 'help' || command === '--help') usage(0)
 if (!commands.has(command)) usage(1)
@@ -21,12 +27,23 @@ main().catch(error => {
 })
 
 async function main() {
-  const mutable = command !== 'status'
+  const mutable = !['status', 'preview', 'logs'].includes(command)
   const context = loadRunContext({ requireExplicit: mutable })
 
   switch (command) {
     case 'status':
       return printStatus(context)
+    case 'start':
+      return startPreview(context)
+    case 'stop':
+      return stopPreview(context)
+    case 'restart':
+      await stopPreview(context, { quiet: true })
+      return startPreview(context)
+    case 'preview':
+      return printPreview(context)
+    case 'logs':
+      return printLogs(context)
     case 'commit':
       return commitRun(context)
     case 'rebase':
@@ -52,11 +69,161 @@ function printStatus(context) {
     `HEAD: ${info.head || '(unknown)'}`,
     `Port: ${info.port || '(none)'}`,
     `Dev URL: ${info.devUrl || '(none)'}`,
+    `Preview: ${info.preview.running ? 'running' : info.preview.status}`,
+    info.preview.publicUrl ? `Preview URL: ${info.preview.publicUrl}` : null,
+    info.preview.logPath ? `Preview log: ${info.preview.logPath}` : null,
     `Changed files: ${info.statusShort.length}`,
     '',
     info.statusShort.length ? info.statusShort.join('\n') : 'Working tree clean.',
     info.diffStat ? `\nDiff stat:\n${info.diffStat}` : '',
   ].filter(Boolean).join('\n'))
+}
+
+async function startPreview(context) {
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  assertRepoReady(context)
+  assertExpectedBranch(context)
+
+  const port = Number(context.state.port)
+  if (!Number.isInteger(port) || port < 1024 || port > 65535 || port === 3000) {
+    fail(`Run state has invalid preview port: ${context.state.port ?? '(missing)'}`)
+  }
+
+  const current = previewInfo(context)
+  if (current.running) {
+    updatePreviewState(context, {
+      status: 'running',
+      pid: current.pid,
+      checkedAt: new Date().toISOString(),
+    })
+    return output(previewOutput(context, { running: true }), previewSummary(context, true))
+  }
+
+  const preview = ensurePreviewMetadata(context)
+  const refreshState = boolArg('refresh-state')
+  if (refreshState || !fs.existsSync(preview.stateDir)) {
+    await snapshotPreviewState(context, preview.stateDir)
+  } else {
+    ensurePreviewStateDirs(preview.stateDir)
+  }
+
+  ensureNodeModulesLink(context)
+  await assertPortAvailable(port)
+
+  fs.mkdirSync(path.dirname(preview.logPath), { recursive: true })
+  const outFd = fs.openSync(preview.logPath, 'a')
+  const nextBin = resolveNextBin(context)
+  const commandArgs = ['dev', '--turbopack', '-H', '127.0.0.1', '-p', String(port)]
+  const child = spawn(nextBin, commandArgs, {
+    cwd: context.state.repoDir,
+    detached: true,
+    stdio: ['ignore', outFd, outFd],
+    env: {
+      ...process.env,
+      NODE_ENV: 'development',
+      NEXT_TELEMETRY_DISABLED: '1',
+      PORT: String(port),
+      ORCHESTRATOR_HOST: '127.0.0.1',
+      ORCHESTRATOR_PORT: String(port),
+      ORCHESTRATOR_PREVIEW: '1',
+      ORCHESTRATOR_STATE_DIR: preview.stateDir,
+      ORCHESTRATOR_PREVIEW_RUN_ID: context.state.runId,
+      ORCHESTRATOR_PREVIEW_BASE_PATH: preview.basePath,
+    },
+  })
+  child.unref()
+  fs.closeSync(outFd)
+
+  updatePreviewState(context, {
+    ...preview,
+    status: 'starting',
+    pid: child.pid,
+    startedAt: new Date().toISOString(),
+    stoppedAt: null,
+    exitCode: null,
+    command: `${nextBin} ${commandArgs.join(' ')}`,
+  })
+
+  try {
+    await waitForPreview(context, port, preview.basePath)
+  } catch (error) {
+    const alive = child.pid ? isPidAlive(child.pid) : false
+    updatePreviewState(context, {
+      status: alive ? 'starting' : 'failed',
+      checkedAt: new Date().toISOString(),
+      lastError: error instanceof Error ? error.message : String(error),
+    })
+    throw error
+  }
+
+  updatePreviewState(context, {
+    status: 'running',
+    checkedAt: new Date().toISOString(),
+  })
+  output(previewOutput(context, { running: true }), previewSummary(context, true))
+}
+
+async function stopPreview(context, options = {}) {
+  if (!supportsManagedPreview(context) && !context.state.preview) {
+    if (!options.quiet) output({ runId: context.state.runId, running: false, status: 'unavailable' }, 'No managed preview is configured for this run.')
+    return
+  }
+  const info = previewInfo(context)
+  if (!info.pid || !info.running) {
+    updatePreviewState(context, {
+      status: 'stopped',
+      pid: null,
+      stoppedAt: new Date().toISOString(),
+      checkedAt: new Date().toISOString(),
+    })
+    if (!options.quiet) output(previewOutput(context, { running: false }), `Preview for ${context.state.runId} is stopped.`)
+    return
+  }
+
+  try {
+    process.kill(info.pid, 'SIGTERM')
+  } catch {
+    // Already gone; state is updated below.
+  }
+
+  const stopped = await waitForPidExit(info.pid, 5000)
+  if (!stopped && boolArg('force')) {
+    try {
+      process.kill(info.pid, 'SIGKILL')
+    } catch {
+      // Already gone.
+    }
+    await waitForPidExit(info.pid, 2000)
+  } else if (!stopped) {
+    updatePreviewState(context, {
+      status: 'stop-failed',
+      checkedAt: new Date().toISOString(),
+      lastError: `PID ${info.pid} did not exit after SIGTERM.`,
+    })
+    fail(`Preview PID ${info.pid} did not exit. Re-run stop with --force if it can be killed.`)
+  }
+
+  updatePreviewState(context, {
+    status: 'stopped',
+    pid: null,
+    stoppedAt: new Date().toISOString(),
+    checkedAt: new Date().toISOString(),
+  })
+  if (!options.quiet) output(previewOutput(context, { running: false }), `Stopped preview for ${context.state.runId}.`)
+}
+
+function printPreview(context) {
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  const info = previewOutput(context)
+  output(info, previewSummary(context, info.running))
+}
+
+function printLogs(context) {
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  const preview = ensurePreviewMetadata(context)
+  const lines = intArg('lines', LOG_TAIL_DEFAULT_LINES)
+  const body = tailFile(preview.logPath, Math.max(1, lines))
+  output({ runId: context.state.runId, logPath: preview.logPath, lines, body }, body || `No preview log found at ${preview.logPath}.`)
 }
 
 function commitRun(context) {
@@ -182,7 +349,7 @@ async function updateRun(context) {
   output({ updateRequested: true, branch, url, response: body }, `Requested branch update from ${branch}.`)
 }
 
-function cleanupRun(context) {
+async function cleanupRun(context) {
   const force = boolArg('force')
   const deleteBranch = boolArg('delete-branch')
   const removeState = boolArg('remove-state')
@@ -190,6 +357,8 @@ function cleanupRun(context) {
   const worktreeControlDir = sourceControlDir(context)
   const linkedWorktree = isLinkedWorktree(repoDir, worktreeControlDir)
   let deletedBranch = false
+
+  await stopPreview(context, { quiet: true })
 
   if (fs.existsSync(repoDir)) {
     const status = gitCapture(['status', '--porcelain'], { cwd: repoDir, optional: true })
@@ -303,6 +472,9 @@ function latestRunStatePath() {
 function collectStatus(context) {
   const repoDir = context.state.repoDir
   const exists = fs.existsSync(repoDir)
+  const preview = supportsManagedPreview(context)
+    ? previewOutput(context)
+    : { status: 'unavailable', running: false, pid: null, publicUrl: null, logPath: null }
   return {
     runId: context.state.runId,
     status: context.state.status ?? 'unknown',
@@ -313,10 +485,287 @@ function collectStatus(context) {
     head: exists ? gitCapture(['rev-parse', '--short=12', 'HEAD'], { cwd: repoDir, optional: true }) : null,
     port: context.state.port ?? null,
     devUrl: context.state.devUrl ?? null,
+    preview,
     statusShort: exists
       ? splitLines(gitCapture(['status', '--short'], { cwd: repoDir, optional: true }))
       : [],
     diffStat: exists ? gitCapture(['diff', '--stat'], { cwd: repoDir, optional: true }) : '',
+  }
+}
+
+function ensurePreviewMetadata(context) {
+  if (!supportsManagedPreview(context)) {
+    fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  }
+  const existing = context.state.preview && typeof context.state.preview === 'object'
+    ? context.state.preview
+    : {}
+  const runId = context.state.runId
+  const basePath = `/dev-preview/${encodeURIComponent(runId)}`
+  const token = typeof existing.token === 'string' && existing.token
+    ? existing.token
+    : randomBytes(PREVIEW_TOKEN_BYTES).toString('base64url')
+  const publicUrl = typeof existing.publicUrl === 'string' && existing.publicUrl
+    ? existing.publicUrl
+    : buildPublicPreviewUrl(basePath, token)
+  const preview = {
+    token,
+    basePath,
+    publicUrl,
+    localUrl: `http://127.0.0.1:${context.state.port}${basePath}/`,
+    stateDir: typeof existing.stateDir === 'string' && path.isAbsolute(existing.stateDir)
+      ? existing.stateDir
+      : path.join(context.runDir, 'preview-state'),
+    logPath: typeof existing.logPath === 'string' && path.isAbsolute(existing.logPath)
+      ? existing.logPath
+      : path.join(context.runDir, 'preview.log'),
+    status: typeof existing.status === 'string' ? existing.status : 'prepared',
+    pid: Number.isInteger(existing.pid) ? existing.pid : null,
+  }
+  const changed = JSON.stringify({ ...existing, updatedAt: undefined }) !== JSON.stringify({ ...existing, ...preview, updatedAt: undefined })
+  if (changed) updatePreviewState(context, preview)
+  return context.state.preview ?? preview
+}
+
+function supportsManagedPreview(context) {
+  if (context.state.kind === 'self') return true
+  const preview = context.state.preview
+  return Boolean(preview && typeof preview === 'object' && typeof preview.basePath === 'string' && preview.basePath.startsWith('/dev-preview/'))
+}
+
+function updatePreviewState(context, patch) {
+  const current = context.state.preview && typeof context.state.preview === 'object'
+    ? context.state.preview
+    : {}
+  updateRunState(context, {
+    preview: {
+      ...current,
+      ...patch,
+      updatedAt: new Date().toISOString(),
+    },
+  })
+}
+
+function buildPublicPreviewUrl(basePath, token) {
+  const origin = publicOrigin()
+  if (!origin) return null
+  const url = new URL(`${basePath}/`, origin)
+  url.searchParams.set('preview_token', token)
+  return url.toString()
+}
+
+function publicOrigin() {
+  const raw = process.env.ORCHESTRATOR_PUBLIC_URL
+    || process.env.ORCHESTRATOR_APP_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`).origin
+  } catch {
+    return null
+  }
+}
+
+function previewInfo(context) {
+  const preview = context.state.preview && typeof context.state.preview === 'object'
+    ? context.state.preview
+    : {}
+  const pid = Number.isInteger(preview.pid) ? preview.pid : null
+  return {
+    pid,
+    running: Boolean(pid && isPidAlive(pid)),
+    status: typeof preview.status === 'string' ? preview.status : 'not-started',
+  }
+}
+
+function previewOutput(context, overrides = {}) {
+  const preview = ensurePreviewMetadata(context)
+  const info = previewInfo(context)
+  const running = overrides.running ?? info.running
+  return {
+    runId: context.state.runId,
+    status: running ? 'running' : (preview.status ?? info.status),
+    running,
+    pid: running ? info.pid : null,
+    port: context.state.port ?? null,
+    localUrl: preview.localUrl,
+    publicUrl: preview.publicUrl,
+    basePath: preview.basePath,
+    stateDir: preview.stateDir,
+    logPath: preview.logPath,
+  }
+}
+
+function previewSummary(context, running) {
+  const preview = ensurePreviewMetadata(context)
+  return [
+    `Preview for ${context.state.runId}: ${running ? 'running' : (preview.status || 'stopped')}`,
+    `Local URL: ${preview.localUrl}`,
+    preview.publicUrl ? `Public URL: ${preview.publicUrl}` : 'Public URL: unavailable; set ORCHESTRATOR_PUBLIC_URL to enable /dev-preview links.',
+    `Log: ${preview.logPath}`,
+    `State: ${preview.stateDir}`,
+  ].join('\n')
+}
+
+async function snapshotPreviewState(context, targetStateDir) {
+  const sourceStateDir = resolveSourceStateDir(context)
+  fs.rmSync(targetStateDir, { recursive: true, force: true })
+  ensurePreviewStateDirs(targetStateDir)
+
+  const sourceDb = path.join(sourceStateDir, 'data.db')
+  const targetDb = path.join(targetStateDir, 'data.db')
+  if (fs.existsSync(sourceDb)) {
+    await backupSqliteDatabase(sourceDb, targetDb)
+  }
+
+  copyDirIfExists(path.join(sourceStateDir, 'workspace'), path.join(targetStateDir, 'workspace'))
+  copyDirIfExists(path.join(sourceStateDir, 'uploads'), path.join(targetStateDir, 'uploads'))
+  fs.mkdirSync(path.join(targetStateDir, 'private'), { recursive: true })
+  try {
+    fs.chmodSync(path.join(targetStateDir, 'private'), 0o700)
+  } catch {
+    // Some filesystems ignore chmod.
+  }
+}
+
+function resolveSourceStateDir(context) {
+  const candidates = [
+    process.env.ORCHESTRATOR_STATE_DIR,
+    context.state.appDir ? path.join(context.state.appDir, '.orchestrator') : null,
+    path.join(projectDir, '.orchestrator'),
+  ].filter(value => typeof value === 'string' && value)
+
+  for (const candidate of candidates) {
+    if (candidate && fs.existsSync(candidate)) return path.resolve(candidate)
+  }
+  return path.join(projectDir, '.orchestrator')
+}
+
+function ensurePreviewStateDirs(stateDir) {
+  fs.mkdirSync(stateDir, { recursive: true })
+  fs.mkdirSync(path.join(stateDir, 'workspace'), { recursive: true })
+  fs.mkdirSync(path.join(stateDir, 'uploads'), { recursive: true })
+  fs.mkdirSync(path.join(stateDir, 'private'), { recursive: true })
+}
+
+async function backupSqliteDatabase(source, target) {
+  const { default: Database } = await import('better-sqlite3')
+  const db = new Database(source, { readonly: true, fileMustExist: true, timeout: 10_000 })
+  try {
+    await db.backup(target)
+  } finally {
+    db.close()
+  }
+}
+
+function copyDirIfExists(source, target) {
+  if (!fs.existsSync(source)) return
+  fs.cpSync(source, target, {
+    recursive: true,
+    dereference: false,
+    filter: entry => path.basename(entry) !== '.DS_Store',
+  })
+}
+
+function ensureNodeModulesLink(context) {
+  const target = path.join(context.state.repoDir, 'node_modules')
+  if (fs.existsSync(target)) return
+
+  const candidates = [
+    context.state.appDir ? path.join(context.state.appDir, 'node_modules') : null,
+    context.state.sourceDir ? path.join(context.state.sourceDir, 'node_modules') : null,
+    path.join(projectDir, 'node_modules'),
+  ].filter(Boolean)
+  const source = candidates.find(candidate => fs.existsSync(candidate))
+  if (!source) {
+    fail('Cannot start preview: no node_modules directory found in appDir, sourceDir, or current project.')
+  }
+  fs.symlinkSync(source, target, 'dir')
+}
+
+function resolveNextBin(context) {
+  const binName = process.platform === 'win32' ? 'next.cmd' : 'next'
+  const candidates = [
+    path.join(context.state.repoDir, 'node_modules', '.bin', binName),
+    context.state.appDir ? path.join(context.state.appDir, 'node_modules', '.bin', binName) : null,
+    context.state.sourceDir ? path.join(context.state.sourceDir, 'node_modules', '.bin', binName) : null,
+  ].filter(Boolean)
+  const found = candidates.find(candidate => fs.existsSync(candidate))
+  if (!found) fail('Cannot start preview: Next.js binary was not found.')
+  return found
+}
+
+async function assertPortAvailable(port) {
+  if (!(await isPortFree(port))) fail(`Preview port ${port} is already in use.`)
+}
+
+function isPortFree(port) {
+  return new Promise(resolve => {
+    const server = net.createServer()
+    server.once('error', () => resolve(false))
+    server.once('listening', () => {
+      server.close(() => resolve(true))
+    })
+    server.listen(port, '127.0.0.1')
+  })
+}
+
+async function waitForPreview(context, port, basePath) {
+  const deadline = Date.now() + PREVIEW_START_TIMEOUT_MS
+  const url = `http://127.0.0.1:${port}${basePath}/`
+  let lastError = ''
+
+  while (Date.now() < deadline) {
+    const pid = context.state.preview?.pid
+    if (pid && !isPidAlive(pid)) {
+      throw new Error(`Preview process ${pid} exited before becoming ready. Check ${context.state.preview?.logPath}.`)
+    }
+    try {
+      const response = await fetch(url, { cache: 'no-store', redirect: 'manual' })
+      if (response.status >= 200 && response.status < 500) return
+      lastError = `HTTP ${response.status}`
+    } catch (error) {
+      lastError = error instanceof Error ? error.message : String(error)
+    }
+    await delay(PREVIEW_POLL_MS)
+  }
+
+  throw new Error(`Preview did not become ready at ${url}: ${lastError || 'timeout'}`)
+}
+
+function isPidAlive(pid) {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch {
+    return false
+  }
+}
+
+async function waitForPidExit(pid, timeoutMs) {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (!isPidAlive(pid)) return true
+    await delay(200)
+  }
+  return !isPidAlive(pid)
+}
+
+function delay(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms))
+}
+
+function tailFile(filePath, lines) {
+  if (!fs.existsSync(filePath)) return ''
+  const stat = fs.statSync(filePath)
+  const readSize = Math.min(stat.size, 256 * 1024)
+  const fd = fs.openSync(filePath, 'r')
+  try {
+    const buffer = Buffer.alloc(readSize)
+    fs.readSync(fd, buffer, 0, readSize, stat.size - readSize)
+    return buffer.toString('utf-8').split(/\r?\n/).slice(-lines).join('\n').trim()
+  } finally {
+    fs.closeSync(fd)
   }
 }
 
@@ -393,6 +842,13 @@ function boolArg(name) {
   return args.get(name) === 'true'
 }
 
+function intArg(name, fallback) {
+  const value = args.get(name)
+  if (value === undefined) return fallback
+  const parsed = Number.parseInt(String(value), 10)
+  return Number.isSafeInteger(parsed) ? parsed : fallback
+}
+
 function readJson(filePath, options = {}) {
   try {
     return JSON.parse(fs.readFileSync(filePath, 'utf-8'))
@@ -465,6 +921,11 @@ function usage(exitCode) {
   const text = [
     'Usage:',
     `  ${prefix} status [--run-id <id>|--state <path>] [--json]`,
+    `  ${prefix} start --run-id <id> [--refresh-state] [--json]`,
+    `  ${prefix} stop --run-id <id> [--force] [--json]`,
+    `  ${prefix} restart --run-id <id> [--refresh-state] [--json]`,
+    `  ${prefix} preview [--run-id <id>|--state <path>] [--json]`,
+    `  ${prefix} logs [--run-id <id>|--state <path>] [--lines 120] [--json]`,
     `  ${prefix} commit --run-id <id> --message "<message>"`,
     `  ${prefix} rebase --run-id <id> [--base origin/master]`,
     `  ${prefix} push --run-id <id> --target-branch master`,

@@ -105,8 +105,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [unreadConversationIds, setUnreadConversationIds] = React.useState<
     Set<string>
   >(() => readUnreadConversationIds())
-  const unreadConversationIdsRef =
-    React.useRef<Set<string>>(unreadConversationIds)
+  const unreadConversationIdsRef = React.useRef<Set<string>>(
+    unreadConversationIds
+  )
   // Wrap the SELECT_CONVERSATION dispatch in a transition so React can
   // prepare the (potentially expensive) new chat render in the background
   // without blocking. The boolean flips true the instant the user clicks,
@@ -1234,15 +1235,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             accReasoning.find(
               (entry) => entry.type === "agent_call" && entry.runId === runId
             )
-          const appendLocalAgentThinking = (runId: string, chunk: string) => {
+          const appendLocalAgentThinking = (
+            runId: string,
+            chunk: string,
+            phase?: number
+          ) => {
             const entry = findAgent(runId)
             if (!entry || entry.type !== "agent_call") return
-            entry.reasoning = appendAgentThought(entry, chunk).reasoning
+            entry.reasoning = appendAgentThought(entry, chunk, phase).reasoning
           }
-          const appendLocalAgentContent = (runId: string, chunk: string) => {
+          const appendLocalAgentContent = (
+            runId: string,
+            chunk: string,
+            phase?: number
+          ) => {
             const entry = findAgent(runId)
             if (!entry || entry.type !== "agent_call") return
-            const updated = appendAgentContent(entry, chunk)
+            const updated = appendAgentContent(entry, chunk, phase)
             entry.content = updated.content
             entry.contentSegments = updated.contentSegments
           }
@@ -1488,27 +1497,35 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 } else if (data.type === "agent_thinking") {
                   const runId = typeof data.runId === "string" ? data.runId : ""
                   const chunk = String(data.content ?? "")
+                  const phase =
+                    typeof data.phase === "number" ? data.phase : undefined
                   if (runId && chunk) {
-                    appendLocalAgentThinking(runId, chunk)
+                    appendLocalAgentThinking(runId, chunk, phase)
                     dispatch({
                       type: "APPEND_STREAMING_AGENT_THINKING",
                       runId,
                       chunk,
+                      phase,
                     })
                   }
                 } else if (data.type === "agent_content") {
                   const runId = typeof data.runId === "string" ? data.runId : ""
                   const chunk = String(data.content ?? "")
+                  const phase =
+                    typeof data.phase === "number" ? data.phase : undefined
                   if (runId && chunk) {
-                    appendLocalAgentContent(runId, chunk)
+                    appendLocalAgentContent(runId, chunk, phase)
                     dispatch({
                       type: "APPEND_STREAMING_AGENT_CONTENT",
                       runId,
                       chunk,
+                      phase,
                     })
                   }
                 } else if (data.type === "agent_tool_call") {
                   const runId = typeof data.runId === "string" ? data.runId : ""
+                  const phase =
+                    typeof data.phase === "number" ? data.phase : undefined
                   const toolCallId =
                     typeof data.toolCall?.id === "string"
                       ? data.toolCall.id
@@ -1540,7 +1557,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                           {
                             type: "tool_call",
                             id: `tool_${toolCallId}`,
-                            phase: agent.contentSegments?.at(-1)?.phase ?? 0,
+                            phase:
+                              phase ??
+                              agent.contentSegments?.at(-1)?.phase ??
+                              0,
                             toolCallId,
                             title,
                             content: "",
@@ -1557,6 +1577,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       runId,
                       toolCallId,
                       title,
+                      phase,
                       toolName,
                       args,
                     })

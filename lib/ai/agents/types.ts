@@ -236,6 +236,7 @@ export type AgentRunEvent =
   | {
       type: "agent_thinking"
       runId: string
+      phase?: number
       content: string
     }
   | {
@@ -246,11 +247,13 @@ export type AgentRunEvent =
   | {
       type: "agent_content"
       runId: string
+      phase?: number
       content: string
     }
   | {
       type: "agent_tool_call"
       runId: string
+      phase?: number
       toolCall: ToolCallInfo & { title?: string }
     }
   | {

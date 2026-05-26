@@ -20,28 +20,19 @@ import {
   Search,
   Trash2,
 } from "lucide-react"
-import { RenderMessageContent } from "@/components/artifacts/render-message-content"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
+import { MessageBubble } from "@/components/message-bubble"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 import { cn } from "@/lib/utils"
-import type { InboxReplyAction, ReasoningEntry } from "@/lib/types"
+import type { InboxReplyAction, Message } from "@/lib/types"
 import type { InboxListItem } from "./use-inbox"
 import { InboxProvider, useInbox } from "./use-inbox"
 
 type FolderFilter = "inbox" | "unread" | "read" | "scheduled"
-
-type DetailMessageData = {
-  id: string
-  role: "user" | "assistant"
-  content: string
-  timestamp: number
-  reasoning?: ReasoningEntry[]
-  replyActions?: InboxReplyAction[]
-}
 
 function activityTime(item: InboxListItem): number {
   return item.lastMessageAt ?? item.updatedAt ?? item.createdAt
@@ -109,12 +100,12 @@ function itemMatchesFilter(item: InboxListItem, filter: FolderFilter): boolean {
   return true
 }
 
-function senderForMessage(message: DetailMessageData, index: number): string {
+function senderForMessage(message: Message, index: number): string {
   if (message.role === "assistant") return "Scheduled run"
   return index === 0 ? "Trigger" : "You"
 }
 
-function initialsForMessage(message: DetailMessageData, index: number): string {
+function initialsForMessage(message: Message, index: number): string {
   if (message.role === "assistant") return "SR"
   return index === 0 ? "TR" : "ME"
 }
@@ -125,7 +116,7 @@ function messagePreview(content: string): string {
   return `${singleLine.slice(0, 139).trimEnd()}...`
 }
 
-function inferQuickReplyActions(message: DetailMessageData): InboxReplyAction[] {
+function inferQuickReplyActions(message: Message): InboxReplyAction[] {
   if (message.role !== "assistant" || message.replyActions?.length) return []
 
   const content = message.content.toLowerCase()
@@ -216,40 +207,6 @@ function MarkdownPreviewLine({ content }: { content: string }) {
         {content || "No preview available."}
       </ReactMarkdown>
     </div>
-  )
-}
-
-function TraceSummary({ reasoning }: { reasoning: ReasoningEntry[] }) {
-  const steps = reasoning.filter(
-    (r): r is Extract<ReasoningEntry, { type: "tool_call" | "agent_call" }> =>
-      r.type === "tool_call" || r.type === "agent_call"
-  )
-  if (steps.length === 0) return null
-  return (
-    <details className="mt-3 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-[12px] text-slate-500 dark:border-white/10 dark:bg-white/[0.04] dark:text-slate-400">
-      <summary className="cursor-pointer font-medium text-slate-600 select-none dark:text-slate-300">
-        {steps.length} step{steps.length > 1 ? "s" : ""}
-      </summary>
-      <ul className="mt-2 space-y-1.5">
-        {steps.map((s, i) => (
-          <li key={i} className="flex min-w-0 items-center gap-2">
-            <span
-              className={cn(
-                "size-1.5 shrink-0 rounded-full",
-                s.status === "error"
-                  ? "bg-red-600"
-                  : s.status === "ok"
-                    ? "bg-emerald-500"
-                    : "bg-slate-400"
-              )}
-            />
-            <span className="truncate">
-              {s.type === "agent_call" ? `agent · ${s.agentName}` : s.title}
-            </span>
-          </li>
-        ))}
-      </ul>
-    </details>
   )
 }
 
@@ -481,7 +438,7 @@ function DetailMessage({
   busyActionId,
   onQuickReply,
 }: {
-  message: DetailMessageData
+  message: Message
   index: number
   total: number
   responding: boolean
@@ -489,9 +446,10 @@ function DetailMessage({
   onQuickReply: (action: InboxReplyAction) => void
 }) {
   const assistant = message.role === "assistant"
-  const sender = senderForMessage(message, index)
-  const initials = initialsForMessage(message, index)
-  const newest = index === total - 1
+  const chronologicalIndex = total - index - 1
+  const sender = senderForMessage(message, chronologicalIndex)
+  const initials = initialsForMessage(message, chronologicalIndex)
+  const newest = index === 0
 
   return (
     <article
@@ -533,7 +491,7 @@ function DetailMessage({
         </div>
       </header>
       <div className="px-4 pb-5 text-[14px] leading-7 text-slate-800 md:px-6 md:pl-[72px] dark:text-slate-100">
-        <RenderMessageContent content={message.content} messageId={message.id} />
+        <MessageBubble message={message} compact />
         {assistant && (
           <QuickReplyActions
             actions={message.replyActions}
@@ -541,9 +499,6 @@ function DetailMessage({
             busyActionId={busyActionId}
             onSelect={onQuickReply}
           />
-        )}
-        {message.reasoning && message.reasoning.length > 0 && (
-          <TraceSummary reasoning={message.reasoning} />
         )}
       </div>
     </article>
@@ -553,13 +508,16 @@ function DetailMessage({
 function CollapsedDetailMessage({
   message,
   index,
+  total,
   onExpand,
 }: {
-  message: DetailMessageData
+  message: Message
   index: number
+  total: number
   onExpand: () => void
 }) {
   const assistant = message.role === "assistant"
+  const chronologicalIndex = total - index - 1
   return (
     <button
       type="button"
@@ -574,12 +532,12 @@ function CollapsedDetailMessage({
             : "bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"
         )}
       >
-        {initialsForMessage(message, index)}
+        {initialsForMessage(message, chronologicalIndex)}
       </div>
       <div className="min-w-0 flex-1">
         <div className="flex min-w-0 items-center gap-2">
           <span className="truncate text-[13px] font-semibold text-slate-900 dark:text-white">
-            {senderForMessage(message, index)}
+            {senderForMessage(message, chronologicalIndex)}
           </span>
           {assistant && (
             <span className="rounded bg-slate-100 px-1.5 text-[11px] leading-5 font-medium text-slate-500 dark:bg-white/[0.06] dark:text-slate-300">
@@ -686,10 +644,10 @@ function InboxViewInner() {
 
   const threadMessages = React.useMemo(
     () =>
-      [...(detail?.messages ?? [])].sort((a, b) => a.timestamp - b.timestamp),
+      [...(detail?.messages ?? [])].sort((a, b) => b.timestamp - a.timestamp),
     [detail?.messages]
   )
-  const latestMessageId = threadMessages.at(-1)?.id ?? null
+  const latestMessageId = threadMessages[0]?.id ?? null
 
   React.useEffect(() => {
     setExpandedMessageIds(
@@ -1013,10 +971,9 @@ function InboxViewInner() {
                           key={message.id}
                           message={{
                             ...message,
-                            replyActions:
-                              message.replyActions?.length
-                                ? message.replyActions
-                                : inferQuickReplyActions(message),
+                            replyActions: message.replyActions?.length
+                              ? message.replyActions
+                              : inferQuickReplyActions(message),
                           }}
                           index={index}
                           total={threadMessages.length}
@@ -1031,6 +988,7 @@ function InboxViewInner() {
                           key={message.id}
                           message={message}
                           index={index}
+                          total={threadMessages.length}
                           onExpand={() => toggleMessageExpanded(message.id)}
                         />
                       )

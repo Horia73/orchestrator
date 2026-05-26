@@ -2025,6 +2025,7 @@ export function ChatView() {
                 streamingReasoning={
                   isStreamingThisConversation ? state.streamingReasoning : []
                 }
+                hideCompleted={!isStreamingThisConversation}
               />
               <ChatInput variant="chat" />
             </div>

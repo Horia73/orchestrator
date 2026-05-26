@@ -106,13 +106,24 @@ export type ChatAction =
       title?: string
     }
   | { type: "UPSERT_STREAMING_AGENT_CALL"; entry: AgentCallReasoningEntry }
-  | { type: "APPEND_STREAMING_AGENT_THINKING"; runId: string; chunk: string }
-  | { type: "APPEND_STREAMING_AGENT_CONTENT"; runId: string; chunk: string }
+  | {
+      type: "APPEND_STREAMING_AGENT_THINKING"
+      runId: string
+      chunk: string
+      phase?: number
+    }
+  | {
+      type: "APPEND_STREAMING_AGENT_CONTENT"
+      runId: string
+      chunk: string
+      phase?: number
+    }
   | {
       type: "ADD_STREAMING_AGENT_TOOL_CALL"
       runId: string
       toolCallId: string
       title: string
+      phase?: number
       toolName?: string
       args?: Record<string, unknown>
     }
@@ -756,7 +767,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingReasoning: updateAgentEntry(
           state.streamingReasoning,
           action.runId,
-          (entry) => appendAgentThought(entry, action.chunk)
+          (entry) => appendAgentThought(entry, action.chunk, action.phase)
         ),
         streamingMode: "reasoning",
       }
@@ -766,7 +777,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingReasoning: updateAgentEntry(
           state.streamingReasoning,
           action.runId,
-          (entry) => appendAgentContent(entry, action.chunk)
+          (entry) => appendAgentContent(entry, action.chunk, action.phase)
         ),
       }
     case "ADD_STREAMING_AGENT_TOOL_CALL":
@@ -789,7 +800,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 {
                   type: "tool_call",
                   id: `tool_${action.toolCallId}`,
-                  phase: entry.contentSegments?.at(-1)?.phase ?? 0,
+                  phase:
+                    action.phase ?? entry.contentSegments?.at(-1)?.phase ?? 0,
                   toolCallId: action.toolCallId,
                   title: action.title,
                   content: "",

@@ -458,7 +458,7 @@ function ThoughtBlock({
                                     }}
                                 >
                                     <div ref={contentRef}>
-                                        {reasoning.length > 0 ? (
+                                        {isShowingContent && reasoning.length > 0 ? (
                                             <div className="mb-2 flex flex-col gap-2 pt-1">
                                                 <ReasoningEntryList
                                                     reasoning={reasoning}
@@ -468,9 +468,9 @@ function ThoughtBlock({
                                                     searchToolDisplay={searchToolDisplay}
                                                 />
                                             </div>
-                                        ) : (
+                                        ) : isShowingContent ? (
                                             <div className="h-4" />
-                                        )}
+                                        ) : null}
                                     </div>
                                     {!isExpanded && isCollapsible && (
                                         <div className={isLiveStreaming ? "h-10" : "h-20"} />

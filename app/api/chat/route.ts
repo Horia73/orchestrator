@@ -430,11 +430,21 @@ export async function POST(request: Request) {
       (entry) => entry.type === "agent_call" && entry.runId === runId
     )
 
-  const appendAgentThinking = (runId: string, chunk: string) => {
+  const fallbackAgentPhase = (runId: string): number => {
+    const entry = findAgentEntry(runId)
+    return entry?.type === "agent_call"
+      ? (entry.contentSegments?.at(-1)?.phase ?? 0)
+      : 0
+  }
+
+  const appendAgentThinking = (
+    runId: string,
+    chunk: string,
+    phase = fallbackAgentPhase(runId)
+  ) => {
     const entry = findAgentEntry(runId)
     if (!entry || entry.type !== "agent_call") return
     const reasoning = entry.reasoning ?? []
-    const phase = entry.contentSegments?.at(-1)?.phase ?? 0
     const last = reasoning[reasoning.length - 1]
     if (last?.type === "thought" && last.phase === phase) {
       last.content += chunk
@@ -449,14 +459,17 @@ export async function POST(request: Request) {
     entry.reasoning = reasoning
   }
 
-  const appendAgentContent = (runId: string, chunk: string) => {
+  const appendAgentContent = (
+    runId: string,
+    chunk: string,
+    phase = fallbackAgentPhase(runId)
+  ) => {
     const entry = findAgentEntry(runId)
     if (!entry || entry.type !== "agent_call") return
     entry.content += chunk
     const segments = entry.contentSegments ?? []
-    const phase = segments.at(-1)?.phase ?? 0
     const last = segments[segments.length - 1]
-    if (last) {
+    if (last && last.phase === phase) {
       last.content += chunk
     } else {
       segments.push({ phase, content: chunk })
@@ -551,9 +564,9 @@ export async function POST(request: Request) {
         })
       }
     } else if (event.type === "agent_thinking") {
-      appendAgentThinking(event.runId, event.content)
+      appendAgentThinking(event.runId, event.content, event.phase)
     } else if (event.type === "agent_content") {
-      appendAgentContent(event.runId, event.content)
+      appendAgentContent(event.runId, event.content, event.phase)
     } else if (event.type === "agent_tool_call") {
       const entry = findAgentEntry(event.runId)
       if (entry?.type === "agent_call") {
@@ -566,7 +579,7 @@ export async function POST(request: Request) {
           reasoning.push({
             type: "tool_call",
             id: `tool_${event.toolCall.id}`,
-            phase: entry.contentSegments?.at(-1)?.phase ?? 0,
+            phase: event.phase ?? entry.contentSegments?.at(-1)?.phase ?? 0,
             toolCallId: event.toolCall.id,
             title:
               event.toolCall.title ??

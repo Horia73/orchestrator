@@ -10,9 +10,9 @@ import type {
   Attachment,
 } from "@/lib/types"
 import { emitChatEvent } from "./events"
-import { ARTIFACTS_DIR, UPLOADS_DIR } from "./config"
+import { ARTIFACTS_DIR, ORCHESTRATOR_STATE_DIR, UPLOADS_DIR } from "./config"
 
-const DB_DIR = path.join(process.cwd(), ".orchestrator")
+const DB_DIR = ORCHESTRATOR_STATE_DIR
 const isProductionBuild =
   process.env.ORCHESTRATOR_BUILD === "1" ||
   process.env.NEXT_PHASE === "phase-production-build" ||

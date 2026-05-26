@@ -5,6 +5,7 @@ import * as React from "react"
 import { AttachmentCard } from "@/components/attachment-card"
 import type { ArtifactPayload } from "@/components/artifact-panel"
 import { StreamingBubble } from "@/components/message-bubble"
+import { TodoBar } from "@/components/todo-bar"
 import { TerminalOutput } from "@/components/tool-call-view"
 import { cn } from "@/lib/utils"
 import type {
@@ -17,6 +18,8 @@ const BROWSER_AGENT_TERMINAL_STYLE: React.CSSProperties = {
   height: "min(460px, calc(100vh - 260px))",
   minHeight: "320px",
 }
+
+const SCROLLABLE_OVERFLOW = new Set(["auto", "scroll", "overlay"])
 
 type SelectedAgentTool = {
   runId: string
@@ -52,7 +55,10 @@ export function AgentWorkspacePanel({
       : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col border-l border-border bg-background">
+    <div
+      className="flex h-full min-h-0 flex-col border-l border-border bg-background"
+      onWheelCapture={containWheelWithinPanel}
+    >
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
         <div className="min-w-0">
           <div className="truncate text-[15px] font-medium">
@@ -113,6 +119,64 @@ export function AgentWorkspacePanel({
       </div>
     </div>
   )
+}
+
+function containWheelWithinPanel(event: React.WheelEvent<HTMLElement>) {
+  const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
+  const scroller = findScrollableAncestor(
+    event.target,
+    event.currentTarget,
+    axis
+  )
+  if (!scroller) return
+
+  event.stopPropagation()
+  const delta = axis === "y" ? event.deltaY : event.deltaX
+  if (shouldBlockScrollChain(scroller, axis, delta)) {
+    event.preventDefault()
+  }
+}
+
+function findScrollableAncestor(
+  target: EventTarget | null,
+  boundary: HTMLElement,
+  axis: "x" | "y"
+): HTMLElement | null {
+  let node = target instanceof HTMLElement ? target : null
+  while (node) {
+    if (isScrollableOnAxis(node, axis)) return node
+    if (node === boundary) break
+    node = node.parentElement
+  }
+  return null
+}
+
+function isScrollableOnAxis(element: HTMLElement, axis: "x" | "y"): boolean {
+  const style = window.getComputedStyle(element)
+  if (axis === "y") {
+    return (
+      SCROLLABLE_OVERFLOW.has(style.overflowY) &&
+      element.scrollHeight > element.clientHeight + 1
+    )
+  }
+  return (
+    SCROLLABLE_OVERFLOW.has(style.overflowX) &&
+    element.scrollWidth > element.clientWidth + 1
+  )
+}
+
+function shouldBlockScrollChain(
+  element: HTMLElement,
+  axis: "x" | "y",
+  delta: number
+): boolean {
+  if (delta === 0) return false
+  if (axis === "y") {
+    const max = element.scrollHeight - element.clientHeight
+    return delta < 0 ? element.scrollTop <= 0 : element.scrollTop >= max - 1
+  }
+  const max = element.scrollWidth - element.clientWidth
+  return delta < 0 ? element.scrollLeft <= 0 : element.scrollLeft >= max - 1
 }
 
 function AgentToolResultPreview({
@@ -233,6 +297,11 @@ function AgentRunPane({
           {run.error}
         </div>
       )}
+      <TodoBar
+        reasoning={run.reasoning ?? []}
+        storageKey={`todo-bar:agent:${run.runId}:expanded`}
+        hideCompleted={run.status !== "running"}
+      />
       {isBrowserAgent ? (
         <BrowserAgentOutputTerminal run={run} />
       ) : (

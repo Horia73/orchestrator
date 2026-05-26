@@ -250,7 +250,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 }
                 accThinking += text
                 appendThinking(reasoning, phase, text)
-                emitAgent(parentCtx, { type: 'agent_thinking', runId: subRequestId, content: text })
+                emitAgent(parentCtx, { type: 'agent_thinking', runId: subRequestId, phase, content: text })
             },
             onThinkingDone(seconds) {
                 emitAgent(parentCtx, { type: 'agent_thinking_done', runId: subRequestId, seconds })
@@ -259,7 +259,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 if (text.length > 0) streamMode = 'content'
                 accContent += text
                 appendContent(contentSegments, phase, text)
-                emitAgent(parentCtx, { type: 'agent_content', runId: subRequestId, content: text })
+                emitAgent(parentCtx, { type: 'agent_content', runId: subRequestId, phase, content: text })
             },
             onToolCall(tc) {
                 if (streamMode === 'content') {
@@ -287,6 +287,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 emitAgent(parentCtx, {
                     type: 'agent_tool_call',
                     runId: subRequestId,
+                    phase,
                     toolCall: { ...tc, arguments: safeArgs, title },
                 })
             },
@@ -319,7 +320,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                     if (tag.length > 0) streamMode = 'content'
                     accContent += tag
                     appendContent(contentSegments, phase, tag)
-                    emitAgent(parentCtx, { type: 'agent_content', runId: subRequestId, content: tag })
+                    emitAgent(parentCtx, { type: 'agent_content', runId: subRequestId, phase, content: tag })
                     result = {
                         ...result,
                         data: stripDirectEmitPayload(directEmit.source),

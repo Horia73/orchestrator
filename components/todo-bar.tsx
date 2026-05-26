@@ -16,25 +16,35 @@ interface TodoItem {
 export function TodoBar({
     messages,
     streamingReasoning,
+    reasoning,
+    storageKey = "todo-bar:expanded",
+    hideCompleted = false,
 }: {
-    messages: Message[]
-    streamingReasoning: ReasoningEntry[]
+    messages?: Message[]
+    streamingReasoning?: ReasoningEntry[]
+    reasoning?: ReasoningEntry[]
+    storageKey?: string
+    hideCompleted?: boolean
 }) {
-    const todos = React.useMemo(() => latestTodos(messages, streamingReasoning), [messages, streamingReasoning])
+    const todos = React.useMemo(
+        () => reasoning ? latestTodosFromReasoning(reasoning) : latestTodos(messages ?? [], streamingReasoning ?? []),
+        [messages, reasoning, streamingReasoning]
+    )
     const [expanded, setExpanded] = React.useState(() => {
         if (typeof window === "undefined") return true
-        return window.localStorage.getItem("todo-bar:expanded") !== "false"
+        return window.localStorage.getItem(storageKey) !== "false"
     })
 
     React.useEffect(() => {
-        window.localStorage.setItem("todo-bar:expanded", String(expanded))
-    }, [expanded])
+        window.localStorage.setItem(storageKey, String(expanded))
+    }, [expanded, storageKey])
 
     if (!todos.length) return null
 
     const active = todos.filter(t => t.status === "in_progress").length
     const done = todos.filter(t => t.status === "completed").length
     const pending = todos.length - active - done
+    if (hideCompleted && done === todos.length) return null
 
     return (
         <div className="mb-2 overflow-hidden rounded-md border border-border bg-background shadow-sm">
@@ -92,6 +102,16 @@ function latestTodos(messages: Message[], streamingReasoning: ReasoningEntry[]):
     const entries: ToolCallReasoningEntry[] = []
     for (const message of messages) collectTodoEntries(message.reasoning, entries)
     collectTodoEntries(streamingReasoning, entries)
+    return latestTodosFromEntries(entries)
+}
+
+function latestTodosFromReasoning(reasoning: ReasoningEntry[]): TodoItem[] {
+    const entries: ToolCallReasoningEntry[] = []
+    collectTodoEntries(reasoning, entries)
+    return latestTodosFromEntries(entries)
+}
+
+function latestTodosFromEntries(entries: ToolCallReasoningEntry[]): TodoItem[] {
     for (let i = entries.length - 1; i >= 0; i -= 1) {
         const todos = todosFromEntry(entries[i])
         if (todos.length) return todos
@@ -103,7 +123,6 @@ function collectTodoEntries(reasoning: ReasoningEntry[] | undefined, out: ToolCa
     if (!reasoning) return
     for (const entry of reasoning) {
         if (entry.type === "tool_call" && entry.toolName === "TodoWrite") out.push(entry)
-        if (entry.type === "agent_call") collectTodoEntries(entry.reasoning, out)
     }
 }
 

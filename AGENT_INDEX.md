@@ -83,7 +83,8 @@ Use tools first:
 - Generic project workflow docs: `docs/project-run-workflow.md`
 - Prepare isolated worktree + port + coder handoff: `npm run self-dev:prepare -- --task "..." --json`
 - Prepare script: `scripts/self-dev-prepare.mjs`
-- Explicit run helper for status/commit/rebase/push/update/cleanup: `npm run self-dev:run -- <command> --run-id <id>`
+- Explicit run helper for start/stop/restart/preview/logs/status/commit/rebase/push/update/cleanup: `npm run self-dev:run -- <command> --run-id <id>`
+- Managed preview proxy: `app/dev-preview/[runId]/[[...path]]/route.ts`, `proxy.ts`
 - Run helper script: `scripts/self-dev-run.mjs`
 - Delegate to coder with `cwd` set to the prepared `repoDir`
 - Workflow docs: `docs/self-dev-workflow.md`
