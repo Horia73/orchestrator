@@ -62,6 +62,7 @@ export type CliQuotaId = CliQuotaSnapshot['cliId']
 const CLAUDE_CREDENTIALS_PATH = join(homedir(), '.claude', '.credentials.json')
 const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
+const CLAUDE_USAGE_DOCKER_TUI_ENABLED = process.env.CLAUDE_USAGE_DOCKER_TUI === '1'
 
 interface ClaudeUsageRaw {
     /** Cleaned-up plain text of the /usage panel. */
@@ -395,6 +396,15 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
             cliId: 'claude-code',
             available: false,
             error: 'Not logged in (no ~/.claude/.credentials.json).',
+            source: 'none',
+            fetchedAt,
+        }
+    }
+    if (process.env.ORCHESTRATOR_SERVICE_MANAGER === 'docker' && !CLAUDE_USAGE_DOCKER_TUI_ENABLED) {
+        return {
+            cliId: 'claude-code',
+            available: false,
+            error: 'Claude Code usage scraping is disabled in Docker to avoid hanging the usage page. Set CLAUDE_USAGE_DOCKER_TUI=1 to opt in.',
             source: 'none',
             fetchedAt,
         }
