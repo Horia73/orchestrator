@@ -246,6 +246,7 @@ export function AppSidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const isCollapsed = sidebarState === "collapsed"
+  const isOnChatHome = pathname === "/"
   const isOnSettings = pathname?.startsWith("/settings") ?? false
   const isOnScheduling = pathname?.startsWith("/scheduling") ?? false
   const isOnWatchlist = pathname?.startsWith("/watchlist") ?? false
@@ -632,27 +633,10 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {/* Scheduling + Watchlist + Inbox */}
+        {/* Watchlist + Scheduling + Inbox */}
         <SidebarGroup className="py-0">
           <SidebarGroupContent>
             <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  asChild
-                  tooltip="Scheduling"
-                  isActive={isOnScheduling}
-                  className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
-                >
-                  <Link
-                    href="/scheduling"
-                    replace={isMobile}
-                    onClick={closeMobileSidebar}
-                  >
-                    <CalendarClock className="size-4" />
-                    <span>Scheduling</span>
-                  </Link>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
               <SidebarMenuItem>
                 <SidebarMenuButton
                   asChild
@@ -667,6 +651,23 @@ export function AppSidebar() {
                   >
                     <LineChart className="size-4" />
                     <span>Watchlist</span>
+                  </Link>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+              <SidebarMenuItem>
+                <SidebarMenuButton
+                  asChild
+                  tooltip="Scheduling"
+                  isActive={isOnScheduling}
+                  className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+                >
+                  <Link
+                    href="/scheduling"
+                    replace={isMobile}
+                    onClick={closeMobileSidebar}
+                  >
+                    <CalendarClock className="size-4" />
+                    <span>Scheduling</span>
                   </Link>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -780,13 +781,7 @@ export function AppSidebar() {
                           state.isStreaming &&
                           state.streamingConversationId === conv.id)
                       const isActiveConversationRow =
-                        state.activeConversationId === conv.id &&
-                        !isOnSettings &&
-                        !isOnScheduling &&
-                        !isOnWatchlist &&
-                        !isOnMonitor &&
-                        !isOnMaps &&
-                        !isOnInbox
+                        state.activeConversationId === conv.id && isOnChatHome
                       const activityAt = getConversationLastMessageAt(conv)
                       const activityLabel = formatConversationActivityAge(
                         activityAt,

@@ -65,6 +65,16 @@ export function computeNextRunAt(spec: ScheduleSpec, fromMs: number): number | n
     }
 }
 
+/**
+ * Persist an explicit anchor for fixed-interval schedules. Without this, an
+ * `every` task that is recomputed after a late tick or a reschedule call starts
+ * counting from that recompute time and slowly drifts.
+ */
+export function ensureEveryStartAt(spec: ScheduleSpec, startAt: number): ScheduleSpec {
+    if (spec.kind !== 'every' || typeof spec.startAt === 'number') return spec
+    return { ...spec, startAt }
+}
+
 /** Throws InvalidScheduleError if the spec can never be scheduled. */
 export function assertSchedulable(spec: ScheduleSpec, nowMs: number): void {
     if (spec.kind === 'once' && spec.fireAt <= nowMs) {

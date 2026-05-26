@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { usePathname } from "next/navigation"
 import type {
   AgentCallReasoningEntry,
   Attachment,
@@ -90,6 +91,7 @@ interface ChatContextType {
 const ChatContext = React.createContext<ChatContextType | null>(null)
 
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
+  const pathname = usePathname()
   const [state, dispatch] = React.useReducer(chatReducer, {
     conversations: [],
     isLoading: true,
@@ -118,6 +120,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const clientStreamMessageIdRef = React.useRef<string | null>(null)
   const streamPageWasHiddenRef = React.useRef(false)
   const activeConversationIdRef = React.useRef<string | null>(null)
+  const pathnameRef = React.useRef(pathname)
   const conversationsRef = React.useRef<Conversation[]>([])
   const activeChatStreamsRef = React.useRef<Record<string, ActiveChatStream>>(
     {}
@@ -136,6 +139,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [state.activeConversationId])
 
   React.useEffect(() => {
+    pathnameRef.current = pathname
+  }, [pathname])
+
+  React.useEffect(() => {
     conversationsRef.current = state.conversations
   }, [state.conversations])
 
@@ -143,10 +150,19 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     unreadConversationIdsRef.current = unreadConversationIds
   }, [unreadConversationIds])
 
+  const getVisibleActiveConversationId = React.useCallback(() => {
+    if (typeof document === "undefined") return null
+    if (document.visibilityState !== "visible") return null
+    if (pathnameRef.current !== "/") return null
+    return activeConversationIdRef.current
+  }, [])
+
   React.useEffect(() => {
     if (state.isLoading) return
     const visibleActiveConversationId =
-      typeof document !== "undefined" && document.visibilityState === "visible"
+      typeof document !== "undefined" &&
+      document.visibilityState === "visible" &&
+      pathname === "/"
         ? state.activeConversationId
         : null
     const next = deriveUnreadConversationIds(
@@ -157,7 +173,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     writeUnreadConversationIds(next)
     unreadConversationIdsRef.current = next
     setUnreadConversationIds(next)
-  }, [state.activeConversationId, state.conversations, state.isLoading])
+  }, [
+    pathname,
+    state.activeConversationId,
+    state.conversations,
+    state.isLoading,
+  ])
 
   React.useEffect(() => {
     activeChatStreamsRef.current = state.activeChatStreams
@@ -217,11 +238,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           current.delete(id)
           return current
         }
-        const visibleActiveConversationId =
-          typeof document !== "undefined" &&
-          document.visibilityState === "visible"
-            ? activeConversationIdRef.current
-            : null
+        const visibleActiveConversationId = getVisibleActiveConversationId()
         if (
           isConversationUnread(
             { ...conversation, readAt },
@@ -235,7 +252,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         return current
       })
     },
-    [updateUnreadConversationIds]
+    [getVisibleActiveConversationId, updateUnreadConversationIds]
   )
 
   const applyConversationArchiveState = React.useCallback(
@@ -297,8 +314,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     (conversationId: string, message: Message) => {
       if (message.status === "aborted") return
       const isVisibleActive =
-        document.visibilityState === "visible" &&
-        activeConversationIdRef.current === conversationId
+        getVisibleActiveConversationId() === conversationId
 
       if (isVisibleActive) {
         markConversationRead(conversationId)
@@ -311,28 +327,38 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       )
       void showChatCompletionNotification(conversationId, conversation, message)
     },
-    [markConversationRead, markConversationUnread]
+    [
+      getVisibleActiveConversationId,
+      markConversationRead,
+      markConversationUnread,
+    ]
   )
 
   React.useEffect(() => {
-    if (!state.activeConversationId || document.visibilityState !== "visible")
+    const visibleActiveConversationId = getVisibleActiveConversationId()
+    if (
+      !visibleActiveConversationId ||
+      visibleActiveConversationId !== state.activeConversationId
+    )
       return
-    markConversationRead(state.activeConversationId)
-  }, [markConversationRead, state.activeConversationId])
+    markConversationRead(visibleActiveConversationId)
+  }, [
+    getVisibleActiveConversationId,
+    markConversationRead,
+    pathname,
+    state.activeConversationId,
+  ])
 
   React.useEffect(() => {
     const onVisibilityChange = () => {
-      if (
-        document.visibilityState === "visible" &&
-        activeConversationIdRef.current
-      ) {
-        markConversationRead(activeConversationIdRef.current)
-      }
+      const visibleActiveConversationId = getVisibleActiveConversationId()
+      if (visibleActiveConversationId)
+        markConversationRead(visibleActiveConversationId)
     }
     document.addEventListener("visibilitychange", onVisibilityChange)
     return () =>
       document.removeEventListener("visibilitychange", onVisibilityChange)
-  }, [markConversationRead])
+  }, [getVisibleActiveConversationId, markConversationRead])
 
   const cleanupStream = React.useCallback(() => {
     streamingRef.current = false

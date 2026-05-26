@@ -7,8 +7,14 @@ This workflow lets Orchestrator edit its own source without touching the live ch
 Run from the live repo:
 
 ```bash
+git status --short
+git branch --show-current
+git fetch origin --prune
+git status -sb
 npm run self-dev:prepare -- --task "Describe the change" --json
 ```
+
+Use this preflight to see whether the live checkout is dirty, behind, ahead, or diverged before creating the isolated worktree. Do not pull, rebase, reset, stash, or discard local work unless the user explicitly asked for that operation.
 
 The script:
 
@@ -34,6 +40,7 @@ Send the generated coder prompt to the coder agent. Coder owns implementation an
 
 - work only inside the isolated worktree;
 - not edit the live checkout;
+- check git branch/status before editing;
 - not commit or push;
 - not use port `3000`;
 - not run `npm run dev` for this repo;
@@ -64,6 +71,8 @@ npm run build
 ```
 
 Run targeted smoke tests for touched subsystems. If checks fail because of unrelated pre-existing errors, record that explicitly and verify the changed area narrowly.
+
+If the investigation shows that the requested behavior is not implemented yet, Orchestrator should propose the smallest coherent codebase change and ask for confirmation before starting a self-development run, unless the user already explicitly asked for implementation.
 
 ## Commit And Push
 

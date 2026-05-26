@@ -12,6 +12,17 @@ npm run project-run:prepare -- --kind existing-git --source "<git-url-or-local-p
 
 For a local path, the helper uses the source repo's `origin` remote when available and falls back to a local clone if the remote clone fails. Uncommitted changes in the local source checkout are not included unless they were committed before preparation.
 
+Before preparing from a local checkout, inspect branch/status and fetch remote refs when available:
+
+```bash
+git status --short
+git branch --show-current
+git fetch origin --prune
+git status -sb
+```
+
+Do not pull, rebase, reset, stash, or discard local work unless the user explicitly asked for that operation.
+
 Useful options:
 
 ```bash

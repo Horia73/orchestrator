@@ -76,6 +76,10 @@ export interface ToolExecutionContext {
   ) => void | Promise<void>
   /** Origin of the running Orchestrator app, used by sub-agents/runbooks for local API calls. */
   appOrigin?: string
+  /** Present when a tool call is made from inside a scheduled task run. */
+  scheduledTaskId?: string
+  /** Scheduled-run fire time (epoch ms) that woke the current agent. */
+  scheduledFiredAt?: number
 }
 
 // ---------------------------------------------------------------------------

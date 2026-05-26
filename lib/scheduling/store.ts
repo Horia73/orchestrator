@@ -20,7 +20,11 @@ import {
   type UpdateScheduledTaskInput,
   UpdateScheduledTaskInputSchema,
 } from "./schema"
-import { assertSchedulable, computeNextRunAt } from "./compute"
+import {
+  assertSchedulable,
+  computeNextRunAt,
+  ensureEveryStartAt,
+} from "./compute"
 
 // Recurring tasks auto-pause after this many consecutive failures so a bad
 // prompt or broken integration cannot loop forever (cost / runaway guard).
@@ -108,6 +112,11 @@ export function createScheduledTask(
 ): ScheduledTask {
   const parsed = CreateScheduledTaskInputSchema.parse(input)
   const now = Date.now()
+  const schedule =
+    parsed.schedule.kind === "every" &&
+    (parsed.enabled || typeof parsed.schedule.startAt === "number")
+      ? ensureEveryStartAt(parsed.schedule, now + parsed.schedule.everyMs)
+      : parsed.schedule
   const id = `sch_${randomUUID()}`
 
   let status: ScheduledTaskStatus
@@ -116,8 +125,8 @@ export function createScheduledTask(
     status = "paused"
     nextRunAt = null
   } else {
-    assertSchedulable(parsed.schedule, now)
-    nextRunAt = computeNextRunAt(parsed.schedule, now)
+    assertSchedulable(schedule, now)
+    nextRunAt = computeNextRunAt(schedule, now)
     status = "scheduled"
   }
 
@@ -139,7 +148,7 @@ export function createScheduledTask(
     enabled: parsed.enabled ? 1 : 0,
     status,
     action: JSON.stringify(parsed.action),
-    schedule: JSON.stringify(parsed.schedule),
+    schedule: JSON.stringify(schedule),
     nextRunAt,
     createdBy: parsed.createdBy,
     createdAt: now,
@@ -163,12 +172,23 @@ export function updateScheduledTask(
 
   const title = parsed.title ?? current.title
   const action: ScheduledAction = parsed.action ?? current.action
-  const schedule: ScheduleSpec = parsed.schedule ?? current.schedule
+  const requestedSchedule: ScheduleSpec = parsed.schedule ?? current.schedule
+  const defaultEveryStartAt =
+    requestedSchedule.kind === "every"
+      ? parsed.schedule !== undefined
+        ? now + requestedSchedule.everyMs
+        : (current.nextRunAt ?? now + requestedSchedule.everyMs)
+      : now
+  const schedule: ScheduleSpec =
+    requestedSchedule.kind === "every"
+      ? ensureEveryStartAt(requestedSchedule, defaultEveryStartAt)
+      : requestedSchedule
   const enabled = parsed.enabled ?? current.enabled
 
   // Recompute the next fire whenever schedule or enabled state changed; a
   // schedule edit always re-arms a paused/done/missed/errored task.
   const scheduleChanged = parsed.schedule !== undefined
+  const scheduleNormalized = schedule !== requestedSchedule
   const enabledChanged =
     parsed.enabled !== undefined && parsed.enabled !== current.enabled
 
@@ -179,6 +199,7 @@ export function updateScheduledTask(
     nextRunAt = null
   } else if (
     scheduleChanged ||
+    scheduleNormalized ||
     enabledChanged ||
     current.status === "paused" ||
     current.status === "missed"
@@ -265,17 +286,35 @@ export function claimForRun(id: string, nowMs: number): ClaimedTask | null {
 
     const task = taskFromRow(row)
     const isOnce = task.schedule.kind === "once"
-    const advancedNext = isOnce ? null : computeNextRunAt(task.schedule, nowMs)
+    const runSchedule =
+      task.schedule.kind === "every"
+        ? ensureEveryStartAt(
+            task.schedule,
+            task.nextRunAt ?? nowMs + task.schedule.everyMs
+          )
+        : task.schedule
+    const advancedNext = isOnce ? null : computeNextRunAt(runSchedule, nowMs)
 
     db.prepare(
       `
             UPDATE scheduled_tasks
-            SET status = 'running', nextRunAt = @nextRunAt, updatedAt = @now
+            SET status = 'running', schedule = @schedule, nextRunAt = @nextRunAt, updatedAt = @now
             WHERE id = @id
         `
-    ).run({ id, nextRunAt: advancedNext, now: nowMs })
+    ).run({
+      id,
+      schedule: JSON.stringify(runSchedule),
+      nextRunAt: advancedNext,
+      now: nowMs,
+    })
 
-    return { task, isOnce }
+    return {
+      task:
+        runSchedule === task.schedule
+          ? task
+          : { ...task, schedule: runSchedule },
+      isOnce,
+    }
   })
   const claimed = tx()
   if (claimed) emitScheduledTaskChanged(id, "running")

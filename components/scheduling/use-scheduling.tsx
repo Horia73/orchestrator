@@ -12,6 +12,9 @@ import { useAppEvent } from "@/hooks/use-app-events"
 export type { TaskRunRecord }
 
 const RUN_HISTORY_PAGE_SIZE = 50
+const DUE_RECONCILE_MS = 5_000
+const MAX_FUTURE_RECONCILE_MS = 60_000
+const DEADLINE_RECONCILE_GRACE_MS = 1_000
 
 export interface TaskRunPage {
   runs: TaskRunRecord[]
@@ -109,6 +112,40 @@ export function SchedulingProvider({
       document.removeEventListener("visibilitychange", onTick)
     }
   }, [refresh])
+
+  React.useEffect(() => {
+    if (tasks.length === 0) return
+
+    const now = Date.now()
+    const hasDueOrRunningTask = tasks.some(
+      (task) =>
+        task.enabled &&
+        (task.status === "running" ||
+          (task.nextRunAt !== null && task.nextRunAt <= now))
+    )
+    const nextRunAt = tasks.reduce<number | null>((soonest, task) => {
+      if (!task.enabled || task.nextRunAt === null) return soonest
+      if (task.nextRunAt <= now) return soonest
+      return soonest === null
+        ? task.nextRunAt
+        : Math.min(soonest, task.nextRunAt)
+    }, null)
+
+    if (!hasDueOrRunningTask && nextRunAt === null) return
+
+    const delay = hasDueOrRunningTask
+      ? DUE_RECONCILE_MS
+      : Math.min(
+          Math.max(nextRunAt! - now + DEADLINE_RECONCILE_GRACE_MS, 1_000),
+          MAX_FUTURE_RECONCILE_MS
+        )
+
+    const timer = window.setTimeout(() => {
+      if (document.visibilityState === "visible") void refresh()
+    }, delay)
+
+    return () => window.clearTimeout(timer)
+  }, [refresh, tasks])
 
   const createTask = React.useCallback(
     async (payload: NewTaskPayload) => {

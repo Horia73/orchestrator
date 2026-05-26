@@ -9,7 +9,12 @@
 // lib/monitoring/smart-monitor.ts; this adapter is just the bridge between the
 // watch store and the scheduler's system-task surface.
 
-import { nextMonitorSlotAfter, MONITOR_CADENCE_STEP_MS } from '../monitor/cadence'
+import {
+    floorToMonitorSlot,
+    isMonitorSlotAligned,
+    nextMonitorSlotAfter,
+    MONITOR_CADENCE_STEP_MS,
+} from '../monitor/cadence'
 import { countEnabledWatches } from '../monitor/store'
 
 // ---------------------------------------------------------------------------
@@ -29,13 +34,44 @@ function desiredSmartMonitorSchedule(): { kind: 'every'; everyMs: number; startA
     }
 }
 
-function needsScheduleRepair(schedule: unknown): boolean {
-    if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return true
-    const spec = schedule as { kind?: unknown; everyMs?: unknown; startAt?: unknown; fireAt?: unknown }
-    if (spec.kind === 'once') return true
-    if (spec.kind !== 'every') return false
-    if (typeof spec.everyMs !== 'number' || !Number.isFinite(spec.everyMs)) return true
-    return typeof spec.startAt !== 'number' || !Number.isFinite(spec.startAt)
+function validMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function snappedIntervalMs(value: number): number {
+    const snapped = Math.round(value / MONITOR_CADENCE_STEP_MS) * MONITOR_CADENCE_STEP_MS
+    return Math.max(MONITOR_CADENCE_STEP_MS, snapped)
+}
+
+function repairedSmartMonitorSchedule(existing: {
+    schedule: unknown
+    nextRunAt: number | null
+    lastRunAt: number | null
+}): { kind: 'every'; everyMs: number; startAt: number } | null {
+    const schedule = existing.schedule
+    if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return desiredSmartMonitorSchedule()
+    const spec = schedule as {
+        kind?: unknown
+        everyMs?: unknown
+        startAt?: unknown
+        fireAt?: unknown
+    }
+    if (spec.kind === 'once') return desiredSmartMonitorSchedule()
+    if (spec.kind !== 'every') return null
+    if (!validMs(spec.everyMs)) return desiredSmartMonitorSchedule()
+
+    const everyMs = snappedIntervalMs(spec.everyMs)
+    const startAt = validMs(spec.startAt) && isMonitorSlotAligned(spec.startAt)
+        ? spec.startAt
+        : floorToMonitorSlot(
+            validMs(existing.lastRunAt)
+                ? existing.lastRunAt
+                : validMs(existing.nextRunAt)
+                    ? existing.nextRunAt
+                    : nextMonitorSlotAfter(Date.now()),
+        )
+    if (everyMs === spec.everyMs && startAt === spec.startAt) return null
+    return { kind: 'every', everyMs, startAt }
 }
 
 /**
@@ -57,9 +93,8 @@ export async function ensureSmartMonitorHeartbeat(options: {
         if (existing.createdBy === 'system') {
             const patch: Parameters<typeof updateScheduledTask>[1] = {}
             if (existing.enabled !== options.enabled) patch.enabled = options.enabled
-            if (needsScheduleRepair(existing.schedule)) {
-                patch.schedule = desiredSmartMonitorSchedule()
-            }
+            const repairedSchedule = repairedSmartMonitorSchedule(existing)
+            if (repairedSchedule) patch.schedule = repairedSchedule
             if (Object.keys(patch).length > 0) {
                 updateScheduledTask(existing.id, patch)
             }

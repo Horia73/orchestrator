@@ -51,6 +51,17 @@ In `trusted_python`, the script may use normal Python libraries for local logic 
 
 Direct Python file access is confined to the script workspace. Relative paths are allowed; absolute paths and path traversal are blocked. Environment variables are sanitized, and app/user secrets are not passed to Python. Shell/process control is blocked by default.
 
+## Trigger And Schedule Contract
+
+Microscripts have two canonical schedule shapes:
+
+- Webhook-only or manual-only: `"schedule": { "kind": "manual" }`
+- Polling: `"schedule": { "kind": "interval", "every": "2m" }`
+
+`manual` means there is no timed polling. It still allows manual runs and inbound webhook dispatch.
+
+If a webhook event needs a later follow-up check, the script can return `nextCheckAfterMs` or `nextRunAt` from that webhook run. Otherwise it should process the event and exit.
+
 ## Blocked Actions
 
 When the runtime blocks an action, the error must include:

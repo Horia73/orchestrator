@@ -81,7 +81,7 @@ def run(ctx):
 Creation checklist:
 1. Clarify exact condition and why this belongs in Microscripts.
 2. Decide stop policy before creating.
-3. Decide cadence and minimum interval.
+3. Decide trigger, cadence, and minimum interval.
 4. Declare runtime/permissions. For flexible scripts, use trusted_python plus explicit notify/tool_call/app-action permissions.
 5. If model judgement is needed, use agent_wake as an escalation after the condition is met; do not wake a model on ordinary quiet checks.
 6. Write a short run(ctx), no sleeps. Use normal Python for deterministic logic and helpers for app actions.

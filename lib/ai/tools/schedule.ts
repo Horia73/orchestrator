@@ -1,6 +1,7 @@
-import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
-import type { ScheduledAction, ScheduleSpec } from '@/lib/scheduling/schema'
+import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
+import type { ScheduledAction, ScheduledTask, ScheduleSpec } from '@/lib/scheduling/schema'
 import { describeSchedule } from '@/lib/scheduling/compute'
+import { floorToMonitorSlot } from '@/lib/monitor/cadence'
 
 // ---------------------------------------------------------------------------
 // Agent-facing scheduling tools. The orchestrator decides ONCE, at creation
@@ -163,6 +164,26 @@ function normalizeSchedule(when: Record<string, unknown>): { spec: ScheduleSpec 
     return { error: 'No timing provided. Set one of: at, in, daily_at, every, weekly_days+weekly_at, cron.' }
 }
 
+function validMs(value: unknown): value is number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+}
+
+function intervalAnchorForReschedule(task: ScheduledTask, next: Extract<ScheduleSpec, { kind: 'every' }>, ctx: ToolExecutionContext | undefined, now: number): number {
+    if (task.schedule.kind === 'every' && validMs(task.schedule.startAt)) return task.schedule.startAt
+
+    const scheduledFiredAt = ctx?.scheduledTaskId === task.id && validMs(ctx.scheduledFiredAt)
+        ? ctx.scheduledFiredAt
+        : null
+    if (task.action.kind === 'monitor' && task.action.monitorKind === 'smart') {
+        const base = scheduledFiredAt ?? (validMs(task.lastRunAt) ? task.lastRunAt : validMs(task.nextRunAt) ? task.nextRunAt : now + next.everyMs)
+        return floorToMonitorSlot(base)
+    }
+
+    if (scheduledFiredAt !== null) return scheduledFiredAt
+    if (task.schedule.kind === 'every' && validMs(task.nextRunAt)) return task.nextRunAt
+    return now + next.everyMs
+}
+
 async function normalizeAction(action: Record<string, unknown>): Promise<{ action: ScheduledAction } | { error: string }> {
     const type = action.type
     if (type === 'agent') {
@@ -298,7 +319,7 @@ export const rescheduleTaskTool: ToolDef = {
     tags: ['scheduling'],
 }
 
-export async function executeRescheduleTask(args: Record<string, unknown>): Promise<ToolResult> {
+export async function executeRescheduleTask(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const taskId = typeof args.task_id === 'string' ? args.task_id.trim() : ''
     if (!taskId) return { success: false, error: 'task_id is required.' }
     if (!args.when || typeof args.when !== 'object' || Array.isArray(args.when)) {
@@ -307,8 +328,18 @@ export async function executeRescheduleTask(args: Record<string, unknown>): Prom
     const sched = normalizeSchedule(args.when as Record<string, unknown>)
     if ('error' in sched) return { success: false, error: sched.error }
     try {
-        const { updateScheduledTask } = await import('@/lib/scheduling/store')
-        const task = updateScheduledTask(taskId, { schedule: sched.spec })
+        const { getScheduledTask, updateScheduledTask } = await import('@/lib/scheduling/store')
+        const current = getScheduledTask(taskId)
+        if (!current) return { success: false, error: `No scheduled task with id ${taskId}.` }
+        const now = Date.now()
+        const schedule =
+            sched.spec.kind === 'every' && !validMs(sched.spec.startAt)
+                ? {
+                      ...sched.spec,
+                      startAt: intervalAnchorForReschedule(current, sched.spec, ctx, now),
+                  }
+                : sched.spec
+        const task = updateScheduledTask(taskId, { schedule })
         if (!task) return { success: false, error: `No scheduled task with id ${taskId}.` }
         return {
             success: true,

@@ -12,6 +12,13 @@ export function alignToMonitorSlot(ms: number): number {
         : rounded + (MONITOR_CADENCE_STEP_MS - remainder)
 }
 
+/** Return the quarter-hour slot at or before the provided time. */
+export function floorToMonitorSlot(ms: number): number {
+    const rounded = Math.floor(ms)
+    const remainder = rounded % MONITOR_CADENCE_STEP_MS
+    return rounded - remainder
+}
+
 /** Strictly future quarter-hour slot after the provided time. */
 export function nextMonitorSlotAfter(ms: number): number {
     return alignToMonitorSlot(ms + 1)

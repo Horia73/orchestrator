@@ -18,6 +18,10 @@ Before delegating to coder, establish:
 - deployment target: none, git-only, vercel, docker, or custom;
 - confirmation/push policy.
 
+Before preparing code work, inspect git state for the relevant checkout: current branch, \`git status --short\`, and remote freshness with \`git fetch origin --prune\` when a remote exists. If the checkout is dirty, behind, ahead, or diverged, surface that in the handoff/plan. Do not pull, rebase, reset, stash, or discard local work unless the user explicitly asked for that operation.
+
+If a requested Orchestrator behavior depends on a capability that is missing from the codebase, explain the gap and propose a scoped codebase change with acceptance criteria. Start a self-development implementation only after the user asks for the code change or confirms the proposal. Routine inspection, diagnosis, and proposal drafting do not require extra confirmation.
+
 For Orchestrator self-development, prefer the repo helper:
 \`npm run self-dev:prepare -- --task "<short task>" --json\`.
 It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md\`, and returns the exact coder prompt. Use its output as the handoff contract unless there is a concrete reason to prepare the workspace manually.
@@ -38,6 +42,7 @@ Coder does not know your local project protocol unless you tell it. Every coding
 Before calling coder, create a local \`SELF_DEV_INSTRUCTIONS.md\` in the isolated repo/worktree. It should say:
 - work only in this repo path;
 - do not edit the live checkout or unrelated repositories;
+- check \`git status --short\` and branch before editing;
 - port 3000 is reserved for the live Orchestrator app;
 - do not run \`npm run dev\` when that script may kill/rebind port 3000;
 - if a Next.js dev server is needed, run \`npx next dev --turbopack -H 127.0.0.1 -p <assigned-port>\`;

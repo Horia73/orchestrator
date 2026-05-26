@@ -5,6 +5,7 @@ import { describeAction, describeRule } from '../monitor/describe'
 import type { SuppressPattern, WatchEvent } from '../monitor/schema'
 import { listMonitorWatches, listWatchEvents } from '../monitor/store'
 import { listTaskRuns, type TaskRunRecord } from '../scheduling/store'
+import { getConfig } from '../config'
 
 function clipUnknownJson(value: unknown, maxChars = 4000): string {
     let s: string
@@ -48,6 +49,68 @@ function buildRecentRunHistoryBlock(taskId: string, now: number): string[] {
     return lines
 }
 
+function systemTimezone(): string {
+    try {
+        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    } catch {
+        return 'UTC'
+    }
+}
+
+function validTimezone(tz: string): boolean {
+    try {
+        new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date(0))
+        return true
+    } catch {
+        return false
+    }
+}
+
+function formatLocalDateTime(ms: number, timezone: string): string {
+    const date = new Date(ms)
+    const local = new Intl.DateTimeFormat('sv-SE', {
+        timeZone: timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+        hour: '2-digit',
+        minute: '2-digit',
+        second: '2-digit',
+        hourCycle: 'h23',
+    }).format(date)
+    const offset =
+        new Intl.DateTimeFormat('en-US', {
+            timeZone: timezone,
+            hour: '2-digit',
+            hourCycle: 'h23',
+            timeZoneName: 'shortOffset',
+        })
+            .formatToParts(date)
+            .find((part) => part.type === 'timeZoneName')?.value ?? ''
+    const localDate = local.slice(0, 10)
+    return offset ? `${local} ${offset} (local_date ${localDate})` : `${local} (local_date ${localDate})`
+}
+
+function buildRuntimeTimeBlock(now: number, watches: Array<{ notify: { quietHours?: { timezone: string } } }>): string[] {
+    const zones = new Set<string>()
+    const configured = getConfig().smartMonitor?.quietHours?.timezone
+    if (configured && validTimezone(configured)) zones.add(configured)
+    for (const watch of watches) {
+        const tz = watch.notify.quietHours?.timezone
+        if (tz && validTimezone(tz)) zones.add(tz)
+    }
+    const system = systemTimezone()
+    if (validTimezone(system)) zones.add(system)
+    if (zones.size === 0) zones.add('UTC')
+
+    const lines = ['Runtime time:', `- UTC wake time: ${new Date(now).toISOString()}`]
+    for (const tz of zones) {
+        lines.push(`- ${tz}: ${formatLocalDateTime(now, tz)}`)
+    }
+    lines.push('- Treat the local time lines above as authoritative; do not manually infer DST from the UTC timestamp.')
+    return lines
+}
+
 /** History kinds the model is interested in when judging this wake. We exclude
  * raw `check` events (very noisy) and `cadence_change` (bookkeeping). */
 const WAKE_HISTORY_KINDS = ['wake', 'notify', 'suppress', 'feedback', 'match', 'action', 'error'] as const
@@ -82,10 +145,11 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push('Cadence policy:')
     lines.push(`- Current task id: ${taskId}. Default cadence is 15m.`)
     lines.push('- You MAY call reschedule_task for this task to self-pace. Keep the 15m default when it still fits; tighten only for clearly time-sensitive periods; widen to 30m, 1h, 2h, or longer after sustained quiet periods, low-signal hours, or known inactive windows. Do not thrash; reschedule only on a clear tier change.')
+    lines.push('- Smart Monitor interval schedules are anchored to the existing monitor slot grid. If a wake happened on the :30 slot and you widen to every 1h, the next wake should stay on :30, not slide to the time this run finishes.')
     lines.push('- Quiet-hour preferences are context only, not a hard upstream gate. Use local time, task history, and urgency to decide whether to notify now, defer, or widen cadence.')
     lines.push('- Always call set_task_state with the full updated small state: per-source watermarks/lastSeen ids, quietRuns/activeRuns, lastNotifiedAt, cadenceTier, lastCheckedAt, digestQueue/lastDigestAt if useful, and any useful time-of-day signal.')
     lines.push('')
-    lines.push(`Wake time: ${new Date(now).toISOString()}.`)
+    lines.push(...buildRuntimeTimeBlock(now, watches))
     lines.push('')
     lines.push('<task_state>')
     lines.push(clipUnknownJson(taskState))

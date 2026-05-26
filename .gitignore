@@ -59,3 +59,5 @@ next-env.d.ts
 .idea/
 .vscode/
 .claude/
+AGENTS.md
+CLAUDE.md

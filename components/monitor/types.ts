@@ -151,3 +151,90 @@ export interface MicroscriptDetail extends MicroscriptRow {
   runs: MicroscriptRun[]
   events: MicroscriptEvent[]
 }
+
+export type WebhookAuthMode = "bearer" | "hmac" | "none"
+export type WebhookEventStatus =
+  | "received"
+  | "processing"
+  | "processed"
+  | "duplicate"
+  | "error"
+export type WebhookDispatchStatus =
+  | "queued"
+  | "running"
+  | "ok"
+  | "skipped"
+  | "error"
+
+export interface WebhookEndpoint {
+  id: string
+  slug: string
+  title: string
+  description: string | null
+  source: string
+  defaultEventType: string | null
+  enabled: boolean
+  authMode: WebhookAuthMode
+  hmacToleranceSeconds: number
+  rateLimitPerMinute: number
+  retentionDays: number
+  createdBy: "user" | "orchestrator" | "system"
+  createdAt: number
+  updatedAt: number
+  secretConfigured: boolean
+  secretPreview: string | null
+}
+
+export interface WebhookSubscription {
+  id: string
+  endpointId: string
+  targetKind: "microscript"
+  targetId: string
+  enabled: boolean
+  eventType: string | null
+  payloadPath: string | null
+  payloadEquals: unknown | null
+  createdAt: number
+  updatedAt: number
+}
+
+export interface NormalizedWebhookEvent {
+  source: string
+  eventType: string
+  subject: string | null
+  actor: string | null
+  occurredAt: number
+  summary: string
+  metadata: Record<string, unknown>
+}
+
+export interface WebhookDispatch {
+  id: string
+  eventId: string
+  subscriptionId: string | null
+  targetKind: "microscript"
+  targetId: string
+  status: WebhookDispatchStatus
+  error: string | null
+  runSummary: string | null
+  conversationId: string | null
+  startedAt: number
+  endedAt: number | null
+}
+
+export interface WebhookEvent {
+  id: string
+  endpointId: string
+  slug: string
+  source: string
+  eventType: string
+  dedupeKey: string
+  payload: Record<string, unknown>
+  normalized: NormalizedWebhookEvent
+  status: WebhookEventStatus
+  error: string | null
+  occurredAt: number
+  receivedAt: number
+  processedAt: number | null
+  dispatches?: WebhookDispatch[]
+}

@@ -12,6 +12,7 @@ import {
   Loader2,
   Radar,
   Trash2,
+  Webhook,
   X,
 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
@@ -43,6 +44,7 @@ import type {
   WatchRow,
 } from "./types"
 import { WatchRowCard } from "./watch-row-card"
+import { WebhooksTab } from "./webhooks-tab"
 
 // ---------------------------------------------------------------------------
 // Detail panel
@@ -939,9 +941,9 @@ function MicroscriptEvents({
 // ---------------------------------------------------------------------------
 
 export function MonitorView() {
-  const [activeTab, setActiveTab] = React.useState<"watches" | "microscripts">(
-    "watches"
-  )
+  const [activeTab, setActiveTab] = React.useState<
+    "watches" | "microscripts" | "webhooks"
+  >("watches")
   const [watches, setWatches] = React.useState<WatchRow[]>([])
   const [microscripts, setMicroscripts] = React.useState<MicroscriptRow[]>([])
   const [status, setStatus] = React.useState<HeartbeatStatus | null>(null)
@@ -1096,9 +1098,13 @@ export function MonitorView() {
         </div>
         <Tabs
           value={activeTab}
-          onValueChange={(value) =>
-            setActiveTab(value === "microscripts" ? "microscripts" : "watches")
-          }
+          onValueChange={(value) => {
+            if (value === "microscripts" || value === "webhooks") {
+              setActiveTab(value)
+              return
+            }
+            setActiveTab("watches")
+          }}
           className="gap-0"
         >
           <TabsList className="h-9 self-start border-b-0">
@@ -1113,13 +1119,17 @@ export function MonitorView() {
               <FileCode2 className="size-3.5" />
               Microscripts
             </TabsTrigger>
+            <TabsTrigger value="webhooks" className="h-9 px-2.5 text-[13px]">
+              <Webhook className="size-3.5" />
+              Webhooks
+            </TabsTrigger>
           </TabsList>
         </Tabs>
       </header>
 
       {activeTab === "watches" ? (
         <StatusHeader status={status} loading={loading} />
-      ) : (
+      ) : activeTab === "microscripts" ? (
         <div className="border-b border-border/60 px-4 py-3 text-[12px] text-foreground/65 md:px-5">
           <div className="flex min-w-0 flex-wrap items-center gap-x-4 gap-y-1.5">
             <div className="flex min-w-0 items-center gap-1.5">
@@ -1149,7 +1159,7 @@ export function MonitorView() {
             </span>
           </div>
         </div>
-      )}
+      ) : null}
 
       {error && (
         <div className="border-b border-border/60 bg-red-50 px-5 py-2 text-[12px] text-[#802020] dark:bg-red-950/30 dark:text-red-300">
@@ -1205,7 +1215,7 @@ export function MonitorView() {
               </div>
             )}
           </>
-        ) : (
+        ) : activeTab === "microscripts" ? (
           <>
             <div
               className={cn(
@@ -1257,6 +1267,8 @@ export function MonitorView() {
               </div>
             )}
           </>
+        ) : (
+          <WebhooksTab microscripts={microscripts} />
         )}
       </div>
     </div>

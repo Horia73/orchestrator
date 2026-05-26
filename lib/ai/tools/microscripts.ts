@@ -224,6 +224,11 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
             webhook_trigger: {
                 trigger: 'ctx["trigger"] == "webhook"',
                 context: 'ctx["webhook"] contains eventId, endpointId, slug, source, eventType, dedupeKey, occurredAt, receivedAt, payload, and normalized.',
+                follow_up: 'Return nextCheckAfterMs/nextRunAt only when the webhook event needs a later follow-up run.',
+            },
+            schedule_contract: {
+                manual: 'manifest.schedule={kind:"manual"} means no timed polling; manual runs and webhook dispatch can still invoke the script.',
+                interval: 'manifest.schedule={kind:"interval", every:"5m"} or everyMs schedules timed polling through the Microscripts heartbeat.',
             },
             response_shape: {
                 summary: 'optional short run summary',
@@ -279,7 +284,7 @@ export const microscriptCreateTool: ToolDef = {
         properties: {
             title: { type: 'string' },
             code: { type: 'string', description: 'Python code defining run(ctx).' },
-            manifest: { type: 'object', description: 'MicroscriptManifest. schedule.every may be a duration string such as "5m".' },
+            manifest: { type: 'object', description: 'MicroscriptManifest. schedule.every may be a duration string such as "5m"; microscript_describe_capabilities includes the schedule shapes.' },
             enabled: { type: 'boolean' },
             initial_state: { type: 'object' },
         },

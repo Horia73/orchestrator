@@ -245,6 +245,8 @@ export async function runScheduledTask(
             depth: 0,
             conversationId,
             parentRequestId: `sched_${randomUUID()}`,
+            scheduledTaskId: task.id,
+            scheduledFiredAt: firedAt,
             onAgentEvent: (event) => {
               if (event.type === "agent_start" && topRunId === null)
                 topRunId = event.runId
@@ -329,6 +331,8 @@ export async function runScheduledTask(
           depth: 0,
           conversationId,
           parentRequestId: `sched_${randomUUID()}`,
+          scheduledTaskId: task.id,
+          scheduledFiredAt: firedAt,
           onAgentEvent: (event) => {
             if (event.type === "agent_start" && topRunId === null)
               topRunId = event.runId
