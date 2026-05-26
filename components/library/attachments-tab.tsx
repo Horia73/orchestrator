@@ -356,7 +356,7 @@ export function AttachmentsTab({
               searchPlaceholder ?? "Caută după nume, tip, conversație sau path…"
             }
             onDebouncedChange={setQuery}
-            className="max-w-md"
+            className="w-full max-w-md"
           />
           {actionMessage ? (
             <span className="text-[12px] text-muted-foreground">

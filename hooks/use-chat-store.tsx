@@ -679,6 +679,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (document.visibilityState !== "visible") return
       const conversationId = activeConversationIdRef.current
       if (!conversationId) return
+      if (streamingRef.current) return
 
       const knownStream = activeChatStreamsRef.current[conversationId]
       if (!knownStream && !isStreamingStateRef.current) return
