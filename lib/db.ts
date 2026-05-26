@@ -529,9 +529,7 @@ function messageFromRow(msgRow: MessageRow): Message {
     thinkingDuration: msgRow.thinkingDuration ?? undefined,
     toolCalls: parseJsonField<Message["toolCalls"]>(msgRow.toolCalls),
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
-    replyActions: parseJsonField<Message["replyActions"]>(
-      msgRow.replyActions
-    ),
+    replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
     timestamp: msgRow.timestamp,
   }
 }
@@ -812,12 +810,12 @@ export function listAllAttachments(): AttachmentLibraryEntry[] {
       `
     )
     .all() as Array<{
-      messageId: string
-      timestamp: number
-      attachments: string
-      conversationId: string
-      conversationTitle: string
-    }>
+    messageId: string
+    timestamp: number
+    attachments: string
+    conversationId: string
+    conversationTitle: string
+  }>
 
   const out: AttachmentLibraryEntry[] = []
   for (const row of rows) {
@@ -847,6 +845,99 @@ export function listAllAttachments(): AttachmentLibraryEntry[] {
     }
   }
   return out
+}
+
+export interface DeleteLibraryAttachmentsResult {
+  requested: number
+  deleted: number
+  missing: string[]
+  affectedMessages: number
+}
+
+function collectAllReferencedAttachmentIds(): Set<string> {
+  const rows = db
+    .prepare("SELECT attachments FROM messages WHERE attachments IS NOT NULL")
+    .all() as { attachments: string | null }[]
+
+  const referenced = new Set<string>()
+  for (const row of rows) {
+    if (!row.attachments) continue
+    try {
+      const parsed = JSON.parse(row.attachments) as Attachment[]
+      for (const att of parsed) {
+        if (typeof att?.id === "string") referenced.add(att.id)
+      }
+    } catch {
+      /* skip malformed rows */
+    }
+  }
+  return referenced
+}
+
+export function deleteLibraryAttachments(
+  ids: string[]
+): DeleteLibraryAttachmentsResult {
+  const requestedIds = Array.from(
+    new Set(
+      ids
+        .filter((id) => typeof id === "string" && id.trim())
+        .map((id) => id.trim())
+    )
+  )
+  if (requestedIds.length === 0) {
+    return { requested: 0, deleted: 0, missing: [], affectedMessages: 0 }
+  }
+
+  const wanted = new Set(requestedIds)
+  const rows = db
+    .prepare(
+      "SELECT id, attachments FROM messages WHERE attachments IS NOT NULL"
+    )
+    .all() as Array<{ id: string; attachments: string | null }>
+
+  const updateMessage = db.prepare(
+    "UPDATE messages SET attachments = ? WHERE id = ?"
+  )
+  const removedIds = new Set<string>()
+  let affectedMessages = 0
+
+  const transaction = db.transaction(() => {
+    for (const row of rows) {
+      if (!row.attachments) continue
+      let parsed: Attachment[]
+      try {
+        parsed = JSON.parse(row.attachments) as Attachment[]
+      } catch {
+        continue
+      }
+      if (!Array.isArray(parsed)) continue
+
+      const kept = parsed.filter((att) => {
+        if (!att || typeof att.id !== "string" || !wanted.has(att.id))
+          return true
+        removedIds.add(att.id)
+        return false
+      })
+      if (kept.length === parsed.length) continue
+
+      updateMessage.run(kept.length > 0 ? JSON.stringify(kept) : null, row.id)
+      affectedMessages++
+    }
+  })
+
+  transaction()
+
+  const stillReferenced = collectAllReferencedAttachmentIds()
+  for (const id of removedIds) {
+    if (!stillReferenced.has(id)) unlinkUploadIfExists(id)
+  }
+
+  return {
+    requested: requestedIds.length,
+    deleted: removedIds.size,
+    missing: requestedIds.filter((id) => !removedIds.has(id)),
+    affectedMessages,
+  }
 }
 
 export function createConversation(conversation: Conversation) {
@@ -933,7 +1024,9 @@ export function createConversation(conversation: Conversation) {
         thinkingDuration: msg.thinkingDuration ?? null,
         toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
         attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
-        replyActions: msg.replyActions ? JSON.stringify(msg.replyActions) : null,
+        replyActions: msg.replyActions
+          ? JSON.stringify(msg.replyActions)
+          : null,
         timestamp: msg.timestamp,
       })
     }

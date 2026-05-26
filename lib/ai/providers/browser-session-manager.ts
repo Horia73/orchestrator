@@ -461,7 +461,7 @@ class BrowserSessionManager {
         const manager = await createBrowserManager({
             backend: config.browser.backend,
             userDataDir: getOfficialDisplayUserDataDir(config, sessionId),
-            downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads', sessionId),
+            downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads'),
             profileMode: config.browser.profileMode,
             baseProfileDir: config.browser.baseProfileDir,
             chromeExecutablePath: config.browser.chromeExecutablePath,
