@@ -79,7 +79,9 @@ function toolsLabel(
     activated: Set<string>,
     entry: IntegrationManifestEntry
 ): string {
-    if (entry.operationalToolIds.length === 0) return 'setup/lifecycle only'
+    if (entry.operationalToolIds.length === 0) {
+        return entry.setupToolIds.length > 0 ? 'setup/lifecycle only' : 'status/runbook only'
+    }
     if (entry.id === 'whatsapp') return `loaded (${entry.operationalToolIds.length} tools; writes require explicit confirmation; connect first when needed)`
     const connected = snapshot[entry.statusKind]?.state === 'connected'
     if (!connected) return 'unavailable until connected'

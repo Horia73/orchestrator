@@ -37,6 +37,7 @@ export type IntegrationStatusKind =
     | 'home-assistant'
     | 'maps'
     | 'weather'
+    | 'location-intelligence'
 
 export interface IntegrationManifestEntry {
     /** Stable id — used by ActivateIntegrationTools, the activation store, and the runbook. */
@@ -64,6 +65,8 @@ export interface IntegrationManifestEntry {
     doctrine?: string
     /** Optional note shown in the block, e.g. shared-account caveats. */
     note?: string
+    /** Include in the always-on block even when it has no tool schemas. */
+    alwaysInScope?: boolean
 }
 
 /** Tool ids that are part of the setup/lifecycle surface, by family. */
@@ -167,6 +170,17 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
         doctrine: WEATHER_DOCTRINE,
         note: 'WeatherShow is always visible to the orchestrator. Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.',
     },
+    {
+        id: 'location-intelligence',
+        label: 'Location Intelligence',
+        capability: 'Optional local location subsystem: Home Assistant location webhook ingestion into a microscript journal, daily scheduled agent summaries, local JSON retention, and Library Places map/timeline views. It is never enabled by default and must be explicitly opted into.',
+        runbookId: 'location-intelligence',
+        statusKind: 'location-intelligence',
+        setupToolIds: [],
+        operationalToolIds: [],
+        alwaysInScope: true,
+        note: 'Stores non-secret config in workspace config.json. The current compatible journal layout is microscripts/<scriptId>/files/location/{points.jsonl,days/*.json,routine.json,place_aliases.json}. Ask about retention, including "keep everything", before enabling tracking.',
+    },
 ]
 
 const MANIFEST_BY_ID = new Map(INTEGRATION_MANIFEST.map(e => [e.id, e]))
@@ -197,6 +211,7 @@ export function operationalIntegrationFor(toolId: string): string | undefined {
 export function integrationsInScope(declaredToolIds: string[]): IntegrationManifestEntry[] {
     const declared = new Set(declaredToolIds)
     return INTEGRATION_MANIFEST.filter(entry =>
+        entry.alwaysInScope ||
         entry.setupToolIds.some(id => declared.has(id)) ||
         entry.operationalToolIds.some(id => declared.has(id))
     )

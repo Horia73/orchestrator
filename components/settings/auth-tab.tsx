@@ -7,10 +7,13 @@ import {
   CalendarDays,
   CheckCircle2,
   ChevronDown,
+  Clock3,
   CloudSun,
+  Database,
   FolderOpen,
   House,
   KeyRound,
+  LocateFixed,
   LogIn,
   Loader2,
   Mail,
@@ -68,6 +71,7 @@ import {
   type GoogleDriveIntegrationStatusEntry,
   type HomeAssistantIntegrationStatusEntry,
   type IntegrationsStatus,
+  type LocationIntelligenceIntegrationStatusEntry,
   type MapsIntegrationStatusEntry,
   type RuntimeAccessInfo,
   type WeatherIntegrationStatusEntry,
@@ -113,6 +117,7 @@ const AUTH_SERVICE_IDS = [
   "googleDrive",
   "homeAssistant",
   "mapsWeather",
+  "locationIntelligence",
 ] as const
 
 type AuthServiceId = (typeof AUTH_SERVICE_IDS)[number]
@@ -848,6 +853,8 @@ function ConnectedServicesSection() {
             onSaveConfig={saveGoogleMapsConfig}
           />
         )
+      case "locationIntelligence":
+        return <LocationIntelligenceCard entry={data.locationIntelligence} />
     }
   }
 
@@ -1082,6 +1089,7 @@ function buildAuthServiceDescriptors(
         "tone" | "status"
       >)
   const mapsStatus = mapsWeatherStatus(data.maps, data.weather)
+  const locationStatus = locationIntelligenceStatus(data.locationIntelligence)
 
   return [
     {
@@ -1162,6 +1170,15 @@ function buildAuthServiceDescriptors(
       iconWrapClassName: "bg-cyan-500/10",
       iconClassName: "text-cyan-700 dark:text-cyan-400",
       ...mapsStatus,
+    },
+    {
+      id: "locationIntelligence",
+      name: data.locationIntelligence.name,
+      summary: locationIntelligenceSummary(data.locationIntelligence),
+      icon: LocateFixed,
+      iconWrapClassName: "bg-violet-500/10",
+      iconClassName: "text-violet-700 dark:text-violet-400",
+      ...locationStatus,
     },
   ]
 }
@@ -1244,6 +1261,248 @@ function mapsWeatherSummary(
   if (!maps.configured) return `Add Maps key · ${weatherLabel}`
   if (!maps.connected) return `Maps not verified · ${weatherLabel}`
   return `${maps.mapIdConfigured ? "Vector Map ID set" : "Demo Map ID"} · ${weatherLabel}`
+}
+
+function LocationIntelligenceCard({
+  entry,
+}: {
+  entry: LocationIntelligenceIntegrationStatusEntry
+}) {
+  const badge = !entry.configured ? (
+    <Badge tone="muted" icon={<LocateFixed className="size-3" />}>
+      Optional
+    </Badge>
+  ) : !entry.enabled ? (
+    <Badge tone="muted" icon={<AlertCircle className="size-3" />}>
+      Disabled
+    </Badge>
+  ) : entry.connected ? (
+    <Badge tone="success" icon={<CheckCircle2 className="size-3" />}>
+      Ready
+    </Badge>
+  ) : (
+    <Badge tone="warn" icon={<AlertCircle className="size-3" />}>
+      Needs setup
+    </Badge>
+  )
+
+  const sourceLabel =
+    entry.source.label ??
+    entry.source.entityId ??
+    sourceTypeLabel(entry.source.type)
+
+  const startSetup = () => {
+    try {
+      window.localStorage.setItem("chat:draft:new", entry.setupPrompt)
+    } catch {
+      // Navigation still opens chat; draft prefill is best-effort.
+    }
+  }
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-violet-500/10">
+              <LocateFixed className="size-4 text-violet-700 dark:text-violet-400" />
+            </span>
+            <CardTitle className="truncate">Location Intelligence</CardTitle>
+          </div>
+          {badge}
+        </div>
+        <CardDescription>
+          Optional local Home Assistant location journal, daily summaries, and
+          Library Places map/timeline. Tracking is off until explicitly
+          configured.
+        </CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-3 md:grid-cols-3">
+          <div className="rounded-xl border border-border/70 bg-background/60 px-3 py-3">
+            <div className="mb-2 flex items-center gap-2 text-[12.5px] font-medium text-foreground/75">
+              <LocateFixed className="size-3.5 text-foreground/50" />
+              Source
+            </div>
+            <div className="grid gap-1.5 text-[12.5px]">
+              <StatusRow label="Mode" value={sourceTypeLabel(entry.source.type)} />
+              <StatusRow label="Entity" value={entry.source.entityId ?? "Not set"} />
+              <StatusRow label="Label" value={sourceLabel} />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border/70 bg-background/60 px-3 py-3">
+            <div className="mb-2 flex items-center gap-2 text-[12.5px] font-medium text-foreground/75">
+              <Database className="size-3.5 text-foreground/50" />
+              Journal
+            </div>
+            <div className="grid gap-1.5 text-[12.5px]">
+              <StatusRow
+                label="Files"
+                value={entry.journal.exists ? "Found" : "Not found"}
+              />
+              <StatusRow label="Days" value={String(entry.journal.dayCount)} />
+              <StatusRow
+                label="Latest"
+                value={entry.journal.lastDate ?? "No days yet"}
+              />
+              <StatusRow
+                label="Path"
+                value={entry.journal.relativePath ?? "Not configured"}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border/70 bg-background/60 px-3 py-3">
+            <div className="mb-2 flex items-center gap-2 text-[12.5px] font-medium text-foreground/75">
+              <Clock3 className="size-3.5 text-foreground/50" />
+              Policy
+            </div>
+            <div className="grid gap-1.5 text-[12.5px]">
+              <StatusRow label="Retention" value={entry.retention.label} />
+              <StatusRow label="Maps mode" value={entry.mapsMode} />
+              <StatusRow
+                label="Script"
+                value={entry.journalScriptId ?? "Not set"}
+              />
+              <StatusRow label="Task" value={entry.dailyTaskId ?? "Not set"} />
+            </div>
+          </div>
+        </div>
+
+        <div className="grid gap-3 md:grid-cols-2">
+          <div className="rounded-xl border border-border/70 bg-background/60 px-3 py-3 text-[12.5px]">
+            <div className="mb-2 font-medium text-foreground/75">
+              Microscript
+            </div>
+            <div className="grid gap-1.5">
+              <StatusRow
+                label="Status"
+                value={
+                  entry.microscript
+                    ? entry.microscript.exists
+                      ? entry.microscript.status ?? "Unknown"
+                      : "Missing"
+                    : "Not configured"
+                }
+              />
+              <StatusRow
+                label="Last run"
+                value={formatStatusTimestamp(entry.microscript?.lastRunAt)}
+              />
+              <StatusRow
+                label="Next run"
+                value={formatStatusTimestamp(entry.microscript?.nextRunAt)}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-border/70 bg-background/60 px-3 py-3 text-[12.5px]">
+            <div className="mb-2 font-medium text-foreground/75">
+              Daily intelligence task
+            </div>
+            <div className="grid gap-1.5">
+              <StatusRow
+                label="Status"
+                value={
+                  entry.dailyTask
+                    ? entry.dailyTask.exists
+                      ? entry.dailyTask.status ?? "Unknown"
+                      : "Missing"
+                    : "Not configured"
+                }
+              />
+              <StatusRow
+                label="Last run"
+                value={formatStatusTimestamp(entry.dailyTask?.lastRunAt)}
+              />
+              <StatusRow
+                label="Next run"
+                value={formatStatusTimestamp(entry.dailyTask?.nextRunAt)}
+              />
+            </div>
+          </div>
+        </div>
+
+        {entry.error && <InlineNotice tone="warning" text={entry.error} />}
+
+        <div className="flex flex-wrap gap-2">
+          <Button asChild size="sm" variant={entry.configured ? "outline" : "default"}>
+            <a href="/" onClick={startSetup}>
+              <MessageCircle className="size-3.5" />
+              Ask your assistant to set up Location Intelligence
+            </a>
+          </Button>
+          <Button asChild size="sm" variant="outline">
+            <a href="/library?tab=places">
+              <MapPinned className="size-3.5" />
+              Open Places
+            </a>
+          </Button>
+        </div>
+
+        <details className="group rounded-xl border border-border/70 bg-background/60 px-3 py-2.5">
+          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 text-[12.5px] font-medium text-foreground/75">
+            <span>Setup guidance</span>
+            <ChevronDown className="size-3.5 text-foreground/45 transition-transform group-open:rotate-180" />
+          </summary>
+          <div className="mt-2 grid gap-2 border-t border-border/60 pt-2 text-[12px] leading-relaxed text-foreground/60">
+            <p>
+              Location Intelligence needs explicit opt-in, a Home Assistant
+              location source, a local journal microscript, a daily scheduled
+              summary task, retention choice, and Maps mode choice.
+            </p>
+            <p>
+              Retention can be finite or "keep everything". Setup stores only
+              non-secret ids and preferences in local config; webhook or Home
+              Assistant credentials belong in existing secret surfaces.
+            </p>
+          </div>
+        </details>
+      </CardContent>
+    </Card>
+  )
+}
+
+function StatusRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="grid grid-cols-[88px_minmax(0,1fr)] gap-2">
+      <span className="text-foreground/55">{label}</span>
+      <span className="truncate text-foreground/80" title={value}>
+        {value}
+      </span>
+    </div>
+  )
+}
+
+function sourceTypeLabel(
+  value: LocationIntelligenceIntegrationStatusEntry["source"]["type"]
+): string {
+  if (value === "home-assistant-webhook") return "Home Assistant webhook"
+  if (value === "home-assistant") return "Home Assistant"
+  if (value === "manual") return "Manual import"
+  return "Not set"
+}
+
+function locationIntelligenceStatus(
+  entry: LocationIntelligenceIntegrationStatusEntry
+): Pick<AuthServiceDescriptor, "tone" | "status"> {
+  if (!entry.configured) return { tone: "muted", status: "Optional" }
+  if (!entry.enabled) return { tone: "muted", status: "Disabled" }
+  if (entry.connected) return { tone: "success", status: "Ready" }
+  if (entry.needsReconnect) return { tone: "warn", status: "Needs setup" }
+  return { tone: "warn", status: "No data" }
+}
+
+function locationIntelligenceSummary(
+  entry: LocationIntelligenceIntegrationStatusEntry
+): string {
+  if (!entry.configured) return "Ask your assistant to set it up"
+  if (!entry.enabled) return "Configured but disabled"
+  if (entry.journal.lastDate) return `Latest day ${entry.journal.lastDate}`
+  if (entry.journal.dayCount > 0) return `${entry.journal.dayCount} days indexed`
+  if (entry.journal.exists) return "Journal ready; no days yet"
+  return "Journal files missing"
 }
 
 function GmailCard({
@@ -2418,6 +2677,16 @@ function formatExpiry(expiresAt: number): string {
     hour: "2-digit",
     minute: "2-digit",
   }).format(new Date(expiresAt))}`
+}
+
+function formatStatusTimestamp(value: number | null | undefined): string {
+  if (!value) return "Not available"
+  return new Intl.DateTimeFormat(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value))
 }
 
 function shortPath(value: string): string {

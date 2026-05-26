@@ -171,6 +171,62 @@ export interface WeatherIntegrationStatusEntry {
     providerInUse: "google" | "open-meteo" | null
 }
 
+export interface LocationIntelligenceIntegrationStatusEntry {
+    id: "locationIntelligence"
+    name: string
+    description: string
+    configured: boolean
+    enabled: boolean
+    connected: boolean
+    needsReconnect: boolean
+    missingConfig: string[]
+    source: {
+        type: "home-assistant-webhook" | "home-assistant" | "manual" | "unknown"
+        label: string | null
+        entityId: string | null
+    }
+    retention: {
+        mode: "days" | "forever" | "unset"
+        days: number | null
+        label: string
+    }
+    mapsMode: "strict" | "balanced" | "relaxed"
+    journalScriptId: string | null
+    dailyTaskId: string | null
+    journal: {
+        exists: boolean
+        relativePath: string | null
+        dayCount: number
+        firstDate: string | null
+        lastDate: string | null
+        lastUpdatedAt: number | null
+        pointsLogExists: boolean
+        routineExists: boolean
+        aliasesExists: boolean
+    }
+    microscript: {
+        id: string
+        exists: boolean
+        status: string | null
+        enabled: boolean | null
+        lastRunAt: number | null
+        nextRunAt: number | null
+        lastRunStatus: string | null
+    } | null
+    dailyTask: {
+        id: string
+        exists: boolean
+        status: string | null
+        enabled: boolean | null
+        lastRunAt: number | null
+        nextRunAt: number | null
+        lastRunStatus: string | null
+    } | null
+    capabilities: string[]
+    setupPrompt: string
+    error?: string
+}
+
 export interface RuntimeAccessInfo {
     appOrigin: string
     appHost: string | null
@@ -201,6 +257,7 @@ export type IntegrationStatusEntry =
     | HomeAssistantIntegrationStatusEntry
     | MapsIntegrationStatusEntry
     | WeatherIntegrationStatusEntry
+    | LocationIntelligenceIntegrationStatusEntry
 
 export interface IntegrationsStatus {
     gmail: GmailIntegrationStatusEntry
@@ -210,6 +267,7 @@ export interface IntegrationsStatus {
     homeAssistant: HomeAssistantIntegrationStatusEntry
     maps: MapsIntegrationStatusEntry
     weather: WeatherIntegrationStatusEntry
+    locationIntelligence: LocationIntelligenceIntegrationStatusEntry
     runtime?: RuntimeAccessInfo
 }
 

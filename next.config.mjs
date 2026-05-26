@@ -16,6 +16,9 @@ const previewBasePath = normalizePreviewBasePath(process.env.ORCHESTRATOR_PREVIE
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   ...(previewBasePath ? { basePath: previewBasePath, assetPrefix: previewBasePath } : {}),
+  env: {
+    NEXT_PUBLIC_ORCHESTRATOR_PREVIEW_BASE_PATH: previewBasePath || "",
+  },
   // Native modules that ship .node binaries — keep them out of the bundler so
   // the runtime loads them via require(), not via webpack/turbopack inlining.
   serverExternalPackages: [

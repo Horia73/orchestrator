@@ -8,6 +8,7 @@ import {
   File as FileIcon,
   Image as ImageIcon,
   Library as LibraryIcon,
+  LocateFixed,
   MapPinned,
   Music,
 } from "lucide-react"
@@ -23,6 +24,7 @@ import { AudioList } from "@/components/library/audio-list"
 import { FilesList } from "@/components/library/files-list"
 import { RecipesTab } from "@/components/library/recipes-tab"
 import { MapsTab } from "@/components/library/maps-tab"
+import { PlacesTab } from "@/components/library/places-tab"
 import { prefetchAttachments } from "@/components/library/use-attachments"
 
 /**
@@ -40,7 +42,14 @@ import { prefetchAttachments } from "@/components/library/use-attachments"
  * component that fetches its own data; switching tabs is cheap.
  */
 
-type TabKey = "workouts" | "recipes" | "maps" | "media" | "audio" | "files"
+type TabKey =
+  | "workouts"
+  | "recipes"
+  | "maps"
+  | "places"
+  | "media"
+  | "audio"
+  | "files"
 
 const TAB_DEFS: Array<{
   key: TabKey
@@ -50,6 +59,7 @@ const TAB_DEFS: Array<{
   { key: "workouts", label: "Workouts", icon: Dumbbell },
   { key: "recipes", label: "Recipes", icon: ChefHat },
   { key: "maps", label: "Maps", icon: MapPinned },
+  { key: "places", label: "Places", icon: LocateFixed },
   { key: "media", label: "Media", icon: ImageIcon },
   { key: "audio", label: "Audio", icon: Music },
   { key: "files", label: "Files", icon: FileIcon },
@@ -213,6 +223,14 @@ function LibraryView() {
             mounted={mountedTabs.has("maps")}
           >
             <MapsTab />
+          </LibraryTabPanel>
+
+          <LibraryTabPanel
+            value="places"
+            active={displayed}
+            mounted={mountedTabs.has("places")}
+          >
+            <PlacesTab />
           </LibraryTabPanel>
 
           <LibraryTabPanel

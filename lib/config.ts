@@ -150,6 +150,33 @@ export interface SmartMonitorSettings {
   liveLocationSource?: SmartMonitorLiveLocationSource
 }
 
+export type LocationIntelligenceSourceType =
+  | "home-assistant-webhook"
+  | "home-assistant"
+  | "manual"
+  | "unknown"
+
+export type LocationIntelligenceMapsMode = "strict" | "balanced" | "relaxed"
+
+export interface LocationIntelligenceSettings {
+  /** User opt-in gate. When false or absent, no location journal is read. */
+  enabled: boolean
+  /** Non-secret upstream source metadata. */
+  source: {
+    type: LocationIntelligenceSourceType
+    entityId?: string
+    label?: string
+  }
+  /** Microscript whose workspace contains files/location/*. */
+  journalScriptId?: string
+  /** Optional scheduled agent task that analyzes the journal daily. */
+  dailyTaskId?: string
+  /** Use "forever" to keep everything; otherwise use retentionDays. */
+  retention?: "forever"
+  retentionDays?: number
+  mapsMode: LocationIntelligenceMapsMode
+}
+
 export interface AppConfig {
   assistantName: string
   userName: string
@@ -167,6 +194,8 @@ export interface AppConfig {
   favorites: string[]
   /** Smart Monitor app-wide settings (quiet hours, future flags). */
   smartMonitor?: SmartMonitorSettings
+  /** Optional location history intelligence. Absent by default; user opt-in only. */
+  locationIntelligence?: LocationIntelligenceSettings
   updatedAt: number
 }
 
@@ -383,6 +412,9 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
     ),
     browserAgent: normalizeBrowserAgentSettings(parsed.browserAgent),
     smartMonitor: normalizeSmartMonitorSettings(parsed.smartMonitor),
+    locationIntelligence: normalizeLocationIntelligenceSettings(
+      (parsed as { locationIntelligence?: unknown }).locationIntelligence
+    ),
   }
 }
 
@@ -453,6 +485,88 @@ function normalizeSmartMonitorSettings(
   }
 
   return Object.keys(next).length > 0 ? next : undefined
+}
+
+function normalizeLocationIntelligenceSettings(
+  value: unknown
+): LocationIntelligenceSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return undefined
+  }
+
+  const raw = value as Record<string, unknown>
+  const enabled = raw.enabled === true
+  const sourceRaw =
+    raw.source && typeof raw.source === "object" && !Array.isArray(raw.source)
+      ? (raw.source as Record<string, unknown>)
+      : {}
+
+  const sourceType = normalizeLocationIntelligenceSourceType(sourceRaw.type)
+  const entityId = normalizeOptionalString(sourceRaw.entityId, 160)
+  const sourceLabel = normalizeOptionalString(sourceRaw.label, 120)
+  const journalScriptId = normalizeScriptId(raw.journalScriptId)
+  const dailyTaskId = normalizeScheduledTaskId(raw.dailyTaskId)
+  const retention =
+    raw.retention === "forever" || raw.retention === "keep_everything"
+      ? "forever"
+      : undefined
+  const retentionDays =
+    retention === "forever" ? undefined : normalizeRetentionDays(raw.retentionDays)
+  const mapsMode = normalizeLocationIntelligenceMapsMode(raw.mapsMode)
+
+  return {
+    enabled,
+    source: {
+      type: sourceType,
+      ...(entityId ? { entityId } : {}),
+      ...(sourceLabel ? { label: sourceLabel } : {}),
+    },
+    ...(journalScriptId ? { journalScriptId } : {}),
+    ...(dailyTaskId ? { dailyTaskId } : {}),
+    ...(retention ? { retention } : {}),
+    ...(retentionDays ? { retentionDays } : {}),
+    mapsMode,
+  }
+}
+
+function normalizeLocationIntelligenceSourceType(
+  value: unknown
+): LocationIntelligenceSourceType {
+  return value === "home-assistant-webhook" ||
+    value === "home-assistant" ||
+    value === "manual" ||
+    value === "unknown"
+    ? value
+    : "unknown"
+}
+
+function normalizeLocationIntelligenceMapsMode(
+  value: unknown
+): LocationIntelligenceMapsMode {
+  return value === "strict" || value === "relaxed" || value === "balanced"
+    ? value
+    : "balanced"
+}
+
+function normalizeOptionalString(value: unknown, maxLength: number): string {
+  return typeof value === "string" ? value.trim().slice(0, maxLength) : ""
+}
+
+function normalizeScriptId(value: unknown): string {
+  const trimmed = normalizeOptionalString(value, 96)
+  return /^ms_[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : ""
+}
+
+function normalizeScheduledTaskId(value: unknown): string {
+  const trimmed = normalizeOptionalString(value, 96)
+  return /^sch_[A-Za-z0-9_-]+$/.test(trimmed) ? trimmed : ""
+}
+
+function normalizeRetentionDays(value: unknown): number | undefined {
+  if (typeof value !== "number" || !Number.isFinite(value)) return undefined
+  const days = Math.floor(value)
+  if (days < 1) return undefined
+  return Math.min(days, 3650)
 }
 
 function normalizeBrowserAgentSettings(value: unknown): BrowserAgentSettings {
