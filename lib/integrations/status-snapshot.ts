@@ -6,6 +6,7 @@ import { getWhatsAppIntegrationStatus } from '@/lib/integrations/whatsapp'
 import { getHomeAssistantIntegrationStatus } from '@/lib/integrations/home-assistant'
 import { getMapsIntegrationStatus } from '@/lib/integrations/maps'
 import { getWeatherIntegrationStatus } from '@/lib/integrations/weather'
+import { resolveAppOrigin } from '@/lib/app-origin'
 
 // ---------------------------------------------------------------------------
 // Connection-status snapshot.
@@ -121,6 +122,21 @@ export function rememberOrigin(origin: string | undefined): void {
     if (origin && origin.trim()) lastKnownOrigin = origin.trim()
 }
 
+/**
+ * Best available origin for status checks. Order: explicit caller arg, then
+ * the last origin seen by any prior request, then the configured app origin
+ * (`ORCHESTRATOR_PUBLIC_URL` / fallback `http://localhost:3000`). The fallback
+ * matters for callers that have no request context (scheduler, microscripts,
+ * MCP) — without it, a cold cache stays cold and integration gates report
+ * `unknown` forever.
+ */
+function resolveSnapshotOrigin(origin?: string): string {
+    const explicit = origin && origin.trim()
+    if (explicit) return explicit
+    if (lastKnownOrigin) return lastKnownOrigin
+    return resolveAppOrigin()
+}
+
 async function fetchSnapshot(origin: string): Promise<IntegrationStatusSnapshot> {
     const [gmail, googleCalendar, googleDrive, whatsapp, homeAssistant, maps, weather] = await Promise.allSettled([
         getGmailIntegrationStatus(origin, true),
@@ -145,8 +161,7 @@ async function fetchSnapshot(origin: string): Promise<IntegrationStatusSnapshot>
 
 /** Refresh the cache now. Awaitable for callers that can afford it (e.g. the status route). */
 export async function refreshIntegrationStatusSnapshot(origin?: string): Promise<IntegrationStatusSnapshot> {
-    const useOrigin = (origin && origin.trim()) || lastKnownOrigin
-    if (!useOrigin) return cached ?? emptySnapshot()
+    const useOrigin = resolveSnapshotOrigin(origin)
     rememberOrigin(useOrigin)
     const snapshot = await fetchSnapshot(useOrigin)
     cached = snapshot
@@ -156,14 +171,14 @@ export async function refreshIntegrationStatusSnapshot(origin?: string): Promise
 
 /**
  * Synchronous read for prompt builders. Returns the last known snapshot
- * immediately; if it is stale (or absent) and an origin is known, schedules a
- * non-blocking refresh so the *next* turn is accurate. A cold cache returns
- * all-`unknown`, which the prompt block renders as "verify with the runbook".
+ * immediately; if it is stale (or absent), schedules a non-blocking refresh
+ * so the *next* turn is accurate. A cold cache returns all-`unknown` for this
+ * turn, which the prompt block renders as "verify with the runbook".
  */
 export function getIntegrationStatusSnapshot(origin?: string): IntegrationStatusSnapshot {
     rememberOrigin(origin)
     const fresh = cached && Date.now() - fetchedAt < TTL_MS
-    if (!fresh && !inFlight && (lastKnownOrigin || origin)) {
+    if (!fresh && !inFlight) {
         inFlight = refreshIntegrationStatusSnapshot(origin)
             .then(() => undefined)
             .catch(() => undefined)

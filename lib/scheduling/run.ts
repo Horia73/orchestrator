@@ -24,6 +24,7 @@ import {
   stripArtifactBlocksForPreview,
 } from "@/lib/artifacts/text"
 import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
+import { resolveAppOrigin } from "@/lib/app-origin"
 
 // Heavy AI modules (runner pulls in the whole tool/provider graph) are
 // imported lazily so the scheduler boot path and this module stay cheap and
@@ -155,6 +156,12 @@ export async function runScheduledTask(
     startedAt: firedAt,
   })
 
+  // Scheduled runs have no incoming HTTP request, so derive the app origin
+  // from configuration. Without this, prompt-side integration status checks
+  // and ActivateIntegrationTools both short-circuit to `state=unknown`, since
+  // the snapshot module cannot refresh without an origin.
+  const appOrigin = resolveAppOrigin()
+
   try {
   let ok = false
   let assistantContent: string
@@ -184,6 +191,7 @@ export async function runScheduledTask(
           depth: 0,
           conversationId,
           parentRequestId: `sched_${randomUUID()}`,
+          appOrigin,
         }
         const result = await executeTool(tool, task.action.args, ctx)
         ok = result.success
@@ -259,6 +267,7 @@ export async function runScheduledTask(
             parentRequestId: `sched_${randomUUID()}`,
             scheduledTaskId: task.id,
             scheduledFiredAt: firedAt,
+            appOrigin,
             onAgentEvent: (event) => {
               if (event.type === "agent_start" && topRunId === null)
                 topRunId = event.runId
@@ -344,6 +353,7 @@ export async function runScheduledTask(
           parentRequestId: `sched_${randomUUID()}`,
           scheduledTaskId: task.id,
           scheduledFiredAt: firedAt,
+          appOrigin,
           onAgentEvent: (event) => {
             if (event.type === "agent_start" && topRunId === null)
               topRunId = event.runId

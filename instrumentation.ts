@@ -7,6 +7,19 @@ export async function register(): Promise<void> {
     if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
+    // Pre-warm the integration status snapshot so the first scheduler tick
+    // (Smart Monitor, Microscripts, scheduled agents) sees real connection
+    // state instead of `unknown`. Fire-and-forget — boot must not block on
+    // network probes; if the refresh fails, the snapshot stays cold and the
+    // stale-while-revalidate path will retry on the next read.
+    try {
+        const { refreshIntegrationStatusSnapshot } = await import('@/lib/integrations/status-snapshot')
+        void refreshIntegrationStatusSnapshot().catch((err) => {
+            console.error('[integrations] failed to pre-warm status snapshot', err)
+        })
+    } catch (err) {
+        console.error('[integrations] failed to schedule status pre-warm', err)
+    }
     // Connect the consolidated markets monitor to the watchlist data layer and
     // arm its system heartbeat. Best-effort: a failure here must not break boot.
     try {

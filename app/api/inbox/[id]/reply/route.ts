@@ -20,6 +20,7 @@ import {
   getInboxConversation,
 } from "@/lib/scheduling/store"
 import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
+import { resolveRequestOrigin } from "@/lib/app-origin"
 
 const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
   "image",
@@ -130,6 +131,7 @@ async function continueInboxReply(args: {
   messages: Message[]
   userReply: string
   attachments?: Attachment[]
+  appOrigin: string
 }): Promise<void> {
   const runId = `inbox_run_${randomUUID()}`
   registerAgentRun({
@@ -166,6 +168,7 @@ async function continueInboxReply(args: {
       depth: 0,
       conversationId: args.id,
       parentRequestId: `inbox_${randomUUID()}`,
+      appOrigin: args.appOrigin,
       onAgentEvent: (event) => {
         if (event.type === "agent_start" && topRunId === null)
           topRunId = event.runId
@@ -303,6 +306,7 @@ export async function POST(
         messages: [...inbox.messages, userMsg],
         userReply: body.content,
         attachments: body.attachments.length > 0 ? body.attachments : undefined,
+        appOrigin: resolveRequestOrigin(request),
       })
 
       return NextResponse.json({
