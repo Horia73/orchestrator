@@ -123,10 +123,17 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
     if (head?.length) upstreamSocket.write(head)
     socket.pipe(upstreamSocket)
     upstreamSocket.pipe(socket)
+    socket.resume()
 
     upstreamSocket.once('error', () => socket.destroy())
     upstreamSocket.once('close', () => {
       if (!socket.destroyed) socket.destroy()
+    })
+    socket.once('close', () => {
+      upstreamSocket.destroy()
+    })
+    socket.once('error', () => {
+      upstreamSocket.destroy()
     })
   })
 
@@ -137,10 +144,6 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
 
   upstream.once('error', (err) => {
     writeSocketResponse(socket, 502, `Preview WebSocket upstream failed: ${err.message}`)
-  })
-
-  socket.once('close', () => {
-    upstream.destroy()
   })
 
   socket.once('error', () => {
