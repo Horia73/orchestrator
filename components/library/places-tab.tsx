@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import {
   AlertCircle,
   CheckCircle2,
@@ -741,10 +742,10 @@ function PlacesEmptyState({
         </div>
         <div className="flex flex-wrap justify-center gap-2">
           <Button asChild size="sm">
-            <a href="/" onClick={startSetup}>
+            <Link href="/" onClick={startSetup}>
               <MessageCircle className="size-3.5" />
               Ask your assistant to set up Location Intelligence
-            </a>
+            </Link>
           </Button>
           <Button asChild size="sm" variant="outline">
             <a href="/settings?tab=auth&auth=locationIntelligence">

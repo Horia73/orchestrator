@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   AlertCircle,
@@ -1438,10 +1439,10 @@ function LocationIntelligenceCard({
             size="sm"
             variant={entry.configured ? "outline" : "default"}
           >
-            <a href="/" onClick={startSetup}>
+            <Link href="/" onClick={startSetup}>
               <MessageCircle className="size-3.5" />
               Ask your assistant to set up Location Intelligence
-            </a>
+            </Link>
           </Button>
           <Button asChild size="sm" variant="outline">
             <a href="/library?tab=places">
@@ -1466,7 +1467,7 @@ function LocationIntelligenceCard({
             <p>
               Library Places can show summarized Places and raw observations;
               longer stops are inferred from gaps between webhook samples.
-              Retention can be finite or "keep everything". Setup stores only
+              Retention can be finite or &ldquo;keep everything&rdquo;. Setup stores only
               non-secret ids and preferences in local config; webhook or Home
               Assistant credentials belong in existing secret surfaces.
             </p>
