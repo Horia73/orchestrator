@@ -240,6 +240,7 @@ import {
   LIST_EXERCISE_HISTORY_TOOL_ID,
 } from "./workout-history"
 import { executeSetTaskState } from "./task-state"
+import { executeApplyUpdate } from "./update-app"
 import { executeMonitorWakeFeedback } from "./smart-monitor-feedback"
 import {
   executeMonitorDescribeSources,
@@ -505,6 +506,7 @@ const executors: Record<string, ToolExecutor> = {
   [GET_EXERCISE_HISTORY_TOOL_ID]: executeGetExerciseHistory,
   [LIST_EXERCISE_HISTORY_TOOL_ID]: executeListExerciseHistory,
   [GET_RECENT_WORKOUTS_TOOL_ID]: executeGetRecentWorkouts,
+  apply_update: executeApplyUpdate,
   WatchlistAddFinancialInstrument: executeWatchlistAddFinancialInstrument,
   WatchlistAddProduct: executeWatchlistAddProduct,
   WatchlistRemoveItem: executeWatchlistRemoveItem,

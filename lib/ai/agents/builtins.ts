@@ -204,6 +204,14 @@ export const SCHEDULING_TOOL_IDS: string[] = [
     'set_task_state',
 ]
 
+// In-app self-update. Orchestrator-only — the prompt's <pending_update>
+// runtime block only shows for agentId === 'orchestrator', so the
+// inbox/smart-monitor aliases never see the proposal even though they
+// inherit the tool list.
+export const UPDATE_TOOL_IDS: string[] = [
+    'apply_update',
+]
+
 export const OBSERVABILITY_TOOL_IDS: string[] = [
     'search_past_runs',
     'get_past_run',

@@ -9,6 +9,7 @@ import { getEnvValue } from '@/lib/config'
 import { shutdownBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
+import { addMessage, getConversation } from '@/lib/db'
 import type { Message } from '@/lib/types'
 
 type UpdatePhase = 'idle' | 'queued' | 'updating' | 'restarting' | 'completed' | 'failed'
@@ -60,6 +61,10 @@ export interface UpdateJob {
     postRestartCurrentCommit?: string | null
     postRestartConfirmationError?: string
     postRestartConfirmationConversationId?: string
+    /** Chat conversation that initiated this update (so the boot hook can post a follow-up there). */
+    initiatedFromConversationId?: string
+    /** Whether the boot hook already posted a follow-up to the originating chat conversation. */
+    postRestartChatNotifiedAt?: number
 }
 
 export interface UpdateStatus {
@@ -342,6 +347,32 @@ export async function confirmPendingUpdateAfterRestart(): Promise<UpdateJob | nu
         }
     }
 
+    // If the update was initiated from an orchestrator chat, drop a follow-up
+    // assistant message into that conversation so the user sees the result
+    // inline next time they open it. Best-effort: a failure here must not
+    // block the inbox confirmation or job state transition.
+    let chatNotifiedAt = job.postRestartChatNotifiedAt
+    if (
+        !chatNotifiedAt &&
+        job.initiatedFromConversationId &&
+        getConversation(job.initiatedFromConversationId)
+    ) {
+        try {
+            postUpdateConfirmationChat({
+                conversationId: job.initiatedFromConversationId,
+                ok,
+                targetCommit,
+                currentCommit,
+                currentVersion: current.version,
+                targetVersion: job.targetVersion,
+                error,
+            })
+            chatNotifiedAt = now
+        } catch (err) {
+            console.warn('[update] failed to post restart follow-up into chat', err)
+        }
+    }
+
     const next: UpdateJob = {
         ...job,
         phase: ok ? 'completed' : job.phase,
@@ -355,9 +386,45 @@ export async function confirmPendingUpdateAfterRestart(): Promise<UpdateJob | nu
         postRestartCurrentCommit: currentCommit,
         postRestartConfirmationError: error,
         postRestartConfirmationConversationId: conversationId,
+        postRestartChatNotifiedAt: chatNotifiedAt,
     }
     setJob(next)
     return next
+}
+
+function postUpdateConfirmationChat(args: {
+    conversationId: string
+    ok: boolean
+    targetCommit: string
+    currentCommit: string | null
+    currentVersion: string
+    targetVersion: string
+    error?: string
+}) {
+    const body = args.ok
+        ? [
+            `Updateul s-a aplicat cu succes. Rulez acum versiunea \`${args.currentVersion}\` (commit \`${args.currentCommit ?? 'unknown'}\`).`,
+            '',
+            'Spune-mi dacă vrei să continuăm de unde am rămas.',
+        ].join('\n')
+        : [
+            `Updateul a fost lansat dar nu am putut confirma versiunea după restart.`,
+            '',
+            `Target commit: \`${args.targetCommit}\``,
+            `Running commit: \`${args.currentCommit ?? 'unknown'}\``,
+            `Version: \`${args.currentVersion}\``,
+            '',
+            args.error ?? 'Post-restart confirmation failed.',
+        ].join('\n')
+
+    addMessage(args.conversationId, {
+        id: `msg_${randomUUID()}`,
+        role: 'assistant',
+        content: body,
+        contentSegments: [{ phase: 0, content: body }],
+        status: args.ok ? 'ok' : 'error',
+        timestamp: Date.now(),
+    })
 }
 
 async function fetchLatestRelease(force = false): Promise<LatestReleaseInfo | null> {
@@ -549,6 +616,34 @@ function dockerHostUpdaterConfig(): { url: string; token: string } | null {
     const token = getEnvValue('ORCHESTRATOR_DOCKER_UPDATE_TOKEN') || getEnvValue('ORCHESTRATOR_HOST_UPDATE_TOKEN')
     if (!url || !token) return null
     return { url, token }
+}
+
+/**
+ * Returns the upstream URL + bearer token for streaming the host updater's
+ * log (SSE endpoint on the docker-update-bridge). Resolves the log path from
+ * the configured `/update` URL: replaces the final segment with `/update-log`,
+ * appends it if no path is present. Returns null when the host updater is not
+ * configured (non-Docker installs).
+ */
+export function getDockerHostUpdaterLogConfig(): { url: string; token: string } | null {
+    const base = dockerHostUpdaterConfig()
+    if (!base) return null
+    let logUrl: string
+    try {
+        const parsed = new URL(base.url)
+        const segments = parsed.pathname.split('/').filter(Boolean)
+        if (segments.length > 0 && segments[segments.length - 1] === 'update') {
+            segments[segments.length - 1] = 'update-log'
+        } else {
+            segments.push('update-log')
+        }
+        parsed.pathname = '/' + segments.join('/')
+        // Preserve any query string the user may have appended.
+        logUrl = parsed.toString()
+    } catch {
+        return null
+    }
+    return { url: logUrl, token: base.token }
 }
 
 function hasDockerHostUpdater(): boolean {
@@ -767,7 +862,11 @@ export async function getUpdateStatus(opts?: { refresh?: boolean }): Promise<Upd
     }
 }
 
-export async function queueUpdate(opts?: { mode?: UpdateTargetKind; branch?: string }): Promise<UpdateStatus> {
+export async function queueUpdate(opts?: {
+    mode?: UpdateTargetKind
+    branch?: string
+    initiatedFromConversationId?: string
+}): Promise<UpdateStatus> {
     const mode: UpdateTargetKind = opts?.mode === 'branch' ? 'branch' : 'release'
     const status = await getUpdateStatus({ refresh: mode === 'release' })
     const currentActive = activeJob(status.job)
@@ -810,6 +909,7 @@ export async function queueUpdate(opts?: { mode?: UpdateTargetKind; branch?: str
         waitReason: status.activeRuns.length > 0
             ? `Waiting for ${status.activeRuns.length} active AI run${status.activeRuns.length === 1 ? '' : 's'}.`
             : 'Waiting for a quiet window.',
+        initiatedFromConversationId: opts?.initiatedFromConversationId,
     }
 
     setJob(job)

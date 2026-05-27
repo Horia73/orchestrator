@@ -150,6 +150,106 @@ function statusTone(status: UpdateStatus | null) {
   return "ok"
 }
 
+const UPDATE_LOG_MAX_LINES = 500
+
+function UpdateLogTerminal({ jobId }: { jobId: string }) {
+  const [lines, setLines] = React.useState<string[]>([])
+  const [connection, setConnection] = React.useState<"connecting" | "live" | "error">(
+    "connecting"
+  )
+  const scrollRef = React.useRef<HTMLPreElement | null>(null)
+  const userScrolledUpRef = React.useRef(false)
+
+  React.useEffect(() => {
+    setLines([])
+    setConnection("connecting")
+
+    const source = new EventSource("/api/update/log")
+
+    const handleOpen = () => setConnection((c) => (c === "error" ? c : "live"))
+    const handleReady = () => setConnection("live")
+    const handleLog = (event: MessageEvent) => {
+      const data = typeof event.data === "string" ? event.data : String(event.data ?? "")
+      setLines((prev) => {
+        const next = prev.length >= UPDATE_LOG_MAX_LINES
+          ? [...prev.slice(prev.length - UPDATE_LOG_MAX_LINES + 1), data]
+          : [...prev, data]
+        return next
+      })
+    }
+    const handleError = () => {
+      // EventSource auto-reconnects on transient drops; surface the state but
+      // do not tear the stream down. The browser will retry with
+      // Last-Event-ID so we resume from the byte offset we already received.
+      setConnection("error")
+    }
+
+    source.addEventListener("open", handleOpen)
+    source.addEventListener("ready", handleReady)
+    source.addEventListener("log", handleLog)
+    source.addEventListener("error", handleError)
+
+    return () => {
+      source.removeEventListener("open", handleOpen)
+      source.removeEventListener("ready", handleReady)
+      source.removeEventListener("log", handleLog)
+      source.removeEventListener("error", handleError)
+      source.close()
+    }
+  }, [jobId])
+
+  React.useEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (userScrolledUpRef.current) return
+    el.scrollTop = el.scrollHeight
+  }, [lines])
+
+  const handleScroll = React.useCallback((event: React.UIEvent<HTMLPreElement>) => {
+    const el = event.currentTarget
+    const distanceFromBottom = el.scrollHeight - (el.scrollTop + el.clientHeight)
+    userScrolledUpRef.current = distanceFromBottom > 16
+  }, [])
+
+  const indicatorLabel =
+    connection === "live" ? "live" : connection === "error" ? "reconnecting" : "connecting"
+  const indicatorDot =
+    connection === "live"
+      ? "bg-emerald-500"
+      : connection === "error"
+        ? "bg-amber-500"
+        : "bg-foreground/30"
+
+  return (
+    <div className="mt-3 overflow-hidden rounded-lg border border-border/60 bg-foreground/[0.025] dark:bg-white/[0.03]">
+      <div className="flex items-center justify-between border-b border-border/60 px-2.5 py-1 text-[11px] font-medium tracking-wider text-foreground/45 uppercase">
+        <span>Host updater log</span>
+        <span className="flex items-center gap-1.5">
+          <span
+            className={cn(
+              "size-1.5 rounded-full",
+              indicatorDot,
+              connection === "connecting" && "animate-pulse"
+            )}
+          />
+          <span className="text-[10.5px]">{indicatorLabel}</span>
+        </span>
+      </div>
+      <pre
+        ref={scrollRef}
+        onScroll={handleScroll}
+        className="max-h-64 min-h-[8rem] overflow-y-auto px-3 py-2 font-mono text-[11.5px] leading-5 text-foreground/75 whitespace-pre-wrap break-words"
+      >
+        {lines.length === 0 ? (
+          <span className="text-foreground/40 italic">Waiting for output...</span>
+        ) : (
+          lines.join("\n")
+        )}
+      </pre>
+    </div>
+  )
+}
+
 export function UpdateTab() {
   const [status, setStatus] = React.useState<UpdateStatus | null>(null)
   const [loading, setLoading] = React.useState(true)
@@ -468,6 +568,10 @@ export function UpdateTab() {
               {status.job.error && (
                 <p className="mt-2 text-[12.5px] text-destructive">{status.job.error}</p>
               )}
+              {ACTIVE_PHASES.has(status.job.phase) &&
+                status.config.serviceManager === "docker" && (
+                  <UpdateLogTerminal jobId={status.job.id} />
+                )}
             </div>
           )}
         </CardContent>

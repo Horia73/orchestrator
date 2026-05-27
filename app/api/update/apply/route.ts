@@ -13,10 +13,14 @@ export async function POST(request: Request) {
         const body = await request.json().catch(() => null) as {
             mode?: unknown
             branch?: unknown
+            initiatedFromConversationId?: unknown
         } | null
         const status = await queueUpdate({
             mode: body?.mode === 'branch' ? 'branch' : 'release',
             branch: typeof body?.branch === 'string' ? body.branch : undefined,
+            initiatedFromConversationId: typeof body?.initiatedFromConversationId === 'string'
+                ? body.initiatedFromConversationId
+                : undefined,
         })
         return NextResponse.json(status, {
             headers: { 'Cache-Control': 'no-store' },

@@ -33,6 +33,14 @@ CLAUDE_USAGE_CWD = Path(
     os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_CWD", str(Path.home() / ".orchestrator" / "claude-usage-cwd"))
 ).expanduser().resolve()
 CLAUDE_USAGE_AUTO_TRUST = os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_AUTO_TRUST", "1") != "0"
+LOG_STREAM_CATCHUP_BYTES = int(os.environ.get("ORCHESTRATOR_UPDATE_LOG_CATCHUP_BYTES", str(32 * 1024)))
+LOG_STREAM_MAX_DURATION_S = float(os.environ.get("ORCHESTRATOR_UPDATE_LOG_MAX_DURATION_S", "3600"))
+LOG_STREAM_HEARTBEAT_S = float(os.environ.get("ORCHESTRATOR_UPDATE_LOG_HEARTBEAT_S", "15"))
+LOG_STREAM_POLL_S = float(os.environ.get("ORCHESTRATOR_UPDATE_LOG_POLL_S", "0.4"))
+
+# Match ANSI CSI (colors, cursor moves) and OSC sequences emitted by docker
+# compose so the streamed log stays as plain text in the browser.
+ANSI_ESCAPE_RE = re.compile(rb"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 update_lock = threading.Lock()
 claude_usage_lock = threading.Lock()
@@ -424,6 +432,133 @@ def update_stack(payload: dict) -> None:
             update_lock.release()
 
 
+def stream_update_log(handler: "Handler") -> None:
+    """Stream `docker-update-bridge.log` as SSE.
+
+    Behavior:
+    - Sends the last `LOG_STREAM_CATCHUP_BYTES` of the log file as catch-up
+      events on first connect. On reconnect (when the client sends a numeric
+      `Last-Event-ID` header), resumes from that byte offset instead.
+    - Tails the file for new content, emitting one SSE `log` event per line.
+      Each event carries the post-line byte offset as its `id` so the client
+      can resume cleanly.
+    - Emits SSE comments (`: heartbeat`) every `LOG_STREAM_HEARTBEAT_S`
+      seconds so proxies and the browser keep the connection open.
+    - Caps stream duration at `LOG_STREAM_MAX_DURATION_S` to avoid leaked
+      threads if a client never disconnects.
+    - Strips ANSI escape codes (docker compose colors) for plain-text output.
+    """
+    out = handler.wfile
+
+    try:
+        handler.send_response(200)
+        handler.send_header("Content-Type", "text/event-stream; charset=utf-8")
+        handler.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+        handler.send_header("Connection", "keep-alive")
+        # Tell nginx/cloudflare-style proxies not to buffer the response.
+        handler.send_header("X-Accel-Buffering", "no")
+        handler.end_headers()
+    except (BrokenPipeError, ConnectionResetError, OSError):
+        return
+
+    def write_raw(payload: bytes) -> bool:
+        try:
+            out.write(payload)
+            out.flush()
+            return True
+        except (BrokenPipeError, ConnectionResetError, OSError):
+            return False
+
+    def emit(event_name: Optional[str], data: str, event_id: Optional[int] = None) -> bool:
+        payload = b""
+        if event_id is not None:
+            payload += f"id: {event_id}\n".encode("utf-8")
+        if event_name and event_name != "message":
+            payload += f"event: {event_name}\n".encode("utf-8")
+        # SSE requires every \n in data to be prefixed by `data:`.
+        # An empty data field still needs one `data:` line per the spec.
+        for piece in (data.split("\n") if data else [""]):
+            payload += b"data: " + piece.encode("utf-8") + b"\n"
+        payload += b"\n"
+        return write_raw(payload)
+
+    def emit_log_line(raw_bytes: bytes, event_id: int) -> bool:
+        cleaned = ANSI_ESCAPE_RE.sub(b"", raw_bytes).decode("utf-8", errors="replace")
+        # Strip trailing \r left over from CRLF lines.
+        cleaned = cleaned.rstrip("\r")
+        return emit("log", cleaned, event_id)
+
+    # Determine starting offset: prefer Last-Event-ID, fall back to catch-up tail.
+    resume_header = handler.headers.get("Last-Event-ID", "").strip()
+    resume_offset: Optional[int] = None
+    if resume_header.isdigit():
+        try:
+            resume_offset = int(resume_header)
+        except ValueError:
+            resume_offset = None
+
+    try:
+        file_size = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
+    except OSError:
+        file_size = 0
+
+    if resume_offset is not None and 0 <= resume_offset <= file_size:
+        offset = resume_offset
+    else:
+        offset = max(0, file_size - LOG_STREAM_CATCHUP_BYTES)
+        # When seeking into the middle of a file we skip the first partial line.
+        if offset > 0:
+            try:
+                with LOG_PATH.open("rb") as fh:
+                    fh.seek(offset)
+                    discard = fh.readline()
+                    offset += len(discard)
+            except OSError:
+                offset = 0
+
+    if not emit("ready", str(offset), offset):
+        return
+
+    pending = b""
+    start_time = time.time()
+    last_heartbeat = start_time
+
+    while time.time() - start_time < LOG_STREAM_MAX_DURATION_S:
+        try:
+            current_size = LOG_PATH.stat().st_size if LOG_PATH.exists() else 0
+        except OSError:
+            current_size = 0
+
+        if current_size < offset:
+            # Log was truncated/rotated under us — restart from the new top.
+            offset = 0
+            pending = b""
+
+        if current_size > offset:
+            try:
+                with LOG_PATH.open("rb") as fh:
+                    fh.seek(offset)
+                    chunk = fh.read(current_size - offset)
+            except OSError:
+                chunk = b""
+            offset += len(chunk)
+            pending += chunk
+            while b"\n" in pending:
+                line, _, pending = pending.partition(b"\n")
+                # event id = byte offset of the newline that ended this line + 1
+                line_end_offset = offset - len(pending)
+                if not emit_log_line(line, line_end_offset):
+                    return
+
+        now = time.time()
+        if now - last_heartbeat > LOG_STREAM_HEARTBEAT_S:
+            if not write_raw(b": heartbeat\n\n"):
+                return
+            last_heartbeat = now
+
+        time.sleep(LOG_STREAM_POLL_S)
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OrchestratorDockerUpdateBridge/1.0"
 
@@ -450,7 +585,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in {"/status", "/claude-usage"}:
+        if path not in {"/status", "/claude-usage", "/update-log"}:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
@@ -459,6 +594,9 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/status":
             with state_lock:
                 self.send_json(200, dict(state))
+            return
+        if path == "/update-log":
+            stream_update_log(self)
             return
 
         write_log("Starting Claude usage capture")

@@ -45,6 +45,7 @@ import {
 } from './maps'
 import { weatherSetCalendarContextTool, weatherSetOutfitTool, weatherSetWhyTool, weatherShowTool, weatherStatusTool } from './weather'
 import { getExerciseHistoryTool, getRecentWorkoutsTool, listExerciseHistoryTool } from './workout-history'
+import { applyUpdateTool } from './update-app'
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -204,3 +205,4 @@ registerTool(weatherSetCalendarContextTool)
 registerTool(getExerciseHistoryTool)
 registerTool(listExerciseHistoryTool)
 registerTool(getRecentWorkoutsTool)
+registerTool(applyUpdateTool)
