@@ -208,6 +208,7 @@ function buildUpgradeRequest(req, upstreamPath, previewPort) {
       lower === 'upgrade' ||
       lower === 'origin' ||
       lower === 'cookie' ||
+      lower === 'sec-websocket-extensions' ||
       lower === 'content-length' ||
       lower === 'transfer-encoding'
     ) {
