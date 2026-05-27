@@ -39,12 +39,15 @@ export function messageSummary(message: Message, chat?: Chat): WhatsAppMessageSu
         from: message.from,
         to: message.to,
         author: message.author ?? null,
+        authorName: null,
         fromMe: Boolean(message.fromMe),
         type: String(message.type ?? 'unknown'),
         body: clip(message.body ?? '', 8_000),
         timestamp: unixSeconds(message.timestamp),
         date: message.timestamp ? new Date(message.timestamp * 1000).toISOString() : null,
         hasMedia: Boolean(message.hasMedia),
+        isForwarded: Boolean(message.isForwarded),
+        forwardingScore: Number.isFinite(message.forwardingScore) ? Number(message.forwardingScore) : 0,
     }
 }
 

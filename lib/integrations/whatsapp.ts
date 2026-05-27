@@ -23,6 +23,8 @@ const AUTH_BASE_DIR = path.join(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, '
 const AUTH_CLIENT_ID = 'orchestrator'
 const QR_TTL_MS = 60_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
+const AUTHOR_ENRICHMENT_TIMEOUT_MS = 12_000
+const AUTHOR_ENRICHMENT_PER_ID_TIMEOUT_MS = 6_000
 const READY_WAIT_TIMEOUT_MS = 120_000
 const READY_HEALTH_TIMEOUT_MS = 5_000
 const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
@@ -101,12 +103,15 @@ export interface WhatsAppMessageSummary {
     from: string
     to: string
     author: string | null
+    authorName: string | null
     fromMe: boolean
     type: string
     body: string
     timestamp: number | null
     date: string | null
     hasMedia: boolean
+    isForwarded: boolean
+    forwardingScore: number
 }
 
 export interface WhatsAppReadChatResult {
@@ -323,12 +328,76 @@ class WhatsAppManager {
                 clamp(Math.floor(maxChars), 2_000, 80_000)
             )
 
+            const chatSum = chatSummary(chat)
+            const enrichmentTargets = [...limited.messages]
+            if (chatSum.lastMessage) enrichmentTargets.push(chatSum.lastMessage)
+            await this.enrichAuthorNames(client, enrichmentTargets)
+
             return {
-                chat: chatSummary(chat),
+                chat: chatSum,
                 messages: limited.messages.sort((a, b) => (a.timestamp || 0) - (b.timestamp || 0)),
                 truncated: limited.truncated,
             }
         })
+    }
+
+    private async enrichAuthorNames(client: Client, summaries: WhatsAppMessageSummary[]): Promise<void> {
+        const summariesByAuthor = new Map<string, WhatsAppMessageSummary[]>()
+        for (const summary of summaries) {
+            if (summary.fromMe) continue
+            const author = summary.author?.trim()
+            if (!author) continue
+            const bucket = summariesByAuthor.get(author)
+            if (bucket) bucket.push(summary)
+            else summariesByAuthor.set(author, [summary])
+        }
+        if (summariesByAuthor.size === 0) return
+
+        const tasks = [...summariesByAuthor.entries()].map(async ([id, bucket]) => {
+            const name = await this.resolveAuthorDisplayName(client, id)
+            for (const summary of bucket) summary.authorName = name
+        })
+
+        try {
+            await withTimeout(
+                Promise.allSettled(tasks),
+                AUTHOR_ENRICHMENT_TIMEOUT_MS,
+                'WhatsApp author name enrichment timed out.'
+            )
+        } catch {
+            // Soft failure: any authors not yet resolved stay as null. Caller still gets the messages.
+        }
+    }
+
+    private async resolveAuthorDisplayName(client: Client, id: string): Promise<string | null> {
+        try {
+            const contact = await withTimeout(
+                client.getContactById(id),
+                AUTHOR_ENRICHMENT_PER_ID_TIMEOUT_MS,
+                `WhatsApp contact lookup timed out for ${id}.`
+            )
+            const name = preferredContactName(contact)
+            if (name) return name
+        } catch {
+            // fall through to phone fallback
+        }
+
+        try {
+            const resolved = await withTimeout(
+                client.getContactLidAndPhone([id]),
+                AUTHOR_ENRICHMENT_PER_ID_TIMEOUT_MS,
+                `WhatsApp lid/phone lookup timed out for ${id}.`
+            )
+            const phoneJid = resolved?.[0]?.pn
+            if (phoneJid) {
+                const formatted = formatPhoneFromJid(phoneJid)
+                if (formatted) return formatted
+            }
+        } catch {
+            // give up
+        }
+
+        return null
     }
 
     async searchMessages(args: {
@@ -1087,6 +1156,24 @@ async function withTimeout<T>(promise: Promise<T>, timeoutMs: number, message: s
     } finally {
         if (timer) clearTimeout(timer)
     }
+}
+
+function preferredContactName(contact: unknown): string | null {
+    if (!contact || typeof contact !== 'object') return null
+    const fields = contact as { name?: unknown; pushname?: unknown; shortName?: unknown; verifiedName?: unknown }
+    for (const value of [fields.name, fields.pushname, fields.shortName, fields.verifiedName]) {
+        if (typeof value === 'string') {
+            const trimmed = value.trim()
+            if (trimmed) return trimmed
+        }
+    }
+    return null
+}
+
+function formatPhoneFromJid(jid: string): string | null {
+    if (typeof jid !== 'string' || !jid) return null
+    const digits = jid.split('@')[0].replace(/[^\d]/g, '')
+    return digits ? `+${digits}` : null
 }
 
 function isRecoverableClientError(err: unknown): boolean {
