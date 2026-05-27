@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import fs from 'fs'
 import http from 'http'
-import net from 'net'
 import path from 'path'
 
 import next from 'next'
@@ -110,43 +109,54 @@ function maybeProxyPreviewUpgrade(req, socket, head) {
 }
 
 function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort }) {
-  const upstream = net.connect({ host: '127.0.0.1', port: previewPort })
-  let opened = false
+  const upstream = http.request({
+    host: '127.0.0.1',
+    port: previewPort,
+    path: upstreamPath,
+    method: req.method || 'GET',
+    headers: buildUpgradeHeaders(req, previewPort),
+  })
 
-  upstream.once('connect', () => {
-    opened = true
-    upstream.write(buildUpgradeRequest(req, upstreamPath, previewPort))
-    if (head?.length) upstream.write(head)
-    socket.pipe(upstream)
-    upstream.pipe(socket)
+  upstream.once('upgrade', (upstreamRes, upstreamSocket, upstreamHead) => {
+    writeUpgradeResponse(socket, upstreamRes)
+    if (upstreamHead?.length) socket.write(upstreamHead)
+    if (head?.length) upstreamSocket.write(head)
+    socket.pipe(upstreamSocket)
+    upstreamSocket.pipe(socket)
+
+    upstreamSocket.once('error', () => socket.destroy())
+    upstreamSocket.once('close', () => {
+      if (!socket.destroyed) socket.destroy()
+    })
+  })
+
+  upstream.once('response', (res) => {
+    res.resume()
+    writeSocketResponse(socket, res.statusCode || 502, 'Preview WebSocket upstream did not upgrade.')
   })
 
   upstream.once('error', (err) => {
-    if (!opened) writeSocketResponse(socket, 502, `Preview WebSocket upstream failed: ${err.message}`)
-    else socket.destroy(err)
+    writeSocketResponse(socket, 502, `Preview WebSocket upstream failed: ${err.message}`)
   })
 
-  upstream.once('close', () => {
-    if (!socket.destroyed) socket.destroy()
+  socket.once('close', () => {
+    upstream.destroy()
   })
 
   socket.once('error', () => {
     upstream.destroy()
   })
 
-  socket.once('close', () => {
-    upstream.destroy()
-  })
+  upstream.end()
 }
 
-function buildUpgradeRequest(req, upstreamPath, previewPort) {
-  const lines = [
-    `${req.method || 'GET'} ${upstreamPath} HTTP/${req.httpVersion}`,
-    `Host: 127.0.0.1:${previewPort}`,
-    'Connection: Upgrade',
-    'Upgrade: websocket',
-    `Origin: http://127.0.0.1:${previewPort}`,
-  ]
+function buildUpgradeHeaders(req, previewPort) {
+  const headers = {
+    host: `127.0.0.1:${previewPort}`,
+    connection: 'Upgrade',
+    upgrade: 'websocket',
+    origin: `http://127.0.0.1:${previewPort}`,
+  }
 
   for (const [name, value] of Object.entries(req.headers)) {
     const lower = name.toLowerCase()
@@ -162,14 +172,24 @@ function buildUpgradeRequest(req, upstreamPath, previewPort) {
       continue
     }
 
-    if (Array.isArray(value)) {
-      for (const item of value) lines.push(`${name}: ${item}`)
-    } else if (value != null) {
-      lines.push(`${name}: ${value}`)
-    }
+    if (value != null) headers[name] = value
   }
 
-  return `${lines.join('\r\n')}\r\n\r\n`
+  return headers
+}
+
+function writeUpgradeResponse(socket, res) {
+  const statusCode = res.statusCode || 101
+  const statusMessage = res.statusMessage || http.STATUS_CODES[statusCode] || 'Switching Protocols'
+  const lines = [`HTTP/1.1 ${statusCode} ${statusMessage}`]
+
+  for (let i = 0; i < res.rawHeaders.length; i += 2) {
+    const name = res.rawHeaders[i]
+    const value = res.rawHeaders[i + 1]
+    if (name && value != null) lines.push(`${name}: ${value}`)
+  }
+
+  socket.write(`${lines.join('\r\n')}\r\n\r\n`)
 }
 
 function readRunState(runId) {
