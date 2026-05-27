@@ -3,7 +3,6 @@
 import * as React from "react"
 import {
   AlertCircle,
-  CalendarDays,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
@@ -147,27 +146,7 @@ export function PlacesTab() {
   }, [selectedDate, activeMode])
 
   return (
-    <div className="flex flex-col gap-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <p className="min-w-0 flex-1 text-sm text-muted-foreground">
-          Local location days from the optional Location Intelligence journal:
-          map, approximate route, stats, summarized Places, and raw points.
-        </p>
-        <button
-          type="button"
-          onClick={() => void load()}
-          disabled={loading}
-          className={cn(
-            "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors",
-            "hover:bg-muted hover:text-foreground",
-            "disabled:cursor-default disabled:opacity-50"
-          )}
-        >
-          <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
-          Refresh
-        </button>
-      </div>
-
+    <div className="flex flex-col gap-3">
       {error ? (
         <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-700 dark:text-rose-300">
           {error}
@@ -184,6 +163,8 @@ export function PlacesTab() {
           <PlacesStatusBar
             status={status}
             totalDays={data?.total ?? days.length}
+            loading={loading}
+            onRefresh={() => void load()}
           />
           {detailError ? (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
@@ -237,30 +218,49 @@ export function PlacesTab() {
 function PlacesStatusBar({
   status,
   totalDays,
+  loading,
+  onRefresh,
 }: {
   status: LocationIntelligenceIntegrationStatus
   totalDays: number
+  loading: boolean
+  onRefresh: () => void
 }) {
   return (
-    <div className="flex flex-wrap items-center gap-2 rounded-lg border border-border/70 bg-background/70 px-3 py-2 text-[12px] text-muted-foreground">
-      <StatusPill
-        icon={status.connected ? CheckCircle2 : AlertCircle}
-        label={status.connected ? "Ready" : "Needs setup"}
-        tone={status.connected ? "success" : "warn"}
-      />
-      <span>{totalDays} days</span>
-      <span className="text-border">|</span>
-      <span>{status.retention.label}</span>
-      <span className="text-border">|</span>
-      <span>Maps mode: {status.mapsMode}</span>
-      {status.source.label || status.source.entityId ? (
-        <>
-          <span className="text-border">|</span>
-          <span className="truncate">
-            Source: {status.source.label ?? status.source.entityId}
-          </span>
-        </>
-      ) : null}
+    <div className="flex items-center gap-2 rounded-lg border border-border/70 bg-background/70 px-3 py-1.5 text-[11.5px] text-muted-foreground">
+      <div className="flex min-w-0 flex-1 items-center gap-2 overflow-x-auto whitespace-nowrap [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        <StatusPill
+          icon={status.connected ? CheckCircle2 : AlertCircle}
+          label={status.connected ? "Ready" : "Needs setup"}
+          tone={status.connected ? "success" : "warn"}
+        />
+        <span>{totalDays} days</span>
+        <span className="text-border">|</span>
+        <span>{status.retention.label}</span>
+        <span className="text-border">|</span>
+        <span>Maps: {status.mapsMode}</span>
+        {status.source.label || status.source.entityId ? (
+          <>
+            <span className="text-border">|</span>
+            <span className="truncate">
+              {status.source.label ?? status.source.entityId}
+            </span>
+          </>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        onClick={onRefresh}
+        disabled={loading}
+        className={cn(
+          "ml-auto inline-flex shrink-0 items-center gap-1 rounded-md px-2 py-1 text-[11.5px] font-medium text-muted-foreground transition-colors",
+          "hover:bg-muted hover:text-foreground",
+          "disabled:cursor-default disabled:opacity-50"
+        )}
+      >
+        <RefreshCw className={cn("size-3.5", loading && "animate-spin")} />
+        <span className="hidden sm:inline">Refresh</span>
+      </button>
     </div>
   )
 }
@@ -315,17 +315,12 @@ function DayNavigator({
       : null
 
   return (
-    <div
-      className={cn(
-        "relative z-20 flex",
-        compact ? "justify-start" : "justify-center"
-      )}
-    >
+    <div className="relative z-20 flex justify-center">
       <div
         className={cn(
-          "grid w-full grid-cols-[40px_minmax(0,1fr)_40px] items-center gap-2 rounded-lg border border-border/70 bg-background/80 p-1",
+          "grid w-full grid-cols-[32px_minmax(0,1fr)_32px] items-center gap-1 rounded-lg border border-border/70 bg-background/80 p-0.5",
           compact
-            ? "shadow-none sm:min-w-[380px]"
+            ? "max-w-[360px] shadow-none"
             : "shadow-sm sm:w-auto sm:min-w-[420px]"
         )}
       >
@@ -335,7 +330,7 @@ function DayNavigator({
           disabled={!previousDay}
           aria-label="Previous location day"
           className={cn(
-            "grid size-10 place-items-center rounded-md text-muted-foreground transition-colors",
+            "grid size-8 place-items-center rounded-md text-muted-foreground transition-colors",
             "hover:bg-muted hover:text-foreground",
             "disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
           )}
@@ -346,18 +341,20 @@ function DayNavigator({
         <button
           type="button"
           onClick={() => setCalendarOpen((open) => !open)}
-          className="min-w-0 rounded-md px-3 py-2 text-center transition-colors hover:bg-muted/70"
+          className="min-w-0 rounded-md px-2 py-2 text-center transition-colors hover:bg-muted/70"
           aria-haspopup="dialog"
           aria-expanded={calendarOpen}
         >
-          <span className="block truncate text-[13px] font-semibold text-foreground">
+          <span className="block truncate text-[12.5px] font-semibold text-foreground">
             {selectedDay ? formatDayLabelLong(selectedDay) : "No day selected"}
           </span>
-          <span className="block truncate text-[11px] text-muted-foreground">
-            {selectedDay
-              ? dayNavigatorSubtitle(selectedDay)
-              : "Click to choose a day"}
-          </span>
+          {!compact ? (
+            <span className="block truncate text-[11px] text-muted-foreground">
+              {selectedDay
+                ? dayNavigatorSubtitle(selectedDay)
+                : "Click to choose a day"}
+            </span>
+          ) : null}
         </button>
 
         <button
@@ -366,7 +363,7 @@ function DayNavigator({
           disabled={!nextDay}
           aria-label="Next location day"
           className={cn(
-            "grid size-10 place-items-center rounded-md text-muted-foreground transition-colors",
+            "grid size-8 place-items-center rounded-md text-muted-foreground transition-colors",
             "hover:bg-muted hover:text-foreground",
             "disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
           )}
@@ -438,30 +435,27 @@ function LocationCalendarPopover({
       ref={rootRef}
       role="dialog"
       aria-label="Choose location day"
-      className="absolute top-[calc(100%+8px)] z-50 w-[min(92vw,360px)] rounded-lg border border-border/70 bg-background p-3 shadow-2xl"
+      className="absolute top-[calc(100%+6px)] left-1/2 z-50 w-[min(90vw,320px)] -translate-x-1/2 rounded-lg border border-border/70 bg-background p-2.5 shadow-2xl"
     >
-      <div className="mb-3 flex items-center justify-between gap-2">
+      <div className="mb-2 flex items-center justify-between gap-2">
         <button
           type="button"
           onClick={() => setVisibleMonth(addMonths(visibleMonth, -1))}
           aria-label="Previous month"
-          className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <ChevronLeft className="size-4" />
         </button>
         <div className="text-center">
-          <div className="text-[13px] font-semibold text-foreground">
+          <div className="text-[12.5px] font-semibold text-foreground">
             {formatMonthLabel(visibleMonth)}
-          </div>
-          <div className="text-[11px] text-muted-foreground">
-            Days with location summaries
           </div>
         </div>
         <button
           type="button"
           onClick={() => setVisibleMonth(addMonths(visibleMonth, 1))}
           aria-label="Next month"
-          className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          className="grid size-7 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
         >
           <ChevronRight className="size-4" />
         </button>
@@ -486,7 +480,7 @@ function LocationCalendarPopover({
               disabled={!day}
               onClick={() => day && onSelect(day.date)}
               className={cn(
-                "relative grid h-10 place-items-center rounded-md text-[12px] transition-colors",
+                "relative grid h-8 place-items-center rounded-md text-[11.5px] transition-colors",
                 item.inMonth ? "text-foreground" : "text-muted-foreground/40",
                 day
                   ? "hover:bg-muted"
@@ -533,42 +527,10 @@ function DayOverview({
       : day.stats.stopCount
 
   return (
-    <div className="grid gap-3 border-b border-border/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
-      <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-3">
-          <DayNavigator
-            compact
-            days={days}
-            selectedDate={selectedDate}
-            onSelect={onSelectDate}
-          />
-          {day.stats.gymDetected ? (
-            <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:text-emerald-400">
-              <Dumbbell className="size-3" />
-              Gym
-            </span>
-          ) : null}
-        </div>
-        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
-          <span className="inline-flex items-center gap-1">
-            <CalendarDays className="size-3" />
-            {day.date}
-          </span>
-          {day.timezone ? <span>{day.timezone}</span> : null}
-          {day.startTime || day.endTime ? (
-            <span className="inline-flex items-center gap-1">
-              <Clock3 className="size-3" />
-              {formatStopTime(day.startTime, day.endTime)}
-            </span>
-          ) : null}
-        </p>
-        {day.summary ? (
-          <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
-            {day.summary}
-          </p>
-        ) : null}
+    <div className="grid gap-2 border-b border-border/60 px-3 py-2 lg:grid-cols-[1fr_auto_1fr] lg:items-center">
+      <div className="flex min-w-0 flex-wrap items-center gap-2">
         {canToggle ? (
-          <div className="mt-2 inline-grid grid-cols-2 rounded-md border border-border/70 bg-muted/20 p-0.5 text-[11.5px]">
+          <div className="inline-grid grid-cols-2 rounded-md border border-border/70 bg-muted/20 p-0.5 text-[11.5px]">
             <button
               type="button"
               onClick={() => onModeChange("places")}
@@ -595,9 +557,26 @@ function DayOverview({
             </button>
           </div>
         ) : null}
+        <span className="inline-flex items-center gap-1 text-[11.5px] text-muted-foreground">
+          <Clock3 className="size-3" />
+          {formatStopTime(day.startTime, day.endTime)}
+        </span>
+        {day.stats.gymDetected ? (
+          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:text-emerald-400">
+            <Dumbbell className="size-3" />
+            Gym
+          </span>
+        ) : null}
       </div>
 
-      <div className="flex min-w-0 flex-wrap gap-2 md:justify-end">
+      <DayNavigator
+        compact
+        days={days}
+        selectedDate={selectedDate}
+        onSelect={onSelectDate}
+      />
+
+      <div className="flex min-w-0 flex-wrap gap-1.5 lg:justify-end">
         <Metric
           label={mode === "raw" ? "Raw pts" : "Stops"}
           value={String(visibleCount)}
@@ -710,7 +689,7 @@ function StopRail({
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="min-w-[82px] rounded-md bg-muted/30 px-2.5 py-1.5">
+    <div className="min-w-[72px] rounded-md bg-muted/20 px-2 py-1">
       <div className="text-[10px] font-medium text-muted-foreground uppercase">
         {label}
       </div>
