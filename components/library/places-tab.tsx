@@ -3,7 +3,9 @@
 import * as React from "react"
 import {
   AlertCircle,
+  CalendarDays,
   CheckCircle2,
+  Clock3,
   Dumbbell,
   LocateFixed,
   MapPinned,
@@ -13,7 +15,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { cn } from "@/lib/utils"
-import { LocationDayMap } from "@/components/library/location-day-map"
+import { LocationDayGoogleMap } from "@/components/library/location-day-google-map"
 import type { LibraryPlaceDayResponse } from "@/app/api/library/places/[date]/route"
 import type { LibraryPlacesResponse } from "@/app/api/library/places/route"
 import type {
@@ -163,19 +165,21 @@ export function PlacesTab() {
               {detailError}
             </div>
           ) : null}
-          <div className="grid min-w-0 gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
-            <section className="min-w-0">
+          <section className="min-w-0 overflow-hidden rounded-lg border border-border/70 bg-background/80">
+            <DayOverview day={selectedDay} detailLoading={detailLoading} />
+            <div className="h-[min(72vh,780px)] min-h-[560px] bg-muted/30">
               {detailLoading && !detail ? (
-                <div className="min-h-[360px] animate-pulse rounded-lg border border-border/70 bg-muted/35" />
+                <div className="h-full animate-pulse bg-muted/35" />
               ) : (
-                <LocationDayMap
+                <LocationDayGoogleMap
+                  title={`Places · ${selectedDay.label}`}
                   route={isDayDetail(selectedDay) ? selectedDay.route : []}
                   stops={isDayDetail(selectedDay) ? selectedDay.stops : []}
                 />
               )}
-            </section>
-            <DayTimeline day={selectedDay} detailLoading={detailLoading} />
-          </div>
+            </div>
+            <StopRail day={selectedDay} detailLoading={detailLoading} />
+          </section>
         </>
       ) : null}
     </div>
@@ -247,60 +251,55 @@ function DaySelector({
   onSelect: (date: string) => void
 }) {
   return (
-    <div className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-      {days.map((day) => {
-        const active = day.date === selectedDate
-        return (
-          <button
-            key={day.date}
-            type="button"
-            onClick={() => onSelect(day.date)}
-            className={cn(
-              "grid h-[58px] min-w-[132px] shrink-0 rounded-lg border px-3 py-2 text-left transition-colors",
-              active
-                ? "border-primary/40 bg-primary/10 text-foreground"
-                : "border-border/70 bg-background hover:bg-muted/50"
-            )}
-          >
-            <span className="truncate text-[12.5px] font-semibold">
-              {day.label}
-            </span>
-            <span className="truncate text-[11px] text-muted-foreground">
-              {day.stats.stopCount} stops
-              {day.stats.distanceMeters
-                ? ` · ${formatDistance(day.stats.distanceMeters)}`
-                : ""}
-            </span>
-          </button>
-        )
-      })}
+    <div className="rounded-lg border border-border/70 bg-muted/20 p-1">
+      <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+        {days.map((day) => {
+          const active = day.date === selectedDate
+          return (
+            <button
+              key={day.date}
+              type="button"
+              onClick={() => onSelect(day.date)}
+              className={cn(
+                "grid h-[64px] min-w-[156px] shrink-0 rounded-md px-3 py-2 text-left transition-colors",
+                active
+                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/70"
+                  : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+              )}
+            >
+              <span className="truncate text-[12px] font-semibold">
+                {formatDayLabel(day)}
+              </span>
+              <span className="truncate text-[11px]">
+                {day.stats.stopCount} stops
+                {day.stats.distanceMeters
+                  ? ` · ${formatDistance(day.stats.distanceMeters)}`
+                  : ""}
+              </span>
+            </button>
+          )
+        })}
+      </div>
     </div>
   )
 }
 
-function DayTimeline({
+function DayOverview({
   day,
   detailLoading,
 }: {
   day: LocationDaySummary | LocationDayDetail
   detailLoading: boolean
 }) {
-  const stops = "stops" in day ? day.stops : []
   const route = "route" in day ? day.route : []
 
   return (
-    <aside className="min-w-0 rounded-lg border border-border/70 bg-background/70">
-      <div className="border-b border-border/60 px-3 py-3">
-        <div className="flex items-start justify-between gap-2">
-          <div className="min-w-0">
-            <h3 className="truncate text-[15px] font-semibold text-foreground">
-              {day.label}
-            </h3>
-            <p className="mt-0.5 text-[11.5px] text-muted-foreground">
-              {day.date}
-              {day.timezone ? ` · ${day.timezone}` : ""}
-            </p>
-          </div>
+    <div className="grid gap-3 border-b border-border/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
+      <div className="min-w-0">
+        <div className="flex flex-wrap items-center gap-2">
+          <h3 className="truncate text-[15px] font-semibold text-foreground">
+            {day.label}
+          </h3>
           {day.stats.gymDetected ? (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:text-emerald-400">
               <Dumbbell className="size-3" />
@@ -308,14 +307,27 @@ function DayTimeline({
             </span>
           ) : null}
         </div>
+        <p className="mt-0.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11.5px] text-muted-foreground">
+          <span className="inline-flex items-center gap-1">
+            <CalendarDays className="size-3" />
+            {day.date}
+          </span>
+          {day.timezone ? <span>{day.timezone}</span> : null}
+          {day.startTime || day.endTime ? (
+            <span className="inline-flex items-center gap-1">
+              <Clock3 className="size-3" />
+              {formatStopTime(day.startTime, day.endTime)}
+            </span>
+          ) : null}
+        </p>
         {day.summary ? (
-          <p className="mt-2 text-[12.5px] leading-relaxed text-muted-foreground">
+          <p className="mt-1.5 text-[12.5px] leading-relaxed text-muted-foreground">
             {day.summary}
           </p>
         ) : null}
       </div>
 
-      <div className="grid grid-cols-2 gap-2 border-b border-border/60 p-3">
+      <div className="flex min-w-0 flex-wrap gap-2 md:justify-end">
         <Metric label="Stops" value={String(day.stats.stopCount)} />
         <Metric
           label="Samples"
@@ -329,61 +341,84 @@ function DayTimeline({
               : "No data"
           }
         />
-        <Metric label="Route" value={route.length >= 2 ? `${route.length} pts` : "Approx"} />
+        <Metric
+          label="Route"
+          value={route.length >= 2 ? `${route.length} pts` : detailLoading ? "Loading" : "Approx"}
+        />
+      </div>
+    </div>
+  )
+}
+
+function StopRail({
+  day,
+  detailLoading,
+}: {
+  day: LocationDaySummary | LocationDayDetail
+  detailLoading: boolean
+}) {
+  const stops = "stops" in day ? day.stops : []
+
+  return (
+    <div className="border-t border-border/60 bg-background/95 px-4 py-3">
+      <div className="mb-2 flex items-center justify-between gap-3">
+        <h4 className="text-[12px] font-semibold uppercase text-muted-foreground">
+          Stops
+        </h4>
+        <span className="text-[11.5px] text-muted-foreground">
+          {stops.length > 0
+            ? `${stops.length} summarized places`
+            : "No summarized places"}
+        </span>
       </div>
 
-      <div className="max-h-[520px] overflow-y-auto p-3">
-        {detailLoading && stops.length === 0 ? (
-          <div className="grid gap-2">
-            {[1, 2, 3, 4].map((item) => (
-              <div
-                key={item}
-                className="h-14 animate-pulse rounded-md bg-muted/45"
-              />
-            ))}
-          </div>
-        ) : stops.length > 0 ? (
-          <ol className="grid gap-2">
-            {stops.map((stop, index) => (
-              <li
-                key={stop.id || index}
-                className="grid grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-md border border-border/60 bg-background px-2.5 py-2"
-              >
-                <span className="mt-0.5 grid size-5 place-items-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
-                  {index + 1}
+      {detailLoading && stops.length === 0 ? (
+        <div className="flex gap-2 overflow-hidden">
+          {[1, 2, 3, 4].map((item) => (
+            <div
+              key={item}
+              className="h-16 min-w-[220px] animate-pulse rounded-md bg-muted/45"
+            />
+          ))}
+        </div>
+      ) : stops.length > 0 ? (
+        <ol className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
+          {stops.map((stop, index) => (
+            <li
+              key={stop.id || index}
+              className="grid min-h-[68px] min-w-[230px] grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-md bg-muted/25 px-2.5 py-2"
+            >
+              <span className="mt-0.5 grid size-5 place-items-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                {index + 1}
+              </span>
+              <span className="min-w-0">
+                <span className="block truncate text-[12.5px] font-medium text-foreground">
+                  {stop.label}
                 </span>
-                <span className="min-w-0">
-                  <span className="block truncate text-[12.5px] font-medium text-foreground">
-                    {stop.label}
-                  </span>
-                  <span className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
-                    <span>{formatStopTime(stop.startTime, stop.endTime)}</span>
-                    {stop.durationMinutes ? (
-                      <span>{stop.durationMinutes} min</span>
-                    ) : null}
-                    {stop.kind ? <span>{stop.kind}</span> : null}
-                  </span>
+                <span className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                  <span>{formatStopWindow(stop)}</span>
+                  {stop.kind ? <span>{stop.kind}</span> : null}
                 </span>
-              </li>
-            ))}
-          </ol>
-        ) : (
-          <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-6 text-center text-[12.5px] text-muted-foreground">
-            No stops were summarized for this day yet.
-          </div>
-        )}
-      </div>
-    </aside>
+              </span>
+            </li>
+          ))}
+        </ol>
+      ) : (
+        <div className="rounded-md border border-dashed border-border bg-muted/20 px-3 py-6 text-center text-[12.5px] text-muted-foreground">
+          No stops were summarized for this day yet.
+        </div>
+      )}
+    </div>
   )
 }
 
 function Metric({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border/60 bg-muted/20 px-2.5 py-2">
-      <div className="text-[10.5px] font-medium uppercase text-muted-foreground">
+    <div className="min-w-[82px] rounded-md bg-muted/30 px-2.5 py-1.5">
+      <div className="text-[10px] font-medium uppercase text-muted-foreground">
         {label}
       </div>
-      <div className="mt-0.5 truncate text-[13px] font-semibold text-foreground">
+      <div className="truncate text-[12.5px] font-semibold text-foreground">
         {value}
       </div>
     </div>
@@ -457,10 +492,7 @@ function PlacesSkeleton() {
   return (
     <div className="grid gap-4">
       <div className="h-10 animate-pulse rounded-lg bg-muted/35" />
-      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_330px]">
-        <div className="min-h-[360px] animate-pulse rounded-lg bg-muted/35" />
-        <div className="min-h-[360px] animate-pulse rounded-lg bg-muted/35" />
-      </div>
+      <div className="min-h-[640px] animate-pulse rounded-lg bg-muted/35" />
     </div>
   )
 }
@@ -480,6 +512,38 @@ function formatStopTime(start: string | null, end: string | null): string {
   if (!start && !end) return "Time not summarized"
   if (start && end) return `${formatTime(start)}-${formatTime(end)}`
   return formatTime(start ?? end ?? "")
+}
+
+function formatStopWindow(stop: {
+  startTime: string | null
+  endTime: string | null
+  durationMinutes: number | null
+}): string {
+  const start = formatTime(stop.startTime ?? "")
+  const end = formatTime(stop.endTime ?? "")
+  const duration =
+    typeof stop.durationMinutes === "number" && stop.durationMinutes > 0
+      ? Math.round(stop.durationMinutes)
+      : null
+
+  if (start && end && start !== end) {
+    return duration ? `${start}-${end} · ${duration} min` : `${start}-${end}`
+  }
+  if (start || end) {
+    if (duration && duration > 1) return `${start || end} · ${duration} min`
+    return `${start || end} · <1 min`
+  }
+  return duration ? `${duration} min` : "Time not summarized"
+}
+
+function formatDayLabel(day: LocationDaySummary): string {
+  const parsed = Date.parse(`${day.date}T12:00:00Z`)
+  if (!Number.isFinite(parsed)) return day.label
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  }).format(new Date(parsed))
 }
 
 function formatTime(value: string): string {
