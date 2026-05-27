@@ -118,16 +118,6 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
     return
   }
 
-  socket.write(
-    [
-      'HTTP/1.1 101 Switching Protocols',
-      'Upgrade: websocket',
-      'Connection: Upgrade',
-      `Sec-WebSocket-Accept: ${accept}`,
-      '',
-      '',
-    ].join('\r\n')
-  )
   socket.pause()
 
   const upstream = net.connect({ host: '127.0.0.1', port: previewPort })
@@ -135,7 +125,7 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
   let bridged = false
 
   const fail = (message) => {
-    if (!socket.destroyed) socket.destroy(new Error(message))
+    if (!socket.destroyed) writeSocketResponse(socket, 502, message)
     upstream.destroy()
   }
 
@@ -157,6 +147,16 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
     upstream.off('data', onUpstreamData)
 
     const rest = pending.subarray(end + 4)
+    socket.write(
+      [
+        'HTTP/1.1 101 Switching Protocols',
+        'Upgrade: websocket',
+        'Connection: Upgrade',
+        `Sec-WebSocket-Accept: ${accept}`,
+        '',
+        '',
+      ].join('\r\n')
+    )
     if (head?.length) upstream.write(head)
     if (rest.length) socket.write(rest)
     socket.pipe(upstream)
