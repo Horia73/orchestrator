@@ -25,8 +25,11 @@ const app = next({
 
 await app.prepare()
 
-const handle = app.getRequestHandler()
-const handleUpgrade = app.getUpgradeHandler()
+// The public custom-server handler lazily registers Next's own upgrade listener
+// on this HTTP server. We own upgrade dispatch below so preview HMR sockets can
+// be routed before Next treats them as app routes and closes them.
+const handle = app.server.getRequestHandler()
+const handleUpgrade = app.server.getUpgradeHandler()
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
