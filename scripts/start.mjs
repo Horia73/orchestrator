@@ -25,11 +25,15 @@ const app = next({
 
 await app.prepare()
 
-// The public custom-server handler lazily registers Next's own upgrade listener
-// on this HTTP server. We own upgrade dispatch below so preview HMR sockets can
-// be routed before Next treats them as app routes and closes them.
-const handle = app.server.getRequestHandler()
-const handleUpgrade = app.server.getUpgradeHandler()
+// Next's public request handler is the only path that includes static asset
+// serving for /_next/static/* (the inner server.getRequestHandler() returns
+// an unwrapped handler that 404s static chunks in production). Trip the
+// internal guard so Next does not auto-register its own 'upgrade' listener
+// on the first request — we own upgrade dispatch below so preview HMR sockets
+// reach our proxy before Next treats them as app routes and closes them.
+app.didWebSocketSetup = true
+const handle = app.getRequestHandler()
+const handleUpgrade = app.getUpgradeHandler()
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
