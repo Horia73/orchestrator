@@ -19,6 +19,7 @@ import {
   forkInboxToConversation,
   getInboxConversation,
 } from "@/lib/scheduling/store"
+import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
 
 const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
   "image",
@@ -130,6 +131,13 @@ async function continueInboxReply(args: {
   userReply: string
   attachments?: Attachment[]
 }): Promise<void> {
+  const runId = `inbox_run_${randomUUID()}`
+  registerAgentRun({
+    id: runId,
+    kind: "inbox",
+    conversationId: args.id,
+    startedAt: Date.now(),
+  })
   try {
     const agent = getAgent("inbox-agent") ?? getAgent("orchestrator")
     if (!agent) {
@@ -250,6 +258,8 @@ async function continueInboxReply(args: {
       status: "error",
       timestamp: Date.now(),
     })
+  } finally {
+    clearAgentRun(runId)
   }
 }
 

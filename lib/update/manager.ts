@@ -4,6 +4,7 @@ import { execFileSync, spawn } from 'child_process'
 import { randomUUID } from 'crypto'
 
 import { listActiveChatStreams } from '@/lib/chat-streams'
+import { listAgentRuns, type ActiveAgentRun } from '@/lib/agent-runs'
 import { getEnvValue } from '@/lib/config'
 import { shutdownBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import { createInboxConversation } from '@/lib/scheduling/store'
@@ -684,6 +685,24 @@ async function startUpdateRunner() {
     }
 }
 
+function agentRunToActiveRunInfo(run: ActiveAgentRun): ActiveRunInfo {
+    return {
+        conversationId: run.conversationId,
+        messageId: run.id,
+        startedAt: run.startedAt,
+    }
+}
+
+function listAllActiveRuns(): ActiveRunInfo[] {
+    // Combine main chat streams with background (inbox-reply, scheduled-task)
+    // model wakes. The update manager treats both as "AI is busy" so a managed
+    // update won't pre-empt a running scheduled run or inbox-reply continuation.
+    return [
+        ...listActiveChatStreams(),
+        ...listAgentRuns().map(agentRunToActiveRunInfo),
+    ]
+}
+
 function scheduleQueuedJob(jobId: string) {
     if (memory.timer) clearTimeout(memory.timer)
 
@@ -691,7 +710,7 @@ function scheduleQueuedJob(jobId: string) {
         const job = memory.job
         if (!job || job.id !== jobId || job.phase !== 'queued') return
 
-        const activeRuns = listActiveChatStreams()
+        const activeRuns = listAllActiveRuns()
         if (activeRuns.length > 0) {
             patchJob({
                 idleSince: undefined,
@@ -726,7 +745,7 @@ export async function getUpdateStatus(opts?: { refresh?: boolean }): Promise<Upd
     const fetchedLatest = await fetchLatestRelease(Boolean(opts?.refresh || !memory.latestCheckedAt))
     const latest = fetchedLatest ?? installedReleaseFallback(current)
     const reconciled = reconcilePersistedJob(current)
-    const activeRuns = listActiveChatStreams()
+    const activeRuns = listAllActiveRuns()
     const manager = serviceManager()
     const dockerHostUpdater = manager === 'docker' && hasDockerHostUpdater()
 

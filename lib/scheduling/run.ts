@@ -23,6 +23,7 @@ import {
   appendMissingArtifactBlocks,
   stripArtifactBlocksForPreview,
 } from "@/lib/artifacts/text"
+import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
 
 // Heavy AI modules (runner pulls in the whole tool/provider graph) are
 // imported lazily so the scheduler boot path and this module stay cheap and
@@ -146,6 +147,15 @@ export async function runScheduledTask(
     timestamp: firedAt,
   }
 
+  const runId = `sched_run_${randomUUID()}`
+  registerAgentRun({
+    id: runId,
+    kind: "scheduled",
+    conversationId,
+    startedAt: firedAt,
+  })
+
+  try {
   let ok = false
   let assistantContent: string
   let reasoning: ReasoningEntry[] | undefined
@@ -518,6 +528,9 @@ export async function runScheduledTask(
     surfaced: surface,
     summary: assistantContent,
     error,
+  }
+  } finally {
+    clearAgentRun(runId)
   }
 }
 
