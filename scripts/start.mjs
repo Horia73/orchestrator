@@ -117,7 +117,6 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
 
   const fail = (status, message) => {
     if (!bridged && !socket.destroyed) writeSocketResponse(socket, status, message)
-    socket.destroy()
     upstream.destroy()
   }
 
@@ -125,24 +124,8 @@ function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort })
     bridged = true
     upstream.write(buildUpgradeRequest(req, upstreamPath, previewPort))
     if (head?.length) upstream.write(head)
-    upstream.on('data', (chunk) => {
-      if (!socket.destroyed && !socket.write(chunk)) upstream.pause()
-    })
-    socket.on('data', (chunk) => {
-      if (!upstream.destroyed && !upstream.write(chunk)) socket.pause()
-    })
-    upstream.on('drain', () => {
-      if (!socket.destroyed) socket.resume()
-    })
-    socket.on('drain', () => {
-      if (!upstream.destroyed) upstream.resume()
-    })
-    upstream.once('end', () => {
-      if (!socket.destroyed) socket.end()
-    })
-    socket.once('end', () => {
-      if (!upstream.destroyed) upstream.end()
-    })
+    upstream.pipe(socket)
+    socket.pipe(upstream)
     socket.resume()
   })
 
