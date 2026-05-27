@@ -9,6 +9,8 @@ import {
     getWhatsAppIntegrationStatus,
     startWhatsApp,
     whatsappListChats,
+    whatsappMarkChatRead,
+    whatsappMarkChatUnread,
     whatsappReadChat,
     whatsappSearchMessages,
     whatsappSendMedia,
@@ -238,6 +240,47 @@ export const whatsappDeleteMessageTool: ToolDef = {
     tags: ['write', 'whatsapp', 'messages', 'destructive', 'external_action'],
 }
 
+export const whatsappMarkChatReadTool: ToolDef = {
+    id: 'WhatsAppMarkChatRead',
+    name: 'WhatsAppMarkChatRead',
+    description: [
+        'Marks a WhatsApp chat as read on the connected device (clears the unread badge for that chat on the user\'s phone).',
+        'Use only when the user explicitly asks to mark a chat as read, or when an Inbox quick-action requests it.',
+        'Reading messages programmatically with WhatsAppReadChat does NOT mark them read — this tool is the only way to clear unread on WhatsApp.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            chat_id: {
+                type: 'string',
+                description: 'WhatsApp chat ID, usually returned by WhatsAppListChats or carried in monitor candidate details.',
+            },
+        },
+        required: ['chat_id'],
+    },
+    tags: ['write', 'whatsapp', 'messages', 'external_action'],
+}
+
+export const whatsappMarkChatUnreadTool: ToolDef = {
+    id: 'WhatsAppMarkChatUnread',
+    name: 'WhatsAppMarkChatUnread',
+    description: [
+        'Marks a WhatsApp chat as unread on the connected device (restores the unread badge so the user sees it again on their phone).',
+        'Use when the user wants a chat to remain visibly unread after the assistant has surfaced or summarized it, or when an Inbox quick-action requests it.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            chat_id: {
+                type: 'string',
+                description: 'WhatsApp chat ID, usually returned by WhatsAppListChats or carried in monitor candidate details.',
+            },
+        },
+        required: ['chat_id'],
+    },
+    tags: ['write', 'whatsapp', 'messages', 'external_action'],
+}
+
 export const whatsappTools: ToolDef[] = [
     whatsappStatusTool,
     whatsappConnectTool,
@@ -248,6 +291,8 @@ export const whatsappTools: ToolDef[] = [
     whatsappSendMessageTool,
     whatsappSendMediaTool,
     whatsappDeleteMessageTool,
+    whatsappMarkChatReadTool,
+    whatsappMarkChatUnreadTool,
 ]
 
 export async function executeWhatsAppStatus(
@@ -381,6 +426,20 @@ export async function executeWhatsAppDeleteMessageForEveryone(args: Record<strin
     if (!messageId) return { success: false, error: 'Missing required parameter: message_id' }
 
     const result = await whatsappDeleteMessageForEveryone(messageId)
+    return { success: true, data: result }
+}
+
+export async function executeWhatsAppMarkChatRead(args: Record<string, unknown>): Promise<ToolResult> {
+    const chatId = stringArg(args, ['chat_id', 'chatId'])
+    if (!chatId) return { success: false, error: 'Missing required parameter: chat_id' }
+    const result = await whatsappMarkChatRead(chatId)
+    return { success: true, data: result }
+}
+
+export async function executeWhatsAppMarkChatUnread(args: Record<string, unknown>): Promise<ToolResult> {
+    const chatId = stringArg(args, ['chat_id', 'chatId'])
+    if (!chatId) return { success: false, error: 'Missing required parameter: chat_id' }
+    const result = await whatsappMarkChatUnread(chatId)
     return { success: true, data: result }
 }
 

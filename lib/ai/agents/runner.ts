@@ -26,6 +26,14 @@ import { getToolsForAgent, getToolsForBuiltins, resolveProviderToolSurface } fro
 import { redactToolArgs } from '@/lib/ai/tools/redaction'
 import { filterIntegrationToolExposure } from '@/lib/integrations/exposure'
 import {
+    appendPromptContext,
+    buildAttachmentContext,
+    canProviderReadLocalUploads,
+} from '@/lib/ai/attachment-context'
+import { resolveExistingUploadPath } from '@/lib/uploads'
+import { isFileSupportedByProvider } from '@/lib/config'
+import type { MessageAttachment } from './types'
+import {
     addAgentThreadTurn,
     type AgentThreadMessage,
     getAgentThreadInteractionId,
@@ -60,6 +68,8 @@ interface RunTextSubAgentArgs {
     parentCtx: ToolExecutionContext
     agentThreadId?: string
     cwd?: string
+    /** User attachments to forward to the model on this turn. */
+    attachments?: Attachment[]
 }
 
 interface RunMediaSubAgentArgs {
@@ -82,7 +92,7 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
  * tree by joining on this column.
  */
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
-    const { target, prompt, parentCtx, agentThreadId, cwd } = args
+    const { target, prompt, parentCtx, agentThreadId, cwd, attachments } = args
     const runtime = resolveAgentRuntimeSettings(target)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
     if (agentThreadId) touchAgentThreadRuntime(agentThreadId, runtime.provider, runtime.model)
@@ -188,7 +198,35 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
     }
 
     const threadMessages = agentThreadId ? getAgentThreadMessages(agentThreadId) : []
-    const messages = buildSubAgentMessages(runtime.provider, threadMessages, prompt, Boolean(prevSession))
+    const safeAttachments = (attachments ?? []).filter(att =>
+        att && typeof att.id === 'string' && resolveExistingUploadPath(att.id) !== null
+    )
+    const attachmentContext = safeAttachments.length > 0
+        ? buildAttachmentContext(safeAttachments, {
+            includeLocalPath: canProviderReadLocalUploads(runtime.provider),
+        })
+        : ''
+    const promptWithAttachments = appendPromptContext(prompt, attachmentContext)
+    const providerAttachments: MessageAttachment[] = []
+    if (safeAttachments.length > 0) {
+        for (const att of safeAttachments) {
+            const mimeType = typeof att.mimeType === 'string'
+                ? att.mimeType.split(';')[0].trim()
+                : ''
+            if (!mimeType) continue
+            if (!isFileSupportedByProvider(runtime.provider, mimeType)) continue
+            const filePath = resolveExistingUploadPath(att.id)
+            if (!filePath) continue
+            providerAttachments.push({ filePath, mimeType })
+        }
+    }
+    const messages = buildSubAgentMessages(
+        runtime.provider,
+        threadMessages,
+        promptWithAttachments,
+        Boolean(prevSession),
+        providerAttachments,
+    )
 
     // Resolve sub-callable agents from the registry so the prompt has full
     // descriptions. Gated by canDelegate: at the depth cap the delegate_to
@@ -447,7 +485,11 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return { success: false, error: `Sub-agent ${target.id} reported error: ${providerError}` }
     }
 
-    if (!accContent.trim()) {
+    // Empty text output is a legitimate outcome when the agent communicated
+    // via tool calls (e.g. notify_inbox-only replies). Only treat as failure
+    // when literally nothing happened — no text and no tools — which usually
+    // signals a misconfigured provider.
+    if (!accContent.trim() && toolCallCount === 0) {
         emitAgent(parentCtx, {
             type: 'agent_done',
             runId: subRequestId,
@@ -464,7 +506,6 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         }
     }
 
-    void toolCallCount  // currently unused, but reserved for future tool-call summary in result
     void accThinking
 
     if (agentThreadId) {
@@ -797,8 +838,11 @@ function buildSubAgentMessages(
     providerId: string,
     history: AgentThreadMessage[],
     prompt: string,
-    hasPrevSession: boolean
-): Array<{ role: string; content: string }> {
+    hasPrevSession: boolean,
+    attachments: MessageAttachment[] = [],
+): Array<{ role: string; content: string; attachments?: MessageAttachment[] }> {
+    const userAttachments = attachments.length > 0 ? attachments : undefined
+
     if ((providerId === 'claude-code' || providerId === 'codex') && !hasPrevSession && history.length > 0) {
         return [{
             role: 'user',
@@ -812,6 +856,7 @@ function buildSubAgentMessages(
                 prompt,
                 '</new_parent_message>',
             ].join('\n'),
+            attachments: userAttachments,
         }]
     }
 
@@ -820,7 +865,7 @@ function buildSubAgentMessages(
             role: message.role,
             content: message.content,
         })),
-        { role: 'user', content: prompt },
+        { role: 'user', content: prompt, attachments: userAttachments },
     ]
 }
 

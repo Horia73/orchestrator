@@ -164,6 +164,14 @@ export interface WhatsAppDeleteMessageResult {
     clearMedia: true
 }
 
+export interface WhatsAppMarkChatResult {
+    status: 'marked_read' | 'marked_unread'
+    chatId: string
+    chatName: string | null
+    isGroup: boolean
+    previousUnreadCount: number
+}
+
 interface MutableWhatsAppState {
     phase: WhatsAppPhase
     qrText: string | null
@@ -447,6 +455,44 @@ class WhatsAppManager {
                 messages,
                 attachments: attachments.map(attachmentSummary),
                 caption: cleanCaption || null,
+            }
+        })
+    }
+
+    async markChatRead(chatId: string): Promise<WhatsAppMarkChatResult> {
+        return this.runReadyOperation('mark chat read', async client => {
+            const chat = await this.getChat(client, chatId)
+            const previousUnreadCount = Number.isFinite(chat.unreadCount) ? chat.unreadCount : 0
+            await withTimeout(
+                chat.sendSeen(),
+                DEFAULT_OPERATION_TIMEOUT_MS,
+                `WhatsApp mark chat read timed out for ${chatId}.`
+            )
+            return {
+                status: 'marked_read',
+                chatId: chat.id._serialized,
+                chatName: chat.name || null,
+                isGroup: Boolean(chat.isGroup),
+                previousUnreadCount,
+            }
+        })
+    }
+
+    async markChatUnread(chatId: string): Promise<WhatsAppMarkChatResult> {
+        return this.runReadyOperation('mark chat unread', async client => {
+            const chat = await this.getChat(client, chatId)
+            const previousUnreadCount = Number.isFinite(chat.unreadCount) ? chat.unreadCount : 0
+            await withTimeout(
+                chat.markUnread(),
+                DEFAULT_OPERATION_TIMEOUT_MS,
+                `WhatsApp mark chat unread timed out for ${chatId}.`
+            )
+            return {
+                status: 'marked_unread',
+                chatId: chat.id._serialized,
+                chatName: chat.name || null,
+                isGroup: Boolean(chat.isGroup),
+                previousUnreadCount,
             }
         })
     }
@@ -875,7 +921,7 @@ class WhatsAppManager {
             browserExecutablePath,
             missingConfig: browserExecutablePath ? [] : ['WHATSAPP_CHROME_EXECUTABLE_PATH or local Chrome/Chromium'],
             needsReconnect: !connected,
-            capabilities: ['status', 'qr_login', 'list_chats', 'unread_summary', 'read_chat', 'search_recent_messages', 'send_message', 'send_media', 'delete_message_for_everyone'],
+            capabilities: ['status', 'qr_login', 'list_chats', 'unread_summary', 'read_chat', 'search_recent_messages', 'send_message', 'send_media', 'delete_message_for_everyone', 'mark_chat_read', 'mark_chat_unread'],
         }
     }
 }
@@ -942,6 +988,14 @@ export function whatsappSendMedia(
 
 export function whatsappDeleteMessageForEveryone(messageId: string): Promise<WhatsAppDeleteMessageResult> {
     return manager().deleteMessageForEveryone(messageId)
+}
+
+export function whatsappMarkChatRead(chatId: string): Promise<WhatsAppMarkChatResult> {
+    return manager().markChatRead(chatId)
+}
+
+export function whatsappMarkChatUnread(chatId: string): Promise<WhatsAppMarkChatResult> {
+    return manager().markChatUnread(chatId)
 }
 
 function clamp(value: number, min: number, max: number): number {

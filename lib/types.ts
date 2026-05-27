@@ -103,15 +103,38 @@ export type MessageStatus = "ok" | "error" | "aborted"
 
 export type InboxReplyActionStyle = "primary" | "secondary" | "destructive"
 
+/**
+ * Whitelisted direct actions that an Inbox quick-reply button can execute
+ * WITHOUT invoking the agent. Only non-destructive, read/unread/archive-style
+ * operations on the message that produced the notification.
+ */
+export type InboxDirectAction =
+  | { tool: "gmail.mark_read"; messageId: string }
+  | { tool: "gmail.mark_unread"; messageId: string }
+  | { tool: "gmail.archive"; messageId: string }
+  | { tool: "whatsapp.mark_chat_read"; chatId: string }
+  | { tool: "whatsapp.mark_chat_unread"; chatId: string }
+
 export interface InboxReplyAction {
   /** Stable machine id for the quick action inside one message. */
   id: string
   /** Short button label shown in Inbox. */
   label: string
-  /** User reply sent when the button is clicked. */
+  /** User reply sent when the button is clicked. Used as fallback / for chat actions that need the agent. */
   value: string
   /** Optional visual intent. Destructive actions still follow model/tool confirmation rules. */
   style?: InboxReplyActionStyle
+  /**
+   * When set, clicking the button executes the listed tool directly server-side
+   * (no agent / no model). The `value` text is NOT sent. Limited to a strict
+   * whitelist of non-destructive operations on the source message/chat.
+   */
+  directAction?: InboxDirectAction
+  /**
+   * Server-side marker once a direct action has been executed. The UI uses this
+   * to disable the button. Not produced by the agent.
+   */
+  consumedAt?: number
 }
 
 export interface AgentCallReasoningEntry {

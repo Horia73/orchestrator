@@ -5,17 +5,69 @@ import { getAgent } from "@/lib/ai/agents/registry"
 import { runTextSubAgent } from "@/lib/ai/agents/runner"
 import type { AgentRunEvent, ToolExecutionContext } from "@/lib/ai/agents/types"
 import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
-import type { InboxReplyAction, Message, ReasoningEntry } from "@/lib/types"
+import type {
+  Attachment,
+  InboxReplyAction,
+  Message,
+  ReasoningEntry,
+} from "@/lib/types"
 import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
 import { appendMissingArtifactBlocks } from "@/lib/artifacts/text"
+import { resolveExistingUploadPath } from "@/lib/uploads"
 import {
   appendInboxMessage,
   forkInboxToConversation,
   getInboxConversation,
 } from "@/lib/scheduling/store"
 
+const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
+  "image",
+  "pdf",
+  "document",
+  "audio",
+  "video",
+  "other",
+])
+
+function isAttachment(value: unknown): value is Attachment {
+  if (!value || typeof value !== "object") return false
+  const candidate = value as Record<string, unknown>
+  return (
+    typeof candidate.id === "string" &&
+    typeof candidate.filename === "string" &&
+    typeof candidate.mimeType === "string" &&
+    typeof candidate.size === "number" &&
+    typeof candidate.type === "string" &&
+    ATTACHMENT_TYPES.has(candidate.type as Attachment["type"])
+  )
+}
+
+function parseAttachmentsField(value: unknown): Attachment[] {
+  if (!Array.isArray(value)) return []
+  const valid: Attachment[] = []
+  for (const entry of value) {
+    if (!isAttachment(entry)) continue
+    if (!resolveExistingUploadPath(entry.id)) continue
+    valid.push(entry)
+  }
+  return valid
+}
+
 function clip(text: string, max = 5000): string {
   return text.length > max ? `${text.slice(0, max)}\n...(truncated)` : text
+}
+
+function formatTranscriptAttachments(attachments: Attachment[] | undefined): string {
+  if (!attachments || attachments.length === 0) return ""
+  const lines = attachments
+    .filter((a) => a && typeof a.id === "string")
+    .map((a) => {
+      const mime = typeof a.mimeType === "string" ? a.mimeType.split(";")[0].trim() : ""
+      const name = typeof a.filename === "string" && a.filename.trim() ? a.filename.trim() : a.id
+      return mime ? `- ${name} (${mime})` : `- ${name}`
+    })
+  if (lines.length === 0) return ""
+  return `\n\nAttached files:\n${lines.join("\n")}`
 }
 
 function buildInlineReplyPrompt(args: {
@@ -27,7 +79,7 @@ function buildInlineReplyPrompt(args: {
   const transcript = recent
     .map((m) => {
       const role = m.role === "user" ? "User/trigger" : "Assistant/result"
-      return `### ${role}\n${clip(m.content)}`
+      return `### ${role}\n${clip(m.content)}${formatTranscriptAttachments(m.attachments)}`
     })
     .join("\n\n")
 
@@ -53,14 +105,19 @@ function buildInlineReplyPrompt(args: {
 
 async function parseBody(
   request: Request
-): Promise<{ content?: string } | null> {
+): Promise<{ content: string; attachments: Attachment[] } | null> {
   const raw = await request.text()
   if (!raw.trim()) return null
   try {
-    const parsed = JSON.parse(raw) as { content?: unknown }
+    const parsed = JSON.parse(raw) as {
+      content?: unknown
+      attachments?: unknown
+    }
     const content =
       typeof parsed.content === "string" ? parsed.content.trim() : ""
-    return content ? { content } : null
+    const attachments = parseAttachmentsField(parsed.attachments)
+    if (!content && attachments.length === 0) return null
+    return { content, attachments }
   } catch {
     return null
   }
@@ -71,9 +128,10 @@ async function continueInboxReply(args: {
   inboxTitle: string
   messages: Message[]
   userReply: string
+  attachments?: Attachment[]
 }): Promise<void> {
   try {
-    const agent = getAgent("orchestrator")
+    const agent = getAgent("inbox-agent") ?? getAgent("orchestrator")
     if (!agent) {
       appendInboxMessage(args.id, {
         id: `msg_${randomUUID()}`,
@@ -130,7 +188,12 @@ async function continueInboxReply(args: {
       messages: args.messages,
       userReply: args.userReply,
     })
-    const result = await runTextSubAgent({ target: agent, prompt, parentCtx })
+    const result = await runTextSubAgent({
+      target: agent,
+      prompt,
+      parentCtx,
+      attachments: args.attachments,
+    })
     const done = topRunId ? doneByRun.get(topRunId) : undefined
     let assistantContent = result.success
       ? notifications.length > 0
@@ -202,7 +265,7 @@ export async function POST(
   try {
     const { id } = await params
     const body = await parseBody(request)
-    if (body?.content) {
+    if (body) {
       const inbox = getInboxConversation(id)
       if (!inbox)
         return NextResponse.json(
@@ -215,6 +278,7 @@ export async function POST(
         role: "user",
         content: body.content,
         timestamp: Date.now(),
+        attachments: body.attachments.length > 0 ? body.attachments : undefined,
       }
       if (!appendInboxMessage(id, userMsg)) {
         return NextResponse.json(
@@ -228,6 +292,7 @@ export async function POST(
         inboxTitle: inbox.title,
         messages: [...inbox.messages, userMsg],
         userReply: body.content,
+        attachments: body.attachments.length > 0 ? body.attachments : undefined,
       })
 
       return NextResponse.json({

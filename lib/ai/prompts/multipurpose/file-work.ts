@@ -32,10 +32,10 @@ Do not re-read context already loaded in the prompt unless:
 - you need a file outside the loaded context set.
 
 When you create or update user-operating knowledge, use the appropriate context file:
-- USER.md for stable user profile facts;
+- USER.md for stable user profile facts and assistant style/setup facts;
 - MEMORY.md for durable operating memory;
 - today's MEMORY_DAY file for temporary action notes/open loops;
-- AGENTS.md or IDENTITY.md only when the task is explicitly about agent behavior.
+- AGENTS.md only when the task is explicitly about agent behavior.
 </workspace_context_protocol>
 
 <document_integrity>

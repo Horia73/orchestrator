@@ -91,7 +91,7 @@ const OFFER_ACTIONS = [
         label: 'Enable',
         value: [
             'Enable model-owned daily memory consolidation.',
-            'Create or update a Smart Monitor custom watch for this recurring maintenance; do not create a separate scheduled task. Store the check instruction in the watch rule as custom_prompt and document the durable spec in MONITORS.md with watchId, cadence/check timing, source/scope, notify rule, and silence rule. The watch may consolidate the just-ended MEMORY_DAY file into USER.md/MEMORY.md/MONITORS.md/IDENTITY.md only when there is durable signal; 00:30 is guidance, not a hard schedule; run at most once per local day; stay silent unless there is an error.',
+            'Create or update a Smart Monitor custom watch for this recurring maintenance; do not create a separate scheduled task. Store the check instruction in the watch rule as custom_prompt and document the durable spec in MONITORS.md with watchId, cadence/check timing, source/scope, notify rule, and silence rule. The watch may consolidate the just-ended MEMORY_DAY file into USER.md/MEMORY.md/MONITORS.md only when there is durable signal; 00:30 is guidance, not a hard schedule; run at most once per local day; stay silent unless there is an error.',
         ].join(' '),
         style: 'primary' as const,
     },

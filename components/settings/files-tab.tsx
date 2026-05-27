@@ -13,6 +13,7 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  Search,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -60,6 +61,7 @@ const LAST_SELECTED_FILE_STORAGE_KEY = "orchestrator:settings:files:last-selecte
 const DAILY_MEMORY_OPEN_STORAGE_KEY = "orchestrator:settings:files:daily-memory-open"
 
 const DAILY_MEMORY_ID_PREFIX = "memory-day:"
+const DAILY_MEMORY_COLLAPSED_LIMIT = 7
 const CATEGORY_ORDER: FileCategory[] = ["onboarding", "knowledge", "behavior", "system"]
 
 const CATEGORY_META: Record<FileCategory, { label: string; badge: string }> = {
@@ -788,6 +790,26 @@ function DailyMemoryFolder({
   onSelect: (id: string) => void
 }) {
   const active = files.some(file => file.id === selectedId)
+  const [query, setQuery] = React.useState("")
+  const [expanded, setExpanded] = React.useState(false)
+  const showSearch = files.length > DAILY_MEMORY_COLLAPSED_LIMIT
+
+  const haystackMap = React.useMemo(() => {
+    const map = new Map<string, string>()
+    for (const file of files) map.set(file.id, buildDailyFileHaystack(file))
+    return map
+  }, [files])
+
+  const trimmedQuery = query.trim().toLowerCase()
+  const filteredFiles = React.useMemo(() => {
+    if (!trimmedQuery) return files
+    return files.filter(file => (haystackMap.get(file.id) ?? "").includes(trimmedQuery))
+  }, [files, haystackMap, trimmedQuery])
+
+  const collapseList = !expanded && !trimmedQuery && filteredFiles.length > DAILY_MEMORY_COLLAPSED_LIMIT
+  const visibleFiles = collapseList ? filteredFiles.slice(0, DAILY_MEMORY_COLLAPSED_LIMIT) : filteredFiles
+  const hiddenCount = filteredFiles.length - visibleFiles.length
+  const canCollapse = expanded && !trimmedQuery && filteredFiles.length > DAILY_MEMORY_COLLAPSED_LIMIT
 
   return (
     <div>
@@ -817,20 +839,95 @@ function DailyMemoryFolder({
       </button>
 
       {open && (
-        <div className="ml-4 mt-1 space-y-0.5 border-l border-border/60 pl-2">
-          {files.map(file => (
-            <FileSidebarButton
-              key={file.id}
-              file={file}
-              active={file.id === selectedId}
-              nested
-              onSelect={onSelect}
-            />
-          ))}
+        <div className="ml-4 mt-1 border-l border-border/60 pl-2">
+          {showSearch && (
+            <div className="relative mb-1.5">
+              <Search className="pointer-events-none absolute left-2 top-1/2 size-3.5 -translate-y-1/2 text-foreground/40" />
+              <input
+                type="search"
+                value={query}
+                onChange={event => setQuery(event.target.value)}
+                placeholder="Caută dată (ex. 21 mai)"
+                aria-label="Caută în daily memory"
+                className="h-7 w-full rounded-md border border-input bg-background pl-7 pr-2 text-[12px] outline-none placeholder:text-foreground/35 focus:border-ring focus:ring-3 focus:ring-ring/30"
+              />
+            </div>
+          )}
+
+          {visibleFiles.length === 0 ? (
+            <p className="px-2 py-2 text-[12px] text-foreground/45">Nicio potrivire</p>
+          ) : (
+            <div className="space-y-0.5">
+              {visibleFiles.map(file => (
+                <FileSidebarButton
+                  key={file.id}
+                  file={file}
+                  active={file.id === selectedId}
+                  nested
+                  onSelect={onSelect}
+                />
+              ))}
+            </div>
+          )}
+
+          {hiddenCount > 0 && (
+            <button
+              type="button"
+              onClick={() => setExpanded(true)}
+              className="mt-1 w-full rounded-md px-2 py-1 text-left text-[12px] text-foreground/55 transition-colors hover:bg-muted/60 hover:text-foreground"
+            >
+              Show {hiddenCount} more
+            </button>
+          )}
+          {canCollapse && (
+            <button
+              type="button"
+              onClick={() => setExpanded(false)}
+              className="mt-1 w-full rounded-md px-2 py-1 text-left text-[12px] text-foreground/55 transition-colors hover:bg-muted/60 hover:text-foreground"
+            >
+              Show less
+            </button>
+          )}
         </div>
       )}
     </div>
   )
+}
+
+function buildDailyFileHaystack(file: WorkspaceFileSummary): string {
+  const stamp = file.dailyDate ?? file.label
+  const parts = new Set<string>([stamp.toLowerCase(), file.label.toLowerCase()])
+  const date = new Date(`${stamp}T00:00:00.000Z`)
+  if (!Number.isNaN(date.getTime())) {
+    const day = date.getUTCDate()
+    const month = date.getUTCMonth() + 1
+    const year = date.getUTCFullYear()
+    parts.add(String(year))
+    parts.add(String(month))
+    parts.add(String(month).padStart(2, "0"))
+    parts.add(String(day))
+    parts.add(String(day).padStart(2, "0"))
+
+    const locales: Array<string | undefined> = [undefined, "ro-RO", "en-US"]
+    const formats: Intl.DateTimeFormatOptions[] = [
+      { year: "numeric", month: "long", day: "numeric" },
+      { year: "numeric", month: "short", day: "numeric" },
+      { month: "long", day: "numeric" },
+      { month: "short", day: "numeric" },
+      { month: "long" },
+      { month: "short" },
+    ]
+    for (const locale of locales) {
+      for (const opt of formats) {
+        try {
+          parts.add(new Intl.DateTimeFormat(locale, opt).format(date).toLowerCase())
+        } catch {
+          // Skip unsupported locale/option combinations.
+        }
+      }
+    }
+  }
+  return Array.from(parts).join(" ")
 }
 
 function FileRoleBadge({ file }: { file: WorkspaceFileSummary }) {

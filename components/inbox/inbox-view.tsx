@@ -6,7 +6,6 @@ import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
   Archive,
-  ArrowUp,
   ArrowLeft,
   Bell,
   CheckCircle2,
@@ -21,16 +20,19 @@ import {
   Trash2,
 } from "lucide-react"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
+import { MarkdownRenderer } from "@/components/markdown-renderer"
 import { MessageBubble } from "@/components/message-bubble"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
+import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 import { cn } from "@/lib/utils"
-import type { InboxReplyAction, Message } from "@/lib/types"
+import type { Attachment, InboxReplyAction, Message } from "@/lib/types"
 import type { InboxListItem } from "./use-inbox"
 import { InboxProvider, useInbox } from "./use-inbox"
+import { InboxComposer } from "./inbox-composer"
 
 type FolderFilter = "inbox" | "unread" | "read" | "scheduled"
 
@@ -228,25 +230,34 @@ function QuickReplyActions({
         const destructive = action.style === "destructive"
         const primary = action.style === "primary"
         const busy = busyActionId === action.id
+        const consumed = Boolean(action.consumedAt)
+        const isDirect = Boolean(action.directAction)
+        const buttonDisabled = consumed || (disabled && !isDirect)
+        const busyLabel = isDirect ? "Doing..." : "Sending..."
+        const label = consumed
+          ? `${action.label} ✓`
+          : busy
+            ? busyLabel
+            : action.label
         return (
           <button
             key={action.id}
             type="button"
             onClick={() => onSelect(action)}
-            disabled={disabled}
+            disabled={buttonDisabled}
             className={cn(
               "inline-flex min-h-8 max-w-full items-center rounded-md border px-3 text-[13px] font-medium transition-colors disabled:pointer-events-none disabled:opacity-60",
-              primary
-                ? "border-[#b76440] bg-[#b76440] text-white hover:bg-[#a55837]"
-                : destructive
-                  ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200"
-                  : "border-border/70 bg-background text-foreground/70 hover:bg-[#f0ede6] hover:text-foreground dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
+              consumed
+                ? "border-border/70 bg-[#f0ede6]/60 text-foreground/60 dark:bg-white/[0.03] dark:text-foreground/60"
+                : primary
+                  ? "border-[#b76440] bg-[#b76440] text-white hover:bg-[#a55837]"
+                  : destructive
+                    ? "border-red-200 bg-red-50 text-red-700 hover:bg-red-100 dark:border-red-900/60 dark:bg-red-950/30 dark:text-red-200"
+                    : "border-border/70 bg-background text-foreground/70 hover:bg-[#f0ede6] hover:text-foreground dark:bg-white/[0.04] dark:hover:bg-white/[0.07]"
             )}
-            title={action.value}
+            title={isDirect ? action.label : action.value}
           >
-            <span className="block truncate">
-              {busy ? "Sending..." : action.label}
-            </span>
+            <span className="block truncate">{label}</span>
           </button>
         )
       })}
@@ -369,10 +380,12 @@ function MessageRow({
       type="button"
       onClick={onOpen}
       className={cn(
-        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 border-b border-border/60 px-4 py-2.5 text-left transition-colors focus-visible:bg-[#f0ede6] focus-visible:outline-none dark:border-white/10 dark:focus-visible:bg-muted",
+        "grid w-full grid-cols-[auto_minmax(0,1fr)_auto] gap-x-3 border-b border-border/60 px-4 py-2.5 text-left transition-colors focus-visible:bg-[#ebe5d8] focus-visible:outline-none dark:border-white/10 dark:focus-visible:bg-muted",
         active
-          ? "bg-[#f0ede6] dark:bg-muted"
-          : "bg-background hover:bg-[#f0ede6]/60 dark:bg-transparent dark:hover:bg-white/[0.04]"
+          ? "bg-[#e3ddd0] dark:bg-muted"
+          : unread
+            ? "bg-white hover:bg-[#ebe5d8] dark:bg-white/[0.04] dark:hover:bg-white/[0.08]"
+            : "bg-[#f1ede4] hover:bg-[#ebe5d8] dark:bg-transparent dark:hover:bg-white/[0.06]"
       )}
     >
       <div className="pt-1.5">
@@ -437,6 +450,7 @@ function DetailMessage({
   responding,
   busyActionId,
   onQuickReply,
+  onCollapse,
 }: {
   message: Message
   index: number
@@ -444,20 +458,59 @@ function DetailMessage({
   responding: boolean
   busyActionId: string | null
   onQuickReply: (action: InboxReplyAction) => void
+  onCollapse?: () => void
 }) {
   const assistant = message.role === "assistant"
   const chronologicalIndex = total - index - 1
   const sender = senderForMessage(message, chronologicalIndex)
   const initials = initialsForMessage(message, chronologicalIndex)
   const newest = index === 0
-  const displayMessage: Message = {
-    ...message,
-    reasoning: undefined,
-    contentSegments: undefined,
-    thinking: undefined,
-    thinkingDuration: undefined,
-    toolCalls: undefined,
-  }
+  const isInitialScheduledResult = assistant && chronologicalIndex === 0
+  const displayMessage: Message = isInitialScheduledResult
+    ? {
+        ...message,
+        reasoning: undefined,
+        contentSegments: undefined,
+        thinking: undefined,
+        thinkingDuration: undefined,
+        toolCalls: undefined,
+      }
+    : message
+
+  const headerInner = (
+    <>
+      <div
+        className={cn(
+          "flex size-9 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold",
+          assistant
+            ? "bg-[#f0ede6] text-[#b76440] dark:bg-white/[0.08] dark:text-[#d78a66]"
+            : "bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"
+        )}
+      >
+        {initials}
+      </div>
+      <div className="min-w-0 flex-1">
+        <div className="flex min-w-0 items-start gap-2">
+          <div className="min-w-0 flex-1">
+            <span className="truncate text-[14px] font-semibold text-slate-900 dark:text-white">
+              {sender}
+            </span>
+            {assistant && (
+              <span className="ml-2 rounded bg-slate-100 px-1.5 text-[11px] leading-5 font-medium text-slate-500 dark:bg-white/[0.06] dark:text-slate-300">
+                Result
+              </span>
+            )}
+            <div className="truncate text-[12px] text-slate-500 dark:text-slate-400">
+              to me
+            </div>
+          </div>
+          <span className="shrink-0 text-[12px] text-slate-500 dark:text-slate-400">
+            {fullDate(message.timestamp)}
+          </span>
+        </div>
+      </div>
+    </>
+  )
 
   return (
     <article
@@ -466,40 +519,28 @@ function DetailMessage({
         newest && "bg-background"
       )}
     >
-      <header className="flex items-start gap-3 px-4 py-3 md:px-6">
-        <div
-          className={cn(
-            "flex size-9 shrink-0 items-center justify-center rounded-full text-[12px] font-semibold",
-            assistant
-              ? "bg-[#f0ede6] text-[#b76440] dark:bg-white/[0.08] dark:text-[#d78a66]"
-              : "bg-slate-100 text-slate-600 dark:bg-white/[0.06] dark:text-slate-300"
-          )}
+      {onCollapse ? (
+        <button
+          type="button"
+          onClick={onCollapse}
+          className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-[#f0ede6]/60 md:px-6 dark:hover:bg-white/[0.04]"
+          aria-label="Collapse message"
         >
-          {initials}
-        </div>
-        <div className="min-w-0 flex-1">
-          <div className="flex min-w-0 items-start gap-2">
-            <div className="min-w-0 flex-1">
-              <span className="truncate text-[14px] font-semibold text-slate-900 dark:text-white">
-                {sender}
-              </span>
-              {assistant && (
-                <span className="ml-2 rounded bg-slate-100 px-1.5 text-[11px] leading-5 font-medium text-slate-500 dark:bg-white/[0.06] dark:text-slate-300">
-                  Result
-                </span>
-              )}
-              <div className="truncate text-[12px] text-slate-500 dark:text-slate-400">
-                to me
-              </div>
-            </div>
-            <span className="shrink-0 text-[12px] text-slate-500 dark:text-slate-400">
-              {fullDate(message.timestamp)}
-            </span>
-          </div>
-        </div>
-      </header>
+          {headerInner}
+        </button>
+      ) : (
+        <header className="flex items-start gap-3 px-4 py-3 md:px-6">
+          {headerInner}
+        </header>
+      )}
       <div className="px-4 pb-5 text-[14px] leading-7 text-slate-800 md:px-6 md:pl-[72px] dark:text-slate-100">
-        <MessageBubble message={displayMessage} compact />
+        {assistant ? (
+          <MessageBubble message={displayMessage} compact />
+        ) : (
+          <div className="min-w-0 break-words text-[15px] leading-7 [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+            <MarkdownRenderer content={message.content} />
+          </div>
+        )}
         {assistant && (
           <QuickReplyActions
             actions={message.replyActions}
@@ -578,6 +619,7 @@ function InboxViewInner() {
     remove,
     reply,
     respond,
+    triggerDirectAction,
   } = useInbox()
   const { selectConversation } = useChatStore()
   const router = useRouter()
@@ -588,12 +630,12 @@ function InboxViewInner() {
   const [responding, setResponding] = React.useState(false)
   const [refreshing, setRefreshing] = React.useState(false)
   const [busyActionId, setBusyActionId] = React.useState<string | null>(null)
-  const [draft, setDraft] = React.useState("")
   const [query, setQuery] = React.useState("")
   const [folderFilter, setFolderFilter] = React.useState<FolderFilter>("inbox")
   const [expandedMessageIds, setExpandedMessageIds] = React.useState<
     Set<string>
   >(new Set())
+  const keyboardInset = useMobileKeyboardInset()
 
   React.useEffect(() => {
     const id = searchParams.get("item")
@@ -663,20 +705,14 @@ function InboxViewInner() {
     )
   }, [detail?.id, latestMessageId])
 
-  const toggleMessageExpanded = React.useCallback(
-    (messageId: string) => {
-      setExpandedMessageIds((current) => {
-        const next = new Set(current)
-        if (next.has(messageId)) {
-          if (messageId !== latestMessageId) next.delete(messageId)
-        } else {
-          next.add(messageId)
-        }
-        return next
-      })
-    },
-    [latestMessageId]
-  )
+  const toggleMessageExpanded = React.useCallback((messageId: string) => {
+    setExpandedMessageIds((current) => {
+      const next = new Set(current)
+      if (next.has(messageId)) next.delete(messageId)
+      else next.add(messageId)
+      return next
+    })
+  }, [])
 
   const onReply = async (id: string) => {
     setReplying(true)
@@ -693,20 +729,36 @@ function InboxViewInner() {
     }
   }
 
-  const onRespond = async (id: string, content: string, actionId?: string) => {
+  const onRespond = async (
+    id: string,
+    content: string,
+    actionId?: string,
+    attachments?: Attachment[],
+  ) => {
     const text = content.trim()
-    if (!text || responding) return
+    if ((!text && !attachments?.length) || responding) return
     setResponding(true)
     setBusyActionId(actionId ?? null)
-    if (!actionId) setDraft("")
-    let ok = false
     try {
-      ok = await respond(id, text)
+      await respond(id, text, attachments)
     } finally {
       setResponding(false)
       setBusyActionId(null)
     }
-    if (!ok && !actionId) setDraft(content)
+  }
+
+  const onDirectAction = async (
+    id: string,
+    messageId: string,
+    action: InboxReplyAction,
+  ) => {
+    if (responding || busyActionId) return
+    setBusyActionId(action.id)
+    try {
+      await triggerDirectAction(id, messageId, action.id)
+    } finally {
+      setBusyActionId(null)
+    }
   }
 
   const onRefresh = async () => {
@@ -719,7 +771,6 @@ function InboxViewInner() {
   }
 
   React.useEffect(() => {
-    setDraft("")
     setBusyActionId(null)
     setResponding(false)
   }, [selectedId])
@@ -944,7 +995,14 @@ function InboxViewInner() {
               </div>
             </header>
 
-            <div className="min-h-0 flex-1 overflow-y-auto bg-background">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto bg-background transition-[padding-bottom] duration-150 ease-out"
+              style={
+                keyboardInset > 0
+                  ? { paddingBottom: keyboardInset }
+                  : undefined
+              }
+            >
               <div className="mx-auto w-full max-w-[920px]">
                 <div className="border-b border-border/60 bg-background px-4 py-4 md:px-6 dark:border-white/10">
                   <div className="mb-2 flex flex-wrap items-center gap-2">
@@ -971,9 +1029,7 @@ function InboxViewInner() {
                 <ConversationArtifactsProvider conversationId={detail.id}>
                   <div>
                     {threadMessages.map((message, index) => {
-                      const latest = message.id === latestMessageId
-                      const expanded =
-                        latest || expandedMessageIds.has(message.id)
+                      const expanded = expandedMessageIds.has(message.id)
                       return expanded ? (
                         <DetailMessage
                           key={message.id}
@@ -987,9 +1043,14 @@ function InboxViewInner() {
                           total={threadMessages.length}
                           responding={responding}
                           busyActionId={busyActionId}
-                          onQuickReply={(action) =>
-                            void onRespond(detail.id, action.value, action.id)
-                          }
+                          onQuickReply={(action) => {
+                            if (action.directAction) {
+                              void onDirectAction(detail.id, message.id, action)
+                            } else {
+                              void onRespond(detail.id, action.value, action.id)
+                            }
+                          }}
+                          onCollapse={() => toggleMessageExpanded(message.id)}
                         />
                       ) : (
                         <CollapsedDetailMessage
@@ -1006,48 +1067,13 @@ function InboxViewInner() {
               </div>
             </div>
 
-            <form
-              className="border-t border-border/60 bg-background px-3 py-3 md:px-6 dark:border-white/10"
-              onSubmit={(event) => {
-                event.preventDefault()
-                void onRespond(detail.id, draft)
-              }}
-            >
-              <div className="mx-auto w-full max-w-[920px]">
-                <div className="relative w-full rounded-2xl border border-transparent bg-white shadow-[0_0_0_0.5px_rgba(93,72,57,0.42)] transition-shadow duration-200 ease-out focus-within:shadow-[0_0_0_0.5px_rgba(93,72,57,0.52)] dark:bg-card dark:shadow-[0_0_0_0.5px_rgba(255,255,255,0.22)] dark:focus-within:shadow-[0_0_0_0.5px_rgba(255,255,255,0.3)]">
-                  <textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    disabled={responding}
-                    placeholder="Write a reply..."
-                    rows={1}
-                    className="max-h-40 min-h-[46px] w-full resize-none bg-transparent px-5 pt-3.5 pr-14 pb-2 text-[15px] leading-6 text-foreground outline-none placeholder:font-medium placeholder:text-foreground/55 disabled:opacity-60"
-                  />
-                  <div className="flex items-center justify-between px-3 pb-3">
-                    <div className="flex min-w-0 items-center gap-2 text-[12px] font-medium text-foreground/55">
-                      <Reply className="size-3.5 shrink-0" />
-                      <span className="truncate">Reply</span>
-                    </div>
-                    <button
-                      type="submit"
-                      disabled={responding || !draft.trim()}
-                      className={cn(
-                        "flex size-8 shrink-0 items-center justify-center rounded-[11px] bg-[#b76440] text-white transition-colors hover:bg-[#a55837]",
-                        (responding || !draft.trim()) &&
-                          "cursor-not-allowed opacity-50 hover:bg-[#b76440]"
-                      )}
-                      aria-label="Send reply"
-                    >
-                      {responding && !busyActionId ? (
-                        <Loader2 className="size-[15px] animate-spin" />
-                      ) : (
-                        <ArrowUp className="size-[17px] stroke-[2.5]" />
-                      )}
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </form>
+            <InboxComposer
+              itemId={detail.id}
+              responding={responding}
+              onSend={(content, attachments) =>
+                onRespond(detail.id, content, undefined, attachments)
+              }
+            />
           </>
         ) : (
           <div className="flex h-full items-center justify-center text-[14px] text-slate-500">

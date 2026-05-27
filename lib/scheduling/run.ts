@@ -228,7 +228,9 @@ export async function runScheduledTask(
       } else {
         const { runTextSubAgent } = await import("@/lib/ai/agents/runner")
         const { getAgent } = await import("@/lib/ai/agents/registry")
-        const agent = getAgent("orchestrator")
+        const monitorAgentId =
+          task.action.monitorKind === "smart" ? "smart-monitor-agent" : "orchestrator"
+        const agent = getAgent(monitorAgentId) ?? getAgent("orchestrator")
         if (!agent) {
           ok = false
           error = "orchestrator agent missing"

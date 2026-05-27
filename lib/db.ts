@@ -222,6 +222,27 @@ db.exec(`
         updatedAt INTEGER NOT NULL
     );
     CREATE INDEX IF NOT EXISTS idx_push_subscriptions_updated ON push_subscriptions(updatedAt DESC);
+
+    -- Audit log for one-click direct actions on Inbox quick-reply buttons.
+    -- The agent can read recent rows via the inbox_action_history tool to
+    -- learn the user's housekeeping preferences across runs.
+    CREATE TABLE IF NOT EXISTS inbox_direct_action_log (
+        id TEXT PRIMARY KEY,
+        conversationId TEXT NOT NULL,
+        messageId TEXT NOT NULL,
+        actionId TEXT NOT NULL,
+        tool TEXT NOT NULL,
+        params TEXT,                     -- JSON of the params passed to the tool
+        result TEXT NOT NULL,            -- 'ok' | 'error'
+        errorMessage TEXT,
+        sourceKind TEXT NOT NULL,        -- 'gmail' | 'whatsapp'
+        sourceTarget TEXT NOT NULL,      -- gmail messageId or whatsapp chatId
+        createdAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_inbox_direct_action_log_created
+        ON inbox_direct_action_log(createdAt DESC);
+    CREATE INDEX IF NOT EXISTS idx_inbox_direct_action_log_source
+        ON inbox_direct_action_log(sourceKind, createdAt DESC);
 `)
 
 // Migration: add interaction tracking columns if missing

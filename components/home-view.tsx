@@ -3,6 +3,7 @@
 import { ChatInput } from "@/components/chat-input"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { displayUserName, useRuntimeConfig } from "@/hooks/use-runtime-config"
+import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 
 function getGreeting(userName: string): string {
   const hour = new Date().getHours()
@@ -17,13 +18,22 @@ function getGreeting(userName: string): string {
 export function HomeView() {
   const { userName } = useRuntimeConfig()
   const greeting = getGreeting(userName)
+  const keyboardInset = useMobileKeyboardInset()
 
   return (
     <div className="relative flex flex-1 flex-col items-center justify-center px-4 pb-52">
       <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-3 md:hidden">
         <SidebarTrigger className="size-10 text-foreground/60 hover:text-foreground" />
       </div>
-      <div className="flex w-full max-w-[672px] flex-col items-center gap-7">
+      <div
+        className="flex w-full max-w-[672px] flex-col items-center gap-7"
+        style={{
+          transform:
+            keyboardInset > 0
+              ? `translateY(${keyboardInset / 2}px)`
+              : undefined,
+        }}
+      >
         {/* Hero greeting */}
         <h1 className="relative -top-[15px] [font-family:var(--font-display)] text-3xl font-normal tracking-[-0.03em] text-foreground/75 md:text-4xl lg:text-[42px]">
           {greeting}

@@ -173,6 +173,8 @@ import {
   executeWhatsAppConnect,
   executeWhatsAppDeleteMessageForEveryone,
   executeWhatsAppListChats,
+  executeWhatsAppMarkChatRead,
+  executeWhatsAppMarkChatUnread,
   executeWhatsAppReadChat,
   executeWhatsAppSearchMessages,
   executeWhatsAppSendMedia,
@@ -194,6 +196,7 @@ import {
   executeSearchPastRuns,
 } from "./observability"
 import { executeNotifyInbox } from "./notify"
+import { executeInboxActionHistory } from "./inbox-history"
 import {
   executeMapsCurrentLocation,
   executeMapsDirections,
@@ -470,6 +473,8 @@ const executors: Record<string, ToolExecutor> = {
   WhatsAppSendMessage: executeWhatsAppSendMessage,
   WhatsAppSendMedia: executeWhatsAppSendMedia,
   WhatsAppDeleteMessageForEveryone: executeWhatsAppDeleteMessageForEveryone,
+  WhatsAppMarkChatRead: executeWhatsAppMarkChatRead,
+  WhatsAppMarkChatUnread: executeWhatsAppMarkChatUnread,
   schedule_task: executeScheduleTask,
   list_tasks: executeListTasks,
   cancel_task: executeCancelTask,
@@ -480,6 +485,7 @@ const executors: Record<string, ToolExecutor> = {
   get_agent_log: executeGetAgentLog,
   read_runtime_index: executeReadRuntimeIndex,
   notify_inbox: executeNotifyInbox,
+  inbox_action_history: executeInboxActionHistory,
   set_task_state: executeSetTaskState,
   [MAP_RENDER_TOOL_ID]: executeMapRender,
   [MAPS_STATUS_TOOL_ID]: executeMapsStatus,

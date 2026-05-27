@@ -3,7 +3,7 @@ import { randomUUID } from "crypto"
 import db, { createConversation, deleteConversation } from "@/lib/db"
 import { emitAppEvent } from "@/lib/events"
 import { appendRuntimeRunIndex } from "@/lib/runtime-index"
-import type { Message } from "@/lib/types"
+import type { InboxReplyAction, Message } from "@/lib/types"
 import { copyArtifactsForMessageMap } from "@/lib/artifacts/store"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 
@@ -1203,6 +1203,145 @@ export function appendInboxMessage(
   tx()
   emitInboxChanged(conversationId, "changed")
   return true
+}
+
+/**
+ * Locates a direct-action quick-reply on an Inbox message, marks it consumed,
+ * and returns the original action so the caller can dispatch the underlying
+ * tool. Returns null when the message/action does not exist, the action has
+ * no directAction payload, or it has already been consumed (anti-replay).
+ */
+export function claimInboxDirectAction(
+  conversationId: string,
+  messageId: string,
+  actionId: string
+): InboxReplyAction | null {
+  const row = db
+    .prepare(
+      `SELECT m.replyActions
+         FROM messages m
+         JOIN conversations c ON c.id = m.conversationId
+         WHERE m.id = ? AND m.conversationId = ? AND c.origin = 'inbox'`
+    )
+    .get(messageId, conversationId) as { replyActions: string | null } | undefined
+  if (!row) return null
+
+  const actions = parseJson<InboxReplyAction[]>(row.replyActions)
+  if (!actions || !Array.isArray(actions)) return null
+
+  const action = actions.find((a) => a && a.id === actionId)
+  if (!action) return null
+  if (!action.directAction) return null
+  if (action.consumedAt) return null
+
+  const updated: InboxReplyAction[] = actions.map((a) =>
+    a.id === actionId ? { ...a, consumedAt: Date.now() } : a
+  )
+
+  db.prepare("UPDATE messages SET replyActions = ? WHERE id = ?").run(
+    JSON.stringify(updated),
+    messageId
+  )
+  emitInboxChanged(conversationId, "changed")
+  return action
+}
+
+export interface InboxDirectActionLogEntry {
+  id: string
+  conversationId: string
+  messageId: string
+  actionId: string
+  tool: string
+  params: Record<string, unknown> | null
+  result: "ok" | "error"
+  errorMessage: string | null
+  sourceKind: "gmail" | "whatsapp"
+  sourceTarget: string
+  createdAt: number
+}
+
+export function logInboxDirectAction(args: {
+  conversationId: string
+  messageId: string
+  actionId: string
+  tool: string
+  params: Record<string, unknown> | null
+  result: "ok" | "error"
+  errorMessage?: string | null
+  sourceKind: "gmail" | "whatsapp"
+  sourceTarget: string
+}): void {
+  db.prepare(
+    `INSERT INTO inbox_direct_action_log
+       (id, conversationId, messageId, actionId, tool, params, result, errorMessage, sourceKind, sourceTarget, createdAt)
+     VALUES (@id, @conversationId, @messageId, @actionId, @tool, @params, @result, @errorMessage, @sourceKind, @sourceTarget, @createdAt)`
+  ).run({
+    id: `iact_${randomUUID()}`,
+    conversationId: args.conversationId,
+    messageId: args.messageId,
+    actionId: args.actionId,
+    tool: args.tool,
+    params: args.params ? JSON.stringify(args.params) : null,
+    result: args.result,
+    errorMessage: args.errorMessage ?? null,
+    sourceKind: args.sourceKind,
+    sourceTarget: args.sourceTarget,
+    createdAt: Date.now(),
+  })
+}
+
+export function listInboxDirectActions(args: {
+  limit?: number
+  sourceKind?: "gmail" | "whatsapp"
+  since?: number
+} = {}): InboxDirectActionLogEntry[] {
+  const limit = Math.max(1, Math.min(200, Math.floor(args.limit ?? 50)))
+  const filters: string[] = []
+  const params: Record<string, unknown> = { limit }
+  if (args.sourceKind) {
+    filters.push("sourceKind = @sourceKind")
+    params.sourceKind = args.sourceKind
+  }
+  if (typeof args.since === "number" && Number.isFinite(args.since)) {
+    filters.push("createdAt >= @since")
+    params.since = args.since
+  }
+  const where = filters.length ? `WHERE ${filters.join(" AND ")}` : ""
+  const rows = db
+    .prepare(
+      `SELECT id, conversationId, messageId, actionId, tool, params, result,
+              errorMessage, sourceKind, sourceTarget, createdAt
+         FROM inbox_direct_action_log
+         ${where}
+         ORDER BY createdAt DESC
+         LIMIT @limit`
+    )
+    .all(params) as Array<{
+    id: string
+    conversationId: string
+    messageId: string
+    actionId: string
+    tool: string
+    params: string | null
+    result: "ok" | "error"
+    errorMessage: string | null
+    sourceKind: "gmail" | "whatsapp"
+    sourceTarget: string
+    createdAt: number
+  }>
+  return rows.map((row) => ({
+    id: row.id,
+    conversationId: row.conversationId,
+    messageId: row.messageId,
+    actionId: row.actionId,
+    tool: row.tool,
+    params: parseJson<Record<string, unknown>>(row.params) ?? null,
+    result: row.result,
+    errorMessage: row.errorMessage,
+    sourceKind: row.sourceKind,
+    sourceTarget: row.sourceTarget,
+    createdAt: row.createdAt,
+  }))
 }
 
 export function markInboxRead(id: string): number | null {

@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import type { Message } from "@/lib/types"
+import type { Attachment, Message } from "@/lib/types"
 import { useAppEvent } from "@/hooks/use-app-events"
 
 export interface InboxListItem {
@@ -38,7 +38,16 @@ interface InboxApi {
   clear: () => void
   remove: (id: string) => Promise<void>
   reply: (id: string) => Promise<string | null>
-  respond: (id: string, content: string) => Promise<boolean>
+  respond: (
+    id: string,
+    content: string,
+    attachments?: Attachment[],
+  ) => Promise<boolean>
+  triggerDirectAction: (
+    id: string,
+    messageId: string,
+    actionId: string,
+  ) => Promise<boolean>
 }
 
 const InboxContext = React.createContext<InboxApi | null>(null)
@@ -221,15 +230,20 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
   )
 
   const respond = React.useCallback(
-    async (id: string, content: string): Promise<boolean> => {
+    async (
+      id: string,
+      content: string,
+      attachments?: Attachment[],
+    ): Promise<boolean> => {
       const text = content.trim()
-      if (!text) return false
+      if (!text && !attachments?.length) return false
       const optimisticId = `optimistic_${Date.now()}_${Math.random().toString(36).slice(2)}`
       const optimisticMessage: Message = {
         id: optimisticId,
         role: "user",
         content: text,
         timestamp: Date.now(),
+        attachments: attachments && attachments.length > 0 ? attachments : undefined,
       }
       setDetail((current) =>
         current?.id === id
@@ -239,7 +253,10 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch(`/api/inbox/${id}/reply`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: text }),
+        body: JSON.stringify({
+          content: text,
+          ...(attachments && attachments.length > 0 ? { attachments } : {}),
+        }),
       })
       if (!res.ok) {
         setDetail((current) =>
@@ -259,6 +276,45 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       await refreshList()
       window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
       return true
+    },
+    [refreshList]
+  )
+
+  const triggerDirectAction = React.useCallback(
+    async (
+      id: string,
+      messageId: string,
+      actionId: string,
+    ): Promise<boolean> => {
+      const res = await fetch(`/api/inbox/${id}/action`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ messageId, actionId }),
+      })
+      if (!res.ok) {
+        let detailMessage: string | null = null
+        try {
+          const body = (await res.json()) as { error?: unknown }
+          if (typeof body.error === "string") detailMessage = body.error
+        } catch {
+          /* non-json error body */
+        }
+        setError(detailMessage ?? `Failed to run quick action (${res.status})`)
+        return false
+      }
+      const data = (await res.json()) as {
+        item?: InboxDetail
+        action?: { success?: boolean; error?: string | null }
+      }
+      if (data.item) setDetail(data.item)
+      if (data.action && data.action.success === false) {
+        setError(data.action.error ?? "Quick action failed")
+      } else {
+        setError(null)
+      }
+      await refreshList()
+      window.dispatchEvent(new CustomEvent("orchestrator:inbox-updated"))
+      return data.action?.success !== false
     },
     [refreshList]
   )
@@ -284,6 +340,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       remove,
       reply,
       respond,
+      triggerDirectAction,
     }),
     [
       items,
@@ -299,6 +356,7 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       remove,
       reply,
       respond,
+      triggerDirectAction,
     ]
   )
 

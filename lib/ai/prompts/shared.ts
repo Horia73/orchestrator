@@ -337,7 +337,7 @@ Free setup nuance: do not refuse or stop early just because a free account/API k
 
 Honesty: never claim a step succeeded unless a tool result or evidence confirms it. State blockers plainly. Do not repeat a failed action unchanged — change something or report the blocker.
 
-Workspace context files (USER.md, IDENTITY.md, AGENTS.md, MEMORY.md, MEMORY_DAY/<date>.md, AGENT_NEEDS.md, ONBOARDING.md, MONITORS.md, BOOT.md, and the integration runbook index) are loaded or listed live into your prompt below — treat them as current state, not a stale snapshot, and do not re-read them just to confirm what is already shown unless a block is marked [truncated] or you have specific reason to read a runbook or changed file during this turn. To change durable state you MUST write the file with tools; editing it only in your reasoning does not persist. Keep these files curated and compact: append meaningful actions and open loops, do not dump transcripts, and label uncertain entries as uncertain. \`.env.local\` is intentionally not loaded into prompt context; it is a runtime secret/config surface, not memory.
+Workspace context files (USER.md, AGENTS.md, MEMORY.md, MEMORY_DAY/<date>.md, AGENT_NEEDS.md, ONBOARDING.md, MONITORS.md, BOOT.md, and the integration runbook index) are loaded or listed live into your prompt below — treat them as current state, not a stale snapshot, and do not re-read them just to confirm what is already shown unless a block is marked [truncated] or you have specific reason to read a runbook or changed file during this turn. To change durable state you MUST write the file with tools; editing it only in your reasoning does not persist. Keep these files curated and compact: append meaningful actions and open loops, do not dump transcripts, and label uncertain entries as uncertain. \`.env.local\` is intentionally not loaded into prompt context; it is a runtime secret/config surface, not memory.
 
 Agent needs backlog: when a task exposes a fixable system gap — missing capability, failed tool with no viable recovery, runtime blocker, integration gap, repo gap, documentation gap, or flaky test — call \`ReportAgentNeed\` if that tool is available. Report one concise entry with what was attempted, what is needed, and any workaround. Do not report ordinary missing user input, routine uncertainty, per-task todos, or secrets. After reporting a blocker to AGENT_NEEDS, stop the active work, inform the user or parent agent that the requested path is blocked, and present any workaround as a proposal. Do not start the workaround or alternate execution path unless the user or parent explicitly confirms it. If the tool is unavailable, return the blocker package to your parent or append a compact entry to AGENT_NEEDS.md only when you have file-write access, then follow the same stop-and-propose rule.
 </safety_core>
@@ -688,7 +688,6 @@ function cleanOrigin(value: string | undefined): string {
 const CONTEXT_FILE_IDS = new Set([
     'agents',
     'user',
-    'identity',
     'boot',
     'memory',
     'memory-day',
@@ -721,8 +720,8 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
     // BOOT.md and ONBOARDING.md are the user-facing onboarding script —
     // only the orchestrator runs onboarding. Sub-agents (researcher,
     // multipurpose, concierge, etc.) get the durable context files
-    // (USER/IDENTITY/MEMORY/MEMORY_DAY) but skip the onboarding script
-    // so it doesn't bloat their prompts every turn while BOOT.md exists.
+    // (USER/MEMORY/MEMORY_DAY) but skip the onboarding script so it
+    // doesn't bloat their prompts every turn while BOOT.md exists.
     const isOrchestrator = agentId === 'orchestrator'
 
     // Returns false when the char budget is exhausted so callers stop.
@@ -776,7 +775,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
     return [
         '<workspace_context_files>',
         'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading one just to confirm what is already shown here; only read from disk when a block is marked [truncated] or you have specific reason to think it changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
-        'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, IDENTITY.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
+        'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
         "Daily working memory lives at MEMORY_DAY/<UTC-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. If MONITORS.md records a model-owned memory-maintenance watch/spec, the Smart Monitor wake may consolidate daily memory according to that spec; suggested wall-clock times are guidance, not a separate scheduled-task contract. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
         '',
         ...blocks,

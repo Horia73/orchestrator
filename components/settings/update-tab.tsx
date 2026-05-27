@@ -104,8 +104,8 @@ const RESET_SCOPE_OPTIONS: Array<{
   },
   {
     id: "memory",
-    label: "Memory & identity",
-    description: "USER.md, IDENTITY.md, MEMORY.md, daily memory, onboarding state, and monitor notes.",
+    label: "Memory",
+    description: "USER.md, MEMORY.md, daily memory, onboarding state, and monitor notes.",
   },
   {
     id: "integrations",
@@ -553,7 +553,7 @@ export function UpdateTab() {
               <div className="min-w-0">
                 <h4 className="text-[13px] font-medium text-foreground/75">Memory portability</h4>
                 <p className="mt-0.5 text-[12.5px] leading-relaxed text-foreground/45">
-                  Export or import USER, IDENTITY, MEMORY, daily memory, onboarding, and monitor notes. Review exports before sharing.
+                  Export or import USER, MEMORY, daily memory, onboarding, and monitor notes. Review exports before sharing.
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">

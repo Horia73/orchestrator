@@ -12,6 +12,8 @@ import { speechGenerator } from './speech-generator'
 import { musicGenerator } from './music-generator'
 import { browserAgent } from './browser-agent'
 import { modelMetadataResearcher } from './model-metadata-researcher'
+import { inboxAgent } from './inbox-agent'
+import { smartMonitorAgent } from './smart-monitor-agent'
 
 // ---------------------------------------------------------------------------
 // Agent Registry
@@ -29,6 +31,8 @@ function register(agent: AgentConfig) {
 register(orchestrator)
 register(researcher)
 register(modelMetadataResearcher)
+register(inboxAgent)
+register(smartMonitorAgent)
 register(multipurpose)
 register(coder)
 register(conciergeAgent)

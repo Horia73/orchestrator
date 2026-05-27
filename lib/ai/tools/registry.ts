@@ -25,6 +25,7 @@ import { whatsappTools } from './whatsapp'
 import { scheduleTools } from './schedule'
 import { observabilityTools } from './observability'
 import { notifyInboxTool } from './notify'
+import { inboxActionHistoryTool } from './inbox-history'
 import { setTaskStateTool } from './task-state'
 import { watchlistTools } from './watchlist'
 import { monitorWakeFeedbackTool } from './smart-monitor-feedback'
@@ -179,6 +180,7 @@ for (const tool of homeAssistantTools) registerTool(tool)
 for (const tool of scheduleTools) registerTool(tool)
 for (const tool of observabilityTools) registerTool(tool)
 registerTool(notifyInboxTool)
+registerTool(inboxActionHistoryTool)
 registerTool(setTaskStateTool)
 for (const tool of watchlistTools) registerTool(tool)
 registerTool(monitorWakeFeedbackTool)
