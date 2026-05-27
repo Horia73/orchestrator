@@ -1,14 +1,12 @@
 #!/usr/bin/env node
-import crypto from 'crypto'
 import fs from 'fs'
 import http from 'http'
-import net from 'net'
 import path from 'path'
 
 import next from 'next'
+import { WebSocket, WebSocketServer } from 'ws'
 
 const projectDir = process.cwd()
-const websocketGuid = '258EAFA5-E914-47DA-95CA-C5AB0DC85B11'
 const host = resolveHost()
 const port = resolvePort()
 const originHost = host === '0.0.0.0' || host === '::' ? '127.0.0.1' : host
@@ -29,6 +27,10 @@ await app.prepare()
 
 const handle = app.getRequestHandler()
 const handleUpgrade = app.getUpgradeHandler()
+const previewWebSocketServer = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+})
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
@@ -59,6 +61,7 @@ server.listen(port, host, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    previewWebSocketServer.close()
     server.close(() => {
       app.close().finally(() => process.exit(0))
     })
@@ -112,117 +115,71 @@ function maybeProxyPreviewUpgrade(req, socket, head) {
 }
 
 function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort }) {
-  const accept = websocketAccept(req)
-  if (!accept) {
-    writeSocketResponse(socket, 400, 'Invalid WebSocket upgrade request.')
-    return
-  }
+  previewWebSocketServer.handleUpgrade(req, socket, head, (client) => {
+    const upstream = new WebSocket(`ws://127.0.0.1:${previewPort}${upstreamPath}`, {
+      perMessageDeflate: false,
+      headers: {
+        Origin: `http://127.0.0.1:${previewPort}`,
+      },
+    })
+    const pendingClientMessages = []
 
-  socket.pause()
-
-  const upstream = net.connect({ host: '127.0.0.1', port: previewPort })
-  let pending = Buffer.alloc(0)
-  let bridged = false
-
-  const fail = (message) => {
-    if (!socket.destroyed) writeSocketResponse(socket, 502, message)
-    upstream.destroy()
-  }
-
-  const onUpstreamData = (chunk) => {
-    pending = Buffer.concat([pending, chunk])
-    const end = pending.indexOf('\r\n\r\n')
-    if (end === -1) {
-      if (pending.length > 16_384) fail('Preview WebSocket upstream sent an invalid handshake.')
-      return
+    const closeClient = (code = 1011, reason = 'Preview WebSocket upstream failed') => {
+      if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+        client.close(code, reason)
+      }
     }
 
-    const headers = pending.subarray(0, end).toString('latin1')
-    if (!/^HTTP\/1\.[01] 101\b/.test(headers)) {
-      fail('Preview WebSocket upstream did not upgrade.')
-      return
+    const closeUpstream = (code, reason) => {
+      if (upstream.readyState === WebSocket.OPEN || upstream.readyState === WebSocket.CONNECTING) {
+        upstream.close(normalizeWebSocketCloseCode(code), reason)
+      } else {
+        upstream.terminate()
+      }
     }
 
-    bridged = true
-    upstream.off('data', onUpstreamData)
+    client.on('message', (data, isBinary) => {
+      if (upstream.readyState === WebSocket.OPEN) {
+        upstream.send(data, { binary: isBinary })
+        return
+      }
+      pendingClientMessages.push([data, isBinary])
+    })
 
-    const rest = pending.subarray(end + 4)
-    socket.write(
-      [
-        'HTTP/1.1 101 Switching Protocols',
-        'Upgrade: websocket',
-        'Connection: Upgrade',
-        `Sec-WebSocket-Accept: ${accept}`,
-        '',
-        '',
-      ].join('\r\n')
-    )
-    if (head?.length) upstream.write(head)
-    if (rest.length) socket.write(rest)
-    socket.pipe(upstream)
-    upstream.pipe(socket)
-    socket.resume()
-  }
+    upstream.on('open', () => {
+      for (const [data, isBinary] of pendingClientMessages.splice(0)) {
+        upstream.send(data, { binary: isBinary })
+      }
+    })
 
-  upstream.once('connect', () => {
-    upstream.write(buildUpgradeRequest(req, upstreamPath, previewPort))
-  })
+    upstream.on('message', (data, isBinary) => {
+      if (client.readyState === WebSocket.OPEN) client.send(data, { binary: isBinary })
+    })
 
-  upstream.on('data', onUpstreamData)
-
-  socket.once('error', () => {
-    upstream.destroy()
-  })
-  socket.once('close', () => {
-    upstream.destroy()
-  })
-  upstream.once('error', (err) => {
-    if (bridged) socket.destroy(err)
-    else fail(`Preview WebSocket upstream failed: ${err.message}`)
-  })
-  upstream.once('close', () => {
-    if (!socket.destroyed) socket.destroy()
+    client.once('close', (code, reason) => {
+      closeUpstream(code, reason)
+    })
+    upstream.once('close', (code, reason) => {
+      if (client.readyState === WebSocket.OPEN || client.readyState === WebSocket.CONNECTING) {
+        client.close(normalizeWebSocketCloseCode(code), reason)
+      }
+    })
+    client.once('error', () => {
+      closeUpstream(1011, 'Preview WebSocket client failed')
+    })
+    upstream.once('error', () => {
+      closeClient()
+    })
+    upstream.once('unexpected-response', () => {
+      closeClient(1011, 'Preview WebSocket upstream did not upgrade')
+    })
   })
 }
 
-function websocketAccept(req) {
-  const key = req.headers['sec-websocket-key']
-  if (typeof key !== 'string' || !key.trim()) return ''
-  return crypto.createHash('sha1').update(`${key.trim()}${websocketGuid}`).digest('base64')
-}
-
-function buildUpgradeRequest(req, upstreamPath, previewPort) {
-  const lines = [
-    `${req.method || 'GET'} ${upstreamPath} HTTP/${req.httpVersion}`,
-    `Host: 127.0.0.1:${previewPort}`,
-    'Connection: Upgrade',
-    'Upgrade: websocket',
-    `Origin: http://127.0.0.1:${previewPort}`,
-  ]
-
-  for (const [name, value] of Object.entries(req.headers)) {
-    const lower = name.toLowerCase()
-    if (
-      lower === 'host' ||
-      lower === 'connection' ||
-      lower === 'upgrade' ||
-      lower === 'origin' ||
-      lower === 'cookie' ||
-      lower === 'sec-websocket-extensions' ||
-      lower === 'content-length' ||
-      lower === 'transfer-encoding'
-    ) {
-      continue
-    }
-
-    if (Array.isArray(value)) {
-      for (const item of value) lines.push(`${name}: ${item}`)
-    } else if (value != null) {
-      lines.push(`${name}: ${value}`)
-    }
-  }
-
-  return `${lines.join('\r\n')}\r\n\r\n`
+function normalizeWebSocketCloseCode(code) {
+  return Number.isInteger(code) && code >= 1000 && code < 5000 && ![1005, 1006, 1015].includes(code)
+    ? code
+    : 1011
 }
 
 function readRunState(runId) {
