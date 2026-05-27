@@ -1,10 +1,10 @@
 #!/usr/bin/env node
 import fs from 'fs'
 import http from 'http'
-import net from 'net'
 import path from 'path'
 
 import next from 'next'
+import { WebSocket, WebSocketServer } from 'ws'
 
 const projectDir = process.cwd()
 const host = resolveHost()
@@ -27,6 +27,10 @@ await app.prepare()
 
 const handle = app.getRequestHandler()
 const handleUpgrade = app.getUpgradeHandler()
+const previewWebSocketServer = new WebSocketServer({
+  noServer: true,
+  perMessageDeflate: false,
+})
 
 const server = http.createServer((req, res) => {
   handle(req, res).catch((err) => {
@@ -57,6 +61,7 @@ server.listen(port, host, () => {
 
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
+    previewWebSocketServer.close()
     server.close(() => {
       app.close().finally(() => process.exit(0))
     })
@@ -105,108 +110,47 @@ function maybeProxyPreviewUpgrade(req, socket, head) {
     return true
   }
 
-  proxyUpgradeToPreview({ req, socket, head, upstreamPath: `${url.pathname}${url.search}`, previewPort })
+  servePreviewHmrBootstrap({ runId, req, socket, head, previewPort })
   return true
 }
 
-function proxyUpgradeToPreview({ req, socket, head, upstreamPath, previewPort }) {
-  socket.pause()
-
-  const upstream = net.connect({ host: '127.0.0.1', port: previewPort })
-  let bridged = false
-
-  const fail = (status, message) => {
-    if (!bridged && !socket.destroyed) writeSocketResponse(socket, status, message)
-    socket.destroy()
-    upstream.destroy()
-  }
-
-  upstream.once('connect', () => {
-    bridged = true
-    upstream.write(buildUpgradeRequest(req, upstreamPath, previewPort))
-    if (head?.length) upstream.write(head)
-    upstream.on('data', (chunk) => {
-      if (!socket.destroyed && !socket.write(chunk)) upstream.pause()
-    })
-    socket.on('data', (chunk) => {
-      if (!upstream.destroyed && !upstream.write(chunk)) socket.pause()
-    })
-    upstream.on('drain', () => {
-      if (!socket.destroyed) socket.resume()
-    })
-    socket.on('drain', () => {
-      if (!upstream.destroyed) upstream.resume()
-    })
-    upstream.once('end', () => {
-      if (!socket.destroyed) socket.end()
-    })
-    socket.once('end', () => {
-      if (!upstream.destroyed) upstream.end()
-    })
-    socket.resume()
-  })
-
-  upstream.once('error', (err) => {
-    if (bridged) {
-      if (!socket.destroyed) socket.destroy(err)
-      return
+function servePreviewHmrBootstrap({ runId, req, socket, head, previewPort }) {
+  previewWebSocketServer.handleUpgrade(req, socket, head, (client) => {
+    const nextVersion = readPreviewNextVersion(runId)
+    const sessionId = Math.floor(Math.random() * Number.MAX_SAFE_INTEGER)
+    const send = (message) => {
+      if (client.readyState === WebSocket.OPEN) client.send(JSON.stringify(message))
     }
-    fail(502, `Preview WebSocket upstream failed: ${err.message}`)
-  })
-  upstream.once('close', () => {
-    if (!socket.destroyed && !socket.writableEnded) socket.end()
-  })
-  socket.once('error', () => {
-    upstream.destroy()
-  })
-  socket.once('close', () => {
-    upstream.destroy()
+
+    // Next's dev runtime waits for the initial Turbopack HMR sync before hydrating.
+    send({ type: 'isrManifest', data: {} })
+    send({ type: 'turbopack-connected', data: { sessionId } })
+    send({
+      type: 'sync',
+      errors: [],
+      warnings: [],
+      hash: '',
+      versionInfo: { staleness: 'fresh', installed: nextVersion },
+      debug: {},
+      devIndicator: { disabledUntil: 0 },
+      devToolsConfig: {},
+    })
+
+    client.on('error', (err) => {
+      console.warn(`[start] preview HMR client failed for ${runId} on ${previewPort}: ${err.message}`)
+    })
   })
 }
 
-function buildUpgradeRequest(req, upstreamPath, previewPort) {
-  const upstreamUrl = parseRequestUrl(upstreamPath)
-  upstreamUrl?.searchParams.delete('preview_token')
-  const sanitizedPath = upstreamUrl ? `${upstreamUrl.pathname}${upstreamUrl.search}` : upstreamPath
-  const lines = [
-    `${req.method || 'GET'} ${sanitizedPath} HTTP/${req.httpVersion}`,
-    `Host: 127.0.0.1:${previewPort}`,
-    'Connection: Upgrade',
-    'Upgrade: websocket',
-    `Origin: http://127.0.0.1:${previewPort}`,
-  ]
-
-  for (const [name, value] of Object.entries(req.headers)) {
-    const lower = name.toLowerCase()
-    if (
-      lower === 'host' ||
-      lower === 'connection' ||
-      lower === 'upgrade' ||
-      lower === 'origin' ||
-      lower === 'cookie' ||
-      lower === 'content-length' ||
-      lower === 'transfer-encoding'
-    ) {
-      continue
-    }
-
-    if (
-      !lower.startsWith('sec-websocket-') &&
-      lower !== 'cache-control' &&
-      lower !== 'pragma' &&
-      lower !== 'user-agent'
-    ) {
-      continue
-    }
-
-    if (Array.isArray(value)) {
-      for (const item of value) lines.push(`${name}: ${item}`)
-    } else if (value != null) {
-      lines.push(`${name}: ${value}`)
-    }
+function readPreviewNextVersion(runId) {
+  const packagePath = path.join(projectDir, '.orchestrator', 'project-runs', runId, 'repo', 'package.json')
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packagePath, 'utf-8'))
+    const version = parsed?.dependencies?.next ?? parsed?.devDependencies?.next
+    return typeof version === 'string' && version.trim() ? version.replace(/^[^\d]*/, '') : 'unknown'
+  } catch {
+    return 'unknown'
   }
-
-  return `${lines.join('\r\n')}\r\n\r\n`
 }
 
 function readRunState(runId) {
