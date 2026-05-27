@@ -133,27 +133,12 @@ async function startPreview(context) {
   const outFd = fs.openSync(preview.logPath, 'a')
   const nextBin = resolveNextBin(context)
   const commandArgs = ['dev', '--turbopack', '-H', '127.0.0.1', '-p', String(port)]
+  const env = previewProcessEnv({ context, preview, port })
   const child = spawn(nextBin, commandArgs, {
     cwd: context.state.repoDir,
     detached: true,
     stdio: ['ignore', outFd, outFd],
-    env: {
-      ...process.env,
-      NODE_ENV: 'development',
-      NEXT_TELEMETRY_DISABLED: '1',
-      PORT: String(port),
-      ORCHESTRATOR_HOST: '127.0.0.1',
-      ORCHESTRATOR_PORT: String(port),
-      ORCHESTRATOR_PREVIEW: '1',
-      ORCHESTRATOR_DISABLE_BACKGROUND: '1',
-      ORCHESTRATOR_DISABLE_SCHEDULER: '1',
-      ORCHESTRATOR_DISABLE_MONITORS: '1',
-      ORCHESTRATOR_DISABLE_MICROSCRIPTS: '1',
-      ORCHESTRATOR_DISABLE_UPDATE_CONFIRMATION: '1',
-      ORCHESTRATOR_STATE_DIR: preview.stateDir,
-      ORCHESTRATOR_PREVIEW_RUN_ID: context.state.runId,
-      ORCHESTRATOR_PREVIEW_BASE_PATH: preview.basePath,
-    },
+    env,
   })
   child.unref()
   fs.closeSync(outFd)
@@ -804,6 +789,40 @@ async function backupSqliteDatabase(source, target) {
     await db.backup(target)
   } finally {
     db.close()
+  }
+}
+
+function previewProcessEnv({ context, preview, port }) {
+  const env = { ...process.env }
+
+  for (const key of Object.keys(env)) {
+    if (
+      key.startsWith('__NEXT_') ||
+      key.startsWith('NEXT_PRIVATE_') ||
+      key === 'NEXT_RUNTIME' ||
+      key === 'NEXT_DEPLOYMENT_ID'
+    ) {
+      delete env[key]
+    }
+  }
+
+  return {
+    ...env,
+    NODE_ENV: 'development',
+    NEXT_TELEMETRY_DISABLED: '1',
+    __NEXT_PRIVATE_ORIGIN: `http://127.0.0.1:${port}`,
+    PORT: String(port),
+    ORCHESTRATOR_HOST: '127.0.0.1',
+    ORCHESTRATOR_PORT: String(port),
+    ORCHESTRATOR_PREVIEW: '1',
+    ORCHESTRATOR_DISABLE_BACKGROUND: '1',
+    ORCHESTRATOR_DISABLE_SCHEDULER: '1',
+    ORCHESTRATOR_DISABLE_MONITORS: '1',
+    ORCHESTRATOR_DISABLE_MICROSCRIPTS: '1',
+    ORCHESTRATOR_DISABLE_UPDATE_CONFIRMATION: '1',
+    ORCHESTRATOR_STATE_DIR: preview.stateDir,
+    ORCHESTRATOR_PREVIEW_RUN_ID: context.state.runId,
+    ORCHESTRATOR_PREVIEW_BASE_PATH: preview.basePath,
   }
 }
 
