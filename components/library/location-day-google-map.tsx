@@ -182,14 +182,24 @@ export function LocationDayGoogleMap({
   }
 
   return (
-    <MapRenderer
-      source={JSON.stringify(artifact)}
-      title={title}
-      mode="panel"
-      hideSidebar
-      frameless
-      className={cn("h-full min-h-[520px]", className)}
-      cameraResetKey={title}
-    />
+    <div className={cn("relative h-full min-h-[520px]", className)}>
+      <MapRenderer
+        source={JSON.stringify(artifact)}
+        title={title}
+        mode="panel"
+        hideSidebar
+        frameless
+        className="h-full min-h-[520px]"
+        cameraResetKey={title}
+      />
+      <div
+        aria-hidden
+        className="absolute inset-y-0 left-0 z-10 w-4 bg-transparent sm:w-5"
+      />
+      <div
+        aria-hidden
+        className="absolute inset-y-0 right-0 z-10 w-4 bg-transparent sm:w-5"
+      />
+    </div>
   )
 }

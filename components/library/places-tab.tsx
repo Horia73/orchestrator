@@ -5,6 +5,8 @@ import {
   AlertCircle,
   CalendarDays,
   CheckCircle2,
+  ChevronLeft,
+  ChevronRight,
   Clock3,
   Dumbbell,
   LocateFixed,
@@ -63,7 +65,7 @@ export function PlacesTab() {
         if (current && body.days.some((day) => day.date === current)) {
           return current
         }
-        return body.days[0]?.date ?? null
+        return latestDate(body.days)
       })
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load Places")
@@ -155,7 +157,7 @@ export function PlacesTab() {
       ) : status && selectedDay ? (
         <>
           <PlacesStatusBar status={status} totalDays={data?.total ?? days.length} />
-          <DaySelector
+          <DayNavigator
             days={days}
             selectedDate={selectedDate}
             onSelect={setSelectedDate}
@@ -241,7 +243,7 @@ function StatusPill({
   )
 }
 
-function DaySelector({
+function DayNavigator({
   days,
   selectedDate,
   onSelect,
@@ -250,32 +252,197 @@ function DaySelector({
   selectedDate: string | null
   onSelect: (date: string) => void
 }) {
+  const [calendarOpen, setCalendarOpen] = React.useState(false)
+  const sortedDays = React.useMemo(
+    () => [...days].sort((a, b) => a.date.localeCompare(b.date)),
+    [days]
+  )
+  const selectedIndex = sortedDays.findIndex((day) => day.date === selectedDate)
+  const selectedDay =
+    selectedIndex >= 0 ? sortedDays[selectedIndex] : sortedDays.at(-1) ?? null
+  const previousDay = selectedIndex > 0 ? sortedDays[selectedIndex - 1] : null
+  const nextDay =
+    selectedIndex >= 0 && selectedIndex < sortedDays.length - 1
+      ? sortedDays[selectedIndex + 1]
+      : null
+
   return (
-    <div className="rounded-lg border border-border/70 bg-muted/20 p-1">
-      <div className="flex gap-1 overflow-x-auto [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
-        {days.map((day) => {
-          const active = day.date === selectedDate
+    <div className="relative z-20 flex items-center justify-center">
+      <div className="grid w-full grid-cols-[40px_minmax(0,1fr)_40px] items-center gap-2 rounded-lg border border-border/70 bg-background/80 p-1 shadow-sm sm:w-auto sm:min-w-[420px]">
+        <button
+          type="button"
+          onClick={() => previousDay && onSelect(previousDay.date)}
+          disabled={!previousDay}
+          aria-label="Previous location day"
+          className={cn(
+            "grid size-10 place-items-center rounded-md text-muted-foreground transition-colors",
+            "hover:bg-muted hover:text-foreground",
+            "disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          )}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+
+        <button
+          type="button"
+          onClick={() => setCalendarOpen((open) => !open)}
+          className="min-w-0 rounded-md px-3 py-2 text-center transition-colors hover:bg-muted/70"
+          aria-haspopup="dialog"
+          aria-expanded={calendarOpen}
+        >
+          <span className="block truncate text-[13px] font-semibold text-foreground">
+            {selectedDay ? formatDayLabelLong(selectedDay) : "No day selected"}
+          </span>
+          <span className="block truncate text-[11px] text-muted-foreground">
+            {selectedDay
+              ? `${selectedDay.stats.stopCount} stops${
+                  selectedDay.stats.distanceMeters
+                    ? ` · ${formatDistance(selectedDay.stats.distanceMeters)}`
+                    : ""
+                }`
+              : "Click to choose a day"}
+          </span>
+        </button>
+
+        <button
+          type="button"
+          onClick={() => nextDay && onSelect(nextDay.date)}
+          disabled={!nextDay}
+          aria-label="Next location day"
+          className={cn(
+            "grid size-10 place-items-center rounded-md text-muted-foreground transition-colors",
+            "hover:bg-muted hover:text-foreground",
+            "disabled:cursor-default disabled:opacity-35 disabled:hover:bg-transparent disabled:hover:text-muted-foreground"
+          )}
+        >
+          <ChevronRight className="size-4" />
+        </button>
+      </div>
+
+      {calendarOpen ? (
+        <LocationCalendarPopover
+          days={sortedDays}
+          selectedDate={selectedDay?.date ?? null}
+          onSelect={(date) => {
+            onSelect(date)
+            setCalendarOpen(false)
+          }}
+          onClose={() => setCalendarOpen(false)}
+        />
+      ) : null}
+    </div>
+  )
+}
+
+function LocationCalendarPopover({
+  days,
+  selectedDate,
+  onSelect,
+  onClose,
+}: {
+  days: LocationDaySummary[]
+  selectedDate: string | null
+  onSelect: (date: string) => void
+  onClose: () => void
+}) {
+  const rootRef = React.useRef<HTMLDivElement | null>(null)
+  const dayByDate = React.useMemo(
+    () => new Map(days.map((day) => [day.date, day])),
+    [days]
+  )
+  const initialMonth = selectedDate ?? days.at(-1)?.date ?? todayDateKey()
+  const [visibleMonth, setVisibleMonth] = React.useState(() =>
+    monthKey(initialMonth)
+  )
+
+  React.useEffect(() => {
+    function onPointerDown(event: PointerEvent) {
+      if (!rootRef.current) return
+      if (rootRef.current.contains(event.target as Node)) return
+      onClose()
+    }
+    function onKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") onClose()
+    }
+    document.addEventListener("pointerdown", onPointerDown)
+    document.addEventListener("keydown", onKeyDown)
+    return () => {
+      document.removeEventListener("pointerdown", onPointerDown)
+      document.removeEventListener("keydown", onKeyDown)
+    }
+  }, [onClose])
+
+  const calendarDays = React.useMemo(
+    () => calendarGridForMonth(visibleMonth),
+    [visibleMonth]
+  )
+
+  return (
+    <div
+      ref={rootRef}
+      role="dialog"
+      aria-label="Choose location day"
+      className="absolute top-[calc(100%+8px)] z-50 w-[min(92vw,360px)] rounded-lg border border-border/70 bg-background p-3 shadow-2xl"
+    >
+      <div className="mb-3 flex items-center justify-between gap-2">
+        <button
+          type="button"
+          onClick={() => setVisibleMonth(addMonths(visibleMonth, -1))}
+          aria-label="Previous month"
+          className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        <div className="text-center">
+          <div className="text-[13px] font-semibold text-foreground">
+            {formatMonthLabel(visibleMonth)}
+          </div>
+          <div className="text-[11px] text-muted-foreground">
+            Days with location summaries
+          </div>
+        </div>
+        <button
+          type="button"
+          onClick={() => setVisibleMonth(addMonths(visibleMonth, 1))}
+          aria-label="Next month"
+          className="grid size-8 place-items-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+        >
+          <ChevronRight className="size-4" />
+        </button>
+      </div>
+
+      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-medium uppercase text-muted-foreground">
+        {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
+          <div key={label} className="py-1">
+            {label}
+          </div>
+        ))}
+      </div>
+
+      <div className="mt-1 grid grid-cols-7 gap-1">
+        {calendarDays.map((item) => {
+          const day = item.date ? dayByDate.get(item.date) : undefined
+          const active = item.date === selectedDate
           return (
             <button
-              key={day.date}
+              key={item.key}
               type="button"
-              onClick={() => onSelect(day.date)}
+              disabled={!day}
+              onClick={() => day && onSelect(day.date)}
               className={cn(
-                "grid h-[64px] min-w-[156px] shrink-0 rounded-md px-3 py-2 text-left transition-colors",
-                active
-                  ? "bg-background text-foreground shadow-sm ring-1 ring-border/70"
-                  : "text-muted-foreground hover:bg-background/70 hover:text-foreground"
+                "relative grid h-10 place-items-center rounded-md text-[12px] transition-colors",
+                item.inMonth ? "text-foreground" : "text-muted-foreground/40",
+                day
+                  ? "hover:bg-muted"
+                  : "cursor-default text-muted-foreground/25",
+                active &&
+                  "bg-primary text-primary-foreground shadow-sm hover:bg-primary"
               )}
             >
-              <span className="truncate text-[12px] font-semibold">
-                {formatDayLabel(day)}
-              </span>
-              <span className="truncate text-[11px]">
-                {day.stats.stopCount} stops
-                {day.stats.distanceMeters
-                  ? ` · ${formatDistance(day.stats.distanceMeters)}`
-                  : ""}
-              </span>
+              <span>{item.dayOfMonth}</span>
+              {day && !active ? (
+                <span className="absolute bottom-1 size-1 rounded-full bg-primary/70" />
+              ) : null}
             </button>
           )
         })}
@@ -544,6 +711,93 @@ function formatDayLabel(day: LocationDaySummary): string {
     month: "short",
     day: "numeric",
   }).format(new Date(parsed))
+}
+
+function formatDayLabelLong(day: LocationDaySummary): string {
+  const parsed = Date.parse(`${day.date}T12:00:00Z`)
+  if (!Number.isFinite(parsed)) return day.label
+  return new Intl.DateTimeFormat(undefined, {
+    weekday: "long",
+    month: "long",
+    day: "numeric",
+    year: "numeric",
+  }).format(new Date(parsed))
+}
+
+function latestDate(days: LocationDaySummary[]): string | null {
+  if (days.length === 0) return null
+  return days.reduce((latest, day) =>
+    day.date > latest.date ? day : latest
+  ).date
+}
+
+function todayDateKey(): string {
+  return new Date().toISOString().slice(0, 10)
+}
+
+function monthKey(dateKey: string): string {
+  return dateKey.slice(0, 7)
+}
+
+function addMonths(yyyyMm: string, delta: number): string {
+  const [year, month] = yyyyMm.split("-").map(Number)
+  const date = new Date(Date.UTC(year, month - 1 + delta, 1, 12))
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`
+}
+
+function formatMonthLabel(yyyyMm: string): string {
+  const [year, month] = yyyyMm.split("-").map(Number)
+  const date = new Date(Date.UTC(year, month - 1, 1, 12))
+  return new Intl.DateTimeFormat(undefined, {
+    month: "long",
+    year: "numeric",
+  }).format(date)
+}
+
+function calendarGridForMonth(yyyyMm: string): Array<{
+  key: string
+  date: string | null
+  dayOfMonth: number | string
+  inMonth: boolean
+}> {
+  const [year, month] = yyyyMm.split("-").map(Number)
+  const first = new Date(Date.UTC(year, month - 1, 1, 12))
+  const daysInMonth = new Date(Date.UTC(year, month, 0, 12)).getUTCDate()
+  const firstWeekdayMonday = (first.getUTCDay() + 6) % 7
+  const cells: Array<{
+    key: string
+    date: string | null
+    dayOfMonth: number | string
+    inMonth: boolean
+  }> = []
+
+  for (let i = 0; i < firstWeekdayMonday; i++) {
+    cells.push({
+      key: `blank-start-${i}`,
+      date: null,
+      dayOfMonth: "",
+      inMonth: false,
+    })
+  }
+  for (let day = 1; day <= daysInMonth; day++) {
+    const date = `${yyyyMm}-${String(day).padStart(2, "0")}`
+    cells.push({
+      key: date,
+      date,
+      dayOfMonth: day,
+      inMonth: true,
+    })
+  }
+  while (cells.length % 7 !== 0) {
+    const index = cells.length
+    cells.push({
+      key: `blank-end-${index}`,
+      date: null,
+      dayOfMonth: "",
+      inMonth: false,
+    })
+  }
+  return cells
 }
 
 function formatTime(value: string): string {
