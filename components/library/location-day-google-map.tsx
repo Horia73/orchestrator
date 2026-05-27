@@ -3,7 +3,10 @@
 import * as React from "react"
 import { MapPinned } from "lucide-react"
 
-import { MapRenderer } from "@/components/artifacts/renderers/map-renderer"
+import {
+  MapRenderer,
+  type MapActionCommand,
+} from "@/components/artifacts/renderers/map-renderer"
 import { cn } from "@/lib/utils"
 import type {
   LocationCoordinate,
@@ -153,11 +156,13 @@ export function LocationDayGoogleMap({
   title,
   route,
   stops,
+  actionCommand,
   className,
 }: {
   title: string
   route: LocationCoordinate[]
   stops: LocationStop[]
+  actionCommand?: MapActionCommand | null
   className?: string
 }) {
   const artifact = React.useMemo(
@@ -191,6 +196,7 @@ export function LocationDayGoogleMap({
         frameless
         className="h-full min-h-[520px]"
         cameraResetKey={title}
+        actionCommand={actionCommand}
       />
       <div
         aria-hidden

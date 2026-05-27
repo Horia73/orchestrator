@@ -167,7 +167,7 @@ function LibraryView() {
   }, [active, visitedTabs])
 
   return (
-    <div className="library-scroll mx-auto flex min-h-0 w-full max-w-6xl flex-1 flex-col gap-5 overflow-y-auto px-3 py-4 sm:gap-6 sm:p-6">
+    <div className="library-scroll flex min-h-0 w-full max-w-none flex-1 flex-col gap-5 overflow-y-auto px-3 py-4 sm:gap-6 sm:p-6 lg:px-8">
       <header className="flex flex-wrap items-end justify-between gap-3">
         <div>
           <h1 className="inline-flex items-center gap-2 text-2xl font-semibold tracking-tight text-foreground">

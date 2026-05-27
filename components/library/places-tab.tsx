@@ -24,6 +24,7 @@ import type {
   LocationDayDetail,
   LocationDaySummary,
   LocationIntelligenceIntegrationStatus,
+  LocationStop,
 } from "@/lib/location-intelligence/schema"
 
 const SETUP_PROMPT =
@@ -43,6 +44,13 @@ export function PlacesTab() {
   const [detail, setDetail] = React.useState<LocationDayDetail | null>(null)
   const [detailLoading, setDetailLoading] = React.useState(false)
   const [detailError, setDetailError] = React.useState<string | null>(null)
+  const [mode, setMode] = React.useState<"places" | "raw">("places")
+  const [focusCommand, setFocusCommand] = React.useState<{
+    type: "recenter"
+    nonce: number
+    position: [number, number]
+    zoom: number
+  } | null>(null)
 
   const load = React.useCallback(async () => {
     setLoading(true)
@@ -118,9 +126,20 @@ export function PlacesTab() {
 
   const status = data?.status
   const days = data?.days ?? []
-  const selectedSummary =
-    selectedDate && days.find((day) => day.date === selectedDate)
+  const selectedSummary = selectedDate
+    ? days.find((day) => day.date === selectedDate) ?? null
+    : null
   const selectedDay = detail ?? selectedSummary ?? null
+  const placeStops = isDayDetail(selectedDay) ? selectedDay.stops : []
+  const rawStops = isDayDetail(selectedDay) ? selectedDay.observations : []
+  const hasPlaces = placeStops.length > 0
+  const hasRaw = rawStops.length > 0
+  const activeMode = mode === "raw" && hasRaw ? "raw" : hasPlaces ? "places" : "raw"
+  const displayStops = activeMode === "raw" ? rawStops : placeStops
+
+  React.useEffect(() => {
+    setFocusCommand(null)
+  }, [selectedDate, activeMode])
 
   return (
     <div className="flex flex-col gap-4">
@@ -168,7 +187,13 @@ export function PlacesTab() {
             </div>
           ) : null}
           <section className="min-w-0 overflow-hidden rounded-lg border border-border/70 bg-background/80">
-            <DayOverview day={selectedDay} detailLoading={detailLoading} />
+            <DayOverview
+              day={selectedDay}
+              detailLoading={detailLoading}
+              mode={activeMode}
+              canToggle={hasPlaces && hasRaw}
+              onModeChange={setMode}
+            />
             <div className="h-[min(72vh,780px)] min-h-[560px] bg-muted/30">
               {detailLoading && !detail ? (
                 <div className="h-full animate-pulse bg-muted/35" />
@@ -176,11 +201,25 @@ export function PlacesTab() {
                 <LocationDayGoogleMap
                   title={`Places · ${selectedDay.label}`}
                   route={isDayDetail(selectedDay) ? selectedDay.route : []}
-                  stops={isDayDetail(selectedDay) ? selectedDay.stops : []}
+                  stops={displayStops}
+                  actionCommand={focusCommand}
                 />
               )}
             </div>
-            <StopRail day={selectedDay} detailLoading={detailLoading} />
+            <StopRail
+              stops={displayStops}
+              mode={activeMode}
+              detailLoading={detailLoading}
+              onFocus={(stop) => {
+                if (!stop.position) return
+                setFocusCommand({
+                  type: "recenter",
+                  nonce: Date.now(),
+                  position: stop.position,
+                  zoom: activeMode === "raw" ? 17 : 16,
+                })
+              }}
+            />
           </section>
         </>
       ) : null}
@@ -454,11 +493,21 @@ function LocationCalendarPopover({
 function DayOverview({
   day,
   detailLoading,
+  mode,
+  canToggle,
+  onModeChange,
 }: {
   day: LocationDaySummary | LocationDayDetail
   detailLoading: boolean
+  mode: "places" | "raw"
+  canToggle: boolean
+  onModeChange: (mode: "places" | "raw") => void
 }) {
   const route = "route" in day ? day.route : []
+  const visibleCount =
+    mode === "raw" && "observations" in day
+      ? day.observations.length
+      : day.stats.stopCount
 
   return (
     <div className="grid gap-3 border-b border-border/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
@@ -492,10 +541,41 @@ function DayOverview({
             {day.summary}
           </p>
         ) : null}
+        {canToggle ? (
+          <div className="mt-2 inline-grid grid-cols-2 rounded-md border border-border/70 bg-muted/20 p-0.5 text-[11.5px]">
+            <button
+              type="button"
+              onClick={() => onModeChange("places")}
+              className={cn(
+                "rounded px-2.5 py-1 font-medium transition-colors",
+                mode === "places"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Places
+            </button>
+            <button
+              type="button"
+              onClick={() => onModeChange("raw")}
+              className={cn(
+                "rounded px-2.5 py-1 font-medium transition-colors",
+                mode === "raw"
+                  ? "bg-background text-foreground shadow-sm"
+                  : "text-muted-foreground hover:text-foreground"
+              )}
+            >
+              Raw
+            </button>
+          </div>
+        ) : null}
       </div>
 
       <div className="flex min-w-0 flex-wrap gap-2 md:justify-end">
-        <Metric label="Stops" value={String(day.stats.stopCount)} />
+        <Metric
+          label={mode === "raw" ? "Raw pts" : "Stops"}
+          value={String(visibleCount)}
+        />
         <Metric
           label="Samples"
           value={day.stats.sampleCount ? String(day.stats.sampleCount) : "No data"}
@@ -518,24 +598,30 @@ function DayOverview({
 }
 
 function StopRail({
-  day,
+  stops,
+  mode,
   detailLoading,
+  onFocus,
 }: {
-  day: LocationDaySummary | LocationDayDetail
+  stops: LocationStop[]
+  mode: "places" | "raw"
   detailLoading: boolean
+  onFocus: (stop: LocationStop) => void
 }) {
-  const stops = "stops" in day ? day.stops : []
-
   return (
     <div className="border-t border-border/60 bg-background/95 px-4 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">
         <h4 className="text-[12px] font-semibold uppercase text-muted-foreground">
-          Stops
+          {mode === "raw" ? "Raw points" : "Stops"}
         </h4>
         <span className="text-[11.5px] text-muted-foreground">
           {stops.length > 0
-            ? `${stops.length} summarized places`
-            : "No summarized places"}
+            ? mode === "raw"
+              ? `${stops.length} raw observations`
+              : `${stops.length} summarized places`
+            : mode === "raw"
+              ? "No raw observations"
+              : "No summarized places"}
         </span>
       </div>
 
@@ -553,20 +639,32 @@ function StopRail({
           {stops.map((stop, index) => (
             <li
               key={stop.id || index}
-              className="grid min-h-[68px] min-w-[230px] grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-md bg-muted/25 px-2.5 py-2"
+              className="min-w-[230px]"
             >
-              <span className="mt-0.5 grid size-5 place-items-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
-                {index + 1}
-              </span>
-              <span className="min-w-0">
-                <span className="block truncate text-[12.5px] font-medium text-foreground">
-                  {stop.label}
+              <button
+                type="button"
+                disabled={!stop.position}
+                onClick={() => onFocus(stop)}
+                className={cn(
+                  "grid min-h-[68px] w-full grid-cols-[24px_minmax(0,1fr)] gap-2 rounded-md bg-muted/25 px-2.5 py-2 text-left transition-colors",
+                  stop.position
+                    ? "hover:bg-muted/50"
+                    : "cursor-default opacity-70"
+                )}
+              >
+                <span className="mt-0.5 grid size-5 place-items-center rounded-full bg-rose-500 text-[10px] font-bold text-white">
+                  {index + 1}
                 </span>
-                <span className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
-                  <span>{formatStopWindow(stop)}</span>
-                  {stop.kind ? <span>{stop.kind}</span> : null}
+                <span className="min-w-0">
+                  <span className="block truncate text-[12.5px] font-medium text-foreground">
+                    {stop.label}
+                  </span>
+                  <span className="mt-0.5 flex flex-wrap gap-x-2 gap-y-0.5 text-[11px] text-muted-foreground">
+                    <span>{formatStopWindow(stop)}</span>
+                    {stop.kind ? <span>{stop.kind}</span> : null}
+                  </span>
                 </span>
-              </span>
+              </button>
             </li>
           ))}
         </ol>
@@ -665,8 +763,9 @@ function PlacesSkeleton() {
 }
 
 function isDayDetail(
-  day: LocationDaySummary | LocationDayDetail
+  day: LocationDaySummary | LocationDayDetail | null
 ): day is LocationDayDetail {
+  if (!day) return false
   return "route" in day && "stops" in day
 }
 

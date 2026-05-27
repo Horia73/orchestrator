@@ -45,6 +45,7 @@ interface PointSummary {
   firstSeenAt: string | null
   lastSeenAt: string | null
   route: LocationCoordinate[]
+  observations: LocationStop[]
 }
 
 interface DayReadResult {
@@ -297,6 +298,7 @@ function buildDayDetail({
 }): LocationDayDetail {
   const raw = day?.raw
   const stops = extractStops(raw, aliases)
+  const observations = pointSummary?.observations ?? []
   const route = thinCoordinates(
     extractRoute(raw) ??
       (includeRouteFallback ? pointSummary?.route ?? [] : []),
@@ -336,6 +338,7 @@ function buildDayDetail({
     notablePlaces,
     hasRoute: route.length >= 2 || Boolean(routeFromRawExists(raw)),
     stops,
+    observations,
     route,
   }
 }
@@ -411,6 +414,68 @@ function normalizeStop(
     position: coordinateFromUnknown(value),
     kind: cleanText(stringFromKeys(value, ["kind", "type", "category"]), 80) || null,
   }
+}
+
+function observationFromPoint(point: unknown, index: number): LocationStop | null {
+  if (!isRecord(point)) return null
+  const position = coordinateFromUnknown(point)
+  if (!position) return null
+  const timestamp = timestampForPoint(point)
+  const label = labelForPoint(point, index)
+  const rawKind =
+    cleanText(stringFromKeys(point, ["event", "activity", "state"]), 80) ||
+    "raw"
+
+  return {
+    id:
+      cleanText(stringFromKeys(point, ["id", "sample_id", "event_id"]), 80) ||
+      `raw-${index + 1}`,
+    label,
+    startTime: timestamp,
+    endTime: timestamp,
+    durationMinutes: null,
+    position,
+    kind: rawKind,
+  }
+}
+
+function withObservationDurations(observations: LocationStop[]): LocationStop[] {
+  const sorted = [...observations].sort((a, b) =>
+    (a.startTime ?? "").localeCompare(b.startTime ?? "")
+  )
+
+  return sorted.map((observation, index) => {
+    const next = sorted[index + 1]
+    const startMs = observation.startTime ? Date.parse(observation.startTime) : NaN
+    const nextMs = next?.startTime ? Date.parse(next.startTime) : NaN
+    if (!Number.isFinite(startMs) || !Number.isFinite(nextMs) || nextMs <= startMs) {
+      return observation
+    }
+    const durationMinutes = Math.max(0, Math.round((nextMs - startMs) / 60000))
+    return {
+      ...observation,
+      endTime: next?.startTime ?? observation.endTime,
+      durationMinutes,
+      kind:
+        durationMinutes >= 6
+          ? `${observation.kind ?? "raw"} · inferred_stay`
+          : observation.kind,
+    }
+  })
+}
+
+function labelForPoint(point: Record<string, unknown>, index: number): string {
+  const state = cleanText(stringFromKeys(point, ["state"]), 80).toLowerCase()
+  if (state === "home") return "home"
+  if (booleanFromKeys(point, ["near_gym", "nearGym"])) return "gym area"
+  const zone = cleanText(stringFromKeys(point, ["zone"]), 120)
+  if (zone) {
+    const firstZone = zone.split(",")[0]?.trim()
+    if (firstZone) return firstZone.replace(/^zone\./, "")
+  }
+  const activity = cleanText(stringFromKeys(point, ["activity"]), 80)
+  if (activity && activity.toLowerCase() !== "unknown") return activity
+  return `Observation ${index + 1}`
 }
 
 function extractStats(
@@ -507,6 +572,7 @@ async function readPointSummaries(
         firstSeenAt: null,
         lastSeenAt: null,
         route: [],
+        observations: [],
       }
     summary.sampleCount += 1
     if (timestamp) {
@@ -520,13 +586,19 @@ async function readPointSummaries(
     if (coord && summary.route.length < MAX_ROUTE_POINTS * 4) {
       summary.route.push(coord)
     }
+    const observation = observationFromPoint(point, summary.sampleCount - 1)
+    if (observation && summary.observations.length < MAX_STOP_COUNT) {
+      summary.observations.push(observation)
+    }
     summaries.set(date, summary)
   })
 
   for (const [date, summary] of summaries) {
+    const observations = withObservationDurations(summary.observations)
     summaries.set(date, {
       ...summary,
       route: thinCoordinates(summary.route, MAX_ROUTE_POINTS),
+      observations,
     })
   }
   return summaries
@@ -542,6 +614,7 @@ async function readPointSummaryForDate(
     firstSeenAt: null,
     lastSeenAt: null,
     route: [],
+    observations: [],
   }
 
   await readPoints(filePath, (point) => {
@@ -559,12 +632,17 @@ async function readPointSummaryForDate(
       }
     }
     if (coord) summary.route.push(coord)
+    const observation = observationFromPoint(point, summary.sampleCount - 1)
+    if (observation && summary.observations.length < MAX_STOP_COUNT) {
+      summary.observations.push(observation)
+    }
   })
 
   if (summary.sampleCount === 0 && summary.route.length === 0) return null
   return {
     ...summary,
     route: thinCoordinates(summary.route, MAX_ROUTE_POINTS),
+    observations: withObservationDurations(summary.observations),
   }
 }
 

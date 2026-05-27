@@ -105,6 +105,7 @@ export interface LocationStop {
 
 export interface LocationDayDetail extends LocationDaySummary {
   stops: LocationStop[]
+  observations: LocationStop[]
   route: LocationCoordinate[]
 }
 
