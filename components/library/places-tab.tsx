@@ -146,7 +146,7 @@ export function PlacesTab() {
   }, [selectedDate, activeMode])
 
   return (
-    <div className="flex flex-col gap-3">
+    <div className="flex flex-col gap-2">
       {error ? (
         <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-700 dark:text-rose-300">
           {error}

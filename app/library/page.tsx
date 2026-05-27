@@ -167,14 +167,14 @@ function LibraryView() {
   }, [active, visitedTabs])
 
   return (
-    <div className="library-scroll flex min-h-0 w-full max-w-none flex-1 flex-col gap-5 overflow-y-auto px-3 py-4 sm:gap-6 sm:p-6 lg:px-8">
-      <header className="flex flex-wrap items-end justify-between gap-3">
+    <div className="library-scroll flex min-h-0 w-full max-w-none flex-1 flex-col gap-2 overflow-y-auto px-3 py-3 sm:p-4 lg:px-8">
+      <header className="flex flex-wrap items-end justify-between gap-2">
         <div>
-          <h1 className="inline-flex items-center gap-2 text-2xl font-semibold tracking-tight text-foreground">
-            <LibraryIcon className="size-6 text-primary" strokeWidth={1.85} />
+          <h1 className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
+            <LibraryIcon className="size-5 text-primary" strokeWidth={1.85} />
             Library
           </h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+          <p className="text-[11.5px] leading-tight text-muted-foreground">
             Tot ce ai generat — workouts, rețete, hărți — într-un singur loc.
           </p>
         </div>
@@ -197,7 +197,7 @@ function LibraryView() {
 
         <div
           className={cn(
-            "mt-6 min-w-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+            "mt-1 min-w-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
             contentVisible ? "opacity-100" : "opacity-0"
           )}
         >
