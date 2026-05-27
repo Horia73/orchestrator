@@ -631,9 +631,46 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         // so the model sees the capability summary + its loaded doctrine
         // together.
         buildActiveCapabilityDoctrinesBlock(exposureOpts),
+        // Self-update proposal — orchestrator-only. Inbox/smart-monitor
+        // aliases share the prompt builder but should never pester the user
+        // with update offers during a notification reply.
+        isOrchestrator ? buildPendingUpdateBlock(ctx) : '',
         buildIntegrationRunbooksContext(),
         buildWorkspaceContextFiles(ctx.agentId),
     ].filter(Boolean).join('\n\n')
+}
+
+const PENDING_UPDATE_NOTES_MAX = 600
+
+function buildPendingUpdateBlock(ctx: PromptContext): string {
+    const pending = ctx.pendingUpdate
+    if (!pending) return ''
+    const notesRaw = (pending.notes ?? '').trim()
+    const notes = notesRaw.length > PENDING_UPDATE_NOTES_MAX
+        ? `${notesRaw.slice(0, PENDING_UPDATE_NOTES_MAX - 1).trimEnd()}…`
+        : notesRaw
+    const lines = [
+        '<pending_update>',
+        `A newer Orchestrator release is available: \`${pending.currentVersion}\` → \`${pending.targetVersion}\` (\`${pending.targetTag}\`).`,
+        pending.releaseName ? `Release: ${pending.releaseName}` : '',
+        pending.publishedAt ? `Published: ${pending.publishedAt}` : '',
+        pending.releaseUrl ? `URL: ${pending.releaseUrl}` : '',
+        pending.fallback
+            ? 'Release notes are unavailable (GitHub lookup fell back to a tag-only source).'
+            : '',
+        notes ? '\nRelease notes (truncated to fit prompt):' : '',
+        notes ? notes : '',
+        '',
+        'How to handle this in chat:',
+        '- Finish the user\'s current request first. Do NOT abandon the task in progress to propose the update.',
+        '- After the actual answer, add ONE short closing line offering the update — keep it to a single sentence in the user\'s language, e.g. "BTW, e disponibil vX.Y.Z cu <highlight>; vrei să updatez?" Reference one concrete highlight from the notes when possible.',
+        '- Propose at most ONCE per conversation. If the conversation history shows you already proposed it (or the user said "not now", "later", "skip"), DO NOT mention it again unless the user explicitly asks.',
+        '- Only call `apply_update` AFTER an explicit user confirmation in this same conversation (e.g. "da", "yes", "update"). When you call it, pass `confirmed_by_user: true`.',
+        '- After `apply_update` returns success, send ONE short message telling the user the app will restart and reconnect, then stop. The boot hook will post the post-restart confirmation back into this conversation automatically — do not promise to "check back later" yourself.',
+        '- Never call `apply_update` proactively, on a tangential question, or just because this block is present.',
+        '</pending_update>',
+    ].filter(line => line !== '')
+    return lines.join('\n')
 }
 
 function buildAgentThreadsContextBlock(ctx: PromptContext): string {

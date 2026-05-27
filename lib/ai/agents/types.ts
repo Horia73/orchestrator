@@ -177,6 +177,24 @@ export interface PromptContext {
   delegationDepth?: number
   /** Hard delegation depth cap (MAX_AGENT_DEPTH). Surfaced so the agent can plan within budget. */
   maxDelegationDepth?: number
+  /**
+   * Pending self-update info. Set by the chat route when a newer release is
+   * available so the orchestrator prompt can render a <pending_update>
+   * runtime block and invite the user to apply it. Filtered to orchestrator
+   * only inside buildRuntimeContext.
+   */
+  pendingUpdate?: {
+    currentVersion: string
+    targetVersion: string
+    targetTag: string
+    releaseName?: string | null
+    releaseUrl?: string | null
+    publishedAt?: string | null
+    /** Release notes body. Pre-truncated by the caller — the block clips again as a safety net. */
+    notes?: string | null
+    /** True if the GitHub lookup failed and we fell back to a tag-only source. */
+    fallback?: boolean
+  }
   /** Any extra context the caller wants to inject */
   extra?: Record<string, string>
 }

@@ -160,6 +160,46 @@ function envBuildValue(name: string): string | null {
     return value
 }
 
+interface BakedBuildInfo {
+    commit: string | null
+    ref: string | null
+    builtAt: string | null
+}
+
+let cachedBuildInfo: BakedBuildInfo | null | undefined
+
+function readBakedBuildInfo(): BakedBuildInfo | null {
+    if (cachedBuildInfo !== undefined) return cachedBuildInfo
+    // Written by the Dockerfile from build args. Truthy when running inside a
+    // managed Docker image, missing when running from a local source checkout.
+    // Authoritative over `git` (`.git` is `.dockerignore`-d) and over the env
+    // var (which `env_file` in docker-compose can silently override with stale
+    // values from `.env`).
+    const candidatePath = path.join(PROJECT_DIR, '.build-info.json')
+    try {
+        if (!fs.existsSync(candidatePath)) {
+            cachedBuildInfo = null
+            return null
+        }
+        const raw = fs.readFileSync(candidatePath, 'utf-8')
+        const parsed = JSON.parse(raw) as { commit?: unknown; ref?: unknown; builtAt?: unknown }
+        const commit = typeof parsed.commit === 'string' && parsed.commit.trim() && parsed.commit.trim() !== 'unknown'
+            ? parsed.commit.trim()
+            : null
+        const ref = typeof parsed.ref === 'string' && parsed.ref.trim() && parsed.ref.trim() !== 'unknown'
+            ? parsed.ref.trim()
+            : null
+        const builtAt = typeof parsed.builtAt === 'string' && parsed.builtAt.trim()
+            ? parsed.builtAt.trim()
+            : null
+        cachedBuildInfo = { commit, ref, builtAt }
+        return cachedBuildInfo
+    } catch {
+        cachedBuildInfo = null
+        return null
+    }
+}
+
 function normalizeCommit(value: string | null | undefined): string | null {
     const clean = value?.trim()
     if (!clean || clean === 'unknown') return null
@@ -177,10 +217,21 @@ function commitsMatch(current: string | null | undefined, target: string | null 
 
 function getCurrentInstall(): CurrentInstallInfo {
     const dirty = Boolean(git(['status', '--porcelain']))
+    const baked = readBakedBuildInfo()
+    // Precedence: baked image metadata (Docker prod) → live git (source
+    // checkouts) → env var (legacy fallback). Reading `baked` first means
+    // post-restart confirmation no longer reports a stale commit when
+    // `.env` happens to carry an old `ORCHESTRATOR_BUILD_COMMIT` line.
+    const commit = baked?.commit
+        ?? git(['rev-parse', '--short=12', 'HEAD'])
+        ?? envBuildValue('ORCHESTRATOR_BUILD_COMMIT')
+    const branch = baked?.ref
+        ?? git(['branch', '--show-current'])
+        ?? envBuildValue('ORCHESTRATOR_BUILD_REF')
     return {
         version: readPackageVersion(),
-        commit: git(['rev-parse', '--short=12', 'HEAD']) ?? envBuildValue('ORCHESTRATOR_BUILD_COMMIT'),
-        branch: git(['branch', '--show-current']) ?? envBuildValue('ORCHESTRATOR_BUILD_REF'),
+        commit,
+        branch,
         dirty,
     }
 }
@@ -972,4 +1023,64 @@ export function isUpdateMaintenanceActive(): boolean {
     if (!job) return false
     if (job.phase !== 'updating' && job.phase !== 'restarting') return false
     return Date.now() - job.updatedAt < MAINTENANCE_STALE_MS
+}
+
+export interface CachedPendingUpdate {
+    currentVersion: string
+    targetVersion: string
+    targetTag: string
+    releaseName: string | null
+    releaseUrl: string | null
+    publishedAt: string | null
+    notes: string | null
+    fallback: boolean
+}
+
+/**
+ * Cache-only view of the pending update used by the orchestrator chat prompt.
+ *
+ * Returns null when no update has been detected yet — never triggers a git
+ * shell or HTTP request, so it's safe to call from the chat hot path. The
+ * cache is populated by the background poll started in instrumentation.ts
+ * (and any in-app refresh via Settings → Updates).
+ */
+export function getCachedPendingUpdate(): CachedPendingUpdate | null {
+    const latest = memory.latest
+    if (!latest) return null
+    const currentVersion = readPackageVersion()
+    if (compareVersions(latest.version, currentVersion) <= 0) return null
+    return {
+        currentVersion,
+        targetVersion: latest.version,
+        targetTag: latest.tag,
+        releaseName: latest.name && latest.name !== latest.tag ? latest.name : null,
+        releaseUrl: latest.htmlUrl,
+        publishedAt: latest.publishedAt,
+        notes: latest.body,
+        fallback: Boolean(latest.fallback),
+    }
+}
+
+/**
+ * Background poll that refreshes the GitHub release cache so the chat prompt
+ * can see new versions without doing any work on the hot path. Called once
+ * from instrumentation.ts; idempotent.
+ */
+const PENDING_UPDATE_POLL_MS = 30 * 60 * 1000
+
+export function startPendingUpdatePoll(): void {
+    const globalKey = '__orchestratorPendingUpdatePollTimer'
+    const g = globalThis as unknown as { [k: string]: NodeJS.Timeout | undefined }
+    if (g[globalKey]) return
+    const tick = () => {
+        fetchLatestRelease(false).catch((err) => {
+            console.warn('[update] background latest-release poll failed', err)
+        })
+    }
+    // Warm the cache once shortly after boot so the first chat turn sees it,
+    // then keep refreshing on a long interval (30 min). The HTTP call itself
+    // is also cached for 5 min inside fetchLatestRelease, so this is cheap.
+    setTimeout(tick, 10_000).unref()
+    g[globalKey] = setInterval(tick, PENDING_UPDATE_POLL_MS)
+    g[globalKey]?.unref?.()
 }

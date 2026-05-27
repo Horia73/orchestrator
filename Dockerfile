@@ -61,6 +61,20 @@ RUN apt-get update \
 
 COPY --from=builder --chown=node:node /app /app
 
+# Bake build metadata into a file the running app can read directly. We
+# can't rely on `git rev-parse HEAD` inside the container (.git is
+# .dockerignored) and we can't rely on the ENV var alone — `env_file` in
+# docker-compose loads `.env` at runtime, which historically held stale
+# values and silently overrode this image's baked ENV. Reading from this
+# file removes that footgun.
+RUN printf '{"commit":"%s","ref":"%s","builtAt":"%s"}\n' \
+      "$ORCHESTRATOR_BUILD_COMMIT" \
+      "$ORCHESTRATOR_BUILD_REF" \
+      "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+      > /app/.build-info.json \
+  && chown node:node /app/.build-info.json \
+  && chmod 0644 /app/.build-info.json
+
 RUN npx patchright install chromium \
   && mkdir -p /app/.orchestrator /ms-playwright /home/node/.npm-global /home/node/.npm \
   && chown -R node:node /app/.orchestrator /ms-playwright /home/node

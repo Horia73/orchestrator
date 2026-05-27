@@ -419,6 +419,13 @@ def update_stack(payload: dict) -> None:
         compose_env = os.environ.copy()
         compose_env["ORCHESTRATOR_BUILD_COMMIT"] = target_commit
         compose_env["ORCHESTRATOR_BUILD_REF"] = branch
+        # Strip any historical BUILD_COMMIT / BUILD_REF lines from `.env`
+        # before invoking compose. `env_file` is loaded into container
+        # runtime AFTER the image's baked ENV, so a stale line there silently
+        # overrides the freshly built `/app/.build-info.json` and the image
+        # ENV. Old installs sometimes ended up with these in `.env`; scrub
+        # them defensively every update.
+        scrub_stale_build_env(APP_DIR / ".env")
         run([*compose_command(), "up", "--build", "-d"], env=compose_env)
         set_state(phase="completed", error=None)
         write_log(f"Completed Docker update job={job_id}")
@@ -430,6 +437,50 @@ def update_stack(payload: dict) -> None:
     finally:
         if update_lock.locked():
             update_lock.release()
+
+
+_STALE_BUILD_ENV_KEYS = ("ORCHESTRATOR_BUILD_COMMIT", "ORCHESTRATOR_BUILD_REF")
+
+
+def scrub_stale_build_env(env_path: Path) -> None:
+    """Remove `ORCHESTRATOR_BUILD_COMMIT` / `ORCHESTRATOR_BUILD_REF` lines
+    from a docker-compose `.env` file.
+
+    Build provenance must come from the image (its baked ENV + the
+    `/app/.build-info.json` file written from build args). When these keys
+    end up in `.env` via legacy installs, docker-compose's `env_file`
+    loads them into the container's runtime environment, overriding the
+    fresh value baked into the image and producing false-positive
+    "running commit does not match target" notices after every update.
+    Best-effort: missing files and read/write failures are tolerated.
+    """
+    try:
+        if not env_path.exists():
+            return
+        original_lines = env_path.read_text(encoding="utf-8").splitlines()
+    except OSError:
+        return
+
+    kept: list[str] = []
+    removed_any = False
+    for line in original_lines:
+        stripped = line.lstrip()
+        if any(stripped.startswith(f"{key}=") for key in _STALE_BUILD_ENV_KEYS):
+            removed_any = True
+            continue
+        kept.append(line)
+
+    if not removed_any:
+        return
+
+    new_text = "\n".join(kept)
+    if original_lines and original_lines[-1] != "" and not new_text.endswith("\n"):
+        new_text += "\n"
+    try:
+        env_path.write_text(new_text, encoding="utf-8")
+        write_log(f"Scrubbed stale build provenance lines from {env_path}")
+    except OSError as exc:
+        write_log(f"Could not scrub stale build provenance from {env_path}: {exc}")
 
 
 def stream_update_log(handler: "Handler") -> None:

@@ -71,8 +71,11 @@ export async function register(): Promise<void> {
     // update runner/host bridge records the expected commit before restart;
     // this boot hook compares it to the running build and posts one Inbox item.
     try {
-        const { confirmPendingUpdateAfterRestart } = await import('@/lib/update/manager')
+        const { confirmPendingUpdateAfterRestart, startPendingUpdatePoll } = await import('@/lib/update/manager')
         void confirmPendingUpdateAfterRestart()
+        // Keep the latest-release cache warm so the orchestrator chat prompt
+        // can show <pending_update> without any blocking work on the hot path.
+        startPendingUpdatePoll()
     } catch (err) {
         console.error('[update] failed to confirm post-restart state', err)
     }

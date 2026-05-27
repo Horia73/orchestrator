@@ -385,7 +385,7 @@ function MessageRow({
           ? "bg-[#e3ddd0] dark:bg-muted"
           : unread
             ? "bg-white hover:bg-[#ebe5d8] dark:bg-white/[0.04] dark:hover:bg-white/[0.08]"
-            : "bg-[#f1ede4] hover:bg-[#ebe5d8] dark:bg-transparent dark:hover:bg-white/[0.06]"
+            : "bg-[#f5f1e8] hover:bg-[#ebe5d8] dark:bg-transparent dark:hover:bg-white/[0.06]"
       )}
     >
       <div className="pt-1.5">

@@ -35,7 +35,7 @@ import {
   resolveProviderToolSurface,
 } from "@/lib/ai/tools/registry"
 import { clearChatStream, registerChatStream } from "@/lib/chat-streams"
-import { isUpdateMaintenanceActive } from "@/lib/update/manager"
+import { getCachedPendingUpdate, isUpdateMaintenanceActive } from "@/lib/update/manager"
 import {
   logRequestStart,
   logRequestComplete,
@@ -333,6 +333,8 @@ export async function POST(request: Request) {
     .map((id) => getAgent(id))
     .filter((a): a is AgentConfig => a !== undefined)
 
+  const pendingUpdate = getCachedPendingUpdate()
+
   const systemPrompt = orchestrator.buildPrompt({
     agentId: orchestrator.id,
     userName: config.userName,
@@ -344,6 +346,7 @@ export async function POST(request: Request) {
     declaredToolIds: orchestrator.tools,
     delegationDepth: 0,
     maxDelegationDepth: MAX_AGENT_DEPTH,
+    pendingUpdate: pendingUpdate ?? undefined,
     extra: { appOrigin: requestOrigin },
   })
 
