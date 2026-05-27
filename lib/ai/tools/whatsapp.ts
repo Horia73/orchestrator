@@ -88,7 +88,11 @@ export const whatsappUnreadSummaryTool: ToolDef = {
 export const whatsappReadChatTool: ToolDef = {
     id: 'WhatsAppReadChat',
     name: 'WhatsAppReadChat',
-    description: 'Reads recent messages from one WhatsApp chat by chat_id returned by WhatsAppListChats. Does not send or mark chats handled.',
+    description: [
+        'Reads recent messages from one WhatsApp chat by chat_id returned by WhatsAppListChats.',
+        'Each returned message includes authorName (sender display name for group messages; falls back to +phone, null for 1:1 or your own messages), isForwarded, and forwardingScore.',
+        'Does not send or mark chats handled.',
+    ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
