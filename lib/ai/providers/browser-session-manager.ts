@@ -301,8 +301,15 @@ class BrowserSessionManager {
                 // Best-effort cleanup for per-session display capsules.
             })
         } else if (this.sessions.size === 0) {
-            await this.browserManager?.close()
+            const sharedManager = this.browserManager
             this.browserManager = null
+            if (sharedManager) {
+                await sharedManager.close().catch(() => {
+                    // Best-effort cleanup; the singleton reference is already cleared
+                    // above so a partial close (e.g., chromium already exited) cannot
+                    // leak a stale manager into the next acquire call.
+                })
+            }
         }
         return true
     }

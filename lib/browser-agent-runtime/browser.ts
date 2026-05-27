@@ -1993,11 +1993,22 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         },
 
         async close() {
-            if (context) {
-                await context.close();
-                context = null;
+            const closingContext = context;
+            context = null;
+            if (closingContext) {
+                try {
+                    await closingContext.close();
+                } catch (err) {
+                    logError('⚠️ Patchright browser context close failed', err);
+                }
             }
-            await displayController?.close();
+            if (displayController) {
+                try {
+                    await displayController.close();
+                } catch (err) {
+                    logError('⚠️ Browser live display close failed', err);
+                }
+            }
 
             for (const session of sessions.values()) {
                 session.pages = [];
