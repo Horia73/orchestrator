@@ -1312,9 +1312,9 @@ function LocationIntelligenceCard({
           {badge}
         </div>
         <CardDescription>
-          Optional local Home Assistant location journal, daily summaries, and
-          Library Places map/timeline. Tracking is off until explicitly
-          configured.
+          Optional local Home Assistant location journal, raw observations,
+          daily summaries, and Library Places views. Tracking is off until
+          explicitly configured.
         </CardDescription>
       </CardHeader>
       <CardContent>
@@ -1325,8 +1325,14 @@ function LocationIntelligenceCard({
               Source
             </div>
             <div className="grid gap-1.5 text-[12.5px]">
-              <StatusRow label="Mode" value={sourceTypeLabel(entry.source.type)} />
-              <StatusRow label="Entity" value={entry.source.entityId ?? "Not set"} />
+              <StatusRow
+                label="Mode"
+                value={sourceTypeLabel(entry.source.type)}
+              />
+              <StatusRow
+                label="Entity"
+                value={entry.source.entityId ?? "Not set"}
+              />
               <StatusRow label="Label" value={sourceLabel} />
             </div>
           </div>
@@ -1381,7 +1387,7 @@ function LocationIntelligenceCard({
                 value={
                   entry.microscript
                     ? entry.microscript.exists
-                      ? entry.microscript.status ?? "Unknown"
+                      ? (entry.microscript.status ?? "Unknown")
                       : "Missing"
                     : "Not configured"
                 }
@@ -1407,7 +1413,7 @@ function LocationIntelligenceCard({
                 value={
                   entry.dailyTask
                     ? entry.dailyTask.exists
-                      ? entry.dailyTask.status ?? "Unknown"
+                      ? (entry.dailyTask.status ?? "Unknown")
                       : "Missing"
                     : "Not configured"
                 }
@@ -1427,7 +1433,11 @@ function LocationIntelligenceCard({
         {entry.error && <InlineNotice tone="warning" text={entry.error} />}
 
         <div className="flex flex-wrap gap-2">
-          <Button asChild size="sm" variant={entry.configured ? "outline" : "default"}>
+          <Button
+            asChild
+            size="sm"
+            variant={entry.configured ? "outline" : "default"}
+          >
             <a href="/" onClick={startSetup}>
               <MessageCircle className="size-3.5" />
               Ask your assistant to set up Location Intelligence
@@ -1449,10 +1459,13 @@ function LocationIntelligenceCard({
           <div className="mt-2 grid gap-2 border-t border-border/60 pt-2 text-[12px] leading-relaxed text-foreground/60">
             <p>
               Location Intelligence needs explicit opt-in, a Home Assistant
-              location source, a local journal microscript, a daily scheduled
-              summary task, retention choice, and Maps mode choice.
+              location source, a local journal microscript that preserves raw
+              points, a daily scheduled summary task, retention choice, and Maps
+              mode choice.
             </p>
             <p>
+              Library Places can show summarized Places and raw observations;
+              longer stops are inferred from gaps between webhook samples.
               Retention can be finite or "keep everything". Setup stores only
               non-secret ids and preferences in local config; webhook or Home
               Assistant credentials belong in existing secret surfaces.
@@ -1500,7 +1513,8 @@ function locationIntelligenceSummary(
   if (!entry.configured) return "Ask your assistant to set it up"
   if (!entry.enabled) return "Configured but disabled"
   if (entry.journal.lastDate) return `Latest day ${entry.journal.lastDate}`
-  if (entry.journal.dayCount > 0) return `${entry.journal.dayCount} days indexed`
+  if (entry.journal.dayCount > 0)
+    return `${entry.journal.dayCount} days indexed`
   if (entry.journal.exists) return "Journal ready; no days yet"
   return "Journal files missing"
 }

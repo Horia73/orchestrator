@@ -19,7 +19,9 @@ import type {
   MapRoute,
 } from "@/lib/maps/schema"
 
-function isCoordinate(value: LocationCoordinate | null): value is LocationCoordinate {
+function isCoordinate(
+  value: LocationCoordinate | null
+): value is LocationCoordinate {
   return (
     Array.isArray(value) &&
     value.length === 2 &&
@@ -32,7 +34,9 @@ function clamp(value: number, min: number, max: number): number {
   return Math.max(min, Math.min(max, value))
 }
 
-function viewportForCoordinates(coords: MapCoordinate[]): MapArtifact["viewport"] {
+function viewportForCoordinates(
+  coords: MapCoordinate[]
+): MapArtifact["viewport"] {
   if (coords.length === 0) {
     return { center: [23.589954, 46.77121], zoom: 12 }
   }
@@ -75,6 +79,54 @@ function stopIcon(stop: LocationStop): string {
   return "dot"
 }
 
+function coordinateKey(position: MapCoordinate): string {
+  return `${position[0].toFixed(5)},${position[1].toFixed(5)}`
+}
+
+function roundedCoordinate([lng, lat]: MapCoordinate): MapCoordinate {
+  return [Number(lng.toFixed(7)), Number(lat.toFixed(7))]
+}
+
+function offsetCoordinate(
+  [lng, lat]: MapCoordinate,
+  index: number,
+  total: number
+): MapCoordinate {
+  if (index === 0 || total <= 1) return [lng, lat]
+
+  const radiusMeters = 14
+  const angle = ((index - 1) / Math.max(1, total - 1)) * Math.PI * 2
+  const latOffset = (Math.sin(angle) * radiusMeters) / 111_320
+  const lngOffset =
+    (Math.cos(angle) * radiusMeters) /
+    (111_320 * Math.max(0.2, Math.cos((lat * Math.PI) / 180)))
+
+  return roundedCoordinate([lng + lngOffset, lat + latOffset])
+}
+
+function spreadOverlappingPins(pins: MapPin[]): MapPin[] {
+  const groups = new Map<string, MapPin[]>()
+  for (const pin of pins) {
+    const group = groups.get(coordinateKey(pin.position))
+    if (group) group.push(pin)
+    else groups.set(coordinateKey(pin.position), [pin])
+  }
+
+  return pins.map((pin) => {
+    const group = groups.get(coordinateKey(pin.position))
+    if (!group || group.length <= 1) return pin
+    const index = group.findIndex((candidate) => candidate === pin)
+    return {
+      ...pin,
+      position: offsetCoordinate(
+        pin.position,
+        Math.max(0, index),
+        group.length
+      ),
+    }
+  })
+}
+
 function compactTime(value: string | null): string | null {
   if (!value) return null
   if (/^\d{1,2}:\d{2}/.test(value)) return value.slice(0, 5)
@@ -113,17 +165,19 @@ function buildMapArtifact({
   route: LocationCoordinate[]
   stops: LocationStop[]
 }): MapArtifact | null {
-  const pins: MapPin[] = stops
-    .filter((stop) => isCoordinate(stop.position))
-    .map((stop, index) => ({
-      id: stop.id || `stop-${index + 1}`,
-      position: stop.position as MapCoordinate,
-      label: stop.label || `Stop ${index + 1}`,
-      address: stopTimeSummary(stop),
-      description: stop.kind ? `Type: ${stop.kind}` : undefined,
-      color: stopColor(stop),
-      icon: stopIcon(stop),
-    }))
+  const pins: MapPin[] = spreadOverlappingPins(
+    stops
+      .filter((stop) => isCoordinate(stop.position))
+      .map((stop, index) => ({
+        id: stop.id || `stop-${index + 1}`,
+        position: stop.position as MapCoordinate,
+        label: stop.label || `Stop ${index + 1}`,
+        address: stopTimeSummary(stop),
+        description: stop.kind ? `Type: ${stop.kind}` : undefined,
+        color: stopColor(stop),
+        icon: stopIcon(stop),
+      }))
+  )
 
   const routeCoords = route.filter(isCoordinate) as MapCoordinate[]
   const routes: MapRoute[] =

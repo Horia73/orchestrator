@@ -28,7 +28,7 @@ import type {
 } from "@/lib/location-intelligence/schema"
 
 const SETUP_PROMPT =
-  "Help me set up optional Location Intelligence. I want Home Assistant location updates to flow into a local microscript journal, daily summaries, retention controls including keep everything, and a Library Places map. Do not enable tracking until I explicitly opt in."
+  "Help me set up optional Location Intelligence. I want Home Assistant location updates to flow into a local microscript journal, preserve raw points in points.jsonl, infer stays from gaps until the next webhook, run daily summaries, support retention including keep everything, and show Library Places with Places/Raw layers. Do not enable tracking until I explicitly opt in."
 const PREVIEW_BASE_PATH =
   process.env.NEXT_PUBLIC_ORCHESTRATOR_PREVIEW_BASE_PATH ?? ""
 
@@ -63,7 +63,9 @@ export function PlacesTab() {
         | LibraryPlacesResponse
         | { error?: string }
       if (!("status" in body)) {
-        throw new Error("error" in body && body.error ? body.error : `HTTP ${res.status}`)
+        throw new Error(
+          "error" in body && body.error ? body.error : `HTTP ${res.status}`
+        )
       }
       if (!res.ok) {
         throw new Error(`HTTP ${res.status}`)
@@ -103,7 +105,9 @@ export function PlacesTab() {
           | LibraryPlaceDayResponse
           | { error?: string }
         if (!("day" in body)) {
-          throw new Error("error" in body && body.error ? body.error : `HTTP ${res.status}`)
+          throw new Error(
+            "error" in body && body.error ? body.error : `HTTP ${res.status}`
+          )
         }
         if (!res.ok) {
           throw new Error(`HTTP ${res.status}`)
@@ -127,14 +131,15 @@ export function PlacesTab() {
   const status = data?.status
   const days = data?.days ?? []
   const selectedSummary = selectedDate
-    ? days.find((day) => day.date === selectedDate) ?? null
+    ? (days.find((day) => day.date === selectedDate) ?? null)
     : null
   const selectedDay = detail ?? selectedSummary ?? null
   const placeStops = isDayDetail(selectedDay) ? selectedDay.stops : []
   const rawStops = isDayDetail(selectedDay) ? selectedDay.observations : []
   const hasPlaces = placeStops.length > 0
   const hasRaw = rawStops.length > 0
-  const activeMode = mode === "raw" && hasRaw ? "raw" : hasPlaces ? "places" : "raw"
+  const activeMode =
+    mode === "raw" && hasRaw ? "raw" : hasPlaces ? "places" : "raw"
   const displayStops = activeMode === "raw" ? rawStops : placeStops
 
   React.useEffect(() => {
@@ -146,7 +151,7 @@ export function PlacesTab() {
       <div className="flex flex-wrap items-end gap-3">
         <p className="min-w-0 flex-1 text-sm text-muted-foreground">
           Local location days from the optional Location Intelligence journal:
-          map, approximate route, stats, and stop timeline.
+          map, approximate route, stats, summarized Places, and raw points.
         </p>
         <button
           type="button"
@@ -171,15 +176,14 @@ export function PlacesTab() {
 
       {loading && !data ? (
         <PlacesSkeleton />
-      ) : status && (!status.configured || !status.enabled || days.length === 0) ? (
+      ) : status &&
+        (!status.configured || !status.enabled || days.length === 0) ? (
         <PlacesEmptyState status={status} />
       ) : status && selectedDay ? (
         <>
-          <PlacesStatusBar status={status} totalDays={data?.total ?? days.length} />
-          <DayNavigator
-            days={days}
-            selectedDate={selectedDate}
-            onSelect={setSelectedDate}
+          <PlacesStatusBar
+            status={status}
+            totalDays={data?.total ?? days.length}
           />
           {detailError ? (
             <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-700 dark:text-amber-300">
@@ -193,6 +197,9 @@ export function PlacesTab() {
               mode={activeMode}
               canToggle={hasPlaces && hasRaw}
               onModeChange={setMode}
+              days={days}
+              selectedDate={selectedDate}
+              onSelectDate={setSelectedDate}
             />
             <div className="h-[min(72vh,780px)] min-h-[560px] bg-muted/30">
               {detailLoading && !detail ? (
@@ -286,10 +293,12 @@ function DayNavigator({
   days,
   selectedDate,
   onSelect,
+  compact = false,
 }: {
   days: LocationDaySummary[]
   selectedDate: string | null
   onSelect: (date: string) => void
+  compact?: boolean
 }) {
   const [calendarOpen, setCalendarOpen] = React.useState(false)
   const sortedDays = React.useMemo(
@@ -298,7 +307,7 @@ function DayNavigator({
   )
   const selectedIndex = sortedDays.findIndex((day) => day.date === selectedDate)
   const selectedDay =
-    selectedIndex >= 0 ? sortedDays[selectedIndex] : sortedDays.at(-1) ?? null
+    selectedIndex >= 0 ? sortedDays[selectedIndex] : (sortedDays.at(-1) ?? null)
   const previousDay = selectedIndex > 0 ? sortedDays[selectedIndex - 1] : null
   const nextDay =
     selectedIndex >= 0 && selectedIndex < sortedDays.length - 1
@@ -306,8 +315,20 @@ function DayNavigator({
       : null
 
   return (
-    <div className="relative z-20 flex items-center justify-center">
-      <div className="grid w-full grid-cols-[40px_minmax(0,1fr)_40px] items-center gap-2 rounded-lg border border-border/70 bg-background/80 p-1 shadow-sm sm:w-auto sm:min-w-[420px]">
+    <div
+      className={cn(
+        "relative z-20 flex",
+        compact ? "justify-start" : "justify-center"
+      )}
+    >
+      <div
+        className={cn(
+          "grid w-full grid-cols-[40px_minmax(0,1fr)_40px] items-center gap-2 rounded-lg border border-border/70 bg-background/80 p-1",
+          compact
+            ? "shadow-none sm:min-w-[380px]"
+            : "shadow-sm sm:w-auto sm:min-w-[420px]"
+        )}
+      >
         <button
           type="button"
           onClick={() => previousDay && onSelect(previousDay.date)}
@@ -334,11 +355,7 @@ function DayNavigator({
           </span>
           <span className="block truncate text-[11px] text-muted-foreground">
             {selectedDay
-              ? `${selectedDay.stats.stopCount} stops${
-                  selectedDay.stats.distanceMeters
-                    ? ` · ${formatDistance(selectedDay.stats.distanceMeters)}`
-                    : ""
-                }`
+              ? dayNavigatorSubtitle(selectedDay)
               : "Click to choose a day"}
           </span>
         </button>
@@ -450,7 +467,7 @@ function LocationCalendarPopover({
         </button>
       </div>
 
-      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-medium uppercase text-muted-foreground">
+      <div className="grid grid-cols-7 gap-1 text-center text-[10px] font-medium text-muted-foreground uppercase">
         {["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"].map((label) => (
           <div key={label} className="py-1">
             {label}
@@ -496,12 +513,18 @@ function DayOverview({
   mode,
   canToggle,
   onModeChange,
+  days,
+  selectedDate,
+  onSelectDate,
 }: {
   day: LocationDaySummary | LocationDayDetail
   detailLoading: boolean
   mode: "places" | "raw"
   canToggle: boolean
   onModeChange: (mode: "places" | "raw") => void
+  days: LocationDaySummary[]
+  selectedDate: string | null
+  onSelectDate: (date: string) => void
 }) {
   const route = "route" in day ? day.route : []
   const visibleCount =
@@ -512,10 +535,13 @@ function DayOverview({
   return (
     <div className="grid gap-3 border-b border-border/60 px-4 py-3 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
       <div className="min-w-0">
-        <div className="flex flex-wrap items-center gap-2">
-          <h3 className="truncate text-[15px] font-semibold text-foreground">
-            {day.label}
-          </h3>
+        <div className="flex flex-wrap items-center gap-3">
+          <DayNavigator
+            compact
+            days={days}
+            selectedDate={selectedDate}
+            onSelect={onSelectDate}
+          />
           {day.stats.gymDetected ? (
             <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10.5px] font-medium text-emerald-700 dark:text-emerald-400">
               <Dumbbell className="size-3" />
@@ -578,7 +604,9 @@ function DayOverview({
         />
         <Metric
           label="Samples"
-          value={day.stats.sampleCount ? String(day.stats.sampleCount) : "No data"}
+          value={
+            day.stats.sampleCount ? String(day.stats.sampleCount) : "No data"
+          }
         />
         <Metric
           label="Distance"
@@ -590,7 +618,13 @@ function DayOverview({
         />
         <Metric
           label="Route"
-          value={route.length >= 2 ? `${route.length} pts` : detailLoading ? "Loading" : "Approx"}
+          value={
+            route.length >= 2
+              ? `${route.length} pts`
+              : detailLoading
+                ? "Loading"
+                : "Approx"
+          }
         />
       </div>
     </div>
@@ -611,7 +645,7 @@ function StopRail({
   return (
     <div className="border-t border-border/60 bg-background/95 px-4 py-3">
       <div className="mb-2 flex items-center justify-between gap-3">
-        <h4 className="text-[12px] font-semibold uppercase text-muted-foreground">
+        <h4 className="text-[12px] font-semibold text-muted-foreground uppercase">
           {mode === "raw" ? "Raw points" : "Stops"}
         </h4>
         <span className="text-[11.5px] text-muted-foreground">
@@ -637,10 +671,7 @@ function StopRail({
       ) : stops.length > 0 ? (
         <ol className="-mx-1 flex gap-2 overflow-x-auto px-1 pb-1 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
           {stops.map((stop, index) => (
-            <li
-              key={stop.id || index}
-              className="min-w-[230px]"
-            >
+            <li key={stop.id || index} className="min-w-[230px]">
               <button
                 type="button"
                 disabled={!stop.position}
@@ -680,7 +711,7 @@ function StopRail({
 function Metric({ label, value }: { label: string; value: string }) {
   return (
     <div className="min-w-[82px] rounded-md bg-muted/30 px-2.5 py-1.5">
-      <div className="text-[10px] font-medium uppercase text-muted-foreground">
+      <div className="text-[10px] font-medium text-muted-foreground uppercase">
         {label}
       </div>
       <div className="truncate text-[12.5px] font-semibold text-foreground">
@@ -823,11 +854,25 @@ function formatDayLabelLong(day: LocationDaySummary): string {
   }).format(new Date(parsed))
 }
 
+function dayNavigatorSubtitle(day: LocationDaySummary): string {
+  const parts: string[] = []
+  if (day.stats.stopCount > 0) {
+    parts.push(`${day.stats.stopCount} stops`)
+  } else if ((day.stats.sampleCount ?? 0) > 0) {
+    parts.push(`${day.stats.sampleCount} samples`)
+  } else {
+    parts.push("No stops")
+  }
+  if (day.stats.distanceMeters) {
+    parts.push(formatDistance(day.stats.distanceMeters))
+  }
+  return parts.join(" · ")
+}
+
 function latestDate(days: LocationDaySummary[]): string | null {
   if (days.length === 0) return null
-  return days.reduce((latest, day) =>
-    day.date > latest.date ? day : latest
-  ).date
+  return days.reduce((latest, day) => (day.date > latest.date ? day : latest))
+    .date
 }
 
 function todayDateKey(): string {

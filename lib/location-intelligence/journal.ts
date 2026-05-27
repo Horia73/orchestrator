@@ -29,7 +29,8 @@ const MAX_NOTABLE_PLACES = 6
 const LOCATION_CAPABILITIES = [
   "Home Assistant webhook ingestion through an opt-in microscript journal",
   "Daily scheduled agent intelligence over local location summaries",
-  "Library Places map and timeline from local JSON files",
+  "Raw points preserved in points.jsonl, with stays inferred from webhook gaps",
+  "Library Places map with Places and Raw observation layers",
   "Configurable finite retention or forever / keep everything retention",
   "Maps mode policy: strict, balanced, or relaxed",
 ]
@@ -132,7 +133,8 @@ export function getLocationIntelligenceStatus(): LocationIntelligenceIntegration
   const enabled = config?.enabled === true
   const journal = resolveJournalPath(config)
   const missingConfig: string[] = []
-  if (configured && !config?.journalScriptId) missingConfig.push("journalScriptId")
+  if (configured && !config?.journalScriptId)
+    missingConfig.push("journalScriptId")
   if (configured && !config?.source?.type) missingConfig.push("source.type")
 
   const microscript = config?.journalScriptId
@@ -146,13 +148,14 @@ export function getLocationIntelligenceStatus(): LocationIntelligenceIntegration
   const needsReconnect =
     configured &&
     enabled &&
-    (missingConfig.length > 0 || (Boolean(config?.journalScriptId) && !journal.files.exists))
+    (missingConfig.length > 0 ||
+      (Boolean(config?.journalScriptId) && !journal.files.exists))
 
   return {
     id: "locationIntelligence",
     name: "Location Intelligence",
     description:
-      "Optional local location journal, daily agent summaries, and Library Places timeline.",
+      "Optional local location journal, raw observations, daily agent summaries, and Library Places views.",
     configured,
     enabled,
     connected,
@@ -172,9 +175,15 @@ export function getLocationIntelligenceStatus(): LocationIntelligenceIntegration
     dailyTask,
     capabilities: [...LOCATION_CAPABILITIES],
     setupPrompt:
-      "Help me set up optional Location Intelligence. I want Home Assistant location updates to flow into a local microscript journal, daily summaries, retention controls including keep everything, and a Library Places map. Do not enable tracking until I explicitly opt in.",
-    ...(configured && enabled && config?.journalScriptId && !journal.files.exists
-      ? { error: "Configured journal script exists, but its files/location directory was not found." }
+      "Help me set up optional Location Intelligence. I want Home Assistant location updates to flow into a local microscript journal, preserve raw points in points.jsonl, infer stays from gaps until the next webhook, run daily summaries, support retention including keep everything, and show Library Places with Places/Raw layers. Do not enable tracking until I explicitly opt in.",
+    ...(configured &&
+    enabled &&
+    config?.journalScriptId &&
+    !journal.files.exists
+      ? {
+          error:
+            "Configured journal script exists, but its files/location directory was not found.",
+        }
       : {}),
   }
 }
@@ -301,7 +310,7 @@ function buildDayDetail({
   const observations = pointSummary?.observations ?? []
   const route = thinCoordinates(
     extractRoute(raw) ??
-      (includeRouteFallback ? pointSummary?.route ?? [] : []),
+      (includeRouteFallback ? (pointSummary?.route ?? []) : []),
     MAX_ROUTE_POINTS
   )
   const stats = extractStats(raw, stops, pointSummary)
@@ -313,24 +322,36 @@ function buildDayDetail({
   return {
     date,
     label: dayLabel(date),
-    summary: cleanText(stringFromKeys(raw, ["summary", "headline", "title"]), 280) || null,
-    timezone: cleanText(stringFromKeys(raw, ["timezone", "timeZone", "tz"]), 80) || null,
+    summary:
+      cleanText(stringFromKeys(raw, ["summary", "headline", "title"]), 280) ||
+      null,
+    timezone:
+      cleanText(stringFromKeys(raw, ["timezone", "timeZone", "tz"]), 80) ||
+      null,
     startTime:
-      normalizeTimeString(stringFromKeys(raw, ["startTime", "start", "firstSeenAt"])) ??
+      normalizeTimeString(
+        stringFromKeys(raw, ["startTime", "start", "firstSeenAt"])
+      ) ??
       pointSummary?.firstSeenAt ??
       stops.find((stop) => stop.startTime)?.startTime ??
       null,
     endTime:
-      normalizeTimeString(stringFromKeys(raw, ["endTime", "end", "lastSeenAt"])) ??
+      normalizeTimeString(
+        stringFromKeys(raw, ["endTime", "end", "lastSeenAt"])
+      ) ??
       pointSummary?.lastSeenAt ??
       [...stops].reverse().find((stop) => stop.endTime)?.endTime ??
       null,
     firstSeenAt:
-      normalizeTimeString(stringFromKeys(raw, ["firstSeenAt", "first_seen_at"])) ??
+      normalizeTimeString(
+        stringFromKeys(raw, ["firstSeenAt", "first_seen_at"])
+      ) ??
       pointSummary?.firstSeenAt ??
       null,
     lastSeenAt:
-      normalizeTimeString(stringFromKeys(raw, ["lastSeenAt", "last_seen_at"])) ??
+      normalizeTimeString(
+        stringFromKeys(raw, ["lastSeenAt", "last_seen_at"])
+      ) ??
       pointSummary?.lastSeenAt ??
       null,
     updatedAt: day?.updatedAt ?? null,
@@ -360,7 +381,10 @@ function stripDayDetail(day: LocationDayDetail): LocationDaySummary {
   }
 }
 
-function extractStops(raw: unknown, aliases: Map<string, string>): LocationStop[] {
+function extractStops(
+  raw: unknown,
+  aliases: Map<string, string>
+): LocationStop[] {
   const candidates = firstArrayFromKeys(raw, [
     "stops",
     "visits",
@@ -412,11 +436,16 @@ function normalizeStop(
     ),
     durationMinutes,
     position: coordinateFromUnknown(value),
-    kind: cleanText(stringFromKeys(value, ["kind", "type", "category"]), 80) || null,
+    kind:
+      cleanText(stringFromKeys(value, ["kind", "type", "category"]), 80) ||
+      null,
   }
 }
 
-function observationFromPoint(point: unknown, index: number): LocationStop | null {
+function observationFromPoint(
+  point: unknown,
+  index: number
+): LocationStop | null {
   if (!isRecord(point)) return null
   const position = coordinateFromUnknown(point)
   if (!position) return null
@@ -439,16 +468,24 @@ function observationFromPoint(point: unknown, index: number): LocationStop | nul
   }
 }
 
-function withObservationDurations(observations: LocationStop[]): LocationStop[] {
+function withObservationDurations(
+  observations: LocationStop[]
+): LocationStop[] {
   const sorted = [...observations].sort((a, b) =>
     (a.startTime ?? "").localeCompare(b.startTime ?? "")
   )
 
   return sorted.map((observation, index) => {
     const next = sorted[index + 1]
-    const startMs = observation.startTime ? Date.parse(observation.startTime) : NaN
+    const startMs = observation.startTime
+      ? Date.parse(observation.startTime)
+      : NaN
     const nextMs = next?.startTime ? Date.parse(next.startTime) : NaN
-    if (!Number.isFinite(startMs) || !Number.isFinite(nextMs) || nextMs <= startMs) {
+    if (
+      !Number.isFinite(startMs) ||
+      !Number.isFinite(nextMs) ||
+      nextMs <= startMs
+    ) {
       return observation
     }
     const durationMinutes = Math.max(0, Math.round((nextMs - startMs) / 60000))
@@ -565,15 +602,13 @@ async function readPointSummaries(
     if (!date) return
     const coord = coordinateFromUnknown(point)
     const timestamp = timestampForPoint(point)
-    const summary =
-      summaries.get(date) ??
-      {
-        sampleCount: 0,
-        firstSeenAt: null,
-        lastSeenAt: null,
-        route: [],
-        observations: [],
-      }
+    const summary = summaries.get(date) ?? {
+      sampleCount: 0,
+      firstSeenAt: null,
+      lastSeenAt: null,
+      route: [],
+      observations: [],
+    }
     summary.sampleCount += 1
     if (timestamp) {
       if (!summary.firstSeenAt || timestamp < summary.firstSeenAt) {
@@ -697,7 +732,16 @@ function aliasForRecord(
   value: Record<string, unknown>,
   aliases: Map<string, string>
 ): string {
-  for (const key of ["placeId", "place_id", "aliasId", "alias_id", "id", "key", "label", "name"]) {
+  for (const key of [
+    "placeId",
+    "place_id",
+    "aliasId",
+    "alias_id",
+    "id",
+    "key",
+    "label",
+    "name",
+  ]) {
     const raw = value[key]
     if (typeof raw !== "string") continue
     const direct = aliases.get(raw)
@@ -751,7 +795,10 @@ function readDailyTaskStatus(id: string): LocationDailyTaskStatus {
 function safeWorkspaceJoin(relativePath: string): string | null {
   const resolved = path.resolve(WORKSPACE_DIR, relativePath)
   const workspace = path.resolve(WORKSPACE_DIR)
-  if (resolved !== workspace && !resolved.startsWith(`${workspace}${path.sep}`)) {
+  if (
+    resolved !== workspace &&
+    !resolved.startsWith(`${workspace}${path.sep}`)
+  ) {
     return null
   }
   return resolved
@@ -782,7 +829,13 @@ function coordinateFromUnknown(value: unknown): LocationCoordinate | null {
       : null)
   if (lat !== null && lng !== null && isValidLatLng(lat, lng)) return [lng, lat]
 
-  for (const key of ["position", "center", "centroid", "coordinate", "location"]) {
+  for (const key of [
+    "position",
+    "center",
+    "centroid",
+    "coordinate",
+    "location",
+  ]) {
     const nested = value[key]
     const coord = Array.isArray(nested)
       ? coordinateFromArray(nested, "lngLat")
@@ -818,8 +871,10 @@ function coordinateFromArray(
   const second = asNumber(value[1])
   if (!isFiniteNumber(first) || !isFiniteNumber(second)) return null
 
-  if (Math.abs(first) > 90 && isValidLatLng(second, first)) return [first, second]
-  if (Math.abs(second) > 90 && isValidLatLng(first, second)) return [second, first]
+  if (Math.abs(first) > 90 && isValidLatLng(second, first))
+    return [first, second]
+  if (Math.abs(second) > 90 && isValidLatLng(first, second))
+    return [second, first]
 
   if (preference === "latLng" && isValidLatLng(first, second)) {
     return [second, first]
@@ -913,7 +968,9 @@ function booleanFromKeys(value: unknown, keys: string[]): boolean {
   return false
 }
 
-function durationMinutesFromRecord(value: Record<string, unknown>): number | null {
+function durationMinutesFromRecord(
+  value: Record<string, unknown>
+): number | null {
   const minutes = numberFromKeys(value, [
     "durationMinutes",
     "duration_minutes",
