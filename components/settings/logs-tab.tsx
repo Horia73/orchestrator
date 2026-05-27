@@ -17,7 +17,7 @@ import {
 
 import { cn } from "@/lib/utils"
 import type { RequestLogRow, RequestStatus, ToolLogRow } from "@/lib/observability/schema"
-import type { Message } from "@/lib/types"
+import type { Message, ToolCallReasoningEntry } from "@/lib/types"
 import { MessageBubble } from "@/components/message-bubble"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import { useLogs, useRequestDetail, type LiveTailStatus, type LogsFilters, type RequestLogTranscript } from "./use-logs"
@@ -345,7 +345,7 @@ function LogsTable({
                 <span />
             </div>
 
-            <div ref={parentRef} className="h-[min(640px,calc(100dvh-260px))] min-h-[420px] overflow-auto md:h-[640px] md:min-h-0">
+            <div ref={parentRef} className="h-[calc(100dvh-230px)] min-h-[480px] overflow-auto md:h-[calc(100dvh-220px)] md:min-h-[560px]">
                 <div style={{ height: virtualizer.getTotalSize(), position: "relative" }}>
                     {items.map(v => {
                         const row = rows[v.index]
@@ -451,10 +451,10 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
 
     return (
         <div className="flex flex-col gap-4 border-t border-border/50 px-3 py-3 md:px-4 md:py-4">
-            <TranscriptPanel
+            <LogChatTranscript
                 row={row}
                 transcript={data?.transcript ?? null}
-                toolLogs={data?.toolLogs ?? []}
+                toolLogs={data?.toolLogs ?? null}
                 loading={loading}
                 error={error}
             />
@@ -515,7 +515,7 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
                     <h4 className="mt-1 text-[11px] font-medium uppercase tracking-wider text-foreground/50">
                         Tool calls {data ? `(${data.toolLogs.length})` : row.toolCallCount > 0 ? `(${row.toolCallCount})` : ""}
                     </h4>
-                    {loading ? (
+                    {loading && row.toolCallCount > 0 ? (
                         <p className="text-[12.5px] text-foreground/50">Loading…</p>
                     ) : error ? (
                         <p className="text-[12.5px] text-destructive">{error}</p>
@@ -544,7 +544,7 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
     )
 }
 
-function TranscriptPanel({
+function LogChatTranscript({
     row,
     transcript,
     toolLogs,
@@ -553,157 +553,87 @@ function TranscriptPanel({
 }: {
     row: RequestLogRow
     transcript: RequestLogTranscript | null
-    toolLogs: ToolLogRow[]
+    toolLogs: ToolLogRow[] | null
     loading: boolean
     error: string | null
 }) {
+    const userMessage = transcript?.userMessage ?? fallbackUserMessage(row)
+    const assistantMessage = buildLogAssistantMessage(row, transcript?.assistantMessage ?? null, toolLogs)
+    const loadingTools = loading && row.toolCallCount > 0 && !hasReasoning(assistantMessage)
+
     return (
-        <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
-            <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/25 px-3 py-2">
-                <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Transcript</h4>
-                {loading && <span className="text-[11.5px] text-foreground/45">Loading rich view...</span>}
-                {error && !loading && <span className="text-[11.5px] text-destructive">Using saved text fallback</span>}
-            </div>
-            <div className="max-h-[520px] overflow-auto px-3 py-4 md:px-5">
-                <ConversationArtifactsProvider conversationId={row.conversationId}>
-                    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
-                        {transcript ? (
-                            <RichTranscript transcript={transcript} row={row} toolLogs={toolLogs} />
-                        ) : (
-                            <FallbackTranscript row={row} toolLogs={toolLogs} />
-                        )}
+        <ConversationArtifactsProvider conversationId={row.conversationId}>
+            <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-1 py-2">
+                {loadingTools && (
+                    <div className="flex items-center gap-2 text-[14px] text-muted-foreground">
+                        <Loader2 className="size-4 animate-spin" />
+                        Loading tool calls...
                     </div>
-                </ConversationArtifactsProvider>
-            </div>
-        </div>
-    )
-}
-
-function RichTranscript({
-    transcript,
-    row,
-    toolLogs,
-}: {
-    transcript: RequestLogTranscript
-    row: RequestLogRow
-    toolLogs: ToolLogRow[]
-}) {
-    const showFallbackTools = toolLogs.length > 0 && !hasReasoning(transcript.assistantMessage)
-
-    if (transcript.type === "message_pair") {
-        return (
-            <>
-                {transcript.userMessage && (
-                    <MessageBubble message={transcript.userMessage} compact />
                 )}
-                {showFallbackTools && <FallbackToolTimeline toolLogs={toolLogs} />}
+                {error && !assistantMessage.content && !hasReasoning(assistantMessage) && (
+                    <div className="text-[13px] text-destructive">{error}</div>
+                )}
+                {userMessage && <MessageBubble message={userMessage} compact />}
                 <MessageBubble
-                    message={transcript.assistantMessage}
+                    message={assistantMessage}
                     compact
                     isLatestAssistantMessage
                     isStreamingMessage={row.status === "streaming"}
                 />
-            </>
-        )
-    }
-
-    return (
-        <>
-            <MessageBubble message={transcript.promptMessage} compact />
-            {showFallbackTools && <FallbackToolTimeline toolLogs={toolLogs} />}
-            <MessageBubble
-                message={transcript.assistantMessage}
-                compact
-                isLatestAssistantMessage
-                isStreamingMessage={row.status === "streaming"}
-            />
-        </>
+            </div>
+        </ConversationArtifactsProvider>
     )
 }
 
-function hasReasoning(message: Message): boolean {
-    return Array.isArray(message.reasoning) && message.reasoning.length > 0
-}
-
-function FallbackTranscript({ row, toolLogs }: { row: RequestLogRow; toolLogs: ToolLogRow[] }) {
-    const hasInput = Boolean(row.inputText)
-    const hasTools = toolLogs.length > 0
-    const hasOutput = Boolean(row.outputText)
-
-    if (!hasInput && !hasTools && !hasOutput) {
-        return (
-            <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-3 text-[13px] text-foreground/45">
-                No transcript text recorded for this request.
-            </div>
-        )
-    }
-
-    return (
-        <>
-            {hasInput && <MessageBubble message={fallbackUserMessage(row)} compact />}
-            {hasTools && <FallbackToolTimeline toolLogs={toolLogs} />}
-            {hasOutput && (
-                <MessageBubble
-                    message={fallbackAssistantMessage(row)}
-                    compact
-                    isLatestAssistantMessage
-                    isStreamingMessage={row.status === "streaming"}
-                />
-            )}
-        </>
-    )
-}
-
-function FallbackToolTimeline({ toolLogs }: { toolLogs: ToolLogRow[] }) {
-    return (
-        <div className="flex w-full min-w-0 flex-col">
-            <div className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
-                <span>Tool calls</span>
-            </div>
-            <div className="mt-2 flex flex-col gap-2 border-l border-border/70 pl-4 text-[13px]">
-                {toolLogs.map(tool => (
-                    <div key={tool.id} className="flex min-w-0 items-start gap-2">
-                        {tool.success ? (
-                            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
-                        ) : (
-                            <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
-                        )}
-                        <div className="min-w-0 flex-1">
-                            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
-                                <span className="truncate font-medium text-foreground/85">{tool.toolName}</span>
-                                <span className="text-[11.5px] tabular-nums text-foreground/45">{formatTime(tool.startedAt)}</span>
-                                {tool.durationMs !== null && (
-                                    <span className="text-[11.5px] tabular-nums text-foreground/45">{formatDuration(tool.durationMs)}</span>
-                                )}
-                            </div>
-                            {tool.errorMessage && (
-                                <div className="mt-0.5 break-words text-[12px] text-destructive">{tool.errorMessage}</div>
-                            )}
-                        </div>
-                    </div>
-                ))}
-            </div>
-        </div>
-    )
-}
-
-function fallbackUserMessage(row: RequestLogRow): Message {
-    return {
-        id: `${row.id}:input`,
-        role: "user",
-        content: row.inputText ?? "",
-        timestamp: row.startedAt,
-    }
-}
-
-function fallbackAssistantMessage(row: RequestLogRow): Message {
-    return {
-        id: `${row.id}:output`,
+function buildLogAssistantMessage(
+    row: RequestLogRow,
+    source: Message | null,
+    toolLogs: ToolLogRow[] | null
+): Message {
+    const base: Message = source ?? {
+        id: row.id,
         role: "assistant",
         content: row.outputText ?? "",
         status: row.status === "streaming" ? undefined : row.status,
         timestamp: row.endedAt ?? row.startedAt,
     }
+
+    if (hasReasoning(base) || !toolLogs?.length) return base
+
+    const reasoning = toolLogs.map<ToolCallReasoningEntry>((tool, index) => ({
+        type: "tool_call",
+        id: `log_tool_${tool.id}`,
+        phase: index,
+        toolCallId: `log_tool_${tool.id}`,
+        title: tool.toolName,
+        content: tool.errorMessage ? `Error: ${tool.errorMessage}` : "",
+        toolName: tool.toolName,
+        success: tool.success,
+        status: tool.success ? "ok" : "error",
+        startedAt: tool.startedAt,
+        endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
+    }))
+    const finalPhase = reasoning.length
+
+    return {
+        ...base,
+        reasoning,
+        contentSegments: base.content ? [{ phase: finalPhase, content: base.content }] : undefined,
+    }
+}
+
+function fallbackUserMessage(row: RequestLogRow): Message | null {
+    if (!row.inputText) return null
+    return {
+        id: `${row.id}:input`,
+        role: "user",
+        content: row.inputText,
+        timestamp: row.startedAt,
+    }
+}
+
+function hasReasoning(message: Message): boolean {
+    return Array.isArray(message.reasoning) && message.reasoning.length > 0
 }
 
 function Stat({ label, value, highlight }: { label: string; value: number | null; highlight?: boolean }) {

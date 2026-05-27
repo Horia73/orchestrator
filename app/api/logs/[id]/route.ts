@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getRequestLog, getToolLogsForRequest } from '@/lib/observability/store'
 import { getConversation } from '@/lib/db'
+import { searchTaskRuns } from '@/lib/scheduling/store'
 import type { RequestLogRow } from '@/lib/observability/schema'
 import type { AgentCallReasoningEntry, Message, ReasoningEntry } from '@/lib/types'
 
@@ -15,56 +16,43 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
     return NextResponse.json({ log, toolLogs, transcript })
 }
 
-type RequestLogTranscript =
-    | {
-        type: 'message_pair'
-        userMessage: Message | null
-        assistantMessage: Message
-    }
-    | {
-        type: 'agent_run'
-        promptMessage: Message
-        assistantMessage: Message
-    }
+type RequestLogTranscript = {
+    userMessage: Message | null
+    assistantMessage: Message
+}
 
 function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {
     const conversation = getConversation(log.conversationId)
-    if (!conversation) return null
+    if (conversation) {
+        const assistantMessage = conversation.messages.find(
+            message => message.id === log.id && message.role === 'assistant'
+        )
+        if (assistantMessage) {
+            const assistantIndex = conversation.messages.indexOf(assistantMessage)
+            return {
+                userMessage: findUserMessageForAssistant(conversation.messages, assistantIndex, log),
+                assistantMessage,
+            }
+        }
 
-    const assistantIndex = conversation.messages.findIndex(
-        message => message.id === log.id && message.role === 'assistant'
-    )
-    if (assistantIndex >= 0) {
-        return {
-            type: 'message_pair',
-            userMessage: findUserMessageForAssistant(conversation.messages, assistantIndex, log),
-            assistantMessage: conversation.messages[assistantIndex],
+        const run = findAgentRun(conversation.messages, log.id)
+        if (run) {
+            return {
+                userMessage: messageFromAgentPrompt(run, log),
+                assistantMessage: messageFromAgentRun(run, log),
+            }
         }
     }
 
-    const run = findAgentRun(conversation.messages, log.id)
-    if (!run) return null
-
-    return {
-        type: 'agent_run',
-        promptMessage: {
-            id: `${run.runId}:prompt`,
-            role: 'user',
-            content: run.prompt || log.inputText || '',
-            timestamp: run.startedAt || log.startedAt,
-        },
-        assistantMessage: {
-            id: run.runId,
-            role: 'assistant',
-            content: run.content || log.outputText || '',
-            status: run.status === 'running' ? undefined : run.status,
-            contentSegments: run.contentSegments ?? (run.content ? [{ phase: 0, content: run.content }] : undefined),
-            reasoning: run.reasoning,
-            attachments: run.attachments,
-            thinkingDuration: run.thinkingDuration,
-            timestamp: run.endedAt ?? log.endedAt ?? run.startedAt ?? log.startedAt,
-        },
+    const scheduledRunMessage = messageFromScheduledRun(log)
+    if (scheduledRunMessage) {
+        return {
+            userMessage: messageFromLogInput(log),
+            assistantMessage: scheduledRunMessage,
+        }
     }
+
+    return null
 }
 
 function findUserMessageForAssistant(messages: Message[], assistantIndex: number, log: RequestLogRow): Message | null {
@@ -72,6 +60,21 @@ function findUserMessageForAssistant(messages: Message[], assistantIndex: number
         const message = messages[i]
         if (message.role === 'user') return message
     }
+    return messageFromLogInput(log)
+}
+
+function messageFromAgentPrompt(run: AgentCallReasoningEntry, log: RequestLogRow): Message | null {
+    const content = run.prompt || log.inputText || ''
+    if (!content) return null
+    return {
+        id: `${run.runId}:prompt`,
+        role: 'user',
+        content,
+        timestamp: run.startedAt || log.startedAt,
+    }
+}
+
+function messageFromLogInput(log: RequestLogRow): Message | null {
     if (!log.inputText) return null
     return {
         id: `${log.id}:input`,
@@ -79,6 +82,61 @@ function findUserMessageForAssistant(messages: Message[], assistantIndex: number
         content: log.inputText,
         timestamp: log.startedAt,
     }
+}
+
+function messageFromAgentRun(run: AgentCallReasoningEntry, log: RequestLogRow): Message {
+    return {
+        id: run.runId,
+        role: 'assistant',
+        content: run.content || log.outputText || '',
+        status: run.status === 'running' ? undefined : run.status,
+        contentSegments: run.contentSegments ?? (run.content ? [{ phase: 0, content: run.content }] : undefined),
+        reasoning: run.reasoning,
+        attachments: run.attachments,
+        thinkingDuration: run.thinkingDuration,
+        timestamp: run.endedAt ?? log.endedAt ?? run.startedAt ?? log.startedAt,
+    }
+}
+
+function messageFromScheduledRun(log: RequestLogRow): Message | null {
+    const windowMs = 10 * 60 * 1000
+    const candidates = searchTaskRuns({
+        startedAfter: Math.max(0, log.startedAt - windowMs),
+        limit: 200,
+    }).runs
+        .filter(run => Math.abs(run.startedAt - log.startedAt) <= windowMs)
+        .sort((a, b) => scheduledRunScore(log, b) - scheduledRunScore(log, a))
+
+    const run = candidates[0]
+    if (!run || scheduledRunScore(log, run) <= 0) return null
+
+    const content = run.summary || log.outputText || ''
+    return {
+        id: log.id,
+        role: 'assistant',
+        content,
+        status: run.status === 'ok' ? 'ok' : 'error',
+        contentSegments: run.contentSegments ?? (content ? [{ phase: finalContentPhase(run.reasoning), content }] : undefined),
+        reasoning: run.reasoning,
+        attachments: run.attachments,
+        timestamp: run.endedAt ?? log.endedAt ?? log.startedAt,
+    }
+}
+
+function scheduledRunScore(log: RequestLogRow, run: { startedAt: number; summary: string; reasoning?: ReasoningEntry[] }): number {
+    const delta = Math.abs(run.startedAt - log.startedAt)
+    let score = Math.max(1, 10 * 60 * 1000 - delta)
+    const logOutput = (log.outputText ?? '').trim()
+    const summary = run.summary.trim()
+    if (logOutput && summary && logOutput === summary) score += 10 * 60 * 1000
+    if (logOutput && summary && (logOutput.includes(summary) || summary.includes(logOutput))) score += 60_000
+    if (run.reasoning?.length) score += 30_000
+    return score
+}
+
+function finalContentPhase(reasoning: ReasoningEntry[] | undefined): number {
+    if (!reasoning?.length) return 0
+    return Math.max(...reasoning.map(entry => Number.isFinite(entry.phase) ? entry.phase : 0)) + 1
 }
 
 function findAgentRun(messages: Message[], runId: string): AgentCallReasoningEntry | null {

@@ -298,14 +298,8 @@ export interface RequestDetail {
 }
 
 export type RequestLogTranscript =
-    | {
-        type: "message_pair"
+    {
         userMessage: Message | null
-        assistantMessage: Message
-    }
-    | {
-        type: "agent_run"
-        promptMessage: Message
         assistantMessage: Message
     }
 

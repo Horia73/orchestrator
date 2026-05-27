@@ -110,6 +110,12 @@ async function main(): Promise<void> {
       prompt.includes("Europe/Bucharest: 2026-05-26 01:31:23 GMT+3"),
       prompt.match(/Europe\/Bucharest: .*/)?.[0]
     )
+    check(
+      "smart monitor prompt routes public web research through researcher delegation",
+      prompt.includes("Use delegate_to with the Researcher") &&
+        prompt.includes("search-only subtask"),
+      prompt.match(/current public-web research.*/)?.[0]
+    )
   } finally {
     Date.now = realDateNow
   }

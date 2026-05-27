@@ -282,9 +282,10 @@ export class GoogleProvider implements AIProvider {
 
         let nativeTools = this.buildNativeTools(options.builtins)
 
-        // Gemini rejects requests that combine google_search/code_execution/etc.
-        // with function calling. The registry normally prevents this, but keep
-        // the provider defensive for direct callers.
+        // Gemini Interactions currently rejects requests that combine
+        // google_search/code_execution/etc. with function calling. Keep the
+        // function surface so agents can still notify, update task state, and
+        // delegate a separate research pass when they need web context.
         if (runtimeTools.length > 0 && nativeTools.length > 0) {
             nativeTools = []
         }
