@@ -3,7 +3,7 @@
  * Smart automation loop with failure tracking and memory
  */
 
-import { ActionTrace, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
+import { ActionTrace, BrowserDiagnosticsSnapshot, BrowserFetchResult, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
 import { VisionService, AgentAction, VisionConfig } from './vision';
 import { ActionHistoryItem, IterationLimitReview } from './prompts';
 import { initializeDefaultLearnings, addLearning } from './memory';
@@ -17,7 +17,7 @@ import {
     summarizeDownloads,
     summarizeDownloadWait,
 } from './agent-formatters';
-import { formatBrowserAgentTextForLog, isLikelySensitiveBrowserText } from './redaction';
+import { formatBrowserAgentTextForLog, isLikelySensitiveBrowserText, redactBrowserAgentText } from './redaction';
 
 export interface SetTaskOptions {
     preserveContext?: boolean;
@@ -235,14 +235,11 @@ export function createAgentController(
                 const previousContext = `[Previous Goal: "${currentGoal}" | Last Agent Action: "${lastAction.action}" - "${lastAction.reasoning || ''}"]`;
 
                 pushConversationHistory(`AGENT: Last action was ${lastAction.action} ("${lastAction.reasoning}")`);
-                pushConversationHistory(`USER: ${trimmedGoal} (Reply to previous context)`);
 
                 currentGoal = `${trimmedGoal} ${previousContext}`;
             } else {
                 if (preserveContext && currentGoal) {
-                    pushConversationHistory(`USER: [Changed Goal] ${trimmedGoal}`);
-                } else {
-                    pushConversationHistory(`USER: ${trimmedGoal}`);
+                    pushConversationHistory(`SYSTEM: Previous browser goal was replaced before completion: ${currentGoal}`);
                 }
                 currentGoal = trimmedGoal;
             }
@@ -297,7 +294,8 @@ export function createAgentController(
                     onStatusUpdate('📸 Scanning page...');
                     const tabsBefore = await browser.getOpenTabCount();
                     const frame = await browser.captureAgentFrame();
-                    const supplementalFrames = pendingSupplementalFrames;
+                    const previousContextFrames = previousVisualContextFrames(browser, frame, actionHistory);
+                    const supplementalFrames = [...previousContextFrames, ...pendingSupplementalFrames];
                     pendingSupplementalFrames = [];
                     const openTabs = await browser.listTabs();
                     const downloads = browser.getDownloads();
@@ -860,9 +858,155 @@ function shouldRedactActionText(action: AgentAction): boolean {
 }
 
 const PASTE_TEXT_THRESHOLD = 120;
+const MAX_DIAGNOSTIC_LINES = 10;
+const MAX_FETCH_SNIPPET_CHARS = 1800;
 
 function shouldPasteText(text: string): boolean {
     return text.length >= PASTE_TEXT_THRESHOLD || /[\r\n\t]/.test(text);
+}
+
+function shouldIncludePreviousFrameAfter(action: ActionHistoryItem | undefined): boolean {
+    if (!action || !action.success) return false;
+    return !['ask', 'done', 'error', 'escalate', 'yield_control'].includes(action.action);
+}
+
+function previousVisualContextFrames(
+    browser: BrowserPageSession,
+    currentFrame: BrowserFrameSnapshot,
+    actionHistory: ActionHistoryItem[]
+): BrowserFrameSnapshot[] {
+    const lastAction = actionHistory[actionHistory.length - 1];
+    if (!shouldIncludePreviousFrameAfter(lastAction)) return [];
+
+    const recentFrames = browser.getAgentFrameHistory(2);
+    const previous = recentFrames
+        .filter(frame => frame.id !== currentFrame.id)
+        .slice(-1)[0];
+    if (!previous) return [];
+    return [previous];
+}
+
+function formatObservationUrl(value: string): string {
+    try {
+        const url = new URL(value);
+        for (const [key] of url.searchParams) {
+            if (/(token|secret|key|code|auth|session|password)/i.test(key)) {
+                url.searchParams.set(key, '[redacted]');
+            }
+        }
+        return redactBrowserAgentText(`${url.origin}${url.pathname}${url.search}`);
+    } catch {
+        return redactBrowserAgentText(value);
+    }
+}
+
+function trimObservation(value: string, maxChars: number): string {
+    const clean = redactBrowserAgentText(value).replace(/\s+/g, ' ').trim();
+    return clean.length <= maxChars ? clean : `${clean.slice(0, maxChars - 1).trimEnd()}…`;
+}
+
+function summarizeDiagnostics(diagnostics: BrowserDiagnosticsSnapshot): string {
+    if (!diagnostics.supported) {
+        return 'Browser diagnostics are unavailable on this backend.';
+    }
+
+    const lines = [
+        `Current URL: ${formatObservationUrl(diagnostics.currentUrl) || '(unknown)'}`,
+        `Captured: console=${diagnostics.consoleMessages.length}, pageErrors=${diagnostics.pageErrors.length}, failedRequests=${diagnostics.failedRequests.length}, httpErrors=${diagnostics.httpErrors.length}`,
+    ];
+
+    const httpErrors = diagnostics.httpErrors.slice(-MAX_DIAGNOSTIC_LINES);
+    if (httpErrors.length > 0) {
+        lines.push('HTTP errors:');
+        for (const entry of httpErrors) {
+            lines.push(`- ${entry.status || '?'} ${entry.method} ${formatObservationUrl(entry.url)} (${entry.resourceType}${entry.statusText ? `, ${entry.statusText}` : ''})`);
+        }
+    }
+
+    const failedRequests = diagnostics.failedRequests.slice(-MAX_DIAGNOSTIC_LINES);
+    if (failedRequests.length > 0) {
+        lines.push('Failed requests:');
+        for (const entry of failedRequests) {
+            lines.push(`- ${entry.method} ${formatObservationUrl(entry.url)} (${entry.resourceType}): ${trimObservation(entry.failureText || 'failed', 160)}`);
+        }
+    }
+
+    const pageErrors = diagnostics.pageErrors.slice(-MAX_DIAGNOSTIC_LINES);
+    if (pageErrors.length > 0) {
+        lines.push('Page errors:');
+        for (const entry of pageErrors) {
+            lines.push(`- ${formatObservationUrl(entry.url)}: ${trimObservation(entry.message, 240)}`);
+        }
+    }
+
+    const consoleMessages = diagnostics.consoleMessages
+        .filter(entry => ['error', 'warning', 'warn'].includes(entry.level.toLowerCase()))
+        .slice(-MAX_DIAGNOSTIC_LINES);
+    if (consoleMessages.length > 0) {
+        lines.push('Console warnings/errors:');
+        for (const entry of consoleMessages) {
+            lines.push(`- ${entry.level} ${formatObservationUrl(entry.url)}: ${trimObservation(entry.text, 240)}`);
+        }
+    }
+
+    if (lines.length === 2) {
+        lines.push('No console warnings/errors, page errors, failed requests, or HTTP 4xx/5xx responses captured.');
+    }
+
+    return lines.join('\n');
+}
+
+function summarizeJsonShape(value: string): string {
+    try {
+        const parsed = JSON.parse(value) as unknown;
+        if (Array.isArray(parsed)) {
+            return `JSON array length=${parsed.length}`;
+        }
+        if (parsed && typeof parsed === 'object') {
+            const record = parsed as Record<string, unknown>;
+            const keys = Object.keys(record).slice(0, 12);
+            const hints = keys.map((key) => {
+                const item = record[key];
+                if (Array.isArray(item)) return `${key}[${item.length}]`;
+                if (item && typeof item === 'object') return `${key}{${Object.keys(item as Record<string, unknown>).slice(0, 5).join(',')}}`;
+                return key;
+            });
+            return `JSON object keys=${hints.join(', ') || '(none)'}`;
+        }
+        return `JSON ${typeof parsed}`;
+    } catch {
+        return '';
+    }
+}
+
+function summarizeFetchResult(result: BrowserFetchResult): string {
+    if (!result.supported) {
+        return result.error || 'Browser-context fetch is unavailable on this backend.';
+    }
+
+    const lines = [
+        `Requested URL: ${formatObservationUrl(result.requestedUrl)}`,
+        `Final URL: ${formatObservationUrl(result.finalUrl)}`,
+        `Status: ${result.status} ${result.statusText || ''}`.trim(),
+        `OK: ${result.ok ? 'yes' : 'no'}${result.redirected ? ' (redirected)' : ''}`,
+        `Content-Type: ${result.contentType || '(unknown)'}`,
+        `Body length: ${result.bodyLength}`,
+    ];
+
+    if (result.error) {
+        lines.push(`Error: ${trimObservation(result.error, 300)}`);
+        return lines.join('\n');
+    }
+
+    const shape = summarizeJsonShape(result.bodySnippet);
+    if (shape) lines.push(shape);
+    if (result.bodySnippet.trim()) {
+        lines.push(`Body snippet: ${trimObservation(result.bodySnippet, MAX_FETCH_SNIPPET_CHARS)}`);
+    } else {
+        lines.push('Body snippet: (empty)');
+    }
+
+    return lines.join('\n');
 }
 
 function fallbackActionHistorySummary(actions: ActionHistoryItem[]): string {
@@ -936,6 +1080,41 @@ async function executeAction(
                 await browser.findInPage(query, Boolean(action.submit));
                 await sleep(timing.actionSettleDelayMs);
                 return { success: true, trace: null, supplementalFrames: [] };
+            }
+
+            case 'inspectDiagnostics': {
+                onStatusUpdate('🧪 Inspecting browser diagnostics...');
+                const diagnostics = browser.getDiagnostics();
+                const observation = summarizeDiagnostics(diagnostics);
+                onStatusUpdate(`🧪 Browser diagnostics:\n${observation}`);
+                return {
+                    success: diagnostics.supported,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation,
+                };
+            }
+
+            case 'fetchUrl': {
+                const targetUrl = String(action.url || action.text || '').trim();
+                if (!targetUrl) {
+                    return {
+                        success: false,
+                        trace: null,
+                        supplementalFrames: [],
+                        observation: 'No URL was provided for fetchUrl.',
+                    };
+                }
+                onStatusUpdate(`🌐 Browser-context fetch: ${targetUrl}`);
+                const result = await browser.fetchUrl(targetUrl);
+                const observation = summarizeFetchResult(result);
+                onStatusUpdate(`🌐 Fetch result:\n${observation}`);
+                return {
+                    success: result.supported && !result.error,
+                    trace: null,
+                    supplementalFrames: [],
+                    observation,
+                };
             }
 
             case 'screenshot': {

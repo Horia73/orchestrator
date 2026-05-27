@@ -26,14 +26,19 @@ import type {
     ActionTrace,
     ActionTraceFrame,
     BrowserCaptureMode,
+    BrowserConsoleEntry,
+    BrowserDiagnosticsSnapshot,
     BrowserDownloadFile,
     BrowserDownloadWaitOptions,
+    BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
     BrowserManager,
     BrowserManagerOptions,
+    BrowserNetworkEntry,
     BrowserPageSession,
     BrowserPageSessionCapabilities,
+    BrowserPageErrorEntry,
     BrowserPageSessionOptions,
     BrowserTabInfo,
     BrowserTabOrigin,
@@ -52,21 +57,29 @@ export type {
     ActionTraceFrame,
     BrowserCaptureMode,
     BrowserCoordinateSpace,
+    BrowserConsoleEntry,
+    BrowserDiagnosticsSnapshot,
     BrowserDownloadFile,
     BrowserDownloadWaitOptions,
+    BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
     BrowserManager,
     BrowserManagerOptions,
+    BrowserNetworkEntry,
     BrowserPageMetrics,
     BrowserPageSession,
     BrowserPageSessionCapabilities,
+    BrowserPageErrorEntry,
     BrowserPageSessionOptions,
     BrowserTabInfo,
     BrowserTabOrigin,
     BrowserVideoRecording,
     TracedActionResult,
 } from './browser-types';
+
+const MAX_DIAGNOSTIC_ENTRIES = 80;
+const MAX_FETCH_BODY_CHARS = 12_000;
 
 interface HumanMouseMoveOptions {
     durationMs?: number;
@@ -188,6 +201,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         agentFrameHistory: BrowserFrameSnapshot[];
         downloads: BrowserDownloadFile[];
         downloadTasks: Set<Promise<void>>;
+        consoleMessages: BrowserConsoleEntry[];
+        pageErrors: BrowserPageErrorEntry[];
+        failedRequests: BrowserNetworkEntry[];
+        httpErrors: BrowserNetworkEntry[];
     };
 
     type PageOwnership = {
@@ -354,6 +371,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             agentFrameHistory: [],
             downloads: [],
             downloadTasks: new Set(),
+            consoleMessages: [],
+            pageErrors: [],
+            failedRequests: [],
+            httpErrors: [],
         };
         sessions.set(id, state);
         return state;
@@ -431,6 +452,43 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         return index >= 0 ? index : undefined;
     };
 
+    const pushBounded = <T>(items: T[], item: T) => {
+        items.push(item);
+        if (items.length > MAX_DIAGNOSTIC_ENTRIES) {
+            items.splice(0, items.length - MAX_DIAGNOSTIC_ENTRIES);
+        }
+    };
+
+    const pageUrl = (page: Page): string => {
+        try {
+            return page.url();
+        } catch {
+            return '';
+        }
+    };
+
+    const resolveSameOriginFetchUrl = (currentUrl: string, targetUrl: string): string => {
+        let current: URL;
+        let target: URL;
+        try {
+            current = new URL(currentUrl);
+        } catch {
+            throw new Error('Cannot fetch from the browser context because the active page has no valid URL.');
+        }
+        try {
+            target = new URL(targetUrl, current);
+        } catch {
+            throw new Error(`Invalid fetch URL: ${targetUrl}`);
+        }
+        if (!/^https?:$/.test(current.protocol) || !/^https?:$/.test(target.protocol)) {
+            throw new Error('Browser fetch supports http(s) pages only.');
+        }
+        if (target.origin !== current.origin) {
+            throw new Error(`Browser fetch is limited to the active page origin (${current.origin}).`);
+        }
+        return target.toString();
+    };
+
     const attachPageToSession = (
         session: BrowserSessionState,
         ownedPage: Page,
@@ -470,6 +528,56 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             return;
         }
         instrumentedPages.add(ownedPage);
+
+        ownedPage.on('console', (message) => {
+            const owner = pageOwners.get(ownedPage) || session;
+            const location = message.location();
+            pushBounded(owner.consoleMessages, {
+                timestamp: new Date().toISOString(),
+                level: message.type(),
+                text: message.text(),
+                url: location.url || pageUrl(ownedPage),
+                lineNumber: location.lineNumber,
+                columnNumber: location.columnNumber,
+            });
+        });
+
+        ownedPage.on('pageerror', (error) => {
+            const owner = pageOwners.get(ownedPage) || session;
+            pushBounded(owner.pageErrors, {
+                timestamp: new Date().toISOString(),
+                message: error.message,
+                stack: error.stack,
+                url: pageUrl(ownedPage),
+            });
+        });
+
+        ownedPage.on('requestfailed', (request) => {
+            const owner = pageOwners.get(ownedPage) || session;
+            pushBounded(owner.failedRequests, {
+                timestamp: new Date().toISOString(),
+                url: request.url(),
+                method: request.method(),
+                resourceType: request.resourceType(),
+                failureText: request.failure()?.errorText || 'request failed',
+            });
+        });
+
+        ownedPage.on('response', (response) => {
+            const status = response.status();
+            if (status < 400) return;
+
+            const owner = pageOwners.get(ownedPage) || session;
+            const request = response.request();
+            pushBounded(owner.httpErrors, {
+                timestamp: new Date().toISOString(),
+                url: response.url(),
+                method: request.method(),
+                resourceType: request.resourceType(),
+                status,
+                statusText: response.statusText(),
+            });
+        });
 
         ownedPage.on('popup', (popupPage) => {
             const openerOwner = pageOwners.get(ownedPage) || session;
@@ -939,6 +1047,8 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             downloadEvents: true,
             displayCapture: false,
             osClipboard: false,
+            diagnostics: true,
+            browserFetch: true,
         };
         const facade: BrowserPageSession = {
             id: session.id,
@@ -1652,6 +1762,67 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             async waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]> {
                 await waitForSessionDownloads(session, timeoutMs, options);
                 return session.downloads.map((download) => cloneDownload(download));
+            },
+
+            getDiagnostics(): BrowserDiagnosticsSnapshot {
+                return {
+                    supported: true,
+                    capturedAt: new Date().toISOString(),
+                    currentUrl: session.activePage ? pageUrl(session.activePage) : '',
+                    consoleMessages: session.consoleMessages.map((entry) => ({ ...entry })),
+                    pageErrors: session.pageErrors.map((entry) => ({ ...entry })),
+                    failedRequests: session.failedRequests.map((entry) => ({ ...entry })),
+                    httpErrors: session.httpErrors.map((entry) => ({ ...entry })),
+                };
+            },
+
+            async fetchUrl(url: string): Promise<BrowserFetchResult> {
+                const activePage = await ensureActivePage(session);
+                const requestedUrl = resolveSameOriginFetchUrl(activePage.url(), url);
+
+                try {
+                    const result = await activePage.evaluate(async ({ targetUrl, maxBodyChars }) => {
+                        const response = await fetch(targetUrl, {
+                            method: 'GET',
+                            credentials: 'include',
+                            cache: 'no-store',
+                            headers: {
+                                Accept: 'application/json, text/plain, */*',
+                            },
+                        });
+                        const body = await response.text();
+                        return {
+                            finalUrl: response.url,
+                            ok: response.ok,
+                            status: response.status,
+                            statusText: response.statusText,
+                            contentType: response.headers.get('content-type') || '',
+                            redirected: response.redirected,
+                            bodyLength: body.length,
+                            bodySnippet: body.slice(0, maxBodyChars),
+                        };
+                    }, { targetUrl: requestedUrl, maxBodyChars: MAX_FETCH_BODY_CHARS });
+
+                    return {
+                        supported: true,
+                        requestedUrl,
+                        ...result,
+                    };
+                } catch (error) {
+                    return {
+                        supported: true,
+                        requestedUrl,
+                        finalUrl: requestedUrl,
+                        ok: false,
+                        status: 0,
+                        statusText: '',
+                        contentType: '',
+                        redirected: false,
+                        bodyLength: 0,
+                        bodySnippet: '',
+                        error: formatBrowserError(error),
+                    };
+                }
             },
 
             getLatestAgentFrame(): BrowserFrameSnapshot | null {

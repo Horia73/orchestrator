@@ -29,6 +29,8 @@ export interface BrowserPageSessionCapabilities {
     downloadEvents: boolean;
     displayCapture: boolean;
     osClipboard: boolean;
+    diagnostics: boolean;
+    browserFetch: boolean;
 }
 
 export interface BrowserPageMetrics {
@@ -77,6 +79,56 @@ export interface BrowserDownloadFile {
 export interface BrowserDownloadWaitOptions {
     waitForNew?: boolean;
     baselineCount?: number;
+}
+
+export interface BrowserConsoleEntry {
+    timestamp: string;
+    level: string;
+    text: string;
+    url: string;
+    lineNumber?: number;
+    columnNumber?: number;
+}
+
+export interface BrowserPageErrorEntry {
+    timestamp: string;
+    message: string;
+    stack?: string;
+    url: string;
+}
+
+export interface BrowserNetworkEntry {
+    timestamp: string;
+    url: string;
+    method: string;
+    resourceType: string;
+    status?: number;
+    statusText?: string;
+    failureText?: string;
+}
+
+export interface BrowserDiagnosticsSnapshot {
+    supported: boolean;
+    capturedAt: string;
+    currentUrl: string;
+    consoleMessages: BrowserConsoleEntry[];
+    pageErrors: BrowserPageErrorEntry[];
+    failedRequests: BrowserNetworkEntry[];
+    httpErrors: BrowserNetworkEntry[];
+}
+
+export interface BrowserFetchResult {
+    supported: boolean;
+    requestedUrl: string;
+    finalUrl: string;
+    ok: boolean;
+    status: number;
+    statusText: string;
+    contentType: string;
+    redirected: boolean;
+    bodyLength: number;
+    bodySnippet: string;
+    error?: string;
 }
 
 export type BrowserTabOrigin = 'initial' | 'newTab' | 'popup' | 'recovered';
@@ -145,6 +197,8 @@ export interface BrowserPageSession {
     getViewport(): Promise<{ width: number; height: number }>;
     getDownloads(): BrowserDownloadFile[];
     waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]>;
+    getDiagnostics(): BrowserDiagnosticsSnapshot;
+    fetchUrl(url: string): Promise<BrowserFetchResult>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;
     getAgentFrameHistory(limit?: number): BrowserFrameSnapshot[];
     clearAgentFrameHistory(): void;

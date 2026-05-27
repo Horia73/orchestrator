@@ -13,6 +13,7 @@ import {
 } from '@/lib/integrations/exposure'
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
+import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
 
 // ---------------------------------------------------------------------------
 // Artifact authoring guidance.
@@ -444,7 +445,7 @@ export function buildToolsSection(ctx: PromptContext): string {
  */
 function agentCapabilityHint(a: PromptContext['availableAgents'][number]): string {
     if (a.status === 'planned') return 'planned — not runtime-ready yet; coordinate the work yourself until it lands'
-    if (a.id === 'browser_agent' || a.provider === 'browser') return 'active browser executor; prompt must be self-contained; use for interactive/visual/logged-in flows; can return screenshots/videos as uploads; stop at commit boundaries'
+    if (a.id === 'browser_agent' || a.provider === 'browser') return BROWSER_AGENT_CAPABILITY_HINT
     if (a.kind === 'image' || a.kind === 'video' || a.kind === 'speech' || a.kind === 'music') {
         return 'one-shot media; you author the full production prompt, it returns the asset — no dialogue'
     }

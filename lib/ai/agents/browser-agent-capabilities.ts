@@ -1,0 +1,9 @@
+export const BROWSER_AGENT_CAPABILITY_HINT = [
+    'active browser executor; prompt must be self-contained',
+    'drives a real persistent browser session with visual screenshots, clicks, typing, scrolling, navigation, tab management, downloads, screenshots/videos, and same-origin browser-context GET checks via fetchUrl',
+    'can inspect captured console warnings/errors, page errors, failed requests, and HTTP 4xx/5xx responses via inspectDiagnostics on Patchright backend',
+    'does not have arbitrary DevTools control, DOM scraping as a general tool, cross-origin raw fetch, server shell access, credentials/2FA, or permission to modify external state past confirmation boundaries',
+    'for loading/API diagnosis, ask for current URL, visible state, inspectDiagnostics, fetchUrl for same-origin endpoints, failed request status/path, and screenshot evidence; do not ask it to infer console/network only from visuals',
+    'reuse thread_id to continue the same browser window/state',
+].join('; ')
+

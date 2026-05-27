@@ -76,6 +76,10 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
   // section explicitly so the main list stays uncluttered.
   const activeModels = allModels.filter(m => !m.model.archived)
   const archivedModels = allModels.filter(m => m.model.archived)
+  // Auto-expand the archived section while a search query is active so cmdk
+  // can match archived models too — without that, the rows aren't mounted and
+  // the search misses them.
+  const effectiveShowArchived = showArchived || query.trim().length > 0
   const modelsByKey = new Map(allModels.map(m => [m.key, m]))
   const activeKeys = new Set(activeModels.map(m => m.key))
 
@@ -286,13 +290,13 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
                       <ChevronDown
                         className={cn(
                           "ml-auto size-3 text-foreground/40 transition-transform",
-                          showArchived && "rotate-180"
+                          effectiveShowArchived && "rotate-180"
                         )}
                       />
                     </button>
                   }
                 >
-                  {showArchived && archivedModels.map(m => (
+                  {effectiveShowArchived && archivedModels.map(m => (
                     <ModelRow
                       key={m.key}
                       model={m}

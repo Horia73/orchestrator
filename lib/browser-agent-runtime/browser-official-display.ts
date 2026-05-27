@@ -5,8 +5,10 @@ import type { BrowserContext, Page } from 'patchright';
 
 import type {
     ActionTrace,
+    BrowserDiagnosticsSnapshot,
     BrowserDownloadFile,
     BrowserDownloadWaitOptions,
+    BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
     BrowserManager,
@@ -98,6 +100,8 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         downloadEvents: false,
         displayCapture: true,
         osClipboard: true,
+        diagnostics: false,
+        browserFetch: false,
     };
 
     const run = (command: string, args: string[], input?: string): Buffer => {
@@ -613,6 +617,32 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
                 await sleep(250);
             } while (Date.now() < deadline);
             return state.downloads.map(download => ({ ...download }));
+        },
+        getDiagnostics(): BrowserDiagnosticsSnapshot {
+            return {
+                supported: false,
+                capturedAt: new Date().toISOString(),
+                currentUrl: state.currentUrl,
+                consoleMessages: [],
+                pageErrors: [],
+                failedRequests: [],
+                httpErrors: [],
+            };
+        },
+        async fetchUrl(url: string): Promise<BrowserFetchResult> {
+            return {
+                supported: false,
+                requestedUrl: url,
+                finalUrl: url,
+                ok: false,
+                status: 0,
+                statusText: '',
+                contentType: '',
+                redirected: false,
+                bodyLength: 0,
+                bodySnippet: '',
+                error: 'Browser fetch is unavailable on the official-display backend.',
+            };
         },
         getLatestAgentFrame() {
             return state.latestAgentFrame ? { ...state.latestAgentFrame } : null;

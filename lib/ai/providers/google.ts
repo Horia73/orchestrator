@@ -105,6 +105,7 @@ export const GOOGLE_CAPABILITIES: ProviderCapabilities = {
     // Abstract names — each provider maps these to its native tool spec.
     // For Google, `web_search` becomes Gemini's `google_search` tool.
     nativeBuiltins: ['web_search', 'code_execution', 'url_context', 'file_search'],
+    nativeBuiltinsCanMixWithFunctionTools: false,
     statefulMode: true,
     promptCaching: 'auto',
     attachmentMode: 'files-api',
@@ -279,7 +280,14 @@ export class GoogleProvider implements AIProvider {
             ...getToolsForBuiltins(options.builtins),
         ])
 
-        const nativeTools = this.buildNativeTools(options.builtins)
+        let nativeTools = this.buildNativeTools(options.builtins)
+
+        // Gemini rejects requests that combine google_search/code_execution/etc.
+        // with function calling. The registry normally prevents this, but keep
+        // the provider defensive for direct callers.
+        if (runtimeTools.length > 0 && nativeTools.length > 0) {
+            nativeTools = []
+        }
 
         // Add tools if provided
         if (runtimeTools.length || nativeTools.length) {

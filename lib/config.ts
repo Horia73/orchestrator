@@ -290,7 +290,7 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
     model: "gemini-3-flash-preview",
     thinkingLevel: "low",
     modelOptions: {
-      media_resolution: "media_resolution_medium",
+      media_resolution: "media_resolution_high",
     },
   },
   pro: {
@@ -298,7 +298,7 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
     model: "gemini-3.1-pro-preview",
     thinkingLevel: "high",
     modelOptions: {
-      media_resolution: "media_resolution_medium",
+      media_resolution: "media_resolution_high",
     },
   },
 }

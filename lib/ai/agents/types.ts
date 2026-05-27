@@ -495,6 +495,12 @@ export interface ProviderCapabilities {
   kinds: AgentKind[]
   /** Native built-ins available (no user implementation needed). */
   nativeBuiltins: ProviderBuiltin[]
+  /**
+   * Whether native built-ins can be sent together with function/tool schemas.
+   * Defaults to true. Some providers reject mixed native tools + function
+   * calling in one request, so callers must choose one surface.
+   */
+  nativeBuiltinsCanMixWithFunctionTools?: boolean
   /** Can resume a session by id (Gemini interactionId, OpenAI Responses, ...). */
   statefulMode: boolean
   /** Prompt caching strategy. `auto` = provider handles, `manual` = caller marks blocks. */

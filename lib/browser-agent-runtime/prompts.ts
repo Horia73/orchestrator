@@ -29,8 +29,8 @@ export function buildSystemPrompt(
    const now = new Date();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
    const responseActionList = isAdvancedMode
-      ? '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "ask" | "yield_control"'
-      : '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "done" | "ask" | "error" | "escalate"';
+      ? '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "ask" | "yield_control"'
+      : '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "done" | "ask" | "error" | "escalate"';
    const modeSpecificActionDocs = isAdvancedMode
       ? `- **ask**: Ask the user for clarification.
 - **yield_control**: Yield control back to the Base Model. Use this when you have cleared the blocker and normal automation can resume. Never return \`escalate\` while in advanced mode.`
@@ -106,6 +106,8 @@ ${coordinateInstructions}
 - **hold**: Long press at (x, y) for a specific duration. Specify \`durationMs\`.
 ${inspectPageDoc}
 - **findInPage**: Open browser find (Ctrl+F), search exact text from \`text\`, and let the browser scroll to the match. Use this for long pages when you know a word, price, date, label, or phrase to locate. Set \`submit: true\` only when you intentionally want the next match.
+- **inspectDiagnostics**: Read captured browser console messages, page errors, failed requests, and HTTP 4xx/5xx responses for the current session. Use this when diagnosing loading, blank, broken, or API-backed pages.
+- **fetchUrl**: Perform a read-only GET from the active page's browser context, with cookies/session included. Use \`url\` as an absolute same-origin URL or path. Use this for same-origin API checks instead of opening a second tab just to inspect JSON/text.
 - **screenshot**: Save the current visible viewport as evidence for the parent/user. Use this when the task asks for a screenshot, when visual proof is useful, or before asking for confirmation on a sensitive action. This does NOT interact with the page.
 - **recordVideo**: Record the current visible viewport as evidence for a specific duration. Specify \`durationMs\` in milliseconds. Use this when the task asks for video or when motion/loading/animation matters. Recording blocks other actions while it captures; keep it short unless the user requested a longer duration.
 - **refresh**: Reload the page.
@@ -142,6 +144,7 @@ ${inspectPageRule}
 15. **Reading From Overview**: You MAY use an overview frame to answer high-level questions about what sections, result groups, posters, cards, or major items appear on the page. If text is too small or ambiguous, scroll closer and verify in the viewport before making precise claims.
 16. **Scroll Estimation From Overview**: When using an overview frame, estimate scrolls approximately to move the viewport near the target area, then refine with one or two smaller viewport-based scrolls. Do not assume pixel-perfect precision from an overview image.
 17. **Clipboard Verification**: If you click a Copy button and the copied value matters, use \`readClipboard\` as the next action before returning \`done\` or trying to paste it.
+18. **Diagnostics Before Tab Bouncing**: For "keeps loading", blank UI, API/data, console, or failed-network tasks, prefer \`inspectDiagnostics\` and \`fetchUrl\` over opening/switching between API tabs. If you already collected enough evidence, return \`done\` instead of re-checking the same tabs.
 
 ## 📥 DOWNLOAD HANDLING
 - Browser files are saved to a managed workspace download folder, not the user's system Downloads folder.
@@ -193,7 +196,7 @@ Single action:
   "key": "Enter" | "Escape" | "Tab" | "Backspace",
   "scrollDirection": "up" | "down" | "left" | "right",
   "scrollAmount": <number>, // Optional, pixels to scroll. Default is 500 (half page). Use larger values (e.g. 1000) to jump large sections.
-  "url": "<url for navigate or newTab action>",
+  "url": "<url for navigate, newTab, or fetchUrl action>",
   "tabIndex": <number>, // For switchTab or closeTab action
   "durationMs": 1000, // Optional, duration in milliseconds for wait, hold, drag, and recordVideo actions
   "expectedFilename": "<optional substring expected in a downloaded filename>",
@@ -259,12 +262,71 @@ export interface IterationLimitReview {
 const ACTION_HISTORY_PROMPT_LIMIT = 50;
 const EARLIER_ACTION_SUMMARY_LIMIT = 20;
 
+function formatHistoryUrl(url: string | undefined, maxChars = 180): string {
+   const safe = redactBrowserAgentText(url || '').replace(/\s+/g, ' ').trim();
+   return safe.length <= maxChars ? safe : `${safe.slice(0, maxChars - 1).trimEnd()}...`;
+}
+
+function actionLoopSignature(action: ActionHistoryItem): string {
+   const parts = [action.action];
+   if (action.tabIndex !== undefined) parts.push(`tab:${action.tabIndex}`);
+   if (action.url) parts.push(`url:${action.url}`);
+   if (action.coordinate) parts.push(`xy:${action.coordinate[0]},${action.coordinate[1]}`);
+   if (action.coordinateEnd) parts.push(`to:${action.coordinateEnd[0]},${action.coordinateEnd[1]}`);
+   if (action.scrollDirection) parts.push(`scroll:${action.scrollDirection}:${action.scrollAmount || ''}`);
+   if (action.key) parts.push(`key:${action.key}`);
+   if (action.text && ['type', 'findInPage', 'fetchUrl'].includes(action.action)) parts.push(`text:${action.text}`);
+   return parts.join('|');
+}
+
+function actionLoopLabel(action: ActionHistoryItem): string {
+   let label = action.action;
+   if (action.tabIndex !== undefined) label += ` tab[${action.tabIndex}]`;
+   if (action.url) label += ` ${formatHistoryUrl(action.url, 100)}`;
+   if (action.coordinate) label += ` [${action.coordinate[0]}, ${action.coordinate[1]}]`;
+   if (action.text && ['findInPage', 'fetchUrl'].includes(action.action)) {
+      label += ` "${formatBrowserAgentTextForLog(action.text, action.reasoning, 60)}"`;
+   }
+   return label;
+}
+
+function detectActionLoop(recentActions: ActionHistoryItem[]): string {
+   if (recentActions.length < 4) return '';
+
+   const last4 = recentActions.slice(-4);
+   const signatures = last4.map(actionLoopSignature);
+   const isAlternating = signatures[0] === signatures[2]
+      && signatures[1] === signatures[3]
+      && signatures[0] !== signatures[1];
+   const isRepeating = signatures.every(signature => signature === signatures[0]);
+
+   if (isAlternating) {
+      return `${actionLoopLabel(last4[0])} ↔ ${actionLoopLabel(last4[1])}`;
+   }
+   if (isRepeating) {
+      return `${actionLoopLabel(last4[0])} repeated ${last4.length} times`;
+   }
+
+   if (recentActions.length >= 6) {
+      const last6 = recentActions.slice(-6).map(actionLoopSignature);
+      const repeatedTriple = last6[0] === last6[3]
+         && last6[1] === last6[4]
+         && last6[2] === last6[5]
+         && new Set(last6.slice(0, 3)).size > 1;
+      if (repeatedTriple) {
+         return recentActions.slice(-6, -3).map(actionLoopLabel).join(' → ');
+      }
+   }
+
+   return '';
+}
+
 function formatActionHistory(recentActions: ActionHistoryItem[], totalActions = recentActions.length, startIndex = 0): string {
    if (recentActions.length === 0) {
       return '';
    }
 
-   let historyText = '\n## 📜 ACTION HISTORY (newest last):\n' + recentActions
+   let historyText = '\n## 📜 ACTION HISTORY (oldest to newest; latest at bottom):\n' + recentActions
       .map((a, i) => {
          const step = startIndex + i + 1;
          let desc = `Step ${step}: ${a.action.toUpperCase()}`;
@@ -276,10 +338,14 @@ function formatActionHistory(recentActions: ActionHistoryItem[], totalActions = 
          if (a.tabIndex !== undefined) desc += ` tab[${a.tabIndex}]`;
          if (a.text) desc += ` ("${formatBrowserAgentTextForLog(a.text, a.reasoning, 30)}")`;
          if (a.submit) desc += ` + ENTER`;
+         if (a.url) desc += ` url="${formatHistoryUrl(a.url)}"`;
          if (a.expectedFilename) desc += ` expected="${a.expectedFilename.substring(0, 60)}"`;
          desc += a.success ? ' ✓' : ' ✗ FAILED';
          if (a.reasoning) desc += `\n         → Reason: "${redactBrowserAgentText(a.reasoning).substring(0, 80)}"`;
-         if (a.observation) desc += `\n         → Result: "${redactBrowserAgentText(a.observation).substring(0, 500)}"`;
+         if (a.observation) {
+            const maxObservationChars = ['inspectDiagnostics', 'fetchUrl', 'listDownloads', 'waitForDownloads'].includes(a.action) ? 1600 : 500;
+            desc += `\n         → Result: "${redactBrowserAgentText(a.observation).substring(0, maxObservationChars)}"`;
+         }
          return desc;
       })
       .join('\n');
@@ -298,7 +364,9 @@ function formatEarlierActionSummary(actions: ActionHistoryItem[], totalActions: 
       const status = a.success ? 'ok' : 'failed';
       const reason = a.reasoning ? ` - ${redactBrowserAgentText(a.reasoning).replace(/\s+/g, ' ').slice(0, 120)}` : '';
       const text = a.text ? ` ("${formatBrowserAgentTextForLog(a.text, a.reasoning, 40)}")` : '';
-      return `Step ${step}: ${a.action}${text} ${status}${reason}`;
+      const url = a.url ? ` url="${formatHistoryUrl(a.url, 100)}"` : '';
+      const tab = a.tabIndex !== undefined ? ` tab[${a.tabIndex}]` : '';
+      return `Step ${step}: ${a.action}${tab}${text}${url} ${status}${reason}`;
    });
 
    const header = omitted > 0
@@ -339,29 +407,10 @@ export function buildActionPrompt(
    const recentActions = actionHistory.slice(-ACTION_HISTORY_PROMPT_LIMIT);
    const earlierActions = actionHistory.slice(0, Math.max(0, actionHistory.length - ACTION_HISTORY_PROMPT_LIMIT));
 
-   // Detect loops (simplified for coordinates)
-   let loopWarning = '';
-   if (recentActions.length >= 4) {
-      const last4 = recentActions.slice(-4);
-
-      const coords = last4.map(a => a.coordinate ? `${a.coordinate[0]},${a.coordinate[1]}` : null).filter(c => c !== null);
-
-      // 1. Detect alternating loops (A-B-A-B)
-      const isAlternating = coords.length >= 4 && coords[0] === coords[2] && coords[1] === coords[3] && coords[0] !== coords[1];
-
-      // 2. Detect repeating loops (A-A-A-A), carefully excluding safe/intentional actions like scrolling/waiting
-      const isRepeating = last4.length === 4 && last4.every(a =>
-         a.action === last4[0].action &&
-         ['click', 'type', 'drag', 'hold'].includes(a.action) &&
-         a.coordinate && last4[0].coordinate &&
-         a.coordinate[0] === last4[0].coordinate[0] &&
-         a.coordinate[1] === last4[0].coordinate[1]
-      );
-
-      if (isAlternating || isRepeating) {
-         loopWarning = `\n\n## ⚠️ LOOP DETECTED! ⚠️\nYou are stuck! Repeating the same failed actions without making progress!\n**STOP trying the exact same thing!** Consider: checking for unselected mandatory fields (allergies/checkboxes), scrolling inside modals by clicking them first, doing something completely different, or immediately using the "escalate" action to let the Advanced Agent take over.\n`;
-      }
-   }
+   const loopDescription = detectActionLoop(recentActions);
+   const loopWarning = loopDescription
+      ? `\n\n## ⚠️ LOOP DETECTED! ⚠️\nRecent actions are repeating without new evidence: ${loopDescription}.\nStop repeating this sequence. If you are diagnosing page loading/API behavior, use \`inspectDiagnostics\` and same-origin \`fetchUrl\` instead of bouncing between tabs. Otherwise choose a materially different action, return \`done\` with the evidence already collected, ask for the missing input, or escalate.\n`
+      : '';
 
    const earlierSummary = formatEarlierActionSummary(earlierActions, actionHistory.length);
    const historyText = formatActionHistory(

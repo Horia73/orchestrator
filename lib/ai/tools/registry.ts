@@ -82,8 +82,17 @@ export function resolveProviderToolSurface(
     capabilities: ProviderCapabilities
 ): { tools: ToolDef[]; builtins: ProviderBuiltin[] } {
     const nativeBuiltins = nativeBuiltinsForProvider(requestedBuiltins, capabilities)
+    const toolsWithNativeDedupe = removeNativeBuiltinToolDuplicates(candidateTools, nativeBuiltins)
+
+    if (capabilities.nativeBuiltinsCanMixWithFunctionTools === false && toolsWithNativeDedupe.length > 0) {
+        return {
+            tools: candidateTools,
+            builtins: [],
+        }
+    }
+
     return {
-        tools: removeNativeBuiltinToolDuplicates(candidateTools, nativeBuiltins),
+        tools: toolsWithNativeDedupe,
         builtins: nativeBuiltins,
     }
 }

@@ -16,8 +16,11 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import type { RequestLogRow, RequestStatus } from "@/lib/observability/schema"
-import { useLogs, useRequestDetail, type LiveTailStatus, type LogsFilters } from "./use-logs"
+import type { RequestLogRow, RequestStatus, ToolLogRow } from "@/lib/observability/schema"
+import type { Message } from "@/lib/types"
+import { MessageBubble } from "@/components/message-bubble"
+import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
+import { useLogs, useRequestDetail, type LiveTailStatus, type LogsFilters, type RequestLogTranscript } from "./use-logs"
 
 const STATUS_LABELS: Record<RequestStatus, string> = {
     streaming: "Streaming",
@@ -448,111 +451,259 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
 
     return (
         <div className="flex flex-col gap-4 border-t border-border/50 px-3 py-3 md:px-4 md:py-4">
-            <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
-                <TextPreview label="Input" text={row.inputText} />
-                <TextPreview label="Output" text={row.outputText} />
-            </div>
+            <TranscriptPanel
+                row={row}
+                transcript={data?.transcript ?? null}
+                toolLogs={data?.toolLogs ?? []}
+                loading={loading}
+                error={error}
+            />
 
             <div className="grid grid-cols-1 gap-5 md:grid-cols-2">
-            <div className="flex flex-col gap-3">
-                <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Tokens</h4>
-                <div className="grid grid-cols-2 gap-2">
-                    <Stat label="Input" value={row.inputTokens} />
-                    <Stat label="Output" value={row.outputTokens} />
-                    <Stat label="Thinking" value={row.thinkingTokens} />
-                    <Stat label="Cached" value={row.cachedTokens} highlight={row.cachedTokens !== null && row.cachedTokens > 0} />
-                    <Stat label="Tool use" value={row.toolUseTokens} />
-                    <Stat label="Total" value={row.totalTokens} />
+                <div className="flex flex-col gap-3">
+                    <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Tokens</h4>
+                    <div className="grid grid-cols-2 gap-2">
+                        <Stat label="Input" value={row.inputTokens} />
+                        <Stat label="Output" value={row.outputTokens} />
+                        <Stat label="Thinking" value={row.thinkingTokens} />
+                        <Stat label="Cached" value={row.cachedTokens} highlight={row.cachedTokens !== null && row.cachedTokens > 0} />
+                        <Stat label="Tool use" value={row.toolUseTokens} />
+                        <Stat label="Total" value={row.totalTokens} />
+                    </div>
+
+                    {row.modalityBreakdown && (
+                        <div className="mt-1">
+                            <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50">Modality</h4>
+                            <div className="space-y-1 text-[12px] tabular-nums text-foreground/70">
+                                {row.modalityBreakdown.input?.map(m => (
+                                    <div key={"in-" + m.modality}>input {m.modality}: {m.tokens.toLocaleString()}</div>
+                                ))}
+                                {row.modalityBreakdown.output?.map(m => (
+                                    <div key={"out-" + m.modality}>output {m.modality}: {m.tokens.toLocaleString()}</div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+
+                    {row.billingBreakdown && row.billingBreakdown.length > 0 && (
+                        <div className="mt-1">
+                            <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50">Billing models</h4>
+                            <div className="space-y-1 text-[12px] text-foreground/70">
+                                {row.billingBreakdown.map((entry) => (
+                                    <div key={`${entry.provider}:${entry.model}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
+                                        <span className="min-w-0 truncate">{entry.provider} · {entry.model}</span>
+                                        <span className="tabular-nums">{entry.totalTokens.toLocaleString()} tok · {entry.requests.toLocaleString()} req</span>
+                                    </div>
+                                ))}
+                            </div>
+                        </div>
+                    )}
                 </div>
 
-                {row.modalityBreakdown && (
-                    <div className="mt-1">
-                        <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50">Modality</h4>
-                        <div className="space-y-1 text-[12px] tabular-nums text-foreground/70">
-                            {row.modalityBreakdown.input?.map(m => (
-                                <div key={"in-" + m.modality}>input {m.modality}: {m.tokens.toLocaleString()}</div>
-                            ))}
-                            {row.modalityBreakdown.output?.map(m => (
-                                <div key={"out-" + m.modality}>output {m.modality}: {m.tokens.toLocaleString()}</div>
-                            ))}
-                        </div>
-                    </div>
-                )}
+                <div className="flex flex-col gap-3">
+                    <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Request</h4>
+                    <dl className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12.5px] sm:grid-cols-[120px_minmax(0,1fr)]">
+                        <Row label="ID" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.id}</code>} />
+                        <Row label="Conversation" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.conversationId}</code>} />
+                        <Row label="Provider" value={`${row.provider}`} />
+                        <Row label="Thinking" value={row.thinkingLevel} />
+                        <Row label="Mode" value={row.statefulMode ? "Stateful" : "Stateless"} />
+                        {row.interactionId && <Row label="Interaction" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.interactionId}</code>} />}
+                        {row.errorMessage && <Row label="Error" value={<span className="text-destructive">{row.errorMessage}</span>} />}
+                    </dl>
 
-                {row.billingBreakdown && row.billingBreakdown.length > 0 && (
-                    <div className="mt-1">
-                        <h4 className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50">Billing models</h4>
-                        <div className="space-y-1 text-[12px] text-foreground/70">
-                            {row.billingBreakdown.map((entry) => (
-                                <div key={`${entry.provider}:${entry.model}`} className="grid grid-cols-[minmax(0,1fr)_auto] gap-2">
-                                    <span className="min-w-0 truncate">{entry.provider} · {entry.model}</span>
-                                    <span className="tabular-nums">{entry.totalTokens.toLocaleString()} tok · {entry.requests.toLocaleString()} req</span>
-                                </div>
+                    <h4 className="mt-1 text-[11px] font-medium uppercase tracking-wider text-foreground/50">
+                        Tool calls {data ? `(${data.toolLogs.length})` : row.toolCallCount > 0 ? `(${row.toolCallCount})` : ""}
+                    </h4>
+                    {loading ? (
+                        <p className="text-[12.5px] text-foreground/50">Loading…</p>
+                    ) : error ? (
+                        <p className="text-[12.5px] text-destructive">{error}</p>
+                    ) : data && data.toolLogs.length > 0 ? (
+                        <ul className="space-y-1 text-[12.5px]">
+                            {data.toolLogs.map(t => (
+                                <li key={t.id} className="flex items-center gap-2">
+                                    {t.success ? (
+                                        <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
+                                    ) : (
+                                        <XCircle className="size-3.5 shrink-0 text-destructive" />
+                                    )}
+                                    <span className="font-medium">{t.toolName}</span>
+                                    {t.durationMs !== null && (
+                                        <span className="ml-auto tabular-nums text-foreground/50">{t.durationMs} ms</span>
+                                    )}
+                                </li>
                             ))}
-                        </div>
-                    </div>
-                )}
-            </div>
-
-            <div className="flex flex-col gap-3">
-                <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Request</h4>
-                <dl className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12.5px] sm:grid-cols-[120px_minmax(0,1fr)]">
-                    <Row label="ID" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.id}</code>} />
-                    <Row label="Conversation" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.conversationId}</code>} />
-                    <Row label="Provider" value={`${row.provider}`} />
-                    <Row label="Thinking" value={row.thinkingLevel} />
-                    <Row label="Mode" value={row.statefulMode ? "Stateful" : "Stateless"} />
-                    {row.interactionId && <Row label="Interaction" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.interactionId}</code>} />}
-                    {row.errorMessage && <Row label="Error" value={<span className="text-destructive">{row.errorMessage}</span>} />}
-                </dl>
-
-                <h4 className="mt-1 text-[11px] font-medium uppercase tracking-wider text-foreground/50">
-                    Tool calls {data ? `(${data.toolLogs.length})` : row.toolCallCount > 0 ? `(${row.toolCallCount})` : ""}
-                </h4>
-                {loading ? (
-                    <p className="text-[12.5px] text-foreground/50">Loading…</p>
-                ) : error ? (
-                    <p className="text-[12.5px] text-destructive">{error}</p>
-                ) : data && data.toolLogs.length > 0 ? (
-                    <ul className="space-y-1 text-[12.5px]">
-                        {data.toolLogs.map(t => (
-                            <li key={t.id} className="flex items-center gap-2">
-                                {t.success ? (
-                                    <CheckCircle2 className="size-3.5 shrink-0 text-emerald-600" />
-                                ) : (
-                                    <XCircle className="size-3.5 shrink-0 text-destructive" />
-                                )}
-                                <span className="font-medium">{t.toolName}</span>
-                                {t.durationMs !== null && (
-                                    <span className="ml-auto tabular-nums text-foreground/50">{t.durationMs} ms</span>
-                                )}
-                            </li>
-                        ))}
-                    </ul>
-                ) : (
-                    <p className="text-[12.5px] text-foreground/50">No tool calls.</p>
-                )}
-            </div>
+                        </ul>
+                    ) : (
+                        <p className="text-[12.5px] text-foreground/50">No tool calls.</p>
+                    )}
+                </div>
             </div>
         </div>
     )
 }
 
-function TextPreview({ label, text }: { label: string; text: string | null }) {
+function TranscriptPanel({
+    row,
+    transcript,
+    toolLogs,
+    loading,
+    error,
+}: {
+    row: RequestLogRow
+    transcript: RequestLogTranscript | null
+    toolLogs: ToolLogRow[]
+    loading: boolean
+    error: string | null
+}) {
     return (
-        <div className="flex flex-col gap-1.5">
-            <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">{label}</h4>
-            {text ? (
-                <pre className="max-h-40 overflow-auto whitespace-pre-wrap break-words rounded-lg border border-border/60 bg-muted/30 p-2.5 text-[12px] font-mono leading-relaxed text-foreground/85">
-                    {text}
-                </pre>
-            ) : (
-                <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-2.5 py-2 text-[12px] text-foreground/45">
-                    No {label.toLowerCase()} recorded.
-                </div>
-            )}
+        <div className="overflow-hidden rounded-xl border border-border/60 bg-background">
+            <div className="flex items-center justify-between gap-3 border-b border-border/60 bg-muted/25 px-3 py-2">
+                <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Transcript</h4>
+                {loading && <span className="text-[11.5px] text-foreground/45">Loading rich view...</span>}
+                {error && !loading && <span className="text-[11.5px] text-destructive">Using saved text fallback</span>}
+            </div>
+            <div className="max-h-[520px] overflow-auto px-3 py-4 md:px-5">
+                <ConversationArtifactsProvider conversationId={row.conversationId}>
+                    <div className="mx-auto flex w-full max-w-3xl flex-col gap-4">
+                        {transcript ? (
+                            <RichTranscript transcript={transcript} row={row} toolLogs={toolLogs} />
+                        ) : (
+                            <FallbackTranscript row={row} toolLogs={toolLogs} />
+                        )}
+                    </div>
+                </ConversationArtifactsProvider>
+            </div>
         </div>
     )
+}
+
+function RichTranscript({
+    transcript,
+    row,
+    toolLogs,
+}: {
+    transcript: RequestLogTranscript
+    row: RequestLogRow
+    toolLogs: ToolLogRow[]
+}) {
+    const showFallbackTools = toolLogs.length > 0 && !hasReasoning(transcript.assistantMessage)
+
+    if (transcript.type === "message_pair") {
+        return (
+            <>
+                {transcript.userMessage && (
+                    <MessageBubble message={transcript.userMessage} compact />
+                )}
+                {showFallbackTools && <FallbackToolTimeline toolLogs={toolLogs} />}
+                <MessageBubble
+                    message={transcript.assistantMessage}
+                    compact
+                    isLatestAssistantMessage
+                    isStreamingMessage={row.status === "streaming"}
+                />
+            </>
+        )
+    }
+
+    return (
+        <>
+            <MessageBubble message={transcript.promptMessage} compact />
+            {showFallbackTools && <FallbackToolTimeline toolLogs={toolLogs} />}
+            <MessageBubble
+                message={transcript.assistantMessage}
+                compact
+                isLatestAssistantMessage
+                isStreamingMessage={row.status === "streaming"}
+            />
+        </>
+    )
+}
+
+function hasReasoning(message: Message): boolean {
+    return Array.isArray(message.reasoning) && message.reasoning.length > 0
+}
+
+function FallbackTranscript({ row, toolLogs }: { row: RequestLogRow; toolLogs: ToolLogRow[] }) {
+    const hasInput = Boolean(row.inputText)
+    const hasTools = toolLogs.length > 0
+    const hasOutput = Boolean(row.outputText)
+
+    if (!hasInput && !hasTools && !hasOutput) {
+        return (
+            <div className="rounded-lg border border-dashed border-border/60 bg-muted/20 px-3 py-3 text-[13px] text-foreground/45">
+                No transcript text recorded for this request.
+            </div>
+        )
+    }
+
+    return (
+        <>
+            {hasInput && <MessageBubble message={fallbackUserMessage(row)} compact />}
+            {hasTools && <FallbackToolTimeline toolLogs={toolLogs} />}
+            {hasOutput && (
+                <MessageBubble
+                    message={fallbackAssistantMessage(row)}
+                    compact
+                    isLatestAssistantMessage
+                    isStreamingMessage={row.status === "streaming"}
+                />
+            )}
+        </>
+    )
+}
+
+function FallbackToolTimeline({ toolLogs }: { toolLogs: ToolLogRow[] }) {
+    return (
+        <div className="flex w-full min-w-0 flex-col">
+            <div className="flex items-center gap-1.5 text-[15px] text-muted-foreground">
+                <span>Tool calls</span>
+            </div>
+            <div className="mt-2 flex flex-col gap-2 border-l border-border/70 pl-4 text-[13px]">
+                {toolLogs.map(tool => (
+                    <div key={tool.id} className="flex min-w-0 items-start gap-2">
+                        {tool.success ? (
+                            <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-emerald-600" />
+                        ) : (
+                            <XCircle className="mt-0.5 size-4 shrink-0 text-destructive" />
+                        )}
+                        <div className="min-w-0 flex-1">
+                            <div className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-1">
+                                <span className="truncate font-medium text-foreground/85">{tool.toolName}</span>
+                                <span className="text-[11.5px] tabular-nums text-foreground/45">{formatTime(tool.startedAt)}</span>
+                                {tool.durationMs !== null && (
+                                    <span className="text-[11.5px] tabular-nums text-foreground/45">{formatDuration(tool.durationMs)}</span>
+                                )}
+                            </div>
+                            {tool.errorMessage && (
+                                <div className="mt-0.5 break-words text-[12px] text-destructive">{tool.errorMessage}</div>
+                            )}
+                        </div>
+                    </div>
+                ))}
+            </div>
+        </div>
+    )
+}
+
+function fallbackUserMessage(row: RequestLogRow): Message {
+    return {
+        id: `${row.id}:input`,
+        role: "user",
+        content: row.inputText ?? "",
+        timestamp: row.startedAt,
+    }
+}
+
+function fallbackAssistantMessage(row: RequestLogRow): Message {
+    return {
+        id: `${row.id}:output`,
+        role: "assistant",
+        content: row.outputText ?? "",
+        status: row.status === "streaming" ? undefined : row.status,
+        timestamp: row.endedAt ?? row.startedAt,
+    }
 }
 
 function Stat({ label, value, highlight }: { label: string; value: number | null; highlight?: boolean }) {

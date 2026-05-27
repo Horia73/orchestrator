@@ -26,13 +26,15 @@ import { orchestrator } from '@/lib/ai/agents/orchestrator'
 import { researcher } from '@/lib/ai/agents/researcher'
 import { multipurpose } from '@/lib/ai/agents/multipurpose'
 import { conciergeAgent } from '@/lib/ai/agents/concierge-agent'
-import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
+import { MAX_AGENT_DEPTH, type ToolDef } from '@/lib/ai/agents/types'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 import { activateIntegrations } from '@/lib/integrations/activation-store'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { activateIntegrationToolsTool } from '@/lib/ai/tools/integrations'
+import { resolveProviderToolSurface } from '@/lib/ai/tools/registry'
 import { ALL_CAPABILITY_IDS, ALL_INTEGRATION_IDS, isSubsystemId } from '@/lib/integrations/exposure'
 import { ALL_SUBSYSTEM_IDS } from '@/lib/integrations/subsystem-manifest'
+import { GOOGLE_CAPABILITIES } from '@/lib/ai/providers/google'
 
 let failures = 0
 function check(label: string, cond: unknown, detail?: unknown) {
@@ -270,6 +272,40 @@ const toolPrompt = buildPromptFor({ agent: orchestrator, conversationId: toolCon
 check(
     'After ActivateIntegrationTools("watchlist"), watchlist doctrine appears in prompt',
     toolPrompt.includes('<doctrine for="watchlist">') && toolPrompt.includes(DOCTRINE_MARKERS.watchlist)
+)
+
+// --- provider tool surface compatibility ----------------------------------
+
+const mockFunctionTool: ToolDef = {
+    id: 'notify_inbox',
+    name: 'notify_inbox',
+    description: 'Smoke function tool.',
+    input_schema: { type: 'object', properties: {} },
+    tags: ['write'],
+}
+
+const googleFunctionSurface = resolveProviderToolSurface(
+    [mockFunctionTool],
+    ['web_search'],
+    GOOGLE_CAPABILITIES
+)
+check(
+    'Google surface suppresses native web_search when function tools are present',
+    googleFunctionSurface.tools.some(tool => tool.id === 'notify_inbox')
+        && !googleFunctionSurface.builtins.includes('web_search'),
+    googleFunctionSurface
+)
+
+const googleNativeOnlySurface = resolveProviderToolSurface(
+    [],
+    ['web_search'],
+    GOOGLE_CAPABILITIES
+)
+check(
+    'Google surface still exposes native web_search when no function tools are present',
+    googleNativeOnlySurface.tools.length === 0
+        && googleNativeOnlySurface.builtins.includes('web_search'),
+    googleNativeOnlySurface
 )
 
 // --- token budget regression ----------------------------------------------

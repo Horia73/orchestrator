@@ -93,10 +93,10 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
     llm: {
         model: 'gemini-3-flash-preview',
         thinkingLevel: 'low',
-        mediaResolution: 'medium',
+        mediaResolution: 'high',
         advancedModel: 'gemini-3.1-pro-preview',
         advancedThinkingLevel: 'low',
-        advancedMediaResolution: 'medium',
+        advancedMediaResolution: 'high',
     },
 };
 

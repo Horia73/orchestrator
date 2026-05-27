@@ -6,6 +6,7 @@ import type {
     ToolLogRow,
     LogsQuery,
 } from "@/lib/observability/schema"
+import type { Message } from "@/lib/types"
 
 interface FilterOptions {
     agents: string[]
@@ -293,7 +294,20 @@ function mergeRows(existing: RequestLogRow[], incoming: RequestLogRow[]): Reques
 export interface RequestDetail {
     log: RequestLogRow
     toolLogs: ToolLogRow[]
+    transcript: RequestLogTranscript | null
 }
+
+export type RequestLogTranscript =
+    | {
+        type: "message_pair"
+        userMessage: Message | null
+        assistantMessage: Message
+    }
+    | {
+        type: "agent_run"
+        promptMessage: Message
+        assistantMessage: Message
+    }
 
 /** Lazy-load a single request's detail (tool calls). */
 export function useRequestDetail(requestId: string | null): {

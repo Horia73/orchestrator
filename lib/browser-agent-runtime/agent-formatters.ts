@@ -22,6 +22,10 @@ export function formatAction(action: AgentAction): string {
             return `Inspect Full Page - ${reason(action)}`;
         case 'findInPage':
             return `Find "${formatBrowserAgentTextForLog(action.text, action.reasoning, 40)}" - ${reason(action)}`;
+        case 'inspectDiagnostics':
+            return `Inspect browser diagnostics - ${reason(action)}`;
+        case 'fetchUrl':
+            return `Fetch URL ${action.url || '[?]'} - ${reason(action)}`;
         case 'screenshot':
             return `Save screenshot - ${reason(action)}`;
         case 'recordVideo': {

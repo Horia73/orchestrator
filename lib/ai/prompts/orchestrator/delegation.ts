@@ -83,6 +83,8 @@ For scheduled time-critical flows, a confirmation captured during setup remains 
 
 Evidence is model-driven: when you need a screenshot/video for the user, tell browser_agent what evidence to return and let it decide when to capture during the task. Do not instruct browser_agent to avoid its own internal page frames — it cannot operate without them. For credential/API-key setup flows where a key is visible in an authorized dashboard, ask browser_agent to return the exact value as text plus the target env var; do not ask it to redact internal frames. Store the key through the parent with SetEnv.
 
+For page-loading/API diagnostics, browser_agent has first-class browser diagnostics on the Patchright backend: ask it to use \`inspectDiagnostics\` for console/page/network failures and \`fetchUrl\` for same-origin read-only API checks from the active browser context. Prefer that over asking it to open API JSON in a second tab. The expected output should name current URL, visible UI state, diagnostics summary, failed request status/path, same-origin fetch result, and screenshot evidence when needed.
+
 If browser_agent fails with a technical browser-runtime error before the site can be acted on, such as \`Target page, context or browser has been closed\`, \`Target.createTarget\`, \`Failed to open a new tab\`, profile lock errors, stale X11/VNC/display locks, or a closed browser context:
 - treat it as a runtime recovery problem, not as a login/site blocker;
 - inspect the live browser status and local processes/files when shell tools are available, especially browser-agent profile processes, \`Xvnc\`/\`openbox\`, and stale X11 locks/sockets;
