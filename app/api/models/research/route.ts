@@ -75,6 +75,8 @@ type ProviderResearchTarget = {
     models: Array<{ modelId: string; model: EffectiveModelEntry; globalIndex: number }>
 }
 
+type SingleModelTarget = { providerId: string; modelId: string }
+
 type ActiveResearchJob = {
     id: string
     controller: AbortController
@@ -85,6 +87,10 @@ type ActiveResearchJob = {
     events: ResearchEvent[]
     subscribers: Set<(event: ResearchEvent) => void>
     promise: Promise<void>
+    // When set, the run targets exactly this model (even if already complete)
+    // instead of the full set of incomplete models. Drives the per-model
+    // "re-research" button.
+    target?: SingleModelTarget
 }
 
 type ResearchGlobals = typeof globalThis & {
@@ -190,8 +196,49 @@ export async function POST(request: Request) {
         }, { status: 409 })
     }
 
-    const job = getOrStartResearchJob()
+    const parsed = await parseResearchTarget(request, registry)
+    if (parsed && 'error' in parsed) {
+        return Response.json({ error: parsed.error }, { status: parsed.status })
+    }
+    // A single-model re-research can't piggyback on an in-flight run — its
+    // stream would surface the unrelated active job. Require a clean slate.
+    if (parsed && activeResearchJob()) {
+        return Response.json({
+            error: 'A research run is already active. Stop it before re-researching a single model.',
+        }, { status: 409 })
+    }
+
+    const job = getOrStartResearchJob(parsed ?? undefined)
     return researchStreamResponse(job, request)
+}
+
+// Parse an optional `{ providerId, modelId }` body that narrows the run to one
+// model. Returns null for a bodyless request (full incomplete-model run), the
+// validated target, or an error envelope to surface to the caller.
+async function parseResearchTarget(
+    request: Request,
+    registry: ReturnType<typeof getEffectiveRegistry>
+): Promise<SingleModelTarget | { error: string; status: number } | null> {
+    let body: unknown
+    try {
+        body = await request.json()
+    } catch {
+        return null
+    }
+    if (!body || typeof body !== 'object') return null
+    const providerId = (body as Record<string, unknown>).providerId
+    const modelId = (body as Record<string, unknown>).modelId
+    if (typeof providerId !== 'string' || typeof modelId !== 'string' || !providerId || !modelId) {
+        return null
+    }
+    const available = await availableModelProviderIds(registry)
+    if (!available.has(providerId)) {
+        return { error: `Provider ${providerId} is not available for research.`, status: 409 }
+    }
+    if (!registry[providerId]?.models[modelId]) {
+        return { error: `Model ${providerId}:${modelId} was not found.`, status: 404 }
+    }
+    return { providerId, modelId }
 }
 
 export async function GET() {
@@ -251,7 +298,7 @@ export async function DELETE() {
     return Response.json({ stopped: true, message: 'Research stop requested.' })
 }
 
-function getOrStartResearchJob(): ActiveResearchJob {
+function getOrStartResearchJob(target?: SingleModelTarget): ActiveResearchJob {
     const existing = activeResearchJob()
     if (existing) return existing
 
@@ -264,6 +311,7 @@ function getOrStartResearchJob(): ActiveResearchJob {
         events: [],
         subscribers: new Set(),
         promise: Promise.resolve(),
+        target,
     }
     researchGlobals().__orchestratorModelResearchJob = job
     researchGlobals().__orchestratorModelResearchLastJob = job
@@ -350,7 +398,9 @@ async function runResearchJob(job: ActiveResearchJob): Promise<void> {
         if (!readiness.available) {
             throw new Error(readiness.chatMessage ?? readiness.unavailableReason ?? 'Model research requires a usable provider.')
         }
-        const providerTargets = await activeProviderResearchTargets(registry)
+        const providerTargets = job.target
+            ? await singleModelResearchTargets(registry, job.target)
+            : await activeProviderResearchTargets(registry)
         const totalModels = providerTargets.reduce((sum, p) => sum + p.models.length, 0)
         const concurrency = providerTargets.length === 0 ? 0 : Math.min(MODEL_RESEARCH_CONCURRENCY, providerTargets.length)
         job.concurrency = concurrency
@@ -689,6 +739,26 @@ function interleaveRoundRobin<T>(lists: T[][]): T[] {
         }
     }
     return out
+}
+
+// Build a one-model target list for a per-model re-research. Unlike the full
+// run, this ignores dataCompleteness (so an already-complete model can be
+// refreshed) but still requires the provider to be available and the model to
+// exist. Returns [] if either check fails, which surfaces as a 0-model "done".
+async function singleModelResearchTargets(
+    registry: ReturnType<typeof getEffectiveRegistry>,
+    target: SingleModelTarget
+): Promise<ProviderResearchTarget[]> {
+    const availableProviders = await availableModelProviderIds(registry)
+    if (!availableProviders.has(target.providerId)) return []
+    const provider = registry[target.providerId]
+    const model = provider?.models[target.modelId]
+    if (!provider || !model) return []
+    return [{
+        providerId: target.providerId,
+        providerName: provider.name,
+        models: [{ modelId: target.modelId, model, globalIndex: 0 }],
+    }]
 }
 
 async function availableModelProviderIds(registry: ReturnType<typeof getEffectiveRegistry>): Promise<Set<string>> {

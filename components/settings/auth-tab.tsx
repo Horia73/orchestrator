@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import { useRouter, useSearchParams } from "next/navigation"
 import {
   AlertCircle,
@@ -1295,9 +1294,13 @@ function LocationIntelligenceCard({
   const startSetup = () => {
     try {
       window.localStorage.setItem("chat:draft:new", entry.setupPrompt)
+      // Clear the restored conversation so home opens the "new" composer,
+      // where the chat:draft:new prompt is shown (not the last chat).
+      window.localStorage.removeItem("chat:active-id")
     } catch {
       // Navigation still opens chat; draft prefill is best-effort.
     }
+    window.location.assign("/?new=1")
   }
 
   return (
@@ -1435,14 +1438,13 @@ function LocationIntelligenceCard({
 
         <div className="flex flex-wrap gap-2">
           <Button
-            asChild
+            type="button"
             size="sm"
             variant={entry.configured ? "outline" : "default"}
+            onClick={startSetup}
           >
-            <Link href="/" onClick={startSetup}>
-              <MessageCircle className="size-3.5" />
-              Ask your assistant to set up Location Intelligence
-            </Link>
+            <MessageCircle className="size-3.5" />
+            Ask your assistant to set up Location Intelligence
           </Button>
           <Button asChild size="sm" variant="outline">
             <a href="/library?tab=places">

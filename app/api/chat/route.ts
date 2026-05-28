@@ -1394,6 +1394,31 @@ export async function POST(request: Request) {
                             contextWindow:
                               latestContextUsage.contextWindow ??
                               finalContextUsage.contextWindow,
+                            // Codex's final `meta.usage` is the cumulative
+                            // whole-run total (`.total`) — correct for billing,
+                            // but the context-window gauge must show the LAST
+                            // turn's occupancy (≤ the window). The live stream
+                            // already captured that from `.last`, so keep those
+                            // numbers instead of the cumulative ones, which
+                            // otherwise blow past the window (e.g. 2.0M / 258K).
+                            contextTokens:
+                              latestContextUsage.contextTokens ??
+                              finalContextUsage.contextTokens,
+                            inputTokens:
+                              latestContextUsage.inputTokens ??
+                              finalContextUsage.inputTokens,
+                            outputTokens:
+                              latestContextUsage.outputTokens ??
+                              finalContextUsage.outputTokens,
+                            thinkingTokens:
+                              latestContextUsage.thinkingTokens ??
+                              finalContextUsage.thinkingTokens,
+                            cachedTokens:
+                              latestContextUsage.cachedTokens ??
+                              finalContextUsage.cachedTokens,
+                            totalTokens:
+                              latestContextUsage.totalTokens ??
+                              finalContextUsage.totalTokens,
                             threadTokens:
                               latestContextUsage.threadTokens ??
                               finalContextUsage.threadTokens,

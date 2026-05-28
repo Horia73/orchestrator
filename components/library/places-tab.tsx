@@ -1,7 +1,6 @@
 "use client"
 
 import * as React from "react"
-import Link from "next/link"
 import {
   AlertCircle,
   CheckCircle2,
@@ -723,9 +722,13 @@ function PlacesEmptyState({
         "chat:draft:new",
         status.setupPrompt || SETUP_PROMPT
       )
+      // Clear the restored conversation so home opens the "new" composer,
+      // where the chat:draft:new prompt is shown (not the last chat).
+      window.localStorage.removeItem("chat:active-id")
     } catch {
-      // The chat link still works without a draft.
+      // The handoff still works without a draft.
     }
+    window.location.assign("/?new=1")
   }
 
   return (
@@ -741,11 +744,9 @@ function PlacesEmptyState({
           </p>
         </div>
         <div className="flex flex-wrap justify-center gap-2">
-          <Button asChild size="sm">
-            <Link href="/" onClick={startSetup}>
-              <MessageCircle className="size-3.5" />
-              Ask your assistant to set up Location Intelligence
-            </Link>
+          <Button type="button" size="sm" onClick={startSetup}>
+            <MessageCircle className="size-3.5" />
+            Ask your assistant to set up Location Intelligence
           </Button>
           <Button asChild size="sm" variant="outline">
             <a href="/settings?tab=auth&auth=locationIntelligence">

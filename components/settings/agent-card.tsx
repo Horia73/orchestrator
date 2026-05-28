@@ -107,10 +107,15 @@ export function AgentCard({
   const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue>; fallbacks?: AgentFallback[] }) => {
     setStatus({ kind: "saving" })
     try {
+      // Strip fallbacks before spreading: the server rejects any fallbacks field
+      // — even an empty array — for non-text agents, so a model/feature change on
+      // a media agent (image/video/speech/music) would otherwise 400. Only re-add
+      // when the agent actually supports fallbacks.
+      const { fallbacks, ...rest } = next
       await setAgentOverride(agentId, {
-        ...next,
-        ...(fallbackCapable && next.fallbacks && next.fallbacks.length > 0
-          ? { fallbacks: next.fallbacks }
+        ...rest,
+        ...(fallbackCapable && fallbacks && fallbacks.length > 0
+          ? { fallbacks }
           : {}),
       })
       setStatus({ kind: "saved", at: Date.now() })

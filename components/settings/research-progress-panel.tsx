@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, Bot, CheckCircle2, CircleDotDashed, FileSearch, Loader2, X } from "lucide-react"
+import { AlertCircle, Bot, CheckCircle2, CircleDotDashed, FileSearch, Loader2, RefreshCw, X } from "lucide-react"
 
 import { StreamingBubble } from "@/components/message-bubble"
 import { appendBoundedToolDelta } from "@/lib/ai/reasoning-limits"
@@ -17,6 +17,7 @@ interface ResearchProgressPanelProps {
   modelStatuses?: CurrentModelResearchStatus[]
   onCollapse: () => void
   onClear: () => void
+  onResearchModel?: (providerId: string, modelId: string) => void
 }
 
 type ResearchRunStatus = "running" | "updated" | "unchanged" | "incomplete" | "failed" | "stopped"
@@ -68,7 +69,7 @@ interface ResearchTimeline {
   activeRun?: ResearchRun
 }
 
-export function ResearchProgressPanel({ events, researching, statusOnly = false, modelStatuses = [], onCollapse, onClear }: ResearchProgressPanelProps) {
+export function ResearchProgressPanel({ events, researching, statusOnly = false, modelStatuses = [], onCollapse, onClear, onResearchModel }: ResearchProgressPanelProps) {
   const timeline = React.useMemo(() => buildResearchTimeline(events), [events])
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null)
   const [selectedStatusKey, setSelectedStatusKey] = React.useState<string | null>(null)
@@ -287,7 +288,11 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
           ) : selectedRun ? (
             <ResearchRunPreview run={selectedRun} now={now} />
           ) : !hasRunTimeline && selectedStatus ? (
-            <CurrentModelStatusPreview model={selectedStatus} />
+            <CurrentModelStatusPreview
+              model={selectedStatus}
+              researching={researching}
+              onResearch={onResearchModel}
+            />
           ) : (
             <div className="flex h-full min-h-[180px] items-center justify-center text-[12.5px] text-foreground/45">
               No model status available.
@@ -409,7 +414,15 @@ function ResearchResultBlock({ result }: { result: Extract<ModelResearchClientEv
   )
 }
 
-function CurrentModelStatusPreview({ model }: { model: CurrentModelResearchStatus }) {
+function CurrentModelStatusPreview({
+  model,
+  researching,
+  onResearch,
+}: {
+  model: CurrentModelResearchStatus
+  researching?: boolean
+  onResearch?: (providerId: string, modelId: string) => void
+}) {
   return (
     <div className="flex min-w-0 flex-col gap-3">
       <div className="flex flex-wrap items-start justify-between gap-2 rounded-lg border border-border/60 bg-background px-3 py-2.5">
@@ -422,7 +435,24 @@ function CurrentModelStatusPreview({ model }: { model: CurrentModelResearchStatu
             {model.providerId}:{model.modelId}
           </p>
         </div>
-        <ModelStatusPill status={model.status} />
+        <div className="flex shrink-0 items-center gap-2">
+          {onResearch && (
+            <button
+              type="button"
+              onClick={() => onResearch(model.providerId, model.modelId)}
+              disabled={researching}
+              className={cn(
+                "inline-flex h-7 items-center gap-1.5 rounded-md border border-border bg-background px-2 text-[12px] font-medium text-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground",
+                researching && "cursor-not-allowed opacity-60"
+              )}
+              title={`Re-run the researcher for ${model.name}`}
+            >
+              <RefreshCw className={cn("size-3.5", researching && "animate-spin")} />
+              Re-research
+            </button>
+          )}
+          <ModelStatusPill status={model.status} />
+        </div>
       </div>
 
       <div className="rounded-lg border border-border/60 bg-background px-3 py-3">

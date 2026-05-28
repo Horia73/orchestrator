@@ -109,6 +109,11 @@ interface SettingsContextValue {
   refreshModels: () => Promise<RefreshResult>
   /** Run the researcher against every active model and stream progress events. */
   researchModels: () => Promise<ModelResearchClientEvent[]>
+  /** Re-run the researcher against a single model (even if already complete). */
+  researchModel: (
+    providerId: string,
+    modelId: string
+  ) => Promise<ModelResearchClientEvent[]>
   stopResearchModels: () => void
   /** True while a refresh is in flight (drives spinner / disabled state). */
   refreshing: boolean
@@ -699,9 +704,9 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     [applyResearchedModel]
   )
 
-  const attachResearchStream = React.useCallback(async (): Promise<
-    ModelResearchClientEvent[]
-  > => {
+  const attachResearchStream = React.useCallback(async (
+    target?: { providerId: string; modelId: string }
+  ): Promise<ModelResearchClientEvent[]> => {
     if (researchStreamRef.current) {
       throw new Error("Research already running")
     }
@@ -714,6 +719,12 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch("/api/models/research", {
         method: "POST",
         signal: controller.signal,
+        ...(target
+          ? {
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify(target),
+            }
+          : {}),
       })
       if (!res.ok) {
         const json = await res.json().catch(() => ({}))
@@ -848,6 +859,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     return attachResearchStream()
   }, [attachResearchStream])
 
+  const researchModel = React.useCallback(
+    async (
+      providerId: string,
+      modelId: string
+    ): Promise<ModelResearchClientEvent[]> => {
+      return attachResearchStream({ providerId, modelId })
+    },
+    [attachResearchStream]
+  )
+
   const stopResearchModels = React.useCallback(() => {
     stopResearchRequestedRef.current = true
     void fetch("/api/models/research", { method: "DELETE" }).catch(() => {
@@ -879,6 +900,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       curateModel,
       refreshModels,
       researchModels,
+      researchModel,
       stopResearchModels,
       refreshing,
       researching,
@@ -899,6 +921,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       curateModel,
       refreshModels,
       researchModels,
+      researchModel,
       stopResearchModels,
       refreshing,
       researching,

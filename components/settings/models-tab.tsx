@@ -49,6 +49,7 @@ export function ModelsTab() {
     refreshModels,
     refreshing,
     researchModels,
+    researchModel,
     stopResearchModels,
     researching,
     researchEvents,
@@ -370,6 +371,42 @@ export function ModelsTab() {
     }
   }
 
+  const handleResearchModel = async (providerId: string, modelId: string) => {
+    if (refreshing || researching) return
+    if (!hasUsableProviders || !researcherReady) {
+      setLastResearch({
+        ok: false,
+        summary:
+          researchUnavailableReason ??
+          "Connect a model provider before running research.",
+      })
+      return
+    }
+    setResearchPreviewOpen(true)
+    setResearchStatusOpen(true)
+    setResearchStatusMode(false)
+    try {
+      setLastResearch(null)
+      const events = await researchModel(providerId, modelId)
+      const done = [...events].reverse().find((e) => e.type === "done")
+      const stopped = [...events].reverse().find((e) => e.type === "stopped")
+      setLastResearch({
+        ok: true,
+        summary:
+          stopped?.type === "stopped"
+            ? stopped.message
+            : done?.type === "done"
+              ? `${done.updated} patched · ${done.incomplete ?? 0} incomplete · ${done.failed} failed`
+              : "Research finished",
+      })
+    } catch (err) {
+      setLastResearch({
+        ok: false,
+        summary: err instanceof Error ? err.message : "Research failed",
+      })
+    }
+  }
+
   // Auto-clear refresh feedback after a few seconds.
   React.useEffect(() => {
     if (!lastRefresh) return
@@ -536,6 +573,7 @@ export function ModelsTab() {
             modelStatuses={currentResearchStatuses}
             onCollapse={() => setResearchPreviewOpen(false)}
             onClear={clearResearchEvents}
+            onResearchModel={handleResearchModel}
           />
         ) : (
           <ResearchPreviewCollapsed

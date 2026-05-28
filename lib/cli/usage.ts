@@ -361,8 +361,10 @@ function parseClaudeResetText(input: string): number {
         .replace(/([A-Za-z])(\d)/g, '$1 $2')
         .replace(/(\d)\s*at\s*(\d)/gi, '$1 at $2')
 
-    // Variant A: "May 15 at 7pm" or "May 15 at 7:30pm"
-    const dateTimeRe = /^([A-Za-z]{3,9})\s+(\d{1,2})(?:\s+at\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i
+    // Variant A: "May 15 at 7pm", "May 29, 7pm" (Claude 2.1.153+), "May 15 7:30pm",
+    // or date-only "Jun 1". The day/time separator may be " at ", a comma, or
+    // just whitespace — claude's wording drifts between CLI versions.
+    const dateTimeRe = /^([A-Za-z]{3,9})\s+(\d{1,2})(?:[,\s]+(?:at\s+)?(\d{1,2})(?::(\d{2}))?\s*(am|pm)?)?$/i
     const m1 = stripped.match(dateTimeRe)
     if (m1) {
         const month = monthIndex(m1[1])
