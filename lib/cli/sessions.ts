@@ -227,6 +227,20 @@ export function resizeSession(id: string, cols: number, rows: number): boolean {
     }
 }
 
+/**
+ * Tear down every live session for a CLI. Used by the "Restart" control so a
+ * stale/hung interactive session (login, setup-token…) is cleared before the
+ * UI re-detects status. Returns how many sessions were signalled.
+ */
+export function closeSessionsForCli(cli: CliId): number {
+    let closed = 0
+    for (const [id, s] of sessions) {
+        if (s.cli !== cli || s.exited) continue
+        if (closeSession(id, 'user')) closed++
+    }
+    return closed
+}
+
 export function closeSession(id: string, reason: 'user' | 'idle' = 'user'): boolean {
     const s = sessions.get(id)
     if (!s) return false

@@ -11,6 +11,7 @@ import {
     LogIn,
     LogOut,
     RefreshCcw,
+    RotateCcw,
     Terminal as TerminalIcon,
     XCircle,
 } from "lucide-react"
@@ -35,6 +36,19 @@ export function CliAccountsSection() {
         setModal(null)
         // Subprocess may have just changed login state — re-pull.
         void refresh()
+    }
+
+    const restartCli = async (cliId: string, refreshStatus: () => Promise<void>) => {
+        try {
+            await fetch("/api/cli/restart", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ cli: cliId }),
+            })
+        } finally {
+            // Re-detect even if the restart call failed — status is the source of truth.
+            await refreshStatus()
+        }
     }
 
     return (
@@ -82,6 +96,7 @@ export function CliAccountsSection() {
                         key={id}
                         id={id}
                         entry={entry}
+                        onRestart={() => restartCli(id, refresh)}
                         onInstall={() => setModal({
                             cliId: id,
                             cliName: entry.name,
@@ -123,14 +138,25 @@ export function CliAccountsSection() {
     )
 }
 
-function CliCard({ id, entry, onInstall, onLogin, onLogout, onSetupToken }: {
+function CliCard({ id, entry, onInstall, onLogin, onLogout, onSetupToken, onRestart }: {
     id: string
     entry: CliStatusEntry
     onInstall: () => void
     onLogin: () => void
     onLogout: () => void
     onSetupToken: () => void
+    onRestart: () => Promise<void>
 }) {
+    const [restarting, setRestarting] = React.useState(false)
+    const handleRestart = async () => {
+        if (restarting) return
+        setRestarting(true)
+        try {
+            await onRestart()
+        } finally {
+            setRestarting(false)
+        }
+    }
     // Only Claude Code exposes the setup-token flow today; codex doesn't have
     // an equivalent and would confuse the user with an option that no-ops.
     const supportsSetupToken = id === "claude-code"
@@ -290,6 +316,23 @@ function CliCard({ id, entry, onInstall, onLogin, onLogout, onSetupToken }: {
                                 </button>
                             )}
                         </>
+                    )}
+                    {entry.installed && (
+                        <button
+                            onClick={handleRestart}
+                            disabled={restarting}
+                            title="Restart this CLI — clears live sessions and re-detects status. New models still need to be in the catalog."
+                            className={cn(
+                                "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors",
+                                "hover:bg-muted/60 hover:text-foreground",
+                                restarting && "opacity-60"
+                            )}
+                        >
+                            {restarting
+                                ? <Loader2 className="size-3.5 animate-spin" />
+                                : <RotateCcw className="size-3.5" />}
+                            Restart
+                        </button>
                     )}
                 </div>
             </CardContent>

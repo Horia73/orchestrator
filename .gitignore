@@ -18,6 +18,10 @@
 /coverage/
 /test-results/
 /playwright-report/
+
+# local scratch / debug probes
+_imgtest*.mjs
+__pycache__/
 /blob-report/
 /.playwright-cli/
 /.playwright-mcp/

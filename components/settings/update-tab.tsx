@@ -11,6 +11,7 @@ import {
   Loader2,
   RefreshCcw,
   RotateCw,
+  Terminal as TerminalIcon,
   Trash2,
   Upload,
   X,
@@ -263,6 +264,8 @@ export function UpdateTab() {
   const [resetMessage, setResetMessage] = React.useState<string | null>(null)
   const [memoryBusy, setMemoryBusy] = React.useState<"export" | "import" | null>(null)
   const [memoryMessage, setMemoryMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
+  const [cliBusy, setCliBusy] = React.useState<"update" | "restart" | null>(null)
+  const [cliMessage, setCliMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
   const memoryImportInputRef = React.useRef<HTMLInputElement | null>(null)
 
   const loadStatus = React.useCallback(async (refresh = false) => {
@@ -329,6 +332,37 @@ export function UpdateTab() {
       setError(err instanceof Error ? err.message : "Failed to queue update.")
     } finally {
       setUpdating(false)
+    }
+  }
+
+  const handleCliUpdate = async () => {
+    setCliBusy("update")
+    setCliMessage(null)
+    try {
+      const res = await fetch("/api/update/cli", { method: "POST", cache: "no-store" })
+      const json = await res.json().catch(() => null) as { ok?: boolean; versions?: string; error?: string } | null
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `CLI update failed (${res.status})`)
+      const versions = json.versions ? ` — ${json.versions.replace(/\n+/g, " · ")}` : ""
+      setCliMessage({ tone: "success", text: `CLIs updated${versions}. Container is restarting — give it a moment.` })
+    } catch (err) {
+      setCliMessage({ tone: "error", text: err instanceof Error ? err.message : "CLI update failed." })
+    } finally {
+      setCliBusy(null)
+    }
+  }
+
+  const handleContainerRestart = async () => {
+    setCliBusy("restart")
+    setCliMessage(null)
+    try {
+      const res = await fetch("/api/update/restart", { method: "POST", cache: "no-store" })
+      const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `Restart failed (${res.status})`)
+      setCliMessage({ tone: "success", text: "Container is restarting — give it a moment, then reload." })
+    } catch (err) {
+      setCliMessage({ tone: "error", text: err instanceof Error ? err.message : "Restart failed." })
+    } finally {
+      setCliBusy(null)
     }
   }
 
@@ -576,6 +610,54 @@ export function UpdateTab() {
           )}
         </CardContent>
       </Card>
+
+      {status?.config.serviceManager === "docker" && status.config.dockerHostUpdater && (
+        <Card className="rounded-xl">
+          <CardHeader className="flex-row items-start justify-between gap-3">
+            <div>
+              <CardTitle className="text-[15px]">CLI tools</CardTitle>
+              <p className="mt-1 text-[12.5px] text-foreground/55">
+                Claude Code and Codex live in a mounted volume, so app updates never refresh them.
+                Update them in place (this restarts the container), or restart the container on its own.
+              </p>
+            </div>
+            <TerminalIcon className="size-4 shrink-0 text-foreground/45" />
+          </CardHeader>
+          <CardContent className="gap-3">
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                size="sm"
+                onClick={handleCliUpdate}
+                disabled={cliBusy !== null || Boolean(activeJob)}
+              >
+                {cliBusy === "update" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                Update CLIs
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={handleContainerRestart}
+                disabled={cliBusy !== null || Boolean(activeJob)}
+              >
+                {cliBusy === "restart" ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
+                Restart container
+              </Button>
+            </div>
+            {cliMessage && (
+              <div
+                className={cn(
+                  "rounded-xl border px-3 py-2.5 text-[12.5px]",
+                  cliMessage.tone === "success"
+                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+                    : "border-destructive/30 bg-destructive/5 text-destructive"
+                )}
+              >
+                {cliMessage.text}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <Card className="rounded-xl">

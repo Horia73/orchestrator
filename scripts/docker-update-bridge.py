@@ -26,6 +26,22 @@ BIND_HOST = os.environ.get("ORCHESTRATOR_UPDATE_BRIDGE_BIND", "127.0.0.1")
 PORT = int(os.environ.get("ORCHESTRATOR_UPDATE_BRIDGE_PORT", "38733"))
 TOKEN_FILE = Path(os.environ.get("ORCHESTRATOR_UPDATE_TOKEN_FILE", str(APP_DIR.parent / "update-bridge-token")))
 APP_PORT = os.environ.get("ORCHESTRATOR_PORT", "3000")
+SERVICE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_SERVICE", "orchestrator")
+# CLIs live in the bind-mounted /home/node volume, so neither the image build
+# nor their own headless (`-p`) runs ever update them. These let the Updates
+# page refresh them in place inside that volume.
+CLI_UPDATE_PACKAGES = [
+    pkg.strip()
+    for pkg in os.environ.get(
+        "ORCHESTRATOR_CLI_UPDATE_PACKAGES",
+        "@anthropic-ai/claude-code@latest,@openai/codex@latest",
+    ).split(",")
+    if pkg.strip()
+]
+CLI_VERSION_PROBE = (
+    "/home/node/.npm-global/bin/claude --version 2>/dev/null; "
+    "/home/node/.npm-global/bin/codex --version 2>/dev/null"
+)
 LOG_DIR = Path(os.environ.get("ORCHESTRATOR_UPDATE_LOG_DIR", str(APP_DIR.parent / "logs")))
 LOG_PATH = LOG_DIR / "docker-update-bridge.log"
 CLAUDE_USAGE_TIMEOUT_SECONDS = float(os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_TIMEOUT_SECONDS", "30"))
@@ -610,6 +626,69 @@ def stream_update_log(handler: "Handler") -> None:
         time.sleep(LOG_STREAM_POLL_S)
 
 
+def run_capture(command: list[str], timeout: Optional[float] = None) -> tuple[int, str]:
+    """Run a command, mirror its combined output into the bridge log, and
+    return (exit_code, output). Unlike `run`, this never raises on a non-zero
+    exit — the caller decides how to report it."""
+    write_log("$ " + " ".join(command))
+    try:
+        result = subprocess.run(
+            command,
+            cwd=APP_DIR,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired:
+        write_log(f"Command timed out after {timeout}s: {' '.join(command)}")
+        return 124, f"Command timed out after {timeout}s."
+    output = result.stdout or ""
+    if output:
+        with LOG_PATH.open("a", encoding="utf-8") as handle:
+            handle.write(output if output.endswith("\n") else output + "\n")
+    return result.returncode, output
+
+
+def restart_container_async(delay: float = 0.4) -> None:
+    """Restart the orchestrator container shortly after the HTTP response is
+    flushed. Done in a background thread because the restart tears down the
+    very app process that proxied this request — we want the caller to receive
+    its response first."""
+    def _do() -> None:
+        time.sleep(delay)
+        try:
+            run([*compose_command(), "restart", SERVICE_NAME])
+            write_log(f"Restarted container service '{SERVICE_NAME}'.")
+        except Exception as exc:  # noqa: BLE001 — log and move on
+            write_log(f"Container restart failed: {exc}")
+        finally:
+            if update_lock.locked():
+                update_lock.release()
+    threading.Thread(target=_do, daemon=True).start()
+
+
+def update_clis() -> dict:
+    """Update the CLIs inside the running container's npm-global volume, then
+    restart the container. Returns the install result; the restart runs in the
+    background after this returns so the response reaches the app first."""
+    if not CLI_UPDATE_PACKAGES:
+        return {"ok": False, "error": "No CLI packages configured to update."}
+    write_log("Starting CLI update: " + ", ".join(CLI_UPDATE_PACKAGES))
+    code, output = run_capture(
+        [*compose_command(), "exec", "-T", SERVICE_NAME, "npm", "install", "-g", *CLI_UPDATE_PACKAGES],
+        timeout=180,
+    )
+    if code != 0:
+        return {"ok": False, "error": f"npm install failed (exit {code}).", "log": output[-2000:]}
+    _, versions = run_capture(
+        [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERSION_PROBE],
+        timeout=30,
+    )
+    restart_container_async()
+    return {"ok": True, "phase": "restarting", "versions": versions.strip()}
+
+
 class Handler(BaseHTTPRequestHandler):
     server_version = "OrchestratorDockerUpdateBridge/1.0"
 
@@ -660,7 +739,8 @@ class Handler(BaseHTTPRequestHandler):
             self.send_json(502, payload)
 
     def do_POST(self) -> None:
-        if self.path != "/update":
+        path = self.path.split("?", 1)[0]
+        if path not in {"/update", "/update-clis", "/restart"}:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
@@ -668,6 +748,28 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not update_lock.acquire(blocking=False):
             self.send_json(409, {"error": "Docker update already running."})
+            return
+
+        if path == "/restart":
+            # Lock is released by the background restart thread.
+            self.send_json(202, {"ok": True, "phase": "restarting"})
+            restart_container_async()
+            return
+
+        if path == "/update-clis":
+            try:
+                result = update_clis()
+            except Exception as exc:  # noqa: BLE001
+                update_lock.release()
+                self.send_json(500, {"ok": False, "error": str(exc)})
+                return
+            if not result.get("ok"):
+                # No restart was scheduled — release the lock ourselves.
+                update_lock.release()
+                self.send_json(502, result)
+                return
+            # Success: restart_container_async() owns the lock release now.
+            self.send_json(200, result)
             return
 
         try:

@@ -697,6 +697,79 @@ export function getDockerHostUpdaterLogConfig(): { url: string; token: string } 
     return { url: logUrl, token: base.token }
 }
 
+/**
+ * Derive a sibling endpoint on the docker-update-bridge from the configured
+ * `/update` URL (e.g. `/update-clis`, `/restart`), reusing its bearer token.
+ */
+function dockerBridgeEndpoint(segment: string): { url: string; token: string } | null {
+    const base = dockerHostUpdaterConfig()
+    if (!base) return null
+    try {
+        const parsed = new URL(base.url)
+        const segments = parsed.pathname.split('/').filter(Boolean)
+        if (segments.length > 0 && segments[segments.length - 1] === 'update') {
+            segments[segments.length - 1] = segment
+        } else {
+            segments.push(segment)
+        }
+        parsed.pathname = '/' + segments.join('/')
+        return { url: parsed.toString(), token: base.token }
+    } catch {
+        return null
+    }
+}
+
+/**
+ * Ask the host bridge to update the CLIs (claude-code, codex) inside the
+ * container's bind-mounted npm-global volume, then restart the container.
+ * Docker installs only — the CLIs live outside the image, so neither a rebuild
+ * nor their headless runs ever refresh them.
+ */
+export async function triggerCliUpdate(): Promise<{ ok: boolean; versions?: string; error?: string }> {
+    const cfg = dockerBridgeEndpoint('update-clis')
+    if (!cfg) {
+        return { ok: false, error: 'CLI update needs a Docker install with the host bridge configured.' }
+    }
+    try {
+        const res = await fetch(cfg.url, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+            body: '{}',
+            cache: 'no-store',
+        })
+        const json = (await res.json().catch(() => null)) as { ok?: boolean; versions?: string; error?: string } | null
+        if (!res.ok || !json?.ok) {
+            return { ok: false, error: json?.error || `Host bridge returned ${res.status}.` }
+        }
+        return { ok: true, versions: json.versions }
+    } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'CLI update request failed.' }
+    }
+}
+
+/** Ask the host bridge to restart the orchestrator container. Docker only. */
+export async function triggerContainerRestart(): Promise<{ ok: boolean; error?: string }> {
+    const cfg = dockerBridgeEndpoint('restart')
+    if (!cfg) {
+        return { ok: false, error: 'Restart needs a Docker install with the host bridge configured.' }
+    }
+    try {
+        const res = await fetch(cfg.url, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+            body: '{}',
+            cache: 'no-store',
+        })
+        if (!res.ok) {
+            const txt = await res.text().catch(() => '')
+            return { ok: false, error: txt || `Host bridge returned ${res.status}.` }
+        }
+        return { ok: true }
+    } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Restart request failed.' }
+    }
+}
+
 function hasDockerHostUpdater(): boolean {
     return Boolean(dockerHostUpdaterConfig())
 }
