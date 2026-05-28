@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 
 interface PdfThumbnailProps {
@@ -22,7 +23,7 @@ export function PdfThumbnail({ file, url, onRendered }: PdfThumbnailProps) {
         async function render() {
             try {
                 const pdfjsLib = await import("pdfjs-dist")
-                pdfjsLib.GlobalWorkerOptions.workerSrc = "/pdf.worker.min.mjs"
+                pdfjsLib.GlobalWorkerOptions.workerSrc = appPath("/pdf.worker.min.mjs")
 
                 // eslint-disable-next-line @typescript-eslint/no-explicit-any
                 let source: any

@@ -31,8 +31,67 @@ const TOOL_CALL_PANEL_MIN_HEIGHT = "160px"
 const TOOL_CALL_PANEL_STYLE: React.CSSProperties = {
     height: TOOL_CALL_PANEL_HEIGHT,
     minHeight: TOOL_CALL_PANEL_MIN_HEIGHT,
+    overscrollBehavior: "contain",
 }
 const TOOL_CALL_INSET_CLASS = "ml-7 w-[calc(100%_-_1.75rem)] max-w-[760px]"
+
+const SCROLLABLE_OVERFLOW = new Set(["auto", "scroll", "overlay"])
+
+// Stop wheel events that originate inside a tool-call box from scrolling the
+// chat/agent page behind it. If the box (or an inner element like the xterm
+// viewport) can scroll, the native scroll still happens; once it hits its
+// boundary — or when the box has nothing scrollable at all — the wheel is
+// blocked instead of chaining outward.
+function trapWheelInsideToolCall(event: React.WheelEvent<HTMLDivElement>) {
+    const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
+    const scroller = findScrollerInside(event.target, event.currentTarget, axis)
+    event.stopPropagation()
+    if (!scroller) {
+        event.preventDefault()
+        return
+    }
+    const delta = axis === "y" ? event.deltaY : event.deltaX
+    if (delta === 0) return
+    if (axis === "y") {
+        const max = scroller.scrollHeight - scroller.clientHeight
+        if ((delta < 0 && scroller.scrollTop <= 0) || (delta > 0 && scroller.scrollTop >= max - 1)) {
+            event.preventDefault()
+        }
+        return
+    }
+    const max = scroller.scrollWidth - scroller.clientWidth
+    if ((delta < 0 && scroller.scrollLeft <= 0) || (delta > 0 && scroller.scrollLeft >= max - 1)) {
+        event.preventDefault()
+    }
+}
+
+function findScrollerInside(
+    target: EventTarget | null,
+    boundary: HTMLElement,
+    axis: "x" | "y"
+): HTMLElement | null {
+    let node = target instanceof HTMLElement ? target : null
+    while (node) {
+        if (isScrollableOnAxis(node, axis)) return node
+        if (node === boundary) break
+        node = node.parentElement
+    }
+    return null
+}
+
+function isScrollableOnAxis(element: HTMLElement, axis: "x" | "y"): boolean {
+    const style = window.getComputedStyle(element)
+    if (axis === "y") {
+        return (
+            SCROLLABLE_OVERFLOW.has(style.overflowY) &&
+            element.scrollHeight > element.clientHeight + 1
+        )
+    }
+    return (
+        SCROLLABLE_OVERFLOW.has(style.overflowX) &&
+        element.scrollWidth > element.clientWidth + 1
+    )
+}
 
 export function InlineToolCallView({ entry, searchDisplay = "expanded" }: InlineToolCallViewProps) {
     const status = entry.status ?? (entry.content ? (entry.success === false ? "error" : "ok") : "running")
@@ -48,6 +107,7 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
                     TOOL_CALL_INSET_CLASS
                 )}
                 style={TOOL_CALL_PANEL_STYLE}
+                onWheelCapture={trapWheelInsideToolCall}
             >
                 <LiveTerminal entry={entry} data={data} className={TERMINAL_MIN_WIDTH_CLASS} />
             </div>
@@ -124,6 +184,7 @@ function ToolFrame({
             <div
                 className={cn("overflow-auto bg-background", bodyClassName)}
                 style={TOOL_CALL_PANEL_STYLE}
+                onWheelCapture={trapWheelInsideToolCall}
             >
                 {children}
             </div>

@@ -7,6 +7,7 @@ import {
     Printer, Download, RotateCw, ChevronLeft, ChevronRight,
     FileText, Loader2,
 } from "lucide-react"
+import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
 
@@ -382,7 +383,7 @@ export function FilePreviewModal({ attachment, onClose }: FilePreviewModalProps)
 
     if (!mounted || !attachment) return null
 
-    const url = `/api/uploads/${attachment.id}`
+    const url = appPath(`/api/uploads/${encodeURIComponent(attachment.id)}`)
 
     if (attachment.type === "pdf") {
         return createPortal(

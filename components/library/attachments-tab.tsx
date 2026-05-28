@@ -95,10 +95,13 @@ export function AttachmentsTab({
     if (!data || selectedIds.size === 0) return []
     return data.filter((item) => selectedIds.has(item.id))
   }, [data, selectedIds])
-  const visibleItems = filtered ?? []
-  const allVisibleSelected =
-    visibleItems.length > 0 &&
-    visibleItems.every((item) => selectedIds.has(item.id))
+  const visibleItems = React.useMemo(() => filtered ?? [], [filtered])
+  const allVisibleSelected = React.useMemo(
+    () =>
+      visibleItems.length > 0 &&
+      visibleItems.every((item) => selectedIds.has(item.id)),
+    [selectedIds, visibleItems]
+  )
 
   React.useEffect(() => {
     if (!data) return

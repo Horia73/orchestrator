@@ -9,6 +9,7 @@ import {
   deleteExtraWorkspaceFile,
   listExtraWorkspaceFiles,
 } from "@/lib/library/workspace-extra-files"
+import { appPath } from "@/lib/app-path"
 
 /**
  * GET /api/library/attachments?type=image|video|audio|pdf|document|other|media|audio|files
@@ -41,7 +42,7 @@ interface LibraryAttachmentResponse {
 }
 
 function uploadUrl(id: string): string {
-  return `/api/uploads/${encodeURIComponent(id)}`
+  return appPath(`/api/uploads/${encodeURIComponent(id)}`)
 }
 
 function normalizeAttachment(
@@ -141,7 +142,7 @@ export async function DELETE(request: Request) {
     try {
       if (deleteExtraWorkspaceFile(workspacePath)) deletedWorkspaceFiles++
       else missingWorkspaceFiles.push(workspacePath)
-    } catch (error) {
+    } catch {
       missingWorkspaceFiles.push(workspacePath)
     }
   }

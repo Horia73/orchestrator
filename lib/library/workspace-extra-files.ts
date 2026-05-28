@@ -2,6 +2,7 @@ import fs from "fs"
 import path from "path"
 
 import { AGENT_WORKSPACE_DIR } from "@/lib/config"
+import { appApiPath } from "@/lib/app-path"
 import {
   isInsideHiddenDiscoveryPath,
   isInsideProtectedAgentPath,
@@ -68,7 +69,7 @@ function mimeTypeFor(filePath: string): string {
 }
 
 function workspaceFileUrl(relativePath: string): string {
-  return `/api/workspace/files?path=${encodeURIComponent(relativePath)}`
+  return appApiPath("/api/workspace/files", { path: relativePath })
 }
 
 function workspaceEntryId(relativePath: string): string {

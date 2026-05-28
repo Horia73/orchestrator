@@ -18,6 +18,9 @@ const ARTIFACT_PANEL_WIDTH_STORAGE_PREFIX = "chat:artifact-panel-width"
 export const SCROLL_BOTTOM_SENTINEL = "bottom"
 export const SCROLL_ANCHOR_STORAGE_PREFIX = "scroll-anchor:chat"
 export const SCROLL_RESTORE_STORAGE_PREFIX = "scroll-restore:chat"
+// Remembers which streaming message we already pinned to the top, so a remount
+// during the same ongoing stream doesn't re-anchor over a restored scroll.
+export const STREAM_ANCHOR_TAKEN_PREFIX = "chat:anchoredStream"
 export const SCROLL_RESTORE_TOP_OFFSET = 16
 export const MESSAGE_ANCHOR_TOP_OFFSET = 32
 export const MESSAGE_ANCHOR_SCROLL_DURATION_MS = 420

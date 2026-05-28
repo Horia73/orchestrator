@@ -2,6 +2,8 @@
 
 import * as React from "react"
 
+import { appApiPath, appPath } from "@/lib/app-path"
+
 export interface LibraryAttachment {
   id: string
   filename: string
@@ -37,9 +39,7 @@ async function fetchAttachments(type: LibraryAttachmentType, force = false) {
     if (inFlight) return inFlight
   }
 
-  const request = fetch(
-    `/api/library/attachments?type=${encodeURIComponent(type)}`
-  )
+  const request = fetch(appApiPath("/api/library/attachments", { type }))
     .then(async (r) => {
       if (!r.ok) throw new Error(`HTTP ${r.status}`)
       const j = (await r.json()) as { attachments: LibraryAttachment[] }
@@ -121,11 +121,11 @@ export function removeAttachmentsFromCache(ids: Iterable<string>) {
 }
 
 export function libraryItemUrl(item: LibraryAttachment): string {
-  if (item.url) return item.url
+  if (item.url) return appPath(item.url)
   if (item.source === "workspace" && item.workspacePath) {
-    return `/api/workspace/files?path=${encodeURIComponent(item.workspacePath)}`
+    return appApiPath("/api/workspace/files", { path: item.workspacePath })
   }
-  return `/api/uploads/${encodeURIComponent(item.id)}`
+  return appPath(`/api/uploads/${encodeURIComponent(item.id)}`)
 }
 
 export function libraryItemSourceLabel(item: LibraryAttachment): string {

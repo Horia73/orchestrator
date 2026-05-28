@@ -7,6 +7,7 @@ import remarkMath from "remark-math"
 import type { Options as RemarkMathOptions } from "remark-math"
 import rehypeKatex from "rehype-katex"
 
+import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 
 /**
@@ -44,15 +45,21 @@ const components: Components = {
     // Open external links in a new tab; let in-page anchors behave normally.
     a: ({ href, children }) => {
         const isExternal = typeof href === "string" && /^https?:\/\//i.test(href)
+        const resolvedHref = href ? appPath(href) : undefined
         return (
             <a
-                href={href}
+                href={resolvedHref}
                 target={isExternal ? "_blank" : undefined}
                 rel={isExternal ? "noopener noreferrer" : undefined}
             >
                 {children}
             </a>
         )
+    },
+    img: ({ src, alt }) => {
+        const resolvedSrc = typeof src === "string" ? appPath(src) : undefined
+        // eslint-disable-next-line @next/next/no-img-element
+        return <img src={resolvedSrc} alt={alt ?? ""} />
     },
 }
 

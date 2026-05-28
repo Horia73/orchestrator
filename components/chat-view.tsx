@@ -22,6 +22,7 @@ import {
   SCROLL_RESTORE_STORAGE_PREFIX,
   SCROLL_RESTORE_TOP_OFFSET,
   STICKY_BOTTOM_THRESHOLD,
+  STREAM_ANCHOR_TAKEN_PREFIX,
   TAIL_SPACER_UPDATE_THRESHOLD_PX,
   artifactPanelArtifactWidthKey,
   artifactPanelConversationWidthKey,
@@ -1412,74 +1413,98 @@ export function ChatView() {
       setTimeout(() => {
         suppressBtnRef.current = false
       }, 300)
-      const messages = activeConversation?.messages || []
-      const lastMsg = messages[messages.length - 1]
-      const previousMsg = messages[messages.length - 2]
 
-      if (lastMsg?.role === "user") {
-        const neededSpace = getTailResponseMinHeight(
-          lastMsg.id,
-          streamingBubbleContainerRef.current
-        )
+      // If we're remounting into a stream we already anchored once, the
+      // layout-effect above has restored the user's saved scroll — don't
+      // overwrite it with a forced top-anchor on the user message.
+      const anchorTakenKey = conversationId
+        ? `${STREAM_ANCHOR_TAKEN_PREFIX}:${conversationId}`
+        : null
+      const alreadyAnchoredStreamId = anchorTakenKey
+        ? localStorage.getItem(anchorTakenKey)
+        : null
+      const isRemountIntoOngoingStream = Boolean(
+        currentStreamMessageId &&
+          alreadyAnchoredStreamId === currentStreamMessageId
+      )
 
-        minHeightActiveRef.current = neededSpace > 0
-        setMinHeightMsgId(null) // streaming bubble takes over
-        setMinHeight(neededSpace)
-
-        if (conversationId) {
-          localStorage.setItem(
-            `chat:minHeight:${conversationId}`,
-            JSON.stringify({
-              minHeight: neededSpace,
-              minHeightMsgId: null,
-              viewportHeight: window.innerHeight,
-            })
-          )
-        }
-
+      if (isRemountIntoOngoingStream) {
         autoScrollEnabledRef.current = false
         followStreamingRef.current = false
-        scheduleMessageTopAnchor(lastMsg.id)
-      } else if (
-        isAssistantMessageInProgress(lastMsg) &&
-        hasAssistantProgress(lastMsg) &&
-        previousMsg?.role === "user"
-      ) {
-        const assistantElement = document.getElementById(
-          `message-${lastMsg.id}`
-        )
-        const neededSpace =
-          assistantElement instanceof HTMLElement
-            ? getCommittedTailSpacer(previousMsg.id, assistantElement)
-            : minHeight
-
-        minHeightActiveRef.current = neededSpace > 0
-        setMinHeightMsgId(lastMsg.id)
-        setMinHeight(neededSpace)
-
-        if (conversationId) {
-          localStorage.setItem(
-            `chat:minHeight:${conversationId}`,
-            JSON.stringify({
-              minHeight: neededSpace,
-              minHeightMsgId: lastMsg.id,
-              viewportHeight: window.innerHeight,
-            })
-          )
-        }
-
-        autoScrollEnabledRef.current = false
-        followStreamingRef.current = false
-        scheduleMessageTopAnchor(previousMsg.id)
       } else {
-        // Keep manual-follow behavior: do not auto-follow streaming unless
-        // the user explicitly taps the scroll button.
-        autoScrollEnabledRef.current = false
-        followStreamingRef.current = false
-        setMinHeight(0)
-        setMinHeightMsgId(null)
-        if (conversationId)
-          localStorage.removeItem(`chat:minHeight:${conversationId}`)
+        if (anchorTakenKey && currentStreamMessageId) {
+          localStorage.setItem(anchorTakenKey, currentStreamMessageId)
+        }
+
+        const messages = activeConversation?.messages || []
+        const lastMsg = messages[messages.length - 1]
+        const previousMsg = messages[messages.length - 2]
+
+        if (lastMsg?.role === "user") {
+          const neededSpace = getTailResponseMinHeight(
+            lastMsg.id,
+            streamingBubbleContainerRef.current
+          )
+
+          minHeightActiveRef.current = neededSpace > 0
+          setMinHeightMsgId(null) // streaming bubble takes over
+          setMinHeight(neededSpace)
+
+          if (conversationId) {
+            localStorage.setItem(
+              `chat:minHeight:${conversationId}`,
+              JSON.stringify({
+                minHeight: neededSpace,
+                minHeightMsgId: null,
+                viewportHeight: window.innerHeight,
+              })
+            )
+          }
+
+          autoScrollEnabledRef.current = false
+          followStreamingRef.current = false
+          scheduleMessageTopAnchor(lastMsg.id)
+        } else if (
+          isAssistantMessageInProgress(lastMsg) &&
+          hasAssistantProgress(lastMsg) &&
+          previousMsg?.role === "user"
+        ) {
+          const assistantElement = document.getElementById(
+            `message-${lastMsg.id}`
+          )
+          const neededSpace =
+            assistantElement instanceof HTMLElement
+              ? getCommittedTailSpacer(previousMsg.id, assistantElement)
+              : minHeight
+
+          minHeightActiveRef.current = neededSpace > 0
+          setMinHeightMsgId(lastMsg.id)
+          setMinHeight(neededSpace)
+
+          if (conversationId) {
+            localStorage.setItem(
+              `chat:minHeight:${conversationId}`,
+              JSON.stringify({
+                minHeight: neededSpace,
+                minHeightMsgId: lastMsg.id,
+                viewportHeight: window.innerHeight,
+              })
+            )
+          }
+
+          autoScrollEnabledRef.current = false
+          followStreamingRef.current = false
+          scheduleMessageTopAnchor(previousMsg.id)
+        } else {
+          // Keep manual-follow behavior: do not auto-follow streaming unless
+          // the user explicitly taps the scroll button.
+          autoScrollEnabledRef.current = false
+          followStreamingRef.current = false
+          setMinHeight(0)
+          setMinHeightMsgId(null)
+          if (conversationId)
+            localStorage.removeItem(`chat:minHeight:${conversationId}`)
+        }
       }
     }
 
@@ -1495,6 +1520,11 @@ export function ChatView() {
       }
 
       if (streamingFinished) {
+        if (conversationId) {
+          localStorage.removeItem(
+            `${STREAM_ANCHOR_TAKEN_PREFIX}:${conversationId}`
+          )
+        }
         if (followStreamingRef.current) {
           scrollToBottom("smooth")
         }

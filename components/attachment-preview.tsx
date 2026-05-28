@@ -3,6 +3,7 @@
 import * as React from "react"
 import { FileText, X } from "lucide-react"
 import { PdfThumbnail } from "@/components/pdf-thumbnail"
+import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 import type { AttachedFile } from "@/hooks/use-file-attachments"
 
@@ -31,7 +32,9 @@ export function AttachmentPreview({
 }) {
     const [hovered, setHovered] = React.useState(false)
     const fileName = attachment.file?.name ?? attachment.uploaded?.filename ?? "File"
-    const serverUrl = attachment.uploaded ? `/api/uploads/${attachment.uploaded.id}` : undefined
+    const serverUrl = attachment.uploaded
+        ? appPath(`/api/uploads/${encodeURIComponent(attachment.uploaded.id)}`)
+        : undefined
     const isLoading = attachment.uploading || attachment.rendering
 
     if (attachment.uploading) {

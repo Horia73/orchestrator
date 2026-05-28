@@ -122,6 +122,21 @@ export function TerminalOutput({
     }
   }, [resetKey, text])
 
+  // Show the beginning of the output once the command is no longer running.
+  // While streaming, xterm's native scroll-to-bottom stays in effect so the
+  // user can watch the tail. After completion we snap back to the top so the
+  // box reads top-down like any other tool-call panel.
+  React.useEffect(() => {
+    const term = termRef.current
+    if (!term || cursorBlink) return
+    const id = requestAnimationFrame(() => {
+      try {
+        term.scrollToTop()
+      } catch {}
+    })
+    return () => cancelAnimationFrame(id)
+  }, [cursorBlink, text])
+
   React.useEffect(() => {
     const el = containerRef.current
     const fit = fitRef.current

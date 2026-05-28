@@ -9,6 +9,7 @@ import rehypeKatex from "rehype-katex"
 import { Copy, Check } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
+import { appApiPath, appPath } from "@/lib/app-path"
 import type { Components } from "react-markdown"
 
 // ---------------------------------------------------------------------------
@@ -140,7 +141,7 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   const [failed, setFailed] = React.useState(false)
-  const imageSrc = typeof src === "string" ? src : undefined
+  const imageSrc = typeof src === "string" ? appPath(src) : undefined
   const isWhatsAppQr =
     typeof imageSrc === "string" &&
     imageSrc.includes("/api/integrations/whatsapp/qr")
@@ -172,7 +173,7 @@ const DOWNLOADABLE_WORKSPACE_EXT_RE =
 function workspaceDownloadHref(href: string | undefined): string | undefined {
   const raw = href?.trim()
   if (!raw || raw.startsWith("#") || raw.startsWith("?")) return undefined
-  if (raw.startsWith("/api/workspace/files?")) return raw
+  if (raw.startsWith("/api/workspace/files?")) return appPath(raw)
   if (/^(?:mailto|tel|javascript):/i.test(raw)) return undefined
 
   let candidate = raw
@@ -196,7 +197,7 @@ function workspaceDownloadHref(href: string | undefined): string | undefined {
     DOWNLOADABLE_WORKSPACE_EXT_RE.test(candidate)
 
   if (!isWorkspacePath && !isRelativeWorkspaceFile) return undefined
-  return `/api/workspace/files?path=${encodeURIComponent(candidate)}`
+  return appApiPath("/api/workspace/files", { path: candidate })
 }
 
 // ---------------------------------------------------------------------------
@@ -265,9 +266,10 @@ const baseComponents: Components = {
   hr: () => <hr className="my-4 border-t border-border/60" />,
   a: ({ href, children }) => {
     const downloadHref = workspaceDownloadHref(href)
+    const resolvedHref = downloadHref ?? (href ? appPath(href) : undefined)
     return (
       <a
-        href={downloadHref ?? href}
+        href={resolvedHref}
         target={downloadHref ? undefined : "_blank"}
         rel={downloadHref ? undefined : "noopener noreferrer"}
         className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"

@@ -3,6 +3,7 @@
 import * as React from "react"
 import { FileText, Image as ImageIcon, Video, Play, Pause } from "lucide-react"
 import { formatDuration } from "@/lib/utils"
+import { appPath } from "@/lib/app-path"
 import { PdfThumbnail } from "@/components/pdf-thumbnail"
 import type { Attachment } from "@/lib/types"
 
@@ -121,7 +122,7 @@ const iconMap = {
 }
 
 export function AttachmentCard({ attachment, onClick }: AttachmentCardProps) {
-    const url = `/api/uploads/${attachment.id}`
+    const url = appPath(`/api/uploads/${encodeURIComponent(attachment.id)}`)
 
     if (attachment.type === "audio") {
         return <AudioPlayer url={url} />
