@@ -7,6 +7,7 @@ import {
 } from '@/lib/models/registry'
 import { readLiveRegistry, writeLiveRegistry } from '@/lib/models/store'
 import { fetchGoogleModels } from '@/lib/models/fetcher'
+import { probeClaudeCodeModels } from '@/lib/cli/model-probe'
 
 /**
  * POST /api/models/refresh
@@ -45,9 +46,31 @@ export async function POST() {
         }
     }
 
-    // ---------- Anthropic & OpenAI ----------
-    // Stubs today. When real providers land, swap to a fetchAnthropicModels /
-    // fetchOpenAIModels call, same shape.
+    // ---------- Claude Code (CLI) ----------
+    // No list API — we resolve the opus/sonnet/haiku aliases by spawning the
+    // CLI and reading the model id from its stream-json init event, then write
+    // them into the live registry so the picker gains e.g. an "Opus 4.8" entry
+    // that tracks whatever the alias currently resolves to.
+    try {
+        const entry = await probeClaudeCodeModels()
+        if (entry) {
+            live.providers['claude-code'] = entry
+            results['claude-code'] = { fetched: Object.keys(entry.models).length }
+        } else {
+            results['claude-code'] = { fetched: 0, skipped: 'not_implemented' }
+        }
+    } catch (err) {
+        results['claude-code'] = {
+            fetched: 0,
+            error: err instanceof Error ? err.message : 'Claude Code probe failed.',
+        }
+    }
+
+    // ---------- Codex & API providers ----------
+    // Codex uses explicit model ids (no "latest" alias) and has no list
+    // command, so there's nothing to probe. Anthropic/OpenAI API fetchers are
+    // not implemented yet.
+    results.codex = { fetched: 0, skipped: 'not_implemented' }
     results.anthropic = { fetched: 0, skipped: 'not_implemented' }
     results.openai = { fetched: 0, skipped: 'not_implemented' }
 
