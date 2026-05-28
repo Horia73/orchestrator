@@ -183,8 +183,10 @@ export function createAgentRuntime(
 
     const statusFromTerminalAction = (terminal: AgentTerminalAction | null): TaskUsageSummary['status'] => {
         if (!terminal) return 'completed';
-        if (terminal.action === 'ask') return 'awaiting_user';
-        if (terminal.action === 'error' || terminal.action === 'iteration_limit') return 'error';
+        // 'checkpoint' (action budget reached) is a continuable pause, not a failure:
+        // treat it like 'awaiting_user' so the session is retained for re-delegation.
+        if (terminal.action === 'ask' || terminal.action === 'checkpoint') return 'awaiting_user';
+        if (terminal.action === 'error') return 'error';
         if (terminal.action === 'stopped') return 'stopped';
         return 'completed';
     };

@@ -235,13 +235,18 @@ class BrowserSessionManager {
         let status: ManagedBrowserSessionStatus = 'completed'
         if (runtimeStatus.running) {
             status = 'running'
-        } else if (runtimeStatus.lastTerminalAction?.action === 'ask' || usageStatus === 'awaiting_user') {
+        } else if (
+            runtimeStatus.lastTerminalAction?.action === 'ask' ||
+            runtimeStatus.lastTerminalAction?.action === 'checkpoint' ||
+            usageStatus === 'awaiting_user'
+        ) {
+            // 'checkpoint' = action budget reached; keep the session alive (awaiting TTL)
+            // so the orchestrator can continue it on the same thread.
             status = 'awaiting_user'
         } else if (runtimeStatus.lastTerminalAction?.action === 'stopped' || usageStatus === 'stopped') {
             status = 'stopped'
         } else if (
             runtimeStatus.lastTerminalAction?.action === 'error' ||
-            runtimeStatus.lastTerminalAction?.action === 'iteration_limit' ||
             usageStatus === 'error'
         ) {
             status = 'error'

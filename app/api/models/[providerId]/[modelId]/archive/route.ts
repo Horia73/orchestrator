@@ -11,8 +11,8 @@ import { setFavorites, getConfig } from '@/lib/config'
  * Side effects:
  *   - Archived models are removed from the favorites list (UI hides them
  *     anyway; keeping a stale favorite confuses the per-agent picker).
- *   - If an agent was using the archived model, getEffectiveAgentSettings
- *     auto-falls back to the first non-archived model in the same provider.
+ *   - Existing/explicit agent selections remain valid. Archived means hidden
+ *     from the default picker/favorites surface, not disabled at runtime.
  */
 async function setArchived(providerId: string, modelId: string, archived: boolean) {
     if (!effectiveModelExists(providerId, modelId)) {

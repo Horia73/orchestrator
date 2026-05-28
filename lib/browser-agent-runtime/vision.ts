@@ -5,7 +5,7 @@
 
 import { GoogleGenAI, MediaResolution, type GenerateContentConfig } from '@google/genai';
 import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from './browser';
-import { buildSystemPrompt, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, buildActionHistoryCompactionPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
+import { buildSystemPrompt, buildMemoryContext, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
 import { getMemories } from './memory';
 
 export interface AgentAction {
@@ -65,12 +65,6 @@ export interface VisionService {
         openTabs?: TabInfo[],
         downloads?: BrowserDownloadFile[]
     ): Promise<IterationLimitReview | null>;
-    compactActionHistory(
-        goal: string,
-        actionsToCompact: ActionHistoryItem[],
-        conversationHistory: string[],
-        keepLastCount: number
-    ): Promise<string | null>;
     updateConfig(patch: Partial<VisionConfig>): void;
     getConfig(): VisionConfig;
 }
@@ -120,10 +114,15 @@ function isMediaResolutionCompatError(error: unknown): boolean {
     return /media[_\s-]?resolution/i.test(message) && /(not supported|invalid|unknown|unrecognized)/i.test(message);
 }
 
-function buildRequestConfig(state: VisionConfig): GenerateContentConfig {
+function buildRequestConfig(state: VisionConfig, systemInstruction?: string): GenerateContentConfig {
     return {
         thinkingConfig: buildThinkingConfig(state.thinkingLevel),
         mediaResolution: toGeminiMediaResolution(state.mediaResolution),
+        // The static system prompt is sent as a separate systemInstruction so it
+        // forms a byte-stable, cacheable prefix across the ~50 calls of a segment
+        // (implicit context caching), instead of being concatenated with the
+        // dynamic per-step content where it could never be cached.
+        ...(systemInstruction ? { systemInstruction } : {}),
     } as unknown as GenerateContentConfig;
 }
 
@@ -132,6 +131,7 @@ async function generateContentWithFallback(
     model: string,
     state: VisionConfig,
     requestParts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>,
+    systemInstruction?: string,
 ) {
     const request = (config: GenerateContentConfig) => ai.models.generateContent({
         model,
@@ -144,7 +144,7 @@ async function generateContentWithFallback(
         ],
     });
 
-    const initialConfig = buildRequestConfig(state);
+    const initialConfig = buildRequestConfig(state, systemInstruction);
 
     try {
         return await request(initialConfig);
@@ -204,7 +204,7 @@ function getUsageMetadata(response: unknown): unknown {
 }
 
 function buildVisionParts(
-    systemPrompt: string,
+    leadingContext: string,
     historyContext: string,
     actionPrompt: string,
     frame: BrowserFrameSnapshot,
@@ -244,7 +244,7 @@ function buildVisionParts(
     const traceContext = `${visualContextLines.join('\n')}\n`;
 
     const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
-        { text: systemPrompt + historyContext + traceContext },
+        { text: leadingContext + historyContext + traceContext },
     ];
 
     orderedFrames.forEach((currentFrame, index) => {
@@ -406,9 +406,10 @@ export function createVisionService(
             isAdvancedMode: boolean = false,
             downloads: BrowserDownloadFile[] = []
         ): Promise<AgentAction[]> {
-            // Get reusable memories (semantic + procedural)
-            const memories = getMemories(frame.url, goal);
-            const systemPrompt = buildSystemPrompt(memories, isAdvancedMode, frame.coordinateSpace);
+            // Static instructions → cacheable systemInstruction (stable across the segment).
+            const systemPrompt = buildSystemPrompt(isAdvancedMode, frame.coordinateSpace);
+            // Dynamic per-session memories (semantic + procedural) → user content.
+            const memoryContext = buildMemoryContext(getMemories(frame.url, goal));
 
             const actionPrompt = isInterrupt
                 ? buildInterruptPrompt(goal)
@@ -419,9 +420,9 @@ export function createVisionService(
                 const historyContext = conversationHistory.length > 0
                     ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
                     : '';
-                const requestParts = buildVisionParts(systemPrompt, historyContext, actionPrompt, frame, recentTrace, supplementalFrames);
+                const requestParts = buildVisionParts(memoryContext, historyContext, actionPrompt, frame, recentTrace, supplementalFrames);
 
-                const response = await generateContentWithFallback(ai, state.model, state, requestParts);
+                const response = await generateContentWithFallback(ai, state.model, state, requestParts, systemPrompt);
 
                 const usage = extractUsage(getUsageMetadata(response));
                 if (typeof onUsage === 'function') {
@@ -456,64 +457,6 @@ export function createVisionService(
                     action: 'error',
                     reasoning: `API Error: ${error instanceof Error ? error.message : 'Unknown'}`,
                 }];
-            }
-        },
-
-        async compactActionHistory(
-            goal: string,
-            actionsToCompact: ActionHistoryItem[],
-            conversationHistory: string[] = [],
-            keepLastCount: number
-        ): Promise<string | null> {
-            if (actionsToCompact.length === 0) return null;
-
-            try {
-                const prompt = buildActionHistoryCompactionPrompt(
-                    goal,
-                    actionsToCompact,
-                    conversationHistory,
-                    keepLastCount
-                );
-                const response = await generateContentWithFallback(ai, state.model, state, [{ text: prompt }]);
-
-                const usage = extractUsage(getUsageMetadata(response));
-                if (typeof onUsage === 'function') {
-                    onUsage({
-                        model: state.model,
-                        ...usage,
-                    });
-                }
-
-                const text = response.text?.trim() || '';
-                const jsonText = extractJsonText(text);
-                const parsed = JSON.parse(jsonText) as {
-                    summary?: unknown;
-                    completed?: unknown;
-                    currentState?: unknown;
-                    avoidRepeating?: unknown;
-                    openRisks?: unknown;
-                };
-
-                const lines: string[] = [];
-                const summary = String(parsed.summary || '').trim();
-                if (summary) lines.push(`Summary: ${summary}`);
-
-                const completed = normalizeStringArray(parsed.completed);
-                if (completed.length > 0) lines.push(`Completed: ${completed.join(' | ')}`);
-
-                const currentState = String(parsed.currentState || '').trim();
-                if (currentState) lines.push(`Last known state: ${currentState}`);
-
-                const avoidRepeating = normalizeStringArray(parsed.avoidRepeating);
-                if (avoidRepeating.length > 0) lines.push(`Do not repeat unless verified missing: ${avoidRepeating.join(' | ')}`);
-
-                const openRisks = normalizeStringArray(parsed.openRisks);
-                if (openRisks.length > 0) lines.push(`Still uncertain / needs verification: ${openRisks.join(' | ')}`);
-
-                return lines.join('\n').trim() || null;
-            } catch (error) {
-                console.error('Vision action-history compaction error:', error);
-                return null;
             }
         },
 

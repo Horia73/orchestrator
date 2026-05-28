@@ -19,6 +19,7 @@ const URL_REGEX = /https?:\/\/[^\s)\]"'<>\x1b]+/g
 // CSI / OSC / single-char escape stripper for the URL detector. xterm itself
 // renders everything fine — we just need clean text for regex matching.
 const ANSI_REGEX = /\x1b(?:\][^\x07\x1b]*(?:\x07|\x1b\\)|\[[0-?]*[ -/]*[@-~]|[@-Z\\-_])/g
+const SPAWN_START_DELAY_MS = 100
 
 function extractUrls(text: string): string[] {
     const stripped = text.replace(ANSI_REGEX, "")
@@ -46,32 +47,35 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
     React.useEffect(() => {
         let cancelled = false
         let createdSessionId: string | null = null
-
-        ;(async () => {
-            try {
-                const res = await fetch("/api/cli/spawn", {
-                    method: "POST",
-                    headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ cli: cliId, mode }),
-                })
-                if (!res.ok) {
-                    const body = await res.json().catch(() => ({}))
-                    throw new Error(body.error || `Spawn failed (${res.status})`)
+        // Avoid launching OAuth twice during React StrictMode's mount probe.
+        const spawnTimer = window.setTimeout(() => {
+            ;(async () => {
+                try {
+                    const res = await fetch("/api/cli/spawn", {
+                        method: "POST",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ cli: cliId, mode }),
+                    })
+                    if (!res.ok) {
+                        const body = await res.json().catch(() => ({}))
+                        throw new Error(body.error || `Spawn failed (${res.status})`)
+                    }
+                    const json = await res.json() as { sessionId: string }
+                    if (cancelled) {
+                        fetch(`/api/cli/${json.sessionId}`, { method: "DELETE" }).catch(() => {})
+                        return
+                    }
+                    createdSessionId = json.sessionId
+                    setSessionId(json.sessionId)
+                } catch (err) {
+                    if (!cancelled) setError(err instanceof Error ? err.message : "Spawn failed")
                 }
-                const json = await res.json() as { sessionId: string }
-                if (cancelled) {
-                    fetch(`/api/cli/${json.sessionId}`, { method: "DELETE" }).catch(() => {})
-                    return
-                }
-                createdSessionId = json.sessionId
-                setSessionId(json.sessionId)
-            } catch (err) {
-                if (!cancelled) setError(err instanceof Error ? err.message : "Spawn failed")
-            }
-        })()
+            })()
+        }, SPAWN_START_DELAY_MS)
 
         return () => {
             cancelled = true
+            window.clearTimeout(spawnTimer)
             if (createdSessionId) {
                 fetch(`/api/cli/${createdSessionId}`, { method: "DELETE" }).catch(() => {})
             }
@@ -186,7 +190,7 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
                             : mode === "install"
                                 ? "Wait for installation to finish, then close this window."
                                 : mode === "setup-token"
-                                    ? "Open the URL, copy the token it prints, paste it back into this terminal."
+                                    ? "Open the URL, copy the token, paste it here, then press Enter. Claude Code may hide pasted token text."
                                     : "Type or click a URL to complete the flow."}
                     </span>
                     <button

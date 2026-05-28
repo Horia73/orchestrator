@@ -32,6 +32,7 @@ import { GET as savedAreasApiGet } from "@/app/api/maps/saved-areas/route"
 import { GET as savedPlacesApiGet } from "@/app/api/maps/saved-places/route"
 import { getAllAgents } from "@/lib/ai/agents/registry"
 import { MAPS_TOOL_IDS } from "@/lib/ai/agents/builtins"
+import { isOrchestratorClassAgent } from "@/lib/ai/agents/orchestrator-class"
 import { executeTool } from "@/lib/ai/tools/executor"
 import { MapArtifactSchema, parseMapArtifact } from "@/lib/maps/schema"
 import { readGoogleMapsApiKey } from "@/lib/maps/google-session"
@@ -905,8 +906,11 @@ for (const [label, raw, pathRe] of badCases) {
 
 {
   const agents = getAllAgents()
-  const nonOrchestratorMapsTools = agents
-    .filter((agent) => agent.id !== "orchestrator")
+  const orchestratorClassAgents = agents.filter((agent) =>
+    isOrchestratorClassAgent(agent.id)
+  )
+  const nonOrchestratorClassMapsTools = agents
+    .filter((agent) => !isOrchestratorClassAgent(agent.id))
     .flatMap((agent) =>
       agent.tools
         .filter((toolId) => MAPS_TOOL_IDS.includes(toolId))
@@ -919,9 +923,16 @@ for (const [label, raw, pathRe] of badCases) {
     orchestratorAgent?.tools
   )
   check(
-    "Agent grants: non-orchestrator agents have no Maps tools",
-    nonOrchestratorMapsTools.length === 0,
-    nonOrchestratorMapsTools
+    "Agent grants: orchestrator-class agents have every Maps tool",
+    orchestratorClassAgents.every((agent) =>
+      MAPS_TOOL_IDS.every((toolId) => agent.tools.includes(toolId))
+    ),
+    orchestratorClassAgents.map((agent) => [agent.id, agent.tools])
+  )
+  check(
+    "Agent grants: non-orchestrator-class agents have no Maps tools",
+    nonOrchestratorClassMapsTools.length === 0,
+    nonOrchestratorClassMapsTools
   )
 
   const renderArgs = {
@@ -958,6 +969,17 @@ for (const [label, raw, pathRe] of badCases) {
     "Agent grants: runtime allows orchestrator MapRender",
     allowed.success,
     allowed
+  )
+  const aliasAllowed = await executeTool(mapRenderTool, renderArgs, {
+    callerAgentId: "inbox-agent",
+    depth: 0,
+    conversationId: "smoke-maps",
+    parentRequestId: "smoke-parent",
+  })
+  check(
+    "Agent grants: runtime allows orchestrator-class MapRender",
+    aliasAllowed.success,
+    aliasAllowed
   )
 }
 

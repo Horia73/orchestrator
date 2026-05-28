@@ -18,9 +18,12 @@ import type { ProviderDef, ModelDef, ModelPricing } from "@/lib/config"
 import { useSettings, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
 
 export interface ModelPickerProps {
-  /** Current value as "providerId:modelId" */
-  value: string
+  /** Current value as "providerId:modelId"; null renders the optional None row. */
+  value: string | null
   onChange: (next: { providerId: string; modelId: string }) => void
+  /** Optional first-row choice for settings like fallbacks. */
+  noneLabel?: string
+  onNone?: () => void
   /** Optional className for the trigger button */
   className?: string
   /** Disabled state */
@@ -45,7 +48,7 @@ export interface ModelPickerOption {
 
 type FlatModel = ModelPickerOption
 
-export function ModelPicker({ value, onChange, className, disabled, filterModel }: ModelPickerProps) {
+export function ModelPicker({ value, onChange, noneLabel, onNone, className, disabled, filterModel }: ModelPickerProps) {
   const { data, setFavorites, setArchived, refreshModels, refreshing } = useSettings()
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState("")
@@ -96,8 +99,9 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
 
   // The current value lookup tolerates being out-of-kind — useful when an
   // agent references a model whose kind metadata changed.
-  const current = modelsByKey.get(value) ??
-    (allModels.find(m => m.key === value) ?? undefined)
+  const current = value
+    ? modelsByKey.get(value) ?? (allModels.find(m => m.key === value) ?? undefined)
+    : undefined
   const currentProviderLabel = current ? providerUnavailableLabel(current.providerId, data) : null
 
   const handleOpenChange = (nextOpen: boolean) => {
@@ -168,6 +172,8 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
                   </span>
                 )}
               </>
+            ) : noneLabel && value === null ? (
+              <span className="text-foreground/60">{noneLabel}</span>
             ) : (
               <span className="text-foreground/50">No model loaded</span>
             )}
@@ -218,6 +224,39 @@ export function ModelPicker({ value, onChange, className, disabled, filterModel 
                 ? "No models shown. Add an API key or unarchive a CLI model."
                 : `No models match “${query}”.`}
             </CommandEmpty>
+
+            {noneLabel && onNone && (
+              <>
+                <CommandGroup>
+                  <CommandItem
+                    value="__none__"
+                    onSelect={() => {
+                      onNone()
+                      setOpen(false)
+                      setQuery("")
+                    }}
+                    data-active={value === null ? true : undefined}
+                    className={cn(
+                      "items-start gap-2 py-2 pr-2 data-[selected=true]:bg-muted/45",
+                      value === null && "bg-muted/75 ring-1 ring-border/70 data-[selected=true]:bg-muted/75"
+                    )}
+                  >
+                    <span className="mt-1.5 size-2.5 rounded-full border border-foreground/25" />
+                    <span className="min-w-0 flex-1 truncate text-[13px] font-medium text-foreground">
+                      {noneLabel}
+                    </span>
+                    <Check
+                      aria-hidden
+                      className={cn(
+                        "mt-1 size-4 shrink-0 text-foreground/65 transition-opacity",
+                        value === null ? "opacity-100" : "opacity-0"
+                      )}
+                    />
+                  </CommandItem>
+                </CommandGroup>
+                {(favoriteModels.length > 0 || Object.keys(groupedNonFavorites).length > 0 || archivedModels.length > 0) && <CommandSeparator />}
+              </>
+            )}
 
             {favoriteModels.length > 0 && (
               <>

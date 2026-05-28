@@ -249,12 +249,14 @@ export async function getGmailIntegrationStatus(origin: string, refresh = false)
     const config = getGmailOAuthConfig(origin)
     let token = readTokenRecord()
     let error: string | undefined
+    let refreshFailed = false
 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
             token = await refreshGmailToken(token, config)
         } catch (err) {
+            refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Gmail token'
         }
     }
@@ -275,7 +277,7 @@ export async function getGmailIntegrationStatus(origin: string, refresh = false)
         missingConfig: config.missing,
         redirectUri: config.redirectUri,
         expiresAt: token?.expiresAt ?? null,
-        needsReconnect: Boolean(!token || missingScopes.length > 0 || (expired && !token.refreshToken)),
+        needsReconnect: Boolean(!token || refreshFailed || missingScopes.length > 0 || (expired && !token.refreshToken)),
         error,
     }
 }

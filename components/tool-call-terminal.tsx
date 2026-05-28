@@ -50,6 +50,7 @@ export function TerminalOutput({
   const fitRef = React.useRef<FitAddon | null>(null)
   const renderedTextRef = React.useRef("")
   const resetKeyRef = React.useRef(resetKey)
+  const cursorBlinkRef = React.useRef(cursorBlink)
 
   React.useEffect(() => {
     if (!containerRef.current) return
@@ -102,6 +103,7 @@ export function TerminalOutput({
   }, [])
 
   React.useEffect(() => {
+    cursorBlinkRef.current = cursorBlink
     const term = termRef.current
     if (!term) return
     term.options.cursorBlink = cursorBlink
@@ -117,15 +119,25 @@ export function TerminalOutput({
     }
     const next = text.slice(renderedTextRef.current.length)
     if (next) {
-      term.write(next)
       renderedTextRef.current = text
+      // xterm.write() is async: it sticks to the bottom as it ingests output.
+      // The completion callback fires AFTER the buffer has grown and settled,
+      // so snapping to the top here (when no longer streaming) actually wins —
+      // a plain rAF runs before the write is processed and gets overridden.
+      term.write(next, () => {
+        if (!cursorBlinkRef.current) {
+          try {
+            term.scrollToTop()
+          } catch {}
+        }
+      })
     }
   }, [resetKey, text])
 
-  // Show the beginning of the output once the command is no longer running.
-  // While streaming, xterm's native scroll-to-bottom stays in effect so the
-  // user can watch the tail. After completion we snap back to the top so the
-  // box reads top-down like any other tool-call panel.
+  // Covers the case where the status flips to "done" with no trailing write
+  // (output already fully rendered while streaming): the write callback won't
+  // fire again, so snap to the top here. While streaming we leave xterm's
+  // native scroll-to-bottom alone so the user can watch the tail.
   React.useEffect(() => {
     const term = termRef.current
     if (!term || cursorBlink) return
@@ -135,7 +147,7 @@ export function TerminalOutput({
       } catch {}
     })
     return () => cancelAnimationFrame(id)
-  }, [cursorBlink, text])
+  }, [cursorBlink])
 
   React.useEffect(() => {
     const el = containerRef.current

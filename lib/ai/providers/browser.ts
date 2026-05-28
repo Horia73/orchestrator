@@ -276,7 +276,15 @@ function formatBrowserRunOutput(
     const lines = ['Browser agent finished.']
     lines.push(`Browser session: ${sessionId}`)
     lines.push(`Session status: ${status}`)
-    if (status === 'awaiting_user') {
+    const isCheckpoint = terminalAction?.action === 'checkpoint'
+    if (isCheckpoint) {
+        lines.push('Action budget reached — this is a CHECKPOINT, not a failure and not a question for the end user.')
+        lines.push('The browser session is paused and preserved. Review the full action log under "Terminal output" below, then choose ONE:')
+        lines.push('- FINALIZE: the gathered evidence already answers the goal — synthesize the result yourself and do not call the browser again.')
+        lines.push('- CONTINUE: call browser_agent again with the SAME thread_id and a corrected, focused instruction. State what is already done (so it does not repeat), the single next sub-goal, and any strategy fix if the log shows it was looping.')
+        lines.push('- ABORT: progress is stuck/looping or hard-blocked — stop and report the blocker to the user.')
+        lines.push('Do NOT simply re-send the same goal if the log shows repetition without progress. Cap continuations at ~3 segments for one browser task; after that, finalize or abort.')
+    } else if (status === 'awaiting_user') {
         lines.push('Browser is waiting for user input or confirmation. Continue this flow by calling browser_agent again with the same agent_thread_id/thread_id.')
     }
     if (terminalAction?.action) {

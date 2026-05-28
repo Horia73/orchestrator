@@ -5,6 +5,7 @@ import * as React from "react"
 export interface CliQuotaWindow {
     usedPercent: number
     resetsAt: number
+    windowSeconds?: number
 }
 
 export interface CliQuotaSnapshot {

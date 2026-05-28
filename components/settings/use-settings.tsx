@@ -5,6 +5,7 @@ import type {
   BrowserAgentModelSettings,
   BrowserAgentModelSlot,
   BrowserAgentSettings,
+  AgentFallback,
   ModelFeatureValue,
   ModelPricing,
   ProviderDef,
@@ -62,6 +63,7 @@ export interface AgentOverrideInput {
   model: string
   thinkingLevel?: ThinkingLevel
   modelOptions?: Record<string, ModelFeatureValue>
+  fallbacks?: AgentFallback[]
 }
 
 interface SettingsContextValue {

@@ -60,6 +60,7 @@ interface RuntimeAgentSettings {
     model: string
     thinkingLevel: AgentConfig['thinkingLevel']
     modelOptions: Record<string, boolean | string | number>
+    fallbackIndex?: number
 }
 
 interface RunTextSubAgentArgs {
@@ -92,8 +93,26 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
  * tree by joining on this column.
  */
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
+    const runtimes = resolveAgentRuntimeCandidates(args.target)
+    let lastResult: ToolResult | null = null
+
+    for (let index = 0; index < runtimes.length; index++) {
+        const result = await runTextSubAgentAttempt(args, runtimes[index])
+        if (result.success) return result
+        lastResult = result
+        if (index >= runtimes.length - 1) break
+        if (!isFallbackSafeToolResult(result)) break
+        if (!shouldTryModelFallback(result.error)) break
+    }
+
+    return lastResult ?? {
+        success: false,
+        error: `Sub-agent ${args.target.id} failed before a model attempt could start.`,
+    }
+}
+
+async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId, cwd, attachments } = args
-    const runtime = resolveAgentRuntimeSettings(target)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
     if (agentThreadId) touchAgentThreadRuntime(agentThreadId, runtime.provider, runtime.model)
 
@@ -101,6 +120,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return {
             success: false,
             error: `Sub-agent ${target.id} is missing provider/model — cannot run.`,
+            data: { fallbackSafe: true },
         }
     }
     // CLI-backed agents can omit buildPrompt — they pass
@@ -112,6 +132,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return {
             success: false,
             error: `Sub-agent ${target.id} is missing buildPrompt — text agents require one.`,
+            data: { fallbackSafe: false },
         }
     }
 
@@ -121,6 +142,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return {
             success: false,
             error: `Sub-agent ${target.id}: API key missing for provider ${runtime.provider}`,
+            data: { fallbackSafe: true },
         }
     }
 
@@ -129,6 +151,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return {
             success: false,
             error: `Sub-agent ${target.id}: provider ${runtime.provider} doesn't support text streaming yet (stub)`,
+            data: { fallbackSafe: true },
         }
     }
 
@@ -441,7 +464,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
                 contentSegments,
                 error: `Sub-agent ${target.id} aborted`,
             })
-            return { success: false, error: `Sub-agent ${target.id} aborted` }
+            return { success: false, error: `Sub-agent ${target.id} aborted`, data: { fallbackSafe: false } }
         }
         logRequestFail(subRequestId, msg, Date.now(), accContent || null)
         emitAgent(parentCtx, {
@@ -454,7 +477,11 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             contentSegments,
             error: msg,
         })
-        return { success: false, error: `Sub-agent ${target.id} failed: ${msg}` }
+        return {
+            success: false,
+            error: `Sub-agent ${target.id} failed: ${msg}`,
+            data: { fallbackSafe: !accContent.trim() && toolCallCount === 0 },
+        }
     }
 
     if (parentCtx.signal?.aborted) {
@@ -468,7 +495,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             contentSegments,
             error: `Sub-agent ${target.id} aborted`,
         })
-        return { success: false, error: `Sub-agent ${target.id} aborted` }
+        return { success: false, error: `Sub-agent ${target.id} aborted`, data: { fallbackSafe: false } }
     }
 
     if (providerError) {
@@ -482,7 +509,11 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
             contentSegments,
             error: providerError,
         })
-        return { success: false, error: `Sub-agent ${target.id} reported error: ${providerError}` }
+        return {
+            success: false,
+            error: `Sub-agent ${target.id} reported error: ${providerError}`,
+            data: { fallbackSafe: !accContent.trim() && toolCallCount === 0 },
+        }
     }
 
     // Empty text output is a legitimate outcome when the agent communicated
@@ -503,6 +534,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         return {
             success: false,
             error: `Sub-agent ${target.id} produced no content. Check that its provider/model are configured.`,
+            data: { fallbackSafe: true },
         }
     }
 
@@ -762,31 +794,105 @@ function dedupeTools<T extends { id: string }>(tools: T[]): T[] {
 }
 
 function resolveAgentRuntimeSettings(target: AgentConfig): RuntimeAgentSettings {
+    return resolveAgentRuntimeCandidates(target)[0]
+}
+
+function resolveAgentRuntimeCandidates(target: AgentConfig): RuntimeAgentSettings[] {
     if (target.provider === 'browser') {
-        return {
+        return [{
             provider: 'browser',
             model: target.model ?? 'default',
             thinkingLevel: target.thinkingLevel ?? 'medium',
             modelOptions: {},
-        }
+        }]
     }
 
     const effective = getEffectiveAgentSettings(target.id)
-    if (effective.fromOverride) {
-        return withSupportedThinkingLevel({
+    const primary = effective.fromOverride
+        ? {
             provider: effective.provider,
             model: effective.model,
             thinkingLevel: effective.thinkingLevel,
             modelOptions: effective.modelOptions,
-        })
+        }
+        : {
+            provider: target.provider ?? effective.provider,
+            model: target.model ?? effective.model,
+            thinkingLevel: effective.thinkingLevel,
+            modelOptions: effective.modelOptions,
+        }
+
+    const candidates: RuntimeAgentSettings[] = [primary]
+    if (supportsModelFallbacks(target)) {
+        for (const [index, fallback] of effective.fallbacks.entries()) {
+            candidates.push({
+                provider: fallback.provider,
+                model: fallback.model,
+                thinkingLevel: fallback.thinkingLevel ?? effective.thinkingLevel,
+                modelOptions: {},
+                fallbackIndex: index + 1,
+            })
+        }
     }
 
-    return withSupportedThinkingLevel({
-        provider: target.provider ?? effective.provider,
-        model: target.model ?? effective.model,
-        thinkingLevel: effective.thinkingLevel,
-        modelOptions: effective.modelOptions,
-    })
+    return dedupeRuntimeSettings(candidates).map(withSupportedThinkingLevel)
+}
+
+function supportsModelFallbacks(target: AgentConfig): boolean {
+    return (
+        (target.kind === 'text' || target.kind === 'concierge') &&
+        target.provider !== 'browser' &&
+        target.id !== 'phone_agent' &&
+        target.id !== 'android_agent'
+    )
+}
+
+function dedupeRuntimeSettings(settings: RuntimeAgentSettings[]): RuntimeAgentSettings[] {
+    const seen = new Set<string>()
+    const out: RuntimeAgentSettings[] = []
+    for (const item of settings) {
+        const key = `${item.provider}:${item.model}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        out.push(item)
+    }
+    return out
+}
+
+function isFallbackSafeToolResult(result: ToolResult): boolean {
+    const data = result.data
+    return Boolean(
+        data &&
+        typeof data === 'object' &&
+        !Array.isArray(data) &&
+        (data as { fallbackSafe?: unknown }).fallbackSafe === true
+    )
+}
+
+function shouldTryModelFallback(error: string | undefined): boolean {
+    const message = (error ?? '').toLowerCase()
+    if (!message || message.includes('aborted')) return false
+    if (message.includes('missing buildprompt')) return false
+    return (
+        message.includes('api key missing') ||
+        message.includes('missing api key') ||
+        message.includes('quota') ||
+        message.includes('rate limit') ||
+        message.includes('rate_limit') ||
+        message.includes('out of usage') ||
+        message.includes('usage limit') ||
+        message.includes('resource_exhausted') ||
+        message.includes('exhausted') ||
+        message.includes('overloaded') ||
+        message.includes('capacity') ||
+        message.includes('unavailable') ||
+        message.includes('expired') ||
+        message.includes('429') ||
+        message.includes('503') ||
+        message.includes('401') ||
+        message.includes('model') ||
+        message.includes('streaming')
+    )
 }
 
 function withSupportedThinkingLevel(runtime: RuntimeAgentSettings): RuntimeAgentSettings {

@@ -71,15 +71,6 @@ export async function register(): Promise<void> {
     } catch (err) {
         console.error('[microscripts] failed to wire heartbeat', err)
     }
-    // Offer model-owned daily memory consolidation as Inbox setup, if the
-    // preference is not already recorded. This only posts a setup card; it
-    // does not create a dedicated scheduled task or edit memory by itself.
-    try {
-        const { maybeOfferDailyMemoryConsolidation } = await import('@/lib/memory/daily-consolidation-offer')
-        void maybeOfferDailyMemoryConsolidation()
-    } catch (err) {
-        console.error('[memory-offer] failed to check daily consolidation offer', err)
-    }
     // Confirm managed self-updates after the restarted process is alive. The
     // update runner/host bridge records the expected commit before restart;
     // this boot hook compares it to the running build and posts one Inbox item.

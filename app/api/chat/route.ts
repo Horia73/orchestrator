@@ -35,7 +35,10 @@ import {
   resolveProviderToolSurface,
 } from "@/lib/ai/tools/registry"
 import { clearChatStream, registerChatStream } from "@/lib/chat-streams"
-import { getCachedPendingUpdate, isUpdateMaintenanceActive } from "@/lib/update/manager"
+import {
+  getCachedPendingUpdate,
+  isUpdateMaintenanceActive,
+} from "@/lib/update/manager"
 import {
   logRequestStart,
   logRequestComplete,
@@ -127,6 +130,30 @@ function requestMessagesFromBody(body: ChatRequestBody): Message[] {
   return body.messages.filter(isRequestMessage).map(slimRequestMessage)
 }
 
+function shouldTryModelFallback(error: string | null | undefined): boolean {
+  const message = (error ?? "").toLowerCase()
+  if (!message || message.includes("aborted")) return false
+  return (
+    message.includes("api key") ||
+    message.includes("quota") ||
+    message.includes("rate limit") ||
+    message.includes("rate_limit") ||
+    message.includes("out of usage") ||
+    message.includes("usage limit") ||
+    message.includes("resource_exhausted") ||
+    message.includes("exhausted") ||
+    message.includes("overloaded") ||
+    message.includes("capacity") ||
+    message.includes("unavailable") ||
+    message.includes("expired") ||
+    message.includes("429") ||
+    message.includes("503") ||
+    message.includes("401") ||
+    message.includes("model") ||
+    message.includes("streaming")
+  )
+}
+
 export async function POST(request: Request) {
   const requestOrigin = resolveRequestOrigin(request)
 
@@ -153,7 +180,7 @@ export async function POST(request: Request) {
   const resolvedOrchestratorSettings = getEffectiveAgentSettings(
     orchestrator.id
   )
-  const agentSettings = resolvedOrchestratorSettings.fromOverride
+  const primaryAgentSettings = resolvedOrchestratorSettings.fromOverride
     ? resolvedOrchestratorSettings
     : {
         ...resolvedOrchestratorSettings,
@@ -164,12 +191,6 @@ export async function POST(request: Request) {
           orchestrator.thinkingLevel ??
           resolvedOrchestratorSettings.thinkingLevel,
       }
-  const apiKey = getApiKey(agentSettings.provider)
-  const registry = getEffectiveRegistry()
-  const providerDef = registry[agentSettings.provider]
-  const modelContextWindow =
-    registry[agentSettings.provider]?.models[agentSettings.model]
-      ?.contextWindow ?? null
 
   let body: ChatRequestBody
   try {
@@ -258,65 +279,6 @@ export async function POST(request: Request) {
     })
   }
 
-  const readiness = await getProviderReadiness(
-    agentSettings.provider,
-    providerDef
-  )
-  if (!readiness.available) {
-    return setupErrorResponse(
-      {
-        error: readiness.unavailableReason ?? "No model loaded.",
-        chatMessage:
-          readiness.chatMessage ??
-          "No model loaded. Configure a provider in Settings, then try again.",
-        code: "provider_unavailable",
-      },
-      401
-    )
-  }
-
-  if (!providerDef?.models[agentSettings.model]) {
-    return setupErrorResponse(
-      {
-        error: `Model ${agentSettings.model} is not available for ${providerDef?.name ?? agentSettings.provider}.`,
-        chatMessage:
-          "No model loaded. Choose a valid model in Settings, then try again.",
-        code: "model_unavailable",
-      },
-      400
-    )
-  }
-
-  const provider = getProvider(agentSettings.provider, apiKey ?? "")
-  const providerStream = provider.stream
-  if (!providerStream) {
-    return new Response(
-      JSON.stringify({
-        error: `Provider ${agentSettings.provider} doesn't support text streaming`,
-      }),
-      { status: 501, headers: { "Content-Type": "application/json" } }
-    )
-  }
-
-  // Resolve agent tools, gate integration operational tools, then remove
-  // custom schemas that duplicate this provider's native built-ins. The final
-  // surface feeds both the prompt builder and provider, so visible schemas and
-  // callable tools stay in sync.
-  const candidateTools = filterIntegrationToolExposure(
-    dedupeTools([
-      ...getToolsForAgent(orchestrator.tools),
-      ...getToolsForBuiltins(orchestrator.builtins),
-    ]),
-    { conversationId, origin: requestOrigin }
-  )
-  const toolSurface = resolveProviderToolSurface(
-    candidateTools,
-    orchestrator.builtins,
-    provider.capabilities
-  )
-  const agentTools = toolSurface.tools
-  const agentBuiltins = toolSurface.builtins
-
   // Build system prompt from orchestrator agent. For text-kind agents
   // buildPrompt must exist; image/video/speech agents won't reach this path.
   if (!orchestrator.buildPrompt) {
@@ -335,29 +297,173 @@ export async function POST(request: Request) {
 
   const pendingUpdate = getCachedPendingUpdate()
 
-  const systemPrompt = orchestrator.buildPrompt({
-    agentId: orchestrator.id,
-    userName: config.userName,
-    assistantName: config.assistantName,
-    availableTools: agentTools,
-    availableBuiltins: agentBuiltins,
-    availableAgents,
-    conversationId,
-    declaredToolIds: orchestrator.tools,
-    delegationDepth: 0,
-    maxDelegationDepth: MAX_AGENT_DEPTH,
-    pendingUpdate: pendingUpdate ?? undefined,
-    extra: { appOrigin: requestOrigin },
-  })
+  type ChatModelAttempt = {
+    provider: string
+    model: string
+    thinkingLevel: string
+    modelOptions: Record<string, boolean | string | number>
+    fallbackIndex?: number
+  }
 
-  // Look up prior session for this exact provider/model. If the user switched
-  // provider or model, we start a fresh provider session and send portable
-  // history instead of handing the new runtime an opaque old session id.
-  const prevSession = getInteractionId(
-    conversationId,
-    agentSettings.provider,
-    agentSettings.model
-  )
+  const buildModelAttempts = (
+    primary: typeof primaryAgentSettings
+  ): ChatModelAttempt[] => {
+    const attempts: ChatModelAttempt[] = [
+      {
+        provider: primary.provider,
+        model: primary.model,
+        thinkingLevel: primary.thinkingLevel,
+        modelOptions: primary.modelOptions,
+      },
+    ]
+    for (const [index, fallback] of primary.fallbacks.entries()) {
+      attempts.push({
+        provider: fallback.provider,
+        model: fallback.model,
+        thinkingLevel: fallback.thinkingLevel ?? primary.thinkingLevel,
+        modelOptions: {},
+        fallbackIndex: index + 1,
+      })
+    }
+
+    const seen = new Set<string>()
+    return attempts.filter((attempt) => {
+      const key = `${attempt.provider}:${attempt.model}`
+      if (seen.has(key)) return false
+      seen.add(key)
+      return true
+    })
+  }
+
+  const prepareChatAttempt = async (
+    settings: ChatModelAttempt,
+    index: number
+  ) => {
+    const registry = getEffectiveRegistry()
+    const providerDef = registry[settings.provider]
+    const readiness = await getProviderReadiness(settings.provider, providerDef)
+    if (!readiness.available) {
+      return {
+        ok: false as const,
+        index,
+        status: 401,
+        payload: {
+          error: readiness.unavailableReason ?? "No model loaded.",
+          chatMessage:
+            readiness.chatMessage ??
+            "No model loaded. Configure a provider in Settings, then try again.",
+          code: "provider_unavailable",
+        },
+      }
+    }
+
+    if (!providerDef?.models[settings.model]) {
+      return {
+        ok: false as const,
+        index,
+        status: 400,
+        payload: {
+          error: `Model ${settings.model} is not available for ${providerDef?.name ?? settings.provider}.`,
+          chatMessage:
+            "No model loaded. Choose a valid model in Settings, then try again.",
+          code: "model_unavailable",
+        },
+      }
+    }
+
+    const apiKey = getApiKey(settings.provider)
+    const provider = getProvider(settings.provider, apiKey ?? "")
+    const providerStream = provider.stream
+    if (!providerStream) {
+      return {
+        ok: false as const,
+        index,
+        status: 501,
+        payload: {
+          error: `Provider ${settings.provider} doesn't support text streaming`,
+          chatMessage:
+            "No model loaded. Choose a provider that supports chat streaming, then try again.",
+          code: "provider_unavailable",
+        },
+      }
+    }
+
+    const candidateTools = filterIntegrationToolExposure(
+      dedupeTools([
+        ...getToolsForAgent(orchestrator.tools),
+        ...getToolsForBuiltins(orchestrator.builtins),
+      ]),
+      { conversationId, origin: requestOrigin }
+    )
+    const toolSurface = resolveProviderToolSurface(
+      candidateTools,
+      orchestrator.builtins,
+      provider.capabilities
+    )
+    const systemPrompt = orchestrator.buildPrompt!({
+      agentId: orchestrator.id,
+      userName: config.userName,
+      assistantName: config.assistantName,
+      availableTools: toolSurface.tools,
+      availableBuiltins: toolSurface.builtins,
+      availableAgents,
+      conversationId,
+      declaredToolIds: orchestrator.tools,
+      delegationDepth: 0,
+      maxDelegationDepth: MAX_AGENT_DEPTH,
+      pendingUpdate: pendingUpdate ?? undefined,
+      extra: { appOrigin: requestOrigin },
+    })
+    const prevSession = getInteractionId(
+      conversationId,
+      settings.provider,
+      settings.model
+    )
+
+    return {
+      ok: true as const,
+      index,
+      settings,
+      provider,
+      providerStream,
+      agentTools: toolSurface.tools,
+      agentBuiltins: toolSurface.builtins,
+      systemPrompt,
+      prevSession,
+      modelContextWindow:
+        registry[settings.provider]?.models[settings.model]?.contextWindow ??
+        null,
+    }
+  }
+
+  const prepareFirstAvailableAttempt = async (attempts: ChatModelAttempt[]) => {
+    let lastFailure: Awaited<ReturnType<typeof prepareChatAttempt>> | null =
+      null
+    for (let index = 0; index < attempts.length; index++) {
+      const prepared = await prepareChatAttempt(attempts[index], index)
+      if (prepared.ok) return prepared
+      lastFailure = prepared
+    }
+    return (
+      lastFailure ?? {
+        ok: false as const,
+        index: 0,
+        status: 400,
+        payload: {
+          error: "No model loaded.",
+          chatMessage:
+            "No model loaded. Configure a provider in Settings, then try again.",
+          code: "provider_unavailable",
+        },
+      }
+    )
+  }
+
+  const modelAttempts = buildModelAttempts(primaryAgentSettings)
+  const preparedInitial = await prepareFirstAvailableAttempt(modelAttempts)
+  if (!preparedInitial.ok) {
+    return setupErrorResponse(preparedInitial.payload, preparedInitial.status)
+  }
 
   // Create placeholder assistant message in DB
   const assistantMsg: Message = {
@@ -374,25 +480,11 @@ export async function POST(request: Request) {
   const serverAbortController = new AbortController()
   registerChatStream(conversationId, messageId, serverAbortController)
 
-  const requestStartedAt = Date.now()
   // The "input" for the orchestrator row is the latest user turn.
   // History stays implicit (we already capture it on each message row).
   const latestUserMessage = [...messagesForProvider]
     .reverse()
     .find((m) => m.role === "user")
-  logRequestStart({
-    requestId: messageId,
-    conversationId,
-    agentId: orchestrator.id,
-    provider: agentSettings.provider,
-    model: agentSettings.model,
-    thinkingLevel: agentSettings.thinkingLevel,
-    // Stateful mode is provider-decided now; we record whether we passed
-    // a prior session id (provider may still drop it internally).
-    statefulMode: Boolean(prevSession),
-    startedAt: requestStartedAt,
-    inputText: latestUserMessage?.content ?? null,
-  })
 
   // Start time per tool call so we can record durationMs in tool_logs.
   const toolStartTimes = new Map<string, number>()
@@ -666,10 +758,7 @@ export async function POST(request: Request) {
             )
           : undefined
       if (toolEntry?.type === "tool_call") {
-        toolEntry.deltas = appendBoundedToolDelta(
-          toolEntry.deltas,
-          event.delta
-        )
+        toolEntry.deltas = appendBoundedToolDelta(toolEntry.deltas, event.delta)
         toolEntry.status = "running"
       }
     } else if (event.type === "agent_tool_result") {
@@ -717,6 +806,7 @@ export async function POST(request: Request) {
           /* controller closed */
         }
       }
+      let activeAttempt = preparedInitial
 
       const publishContextUsage = (
         snapshot: ContextUsageSnapshot,
@@ -724,10 +814,11 @@ export async function POST(request: Request) {
       ) => {
         const enriched = mergeContextUsage(latestContextUsage, {
           ...snapshot,
-          provider: snapshot.provider || agentSettings.provider,
-          model: snapshot.model || agentSettings.model,
+          provider: snapshot.provider || activeAttempt.settings.provider,
+          model: snapshot.model || activeAttempt.settings.model,
           requestId: snapshot.requestId ?? messageId,
-          contextWindow: snapshot.contextWindow ?? modelContextWindow,
+          contextWindow:
+            snapshot.contextWindow ?? activeAttempt.modelContextWindow,
           updatedAt: snapshot.updatedAt || Date.now(),
         })
         const key = contextUsageKey(enriched)
@@ -742,420 +833,154 @@ export async function POST(request: Request) {
       }
 
       try {
-        // Build messages with file attachments resolved from disk
-        const includeLocalAttachmentContext = canProviderReadLocalUploads(
-          agentSettings.provider
-        )
-
-        const resolvedMessages = messagesForProvider.map((m) => {
-          const messageAttachments = Array.isArray(m.attachments)
-            ? m.attachments
-            : []
-          const localAttachmentContext =
-            m.role === "user"
-              ? buildAttachmentContext(messageAttachments, {
-                  includeLocalPath: includeLocalAttachmentContext,
-                })
-              : ""
-          const messageContent = typeof m.content === "string" ? m.content : ""
-          const runtimePromptContext =
-            m.id === promptContextMessageId
-              ? [
-                  "<runtime_context source=\"Smart Maps UI\">",
-                  "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with map-aware tools and artifacts; do not quote it back verbatim.",
-                  promptContext,
-                  "</runtime_context>",
-                ].join("\n")
-              : ""
-          const result: {
-            role: string
-            content: string
-            attachments?: MessageAttachment[]
-          } = {
-            role: m.role,
-            content: appendPromptContext(
-              appendPromptContext(messageContent, localAttachmentContext),
-              runtimePromptContext
-            ),
-          }
-
-          if (messageAttachments.length) {
-            const atts: MessageAttachment[] = []
-            for (const att of messageAttachments) {
-              if (
-                !att ||
-                typeof att.id !== "string" ||
-                typeof att.mimeType !== "string"
-              )
-                continue
-              // Only include files the provider supports natively
-              if (
-                !isFileSupportedByProvider(agentSettings.provider, att.mimeType)
-              )
-                continue
-              const filePath = resolveExistingUploadPath(att.id)
-              if (!filePath) continue
-              atts.push({
-                filePath,
-                mimeType: att.mimeType.split(";")[0].trim(),
-              })
-            }
-            if (atts.length) result.attachments = atts
-          }
-
-          return result
-        })
-
-        // Shared content-chunk pipeline. Called for every text fragment that
-        // arrives — either real model output (`onContent`) or a server-side
-        // injection from a tool result (`directEmit` artifacts). Centralising
-        // the path means a synthetic chunk gets accContent persistence,
-        // streaming SSE delivery, parser-driven artifact creation, and the
-        // resulting `artifact_end` event with the inserted row — all
-        // identical to a chunk the model emitted itself.
-        const processContentChunk = (text: string, synthetic: boolean): void => {
-          void synthetic
-          accContent += text
-          appendContentChunk(text)
-          if (text.length > 0) streamMode = "content"
-          if (text.length > 0) send({ type: "content", content: text })
-          for (const ev of artifactParser.feed(text)) {
-            switch (ev.kind) {
-              case "prose":
-                break
-              case "artifact_start":
-                pendingArtifacts.set(ev.clientToken, {
-                  attrs: ev.attrs,
-                  content: "",
-                })
-                send({
-                  type: "artifact_start",
-                  clientToken: ev.clientToken,
-                  attrs: ev.attrs,
-                })
-                break
-              case "artifact_chunk": {
-                const p = pendingArtifacts.get(ev.clientToken)
-                if (p) p.content += ev.text
-                break
-              }
-              case "artifact_end": {
-                const p = pendingArtifacts.get(ev.clientToken)
-                pendingArtifacts.delete(ev.clientToken)
-                if (p) {
-                  try {
-                    const row = insertArtifact({
-                      conversationId,
-                      messageId,
-                      identifier: p.attrs.identifier,
-                      type: p.attrs.type,
-                      title: p.attrs.title,
-                      language: p.attrs.language ?? null,
-                      display: p.attrs.display ?? null,
-                      content: stripWrappingCodeFence(p.content),
-                    })
-                    send({
-                      type: "artifact_end",
-                      clientToken: ev.clientToken,
-                      artifact: row,
-                    })
-                  } catch (err) {
-                    send({
-                      type: "artifact_error",
-                      clientToken: ev.clientToken,
-                      message: err instanceof Error ? err.message : "persist failed",
-                    })
-                  }
-                } else {
-                  send({ type: "artifact_end", clientToken: ev.clientToken })
-                }
-                break
-              }
-              case "artifact_error":
-                send({ type: "artifact_error", message: ev.message })
-                break
-            }
-          }
-          persistAssistantProgress()
-        }
-
-        await providerStream.call(
-          provider,
-          {
-            model: agentSettings.model,
-            messages: resolvedMessages,
-            systemPrompt,
-            thinkingLevel: agentSettings.thinkingLevel,
-            modelOptions: agentSettings.modelOptions,
-            tools: agentTools.length > 0 ? agentTools : undefined,
-            builtins: agentBuiltins,
-            prevSession,
-            toolContext: {
-              callerAgentId: orchestrator.id,
-              depth: 0,
-              conversationId,
-              parentRequestId: messageId,
-              signal: serverAbortController.signal,
-              onAgentEvent: (event) => handleAgentEvent(event, send),
-              onToolDelta: (toolCallId, toolName, delta) =>
-                appendToolDelta(toolCallId, toolName, delta, send),
-              appOrigin: requestOrigin,
-            },
-            signal: serverAbortController.signal,
-          },
-          {
-            onThinking(text) {
-              if (streamMode === "content") {
-                reasoningPhase += 1
-                streamMode = "reasoning"
-              }
-              accThinking += text
-              appendThinkingChunk(text)
-              send({ type: "thinking", content: text })
-              persistAssistantProgress()
-            },
-            onThinkingDone(seconds) {
-              send({ type: "thinking_done", seconds })
-            },
-            onContent(text) {
-              processContentChunk(text, /* synthetic= */ false)
-            },
-            onToolCall(toolCall) {
-              if (streamMode === "content") {
-                reasoningPhase += 1
-                streamMode = "reasoning"
-              }
-              const safeArgs =
-                redactToolArgs(toolCall.name, toolCall.arguments) ?? {}
-              const title = buildToolTitle(toolCall.name, safeArgs)
-              accReasoning.push({
-                type: "tool_call",
-                id: `tool_${toolCall.id}`,
-                phase: reasoningPhase,
-                toolCallId: toolCall.id,
-                title,
-                content: "",
-                toolName: toolCall.name,
-                args: safeArgs,
-                status: "running",
-                startedAt: Date.now(),
-              })
-
-              toolStartTimes.set(toolCall.id, Date.now())
-
-              send({
-                type: "tool_call",
-                toolCall: {
-                  id: toolCall.id,
-                  name: toolCall.name,
-                  title,
-                  arguments: safeArgs,
-                },
-              })
-              persistAssistantProgress({ force: true })
-            },
-            onToolDelta(toolCallId, toolName, delta) {
-              appendToolDelta(toolCallId, toolName, delta, send)
-            },
-            onToolResult(toolCallId, toolName, result) {
-              // Auto-inject artifact tag for tools that opt in via
-              // `directEmit: true`. The synthetic tag flows through the
-              // SAME content-chunk pipeline the model uses, so the parser
-              // creates the artifact row, the client mounts the card, and
-              // the assistant message body reads identically to a turn
-              // where the model emitted the tag itself.
-              const directEmit = result.success
-                ? getDirectEmitArtifactData(result.data)
-                : null
-              if (directEmit) {
-                // Always log the outcome of the directEmit check — makes it
-                // possible to diagnose "no card appeared" without spelunking
-                // through the SSE stream. Logs are dev-only noise; consider
-                // gating behind a debug flag later.
-                console.log(
-                  `[autoinject] tool=${toolName} success=${result.success} directEmit=true ` +
-                  `hasBody=true type=${directEmit.type} identifier=${directEmit.identifier} -> INJECTING`,
+        let lastModelAttemptError: string | null = null
+        for (
+          let attemptIndex = preparedInitial.index;
+          attemptIndex < modelAttempts.length;
+          attemptIndex++
+        ) {
+          const prepared =
+            attemptIndex === preparedInitial.index
+              ? preparedInitial
+              : await prepareChatAttempt(
+                  modelAttempts[attemptIndex],
+                  attemptIndex
                 )
-                const tag = buildAutoArtifactTag({
-                  identifier: directEmit.identifier,
-                  type: directEmit.type,
-                  title: directEmit.title,
-                  display: directEmit.display ?? "inline",
-                  body: directEmit.body,
-                })
-                processContentChunk(tag, /* synthetic= */ true)
-                // Strip body + usage from the streamed tool result so the
-                // UI does not show giant JSON after the artifact has mounted.
-                result = {
-                  ...result,
-                  data: stripDirectEmitPayload(directEmit.source),
-                }
-              } else {
-                const artifactUpdate = result.success
-                  ? getArtifactUpdateData(result.data)
-                  : null
-                if (artifactUpdate) {
-                  try {
-                    const row = insertArtifact({
-                      conversationId,
-                      messageId,
-                      identifier: artifactUpdate.identifier,
-                      type: artifactUpdate.type,
-                      title: artifactUpdate.title,
-                      display: artifactUpdate.display === "panel" || artifactUpdate.display === "fullscreen"
-                        ? artifactUpdate.display
-                        : "inline",
-                      content: stripWrappingCodeFence(artifactUpdate.body),
-                    })
-                    send({
-                      type: "artifact_end",
-                      clientToken: `artifact-update-${row.id}`,
-                      artifact: row,
-                    })
-                    console.log(
-                      `[artifact-update] tool=${toolName} identifier=${artifactUpdate.identifier} ` +
-                      `type=${artifactUpdate.type} version=${row.version}`,
-                    )
-                    result = {
-                      ...result,
-                      data: stripArtifactUpdatePayload(artifactUpdate.source),
-                    }
-                  } catch (err) {
-                    result = {
-                      success: false,
-                      error: err instanceof Error ? err.message : "artifact update failed",
-                    }
-                  }
-                } else if (toolName === "WeatherShow") {
-                  console.log(
-                    `[autoinject] WeatherShow result: success=${result.success} ` +
-                    `error=${result.error ?? "n/a"}`,
+          if (!prepared.ok) {
+            lastModelAttemptError = prepared.payload.error
+            continue
+          }
+          activeAttempt = prepared
+          let attemptStreamError: string | null = null
+          let attemptHadToolCall = false
+          const attemptContentStart = accContent.length
+          const requestStartedAt = Date.now()
+          logRequestStart({
+            requestId: messageId,
+            conversationId,
+            agentId: orchestrator.id,
+            provider: prepared.settings.provider,
+            model: prepared.settings.model,
+            thinkingLevel: prepared.settings.thinkingLevel,
+            // Stateful mode is provider-decided now; we record whether we passed
+            // a prior session id (provider may still drop it internally).
+            statefulMode: Boolean(prepared.prevSession),
+            startedAt: requestStartedAt,
+            inputText: latestUserMessage?.content ?? null,
+          })
+          if (prepared.settings.fallbackIndex && accContent.length === 0) {
+            const note = `Using fallback ${prepared.settings.fallbackIndex}: ${prepared.settings.provider}:${prepared.settings.model}.\n`
+            accThinking += note
+            appendThinkingChunk(note)
+            send({ type: "thinking", content: note })
+            persistAssistantProgress({ force: true })
+          }
+
+          // Build messages with file attachments resolved from disk
+          const includeLocalAttachmentContext = canProviderReadLocalUploads(
+            prepared.settings.provider
+          )
+
+          const resolvedMessages = messagesForProvider.map((m) => {
+            const messageAttachments = Array.isArray(m.attachments)
+              ? m.attachments
+              : []
+            const localAttachmentContext =
+              m.role === "user"
+                ? buildAttachmentContext(messageAttachments, {
+                    includeLocalPath: includeLocalAttachmentContext,
+                  })
+                : ""
+            const messageContent =
+              typeof m.content === "string" ? m.content : ""
+            const runtimePromptContext =
+              m.id === promptContextMessageId
+                ? [
+                    '<runtime_context source="Smart Maps UI">',
+                    "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with map-aware tools and artifacts; do not quote it back verbatim.",
+                    promptContext,
+                    "</runtime_context>",
+                  ].join("\n")
+                : ""
+            const result: {
+              role: string
+              content: string
+              attachments?: MessageAttachment[]
+            } = {
+              role: m.role,
+              content: appendPromptContext(
+                appendPromptContext(messageContent, localAttachmentContext),
+                runtimePromptContext
+              ),
+            }
+
+            if (messageAttachments.length) {
+              const atts: MessageAttachment[] = []
+              for (const att of messageAttachments) {
+                if (
+                  !att ||
+                  typeof att.id !== "string" ||
+                  typeof att.mimeType !== "string"
+                )
+                  continue
+                // Only include files the provider supports natively
+                if (
+                  !isFileSupportedByProvider(
+                    prepared.settings.provider,
+                    att.mimeType
                   )
-                }
-              }
-
-              const displayContent = result.success
-                ? typeof result.data === "object"
-                  ? JSON.stringify(result.data, null, 2)
-                  : String(result.data ?? "")
-                : `Error: ${result.error}`
-
-              const reasoningToolCall = accReasoning.find(
-                (entry) =>
-                  entry.type === "tool_call" && entry.toolCallId === toolCallId
-              )
-              const fallbackArgs =
-                (reasoningToolCall?.type === "tool_call"
-                  ? reasoningToolCall.args
-                  : undefined) ??
-                ((result.data as Record<string, unknown>)?.path
-                  ? { path: (result.data as Record<string, unknown>).path }
-                  : {})
-              const displayText =
-                reasoningToolCall?.type === "tool_call"
-                  ? reasoningToolCall.title
-                  : buildToolTitle(toolName, fallbackArgs)
-              const displaySummary =
-                sanitizeToolCallSummaries([
-                  { text: displayText, content: displayContent },
-                ])?.[0] ?? { text: displayText, content: displayContent }
-
-              if (reasoningToolCall && reasoningToolCall.type === "tool_call") {
-                reasoningToolCall.content = displaySummary.content
-                reasoningToolCall.success = result.success
-                reasoningToolCall.status = result.success ? "ok" : "error"
-                reasoningToolCall.endedAt = Date.now()
-              }
-
-              accToolCalls.push(displaySummary)
-              persistAssistantProgress({ force: true })
-
-              const toolStart = toolStartTimes.get(toolCallId)
-              const toolEnd = Date.now()
-              toolStartTimes.delete(toolCallId)
-              logToolCall({
-                requestId: messageId,
-                toolName,
-                success: result.success,
-                startedAt: toolStart ?? toolEnd,
-                durationMs: toolStart ? toolEnd - toolStart : null,
-                errorMessage: result.success ? null : (result.error ?? null),
-              })
-
-              send({
-                type: "tool_result",
-                toolCallId,
-                toolName,
-                result: {
-                  success: result.success,
-                  text: displaySummary.text,
-                  content: displaySummary.content,
-                },
-              })
-            },
-            onUsage(usage) {
-              publishContextUsage(usage)
-            },
-            onContextCompaction(event) {
-              appendContextCompaction(event, send)
-              publishContextUsage(
-                {
-                  provider: agentSettings.provider,
-                  model: agentSettings.model,
-                  source: latestContextUsage?.source ?? "provider-live",
-                  accuracy: latestContextUsage?.accuracy ?? "live",
-                  updatedAt: event.at,
-                  requestId: messageId,
-                  threadId: event.threadId ?? latestContextUsage?.threadId,
-                  turnId: event.turnId ?? latestContextUsage?.turnId,
-                  contextWindow:
-                    latestContextUsage?.contextWindow ?? modelContextWindow,
-                  contextTokens: latestContextUsage?.contextTokens ?? null,
-                  inputTokens: latestContextUsage?.inputTokens ?? null,
-                  outputTokens: latestContextUsage?.outputTokens ?? null,
-                  thinkingTokens: latestContextUsage?.thinkingTokens ?? null,
-                  cachedTokens: latestContextUsage?.cachedTokens ?? null,
-                  totalTokens: latestContextUsage?.totalTokens ?? null,
-                  threadTokens: latestContextUsage?.threadTokens ?? null,
-                  last: latestContextUsage?.last ?? null,
-                  total: latestContextUsage?.total ?? null,
-                  lastCompactedAt: event.at,
-                  compactedCount: (latestContextUsage?.compactedCount ?? 0) + 1,
-                },
-                { force: true }
-              )
-            },
-            onDone(meta) {
-              if (terminalStreamError) return
-              if (serverAbortController.signal.aborted) {
-                terminalStreamError = "Aborted"
-                terminalMessageStatus = "aborted"
-                logRequestAbort(messageId, Date.now(), accContent || null)
-                persistAssistantProgress({
-                  force: true,
-                  thinkingDuration: 0,
-                  status: "aborted",
+                )
+                  continue
+                const filePath = resolveExistingUploadPath(att.id)
+                if (!filePath) continue
+                atts.push({
+                  filePath,
+                  mimeType: att.mimeType.split(";")[0].trim(),
                 })
-                send({ type: "stopped", messageId })
-                return
               }
+              if (atts.length) result.attachments = atts
+            }
 
-              accAttachments = meta.attachments ?? []
-              // Flush any trailing parser state (unterminated tags
-              // become prose; unterminated artifacts are closed
-              // and persisted with whatever content arrived).
-              for (const ev of artifactParser.end()) {
-                if (ev.kind === "prose") {
-                  // Unterminated tag bytes (e.g. '<artifac'
-                  // at end-of-stream). The bytes were already
-                  // sent to the client via the raw content
-                  // stream above — don't duplicate.
-                } else if (ev.kind === "artifact_chunk") {
-                  // Accumulate for DB persistence only — body
-                  // bytes already on the wire as raw content.
+            return result
+          })
+
+          // Shared content-chunk pipeline. Called for every text fragment that
+          // arrives — either real model output (`onContent`) or a server-side
+          // injection from a tool result (`directEmit` artifacts). Centralising
+          // the path means a synthetic chunk gets accContent persistence,
+          // streaming SSE delivery, parser-driven artifact creation, and the
+          // resulting `artifact_end` event with the inserted row — all
+          // identical to a chunk the model emitted itself.
+          const processContentChunk = (
+            text: string,
+            synthetic: boolean
+          ): void => {
+            void synthetic
+            accContent += text
+            appendContentChunk(text)
+            if (text.length > 0) streamMode = "content"
+            if (text.length > 0) send({ type: "content", content: text })
+            for (const ev of artifactParser.feed(text)) {
+              switch (ev.kind) {
+                case "prose":
+                  break
+                case "artifact_start":
+                  pendingArtifacts.set(ev.clientToken, {
+                    attrs: ev.attrs,
+                    content: "",
+                  })
+                  send({
+                    type: "artifact_start",
+                    clientToken: ev.clientToken,
+                    attrs: ev.attrs,
+                  })
+                  break
+                case "artifact_chunk": {
                   const p = pendingArtifacts.get(ev.clientToken)
                   if (p) p.content += ev.text
-                } else if (ev.kind === "artifact_end") {
+                  break
+                }
+                case "artifact_end": {
                   const p = pendingArtifacts.get(ev.clientToken)
                   pendingArtifacts.delete(ev.clientToken)
                   if (p) {
@@ -1168,7 +993,7 @@ export async function POST(request: Request) {
                         title: p.attrs.title,
                         language: p.attrs.language ?? null,
                         display: p.attrs.display ?? null,
-                        content: p.content,
+                        content: stripWrappingCodeFence(p.content),
                       })
                       send({
                         type: "artifact_end",
@@ -1186,119 +1011,535 @@ export async function POST(request: Request) {
                   } else {
                     send({ type: "artifact_end", clientToken: ev.clientToken })
                   }
+                  break
                 }
+                case "artifact_error":
+                  send({ type: "artifact_error", message: ev.message })
+                  break
               }
-
-              // Save final message and emit an add_message sync event.
-              terminalMessageStatus = "ok"
-              persistAssistantProgress({
-                force: true,
-                thinkingDuration: meta.thinkingDuration,
-                status: "ok",
-              })
-
-              if (meta.sessionId) {
-                updateInteractionId(
-                  conversationId,
-                  agentSettings.provider,
-                  agentSettings.model,
-                  meta.sessionId
-                )
-              }
-
-              const finalContextUsage = buildFinalContextUsageSnapshot({
-                provider: agentSettings.provider,
-                model: agentSettings.model,
-                rawUsage: meta.usage,
-                contextWindow: modelContextWindow,
-                requestId: messageId,
-                interactionId: meta.sessionId ?? null,
-              })
-              if (finalContextUsage) {
-                publishContextUsage(
-                  agentSettings.provider === "codex" && latestContextUsage
-                    ? {
-                        ...finalContextUsage,
-                        source: latestContextUsage.source,
-                        accuracy: latestContextUsage.accuracy,
-                        threadId: latestContextUsage.threadId,
-                        turnId: latestContextUsage.turnId,
-                        contextWindow:
-                          latestContextUsage.contextWindow ??
-                          finalContextUsage.contextWindow,
-                        threadTokens:
-                          latestContextUsage.threadTokens ??
-                          finalContextUsage.threadTokens,
-                        last: latestContextUsage.last ?? finalContextUsage.last,
-                        total:
-                          latestContextUsage.total ?? finalContextUsage.total,
-                        lastCompactedAt:
-                          latestContextUsage.lastCompactedAt ??
-                          finalContextUsage.lastCompactedAt,
-                        compactedCount:
-                          latestContextUsage.compactedCount ??
-                          finalContextUsage.compactedCount,
-                      }
-                    : finalContextUsage,
-                  { force: true }
-                )
-              }
-
-              logRequestComplete({
-                requestId: messageId,
-                endedAt: Date.now(),
-                thinkingMs:
-                  typeof meta.thinkingDuration === "number"
-                    ? meta.thinkingDuration * 1000
-                    : null,
-                interactionId: meta.sessionId ?? null,
-                usage: meta.usage,
-                provider: agentSettings.provider,
-                outputText: accContent || null,
-              })
-
-              send({
-                type: "done",
-                messageId,
-                status: "ok",
-                thinkingDuration: meta.thinkingDuration,
-                usage: meta.usage,
-                interactionId: meta.sessionId,
-                attachments: accAttachments,
-              })
-
-              const completedConversation = getConversation(conversationId)
-              void sendChatCompletionPushNotification({
-                conversationId,
-                title: completedConversation?.title ?? "Chat finished",
-                body: accContent,
-              }).catch((error) => {
-                console.warn(
-                  "Failed to send chat completion notification",
-                  error
-                )
-              })
-            },
-            onError(error) {
-              if (terminalStreamError) return
-              terminalStreamError = error
-              const aborted = serverAbortController.signal.aborted
-              terminalMessageStatus = aborted ? "aborted" : "error"
-              console.error("Provider stream error:", error)
-              if (aborted) {
-                logRequestAbort(messageId, Date.now(), accContent || null)
-              } else {
-                logRequestFail(messageId, error, Date.now(), accContent || null)
-              }
-              persistAssistantProgress({
-                force: true,
-                thinkingDuration: 0,
-                status: terminalMessageStatus,
-              })
-              send(aborted ? { type: "stopped", messageId } : { type: "error", error })
-            },
+            }
+            persistAssistantProgress()
           }
-        )
+
+          try {
+            await prepared.providerStream.call(
+              prepared.provider,
+              {
+                model: prepared.settings.model,
+                messages: resolvedMessages,
+                systemPrompt: prepared.systemPrompt,
+                thinkingLevel: prepared.settings.thinkingLevel,
+                modelOptions: prepared.settings.modelOptions,
+                tools:
+                  prepared.agentTools.length > 0
+                    ? prepared.agentTools
+                    : undefined,
+                builtins: prepared.agentBuiltins,
+                prevSession: prepared.prevSession,
+                toolContext: {
+                  callerAgentId: orchestrator.id,
+                  depth: 0,
+                  conversationId,
+                  parentRequestId: messageId,
+                  signal: serverAbortController.signal,
+                  onAgentEvent: (event) => handleAgentEvent(event, send),
+                  onToolDelta: (toolCallId, toolName, delta) =>
+                    appendToolDelta(toolCallId, toolName, delta, send),
+                  appOrigin: requestOrigin,
+                },
+                signal: serverAbortController.signal,
+              },
+              {
+                onThinking(text) {
+                  if (streamMode === "content") {
+                    reasoningPhase += 1
+                    streamMode = "reasoning"
+                  }
+                  accThinking += text
+                  appendThinkingChunk(text)
+                  send({ type: "thinking", content: text })
+                  persistAssistantProgress()
+                },
+                onThinkingDone(seconds) {
+                  send({ type: "thinking_done", seconds })
+                },
+                onContent(text) {
+                  processContentChunk(text, /* synthetic= */ false)
+                },
+                onToolCall(toolCall) {
+                  attemptHadToolCall = true
+                  if (streamMode === "content") {
+                    reasoningPhase += 1
+                    streamMode = "reasoning"
+                  }
+                  const safeArgs =
+                    redactToolArgs(toolCall.name, toolCall.arguments) ?? {}
+                  const title = buildToolTitle(toolCall.name, safeArgs)
+                  accReasoning.push({
+                    type: "tool_call",
+                    id: `tool_${toolCall.id}`,
+                    phase: reasoningPhase,
+                    toolCallId: toolCall.id,
+                    title,
+                    content: "",
+                    toolName: toolCall.name,
+                    args: safeArgs,
+                    status: "running",
+                    startedAt: Date.now(),
+                  })
+
+                  toolStartTimes.set(toolCall.id, Date.now())
+
+                  send({
+                    type: "tool_call",
+                    toolCall: {
+                      id: toolCall.id,
+                      name: toolCall.name,
+                      title,
+                      arguments: safeArgs,
+                    },
+                  })
+                  persistAssistantProgress({ force: true })
+                },
+                onToolDelta(toolCallId, toolName, delta) {
+                  appendToolDelta(toolCallId, toolName, delta, send)
+                },
+                onToolResult(toolCallId, toolName, result) {
+                  // Auto-inject artifact tag for tools that opt in via
+                  // `directEmit: true`. The synthetic tag flows through the
+                  // SAME content-chunk pipeline the model uses, so the parser
+                  // creates the artifact row, the client mounts the card, and
+                  // the assistant message body reads identically to a turn
+                  // where the model emitted the tag itself.
+                  const directEmit = result.success
+                    ? getDirectEmitArtifactData(result.data)
+                    : null
+                  if (directEmit) {
+                    // Always log the outcome of the directEmit check — makes it
+                    // possible to diagnose "no card appeared" without spelunking
+                    // through the SSE stream. Logs are dev-only noise; consider
+                    // gating behind a debug flag later.
+                    console.log(
+                      `[autoinject] tool=${toolName} success=${result.success} directEmit=true ` +
+                        `hasBody=true type=${directEmit.type} identifier=${directEmit.identifier} -> INJECTING`
+                    )
+                    const tag = buildAutoArtifactTag({
+                      identifier: directEmit.identifier,
+                      type: directEmit.type,
+                      title: directEmit.title,
+                      display: directEmit.display ?? "inline",
+                      body: directEmit.body,
+                    })
+                    processContentChunk(tag, /* synthetic= */ true)
+                    // Strip body + usage from the streamed tool result so the
+                    // UI does not show giant JSON after the artifact has mounted.
+                    result = {
+                      ...result,
+                      data: stripDirectEmitPayload(directEmit.source),
+                    }
+                  } else {
+                    const artifactUpdate = result.success
+                      ? getArtifactUpdateData(result.data)
+                      : null
+                    if (artifactUpdate) {
+                      try {
+                        const row = insertArtifact({
+                          conversationId,
+                          messageId,
+                          identifier: artifactUpdate.identifier,
+                          type: artifactUpdate.type,
+                          title: artifactUpdate.title,
+                          display:
+                            artifactUpdate.display === "panel" ||
+                            artifactUpdate.display === "fullscreen"
+                              ? artifactUpdate.display
+                              : "inline",
+                          content: stripWrappingCodeFence(artifactUpdate.body),
+                        })
+                        send({
+                          type: "artifact_end",
+                          clientToken: `artifact-update-${row.id}`,
+                          artifact: row,
+                        })
+                        console.log(
+                          `[artifact-update] tool=${toolName} identifier=${artifactUpdate.identifier} ` +
+                            `type=${artifactUpdate.type} version=${row.version}`
+                        )
+                        result = {
+                          ...result,
+                          data: stripArtifactUpdatePayload(
+                            artifactUpdate.source
+                          ),
+                        }
+                      } catch (err) {
+                        result = {
+                          success: false,
+                          error:
+                            err instanceof Error
+                              ? err.message
+                              : "artifact update failed",
+                        }
+                      }
+                    } else if (toolName === "WeatherShow") {
+                      console.log(
+                        `[autoinject] WeatherShow result: success=${result.success} ` +
+                          `error=${result.error ?? "n/a"}`
+                      )
+                    }
+                  }
+
+                  const displayContent = result.success
+                    ? typeof result.data === "object"
+                      ? JSON.stringify(result.data, null, 2)
+                      : String(result.data ?? "")
+                    : `Error: ${result.error}`
+
+                  const reasoningToolCall = accReasoning.find(
+                    (entry) =>
+                      entry.type === "tool_call" &&
+                      entry.toolCallId === toolCallId
+                  )
+                  const fallbackArgs =
+                    (reasoningToolCall?.type === "tool_call"
+                      ? reasoningToolCall.args
+                      : undefined) ??
+                    ((result.data as Record<string, unknown>)?.path
+                      ? { path: (result.data as Record<string, unknown>).path }
+                      : {})
+                  const displayText =
+                    reasoningToolCall?.type === "tool_call"
+                      ? reasoningToolCall.title
+                      : buildToolTitle(toolName, fallbackArgs)
+                  const displaySummary = sanitizeToolCallSummaries([
+                    { text: displayText, content: displayContent },
+                  ])?.[0] ?? { text: displayText, content: displayContent }
+
+                  if (
+                    reasoningToolCall &&
+                    reasoningToolCall.type === "tool_call"
+                  ) {
+                    reasoningToolCall.content = displaySummary.content
+                    reasoningToolCall.success = result.success
+                    reasoningToolCall.status = result.success ? "ok" : "error"
+                    reasoningToolCall.endedAt = Date.now()
+                  }
+
+                  accToolCalls.push(displaySummary)
+                  persistAssistantProgress({ force: true })
+
+                  const toolStart = toolStartTimes.get(toolCallId)
+                  const toolEnd = Date.now()
+                  toolStartTimes.delete(toolCallId)
+                  logToolCall({
+                    requestId: messageId,
+                    toolName,
+                    success: result.success,
+                    startedAt: toolStart ?? toolEnd,
+                    durationMs: toolStart ? toolEnd - toolStart : null,
+                    errorMessage: result.success
+                      ? null
+                      : (result.error ?? null),
+                  })
+
+                  send({
+                    type: "tool_result",
+                    toolCallId,
+                    toolName,
+                    result: {
+                      success: result.success,
+                      text: displaySummary.text,
+                      content: displaySummary.content,
+                    },
+                  })
+                },
+                onUsage(usage) {
+                  publishContextUsage(usage)
+                },
+                onContextCompaction(event) {
+                  appendContextCompaction(event, send)
+                  publishContextUsage(
+                    {
+                      provider: prepared.settings.provider,
+                      model: prepared.settings.model,
+                      source: latestContextUsage?.source ?? "provider-live",
+                      accuracy: latestContextUsage?.accuracy ?? "live",
+                      updatedAt: event.at,
+                      requestId: messageId,
+                      threadId: event.threadId ?? latestContextUsage?.threadId,
+                      turnId: event.turnId ?? latestContextUsage?.turnId,
+                      contextWindow:
+                        latestContextUsage?.contextWindow ??
+                        prepared.modelContextWindow,
+                      contextTokens: latestContextUsage?.contextTokens ?? null,
+                      inputTokens: latestContextUsage?.inputTokens ?? null,
+                      outputTokens: latestContextUsage?.outputTokens ?? null,
+                      thinkingTokens:
+                        latestContextUsage?.thinkingTokens ?? null,
+                      cachedTokens: latestContextUsage?.cachedTokens ?? null,
+                      totalTokens: latestContextUsage?.totalTokens ?? null,
+                      threadTokens: latestContextUsage?.threadTokens ?? null,
+                      last: latestContextUsage?.last ?? null,
+                      total: latestContextUsage?.total ?? null,
+                      lastCompactedAt: event.at,
+                      compactedCount:
+                        (latestContextUsage?.compactedCount ?? 0) + 1,
+                    },
+                    { force: true }
+                  )
+                },
+                onDone(meta) {
+                  if (terminalStreamError || attemptStreamError) return
+                  if (serverAbortController.signal.aborted) {
+                    terminalStreamError = "Aborted"
+                    terminalMessageStatus = "aborted"
+                    logRequestAbort(messageId, Date.now(), accContent || null)
+                    persistAssistantProgress({
+                      force: true,
+                      thinkingDuration: 0,
+                      status: "aborted",
+                    })
+                    send({ type: "stopped", messageId })
+                    return
+                  }
+
+                  accAttachments = meta.attachments ?? []
+                  // Flush any trailing parser state (unterminated tags
+                  // become prose; unterminated artifacts are closed
+                  // and persisted with whatever content arrived).
+                  for (const ev of artifactParser.end()) {
+                    if (ev.kind === "prose") {
+                      // Unterminated tag bytes (e.g. '<artifac'
+                      // at end-of-stream). The bytes were already
+                      // sent to the client via the raw content
+                      // stream above — don't duplicate.
+                    } else if (ev.kind === "artifact_chunk") {
+                      // Accumulate for DB persistence only — body
+                      // bytes already on the wire as raw content.
+                      const p = pendingArtifacts.get(ev.clientToken)
+                      if (p) p.content += ev.text
+                    } else if (ev.kind === "artifact_end") {
+                      const p = pendingArtifacts.get(ev.clientToken)
+                      pendingArtifacts.delete(ev.clientToken)
+                      if (p) {
+                        try {
+                          const row = insertArtifact({
+                            conversationId,
+                            messageId,
+                            identifier: p.attrs.identifier,
+                            type: p.attrs.type,
+                            title: p.attrs.title,
+                            language: p.attrs.language ?? null,
+                            display: p.attrs.display ?? null,
+                            content: p.content,
+                          })
+                          send({
+                            type: "artifact_end",
+                            clientToken: ev.clientToken,
+                            artifact: row,
+                          })
+                        } catch (err) {
+                          send({
+                            type: "artifact_error",
+                            clientToken: ev.clientToken,
+                            message:
+                              err instanceof Error
+                                ? err.message
+                                : "persist failed",
+                          })
+                        }
+                      } else {
+                        send({
+                          type: "artifact_end",
+                          clientToken: ev.clientToken,
+                        })
+                      }
+                    }
+                  }
+
+                  // Save final message and emit an add_message sync event.
+                  terminalMessageStatus = "ok"
+                  persistAssistantProgress({
+                    force: true,
+                    thinkingDuration: meta.thinkingDuration,
+                    status: "ok",
+                  })
+
+                  if (meta.sessionId) {
+                    updateInteractionId(
+                      conversationId,
+                      prepared.settings.provider,
+                      prepared.settings.model,
+                      meta.sessionId
+                    )
+                  }
+
+                  const finalContextUsage = buildFinalContextUsageSnapshot({
+                    provider: prepared.settings.provider,
+                    model: prepared.settings.model,
+                    rawUsage: meta.usage,
+                    contextWindow: prepared.modelContextWindow,
+                    requestId: messageId,
+                    interactionId: meta.sessionId ?? null,
+                  })
+                  if (finalContextUsage) {
+                    publishContextUsage(
+                      prepared.settings.provider === "codex" &&
+                        latestContextUsage
+                        ? {
+                            ...finalContextUsage,
+                            source: latestContextUsage.source,
+                            accuracy: latestContextUsage.accuracy,
+                            threadId: latestContextUsage.threadId,
+                            turnId: latestContextUsage.turnId,
+                            contextWindow:
+                              latestContextUsage.contextWindow ??
+                              finalContextUsage.contextWindow,
+                            threadTokens:
+                              latestContextUsage.threadTokens ??
+                              finalContextUsage.threadTokens,
+                            last:
+                              latestContextUsage.last ?? finalContextUsage.last,
+                            total:
+                              latestContextUsage.total ??
+                              finalContextUsage.total,
+                            lastCompactedAt:
+                              latestContextUsage.lastCompactedAt ??
+                              finalContextUsage.lastCompactedAt,
+                            compactedCount:
+                              latestContextUsage.compactedCount ??
+                              finalContextUsage.compactedCount,
+                          }
+                        : finalContextUsage,
+                      { force: true }
+                    )
+                  }
+
+                  logRequestComplete({
+                    requestId: messageId,
+                    endedAt: Date.now(),
+                    thinkingMs:
+                      typeof meta.thinkingDuration === "number"
+                        ? meta.thinkingDuration * 1000
+                        : null,
+                    interactionId: meta.sessionId ?? null,
+                    usage: meta.usage,
+                    provider: prepared.settings.provider,
+                    outputText: accContent || null,
+                  })
+
+                  send({
+                    type: "done",
+                    messageId,
+                    status: "ok",
+                    thinkingDuration: meta.thinkingDuration,
+                    usage: meta.usage,
+                    interactionId: meta.sessionId,
+                    attachments: accAttachments,
+                  })
+
+                  const completedConversation = getConversation(conversationId)
+                  void sendChatCompletionPushNotification({
+                    conversationId,
+                    title: completedConversation?.title ?? "Chat finished",
+                    body: accContent,
+                  }).catch((error) => {
+                    console.warn(
+                      "Failed to send chat completion notification",
+                      error
+                    )
+                  })
+                },
+                onError(error) {
+                  if (attemptStreamError || terminalStreamError) return
+                  attemptStreamError = error
+                  const aborted = serverAbortController.signal.aborted
+                  console.error("Provider stream error:", error)
+                  if (aborted) {
+                    terminalStreamError = error
+                    terminalMessageStatus = "aborted"
+                    logRequestAbort(messageId, Date.now(), accContent || null)
+                    persistAssistantProgress({
+                      force: true,
+                      thinkingDuration: 0,
+                      status: terminalMessageStatus,
+                    })
+                    send({ type: "stopped", messageId })
+                    return
+                  }
+                  logRequestFail(
+                    messageId,
+                    error,
+                    Date.now(),
+                    accContent || null
+                  )
+                },
+              }
+            )
+          } catch (error: unknown) {
+            const msg = error instanceof Error ? error.message : "Unknown error"
+            if (!attemptStreamError) {
+              attemptStreamError = msg
+              const aborted = serverAbortController.signal.aborted
+              console.error("Streaming error:", msg)
+              if (aborted) {
+                terminalStreamError = msg
+                terminalMessageStatus = "aborted"
+                logRequestAbort(messageId, Date.now(), accContent || null)
+                persistAssistantProgress({
+                  force: true,
+                  thinkingDuration: 0,
+                  status: terminalMessageStatus,
+                })
+                send({ type: "stopped", messageId })
+              } else {
+                logRequestFail(messageId, msg, Date.now(), accContent || null)
+              }
+            }
+          }
+          if (
+            terminalMessageStatus === "ok" ||
+            terminalMessageStatus === "aborted"
+          ) {
+            break
+          }
+          if (attemptStreamError) {
+            lastModelAttemptError = attemptStreamError
+            const canRetry =
+              attemptIndex < modelAttempts.length - 1 &&
+              !attemptHadToolCall &&
+              accContent.length === attemptContentStart &&
+              shouldTryModelFallback(attemptStreamError)
+            if (canRetry) {
+              const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before output; trying fallback.\n`
+              accThinking += note
+              appendThinkingChunk(note)
+              send({ type: "thinking", content: note })
+              persistAssistantProgress({ force: true })
+              continue
+            }
+            terminalStreamError = attemptStreamError
+            terminalMessageStatus = "error"
+            persistAssistantProgress({
+              force: true,
+              thinkingDuration: 0,
+              status: terminalMessageStatus,
+            })
+            send({ type: "error", error: attemptStreamError })
+            break
+          }
+        }
+        if (!terminalMessageStatus) {
+          const error =
+            lastModelAttemptError ?? "All configured model attempts failed."
+          terminalStreamError = error
+          terminalMessageStatus = "error"
+          persistAssistantProgress({
+            force: true,
+            thinkingDuration: 0,
+            status: terminalMessageStatus,
+          })
+          send({ type: "error", error })
+        }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Unknown error"
         const aborted = serverAbortController.signal.aborted

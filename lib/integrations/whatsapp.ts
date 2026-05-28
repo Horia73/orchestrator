@@ -28,6 +28,7 @@ const AUTHOR_ENRICHMENT_PER_ID_TIMEOUT_MS = 6_000
 const READY_WAIT_TIMEOUT_MS = 120_000
 const READY_HEALTH_TIMEOUT_MS = 5_000
 const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
+const MEDIA_DOWNLOAD_TIMEOUT_MS = 60_000
 const AUTO_RESUME_COOLDOWN_MS = 30_000
 const DEFAULT_WHATSAPP_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
 
@@ -167,6 +168,15 @@ export interface WhatsAppDeleteMessageResult {
     chatId: string | null
     deletedFor: 'everyone'
     clearMedia: true
+}
+
+export interface WhatsAppDownloadedMedia {
+    messageId: string
+    chatId: string | null
+    type: string
+    mimeType: string
+    filename: string | null
+    bytes: Buffer
 }
 
 export interface WhatsAppMarkChatResult {
@@ -589,6 +599,55 @@ class WhatsAppManager {
                 chatId: summary.chatId || null,
                 deletedFor: 'everyone',
                 clearMedia: true,
+            }
+        })
+    }
+
+    async downloadMessageMedia(messageId: string): Promise<WhatsAppDownloadedMedia> {
+        const normalized = messageId.trim()
+        if (!normalized) throw new Error('WhatsApp message_id is required.')
+
+        return this.runReadyOperation('download message media', async client => {
+            const message = await withTimeout(
+                client.getMessageById(normalized),
+                DEFAULT_OPERATION_TIMEOUT_MS,
+                `WhatsApp message lookup timed out for ${normalized}.`
+            )
+            if (!message) {
+                throw new Error(
+                    `Could not find WhatsApp message ${normalized}. WhatsApp Web only keeps recently loaded messages addressable by id, so open the chat with WhatsAppReadChat to pull the message into view, then retry.`
+                )
+            }
+            if (!message.hasMedia) {
+                throw new Error(`WhatsApp message ${normalized} has no media attachment to download.`)
+            }
+
+            const media = await withTimeout(
+                message.downloadMedia(),
+                MEDIA_DOWNLOAD_TIMEOUT_MS,
+                `WhatsApp media download timed out for ${normalized}.`
+            )
+            if (!media || !media.data) {
+                throw new Error(
+                    `WhatsApp returned no media data for message ${normalized}. WhatsApp drops media from its servers after a while, so older attachments can no longer be re-downloaded once they have fallen out of the local WhatsApp Web cache.`
+                )
+            }
+
+            const bytes = Buffer.from(media.data, 'base64')
+            if (bytes.byteLength === 0) {
+                throw new Error(
+                    `WhatsApp media for message ${normalized} was empty after download. This usually means the original media expired on WhatsApp's servers.`
+                )
+            }
+
+            const summary = messageSummary(message)
+            return {
+                messageId: normalized,
+                chatId: summary.chatId || null,
+                type: summary.type,
+                mimeType: typeof media.mimetype === 'string' && media.mimetype.trim() ? media.mimetype.trim() : 'application/octet-stream',
+                filename: typeof media.filename === 'string' && media.filename.trim() ? media.filename.trim() : null,
+                bytes,
             }
         })
     }
@@ -1057,6 +1116,10 @@ export function whatsappSendMedia(
 
 export function whatsappDeleteMessageForEveryone(messageId: string): Promise<WhatsAppDeleteMessageResult> {
     return manager().deleteMessageForEveryone(messageId)
+}
+
+export function whatsappDownloadMedia(messageId: string): Promise<WhatsAppDownloadedMedia> {
+    return manager().downloadMessageMedia(messageId)
 }
 
 export function whatsappMarkChatRead(chatId: string): Promise<WhatsAppMarkChatResult> {

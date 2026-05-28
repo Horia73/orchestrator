@@ -8,9 +8,6 @@ export async function GET(request: Request) {
 
     try {
         const config = getRuntimeConfig();
-        void import('@/lib/memory/daily-consolidation-offer').then((mod) =>
-            mod.maybeOfferDailyMemoryConsolidation()
-        ).catch((err) => console.warn('[memory-offer] background check failed', err))
         return NextResponse.json(config);
     } catch (error) {
         console.error("Failed to fetch config", error);

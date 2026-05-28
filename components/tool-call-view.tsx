@@ -37,32 +37,43 @@ const TOOL_CALL_INSET_CLASS = "ml-7 w-[calc(100%_-_1.75rem)] max-w-[760px]"
 
 const SCROLLABLE_OVERFLOW = new Set(["auto", "scroll", "overlay"])
 
-// Stop wheel events that originate inside a tool-call box from scrolling the
-// chat/agent page behind it. If the box (or an inner element like the xterm
-// viewport) can scroll, the native scroll still happens; once it hits its
-// boundary — or when the box has nothing scrollable at all — the wheel is
-// blocked instead of chaining outward.
-function trapWheelInsideToolCall(event: React.WheelEvent<HTMLDivElement>) {
-    const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
-    const scroller = findScrollerInside(event.target, event.currentTarget, axis)
-    event.stopPropagation()
-    if (!scroller) {
-        event.preventDefault()
-        return
-    }
-    const delta = axis === "y" ? event.deltaY : event.deltaX
-    if (delta === 0) return
-    if (axis === "y") {
-        const max = scroller.scrollHeight - scroller.clientHeight
-        if ((delta < 0 && scroller.scrollTop <= 0) || (delta > 0 && scroller.scrollTop >= max - 1)) {
-            event.preventDefault()
+// Keep a tool-call box's wheel gesture inside the box: scroll its own content,
+// but never chain out to the chat/agent page behind it once the box hits a
+// boundary (or when there's nothing to scroll at all).
+//
+// Implemented as a native, non-passive `wheel` listener in the bubble phase —
+// NOT React's onWheel/onWheelCapture — for two reasons:
+//   1. preventDefault() must actually cancel the scroll; React attaches wheel
+//      listeners as passive at the root, where preventDefault is a no-op.
+//   2. Capturing + stopPropagation would swallow the event before xterm's own
+//      wheel handler runs, leaving the terminal unscrollable. Bubble phase lets
+//      the inner content (incl. xterm) scroll first; we only block the chain.
+function useTrapWheel<T extends HTMLElement>() {
+    const ref = React.useRef<T>(null)
+    React.useEffect(() => {
+        const el = ref.current
+        if (!el) return
+        const handleWheel = (event: WheelEvent) => {
+            const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
+            const scroller = findScrollerInside(event.target, el, axis)
+            if (!scroller) {
+                event.preventDefault()
+                return
+            }
+            const delta = axis === "y" ? event.deltaY : event.deltaX
+            if (delta === 0) return
+            const position = axis === "y" ? scroller.scrollTop : scroller.scrollLeft
+            const max = axis === "y"
+                ? scroller.scrollHeight - scroller.clientHeight
+                : scroller.scrollWidth - scroller.clientWidth
+            if ((delta < 0 && position <= 0) || (delta > 0 && position >= max - 1)) {
+                event.preventDefault()
+            }
         }
-        return
-    }
-    const max = scroller.scrollWidth - scroller.clientWidth
-    if ((delta < 0 && scroller.scrollLeft <= 0) || (delta > 0 && scroller.scrollLeft >= max - 1)) {
-        event.preventDefault()
-    }
+        el.addEventListener("wheel", handleWheel, { passive: false })
+        return () => el.removeEventListener("wheel", handleWheel)
+    }, [])
+    return ref
 }
 
 function findScrollerInside(
@@ -75,6 +86,12 @@ function findScrollerInside(
         if (isScrollableOnAxis(node, axis)) return node
         if (node === boundary) break
         node = node.parentElement
+    }
+    // xterm renders its scrollable viewport as a sibling of the visible screen,
+    // so walking ancestors never reaches it. Fall back to it directly.
+    if (axis === "y") {
+        const viewport = boundary.querySelector<HTMLElement>(".xterm-viewport")
+        if (viewport && isScrollableOnAxis(viewport, "y")) return viewport
     }
     return null
 }
@@ -96,18 +113,19 @@ function isScrollableOnAxis(element: HTMLElement, axis: "x" | "y"): boolean {
 export function InlineToolCallView({ entry, searchDisplay = "expanded" }: InlineToolCallViewProps) {
     const status = entry.status ?? (entry.content ? (entry.success === false ? "error" : "ok") : "running")
     const data = parseToolData(entry.content)
+    const terminalWrapRef = useTrapWheel<HTMLDivElement>()
 
     if (isHiddenToolCall(entry)) return null
 
     if (entry.toolName === "Bash" || entry.toolName === "shell") {
         return (
             <div
+                ref={terminalWrapRef}
                 className={cn(
                     "relative z-10 flex flex-col overflow-x-auto overflow-y-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm [touch-action:pan-x_pan-y]",
                     TOOL_CALL_INSET_CLASS
                 )}
                 style={TOOL_CALL_PANEL_STYLE}
-                onWheelCapture={trapWheelInsideToolCall}
             >
                 <LiveTerminal entry={entry} data={data} className={TERMINAL_MIN_WIDTH_CLASS} />
             </div>
@@ -179,12 +197,13 @@ function ToolFrame({
     bodyClassName?: string
     children: React.ReactNode
 }) {
+    const bodyRef = useTrapWheel<HTMLDivElement>()
     return (
         <div className={cn("relative z-10 overflow-hidden rounded-md border border-border bg-background text-left shadow-sm", TOOL_CALL_INSET_CLASS)}>
             <div
+                ref={bodyRef}
                 className={cn("overflow-auto bg-background", bodyClassName)}
                 style={TOOL_CALL_PANEL_STYLE}
-                onWheelCapture={trapWheelInsideToolCall}
             >
                 {children}
             </div>

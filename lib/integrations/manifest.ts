@@ -145,7 +145,7 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     id: "whatsapp",
     label: "WhatsApp",
     capability:
-      "WhatsApp: list/read/search recent chats, send confirmed messages/media, and delete confirmed messages for everyone.",
+      "WhatsApp: list/read/search recent chats, download media (photos/files) from a message to show the user, send confirmed messages/media, and delete confirmed messages for everyone.",
     runbookId: "whatsapp",
     statusKind: "whatsapp",
     setupToolIds: WHATSAPP_SETUP,

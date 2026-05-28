@@ -455,7 +455,6 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
                 row={row}
                 transcript={data?.transcript ?? null}
                 toolLogs={data?.toolLogs ?? null}
-                loading={loading}
                 error={error}
             />
 
@@ -548,28 +547,19 @@ function LogChatTranscript({
     row,
     transcript,
     toolLogs,
-    loading,
     error,
 }: {
     row: RequestLogRow
     transcript: RequestLogTranscript | null
     toolLogs: ToolLogRow[] | null
-    loading: boolean
     error: string | null
 }) {
     const userMessage = transcript?.userMessage ?? fallbackUserMessage(row)
     const assistantMessage = buildLogAssistantMessage(row, transcript?.assistantMessage ?? null, toolLogs)
-    const loadingTools = loading && row.toolCallCount > 0 && !hasReasoning(assistantMessage)
 
     return (
         <ConversationArtifactsProvider conversationId={row.conversationId}>
             <div className="mx-auto flex w-full max-w-3xl flex-col gap-2 px-1 py-2">
-                {loadingTools && (
-                    <div className="flex items-center gap-2 text-[14px] text-muted-foreground">
-                        <Loader2 className="size-4 animate-spin" />
-                        Loading tool calls...
-                    </div>
-                )}
                 {error && !assistantMessage.content && !hasReasoning(assistantMessage) && (
                     <div className="text-[13px] text-destructive">{error}</div>
                 )}
@@ -590,29 +580,32 @@ function buildLogAssistantMessage(
     source: Message | null,
     toolLogs: ToolLogRow[] | null
 ): Message {
-    const base: Message = source ?? {
+    const base = ensureRenderableLogContent(source ?? {
         id: row.id,
         role: "assistant",
         content: row.outputText ?? "",
         status: row.status === "streaming" ? undefined : row.status,
         timestamp: row.endedAt ?? row.startedAt,
-    }
+    })
 
     if (hasReasoning(base) || !toolLogs?.length) return base
 
-    const reasoning = toolLogs.map<ToolCallReasoningEntry>((tool, index) => ({
-        type: "tool_call",
-        id: `log_tool_${tool.id}`,
-        phase: index,
-        toolCallId: `log_tool_${tool.id}`,
-        title: tool.toolName,
-        content: tool.errorMessage ? `Error: ${tool.errorMessage}` : "",
-        toolName: tool.toolName,
-        success: tool.success,
-        status: tool.success ? "ok" : "error",
-        startedAt: tool.startedAt,
-        endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
-    }))
+    const reasoning = toolLogs
+        .filter(tool => tool.errorMessage)
+        .map<ToolCallReasoningEntry>((tool, index) => ({
+            type: "tool_call",
+            id: `log_tool_${tool.id}`,
+            phase: index,
+            toolCallId: `log_tool_${tool.id}`,
+            title: tool.toolName,
+            content: `Error: ${tool.errorMessage}`,
+            toolName: tool.toolName,
+            success: false,
+            status: "error",
+            startedAt: tool.startedAt,
+            endedAt: tool.durationMs === null ? undefined : tool.startedAt + tool.durationMs,
+        }))
+    if (reasoning.length === 0) return base
     const finalPhase = reasoning.length
 
     return {
@@ -620,6 +613,26 @@ function buildLogAssistantMessage(
         reasoning,
         contentSegments: base.content ? [{ phase: finalPhase, content: base.content }] : undefined,
     }
+}
+
+function ensureRenderableLogContent(message: Message): Message {
+    const hasRenderableSegment = message.contentSegments?.some(segment => segment.content.trim().length > 0)
+    if (!message.content.trim() || hasRenderableSegment) return message
+
+    return {
+        ...message,
+        contentSegments: [
+            {
+                phase: finalContentPhase(message.reasoning),
+                content: message.content,
+            },
+        ],
+    }
+}
+
+function finalContentPhase(reasoning: Message["reasoning"]): number {
+    if (!reasoning?.length) return 0
+    return Math.max(...reasoning.map(entry => Number.isFinite(entry.phase) ? entry.phase : 0)) + 1
 }
 
 function fallbackUserMessage(row: RequestLogRow): Message | null {

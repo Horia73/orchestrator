@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useRouter, useSearchParams } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import ReactMarkdown from "react-markdown"
 import remarkGfm from "remark-gfm"
 import {
@@ -625,6 +625,7 @@ function InboxViewInner() {
   const router = useRouter()
   const { isMobile } = useSidebar()
   const searchParams = useSearchParams()
+  const pathname = usePathname()
   const { confirm, dialog } = useConfirm()
   const [replying, setReplying] = React.useState(false)
   const [responding, setResponding] = React.useState(false)
@@ -637,10 +638,23 @@ function InboxViewInner() {
   >(new Set())
   const keyboardInset = useMobileKeyboardInset()
 
+  const handledItemParam = React.useRef<string | null>(null)
   React.useEffect(() => {
     const id = searchParams.get("item")
-    if (id && id !== selectedId) void open(id)
-  }, [open, searchParams, selectedId])
+    if (id === handledItemParam.current) return
+    handledItemParam.current = id
+    if (id) void open(id)
+  }, [open, searchParams])
+
+  const handleBack = React.useCallback(() => {
+    clear()
+    if (searchParams.get("item")) {
+      const params = new URLSearchParams(searchParams.toString())
+      params.delete("item")
+      const qs = params.toString()
+      router.replace(qs ? `${pathname}?${qs}` : pathname, { scroll: false })
+    }
+  }, [clear, pathname, router, searchParams])
 
   const counts = React.useMemo(() => {
     const read = items.filter((item) => !isUnread(item)).length
@@ -699,7 +713,7 @@ function InboxViewInner() {
   )
   const latestMessageId = threadMessages[0]?.id ?? null
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     setExpandedMessageIds(
       latestMessageId ? new Set([latestMessageId]) : new Set()
     )
@@ -944,7 +958,7 @@ function InboxViewInner() {
               <div className="flex h-14 items-center gap-1 px-3 md:px-5">
                 <button
                   type="button"
-                  onClick={clear}
+                  onClick={handleBack}
                   className="flex size-9 shrink-0 items-center justify-center rounded-full text-foreground/60 transition-colors hover:bg-[#f0ede6] hover:text-foreground md:hidden dark:hover:bg-white/[0.05]"
                   aria-label="Back to inbox"
                 >

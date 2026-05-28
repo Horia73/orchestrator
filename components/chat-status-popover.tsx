@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
     AlertCircle,
+    AlertTriangle,
     CheckCircle2,
     ChevronRight,
     Loader2,
@@ -11,6 +12,12 @@ import {
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { cn } from "@/lib/utils"
+import {
+    quotaPaceLabel,
+    formatResetCountdown,
+    FIVE_HOUR_SECONDS,
+    WEEKLY_SECONDS,
+} from "@/lib/cli/quota-pace"
 import type { Attachment, ContextUsageSnapshot, Message } from "@/lib/types"
 
 type ChatStatusSource = "globalDefault" | "agentDefault" | "agentOverride"
@@ -46,6 +53,7 @@ interface ChatStatusResponse {
 interface CliQuotaWindow {
     usedPercent: number
     resetsAt: number
+    windowSeconds?: number
 }
 
 interface CliQuotaSnapshot {
@@ -55,7 +63,7 @@ interface CliQuotaSnapshot {
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
     weeklySonnet?: CliQuotaWindow
-    source: "api" | "log" | "tui" | "none"
+    source: "api" | "host-bridge" | "log" | "tui" | "none"
     fetchedAt: number
     dataTimestamp?: number
 }
@@ -277,12 +285,14 @@ function PlanUsageSection({
                         value={formatQuotaValue(snapshot.fiveHour)}
                         progress={snapshot.fiveHour?.usedPercent ?? 0}
                         tone="context"
+                        caption={<PaceCaption window={snapshot.fiveHour} fallbackWindowSeconds={FIVE_HOUR_SECONDS} />}
                     />
                     <MetricRow
                         label="Weekly · all models"
                         value={formatQuotaValue(snapshot.weekly)}
                         progress={snapshot.weekly?.usedPercent ?? 0}
                         tone="weekly"
+                        caption={<PaceCaption window={snapshot.weekly} fallbackWindowSeconds={WEEKLY_SECONDS} />}
                     />
                     {snapshot.weeklySonnet && (
                         <MetricRow
@@ -290,6 +300,7 @@ function PlanUsageSection({
                             value={formatQuotaValue(snapshot.weeklySonnet)}
                             progress={snapshot.weeklySonnet.usedPercent}
                             tone="sonnet"
+                            caption={<PaceCaption window={snapshot.weeklySonnet} fallbackWindowSeconds={WEEKLY_SECONDS} />}
                         />
                     )}
                 </div>
@@ -304,12 +315,14 @@ function MetricRow({
     progress,
     tone,
     trailing,
+    caption,
 }: {
     label: string
     value: string
     progress: number
     tone: "context" | "weekly" | "sonnet"
     trailing?: React.ReactNode
+    caption?: React.ReactNode
 }) {
     const pct = Math.max(0, Math.min(100, progress))
     const barColor =
@@ -334,6 +347,27 @@ function MetricRow({
                     style={{ width: `${pct}%` }}
                 />
             </div>
+            {caption}
+        </div>
+    )
+}
+
+function PaceCaption({ window: w, fallbackWindowSeconds }: {
+    window: CliQuotaWindow | undefined
+    fallbackWindowSeconds: number
+}) {
+    if (!w) return null
+    const label = quotaPaceLabel(w, fallbackWindowSeconds)
+    if (!label) return null
+    const cls =
+        label.tone === "danger" ? "text-destructive"
+            : label.tone === "warn" ? "text-amber-600 dark:text-amber-400"
+                : "text-foreground/50"
+    const showIcon = label.tone === "danger" || label.tone === "warn"
+    return (
+        <div className={cn("mt-1.5 flex items-center gap-1 text-[11.5px] tabular-nums", cls)}>
+            {showIcon && <AlertTriangle className="size-3 shrink-0" />}
+            <span>{label.text}</span>
         </div>
     )
 }
@@ -354,20 +388,7 @@ function SkeletonMetric() {
 
 function formatQuotaValue(window: CliQuotaWindow | undefined): string {
     if (!window) return "-"
-    return `${formatPercent(window.usedPercent)} · ${formatResetShort(window.resetsAt)}`
-}
-
-function formatResetShort(resetsAt: number): string {
-    if (!resetsAt || !Number.isFinite(resetsAt)) return "reset unknown"
-    const now = Math.floor(Date.now() / 1000)
-    const delta = resetsAt - now
-    if (delta <= 0) return "rolled over"
-    const days = Math.floor(delta / 86400)
-    const hours = Math.floor(delta / 3600)
-    const minutes = Math.floor((delta % 3600) / 60)
-    if (days >= 1) return `resets ${days}d`
-    if (hours >= 1) return `resets ${hours}h`
-    return `resets ${minutes}m`
+    return `${formatPercent(window.usedPercent)} · ${formatResetCountdown(window.resetsAt)}`
 }
 
 function formatPercent(value: number): string {

@@ -46,9 +46,35 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
     const termRef = React.useRef<Terminal | null>(null)
     const fitRef = React.useRef<FitAddon | null>(null)
     const textBufferRef = React.useRef<string>("")
+    const pasteNoticeTimerRef = React.useRef<number | null>(null)
 
     const [status, setStatus] = React.useState<"connecting" | "running" | "exited" | "error">("connecting")
     const [exitCode, setExitCode] = React.useState<number | null>(null)
+    const [pasteNotice, setPasteNotice] = React.useState<string | null>(null)
+
+    const showPasteNotice = React.useCallback(() => {
+        setPasteNotice("Pasted into terminal. If nothing appears, the CLI is hiding secret input; press Enter.")
+        if (pasteNoticeTimerRef.current !== null) {
+            window.clearTimeout(pasteNoticeTimerRef.current)
+        }
+        pasteNoticeTimerRef.current = window.setTimeout(() => {
+            setPasteNotice(null)
+            pasteNoticeTimerRef.current = null
+        }, 3500)
+    }, [])
+
+    const handlePasteCapture = React.useCallback((event: React.ClipboardEvent<HTMLDivElement>) => {
+        const text = event.clipboardData?.getData("text") ?? ""
+        if (text.length > 0) showPasteNotice()
+    }, [showPasteNotice])
+
+    React.useEffect(() => {
+        return () => {
+            if (pasteNoticeTimerRef.current !== null) {
+                window.clearTimeout(pasteNoticeTimerRef.current)
+            }
+        }
+    }, [])
 
     // ---- Mount xterm ----------------------------------------------------
     React.useEffect(() => {
@@ -91,6 +117,7 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         term.loadAddon(links)
         term.open(containerRef.current)
         try { fit.fit() } catch { /* container not laid out yet */ }
+        term.focus()
 
         termRef.current = term
         fitRef.current = fit
@@ -183,7 +210,10 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
     }, [sessionId])
 
     return (
-        <div className={cn("flex flex-col overflow-hidden rounded-lg border border-border/70 bg-[#0c0c0e]", className)}>
+        <div
+            className={cn("flex flex-col overflow-hidden rounded-lg border border-border/70 bg-[#0c0c0e]", className)}
+            onPasteCapture={handlePasteCapture}
+        >
             <div className="flex items-center gap-1.5 border-b border-zinc-800/80 bg-zinc-950 px-3 py-1.5">
                 <span className="size-2.5 rounded-full bg-rose-500/80" />
                 <span className="size-2.5 rounded-full bg-amber-500/80" />
@@ -198,6 +228,11 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
                             : "connecting…"}
                 </span>
                 {status === "connecting" && <Loader2 className="ml-1 size-3 animate-spin text-zinc-500" />}
+                {pasteNotice && (
+                    <span className="ml-auto max-w-[70%] truncate rounded bg-zinc-800 px-2 py-0.5 text-[11px] normal-case tracking-normal text-zinc-300">
+                        {pasteNotice}
+                    </span>
+                )}
             </div>
 
             <div ref={containerRef} className="min-h-[280px] flex-1 px-2 py-2" />

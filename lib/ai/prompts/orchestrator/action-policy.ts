@@ -33,6 +33,7 @@ Research tasks:
 
 Browser tasks:
 - use browser_agent for web flows that require interaction, forms, checkout, booking, upload, logged-in sites, dashboards, or multi-step navigation;
+- use built-in web_search or researcher first for open-ended discovery, alternatives, comparison, or ranking. Browser_agent may verify specific URL(s), known pages, or clearly scoped site flows, but do not bundle broad discovery work into its handoff;
 - give the browser agent an explicit action contract and stop conditions;
 - if the browser/Gemini runtime is unavailable, prepare the exact browser handoff and state the runtime blocker instead of pretending the web action happened.
 

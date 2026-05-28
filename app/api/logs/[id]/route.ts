@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { getRequestLog, getToolLogsForRequest } from '@/lib/observability/store'
 import { getConversation } from '@/lib/db'
-import { searchTaskRuns } from '@/lib/scheduling/store'
+import { getInboxConversation, searchTaskRuns } from '@/lib/scheduling/store'
 import type { RequestLogRow } from '@/lib/observability/schema'
 import type { AgentCallReasoningEntry, Message, ReasoningEntry } from '@/lib/types'
 
@@ -22,6 +22,11 @@ type RequestLogTranscript = {
 }
 
 function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {
+    const inboxTranscript = getInboxThreadTranscript(log)
+    if (inboxTranscript) {
+        return inboxTranscript
+    }
+
     const conversation = getConversation(log.conversationId)
     if (conversation) {
         const assistantMessage = conversation.messages.find(
@@ -55,11 +60,73 @@ function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {
     return null
 }
 
-function findUserMessageForAssistant(messages: Message[], assistantIndex: number, log: RequestLogRow): Message | null {
+function getInboxThreadTranscript(log: RequestLogRow): RequestLogTranscript | null {
+    if (!shouldPreferInboxThreadTranscript(log)) return null
+
+    const inbox = getInboxConversation(log.conversationId)
+    if (!inbox) return null
+
+    const assistantMessage = findInboxAssistantMessageForLog(inbox.messages, log)
+    if (!assistantMessage) return null
+
+    const assistantIndex = inbox.messages.indexOf(assistantMessage)
+    return {
+        userMessage: findUserMessageForAssistant(
+            inbox.messages,
+            assistantIndex,
+            log,
+            { fallbackToLogInput: false },
+        ),
+        assistantMessage,
+    }
+}
+
+function shouldPreferInboxThreadTranscript(log: RequestLogRow): boolean {
+    const parentRequestId = log.parentRequestId ?? ''
+    // Scheduled wakes keep their full run transcript.
+    // Inbox replies and microscript notifications mirror the Inbox thread.
+    return parentRequestId.startsWith('inbox_') || parentRequestId.startsWith('microscript_')
+}
+
+function findInboxAssistantMessageForLog(messages: Message[], log: RequestLogRow): Message | null {
+    const byId = messages.find(message => message.id === log.id && message.role === 'assistant')
+    if (byId) return byId
+
+    const end = log.endedAt ?? log.startedAt
+    const minTimestamp = log.startedAt - 5_000
+    const maxTimestamp = end + 60 * 60_000
+    let best: { message: Message; score: number } | null = null
+
+    for (const message of messages) {
+        if (message.role !== 'assistant') continue
+        if (message.timestamp < minTimestamp || message.timestamp > maxTimestamp) continue
+
+        let score = Math.max(1, 60 * 60_000 - Math.abs(message.timestamp - end))
+        const logOutput = (log.outputText ?? '').trim()
+        const content = message.content.trim()
+        if (logOutput && content === logOutput) score += 1_000_000
+        else if (logOutput && (content.includes(logOutput) || logOutput.includes(content))) score += 500_000
+        if (message.reasoning?.length) score += 50_000
+        if (message.contentSegments?.length) score += 50_000
+        if (message.status === log.status) score += 10_000
+
+        if (!best || score > best.score) best = { message, score }
+    }
+
+    return best?.message ?? null
+}
+
+function findUserMessageForAssistant(
+    messages: Message[],
+    assistantIndex: number,
+    log: RequestLogRow,
+    options: { fallbackToLogInput?: boolean } = {},
+): Message | null {
     for (let i = assistantIndex - 1; i >= 0; i--) {
         const message = messages[i]
         if (message.role === 'user') return message
     }
+    if (options.fallbackToLogInput === false) return null
     return messageFromLogInput(log)
 }
 

@@ -17,7 +17,8 @@ export const delegateToTool: ToolDef = {
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
         'Returns the sub-agent\'s complete response and agent_thread_id. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
-        'For browser_agent, the prompt must be self-contained: site/link, goal, allowed data, forbidden data, account/session assumptions, exact stop boundary, confirmation status, screenshot/video needs, and expected evidence. Reuse thread_id to continue the same browser state.',
+        'For browser_agent, pass bounded execution/verification tasks, not open-ended research/discovery/comparison. The prompt must be self-contained: exact URL(s) or clearly scoped site flow, goal, allowed data, forbidden data, account/session assumptions, exact stop boundary, confirmation status, screenshot/video needs, and expected evidence. Reuse thread_id to continue the same browser state.',
+        'browser_agent runs in bounded segments (~50 actions). If it returns Session status awaiting_user with Final action "checkpoint", the action budget was reached — this is NOT a failure or a user question. Read the action log, then FINALIZE (synthesize from evidence), CONTINUE (same thread_id + a corrected focused instruction: what is done, the next sub-goal, any loop fix), or ABORT. Do not re-send the same goal if the log shows no progress; cap continuations at ~3 segments per task.',
         'For browser_agent loading/API diagnostics, ask for inspectDiagnostics and same-origin fetchUrl results instead of only visual inspection or API-tab switching.',
     ].join(' '),
     input_schema: {
@@ -56,7 +57,7 @@ export const delegateParallelTool: ToolDef = {
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
-        'Browser_agent jobs must include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
+        'Browser_agent jobs must be bounded execution/verification tasks, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
     ].join(' '),
     input_schema: {
         type: 'object',

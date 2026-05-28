@@ -1,5 +1,6 @@
 import type { PromptContext } from '@/lib/ai/agents/types'
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
+import { isOrchestratorClassAgent } from '@/lib/ai/agents/orchestrator-class'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
@@ -617,8 +618,10 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     // doctrines all live next to each other so the model can see what
     // exists, what it has activated, and what's still gated. Sub-agents
     // don't need this surface — they receive their tools directly and
-    // delegate composition back to the orchestrator.
-    const isOrchestrator = ctx.agentId === 'orchestrator'
+    // delegate composition back to the orchestrator. The Inbox/Smart
+    // Monitor aliases ARE the orchestrator (see orchestrator-class.ts), so
+    // they get the full surface too.
+    const isOrchestrator = isOrchestratorClassAgent(ctx.agentId)
     return [
         runtime,
         buildAgentThreadsContextBlock(ctx),
@@ -632,9 +635,9 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         // so the model sees the capability summary + its loaded doctrine
         // together.
         buildActiveCapabilityDoctrinesBlock(exposureOpts),
-        // Self-update proposal — orchestrator-only. Inbox/smart-monitor
-        // aliases share the prompt builder but should never pester the user
-        // with update offers during a notification reply.
+        // Self-update proposal — orchestrator-class only (orchestrator +
+        // Inbox/Smart Monitor aliases). The block itself only renders when
+        // ctx.pendingUpdate is set and instructs at-most-once-per-conversation.
         isOrchestrator ? buildPendingUpdateBlock(ctx) : '',
         buildIntegrationRunbooksContext(),
         buildWorkspaceContextFiles(ctx.agentId),
@@ -756,11 +759,12 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
     let remaining = MAX_CONTEXT_TOTAL_CHARS
 
     // BOOT.md and ONBOARDING.md are the user-facing onboarding script —
-    // only the orchestrator runs onboarding. Sub-agents (researcher,
-    // multipurpose, concierge, etc.) get the durable context files
-    // (USER/MEMORY/MEMORY_DAY) but skip the onboarding script so it
-    // doesn't bloat their prompts every turn while BOOT.md exists.
-    const isOrchestrator = agentId === 'orchestrator'
+    // only the orchestrator class runs onboarding. Other sub-agents
+    // (researcher, multipurpose, concierge, etc.) get the durable context
+    // files (USER/MEMORY/MEMORY_DAY) but skip the onboarding script so it
+    // doesn't bloat their prompts every turn while BOOT.md exists. The
+    // Inbox/Smart Monitor aliases ARE the orchestrator, so they keep it.
+    const isOrchestrator = isOrchestratorClassAgent(agentId)
 
     // Returns false when the char budget is exhausted so callers stop.
     const pushBlock = (relPath: string, id: string, raw: string): boolean => {
@@ -814,7 +818,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         '<workspace_context_files>',
         'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading one just to confirm what is already shown here; only read from disk when a block is marked [truncated] or you have specific reason to think it changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
         'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
-        "Daily working memory lives at MEMORY_DAY/<UTC-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. If MONITORS.md records a model-owned memory-maintenance watch/spec, the Smart Monitor wake may consolidate daily memory according to that spec; suggested wall-clock times are guidance, not a separate scheduled-task contract. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
+        "Daily working memory lives at MEMORY_DAY/<UTC-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
         '',
         ...blocks,
         '</workspace_context_files>',

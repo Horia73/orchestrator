@@ -209,7 +209,7 @@ write(path.join('MEMORY_DAY', `${today}.md`), [
     '',
     `Daily working memory for ${today} (UTC).`,
     '',
-    'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design and may be consolidated opportunistically by a model-owned Smart Monitor maintenance watch after local midnight when that preference is recorded.',
+    'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design.',
     '',
 ].join('\n'))
 

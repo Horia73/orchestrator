@@ -4,8 +4,10 @@ import path from 'path'
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { getConversation } from '@/lib/db'
 import {
+    type WhatsAppDownloadedMedia,
     type WhatsAppOutgoingAttachment,
     whatsappDeleteMessageForEveryone,
+    whatsappDownloadMedia,
     getWhatsAppIntegrationStatus,
     startWhatsApp,
     whatsappListChats,
@@ -17,8 +19,9 @@ import {
     whatsappSendMessage,
     whatsappUnreadSummary,
 } from '@/lib/integrations/whatsapp'
+import { formatAssetReference } from '@/lib/ai/media-assets'
 import type { Attachment } from '@/lib/types'
-import { resolveExistingUploadPath } from '@/lib/uploads'
+import { MAX_UPLOAD_FILE_BYTES, persistUploadBytes, resolveExistingUploadPath } from '@/lib/uploads'
 import { booleanArg, clamp, numberArg, stringArg } from './helpers'
 import { displayPath, isInsideProtectedAgentPath, resolveSandboxed } from './sandbox'
 
@@ -143,6 +146,29 @@ export const whatsappSearchMessagesTool: ToolDef = {
             },
         },
         required: ['query'],
+    },
+    tags: ['read', 'whatsapp', 'messages'],
+}
+
+export const whatsappDownloadMediaTool: ToolDef = {
+    id: 'WhatsAppDownloadMedia',
+    name: 'WhatsAppDownloadMedia',
+    description: [
+        'Downloads the media attachment (photo, video, voice note, audio, document, or sticker) from a single WhatsApp message and saves it so it can be shown to the user.',
+        'Pass the message_id (the id field from WhatsAppReadChat or WhatsAppSearchMessages) of a message whose hasMedia is true.',
+        'On success the result includes mediaMarkdown — embed that string verbatim in your final answer so the photo/file appears inline for the user. The saved file is also exposed as an upload (attachment.id and url), which you can reuse, e.g. to forward it with WhatsAppSendMedia.',
+        'This only reads and downloads; it never sends, forwards, or deletes anything, so no user confirmation is required.',
+        'Caveat about caching: WhatsApp removes media from its servers after a while. Old attachments can fail to download once they have dropped out of the local WhatsApp Web cache. If the download fails, tell the user the media is no longer retrievable and, if they still need it, ask them to reopen or resend it in WhatsApp. For older messages, call WhatsAppReadChat on that chat first so the message is loaded into view, then retry.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            message_id: {
+                type: 'string',
+                description: 'Exact WhatsApp message ID (the id field returned by WhatsAppReadChat or WhatsAppSearchMessages) of a message whose hasMedia is true.',
+            },
+        },
+        required: ['message_id'],
     },
     tags: ['read', 'whatsapp', 'messages'],
 }
@@ -292,6 +318,7 @@ export const whatsappTools: ToolDef[] = [
     whatsappUnreadSummaryTool,
     whatsappReadChatTool,
     whatsappSearchMessagesTool,
+    whatsappDownloadMediaTool,
     whatsappSendMessageTool,
     whatsappSendMediaTool,
     whatsappDeleteMessageTool,
@@ -364,6 +391,46 @@ export async function executeWhatsAppSearchMessages(args: Record<string, unknown
         perChatLimit,
     })
     return { success: true, data: result }
+}
+
+export async function executeWhatsAppDownloadMedia(args: Record<string, unknown>): Promise<ToolResult> {
+    const messageId = stringArg(args, ['message_id', 'messageId', 'id'])
+    if (!messageId) return { success: false, error: 'Missing required parameter: message_id' }
+
+    let media: WhatsAppDownloadedMedia
+    try {
+        media = await whatsappDownloadMedia(messageId)
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
+
+    if (media.bytes.byteLength > MAX_UPLOAD_FILE_BYTES) {
+        const sizeMb = (media.bytes.byteLength / (1024 * 1024)).toFixed(1)
+        const limitMb = Math.round(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))
+        return { success: false, error: `Downloaded WhatsApp media is ${sizeMb}MB, over the ${limitMb}MB limit for saving as an attachment.` }
+    }
+
+    const saved = persistUploadBytes(media.bytes, media.mimeType, media.filename ?? undefined, 'whatsapp-media')
+
+    return {
+        success: true,
+        data: {
+            status: 'downloaded',
+            messageId: media.messageId,
+            chatId: media.chatId,
+            messageType: media.type,
+            attachment: {
+                id: saved.attachment.id,
+                filename: saved.attachment.filename,
+                mimeType: saved.attachment.mimeType,
+                size: saved.attachment.size,
+                type: saved.attachment.type,
+            },
+            url: saved.url,
+            mediaMarkdown: formatAssetReference(saved),
+            instruction: 'Show mediaMarkdown directly in your final answer so the media appears inline for the user. The saved attachment.id/url can also be passed to WhatsAppSendMedia to forward this file to a chat.',
+        },
+    }
 }
 
 export async function executeWhatsAppSendMessage(args: Record<string, unknown>): Promise<ToolResult> {

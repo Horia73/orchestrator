@@ -98,6 +98,68 @@ function toContentType(mimeType: string): 'audio' | 'image' | 'video' | 'documen
     return 'document'
 }
 
+// Raw Gemini `Usage` total fields (snake_case wire shape). Summed across rounds
+// by accumulateGeminiUsage. See lib/observability/usage-mapper.ts → mapGemini.
+const GEMINI_USAGE_TOTAL_KEYS = [
+    'total_input_tokens',
+    'total_output_tokens',
+    'total_thought_tokens',
+    'total_cached_tokens',
+    'total_tool_use_tokens',
+    'total_tokens',
+] as const
+
+const GEMINI_USAGE_MODALITY_KEYS = [
+    'input_tokens_by_modality',
+    'output_tokens_by_modality',
+    'cached_tokens_by_modality',
+    'tool_use_tokens_by_modality',
+] as const
+
+/**
+ * Sum two raw Gemini `Usage` payloads. The Interactions API bills each agentic
+ * round as its own request and reports per-interaction (marginal) usage, not a
+ * running total for the `previous_interaction_id` chain. The tool loop fires one
+ * interaction per round, so the run total is the sum of every round's usage —
+ * keeping only the last interaction undercounts multi-round runs (and makes
+ * Gemini look ~10x cheaper than the equivalent cumulative Claude Code run).
+ */
+function accumulateGeminiUsage(acc: unknown, next: unknown): unknown {
+    if (!next || typeof next !== 'object') return acc
+    if (!acc || typeof acc !== 'object') return next
+    const a = acc as Record<string, unknown>
+    const b = next as Record<string, unknown>
+    const out: Record<string, unknown> = { ...a }
+    for (const key of GEMINI_USAGE_TOTAL_KEYS) {
+        if (a[key] === undefined && b[key] === undefined) continue
+        out[key] = geminiUsageNumber(a[key]) + geminiUsageNumber(b[key])
+    }
+    for (const key of GEMINI_USAGE_MODALITY_KEYS) {
+        const merged = mergeGeminiModality(a[key], b[key])
+        if (merged) out[key] = merged
+    }
+    return out
+}
+
+function geminiUsageNumber(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function mergeGeminiModality(a: unknown, b: unknown): Array<{ modality: string; tokens: number }> | null {
+    const byModality = new Map<string, number>()
+    for (const entry of [...toModalityArray(a), ...toModalityArray(b)]) {
+        const modality = typeof entry?.modality === 'string' ? entry.modality : ''
+        if (!modality) continue
+        byModality.set(modality, (byModality.get(modality) ?? 0) + geminiUsageNumber(entry?.tokens))
+    }
+    if (byModality.size === 0) return null
+    return [...byModality.entries()].map(([modality, tokens]) => ({ modality, tokens }))
+}
+
+function toModalityArray(value: unknown): Array<{ modality?: unknown; tokens?: unknown }> {
+    return Array.isArray(value) ? value as Array<{ modality?: unknown; tokens?: unknown }> : []
+}
+
 // Hoisted so the registry can read capabilities without ever instantiating a
 // real SDK client (which warns on empty keys).
 export const GOOGLE_CAPABILITIES: ProviderCapabilities = {
@@ -446,7 +508,7 @@ export class GoogleProvider implements AIProvider {
 
                 if (eventType === 'interaction.complete') {
                     if (event.interaction?.id) interactionId = event.interaction.id
-                    usage = event.interaction?.usage ?? usage
+                    usage = accumulateGeminiUsage(usage, event.interaction?.usage)
                 }
 
                 if (eventType === 'error') {

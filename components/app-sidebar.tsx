@@ -803,7 +803,9 @@ export function AppSidebar() {
                             className={`text-[15px] text-foreground/75 group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
                           >
                             <span className="min-w-0 flex-1">
-                              <span className="block truncate">
+                              <span
+                                className={`block truncate ${unread ? "font-semibold" : ""}`}
+                              >
                                 {conv.title}
                               </span>
                               {isFiltering && (

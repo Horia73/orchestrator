@@ -155,6 +155,7 @@ export const WHATSAPP_TOOL_IDS: string[] = [
     'WhatsAppUnreadSummary',
     'WhatsAppReadChat',
     'WhatsAppSearchMessages',
+    'WhatsAppDownloadMedia',
     'WhatsAppSendMessage',
     'WhatsAppSendMedia',
     'WhatsAppDeleteMessageForEveryone',
@@ -204,10 +205,10 @@ export const SCHEDULING_TOOL_IDS: string[] = [
     'set_task_state',
 ]
 
-// In-app self-update. Orchestrator-only — the prompt's <pending_update>
-// runtime block only shows for agentId === 'orchestrator', so the
-// inbox/smart-monitor aliases never see the proposal even though they
-// inherit the tool list.
+// In-app self-update. The prompt's <pending_update> runtime block shows for
+// the orchestrator class (orchestrator + the inbox/smart-monitor aliases, see
+// orchestrator-class.ts), which all inherit this tool via the orchestrator
+// grant. Other sub-agents inherit neither the block nor a reason to apply it.
 export const UPDATE_TOOL_IDS: string[] = [
     'apply_update',
 ]

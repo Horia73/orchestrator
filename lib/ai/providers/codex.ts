@@ -459,7 +459,13 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 }
                 case 'thread/tokenUsage/updated': {
                     if (!activeTurnId || params?.turnId === activeTurnId) {
-                        finalUsage = (params?.tokenUsage as AnyObj | undefined)?.last ?? params?.tokenUsage
+                        // Prefer the cumulative thread total over the last turn's
+                        // marginal usage, so multi-round runs are logged/billed for
+                        // the whole run (matches Claude Code's cumulative result.usage
+                        // and the Gemini accumulator). `.last` stays as a fallback for
+                        // protocol versions that omit `.total`.
+                        const tokenUsage = params?.tokenUsage as AnyObj | undefined
+                        finalUsage = tokenUsage?.total ?? tokenUsage?.last ?? tokenUsage
                     }
                     fireContextUsage(params)
                     return

@@ -69,7 +69,7 @@ export class AnthropicProvider implements AIProvider {
                 callbacks: cb,
             })
 
-            finalUsage = result.usage ?? finalUsage
+            finalUsage = accumulateAnthropicUsage(finalUsage, result.usage)
             finalThinkingDuration = result.thinkingDuration ?? finalThinkingDuration
 
             if (result.toolCalls.length === 0 || result.stopReason !== 'tool_use') {
@@ -370,10 +370,43 @@ function mapAnthropicThinkingBudget(level: string | undefined): number | null {
     }
 }
 
+// Field-merge for the two usage payloads emitted WITHIN one request: message_start
+// carries input/cache counts, message_delta carries the final output_tokens. These
+// don't overlap, so a shallow overlay is correct — do NOT use this to combine
+// separate rounds (that would drop earlier rounds); see accumulateAnthropicUsage.
 function mergeUsage(current: unknown, next: unknown): unknown {
     if (!current || typeof current !== 'object') return next ?? current
     if (!next || typeof next !== 'object') return current
     return { ...(current as Record<string, unknown>), ...(next as Record<string, unknown>) }
+}
+
+// Anthropic's API is stateless — each tool round is a separate request whose usage
+// covers only that request. Sum per-round usage so the run total reflects the whole
+// agentic loop (matches Claude Code's cumulative result.usage and the Gemini/Codex
+// accumulators). Without this only the last round is logged, undercounting fresh
+// input + output from earlier rounds.
+const ANTHROPIC_USAGE_SUM_KEYS = [
+    'input_tokens',
+    'output_tokens',
+    'cache_creation_input_tokens',
+    'cache_read_input_tokens',
+] as const
+
+function accumulateAnthropicUsage(acc: unknown, next: unknown): unknown {
+    if (!next || typeof next !== 'object') return acc
+    if (!acc || typeof acc !== 'object') return next
+    const a = acc as Record<string, unknown>
+    const b = next as Record<string, unknown>
+    const out: Record<string, unknown> = { ...a }
+    for (const key of ANTHROPIC_USAGE_SUM_KEYS) {
+        if (a[key] === undefined && b[key] === undefined) continue
+        out[key] = anthropicUsageNumber(a[key]) + anthropicUsageNumber(b[key])
+    }
+    return out
+}
+
+function anthropicUsageNumber(value: unknown): number {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
 }
 
 function anthropicTool(tool: ToolDef): AnyObj {

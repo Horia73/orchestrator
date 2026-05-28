@@ -7,25 +7,32 @@ import type { RetrievedMemory } from './memory';
 import type { BrowserCoordinateSpace, BrowserDownloadFile } from './browser';
 import { formatBrowserAgentTextForLog, redactBrowserAgentText } from './redaction';
 
-export function buildSystemPrompt(
-   memories: RetrievedMemory,
-   isAdvancedMode: boolean = false,
-   coordinateSpace: BrowserCoordinateSpace = 'normalized-viewport',
-): string {
-   let memoryBlock = '';
+/**
+ * Per-session memory block. Kept OUT of buildSystemPrompt so the system prompt
+ * stays byte-stable across a segment and can be sent as a cacheable
+ * systemInstruction. Memories are dynamic (they vary by URL/goal and grow as the
+ * agent learns), so they belong in the per-request user content instead.
+ */
+export function buildMemoryContext(memories: RetrievedMemory): string {
+   const blocks: string[] = [];
 
    // Semantic facts
    if (memories.semantic.length > 0) {
-      memoryBlock += `\n## 📝 Known Facts (from past sessions):\n${memories.semantic.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+      blocks.push(`## 📝 Known Facts (from past sessions):\n${memories.semantic.map((l, i) => `${i + 1}. ${l}`).join('\n')}`);
    }
 
    // Procedural strategies
    if (memories.procedural.length > 0) {
-      memoryBlock += `\n## 🧩 Learned Strategies:\n${memories.procedural.map((l, i) => `${i + 1}. ${l}`).join('\n')}`;
+      blocks.push(`## 🧩 Learned Strategies:\n${memories.procedural.map((l, i) => `${i + 1}. ${l}`).join('\n')}`);
    }
 
-   const learningsText = memoryBlock;
+   return blocks.length > 0 ? `\n${blocks.join('\n')}\n` : '';
+}
 
+export function buildSystemPrompt(
+   isAdvancedMode: boolean = false,
+   coordinateSpace: BrowserCoordinateSpace = 'normalized-viewport',
+): string {
    const now = new Date();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
    const responseActionList = isAdvancedMode
@@ -135,8 +142,8 @@ ${coordinateAccuracyRule}
 7. **Hard Commit Boundary**: NEVER click final payment, start a paid trial/subscription, place/cancel a final order, confirm/cancel a booking, send a message, perform an irreversible submit, change account/security settings, grant permissions, upload/submit sensitive personal documents/data to an external service, publicly share content, do destructive actions, submit account creation, or accept legal terms unless the delegated task explicitly confirms that exact final action. If confirmation is missing, stop with \`ask\` and include the exact action, visible details, URL, and a screenshot if useful.
    - Free setup/API-key flows are allowed up to that boundary. Do not refuse just because signup/login may be involved. Navigate, inspect pricing, locate free plan/dashboard/API key pages, use existing logged-in sessions, ask which account/sign-in method to use when unclear, and fill non-sensitive fields when the task contract provides them. Stop only before final account creation, legal terms acceptance, permission grant, personal-data submission, paid trial/subscription, or payment. When the key is already visible after authorized login/setup, return the key value if the task asks for it, or return the key plus intended env var name if the parent needs to store it.
 8. **Evidence**: When the user or parent asks for a screenshot/video, use \`screenshot\` or \`recordVideo\` yourself. Also use \`screenshot\` before asking for confirmation on purchases, bookings, sends, uploads, or other sensitive boundaries. Evidence-action rules do not apply to the internal screenshots you receive for browser control. When your final \`done\`/\`ask\`/\`error\` message mentions captured evidence, say that it was captured; do not invent or cite image filenames/links. The parent app attaches captured media inline.
-9. **Data Gathering**: Do not be afraid to scroll and explore the whole page to find the information you need.
-10. **Search Results**: If the search results are not what you expected, try to refine the search query or try a different approach. Or maybe just what you searched for is not available on the site.
+9. **Data Gathering**: Within the delegated bounded browser task, do not be afraid to scroll and explore the relevant page or scoped site flow to find the information you need. If the delegated goal mixes bounded browser verification with broad discovery, comparison, or ranking, complete only the bounded browser part and report that the discovery portion should be handled by the parent/researcher.
+10. **Search Results**: Within a scoped site flow, if the search results are not what you expected, try to refine the search query or try a different approach. Do not expand into open-ended web research, broad alternative finding, comparison, or ranking unless the parent explicitly scoped that as the browser task on this site.
 11. **Popup & Modal Scrolling**: If a popup, modal, or specific container has its own internal scroll, you MUST click inside it first before using the scroll or \`scrollToBottom\` action. If you used a scroll action and notice only the background page moved but the modal didn't, you failed because the modal wasn't focused. BATCH a "click" inside the modal + "scroll" to fix it.
 12. **Overview Frames**: If a frame says \`Capture: overview\`, it shows the full page for orientation only. Use it to decide where to scroll, not where to click.
 ${inspectPageRule}
@@ -171,8 +178,6 @@ Manage tabs like a person would — check OPEN TABS before acting:
    - Do not save one-off task outcomes, captcha-specific instructions, button labels, or temporary page states.
    - Do not add memory for every action, only for significant ones.
    - Do not repeat the same memory.
-
-${learningsText}
 
 ## 🔀 BATCH ACTIONS
 When you can determine multiple actions from the current screenshot (e.g. selecting multiple CAPTCHA images, filling several form fields, clicking multiple checkboxes), return an ARRAY of actions instead of a single one.
@@ -507,45 +512,6 @@ Rules:
 - Keep arrays short and high-signal.
 - JSON only.`;
 }
-
-export function buildActionHistoryCompactionPrompt(
-   goal: string,
-   actionsToCompact: ActionHistoryItem[],
-   conversationHistory: string[],
-   keepLastCount: number
-): string {
-   const historyText = formatActionHistory(actionsToCompact, actionsToCompact.length, 0);
-   const priorContext = conversationHistory.length > 0
-      ? `\n## EXISTING COMPACTED / CONVERSATION CONTEXT\n${conversationHistory.map((entry) => redactBrowserAgentText(entry)).join('\n')}\n`
-      : '';
-
-   return `## BROWSER ACTION HISTORY COMPACTION
-You are compacting older browser-agent action history so the agent can continue a long task.
-The live prompt will keep the latest ${keepLastCount} actions separately; summarize ONLY the older actions below.
-
-## ORIGINAL GOAL
-${redactBrowserAgentText(goal)}
-${priorContext}
-${historyText}
-
-Return JSON only with this exact shape:
-{
-  "summary": "<compact but specific paragraph>",
-  "completed": ["<important completed step>", "<important completed step>"],
-  "currentState": "<last known relevant page/file/state from this older history>",
-  "avoidRepeating": ["<step the agent should not redo unless verified missing>"],
-  "openRisks": ["<uncertainty, failed step, or thing still needing verification>"]
-}
-
-Rules:
-- Preserve task-critical facts: files opened or edited, buttons clicked to save, sections already searched, entities/forms/settings already touched, failed attempts, and any user-imposed boundaries.
-- For config/editor tasks, explicitly note which file or setting was already edited or saved if the action history supports that.
-- Do not include passwords, bearer tokens, API keys, webhook secrets, auth headers, or raw credential values. Write "[redacted]" if a secret was involved.
-- Do not invent success that the action history does not support; distinguish "typed/clicked save" from "verified saved" when verification is absent.
-- Keep it short enough to fit as durable context in future prompts.
-- JSON only.`;
-}
-
 
 export function buildInterruptPrompt(
    newGoal: string

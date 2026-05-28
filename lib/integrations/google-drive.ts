@@ -256,12 +256,14 @@ export async function getGoogleDriveIntegrationStatus(origin: string, refresh = 
     const config = getGoogleOAuthConfig(origin, GOOGLE_DRIVE_PROVIDER)
     let token = readDriveToken()
     let error: string | undefined
+    let refreshFailed = false
 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
             token = await refreshGoogleOAuthToken(token, config, GOOGLE_DRIVE_TOKEN_PATH)
         } catch (err) {
+            refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Google Workspace token'
         }
     }
@@ -292,7 +294,7 @@ export async function getGoogleDriveIntegrationStatus(origin: string, refresh = 
         missingConfig: config.missing,
         redirectUri: config.redirectUri,
         expiresAt: token?.expiresAt ?? null,
-        needsReconnect: Boolean(!token || missingScopes.length > 0 || (expired && !token.refreshToken)),
+        needsReconnect: Boolean(!token || refreshFailed || missingScopes.length > 0 || (expired && !token.refreshToken)),
         storageQuota: about?.storageQuota ?? null,
         maxUploadSize: about?.maxUploadSize ?? null,
         appInstalled: about?.appInstalled ?? null,

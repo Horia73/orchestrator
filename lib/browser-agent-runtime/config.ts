@@ -83,7 +83,10 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
         maxConcurrent: 3,
     },
     runtime: {
-        maxIterations: 60,
+        // Per-task action budget. On reaching it without a terminal action the agent
+        // returns a 'checkpoint' for the orchestrator to review (override via
+        // AGENT_MAX_ITERATIONS). Keeps each segment's context bounded.
+        maxIterations: 50,
         maxConversationHistory: 40,
         stepDelayMs: 500,
         actionSettleDelayMs: 1000,

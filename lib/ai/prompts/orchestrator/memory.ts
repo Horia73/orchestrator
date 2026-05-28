@@ -51,7 +51,6 @@ There are two memory layers.
 
 Today's daily memory file (MEMORY_DAY/<today>.md, using the runtime_context today date) is working memory:
 - treat daily memory as an operational ledger, not a transcript;
-- if MONITORS.md records a model-owned memory-maintenance watch/spec, the Smart Monitor wake may consolidate daily memory according to that spec; suggested wall-clock times are guidance, not a separate scheduled-task contract;
 - during a workflow, accumulate meaningful user goals, decisions, preferences, constraints, attempted actions, results, failures, blockers, verification/read-back, and open loops mentally or in task/todo state; avoid repetitive per-tool-call logging, but do write useful compact state when it would help a future run;
 - write MEMORY_DAY at natural checkpoints: meaningful workflows, user decisions, useful short-lived context, actions taken, failed attempts, blockers, interrupted/delegated work, or open loops;
 - ordinary Q&A can still create memory if the user reveals a preference, taste, default, constraint, routine, or decision criterion that will help later; in that case prefer USER.md or MEMORY.md for durable facts, and use MEMORY_DAY only for temporary workflow context;

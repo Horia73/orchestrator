@@ -3,6 +3,7 @@ import type {
   ToolExecutionContext,
   ToolResult,
 } from "@/lib/ai/agents/types"
+import { isOrchestratorClassAgent } from "@/lib/ai/agents/orchestrator-class"
 import { executeListDir } from "./list-dir"
 import { executeReadFile } from "./read-file"
 import { executeDelegateParallel, executeDelegateTo } from "./delegate-to"
@@ -172,6 +173,7 @@ import {
 import {
   executeWhatsAppConnect,
   executeWhatsAppDeleteMessageForEveryone,
+  executeWhatsAppDownloadMedia,
   executeWhatsAppListChats,
   executeWhatsAppMarkChatRead,
   executeWhatsAppMarkChatUnread,
@@ -471,6 +473,7 @@ const executors: Record<string, ToolExecutor> = {
   WhatsAppUnreadSummary: executeWhatsAppUnreadSummary,
   WhatsAppReadChat: executeWhatsAppReadChat,
   WhatsAppSearchMessages: executeWhatsAppSearchMessages,
+  WhatsAppDownloadMedia: executeWhatsAppDownloadMedia,
   WhatsAppSendMessage: executeWhatsAppSendMessage,
   WhatsAppSendMedia: executeWhatsAppSendMedia,
   WhatsAppDeleteMessageForEveryone: executeWhatsAppDeleteMessageForEveryone,
@@ -650,7 +653,7 @@ export async function executeTool(
   ctx?: ToolExecutionContext
 ): Promise<ToolResult> {
   if (
-    (!ctx || ctx.callerAgentId !== "orchestrator") &&
+    !isOrchestratorClassAgent(ctx?.callerAgentId) &&
     ORCHESTRATOR_ONLY_TOOL_IDS.has(tool.id)
   ) {
     return {

@@ -6,7 +6,7 @@ import { AlertCircle, Check, CheckCircle2, ChevronDown, FlaskConical, KeyRound }
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import type { BrowserAgentModelSettings, BrowserAgentModelSlot, BrowserAgentSettings, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
+import type { AgentFallback, BrowserAgentModelSettings, BrowserAgentModelSlot, BrowserAgentSettings, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
 import { useSettings, type AgentInfo, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
 import { ModelPicker, type ModelPickerOption } from "./model-picker"
 
@@ -42,6 +42,7 @@ export function AgentCard({
 }) {
   const { data, setAgentOverride, setBrowserAgentModel, setBrowserAgentBackend } = useSettings()
   const [status, setStatus] = React.useState<SaveStatus>({ kind: "idle" })
+  const [fallbacksOpen, setFallbacksOpen] = React.useState(false)
 
   // Auto-clear "saved" badge after a couple seconds
   React.useEffect(() => {
@@ -100,11 +101,18 @@ export function AgentCard({
     ...defaultModelOptions(visibleFeatures),
     ...modelOptionsForFeatures(visibleFeatures, override?.modelOptions),
   }
+  const effectiveFallbacks = normalizeUiFallbacks(override?.fallbacks)
+  const fallbackCapable = supportsAgentFallbacks(agent)
 
-  const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue> }) => {
+  const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue>; fallbacks?: AgentFallback[] }) => {
     setStatus({ kind: "saving" })
     try {
-      await setAgentOverride(agentId, next)
+      await setAgentOverride(agentId, {
+        ...next,
+        ...(fallbackCapable && next.fallbacks && next.fallbacks.length > 0
+          ? { fallbacks: next.fallbacks }
+          : {}),
+      })
       setStatus({ kind: "saved", at: Date.now() })
     } catch (err) {
       setStatus({ kind: "error", message: err instanceof Error ? err.message : "Save failed" })
@@ -123,12 +131,13 @@ export function AgentCard({
       model: modelId,
       thinkingLevel: nextThinkingLevel,
       modelOptions: defaultModelOptions(nextVisibleFeatures),
+      fallbacks: effectiveFallbacks,
     })
   }
 
   const handleThinkingChange = (level: ThinkingLevel) => {
     if (level === selectedThinkingLevel) return
-    save({ provider: effectiveProvider, model: effectiveModel, thinkingLevel: level, modelOptions: effectiveModelOptions })
+    save({ provider: effectiveProvider, model: effectiveModel, thinkingLevel: level, modelOptions: effectiveModelOptions, fallbacks: effectiveFallbacks })
   }
 
   const handleFeatureChange = (featureId: string, value: ModelFeatureValue) => {
@@ -137,6 +146,24 @@ export function AgentCard({
       model: effectiveModel,
       thinkingLevel: selectedThinkingLevel,
       modelOptions: { ...effectiveModelOptions, [featureId]: value },
+      fallbacks: effectiveFallbacks,
+    })
+  }
+
+  const handleFallbackChange = (slot: 0 | 1, value: AgentFallback | null) => {
+    const nextFallbacks = effectiveFallbacks.slice()
+    if (value === null) {
+      if (slot === 0) nextFallbacks.splice(0)
+      else nextFallbacks.splice(1)
+    } else {
+      nextFallbacks[slot] = value
+    }
+    save({
+      provider: effectiveProvider,
+      model: effectiveModel,
+      thinkingLevel: selectedThinkingLevel,
+      modelOptions: effectiveModelOptions,
+      fallbacks: nextFallbacks.filter(isAgentFallback).slice(0, 2),
     })
   }
 
@@ -204,6 +231,16 @@ export function AgentCard({
           </div>
         )}
 
+        {fallbackCapable && (
+          <FallbackSection
+            open={fallbacksOpen}
+            onOpenChange={setFallbacksOpen}
+            fallbacks={effectiveFallbacks}
+            data={data}
+            onChange={handleFallbackChange}
+          />
+        )}
+
         {/* Warnings rendered AFTER picker + thinking so the controls line up
             across cards regardless of how many warnings are active. */}
         {!providerReady && providerDef && (
@@ -223,6 +260,134 @@ export function AgentCard({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function FallbackSection({
+  open,
+  onOpenChange,
+  fallbacks,
+  data,
+  onChange,
+}: {
+  open: boolean
+  onOpenChange: (open: boolean) => void
+  fallbacks: AgentFallback[]
+  data: SettingsBootstrap
+  onChange: (slot: 0 | 1, value: AgentFallback | null) => void
+}) {
+  const activeCount = fallbacks.length
+
+  return (
+    <div className="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/20 p-2.5">
+      <button
+        type="button"
+        onClick={() => onOpenChange(!open)}
+        aria-expanded={open}
+        className="flex min-h-8 w-full items-center justify-between gap-2 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+      >
+        <span className="flex min-w-0 items-center gap-2">
+          <span className="text-[12px] font-medium uppercase tracking-wider text-foreground/55">
+            Fallbacks
+          </span>
+          <span className="rounded-full bg-background px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/50 ring-1 ring-border/60">
+            {activeCount}/2
+          </span>
+        </span>
+        <ChevronDown
+          className={cn(
+            "size-4 shrink-0 text-foreground/45 transition-transform",
+            open && "rotate-180"
+          )}
+        />
+      </button>
+
+      {open && (
+        <div className="flex flex-col gap-3 pt-1">
+          <FallbackSlotControls
+            title="Fallback 1"
+            value={fallbacks[0] ?? null}
+            data={data}
+            onChange={(value) => onChange(0, value)}
+          />
+          {fallbacks[0] && (
+            <FallbackSlotControls
+              title="Fallback 2"
+              value={fallbacks[1] ?? null}
+              data={data}
+              onChange={(value) => onChange(1, value)}
+            />
+          )}
+        </div>
+      )}
+    </div>
+  )
+}
+
+function FallbackSlotControls({
+  title,
+  value,
+  data,
+  onChange,
+}: {
+  title: string
+  value: AgentFallback | null
+  data: SettingsBootstrap
+  onChange: (value: AgentFallback | null) => void
+}) {
+  const modelDef = value ? data.providers[value.provider]?.models[value.model] : undefined
+  const availableThinkingLevels = availableThinkingLevelsForModel(modelDef)
+  const effectiveThinkingLevel =
+    value && availableThinkingLevels.length > 0
+      ? normalizeThinkingLevelForModel(modelDef, value.thinkingLevel ?? modelDef?.defaultThinkingLevel ?? availableThinkingLevels[0])
+      : value?.thinkingLevel
+
+  const handleModelChange = ({ providerId, modelId }: { providerId: string; modelId: string }) => {
+    const nextModelDef = data.providers[providerId]?.models[modelId]
+    const nextThinkingLevel = normalizeThinkingLevelForModel(
+      nextModelDef,
+      effectiveThinkingLevel ?? nextModelDef?.defaultThinkingLevel ?? "medium"
+    )
+    onChange({
+      provider: providerId,
+      model: modelId,
+      thinkingLevel: nextThinkingLevel,
+    })
+  }
+
+  const handleThinkingChange = (thinkingLevel: ThinkingLevel) => {
+    if (!value) return
+    onChange({ ...value, thinkingLevel })
+  }
+
+  return (
+    <div className="flex min-w-0 flex-col gap-2">
+      <Field label={title} hint={modelDef ? formatModelHint(modelDef) : undefined}>
+        <ModelPicker
+          value={value ? `${value.provider}:${value.model}` : null}
+          noneLabel="None"
+          onNone={() => onChange(null)}
+          onChange={handleModelChange}
+          filterModel={isTextCompatibleModel}
+        />
+      </Field>
+
+      {value && availableThinkingLevels.length > 0 && effectiveThinkingLevel && (
+        <Field label="Thinking">
+          {availableThinkingLevels.length > 1 ? (
+            <SegmentedThinking
+              value={effectiveThinkingLevel}
+              available={availableThinkingLevels}
+              onChange={handleThinkingChange}
+            />
+          ) : (
+            <div className="inline-flex h-9 w-full items-center justify-center rounded-lg bg-background/70 text-[12.5px] text-foreground/50 ring-1 ring-border/50">
+              Not adjustable for this model
+            </div>
+          )}
+        </Field>
+      )}
+    </div>
   )
 }
 
@@ -512,6 +677,30 @@ function BrowserModelSlotControls({
 
 function isBrowserCompatibleModel(option: ModelPickerOption): boolean {
   return option.providerId === "google" && (option.model.kinds.includes("text") || option.model.capabilities.includes("text"))
+}
+
+function isTextCompatibleModel(option: ModelPickerOption): boolean {
+  return option.model.kinds.includes("text") || option.model.capabilities.includes("text")
+}
+
+function supportsAgentFallbacks(agent: AgentInfo): boolean {
+  return (
+    (agent.kind === "text" || agent.kind === "concierge") &&
+    agent.id !== "browser_agent" &&
+    agent.id !== "phone_agent" &&
+    agent.id !== "android_agent"
+  )
+}
+
+function normalizeUiFallbacks(value: AgentFallback[] | undefined): AgentFallback[] {
+  if (!Array.isArray(value)) return []
+  return value.filter(isAgentFallback).slice(0, 2)
+}
+
+function isAgentFallback(value: unknown): value is AgentFallback {
+  if (!value || typeof value !== "object" || Array.isArray(value)) return false
+  const candidate = value as Partial<AgentFallback>
+  return typeof candidate.provider === "string" && typeof candidate.model === "string"
 }
 
 function formatProviderUnavailable(status: ProviderStatus | undefined, apiKeyEnv: string): React.ReactNode {

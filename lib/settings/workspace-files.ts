@@ -1043,7 +1043,7 @@ function buildDailyMemoryTemplate(stamp: string = utcDateStamp()): string {
     "",
     `Daily working memory for ${stamp} (UTC).`,
     "",
-    "Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design and may be consolidated opportunistically by a model-owned scheduled/monitor wake after local midnight when that preference is recorded.",
+    "Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design.",
     "",
   ].join("\n")
 }

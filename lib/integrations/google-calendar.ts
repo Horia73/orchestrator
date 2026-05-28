@@ -297,12 +297,14 @@ export async function getGoogleCalendarIntegrationStatus(origin: string, refresh
     const config = getGoogleOAuthConfig(origin, GOOGLE_CALENDAR_PROVIDER)
     let token = readCalendarToken()
     let error: string | undefined
+    let refreshFailed = false
 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
             token = await refreshGoogleOAuthToken(token, config, GOOGLE_CALENDAR_TOKEN_PATH)
         } catch (err) {
+            refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Google Calendar token'
         }
     }
@@ -335,7 +337,7 @@ export async function getGoogleCalendarIntegrationStatus(origin: string, refresh
         missingConfig: config.missing,
         redirectUri: config.redirectUri,
         expiresAt: token?.expiresAt ?? null,
-        needsReconnect: Boolean(!token || missingScopes.length > 0 || (expired && !token.refreshToken)),
+        needsReconnect: Boolean(!token || refreshFailed || missingScopes.length > 0 || (expired && !token.refreshToken)),
         calendarCount: calendars ? calendars.length : null,
         writableCalendarCount: calendars ? calendars.filter(calendar => calendar.canWriteEvents).length : null,
         primaryCalendarId: primary?.id ?? null,

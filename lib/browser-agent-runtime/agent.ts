@@ -92,7 +92,10 @@ export interface AgentController {
 
 export type AgentTerminalAction =
     | {
-        action: 'done' | 'ask' | 'error' | 'iteration_limit' | 'stopped';
+        // 'checkpoint' = the per-task action budget was reached without a terminal
+        // action. It is NOT a failure: the browser session is preserved and the
+        // orchestrator decides whether to finalize, continue (same thread), or abort.
+        action: 'done' | 'ask' | 'error' | 'checkpoint' | 'stopped';
         reasoning?: string;
         text?: string;
         timestamp: string;
@@ -104,9 +107,11 @@ export function createAgentController(
     onStatusUpdate: (message: string) => void,
     options: AgentControllerOptions = {}
 ): AgentController {
-    const maxIterations = options.maxIterations ?? 60;
+    // Per-task action budget. When reached without a terminal action, the agent
+    // returns a 'checkpoint' and hands strategic judgment back to the orchestrator,
+    // which keeps each segment's context bounded (no in-agent history compaction).
+    const maxIterations = options.maxIterations ?? 50;
     const maxConversationHistory = options.maxConversationHistory ?? 40;
-    const liveActionHistoryLimit = 50;
     const stepDelayMs = options.stepDelayMs ?? 500;
     const actionSettleDelayMs = options.actionSettleDelayMs ?? 1000;
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
@@ -122,7 +127,6 @@ export function createAgentController(
     let shouldStop = false;
     let isInterrupt = false;
     let actionHistory: ActionHistoryItem[] = [];
-    let compactedActionCount = 0;
     let conversationHistory: string[] = [];
     let clipboard: string | null = null;
     let pendingTrace: ActionTrace | null = null;
@@ -146,44 +150,6 @@ export function createAgentController(
         if (conversationHistory.length > maxConversationHistory) {
             conversationHistory = conversationHistory.slice(-maxConversationHistory);
         }
-    };
-
-    const compactActionHistoryIfNeeded = async () => {
-        const trimAlreadyCompactedHistory = () => {
-            const overflowCount = actionHistory.length - liveActionHistoryLimit;
-            if (overflowCount <= 0 || compactedActionCount < overflowCount) {
-                return;
-            }
-            actionHistory = actionHistory.slice(overflowCount);
-            compactedActionCount = Math.max(0, compactedActionCount - overflowCount);
-        };
-
-        const pendingActionCount = actionHistory.length - compactedActionCount;
-        if (pendingActionCount < liveActionHistoryLimit) {
-            trimAlreadyCompactedHistory();
-            return;
-        }
-
-        const actionsToCompact = actionHistory.slice(
-            compactedActionCount,
-            compactedActionCount + liveActionHistoryLimit
-        );
-        const llmSummary = await vision.compactActionHistory(
-            currentGoal || 'Current browser task',
-            actionsToCompact,
-            conversationHistory,
-            liveActionHistoryLimit
-        );
-        const summary = llmSummary || fallbackActionHistorySummary(actionsToCompact);
-
-        pushConversationHistory(
-            `SYSTEM: Compacted browser action history before the latest ${liveActionHistoryLimit} actions:\n${summary}`
-        );
-        compactedActionCount += actionsToCompact.length;
-
-        trimAlreadyCompactedHistory();
-
-        onStatusUpdate(`🧠 Compacted ${actionsToCompact.length} action(s) with Gemini; keeping latest ${Math.min(actionHistory.length, liveActionHistoryLimit)} live.`);
     };
 
     const restoreBaseModel = () => {
@@ -245,7 +211,6 @@ export function createAgentController(
             }
 
             actionHistory = [];
-            compactedActionCount = 0;
             pendingTrace = null;
             pendingSupplementalFrames = [];
             lastTerminalAction = null;
@@ -582,7 +547,6 @@ export function createAgentController(
 
                     if (shouldBreak) break;
                     if (shouldRestartLoop) {
-                        await compactActionHistoryIfNeeded();
                         pendingTrace = null;
                         continue;
                     }
@@ -603,8 +567,6 @@ export function createAgentController(
                         });
                     }
 
-                    await compactActionHistoryIfNeeded();
-
                     await sleep(stepDelayMs);
                 }
 
@@ -616,11 +578,12 @@ export function createAgentController(
                         });
                     }
 
-                    onStatusUpdate(`🛑 Max iterations reached (${iterationCount}/${maxIterations})`);
-                    pushConversationHistory(`AGENT: Reached the iteration limit before completing the goal "${reviewGoal}".`);
+                    onStatusUpdate(`🧭 Action budget reached (${iterationCount}/${maxIterations}). Handing back to the orchestrator as a checkpoint — the browser session is preserved for continuation on the same thread.`);
+                    pushConversationHistory(`AGENT: Reached the ${maxIterations}-action budget before completing the goal "${reviewGoal}". Returning a checkpoint to the orchestrator.`);
                     lastTerminalAction = {
-                        action: 'iteration_limit',
-                        reasoning: `Max iterations reached (${iterationCount}/${maxIterations})`,
+                        action: 'checkpoint',
+                        reasoning: `Action budget reached (${iterationCount}/${maxIterations}) without a terminal action.`,
+                        text: `Reached the ${maxIterations}-action budget; the browser session is preserved for continuation on the same thread.`,
                         timestamp: new Date().toISOString(),
                     };
 
@@ -649,16 +612,27 @@ export function createAgentController(
                             );
                             if (agentNeedStatus) onStatusUpdate(agentNeedStatus);
 
+                            // Fold the agent's self-assessment into the checkpoint hand-off so the
+                            // orchestrator sees where it stalled (treat as a low-trust hint; the raw
+                            // action log is the source of truth).
+                            const selfAssessment = [review.stuckPoint, review.whyNotFinished]
+                                .map((part) => (part || '').trim())
+                                .filter(Boolean)
+                                .join(' — ');
+                            if (selfAssessment) {
+                                lastTerminalAction = { ...lastTerminalAction, text: selfAssessment };
+                            }
+
                             if (review.questionsForUser.length > 0) {
                                 pushConversationHistory(
-                                    `AGENT: Iteration-limit review questions for the user: ${review.questionsForUser.join(' | ')}`
+                                    `AGENT: Checkpoint self-review notes for the orchestrator: ${review.questionsForUser.join(' | ')}`
                                 );
                             }
                         } else {
-                            onStatusUpdate('🧠 Iteration limit review unavailable. The agent ran out of attempts before producing a useful diagnosis.');
+                            onStatusUpdate('🧠 Checkpoint self-review unavailable; returning the raw action log to the orchestrator.');
                         }
                     } catch (reviewError) {
-                        onStatusUpdate(`⚠️ Iteration limit review failed: ${reviewError instanceof Error ? reviewError.message : 'Unknown error'}`);
+                        onStatusUpdate(`⚠️ Checkpoint self-review failed: ${reviewError instanceof Error ? reviewError.message : 'Unknown error'}`);
                     }
                 }
             } catch (error) {
@@ -719,7 +693,6 @@ export function createAgentController(
             }
             if (clearActionHistory) {
                 actionHistory = [];
-                compactedActionCount = 0;
             }
             if (clearClipboard) {
                 clipboard = null;
@@ -1007,27 +980,6 @@ function summarizeFetchResult(result: BrowserFetchResult): string {
     }
 
     return lines.join('\n');
-}
-
-function fallbackActionHistorySummary(actions: ActionHistoryItem[]): string {
-    const lines = actions.slice(-20).map((action, index) => {
-        const step = Math.max(1, actions.length - Math.min(actions.length, 20) + index + 1);
-        const status = action.success ? 'ok' : 'failed';
-        const text = action.text ? ` text="${formatBrowserAgentTextForLog(action.text, action.reasoning, 40)}"` : '';
-        const reason = action.reasoning
-            ? `; reason="${formatBrowserAgentTextForLog(action.reasoning, '', 120)}"`
-            : '';
-        const observation = action.observation
-            ? `; result="${formatBrowserAgentTextForLog(action.observation, '', 160)}"`
-            : '';
-        return `Step ${step}: ${action.action}${text} ${status}${reason}${observation}`;
-    });
-
-    const omitted = Math.max(0, actions.length - lines.length);
-    const prefix = omitted > 0
-        ? `Deterministic fallback summary. ${actions.length} older actions compacted; first ${omitted} omitted.`
-        : `Deterministic fallback summary. ${actions.length} older actions compacted.`;
-    return `${prefix}\n${lines.join('\n')}`;
 }
 
 async function executeAction(

@@ -1,5 +1,6 @@
 import fs from 'fs'
 import path from 'path'
+import { randomUUID } from 'crypto'
 import type { Attachment } from '@/lib/types'
 import { UPLOADS_DIR } from '@/lib/config'
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
@@ -176,4 +177,69 @@ export function resolveExistingUploadPath(id: string): string | null {
 export function uploadContentType(id: string): string {
     const ext = path.extname(id).toLowerCase()
     return UPLOAD_MIME_MAP[ext] || 'application/octet-stream'
+}
+
+export interface PersistedUpload {
+    attachment: Attachment
+    filePath: string
+    url: string
+}
+
+function uploadExtensionForMime(mimeType: string, originalName?: string): string {
+    const fromName = originalName ? path.extname(originalName).toLowerCase() : ''
+    if (fromName && SAFE_UPLOAD_EXTENSIONS.has(fromName)) return fromName
+    const clean = mimeType.split(';')[0].trim().toLowerCase()
+    for (const [ext, mime] of Object.entries(UPLOAD_MIME_MAP)) {
+        if (mime === clean) return ext
+    }
+    return '.bin'
+}
+
+function uploadBaseName(originalName: string | undefined, fallback: string): string {
+    const stem = (originalName ?? '').replace(/\.[^./\\]+$/, '')
+    const cleaned = path.basename(stem).replace(/[^\w.\- ]+/g, '_').replace(/\s+/g, ' ').trim()
+    return cleaned || fallback
+}
+
+/**
+ * Persist raw bytes (e.g. media downloaded from an integration) as an upload
+ * addressable at /api/uploads/{id}. Uses the same id/mime conventions as
+ * user-uploaded files so the result serves with the correct content type and
+ * renders inline through the existing attachment/markdown paths.
+ */
+export function persistUploadBytes(
+    data: Buffer,
+    mimeType: string,
+    originalName?: string,
+    fallbackBaseName = 'attachment',
+): PersistedUpload {
+    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+    const extension = uploadExtensionForMime(mimeType, originalName)
+
+    for (let attempt = 0; attempt < 3; attempt++) {
+        const id = `${randomUUID()}${extension}`
+        const filePath = resolveUploadPath(id)
+        if (!filePath) continue
+
+        try {
+            fs.writeFileSync(filePath, data, { flag: 'wx' })
+        } catch (error) {
+            if (typeof error === 'object' && error !== null && 'code' in error && (error as { code?: string }).code === 'EEXIST') {
+                continue
+            }
+            throw error
+        }
+
+        const resolvedMime = UPLOAD_MIME_MAP[extension] || mimeType.split(';')[0].trim() || 'application/octet-stream'
+        const attachment: Attachment = {
+            id,
+            filename: `${uploadBaseName(originalName, fallbackBaseName)}${extension}`,
+            mimeType: resolvedMime,
+            size: data.length,
+            type: classifyUploadMime(resolvedMime),
+        }
+        return { attachment, filePath, url: `/api/uploads/${id}` }
+    }
+
+    throw new Error('Failed to allocate upload filename')
 }

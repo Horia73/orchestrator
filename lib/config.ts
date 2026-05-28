@@ -112,6 +112,13 @@ export interface AgentOverride {
   model: string
   thinkingLevel?: ThinkingLevel
   modelOptions?: Record<string, ModelFeatureValue>
+  fallbacks?: AgentFallback[]
+}
+
+export interface AgentFallback {
+  provider: string
+  model: string
+  thinkingLevel?: ThinkingLevel
 }
 
 export type BrowserAgentModelSlot = "light" | "pro"
@@ -406,7 +413,7 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
   return {
     ...DEFAULT_CONFIG,
     ...parsed,
-    agentOverrides: parsed.agentOverrides ?? DEFAULT_CONFIG.agentOverrides,
+    agentOverrides: normalizeAgentOverrides(parsed.agentOverrides),
     agentOrder: normalizeStringList(
       (parsed as { agentOrder?: unknown }).agentOrder
     ),
@@ -430,6 +437,83 @@ function normalizeStringList(value: unknown): string[] {
     out.push(trimmed)
   }
   return out
+}
+
+function normalizeAgentOverrides(value: unknown): Record<string, AgentOverride> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return DEFAULT_CONFIG.agentOverrides
+  }
+
+  const out: Record<string, AgentOverride> = {}
+  for (const [agentId, rawOverride] of Object.entries(value)) {
+    if (
+      typeof agentId !== "string" ||
+      !agentId.trim() ||
+      !rawOverride ||
+      typeof rawOverride !== "object" ||
+      Array.isArray(rawOverride)
+    ) {
+      continue
+    }
+
+    const raw = rawOverride as Record<string, unknown>
+    const provider = normalizeOptionalString(raw.provider, 96)
+    const model = normalizeOptionalString(raw.model, 160)
+    if (!provider || !model) continue
+
+    const override: AgentOverride = { provider, model }
+    if (typeof raw.thinkingLevel === "string") {
+      override.thinkingLevel = raw.thinkingLevel
+    }
+    if (isModelOptionsRecord(raw.modelOptions)) {
+      override.modelOptions = raw.modelOptions
+    }
+    const fallbacks = normalizeAgentFallbacks(raw.fallbacks)
+    if (fallbacks.length > 0) override.fallbacks = fallbacks
+    out[agentId] = override
+  }
+
+  return out
+}
+
+function normalizeAgentFallbacks(value: unknown): AgentFallback[] {
+  if (!Array.isArray(value)) return []
+  const out: AgentFallback[] = []
+  const seen = new Set<string>()
+  for (const item of value) {
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue
+    const raw = item as Record<string, unknown>
+    const provider = normalizeOptionalString(raw.provider, 96)
+    const model = normalizeOptionalString(raw.model, 160)
+    if (!provider || !model) continue
+    const key = `${provider}:${model}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    const fallback: AgentFallback = { provider, model }
+    if (typeof raw.thinkingLevel === "string") {
+      fallback.thinkingLevel = raw.thinkingLevel
+    }
+    out.push(fallback)
+    if (out.length >= 2) break
+  }
+  return out
+}
+
+function isModelOptionsRecord(
+  value: unknown
+): value is Record<string, ModelFeatureValue> {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Object.entries(value).every(
+      ([key, optionValue]) =>
+        /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(key) &&
+        (typeof optionValue === "boolean" ||
+          typeof optionValue === "string" ||
+          typeof optionValue === "number")
+    )
+  )
 }
 
 function normalizeSmartMonitorSettings(
@@ -750,6 +834,7 @@ export interface EffectiveAgentSettings {
   model: string
   thinkingLevel: ThinkingLevel
   modelOptions: Record<string, ModelFeatureValue>
+  fallbacks: AgentFallback[]
   /** True if these settings come from a per-agent override (vs the global default) */
   fromOverride: boolean
 }
@@ -759,10 +844,10 @@ export interface EffectiveAgentSettings {
  * Priority: agentOverrides[id] > global active.
  *
  * The returned model is guaranteed to exist in the effective registry — if the
- * override or global points to a missing model (or one that's been archived),
- * we fall back to the first non-archived model in the provider, then to the
- * global default. This prevents broken state when a previously-favorited model
- * is removed or archived.
+ * override or global points to a missing model, we fall back to the first
+ * available model in the provider, then to the global default. Archived models
+ * stay valid when explicitly selected; archiving only hides them from the
+ * default picker/favorites surface.
  */
 export function getEffectiveAgentSettings(
   agentId: string
@@ -777,6 +862,7 @@ export function getEffectiveAgentSettings(
         model: override.model,
         thinkingLevel: override.thinkingLevel ?? config.thinkingLevel,
         modelOptions: override.modelOptions ?? {},
+        fallbacks: override.fallbacks ?? [],
         fromOverride: true,
       }
     : {
@@ -784,6 +870,7 @@ export function getEffectiveAgentSettings(
         model: config.activeModel,
         thinkingLevel: config.thinkingLevel,
         modelOptions: {},
+        fallbacks: [],
         fromOverride: false,
       }
 
@@ -799,9 +886,9 @@ export function getEffectiveAgentSettings(
     candidate.fromOverride = false
   }
 
-  // Validate model — pick first non-archived if current is missing/archived
+  // Validate model — archived models remain runnable when explicitly selected.
   const modelDef = providerDef?.models[candidate.model]
-  if (!modelDef || modelDef.archived) {
+  if (!modelDef) {
     const fallback = Object.entries(providerDef?.models ?? {}).find(
       ([, m]) => !m.archived
     )

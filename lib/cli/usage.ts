@@ -23,12 +23,20 @@ import { spawn as ptySpawn } from 'node-pty'
 
 import { resolveBin, augmentedEnv } from './resolve-bin'
 import { CODEX_RUNTIME_AUTH_PATH, prepareCodexRuntimeHome } from './codex-env'
+import { getAllCliStatuses } from './status'
 
 export interface CliQuotaWindow {
     /** Percent of the window used, 0–100. */
     usedPercent: number
     /** Unix epoch seconds at which this window resets. */
     resetsAt: number
+    /**
+     * Window length in seconds, when the source reports it authoritatively
+     * (Codex's `limit_window_seconds`). Omitted for Claude Code, whose windows
+     * are the fixed 5h / 7d — consumers fall back to those constants. Used to
+     * project when the window will run out at the current burn rate.
+     */
+    windowSeconds?: number
 }
 
 export interface CliQuotaSnapshot {
@@ -61,7 +69,6 @@ export type CliQuotaId = CliQuotaSnapshot['cliId']
 // Claude Code — scrape the /usage TUI panel
 // ---------------------------------------------------------------------------
 
-const CLAUDE_CREDENTIALS_PATH = join(homedir(), '.claude', '.credentials.json')
 const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
 const CLAUDE_USAGE_DOCKER_TUI_ENABLED = process.env.CLAUDE_USAGE_DOCKER_TUI === '1'
@@ -470,16 +477,6 @@ function nowDayInTz(tz: string, when: Date): number {
 async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
     const fetchedAt = Date.now()
     const runningInDocker = process.env.ORCHESTRATOR_SERVICE_MANAGER === 'docker'
-    const hasLocalCredentials = existsSync(CLAUDE_CREDENTIALS_PATH)
-    if (!runningInDocker && !hasLocalCredentials) {
-        return {
-            cliId: 'claude-code',
-            available: false,
-            error: 'Not logged in (no ~/.claude/.credentials.json).',
-            source: 'none',
-            fetchedAt,
-        }
-    }
     let captured: ClaudeUsageRaw | { error: string } | null = null
     let source: CliQuotaSnapshot['source'] = 'tui'
 
@@ -499,13 +496,17 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
         }
     }
 
-    if (!hasLocalCredentials) {
-        return {
-            cliId: 'claude-code',
-            available: false,
-            error: 'Not logged in (no ~/.claude/.credentials.json).',
-            source: 'none',
-            fetchedAt,
+    if (!captured || 'error' in captured) {
+        const status = await getClaudeStatusForUsage()
+        const statusError = claudeStatusError(status)
+        if (statusError) {
+            return {
+                cliId: 'claude-code',
+                available: false,
+                error: withBridgeError(statusError, captured),
+                source: 'none',
+                fetchedAt,
+            }
         }
     }
 
@@ -547,6 +548,34 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
         fetchedAt,
         dataTimestamp: fetchedAt,
     }
+}
+
+async function getClaudeStatusForUsage() {
+    try {
+        const statuses = await getAllCliStatuses({ force: true, ttlMs: 0 })
+        return statuses['claude-code']
+    } catch {
+        return null
+    }
+}
+
+function claudeStatusError(status: Awaited<ReturnType<typeof getClaudeStatusForUsage>>): string | null {
+    if (!status) return null
+    if (!status.installed) return 'Claude Code CLI is not installed.'
+    if (status.needsReconnect) {
+        return 'Claude Code session expired. Open Settings > Auth and click Reconnect, or run `claude setup-token`.'
+    }
+    if (!status.loggedIn) {
+        return status.detail
+            ? `Claude Code CLI is installed but not logged in (${status.detail}).`
+            : 'Claude Code CLI is installed but not logged in.'
+    }
+    return null
+}
+
+function withBridgeError(message: string, captured: ClaudeUsageRaw | { error: string } | null): string {
+    if (!captured || !('error' in captured)) return message
+    return `${message} Host bridge error: ${captured.error}`
 }
 
 function sleep(ms: number): Promise<void> {
@@ -615,7 +644,10 @@ function codexWindow(w: CodexUsageWindow | undefined): CliQuotaWindow | undefine
     if (!resetsAt && typeof w.reset_after_seconds === 'number') {
         resetsAt = Math.floor(Date.now() / 1000) + w.reset_after_seconds
     }
-    return { usedPercent: w.used_percent, resetsAt }
+    const windowSeconds = typeof w.limit_window_seconds === 'number' && w.limit_window_seconds > 0
+        ? w.limit_window_seconds
+        : undefined
+    return { usedPercent: w.used_percent, resetsAt, ...(windowSeconds ? { windowSeconds } : {}) }
 }
 
 async function getCodexQuota(): Promise<CliQuotaSnapshot> {

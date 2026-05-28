@@ -3,6 +3,7 @@
 import * as React from "react"
 import {
     AlertCircle,
+    AlertTriangle,
     ArrowDownRight,
     ArrowUpRight,
     Clock,
@@ -33,6 +34,12 @@ import type {
     UsageByAgent,
     UsageByTool,
 } from "@/lib/observability/schema"
+import {
+    quotaPaceLabel,
+    formatResetCountdown,
+    FIVE_HOUR_SECONDS,
+    WEEKLY_SECONDS,
+} from "@/lib/cli/quota-pace"
 import { useUsage } from "./use-usage"
 import { useCliUsage, type CliQuotaSnapshot, type CliQuotaWindow } from "./use-cli-usage"
 
@@ -193,10 +200,10 @@ function CliQuotaCard({ id, snapshot }: { id: string; snapshot: CliQuotaSnapshot
                 </div>
             ) : (
                 <div className="flex flex-col gap-3.5">
-                    <QuotaBar label="5-hour window" window={snapshot.fiveHour} />
-                    <QuotaBar label="7-day window" window={snapshot.weekly} />
+                    <QuotaBar label="5-hour window" window={snapshot.fiveHour} fallbackWindowSeconds={FIVE_HOUR_SECONDS} />
+                    <QuotaBar label="7-day window" window={snapshot.weekly} fallbackWindowSeconds={WEEKLY_SECONDS} />
                     {snapshot.weeklySonnet && (
-                        <QuotaBar label="7-day · Sonnet" window={snapshot.weeklySonnet} muted />
+                        <QuotaBar label="7-day · Sonnet" window={snapshot.weeklySonnet} fallbackWindowSeconds={WEEKLY_SECONDS} muted />
                     )}
                 </div>
             )}
@@ -204,10 +211,11 @@ function CliQuotaCard({ id, snapshot }: { id: string; snapshot: CliQuotaSnapshot
     )
 }
 
-function QuotaBar({ label, window: w, muted }: {
+function QuotaBar({ label, window: w, muted, fallbackWindowSeconds }: {
     label: string
     window: CliQuotaWindow | undefined
     muted?: boolean
+    fallbackWindowSeconds: number
 }) {
     if (!w) {
         return (
@@ -223,6 +231,7 @@ function QuotaBar({ label, window: w, muted }: {
         tone === "danger" ? "bg-destructive"
             : tone === "warn" ? "bg-amber-500"
                 : "bg-emerald-500"
+    const pace = quotaPaceLabel(w, fallbackWindowSeconds)
     return (
         <div className={cn("flex flex-col gap-1.5", muted && "opacity-75")}>
             <div className="flex items-baseline justify-between gap-2 text-[12.5px]">
@@ -246,8 +255,19 @@ function QuotaBar({ label, window: w, muted }: {
             </div>
             <div className="flex items-center gap-1 text-[11px] tabular-nums text-foreground/50">
                 <Clock className="size-3" />
-                <span>{formatResetPhrase(w.resetsAt)}</span>
+                <span>{formatResetCountdown(w.resetsAt)}</span>
             </div>
+            {pace && (
+                <div className={cn(
+                    "flex items-center gap-1 text-[11px] tabular-nums",
+                    pace.tone === "danger" ? "text-destructive"
+                        : pace.tone === "warn" ? "text-amber-600 dark:text-amber-400"
+                            : "text-foreground/55"
+                )}>
+                    {(pace.tone === "danger" || pace.tone === "warn") && <AlertTriangle className="size-3 shrink-0" />}
+                    <span>{pace.text}</span>
+                </div>
+            )}
         </div>
     )
 }
@@ -262,21 +282,6 @@ function Badge({ tone, children }: { tone: "success" | "muted"; children: React.
         </span>
     )
 }
-
-function formatResetPhrase(resetsAt: number): string {
-    if (!resetsAt || !Number.isFinite(resetsAt)) return "reset time unknown"
-    const now = Math.floor(Date.now() / 1000)
-    const delta = resetsAt - now
-    // A reset moment in the past means the window has already cycled — the
-    // % we're displaying is from before that point, so the value is stale.
-    if (delta <= 0) return "window already rolled over"
-    const h = Math.floor(delta / 3600)
-    const m = Math.floor((delta % 3600) / 60)
-    if (h >= 48) return `resets in ${Math.round(h / 24)}d`
-    if (h >= 1) return `resets in ${h}h ${m}m`
-    return `resets in ${m}m`
-}
-
 
 function UsageContent({ data }: { data: UsageReport }) {
     return (
