@@ -494,7 +494,7 @@ function withObservationDurations(
       endTime: next?.startTime ?? observation.endTime,
       durationMinutes,
       kind:
-        durationMinutes >= 6
+        durationMinutes >= 7
           ? `${observation.kind ?? "raw"} · inferred_stay`
           : observation.kind,
     }
