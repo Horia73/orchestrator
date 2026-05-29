@@ -1215,7 +1215,7 @@ async function executeAction(
                     const [x, y] = await resolveCoordinate(browser, action.coordinate);
                     onStatusUpdate(`🖱️  Hovering at [${x}, ${y}] before scroll (from ${action.coordinate})`);
                     await browser.hoverCoordinate(x, y);
-                    await sleep(100);
+                    await sleep(300);
                 }
                 onStatusUpdate(`📜 Scrolling ${action.scrollDirection || 'down'}${amountText}...`);
                 await browser.scroll(action.scrollDirection || 'down', action.scrollAmount);

@@ -151,10 +151,20 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         return found.stdout.trim().split(/\s+/)[0] || null;
     };
 
+    const getActiveWindow = (): string | null => {
+        const active = spawnSync('xdotool', ['getactivewindow'], {
+            env: displayEnv(state.display.display),
+            encoding: 'utf8',
+        });
+        if (active.status !== 0) return null;
+        return active.stdout.trim() || null;
+    };
+
     const activateChromeWindow = async () => {
         const windowId = state.chromeWindowId || findChromeWindow();
         if (!windowId) return;
         state.chromeWindowId = windowId;
+        if (getActiveWindow() === windowId) return;
         let lastError: unknown = null;
         let focused = false;
         try {
@@ -450,7 +460,7 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             await activateChromeWindow();
             const [safeX, safeY] = clampDisplayCoordinate(x, y);
             const repeat = Number.isFinite(count) ? Math.max(1, Math.round(count)) : 1;
-            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            await xdotool(['mousemove', String(safeX), String(safeY)]);
             state.lastMousePosition = { x: safeX, y: safeY };
             for (let i = 0; i < repeat; i++) {
                 await xdotool(['mousedown', '1']);
@@ -468,13 +478,13 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             const [safeStartX, safeStartY] = clampDisplayCoordinate(startX, startY);
             const [safeEndX, safeEndY] = clampDisplayCoordinate(endX, endY);
             const steps = Math.max(8, Math.min(40, Math.round(durationMs / 35)));
-            await xdotool(['mousemove', '--sync', String(safeStartX), String(safeStartY), 'mousedown', '1']);
+            await xdotool(['mousemove', String(safeStartX), String(safeStartY), 'mousedown', '1']);
             state.lastMousePosition = { x: safeStartX, y: safeStartY };
             for (let step = 1; step <= steps; step++) {
                 const ratio = step / steps;
                 const x = Math.round(safeStartX + (safeEndX - safeStartX) * ratio);
                 const y = Math.round(safeStartY + (safeEndY - safeStartY) * ratio);
-                await xdotool(['mousemove', '--sync', String(x), String(y)]);
+                await xdotool(['mousemove', String(x), String(y)]);
                 await sleep(Math.max(5, durationMs / steps));
             }
             state.lastMousePosition = { x: safeEndX, y: safeEndY };
@@ -485,7 +495,7 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
         async holdCoordinate(x: number, y: number, durationMs = 10000): Promise<TracedActionResult> {
             await activateChromeWindow();
             const [safeX, safeY] = clampDisplayCoordinate(x, y);
-            await xdotool(['mousemove', '--sync', String(safeX), String(safeY), 'mousedown', '1']);
+            await xdotool(['mousemove', String(safeX), String(safeY), 'mousedown', '1']);
             state.lastMousePosition = { x: safeX, y: safeY };
             await sleep(Math.max(200, durationMs));
             await xdotool(['mouseup', '1']);
@@ -493,9 +503,8 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             return { success: true, trace: emptyTrace('hold') };
         },
         async hoverCoordinate(x: number, y: number) {
-            await activateChromeWindow();
             const [safeX, safeY] = clampDisplayCoordinate(x, y);
-            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            await xdotool(['mousemove', String(safeX), String(safeY)]);
             state.lastMousePosition = { x: safeX, y: safeY };
         },
         async type(text: string) {
@@ -540,7 +549,7 @@ export async function createOfficialDisplayBrowserManager(options: BrowserManage
             await activateChromeWindow();
             const target = state.lastMousePosition ?? { x: state.viewport.width / 2, y: state.viewport.height / 2 };
             const [targetX, targetY] = clampDisplayCoordinate(target.x, target.y);
-            await xdotool(['mousemove', '--sync', String(targetX), String(targetY)]);
+            await xdotool(['mousemove', String(targetX), String(targetY)]);
             state.lastMousePosition = { x: targetX, y: targetY };
             const button = direction === 'up' ? '4' : direction === 'down' ? '5' : direction === 'left' ? '6' : '7';
             const repeats = Math.max(1, Math.min(20, Math.ceil(amount / 120)));

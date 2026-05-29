@@ -1237,7 +1237,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
         try {
             log(`🖱️ Display click at ${safeX}, ${safeY} (Count: ${repeat})`);
-            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            await xdotool(['mousemove', String(safeX), String(safeY)]);
             session.lastMousePosition = { x: safeX, y: safeY };
             for (let i = 0; i < repeat; i++) {
                 await xdotool(['mousedown', '1']);
@@ -1261,7 +1261,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     ): Promise<void> => {
         const [safeX, safeY] = clampDisplayCoordinate(x, y);
         log(`🖱️ Display hover at ${safeX}, ${safeY}`);
-        await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+        await xdotool(['mousemove', String(safeX), String(safeY)]);
         session.lastMousePosition = { x: safeX, y: safeY };
     };
 
@@ -1279,14 +1279,14 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
         try {
             log(`🖱️ Display drag from [${safeStartX}, ${safeStartY}] to [${safeEndX}, ${safeEndY}] (${durationMs}ms)`);
-            await xdotool(['mousemove', '--sync', String(safeStartX), String(safeStartY)]);
+            await xdotool(['mousemove', String(safeStartX), String(safeStartY)]);
             await xdotool(['mousedown', '1']);
             session.lastMousePosition = { x: safeStartX, y: safeStartY };
             for (let step = 1; step <= steps; step++) {
                 const ratio = step / steps;
                 const x = Math.round(safeStartX + (safeEndX - safeStartX) * ratio);
                 const y = Math.round(safeStartY + (safeEndY - safeStartY) * ratio);
-                await xdotool(['mousemove', '--sync', String(x), String(y)]);
+                await xdotool(['mousemove', String(x), String(y)]);
                 await sleep(Math.max(5, durationMs / steps));
             }
             session.lastMousePosition = { x: safeEndX, y: safeEndY };
@@ -1311,7 +1311,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
         try {
             log(`🖱️ Display hold at ${safeX}, ${safeY} (${durationMs}ms)`);
-            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            await xdotool(['mousemove', String(safeX), String(safeY)]);
             await xdotool(['mousedown', '1']);
             session.lastMousePosition = { x: safeX, y: safeY };
             await sleep(Math.max(200, durationMs));
@@ -1334,7 +1334,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         const display = getDisplayDimensions();
         const target = session.lastMousePosition ?? { x: display.width / 2, y: display.height / 2 };
         const [targetX, targetY] = clampDisplayCoordinate(target.x, target.y);
-        await xdotool(['mousemove', '--sync', String(targetX), String(targetY)]);
+        await xdotool(['mousemove', String(targetX), String(targetY)]);
         session.lastMousePosition = { x: targetX, y: targetY };
 
         const button = direction === 'up' ? '4' : direction === 'down' ? '5' : direction === 'left' ? '6' : '7';
@@ -1876,13 +1876,6 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 const safeY = Math.max(0, Math.min(y, height - 1));
 
                 log(`🖱️ Hovering at ${safeX}, ${safeY}`);
-                await humanMouseMove(
-                    activePage,
-                    safeX,
-                    safeY,
-                    session.lastMousePosition?.x,
-                    session.lastMousePosition?.y,
-                );
                 await activePage.mouse.move(safeX, safeY);
                 session.lastMousePosition = { x: safeX, y: safeY };
             },

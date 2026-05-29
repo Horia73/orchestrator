@@ -16,6 +16,9 @@ const previewBasePath = normalizePreviewBasePath(process.env.ORCHESTRATOR_PREVIE
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   ...(previewBasePath ? { basePath: previewBasePath, assetPrefix: previewBasePath } : {}),
+  devIndicators: {
+    position: "bottom-right",
+  },
   env: {
     NEXT_PUBLIC_ORCHESTRATOR_PREVIEW_BASE_PATH: previewBasePath || "",
   },
