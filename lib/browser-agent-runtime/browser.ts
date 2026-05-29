@@ -1179,12 +1179,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
                     await sleep(12 + Math.random() * 16);
 
-                    if (count === 2) {
-                        await activePage.mouse.click(safeX, safeY, { clickCount: 2, delay: 70 });
-                    } else {
-                        await activePage.mouse.click(safeX, safeY, { delay: 24 });
-                    }
-
+                    // Draw the marker before the click so it's on screen at the
+                    // moment of the click, not after the page has already reacted.
+                    // pointerEvents:none keeps it from intercepting the click.
                     try {
                         await activePage.evaluate(({ x, y }) => {
                             try {
@@ -1211,7 +1208,13 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                             }
                         }, { x: safeX, y: safeY });
                     } catch {
-                        // Navigation happened.
+                        // Page not ready (e.g. mid-navigation) — skip the marker.
+                    }
+
+                    if (count === 2) {
+                        await activePage.mouse.click(safeX, safeY, { clickCount: 2, delay: 70 });
+                    } else {
+                        await activePage.mouse.click(safeX, safeY, { delay: 24 });
                     }
 
                     return true;
