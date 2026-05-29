@@ -91,6 +91,8 @@ For Orchestrator self-updates:
 - never run the repo's \`npm run dev\` in a way that can kill the live app;
 - stop the managed preview only after the user approves the result or during cleanup;
 - after checks pass, commit, rebase onto \`origin/master\`, and push only if there are no conflicts;
+- normal chat/Settings managed updates are release-only: \`apply_update\` and Settings -> Updates see GitHub Releases, not raw commits pushed to \`master\`/\`main\`;
+- if a pushed commit must be deployed through the normal updater, create/publish the version tag and GitHub Release first; otherwise use an explicit branch update path only when the user clearly asks for that operational path;
 - before triggering restart/rebuild, record the target commit for post-restart confirmation;
 - after restart, the app must confirm that the running build matches the target commit and surface the result to the Inbox.
 </self_update_policy>

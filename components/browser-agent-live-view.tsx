@@ -48,6 +48,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     const controlModeRef = React.useRef<LiveControlMode>("agent")
     const stateRef = React.useRef<BrowserAgentLiveState | null>(null)
     const inputBusyRef = React.useRef(false)
+    const manualPasteCaptureRef = React.useRef(false)
     const inputMessageTimerRef = React.useRef<number | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
@@ -100,6 +101,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     }, [])
 
     const requestManualPasteCapture = React.useCallback((message: string) => {
+        manualPasteCaptureRef.current = true
         showInputMessage(message)
         requestAnimationFrame(() => {
             const target = hiddenPasteRef.current
@@ -272,14 +274,13 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     const handleBrowserShortcut = React.useCallback((key: string) => {
         if (key === "Control+V" || key === "Meta+V") {
             const readText = navigator.clipboard?.readText?.bind(navigator.clipboard)
-            if (!readText) {
+            if (!readText || !window.isSecureContext) {
                 requestManualPasteCapture("Clipboard access is blocked. Press paste shortcut again.")
                 return
             }
             void readText()
                 .then((text) => {
-                    if (text) void pasteText(text)
-                    else void sendKey(key)
+                    void pasteText(text || "")
                 })
                 .catch(() => requestManualPasteCapture("Clipboard permission was denied. Press paste shortcut again."))
             return
@@ -304,13 +305,20 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             if (!browserInputContainsTarget(event.target)) return
             const key = browserShortcutFromEvent(event, currentState.platform)
             if (!key) return
-            if ((key === "Control+V" || key === "Meta+V") && (!navigator.clipboard?.readText || !window.isSecureContext)) {
+            const isPasteShortcut = key === "Control+V" || key === "Meta+V"
+            if (isPasteShortcut && manualPasteCaptureRef.current && event.target === hiddenPasteRef.current) {
+                event.stopPropagation()
+                event.stopImmediatePropagation()
                 return
             }
 
             event.preventDefault()
             event.stopPropagation()
             event.stopImmediatePropagation()
+            if (isPasteShortcut && (!navigator.clipboard?.readText || !window.isSecureContext)) {
+                requestManualPasteCapture("Clipboard access is blocked. Press paste shortcut again.")
+                return
+            }
             handleBrowserShortcut(key)
         }
 
@@ -318,14 +326,16 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             const currentState = stateRef.current
             if (currentState?.controlMode !== "user") return
             if (!browserInputContainsTarget(event.target)) return
+            const isManualPasteTarget = manualPasteCaptureRef.current && event.target === hiddenPasteRef.current
             const text = event.clipboardData?.getData("text/plain")
-            if (!text) return
+            if (!text && !isManualPasteTarget) return
 
             event.preventDefault()
             event.stopPropagation()
             event.stopImmediatePropagation()
+            manualPasteCaptureRef.current = false
             if (hiddenPasteRef.current) hiddenPasteRef.current.value = ""
-            void pasteText(text)
+            void pasteText(text || "")
         }
 
         document.addEventListener("keydown", handleNativeKeyDownCapture, true)
@@ -334,7 +344,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             document.removeEventListener("keydown", handleNativeKeyDownCapture, true)
             document.removeEventListener("paste", handleNativePasteCapture, true)
         }
-    }, [browserInputContainsTarget, controlMode, handleBrowserShortcut, pasteText])
+    }, [browserInputContainsTarget, controlMode, handleBrowserShortcut, pasteText, requestManualPasteCapture])
 
     const handleViewportPointerDown = React.useCallback(() => {
         if (stateRef.current?.controlMode === "user") focusRfb()

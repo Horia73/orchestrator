@@ -18,7 +18,7 @@ export interface BrowserManagerOptions {
 
 export type BrowserFrameSource = 'agent' | 'live';
 export type BrowserCaptureMode = 'viewport' | 'overview';
-export type BrowserCoordinateSpace = 'normalized-viewport' | 'absolute-display';
+export type BrowserCoordinateSpace = 'normalized-viewport' | 'normalized-display';
 
 export interface BrowserPageSessionCapabilities {
     backend: BrowserBackend;

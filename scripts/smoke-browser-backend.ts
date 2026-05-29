@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 
 import { parseBrowserBackendPreference, resolveBrowserBackend } from '@/lib/browser-agent-backend'
-import { buildActionPrompt, type ActionHistoryItem } from '@/lib/browser-agent-runtime/prompts'
+import { buildActionPrompt, buildSystemPrompt, type ActionHistoryItem } from '@/lib/browser-agent-runtime/prompts'
 
 assert.equal(parseBrowserBackendPreference('auto'), 'auto')
 assert.equal(parseBrowserBackendPreference('official_display'), 'official-display')
@@ -47,6 +47,43 @@ assert.ok(
     tabLoopPrompt.includes('switchTab tab[0]') && tabLoopPrompt.includes('switchTab tab[1]'),
     tabLoopPrompt
 )
+
+const systemPrompt = buildSystemPrompt()
+assert.match(systemPrompt, /Safe Container Scrolling/)
+assert.match(systemPrompt, /Do not click a row\/card\/link\/button just to focus scrolling/)
+assert.match(systemPrompt, /coordinate.*hover.*inert panel point/i)
+
+const normalizedDisplayPrompt = buildSystemPrompt(false, 'normalized-display')
+assert.match(normalizedDisplayPrompt, /NORMALIZED COORDINATES \(0-1000 range\)/)
+assert.match(normalizedDisplayPrompt, /full browser display, including tabs, address bar, toolbar, page content, popups, and context menus/)
+assert.match(normalizedDisplayPrompt, /Native Browser UI/)
+assert.match(normalizedDisplayPrompt, /1000x1000 grid system/)
+assert.doesNotMatch(normalizedDisplayPrompt, /ABSOLUTE PIXEL COORDINATES/)
+
+const unsafeScrollFocusPrompt = buildActionPrompt('Scroll a course list to Course 10.', [
+    {
+        action: 'click',
+        coordinate: [520, 480],
+        success: true,
+        reasoning: "Click inside the 'Învățare Interactivă' list box to focus it so we can scroll down to find Cursul 10.",
+    },
+    {
+        action: 'scroll',
+        scrollDirection: 'down',
+        scrollAmount: 500,
+        success: true,
+        reasoning: "Scroll down inside the 'Învățare Interactivă' container to find Curs nr. 10.",
+    },
+    {
+        action: 'click',
+        coordinate: [967, 43],
+        success: true,
+        reasoning: "We accidentally entered Course 1 instead of scrolling. Click 'Ieși' to return to the dashboard.",
+    },
+])
+assert.match(unsafeScrollFocusPrompt, /UNSAFE SCROLL FOCUS PATTERN/)
+assert.match(unsafeScrollFocusPrompt, /Do not click that list\/card area again/)
+assert.match(unsafeScrollFocusPrompt, /scroll.*coordinate.*inert/i)
 
 const urlHistoryPrompt = buildActionPrompt('Inspect API.', [
     {

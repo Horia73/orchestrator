@@ -7,6 +7,7 @@ import { GoogleGenAI, MediaResolution, type GenerateContentConfig } from '@googl
 import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from './browser';
 import { buildSystemPrompt, buildMemoryContext, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
 import { getMemories } from './memory';
+import { redactBrowserAgentText } from './redaction';
 
 export interface AgentAction {
     action: 'click' | 'type' | 'key' | 'scroll' | 'scrollToBottom' | 'undo' | 'wait' | 'navigate' | 'hold' | 'drag' | 'hover' | 'inspectPage' | 'findInPage' | 'inspectDiagnostics' | 'fetchUrl' | 'screenshot' | 'recordVideo' | 'closeTab' | 'refresh' | 'getLink' | 'pasteLink' | 'readClipboard' | 'clear' | 'done' | 'ask' | 'goBack' | 'goForward' | 'listTabs' | 'switchTab' | 'newTab' | 'listDownloads' | 'waitForDownloads' | 'error' | 'escalate' | 'yield_control';
@@ -70,6 +71,111 @@ export interface VisionService {
     getConfig(): VisionConfig;
 }
 
+type VisionRequestPart = { text?: string; inlineData?: { mimeType: string; data: string } };
+type VisionGenerateResponse = { text?: string; usageMetadata?: unknown };
+
+const MAX_JSON_PARSE_RETRIES = 3;
+const MAX_MODEL_RESPONSE_LOG_CHARS = 1000;
+
+const VALID_ACTIONS = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'] as const satisfies readonly AgentAction['action'][];
+const VALID_ACTION_SET = new Set<string>(VALID_ACTIONS);
+
+const COORDINATE_JSON_SCHEMA = {
+    type: 'array',
+    items: { type: 'number' },
+    minItems: 2,
+    maxItems: 2,
+} as const;
+
+const BROWSER_ACTION_JSON_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        action: { type: 'string', enum: [...VALID_ACTIONS] },
+        sub_objective: { type: 'string' },
+        coordinate: COORDINATE_JSON_SCHEMA,
+        coordinateEnd: COORDINATE_JSON_SCHEMA,
+        text: { type: 'string' },
+        submit: { type: 'boolean' },
+        clearBefore: { type: 'boolean' },
+        clickCount: { type: 'integer', minimum: 1 },
+        key: { type: 'string', enum: ['Enter', 'Escape', 'Tab', 'Backspace'] },
+        scrollDirection: { type: 'string', enum: ['up', 'down', 'left', 'right'] },
+        scrollAmount: { type: 'integer', minimum: 1 },
+        url: { type: 'string' },
+        tabIndex: { type: 'integer', minimum: 0 },
+        reasoning: { type: 'string' },
+        memory: { type: 'string' },
+        durationMs: { type: 'integer', minimum: 1 },
+        expectedFilename: { type: 'string' },
+    },
+    required: ['action', 'reasoning'],
+    propertyOrdering: ['action', 'coordinate', 'coordinateEnd', 'clickCount', 'text', 'submit', 'clearBefore', 'key', 'scrollDirection', 'scrollAmount', 'url', 'tabIndex', 'durationMs', 'expectedFilename', 'sub_objective', 'reasoning', 'memory'],
+} as const;
+
+const BROWSER_ACTION_RESPONSE_JSON_SCHEMA = {
+    anyOf: [
+        BROWSER_ACTION_JSON_SCHEMA,
+        {
+            type: 'array',
+            items: BROWSER_ACTION_JSON_SCHEMA,
+            minItems: 1,
+            maxItems: 8,
+        },
+    ],
+} as const;
+
+const STRING_ARRAY_JSON_SCHEMA = {
+    type: 'array',
+    items: { type: 'string' },
+    maxItems: 5,
+} as const;
+
+const ITERATION_LIMIT_REVIEW_JSON_SCHEMA = {
+    type: 'object',
+    additionalProperties: false,
+    properties: {
+        whyNotFinished: { type: 'string' },
+        stuckPoint: { type: 'string' },
+        whySelfRecoveryFailed: { type: 'string' },
+        humanAssessment: { type: 'string' },
+        missingToolsOrCapabilities: STRING_ARRAY_JSON_SCHEMA,
+        hardParts: STRING_ARRAY_JSON_SCHEMA,
+        easyParts: STRING_ARRAY_JSON_SCHEMA,
+        futureStrategy: STRING_ARRAY_JSON_SCHEMA,
+        questionsForUser: STRING_ARRAY_JSON_SCHEMA,
+    },
+    required: [
+        'whyNotFinished',
+        'stuckPoint',
+        'whySelfRecoveryFailed',
+        'humanAssessment',
+        'missingToolsOrCapabilities',
+        'hardParts',
+        'easyParts',
+        'futureStrategy',
+        'questionsForUser',
+    ],
+    propertyOrdering: [
+        'whyNotFinished',
+        'stuckPoint',
+        'whySelfRecoveryFailed',
+        'humanAssessment',
+        'missingToolsOrCapabilities',
+        'hardParts',
+        'easyParts',
+        'futureStrategy',
+        'questionsForUser',
+    ],
+} as const;
+
+class ModelOutputParseError extends Error {
+    constructor(message: string) {
+        super(message);
+        this.name = 'ModelOutputParseError';
+    }
+}
+
 function sanitizeThinkingLevel(value: unknown): VisionConfig['thinkingLevel'] | '' {
     const normalized = String(value || '').trim().toLowerCase();
     if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
@@ -115,15 +221,52 @@ function isMediaResolutionCompatError(error: unknown): boolean {
     return /media[_\s-]?resolution/i.test(message) && /(not supported|invalid|unknown|unrecognized)/i.test(message);
 }
 
-function buildRequestConfig(state: VisionConfig, systemInstruction?: string): GenerateContentConfig {
+function isStructuredOutputCompatError(error: unknown): boolean {
+    const message = error instanceof Error ? error.message : String(error);
+    return /(response[_\s-]?(mime|schema|json)|responseMimeType|responseJsonSchema|application\/json|structured output)/i.test(message)
+        && /(not supported|unsupported|invalid|unknown|unrecognized|must|expected|schema)/i.test(message);
+}
+
+function stripIncompatibleConfig(config: GenerateContentConfig, error: unknown): { config: GenerateContentConfig; changed: boolean } {
+    const next: Partial<GenerateContentConfig> = { ...config };
+    let changed = false;
+
+    if (next.thinkingConfig && isThinkingCompatError(error)) {
+        delete next.thinkingConfig;
+        changed = true;
+    }
+    if (next.mediaResolution && isMediaResolutionCompatError(error)) {
+        delete next.mediaResolution;
+        changed = true;
+    }
+    if ((next.responseMimeType || next.responseSchema || next.responseJsonSchema) && isStructuredOutputCompatError(error)) {
+        delete next.responseMimeType;
+        delete next.responseSchema;
+        delete next.responseJsonSchema;
+        changed = true;
+    }
+
+    return { config: next as GenerateContentConfig, changed };
+}
+
+interface GenerateContentOptions {
+    systemInstruction?: string;
+    responseJsonSchema?: unknown;
+}
+
+function buildRequestConfig(state: VisionConfig, options: GenerateContentOptions = {}): GenerateContentConfig {
     return {
         thinkingConfig: buildThinkingConfig(state.thinkingLevel),
         mediaResolution: toGeminiMediaResolution(state.mediaResolution),
+        ...(options.responseJsonSchema ? {
+            responseMimeType: 'application/json',
+            responseJsonSchema: options.responseJsonSchema,
+        } : {}),
         // The static system prompt is sent as a separate systemInstruction so it
         // forms a byte-stable, cacheable prefix across the ~50 calls of a segment
         // (implicit context caching), instead of being concatenated with the
         // dynamic per-step content where it could never be cached.
-        ...(systemInstruction ? { systemInstruction } : {}),
+        ...(options.systemInstruction ? { systemInstruction: options.systemInstruction } : {}),
     } as unknown as GenerateContentConfig;
 }
 
@@ -131,8 +274,8 @@ async function generateContentWithFallback(
     ai: GoogleGenAI,
     model: string,
     state: VisionConfig,
-    requestParts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }>,
-    systemInstruction?: string,
+    requestParts: VisionRequestPart[],
+    options: GenerateContentOptions = {},
 ) {
     const request = (config: GenerateContentConfig) => ai.models.generateContent({
         model,
@@ -145,42 +288,23 @@ async function generateContentWithFallback(
         ],
     });
 
-    const initialConfig = buildRequestConfig(state, systemInstruction);
+    let config = buildRequestConfig(state, options);
+    let lastError: unknown = null;
 
-    try {
-        return await request(initialConfig);
-    } catch (error) {
-        if (!isThinkingCompatError(error) && !isMediaResolutionCompatError(error)) {
-            throw error;
-        }
-
-        const fallbackConfig: Partial<GenerateContentConfig> = { ...initialConfig };
-        if (isThinkingCompatError(error)) {
-            delete fallbackConfig.thinkingConfig;
-        }
-        if (isMediaResolutionCompatError(error)) {
-            delete fallbackConfig.mediaResolution;
-        }
-
+    for (let attempt = 0; attempt < 4; attempt++) {
         try {
-            return await request(fallbackConfig as GenerateContentConfig);
-        } catch (fallbackError) {
-            const retryConfig: Partial<GenerateContentConfig> = { ...fallbackConfig };
-            let shouldRetry = false;
-            if (retryConfig.thinkingConfig && isThinkingCompatError(fallbackError)) {
-                delete retryConfig.thinkingConfig;
-                shouldRetry = true;
+            return await request(config);
+        } catch (error) {
+            const fallback = stripIncompatibleConfig(config, error);
+            if (!fallback.changed) {
+                throw error;
             }
-            if (retryConfig.mediaResolution && isMediaResolutionCompatError(fallbackError)) {
-                delete retryConfig.mediaResolution;
-                shouldRetry = true;
-            }
-            if (shouldRetry) {
-                return request(retryConfig as GenerateContentConfig);
-            }
-            throw fallbackError;
+            lastError = error;
+            config = fallback.config;
         }
     }
+
+    throw lastError instanceof Error ? lastError : new Error('Gemini request failed after config compatibility fallbacks.');
 }
 
 function extractUsage(rawUsage: unknown): Omit<VisionUsage, 'model'> {
@@ -341,6 +465,116 @@ function extractJsonText(text: string): string {
     return extractFirstBalancedJson(text) || text.trim();
 }
 
+function parseJsonFromModelText(text: string): unknown {
+    const jsonText = extractJsonText(text);
+    try {
+        return JSON.parse(jsonText) as unknown;
+    } catch (error) {
+        const message = error instanceof Error ? error.message : 'Unknown parse error';
+        throw new ModelOutputParseError(`Invalid JSON: ${message}`);
+    }
+}
+
+function parseAgentActionsFromModelText(text: string): AgentAction[] {
+    const parsed = parseJsonFromModelText(text);
+    const actions = Array.isArray(parsed) ? parsed : [parsed];
+
+    if (actions.length === 0) {
+        throw new ModelOutputParseError('Browser action response must contain at least one action.');
+    }
+
+    for (const action of actions) {
+        if (!action || typeof action !== 'object' || Array.isArray(action)) {
+            throw new ModelOutputParseError('Browser action response must be an object or an array of objects.');
+        }
+
+        const record = action as Record<string, unknown>;
+        if (typeof record.action !== 'string') {
+            throw new ModelOutputParseError('Browser action is missing a string action field.');
+        }
+        if (!VALID_ACTION_SET.has(record.action)) {
+            throw new ModelOutputParseError(`Invalid browser action: ${record.action}`);
+        }
+        if (typeof record.reasoning !== 'string') {
+            throw new ModelOutputParseError('Browser action is missing a string reasoning field.');
+        }
+    }
+
+    return actions as AgentAction[];
+}
+
+function parseIterationLimitReviewFromModelText(text: string): Partial<IterationLimitReview> {
+    const parsed = parseJsonFromModelText(text);
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) {
+        throw new ModelOutputParseError('Iteration-limit review response must be a JSON object.');
+    }
+    return parsed as Partial<IterationLimitReview>;
+}
+
+function safeModelResponseSnippet(text: string): string {
+    const clean = redactBrowserAgentText(text).replace(/\s+/g, ' ').trim();
+    return clean.length <= MAX_MODEL_RESPONSE_LOG_CHARS
+        ? clean
+        : `${clean.slice(0, MAX_MODEL_RESPONSE_LOG_CHARS - 1).trimEnd()}...`;
+}
+
+function buildJsonRetryInstruction(contextLabel: string, error: unknown, retryNumber: number, maxRetries: number): string {
+    const message = error instanceof Error ? error.message : String(error);
+    return [
+        `\n## JSON OUTPUT RETRY ${retryNumber}/${maxRetries}`,
+        `Your previous ${contextLabel} response could not be parsed by the browser runtime: ${message}`,
+        'Return ONLY valid JSON matching the required response schema.',
+        'Use double quotes for all object keys and strings. Do not include Markdown fences, comments, trailing commas, or explanatory prose.',
+    ].join('\n');
+}
+
+async function requestParsedJsonWithRetries<T>(args: {
+    contextLabel: string;
+    model: string;
+    requestParts: VisionRequestPart[];
+    systemInstruction?: string;
+    maxRetries?: number;
+    generate: (requestParts: VisionRequestPart[], systemInstruction?: string) => Promise<VisionGenerateResponse>;
+    parse: (text: string) => T;
+    onUsage?: (usage: VisionUsage) => void;
+}): Promise<T> {
+    const maxRetries = args.maxRetries ?? MAX_JSON_PARSE_RETRIES;
+    let lastError: unknown = null;
+
+    for (let attempt = 0; attempt <= maxRetries; attempt++) {
+        const requestParts = attempt === 0
+            ? args.requestParts
+            : [
+                ...args.requestParts,
+                { text: buildJsonRetryInstruction(args.contextLabel, lastError, attempt, maxRetries) },
+            ];
+
+        const response = await args.generate(requestParts, args.systemInstruction);
+        const usage = extractUsage(getUsageMetadata(response));
+        args.onUsage?.({
+            model: args.model,
+            ...usage,
+        });
+
+        const text = response.text?.trim() || '';
+        try {
+            return args.parse(text);
+        } catch (error) {
+            lastError = error;
+            const snippet = safeModelResponseSnippet(text);
+            const retryText = attempt < maxRetries ? `retrying ${attempt + 1}/${maxRetries}` : 'no retries left';
+            console.warn(
+                `[browser-agent] Invalid Gemini JSON for ${args.contextLabel}; ${retryText}. ` +
+                `${error instanceof Error ? error.message : 'Unknown parse error'}. ` +
+                `Raw response: ${snippet || '(empty)'}`
+            );
+        }
+    }
+
+    const message = lastError instanceof Error ? lastError.message : 'Unknown parse error';
+    throw new ModelOutputParseError(`Model returned invalid ${args.contextLabel} JSON after ${maxRetries + 1} attempts. Last error: ${message}`);
+}
+
 function normalizeStringArray(value: unknown): string[] {
     if (!Array.isArray(value)) {
         return [];
@@ -424,40 +658,24 @@ export function createVisionService(
                     : '';
                 const requestParts = buildVisionParts(memoryContext, historyContext, actionPrompt, frame, recentTrace, supplementalFrames);
 
-                const response = await generateContentWithFallback(ai, state.model, state, requestParts, systemPrompt);
-
-                const usage = extractUsage(getUsageMetadata(response));
-                if (typeof onUsage === 'function') {
-                    onUsage({
-                        model: state.model,
-                        ...usage,
-                    });
-                }
-
-                const text = response.text?.trim() || '';
-                const jsonText = extractJsonText(text);
-
-                const validActions = ['click', 'type', 'key', 'scroll', 'scrollToBottom', 'undo', 'wait', 'navigate', 'hold', 'drag', 'hover', 'inspectPage', 'findInPage', 'inspectDiagnostics', 'fetchUrl', 'screenshot', 'recordVideo', 'closeTab', 'refresh', 'getLink', 'pasteLink', 'readClipboard', 'clear', 'done', 'ask', 'error', 'goBack', 'goForward', 'listTabs', 'switchTab', 'newTab', 'listDownloads', 'waitForDownloads', 'escalate', 'yield_control'];
-
-                const parsed = JSON.parse(jsonText);
-                const actions: AgentAction[] = Array.isArray(parsed) ? parsed : [parsed];
-
-                // Validate all actions
-                for (const action of actions) {
-                    if (!action.action) {
-                        throw new Error('Missing action field');
-                    }
-                    if (!validActions.includes(action.action)) {
-                        throw new Error(`Invalid action: ${action.action}`);
-                    }
-                }
-
-                return actions;
+                return await requestParsedJsonWithRetries({
+                    contextLabel: 'browser action',
+                    model: state.model,
+                    requestParts,
+                    systemInstruction: systemPrompt,
+                    generate: (parts, systemInstruction) => generateContentWithFallback(ai, state.model, state, parts, {
+                        systemInstruction,
+                        responseJsonSchema: BROWSER_ACTION_RESPONSE_JSON_SCHEMA,
+                    }) as Promise<VisionGenerateResponse>,
+                    parse: parseAgentActionsFromModelText,
+                    onUsage,
+                });
             } catch (error) {
-                console.error('Vision API error:', error);
+                console.error('Vision action error:', error);
+                const prefix = error instanceof ModelOutputParseError ? 'Model Output Error' : 'API Error';
                 return [{
                     action: 'error',
-                    reasoning: `API Error: ${error instanceof Error ? error.message : 'Unknown'}`,
+                    reasoning: `${prefix}: ${error instanceof Error ? error.message : 'Unknown'}`,
                 }];
             }
         },
@@ -479,19 +697,17 @@ export function createVisionService(
                     : '';
                 const requestParts = buildVisionParts('', historyContext, reviewPrompt, frame, recentTrace, supplementalFrames);
 
-                const response = await generateContentWithFallback(ai, state.model, state, requestParts);
-
-                const usage = extractUsage(getUsageMetadata(response));
-                if (typeof onUsage === 'function') {
-                    onUsage({
-                        model: state.model,
-                        ...usage,
-                    });
-                }
-
-                const text = response.text?.trim() || '';
-                const jsonText = extractJsonText(text);
-                const parsed = JSON.parse(jsonText) as Partial<IterationLimitReview>;
+                const parsed = await requestParsedJsonWithRetries({
+                    contextLabel: 'iteration-limit review',
+                    model: state.model,
+                    requestParts,
+                    generate: (parts, systemInstruction) => generateContentWithFallback(ai, state.model, state, parts, {
+                        systemInstruction,
+                        responseJsonSchema: ITERATION_LIMIT_REVIEW_JSON_SCHEMA,
+                    }) as Promise<VisionGenerateResponse>,
+                    parse: parseIterationLimitReviewFromModelText,
+                    onUsage,
+                });
 
                 return {
                     whyNotFinished: String(parsed.whyNotFinished || '').trim(),
@@ -513,3 +729,10 @@ export function createVisionService(
 
     return service;
 }
+
+export const browserVisionTestHooks = {
+    buildRequestConfig,
+    parseAgentActionsFromModelText,
+    parseIterationLimitReviewFromModelText,
+    requestParsedJsonWithRetries,
+};

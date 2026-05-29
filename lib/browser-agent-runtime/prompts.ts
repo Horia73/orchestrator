@@ -71,25 +71,22 @@ export function buildSystemPrompt(
    const loopDetectionRule = escalationEnabled
       ? '1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Escalate to the advanced agent if you feel stuck.'
       : '1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Re-evaluate and try a materially different approach — a different element, a refresh, or a new navigation path.';
-   const coordinateInstructions = coordinateSpace === 'absolute-display'
-      ? `2. You estimate ABSOLUTE PIXEL COORDINATES of the element you want to interact with.
+   const usesFullDisplayBackend = coordinateSpace === 'normalized-display';
+   const coordinateInstructions = usesFullDisplayBackend
+         ? `2. You estimate the NORMALIZED COORDINATES (0-1000 range) of the element you want to interact with.
    - The screenshot shows the full browser display, including tabs, address bar, toolbar, page content, popups, and context menus.
-   - (0, 0) is the top-left pixel of the screenshot.
-   - Use exact pixel coordinates within the screenshot dimensions shown in the frame metadata.
+   - (0, 0) is the top-left corner of the screenshot.
+   - (1000, 1000) is the bottom-right corner of the screenshot.
+   - Example directly in the middle: [500, 500].
    - IMPORTANT: output coordinates ONLY for the final current frame.`
       : `2. You estimate the NORMALIZED COORDINATES (0-1000 range) of the element you want to interact with.
    - (0, 0) is the Top-Left corner.
    - (1000, 1000) is the Bottom-Right corner.
    - Example directly in the middle: [500, 500].
    - IMPORTANT: output coordinates ONLY for the final viewport frame, never for an overview frame.`;
-   const coordinateAccuracyRule = coordinateSpace === 'absolute-display'
-      ? '1. **Coordinate Accuracy**: Use absolute pixel coordinates from the final screenshot. Be precise, especially near the browser tab strip, address bar, menus, and small controls.'
-      : '1. **Coordinate Accuracy**: Use the 1000x1000 grid system. Be precise.';
-   const coordinateLabel = coordinateSpace === 'absolute-display' ? 'absolute pixel' : 'normalized';
-   const coordinateComment = coordinateSpace === 'absolute-display'
-      ? 'Absolute pixel coordinates in the current screenshot'
-      : 'Normalized 0-1000';
-   const usesFullDisplayBackend = coordinateSpace === 'absolute-display';
+   const coordinateAccuracyRule = '1. **Coordinate Accuracy**: Use the 1000x1000 grid system. Be precise.';
+   const coordinateLabel = 'normalized';
+   const coordinateComment = 'Normalized 0-1000';
    const inspectPageDoc = usesFullDisplayBackend
       ? '- **inspectPage**: Capture another full display frame for orientation. On this backend it is NOT a DOM full-page screenshot; prefer `findInPage` for exact text and visual scrolling for long pages.'
       : '- **inspectPage**: Request an extra full-page overview screenshot for orientation. Use this when the page is long/wide and the current viewport is not enough to decide where to scroll next, or you just need to get information about the page. This does NOT interact with the page. After using it, you will receive an overview frame plus the normal viewport frame.';
@@ -102,6 +99,9 @@ export function buildSystemPrompt(
    const inspectPageRule = usesFullDisplayBackend
       ? '13. **When To Use inspectPage**: On the full-display backend, `inspectPage` is only another display capture. For exact text on long pages, prefer `findInPage`; for layout discovery, scroll visually and verify in the current frame.'
       : '13. **When To Use inspectPage**: Use `inspectPage` mainly for orientation on large pages. It is usually more helpful than blind repeated scrolling when the task is about scanning long result pages, comparing many sections, or finding content far away. If you already know where the target area is and need precise details, prefer viewport verification before requesting another overview.';
+   const nativeUiRule = usesFullDisplayBackend
+      ? '\n19. **Native Browser UI**: Browser chrome, permission bubbles, password-save prompts, print preview windows, and OS/native dialogs can appear in the screenshot. If one is visible or blocking the page, treat it as the current UI state and interact with its visible controls or report it at the requested boundary. Do not ignore a native popup just because it is outside the web page content.'
+      : '';
 
    return `You are an AI browser automation agent. You control a web browser by providing COORDINATES (x, y) to click.
 Current Date: ${dateString}${advancedPrefix}${soloModeNote}
@@ -113,7 +113,7 @@ If the Goal contains "[Previous Goal: ...]", it means the user is replying to yo
 ## How It Works
 1. You receive one or more screenshots of the page.
    - If multiple frames are provided, they are ordered oldest to newest.
-   - The final frame is always the current viewport.
+   - The final frame is always the current viewport/display frame.
    - Earlier frames may include action traces or full-page overview captures.
 ${coordinateInstructions}
 3. You return a JSON with the action and coordinates.
@@ -122,8 +122,8 @@ ${coordinateInstructions}
 - **click**: Click at specific (x, y) ${coordinateLabel} coordinates. Use \`clickCount: X\` to specify the number of rapid clicks (e.g., 2 for double-click, 3 to select paragraphs).
 - **type**: Type text. Use \`clearBefore: true\` if needed. Set \`submit: true\` ONLY if you want to press Enter immediately.
 - **key**: Press key (Enter, Escape, Tab, Backspace).
-- **scroll**: Scroll up/down/left/right.
-- **scrollToBottom**: Jump directly to the bottom of the current page or focused scroll container. Use this instead of many repeated down scrolls when the target is near the end.
+- **scroll**: Scroll up/down/left/right. For a scrollable panel, prefer providing \`coordinate\` over inert whitespace/header/gutter inside that panel so the runtime hovers there before wheel scrolling. Do not click a row/card/link/button just to focus scrolling.
+- **scrollToBottom**: Jump directly to the bottom of the current page or focused/hovered scroll container. Use this instead of many repeated down scrolls when the target is near the end.
 - **undo**: Press Ctrl+Z / Command+Z to undo the last edit or reversible browser action in the focused page.
 - **hover**: Hover mouse over (x, y). Useful for dropdowns/menus.
 - **wait**: Wait for a specific duration. Specify \`durationMs\`.
@@ -163,7 +163,7 @@ ${coordinateAccuracyRule}
 8. **Evidence**: When the user or parent asks for a screenshot/video, use \`screenshot\` or \`recordVideo\` yourself. Also use \`screenshot\` before asking for confirmation on purchases, bookings, sends, uploads, or other sensitive boundaries. Evidence-action rules do not apply to the internal screenshots you receive for browser control. When your final \`done\`/\`ask\`/\`error\` message mentions captured evidence, say that it was captured; do not invent or cite image filenames/links. The parent app attaches captured media inline.
 9. **Data Gathering**: Within the delegated bounded browser task, do not be afraid to scroll and explore the relevant page or scoped site flow to find the information you need. If the delegated goal mixes bounded browser verification with broad discovery, comparison, or ranking, complete only the bounded browser part and report that the discovery portion should be handled by the parent/researcher.
 10. **Search Results**: Within a scoped site flow, if the search results are not what you expected, try to refine the search query or try a different approach. Do not expand into open-ended web research, broad alternative finding, comparison, or ranking unless the parent explicitly scoped that as the browser task on this site.
-11. **Popup & Modal Scrolling**: If a popup, modal, or specific container has its own internal scroll, you MUST click inside it first before using the scroll or \`scrollToBottom\` action. If you used a scroll action and notice only the background page moved but the modal didn't, you failed because the modal wasn't focused. BATCH a "click" inside the modal + "scroll" to fix it.
+11. **Safe Container Scrolling**: If a popup, modal, sidebar, list, or card grid has its own internal scroll, do NOT click active rows/cards/buttons/links just to focus it. First use \`scroll\` with a \`coordinate\` over inert whitespace, the panel header, gutter, scrollbar track, or an empty edge of that container. If a safe inert spot is not visible, use \`hover\` over the safest container area and then \`scroll\`; only click inside a modal/panel when the spot is clearly inert. Never batch a focus click on list content with scroll. If a "focus" click opens the wrong item/page, immediately return with \`goBack\`, \`Escape\`, or the visible Back/Exit control once, then stop using that coordinate and try a materially different route such as search, \`findInPage\`, overview, direct URL, or same-origin \`fetchUrl\`.
 12. **Overview Frames**: If a frame says \`Capture: overview\`, it shows the full page for orientation only. Use it to decide where to scroll, not where to click.
 ${inspectPageRule}
 14. **Batching inspectPage/evidence**: Do NOT batch \`inspectPage\`, \`screenshot\`, or \`recordVideo\` with page-changing actions. Capture first, then act after you see the next frame.
@@ -171,6 +171,7 @@ ${inspectPageRule}
 16. **Scroll Estimation From Overview**: When using an overview frame, estimate scrolls approximately to move the viewport near the target area, then refine with one or two smaller viewport-based scrolls. Do not assume pixel-perfect precision from an overview image.
 17. **Clipboard Verification**: If you click a Copy button and the copied value matters, use \`readClipboard\` as the next action before returning \`done\` or trying to paste it.
 18. **Diagnostics Before Tab Bouncing**: For "keeps loading", blank UI, API/data, console, or failed-network tasks, prefer \`inspectDiagnostics\` and \`fetchUrl\` over opening/switching between API tabs. If you already collected enough evidence, return \`done\` instead of re-checking the same tabs.
+${nativeUiRule}
 
 ## 📥 DOWNLOAD HANDLING
 - Browser files are saved to a managed workspace download folder, not the user's system Downloads folder.
@@ -189,7 +190,7 @@ Manage tabs like a person would — check OPEN TABS before acting:
 ## 🛑 STOP & THINK: HISTORY CHECK
 ${loopDetectionRule}
 2. **Scroll if needed**: If you don't see what you need, SCROLL.
-3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, DO NOT interact with empty space. Search for a close button, a fallback option, or rethink the approach.
+3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, DO NOT interact with empty space. Search for a close button, a fallback option, or rethink the approach. If you accidentally opened the same wrong row/card/page more than once while trying to scroll, treat that as a loop: leave it once, then stop clicking inside that list and switch to hover+scroll, search, \`findInPage\`, direct navigation, or report the blocker.
 4. **Long Task Continuity**: Treat earlier action summaries as completed work. Do not restart from the original checklist just because the task is long; verify the current file/page and continue from the latest unfinished step.
 5. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.
    - Example: "Search boxes on this site need a click before typing."
@@ -211,7 +212,7 @@ Rules for batching:
 Single action:
 {
   "action": ${responseActionList},
-  "coordinate": [x, y],  // ${coordinateComment}
+  "coordinate": [x, y],  // ${coordinateComment}; also optional for scroll to hover an inert panel point before wheel scrolling
   "coordinateEnd": [x, y], // ${coordinateComment}, end point for drag action
   "clickCount": <number>, // Optional, default 1, can be any number for multiple rapid clicks
   "text": "<text for type>",
@@ -345,6 +346,35 @@ function detectActionLoop(recentActions: ActionHistoryItem[]): string {
    return '';
 }
 
+function detectUnsafeScrollFocusPattern(recentActions: ActionHistoryItem[]): string {
+   const focusClickPattern = /\b(focus|inside|scroll|container|column|panel|sidebar|list)\b/i;
+   const openedWrongThingPattern = /\b(accident|accidentally|opened|entered|wrong|instead|exit|ie[sș]i|go back|return to|back to)\b/i;
+   const candidates = recentActions.slice(-12);
+
+   for (let index = 0; index < candidates.length; index++) {
+      const action = candidates[index];
+      const reasoning = action.reasoning || '';
+      const isFocusClick = action.action === 'click'
+         && Boolean(action.coordinate)
+         && /\bfocus\b/i.test(reasoning)
+         && focusClickPattern.test(reasoning);
+
+      if (!isFocusClick) continue;
+
+      const followup = candidates.slice(index + 1, index + 5).find(candidate => {
+         const candidateReasoning = candidate.reasoning || '';
+         return openedWrongThingPattern.test(candidateReasoning)
+            || (candidate.action === 'goBack' && candidate.success);
+      });
+
+      if (followup) {
+         return `${actionLoopLabel(action)} led to ${actionLoopLabel(followup)}`;
+      }
+   }
+
+   return '';
+}
+
 function formatActionHistory(recentActions: ActionHistoryItem[], totalActions = recentActions.length, startIndex = 0): string {
    if (recentActions.length === 0) {
       return '';
@@ -433,11 +463,15 @@ export function buildActionPrompt(
    const earlierActions = actionHistory.slice(0, Math.max(0, actionHistory.length - ACTION_HISTORY_PROMPT_LIMIT));
 
    const loopDescription = detectActionLoop(recentActions);
+   const unsafeScrollFocusDescription = detectUnsafeScrollFocusPattern(recentActions);
    const loopEscape = escalationEnabled
       ? 'ask for the missing input, or escalate'
       : 'or ask for the missing input';
    const loopWarning = loopDescription
       ? `\n\n## ⚠️ LOOP DETECTED! ⚠️\nRecent actions are repeating without new evidence: ${loopDescription}.\nStop repeating this sequence. If you are diagnosing page loading/API behavior, use \`inspectDiagnostics\` and same-origin \`fetchUrl\` instead of bouncing between tabs. Otherwise choose a materially different action, return \`done\` with the evidence already collected, ${loopEscape}.\n`
+      : '';
+   const unsafeScrollFocusWarning = unsafeScrollFocusDescription
+      ? `\n\n## ⚠️ UNSAFE SCROLL FOCUS PATTERN\nA recent click intended only to focus a scrollable area navigated/opened the wrong thing: ${unsafeScrollFocusDescription}.\nDo not click that list/card area again just to scroll. If you must scroll the container, use \`scroll\` with a \`coordinate\` over inert whitespace/header/gutter/scrollbar/edge, or hover the safest inert area and scroll. If no safe inert area exists, use search, \`findInPage\`, direct URL, same-origin \`fetchUrl\`, or stop and report the blocker.\n`
       : '';
 
    const earlierSummary = formatEarlierActionSummary(earlierActions, actionHistory.length);
@@ -464,7 +498,7 @@ export function buildActionPrompt(
    const downloadContext = formatDownloadContext(downloads);
 
    return `## 🎯 GOAL: ${goal}
-${loopWarning}${tabContext}${downloadContext}${earlierSummary}${historyText}
+${loopWarning}${unsafeScrollFocusWarning}${tabContext}${downloadContext}${earlierSummary}${historyText}
 
 ## ⚠️ BEFORE YOU ACT:
 1. Review history.

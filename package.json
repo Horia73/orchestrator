@@ -25,7 +25,7 @@
     "smoke:workout": "tsx scripts/smoke-workout-parser.ts && tsx scripts/smoke-workout-save.ts && tsx scripts/smoke-workout-storage.ts",
     "smoke:observability": "tsx scripts/smoke-observability-tools.ts",
     "smoke:api-guard": "tsx scripts/smoke-api-guard.ts",
-    "smoke:browser-backend": "tsx scripts/smoke-browser-backend.ts",
+    "smoke:browser-backend": "tsx scripts/smoke-browser-backend.ts && tsx scripts/smoke-browser-vision-json.ts",
     "smoke:capability-gating": "tsx scripts/smoke-capability-gating.ts",
     "smoke:official-display": "tsx scripts/smoke-official-display.ts",
     "smoke:official-display-agent": "tsx scripts/smoke-official-display-agent.ts",

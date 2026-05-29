@@ -1,4 +1,5 @@
 import { chromium, BrowserContext, Page } from 'patchright';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import path from 'path';
 import { DEFAULT_VIEWPORT } from './viewport';
@@ -95,6 +96,67 @@ interface BrowserFrameMetrics {
     scrollY: number;
 }
 
+const DISPLAY_AUTOMATION_COMMANDS = ['import', 'xdotool'] as const;
+const executableCache = new Map<string, boolean>();
+
+function commandExists(command: string): boolean {
+    const cached = executableCache.get(command);
+    if (cached !== undefined) return cached;
+    const result = spawnSync('sh', ['-lc', `command -v ${command} >/dev/null 2>&1`], {
+        stdio: 'ignore',
+    });
+    const exists = result.status === 0;
+    executableCache.set(command, exists);
+    return exists;
+}
+
+function displayEnv(display: string | undefined): NodeJS.ProcessEnv {
+    return {
+        ...process.env,
+        DISPLAY: display || process.env.DISPLAY || ':99',
+    };
+}
+
+function runDisplayCommand(display: string | undefined, command: string, args: string[], input?: string): Buffer {
+    const result = spawnSync(command, args, {
+        env: displayEnv(display),
+        input,
+        maxBuffer: 64 * 1024 * 1024,
+    });
+    if (result.error) {
+        throw new Error(`${command} is unavailable: ${result.error.message}`);
+    }
+    if (result.status !== 0) {
+        const stderr = result.stderr.toString('utf8').trim();
+        const stdout = result.stdout.toString('utf8').trim();
+        const detail = stderr || stdout;
+        throw new Error(`${command} ${args.join(' ')} failed${detail ? `: ${detail}` : ''}`);
+    }
+    return result.stdout;
+}
+
+function normalizeXdotoolKey(key: string): string {
+    const parts = key.split('+').map(part => part.trim()).filter(Boolean);
+    return parts.map(part => {
+        const lower = part.toLowerCase();
+        if (lower === 'control') return 'ctrl';
+        if (lower === 'meta' || lower === 'command') return 'super';
+        if (lower === 'enter') return 'Return';
+        if (lower === 'backspace') return 'BackSpace';
+        if (lower === 'escape') return 'Escape';
+        if (lower === 'delete') return 'Delete';
+        if (lower === 'arrowleft') return 'Left';
+        if (lower === 'arrowright') return 'Right';
+        if (lower === 'arrowup') return 'Up';
+        if (lower === 'arrowdown') return 'Down';
+        return part.length === 1 ? part.toLowerCase() : part;
+    }).join('+');
+}
+
+function emptyTrace(action: ActionTrace['action']): ActionTrace {
+    return { action, intervalMs: 0, frames: [] };
+}
+
 // Bezier curve helper
 function bezierCurve(t: number, p0: number, p1: number, p2: number, p3: number): number {
     const u = 1 - t;
@@ -188,6 +250,50 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         platform: process.platform,
         width: DEFAULT_VIEWPORT.width,
         height: DEFAULT_VIEWPORT.height,
+    };
+    let displayAutomationWarningLogged = false;
+
+    const getDisplayDimensions = (): { width: number; height: number } => ({
+        width: lastLiveViewState.width ?? DEFAULT_VIEWPORT.width,
+        height: lastLiveViewState.height ?? DEFAULT_VIEWPORT.height,
+    });
+
+    const getDisplayAutomationMissingCommands = (): string[] => (
+        DISPLAY_AUTOMATION_COMMANDS.filter(command => !commandExists(command))
+    );
+
+    const shouldUseDisplayAutomation = (): boolean => {
+        if (process.platform !== 'linux' || !lastLiveViewState.ready || !lastLiveViewState.display) {
+            return false;
+        }
+
+        const missing = getDisplayAutomationMissingCommands();
+        if (missing.length > 0) {
+            if (!displayAutomationWarningLogged) {
+                log(`⚠️ Patchright live display is available but display automation is disabled because these commands are missing: ${missing.join(', ')}`);
+                displayAutomationWarningLogged = true;
+            }
+            return false;
+        }
+
+        return true;
+    };
+
+    const xdotool = async (args: string[]) => {
+        runDisplayCommand(lastLiveViewState.display, 'xdotool', args);
+        await sleep(20);
+    };
+
+    const clampDisplayCoordinate = (x: number, y: number): [number, number] => {
+        const display = getDisplayDimensions();
+        const roundedX = Number.isFinite(x) ? Math.round(x) : 0;
+        const roundedY = Number.isFinite(y) ? Math.round(y) : 0;
+        const safeX = Math.max(0, Math.min(roundedX, display.width - 1));
+        const safeY = Math.max(0, Math.min(roundedY, display.height - 1));
+        if (safeX !== roundedX || safeY !== roundedY) {
+            log(`⚠️ Clamping display coordinates from [${x}, ${y}] to [${safeX}, ${safeY}] (${display.width}x${display.height})`);
+        }
+        return [safeX, safeY];
     };
 
     type BrowserSessionState = {
@@ -333,8 +439,26 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }, text);
     };
 
+    const isPageVisible = async (page: Page): Promise<boolean> => {
+        try {
+            return await page.evaluate(() => document.visibilityState === 'visible');
+        } catch {
+            return false;
+        }
+    };
+
     const pasteTextIntoPage = async (page: Page, text: string) => {
-        await page.bringToFront();
+        if (!await isPageVisible(page)) {
+            await page.bringToFront();
+        }
+
+        try {
+            await page.keyboard.insertText(text);
+            return;
+        } catch (error) {
+            log(`⚠️ Direct text insert failed; falling back to clipboard paste: ${formatBrowserError(error)}`);
+        }
+
         await grantClipboardAccess(page);
         const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
 
@@ -465,6 +589,42 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         } catch {
             return '';
         }
+    };
+
+    const syncActivePageWithVisibleTab = async (
+        session: BrowserSessionState,
+        pages: Page[] = getOpenOwnedPages(session),
+    ): Promise<Page | null> => {
+        if (pages.length === 0) return null;
+
+        if (pages.length === 1) {
+            if (session.activePage !== pages[0]) {
+                session.activePage = pages[0];
+                session.lastMousePosition = null;
+            }
+            return pages[0];
+        }
+
+        if (session.activePage && pages.includes(session.activePage) && await isPageVisible(session.activePage)) {
+            return session.activePage;
+        }
+
+        const visibility = await Promise.all(
+            pages.map(async page => ({
+                page,
+                visible: await isPageVisible(page),
+            })),
+        );
+        const visiblePage = visibility.find(result => result.visible)?.page ?? null;
+        if (!visiblePage) return null;
+
+        if (session.activePage !== visiblePage) {
+            session.activePage = visiblePage;
+            session.lastMousePosition = null;
+            log(`🔀 Synced session "${session.id}" to visible tab ${pages.indexOf(visiblePage)}: ${pageUrl(visiblePage)}`);
+        }
+
+        return visiblePage;
     };
 
     const resolveSameOriginFetchUrl = (currentUrl: string, targetUrl: string): string => {
@@ -665,6 +825,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
 
         const pages = getOpenOwnedPages(session);
+        const visiblePage = await syncActivePageWithVisibleTab(session, pages);
+        if (visiblePage) {
+            return visiblePage;
+        }
+
         if (session.activePage && pages.includes(session.activePage)) {
             return session.activePage;
         }
@@ -757,6 +922,47 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         options: { fullPage?: boolean; highlightViewport?: boolean } = {},
     ): Promise<BrowserFrameSnapshot> => {
         const activePage = await ensureActivePage(session);
+        const useDisplayAutomation = shouldUseDisplayAutomation();
+
+        if (useDisplayAutomation) {
+            const display = getDisplayDimensions();
+            if (source === 'agent') {
+                log(`📸 Display screenshot ${display.width}x${display.height} (${source})`);
+            }
+
+            const buffer = runDisplayCommand(lastLiveViewState.display, 'import', [
+                '-window', 'root',
+                '-quality', String(Math.max(1, Math.min(100, Math.round(quality)))),
+                'jpg:-',
+            ]);
+            const frame: BrowserFrameSnapshot = {
+                id: toFrameId(++session.frameSequence),
+                source,
+                timestamp: new Date().toISOString(),
+                imageBase64: buffer.toString('base64'),
+                url: activePage.url(),
+                captureMode: 'viewport',
+                coordinateSpace: 'normalized-display',
+                viewport: { ...display },
+                page: {
+                    width: display.width,
+                    height: display.height,
+                    scrollX: 0,
+                    scrollY: 0,
+                },
+            };
+
+            if (trackInHistory) {
+                session.latestAgentFrame = frame;
+                session.agentFrameHistory.push(frame);
+                if (session.agentFrameHistory.length > MAX_AGENT_FRAME_HISTORY) {
+                    session.agentFrameHistory = session.agentFrameHistory.slice(-MAX_AGENT_FRAME_HISTORY);
+                }
+            }
+
+            return frame;
+        }
+
         const metrics = await getFrameMetrics(activePage);
 
         if (source === 'agent') {
@@ -961,6 +1167,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
     const describeTabs = async (session: BrowserSessionState): Promise<BrowserTabInfo[]> => {
         const pages = getOpenOwnedPages(session);
+        await syncActivePageWithVisibleTab(session, pages);
         const results: BrowserTabInfo[] = [];
 
         for (let i = 0; i < pages.length; i++) {
@@ -1019,6 +1226,128 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
     };
 
+    const clickDisplayCoordinate = async (
+        session: BrowserSessionState,
+        x: number,
+        y: number,
+        count: number = 1,
+    ): Promise<boolean> => {
+        const [safeX, safeY] = clampDisplayCoordinate(x, y);
+        const repeat = Number.isFinite(count) ? Math.max(1, Math.round(count)) : 1;
+
+        try {
+            log(`🖱️ Display click at ${safeX}, ${safeY} (Count: ${repeat})`);
+            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            session.lastMousePosition = { x: safeX, y: safeY };
+            for (let i = 0; i < repeat; i++) {
+                await xdotool(['mousedown', '1']);
+                await sleep(45);
+                await xdotool(['mouseup', '1']);
+                if (i < repeat - 1) {
+                    await sleep(80);
+                }
+            }
+            return true;
+        } catch (error) {
+            logError('Display click failed:', error);
+            return false;
+        }
+    };
+
+    const hoverDisplayCoordinate = async (
+        session: BrowserSessionState,
+        x: number,
+        y: number,
+    ): Promise<void> => {
+        const [safeX, safeY] = clampDisplayCoordinate(x, y);
+        log(`🖱️ Display hover at ${safeX}, ${safeY}`);
+        await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+        session.lastMousePosition = { x: safeX, y: safeY };
+    };
+
+    const dragDisplayCoordinate = async (
+        session: BrowserSessionState,
+        startX: number,
+        startY: number,
+        endX: number,
+        endY: number,
+        durationMs: number = DEFAULT_DRAG_DURATION_MS,
+    ): Promise<TracedActionResult> => {
+        const [safeStartX, safeStartY] = clampDisplayCoordinate(startX, startY);
+        const [safeEndX, safeEndY] = clampDisplayCoordinate(endX, endY);
+        const steps = Math.max(8, Math.min(40, Math.round(durationMs / 35)));
+
+        try {
+            log(`🖱️ Display drag from [${safeStartX}, ${safeStartY}] to [${safeEndX}, ${safeEndY}] (${durationMs}ms)`);
+            await xdotool(['mousemove', '--sync', String(safeStartX), String(safeStartY)]);
+            await xdotool(['mousedown', '1']);
+            session.lastMousePosition = { x: safeStartX, y: safeStartY };
+            for (let step = 1; step <= steps; step++) {
+                const ratio = step / steps;
+                const x = Math.round(safeStartX + (safeEndX - safeStartX) * ratio);
+                const y = Math.round(safeStartY + (safeEndY - safeStartY) * ratio);
+                await xdotool(['mousemove', '--sync', String(x), String(y)]);
+                await sleep(Math.max(5, durationMs / steps));
+            }
+            session.lastMousePosition = { x: safeEndX, y: safeEndY };
+            await xdotool(['mouseup', '1']);
+            return { success: true, trace: emptyTrace('drag') };
+        } catch (error) {
+            logError('Display drag failed:', error);
+            try {
+                await xdotool(['mouseup', '1']);
+            } catch {}
+            return { success: false, trace: emptyTrace('drag') };
+        }
+    };
+
+    const holdDisplayCoordinate = async (
+        session: BrowserSessionState,
+        x: number,
+        y: number,
+        durationMs: number = 10000,
+    ): Promise<TracedActionResult> => {
+        const [safeX, safeY] = clampDisplayCoordinate(x, y);
+
+        try {
+            log(`🖱️ Display hold at ${safeX}, ${safeY} (${durationMs}ms)`);
+            await xdotool(['mousemove', '--sync', String(safeX), String(safeY)]);
+            await xdotool(['mousedown', '1']);
+            session.lastMousePosition = { x: safeX, y: safeY };
+            await sleep(Math.max(200, durationMs));
+            await xdotool(['mouseup', '1']);
+            return { success: true, trace: emptyTrace('hold') };
+        } catch (error) {
+            logError('Display hold failed:', error);
+            try {
+                await xdotool(['mouseup', '1']);
+            } catch {}
+            return { success: false, trace: emptyTrace('hold') };
+        }
+    };
+
+    const scrollDisplay = async (
+        session: BrowserSessionState,
+        direction: 'up' | 'down' | 'left' | 'right',
+        amount: number = 500,
+    ): Promise<void> => {
+        const display = getDisplayDimensions();
+        const target = session.lastMousePosition ?? { x: display.width / 2, y: display.height / 2 };
+        const [targetX, targetY] = clampDisplayCoordinate(target.x, target.y);
+        await xdotool(['mousemove', '--sync', String(targetX), String(targetY)]);
+        session.lastMousePosition = { x: targetX, y: targetY };
+
+        const button = direction === 'up' ? '4' : direction === 'down' ? '5' : direction === 'left' ? '6' : '7';
+        const repeats = Math.max(1, Math.min(20, Math.ceil(amount / 120)));
+        for (let i = 0; i < repeats; i++) {
+            await xdotool(['click', button]);
+        }
+    };
+
+    const pressDisplayKey = async (key: string): Promise<void> => {
+        await xdotool(['key', '--clearmodifiers', normalizeXdotoolKey(key)]);
+    };
+
     const isReusableInitialBlankPage = (candidatePage: Page): boolean => {
         const ownership = pageOwnership.get(candidatePage);
         if (ownership?.sessionId !== defaultSessionState.id || ownership.origin !== 'initial') {
@@ -1038,22 +1367,27 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     };
 
     const createSessionFacade = (session: BrowserSessionState): BrowserPageSession => {
-        const capabilities: BrowserPageSessionCapabilities = {
-            backend,
-            coordinateSpace: 'normalized-viewport',
-            domInspection: true,
-            overviewCapture: true,
-            tabEnumeration: true,
-            downloadEvents: true,
-            displayCapture: false,
-            osClipboard: false,
-            diagnostics: true,
-            browserFetch: true,
+        const getCapabilities = (): BrowserPageSessionCapabilities => {
+            const displayAutomation = shouldUseDisplayAutomation();
+            return {
+                backend,
+                coordinateSpace: displayAutomation ? 'normalized-display' : 'normalized-viewport',
+                domInspection: true,
+                overviewCapture: !displayAutomation,
+                tabEnumeration: true,
+                downloadEvents: true,
+                displayCapture: displayAutomation,
+                osClipboard: false,
+                diagnostics: true,
+                browserFetch: true,
+            };
         };
         const facade: BrowserPageSession = {
             id: session.id,
             createdAt: session.createdAt,
-            capabilities,
+            get capabilities() {
+                return getCapabilities();
+            },
 
             async screenshot(source: BrowserFrameSource = 'agent'): Promise<string> {
                 const frame = await captureFrame(session, source, 90, source === 'agent');
@@ -1077,6 +1411,46 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
             async recordVideo(durationMs?: number): Promise<BrowserVideoRecording> {
                 const activePage = await ensureActivePage(session);
+                if (shouldUseDisplayAutomation()) {
+                    if (!commandExists('ffmpeg')) {
+                        throw new Error('ffmpeg is required for Patchright display video recording.');
+                    }
+                    const recordingDurationMs = clampDurationMs(
+                        durationMs,
+                        DEFAULT_VIDEO_DURATION_MS,
+                        MIN_VIDEO_DURATION_MS,
+                        MAX_VIDEO_DURATION_MS,
+                    );
+                    const fps = DEFAULT_VIDEO_FPS;
+                    const display = getDisplayDimensions();
+                    const outputPath = path.join(downloadsDir, `browser-recording-${Date.now()}.webm`);
+                    const seconds = Math.max(1, Math.min(60, recordingDurationMs / 1000));
+
+                    log(`🎥 Recording full display for ${Math.round(recordingDurationMs / 1000)}s...`);
+                    runDisplayCommand(lastLiveViewState.display, 'ffmpeg', [
+                        '-y',
+                        '-video_size', `${display.width}x${display.height}`,
+                        '-f', 'x11grab',
+                        '-i', `${lastLiveViewState.display}.0`,
+                        '-t', String(seconds),
+                        '-r', String(fps),
+                        outputPath,
+                    ]);
+                    const bytes = fs.readFileSync(outputPath);
+                    return {
+                        id: `video_${Date.now().toString(36)}`,
+                        timestamp: new Date().toISOString(),
+                        mimeType: 'video/webm',
+                        videoBase64: bytes.toString('base64'),
+                        url: activePage.url(),
+                        durationMs: recordingDurationMs,
+                        fps,
+                        frameCount: Math.max(1, Math.round((recordingDurationMs / 1000) * fps)),
+                        viewport: { ...display },
+                        page: { width: display.width, height: display.height, scrollX: 0, scrollY: 0 },
+                    };
+                }
+
                 const metrics = await getFrameMetrics(activePage);
                 const recordingDurationMs = clampDurationMs(
                     durationMs,
@@ -1150,6 +1524,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async clickCoordinate(x: number, y: number, count: number = 1): Promise<boolean> {
+                if (shouldUseDisplayAutomation()) {
+                    return clickDisplayCoordinate(session, x, y, count);
+                }
+
                 const activePage = await ensureActivePage(session);
 
                 const { width: maxX, height: maxY } = await activePage.evaluate(() => ({
@@ -1231,6 +1609,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 endY: number,
                 durationMs: number = DEFAULT_DRAG_DURATION_MS,
             ): Promise<TracedActionResult> {
+                if (shouldUseDisplayAutomation()) {
+                    return dragDisplayCoordinate(session, startX, startY, endX, endY, durationMs);
+                }
+
                 const activePage = await ensureActivePage(session);
                 const traceFrames: ActionTraceFrame[] = [];
 
@@ -1367,6 +1749,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async holdCoordinate(x: number, y: number, durationMs: number = 10000): Promise<TracedActionResult> {
+                if (shouldUseDisplayAutomation()) {
+                    return holdDisplayCoordinate(session, x, y, durationMs);
+                }
+
                 const activePage = await ensureActivePage(session);
                 const traceFrames: ActionTraceFrame[] = [];
 
@@ -1477,6 +1863,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async hoverCoordinate(x: number, y: number): Promise<void> {
+                if (shouldUseDisplayAutomation()) {
+                    return hoverDisplayCoordinate(session, x, y);
+                }
+
                 const activePage = await ensureActivePage(session);
                 const { width, height } = await activePage.evaluate(() => ({
                     width: window.innerWidth,
@@ -1531,11 +1921,22 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async clear() {
+                if (shouldUseDisplayAutomation()) {
+                    await pressDisplayKey(process.platform === 'darwin' ? 'Meta+A' : 'Control+A');
+                    await pressDisplayKey('Backspace');
+                    return;
+                }
+
                 const activePage = await ensureActivePage(session);
                 await selectAllAndClear(activePage);
             },
 
             async pressKey(key: string) {
+                if (shouldUseDisplayAutomation()) {
+                    await pressDisplayKey(key);
+                    return;
+                }
+
                 const activePage = await ensureActivePage(session);
                 await activePage.keyboard.press(key);
             },
@@ -1558,6 +1959,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number = 500) {
+                if (shouldUseDisplayAutomation()) {
+                    await scrollDisplay(session, direction, amount);
+                    return;
+                }
+
                 const activePage = await ensureActivePage(session);
                 const deltaX = direction === 'right' ? amount : direction === 'left' ? -amount : 0;
                 const deltaY = direction === 'down' ? amount : direction === 'up' ? -amount : 0;
@@ -1565,6 +1971,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async scrollToBottom() {
+                if (shouldUseDisplayAutomation()) {
+                    await pressDisplayKey('End');
+                    return;
+                }
+
                 const activePage = await ensureActivePage(session);
                 const pointer = session.lastMousePosition;
                 await activePage.evaluate((lastPointer) => {
@@ -1618,6 +2029,11 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async undo() {
+                if (shouldUseDisplayAutomation()) {
+                    await pressDisplayKey(process.platform === 'darwin' ? 'Meta+Z' : 'Control+Z');
+                    return;
+                }
+
                 const activePage = await ensureActivePage(session);
                 const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
                 await pressShortcut(activePage, `${modifier}+z`);
@@ -1716,6 +2132,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async getHrefAt(x: number, y: number): Promise<string | null> {
+                if (shouldUseDisplayAutomation()) {
+                    return null;
+                }
+
                 const activePage = await ensureActivePage(session);
                 const { width: maxX, height: maxY } = await activePage.evaluate(() => ({
                     width: window.innerWidth,
@@ -1747,6 +2167,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             },
 
             async getViewport(): Promise<{ width: number; height: number }> {
+                if (shouldUseDisplayAutomation()) {
+                    return getDisplayDimensions();
+                }
+
                 try {
                     const activePage = await ensureActivePage(session);
                     return await activePage.evaluate(() => ({
@@ -1873,6 +2297,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
     const manager: BrowserManager = {
         ...defaultSession,
+        get capabilities() {
+            return defaultSession.capabilities;
+        },
 
         async launch() {
             if (context) {
@@ -1992,6 +2419,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             }
             attachPageToSession(defaultSessionState, initialPage, { origin: 'initial' });
 
+            if (shouldUseDisplayAutomation()) {
+                const display = getDisplayDimensions();
+                log(`🖥️ Patchright display automation enabled (${display.width}x${display.height}); agent frames use normalized coordinates mapped to display pixels.`);
+            }
             log('✅ Patchright Browser ready');
         },
 

@@ -438,6 +438,8 @@ function buildPendingUpdateBlock(ctx: PromptContext): string {
         '- Finish the user\'s current request first. Do NOT abandon the task in progress to propose the update.',
         '- After the actual answer, add ONE short closing line offering the update — keep it to a single sentence in the user\'s language, e.g. "BTW, e disponibil vX.Y.Z cu <highlight>; vrei să updatez?" Reference one concrete highlight from the notes when possible.',
         '- Propose at most ONCE per conversation. If the conversation history shows you already proposed it (or the user said "not now", "later", "skip"), DO NOT mention it again unless the user explicitly asks.',
+        '- `apply_update` is release-only. It installs the newer GitHub Release in this block; it does not deploy arbitrary commits from master/main.',
+        '- If the user asks whether a pushed commit can be updated without a GitHub Release, explain that normal managed updates require a published tag/GitHub Release, or a separate explicit branch update path outside `apply_update`.',
         '- Only call `apply_update` AFTER an explicit user confirmation in this same conversation (e.g. "da", "yes", "update"). When you call it, pass `confirmed_by_user: true`.',
         '- After `apply_update` returns success, send ONE short message telling the user the app will restart and reconnect, then stop. The boot hook will post the post-restart confirmation back into this conversation automatically — do not promise to "check back later" yourself.',
         '- Never call `apply_update` proactively, on a tangential question, or just because this block is present.',

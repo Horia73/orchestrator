@@ -758,9 +758,6 @@ function denormalize(coordinate: [number, number], width: number, height: number
 }
 
 async function resolveCoordinate(browser: BrowserPageSession, coordinate: [number, number]): Promise<[number, number]> {
-    if (browser.capabilities.coordinateSpace === 'absolute-display') {
-        return [Math.round(coordinate[0]), Math.round(coordinate[1])];
-    }
     const viewport = await browser.getViewport();
     return denormalize(coordinate, viewport.width, viewport.height);
 }
@@ -1214,6 +1211,12 @@ async function executeAction(
 
             case 'scroll': {
                 const amountText = action.scrollAmount ? ` by ${action.scrollAmount}px` : '';
+                if (action.coordinate) {
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    onStatusUpdate(`🖱️  Hovering at [${x}, ${y}] before scroll (from ${action.coordinate})`);
+                    await browser.hoverCoordinate(x, y);
+                    await sleep(100);
+                }
                 onStatusUpdate(`📜 Scrolling ${action.scrollDirection || 'down'}${amountText}...`);
                 await browser.scroll(action.scrollDirection || 'down', action.scrollAmount);
                 return { success: true, trace: null, supplementalFrames: [] };

@@ -15,6 +15,11 @@ const viewport = {
     height: Number(process.env.BROWSER_AGENT_SMOKE_HEIGHT || 720),
 };
 
+if (process.platform !== 'linux') {
+    console.log('smoke-official-display-agent skipped: official-display backend is Linux-only');
+    process.exit(0);
+}
+
 function createSmokeVision(): VisionService {
     let step = 0;
     let config: VisionConfig = {
@@ -51,8 +56,8 @@ function createSmokeVision(): VisionService {
             if (step === 1) {
                 return [{
                     action: 'click',
-                    coordinate: [Math.round(viewport.width / 2), Math.round(viewport.height / 2)],
-                    reasoning: 'Click the full-screen target using absolute display coordinates.',
+                    coordinate: [500, 500],
+                    reasoning: 'Click the full-screen target using normalized display coordinates.',
                 }];
             }
             if (step === 2) {
