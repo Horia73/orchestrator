@@ -1,5 +1,7 @@
 "use client"
 
+import * as React from "react"
+
 import { ChatInput } from "@/components/chat-input"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { displayUserName, useRuntimeConfig } from "@/hooks/use-runtime-config"
@@ -17,6 +19,16 @@ function getGreeting(userName: string): string {
 export function HomeView() {
   const { userName } = useRuntimeConfig()
   const greeting = getGreeting(userName)
+
+  React.useEffect(() => {
+    const root = document.documentElement
+    const previous = root.dataset.orchHomePage
+    root.dataset.orchHomePage = "true"
+    return () => {
+      if (previous === undefined) delete root.dataset.orchHomePage
+      else root.dataset.orchHomePage = previous
+    }
+  }, [])
 
   return (
     <div className="relative flex flex-1 flex-col items-center justify-center px-4 pb-52">

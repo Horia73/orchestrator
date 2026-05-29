@@ -2,6 +2,10 @@ import { NextResponse } from 'next/server'
 
 import { getBinding } from '@/lib/cli/mcp-bindings'
 import { executeTool } from '@/lib/ai/tools/executor'
+import { getAgent } from '@/lib/ai/agents/registry'
+import { getToolsForAgent } from '@/lib/ai/tools/registry'
+import { operationalIntegrationFor } from '@/lib/integrations/manifest'
+import { subsystemForGatedTool } from '@/lib/integrations/subsystem-manifest'
 
 /**
  * MCP-server proxy endpoint.
@@ -58,7 +62,27 @@ export async function POST(req: Request) {
         if (!body.tool || typeof body.tool !== 'string') {
             return NextResponse.json({ error: 'missing tool name' }, { status: 400 })
         }
-        const tool = binding.toolDefs.find(t => t.name === body.tool || t.id === body.tool)
+        let tool = binding.toolDefs.find(t => t.name === body.tool || t.id === body.tool)
+        if (!tool) {
+            // The advertised tool list is frozen at CLI launch (the MCP server
+            // declares listChanged:false and caches tools/list), so a GATED
+            // capability tool the model wants mid-run — maps/weather/monitor/
+            // schedule/watchlist/microscript/integration ops — is not in
+            // binding.toolDefs even after ActivateIntegrationTools. Without this
+            // fallback the model gets "No such tool available" and gets stuck.
+            // Resolve it from the caller's OWN declared grant and run it. Scoped
+            // to gated capability tools only (never arbitrary tools), and
+            // executeTool still enforces orchestrator-only guards.
+            const agent = binding.ctx.callerAgentId ? getAgent(binding.ctx.callerAgentId) : undefined
+            if (agent) {
+                const candidate = getToolsForAgent(agent.tools).find(
+                    t => t.name === body.tool || t.id === body.tool
+                )
+                if (candidate && (operationalIntegrationFor(candidate.id) || subsystemForGatedTool(candidate.id))) {
+                    tool = candidate
+                }
+            }
+        }
         if (!tool) {
             return NextResponse.json(
                 { error: `unknown tool: ${body.tool}` },

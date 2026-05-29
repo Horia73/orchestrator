@@ -7,6 +7,7 @@ import type { ArtifactPayload } from "@/components/artifact-panel"
 import { StreamingBubble } from "@/components/message-bubble"
 import { TodoBar } from "@/components/todo-bar"
 import { TerminalOutput } from "@/components/tool-call-view"
+import { FULL_HISTORY_SCROLLBACK } from "@/components/tool-call-terminal"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -123,6 +124,18 @@ export function AgentWorkspacePanel({
 
 function containWheelWithinPanel(event: React.WheelEvent<HTMLElement>) {
   const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
+
+  // xterm manages its own wheel-to-scroll on `.xterm-viewport`, and CSS
+  // `overscroll-behavior: contain` already keeps the chain off the page.
+  // Intercepting here (stopPropagation) would freeze the terminal, so when the
+  // buffer has something to scroll we let the event reach xterm untouched.
+  if (axis === "y") {
+    const xtermRoot =
+      event.target instanceof Element ? event.target.closest(".xterm") : null
+    const viewport = xtermRoot?.querySelector<HTMLElement>(".xterm-viewport")
+    if (viewport && viewport.scrollHeight > viewport.clientHeight + 1) return
+  }
+
   const scroller = findScrollableAncestor(
     event.target,
     event.currentTarget,
@@ -334,13 +347,15 @@ function AgentRunPane({
 function BrowserAgentOutputTerminal({ run }: { run: AgentCallReasoningEntry }) {
   return (
     <div
-      className="overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm"
+      className="flex flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm"
       style={BROWSER_AGENT_TERMINAL_STYLE}
     >
       <TerminalOutput
         text={browserAgentTerminalText(run)}
         cursorBlink={run.status === "running"}
         resetKey={run.runId}
+        autoScroll
+        scrollback={FULL_HISTORY_SCROLLBACK}
       />
     </div>
   )

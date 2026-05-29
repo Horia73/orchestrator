@@ -173,6 +173,13 @@ export interface PromptContext {
    * `availableTools`.
    */
   declaredToolIds?: string[]
+  /**
+   * The agent's full static tool grant resolved to ToolDefs (before gating).
+   * Used to build the gated-capability tool menus in <integrations>/<subsystems>
+   * from each tool's own description. Passed by the caller so the prompt layer
+   * needn't import the tool registry (avoids a module-init cycle).
+   */
+  declaredTools?: ToolDef[]
   /** Depth of the agent receiving this prompt. Orchestrator = 0. */
   delegationDepth?: number
   /** Hard delegation depth cap (MAX_AGENT_DEPTH). Surfaced so the agent can plan within budget. */

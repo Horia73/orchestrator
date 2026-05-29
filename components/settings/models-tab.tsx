@@ -1114,6 +1114,9 @@ function formatAgentSidebarSummary(
       data.config.browserAgent.light.provider,
       data.config.browserAgent.light.model
     ).model
+    if (!data.config.browserAgent.proEnabled) {
+      return `${backend} · ${light}`
+    }
     const pro = formatProviderModel(
       data,
       data.config.browserAgent.pro.provider,
@@ -1190,12 +1193,16 @@ function buildAgentContextDetails(
       data.config.browserAgent.pro.provider,
       data.config.browserAgent.pro.model
     )
+    const proEnabled = data.config.browserAgent.proEnabled
     return [
       { label: "Status", value: status },
       { label: "Kind", value: agent.kind },
       { label: "Backend", value: backend },
+      { label: "Mode", value: proEnabled ? "Multi (light + pro)" : "Single (light only)" },
       { label: "Light", value: `${light.provider} · ${light.model}` },
-      { label: "Pro", value: `${pro.provider} · ${pro.model}` },
+      ...(proEnabled
+        ? [{ label: "Pro", value: `${pro.provider} · ${pro.model}` }]
+        : []),
     ]
   }
 
@@ -1253,7 +1260,9 @@ function agentHasProviderWarning(
   if (agent.id === "browser_agent") {
     return [
       data.config.browserAgent.light.provider,
-      data.config.browserAgent.pro.provider,
+      ...(data.config.browserAgent.proEnabled
+        ? [data.config.browserAgent.pro.provider]
+        : []),
     ].some(
       (providerId) => !(data.providerStatus[providerId]?.available ?? false)
     )

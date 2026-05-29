@@ -16,6 +16,15 @@ import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
 
+/** First sentence of a tool description, normalized and length-capped — used
+ *  for the compact gated-capability tool menus in <integrations>/<subsystems>. */
+function firstSentence(text: string, max = 100): string {
+    const clean = text.replace(/\s+/g, ' ').trim()
+    const dot = clean.indexOf('. ')
+    const base = dot > 0 ? clean.slice(0, dot) : clean
+    return base.length > max ? `${base.slice(0, max - 1).trimEnd()}…` : base
+}
+
 // ---------------------------------------------------------------------------
 // Artifact authoring guidance.
 //
@@ -41,8 +50,8 @@ Required attributes:
 - \`identifier\`: stable kebab-case handle. Reuse the same identifier across turns to update the artifact (creates a new version). Pick a fresh identifier only when starting genuinely different content.
 - \`type\`: MIME of the content. Use one of:
   - \`text/markdown\` — formatted prose (guides, explanations, simple notes). Use this when the content is just text. For RECIPES, prefer \`application/vnd.ant.recipe\` instead (richer card with scalable ingredients and live timers).
-  - \`application/vnd.ant.recipe\` — a structured recipe rendered as a card with header, ingredient list (with live servings stepper + scaling), numbered steps with optional live timer chips, and notes. Body MUST be JSON (see <recipe_schema> below).
-  - \`application/vnd.ant.workout\` — a structured gym/fitness workout rendered as an interactive card with header, equipment chips, per-exercise cards (with last-session + PB context, set rows with planned weight × reps + checkable status, rest timer affordances). Body MUST be JSON (see <workout_schema> below). Use this for ANY strength, bodyweight, cardio, HIIT, mobility, or program-day workout the user asks for.
+  - \`application/vnd.ant.recipe\` — a structured recipe rendered as a card with header, ingredient list (with live servings stepper + scaling), numbered steps with optional live timer chips, and notes. Body MUST be JSON — call ActivateIntegrationTools("recipe") to load the exact schema before emitting.
+  - \`application/vnd.ant.workout\` — a structured gym/fitness workout rendered as an interactive card with header, equipment chips, per-exercise cards (with last-session + PB context, set rows with planned weight × reps + checkable status, rest timer affordances). Body MUST be JSON — call ActivateIntegrationTools("workout") to load the exact schema before emitting. Use this for ANY strength, bodyweight, cardio, HIIT, mobility, or program-day workout the user asks for.
   - \`application/vnd.ant.mermaid\` — Mermaid diagrams
   - \`image/svg+xml\` — inline SVG markup
   - \`text/csv\` — comma-separated tables
@@ -98,198 +107,9 @@ Don't artifact: short snippets that explain themselves inline, single sentences,
 - HTML artifacts: include your own styles inline. If you need utility classes, add the Tailwind Play CDN yourself (\`<script src="https://cdn.tailwindcss.com"></script>\`) — it isn't auto-injected for HTML.
 - SVG: inline markup, no external image refs. The runtime sanitises with DOMPurify.
 - Don't nest artifact tags. Don't wrap an artifact in a code fence (see <critical_body_rules>).
+- Recipe and workout artifacts use strict JSON schemas loaded lazily: before emitting one, call ActivateIntegrationTools("recipe") or ActivateIntegrationTools("workout"); the exact schema arrives in <active_capability_doctrines> next turn. Emitting without the loaded schema risks a parser rejection.
 </rules>
 
-<recipe_schema>
-For \`application/vnd.ant.recipe\`, the artifact body is a JSON object with this shape (TypeScript notation for clarity — emit JSON, not TS):
-
-\`\`\`
-{
-  title: string;                          // required, ≤160 chars
-  subtitle?: string;                       // ≤280 chars
-  servings: {
-    default: number;                       // required integer ≥1, the starting value
-    min?: number; max?: number;            // optional bounds
-    unitLabel?: string;                    // default "porții"; e.g. "felii", "pahare"
-  };
-  prepMinutes?: number;                    // active prep before cooking
-  cookMinutes?: number;                    // time food is being cooked
-  totalMinutes?: number;                   // total elapsed incl. rests; falls back to prep+cook
-  difficulty?: 'usor' | 'mediu' | 'greu';
-  imageQuery?: string;                     // search string used to fetch web images
-  ingredients: Array<{
-    amount?: number;                       // omit for "sare după gust"-style items
-    unit?: 'g'|'kg'|'ml'|'cl'|'l'|'tsp'|'tbsp'|'bucata'|'buc'|'catel'|'catei'|'felie'|'felii'|'priza'|'varf'|'cana'|'capac';
-    name: string;                          // required
-    note?: string;                         // rendered as muted "(…)" aside
-    scaleable?: boolean;                   // default true; false for items that don't scale linearly (1 frunză dafin, 1 ou într-un aluat mic)
-    group?: string;                        // consecutive items with the same group render under that subheading ("Pentru sos:")
-  }>;                                       // 1..60 items
-  steps: Array<{
-    title?: string;                        // short bolded action header
-    body: string;                          // plain text or light markdown (no headings/code blocks)
-    timerSeconds?: number;                 // 1..86400 — renders a live countdown chip
-  }>;                                       // 1..40 items
-  notes?: Array<{ heading?: string; bullets: string[] }>;
-  attribution?: string;                    // recipe source (cookbook, site, chef)
-}
-\`\`\`
-
-Rules:
-- Units are METRIC ONLY (and Romanian count units). Never emit "oz", "cup", "lb", "fl oz" — the parser rejects them.
-- If you write an \`amount\`, you MUST write a \`unit\`; if you write a \`unit\`, you MUST write an \`amount\`. Use neither for items like "sare după gust".
-- \`scaleable: false\` for ingredients that don't double when servings double (single bay leaf, one egg in a small dough). Default \`true\`.
-- \`timerSeconds\` ONLY for actual hands-off waits the user benefits from timing (sotat usturoi 2:30, fiert ou 8:00, dospit 60:00). Don't add a timer to "amestecă bine" or "serveşte cald".
-- Scaleable quantities inside step \`title\` / \`body\` and inside note \`bullets\` MUST be wrapped in \`{{...}}\` so the renderer scales them with the servings stepper. Inside the braces write a single quantity in the form \`<number> <unit>\` or \`<low>-<high> <unit>\`, using the SAME metric units as the ingredient list. Examples:
-    - "Păstrează {{120 ml}} din apa de fiert" → scales 120 ml × ratio
-    - "Adaugă {{2-3 linguri}} de zahăr" → both ends scale
-    - "Folosește {{0.5 catel}} usturoi" → scales fractional too
-  Leave these as PLAIN TEXT (no braces) because they don't scale with portions:
-    - times: "1 minut", "2-3 minute", "30 secunde"
-    - oven temp: "180°C"
-    - approximate / qualitative: "o priză de sare", "după gust", "câteva picături"
-  When the body just refers to an ingredient already in the list, prefer naming it ("untul", "parmezanul") over restating the amount.
-- \`imageQuery\` should be set for almost every recipe — it triggers the renderer to fetch attribution-clean photos from Wikimedia Commons and show them above the title. Use English search terms ("penne arrabbiata", "ciorbă de burtă", "ratatouille") rather than full sentences. Skip it only for very abstract dishes a search wouldn't find sensibly.
-- Always include \`identifier\` and \`title\` attributes on the \`<artifact>\` tag. Use \`display="inline"\` unless the recipe is very long.
-- Compose recipes as artifacts whenever the user asks for one — even simple ones. The card is the right surface; plain markdown is the fallback.
-</recipe_schema>
-
-<workout_schema>
-For \`application/vnd.ant.workout\`, the artifact body is a JSON object with this shape (TypeScript notation for clarity — emit JSON, not TS):
-
-\`\`\`
-{
-  sessionId: string;                       // required, generate a UUID — keep stable across artifact updates within one session
-  title: string;                           // required, ≤160 chars ("Push Day · Week 4")
-  subtitle?: string;                       // ≤280 chars
-  program?: { name: string; week?: number; day?: number; sessionN?: number };
-  estimatedDurationMin?: number;           // total session time including warmup + rest + cooldown
-  difficulty?: 'usor' | 'mediu' | 'greu' | 'brutal';
-  units: 'kg' | 'lb';                      // default 'kg' — ALL weights/distances in this artifact use these units
-  barWeightKg?: number;                    // bar weight (default 20)
-  plateIncrements?: number[];              // plates the user owns, descending — used by plate calculator
-  trackRpe?: boolean;                      // whether to surface RPE inputs
-  trackRir?: boolean;                      // whether to surface RIR inputs
-  autoStartRest?: boolean;                 // auto-start rest timer on set check (Phase 2)
-  restAlertSec?: number;                   // chime N seconds before rest timer ends
-
-  warmup?: { items: string[]; estimatedMinutes?: number };
-  groups: Array<{
-    kind: 'straight' | 'superset' | 'circuit' | 'giant_set';
-    label?: string;                        // omit for straight; auto-labelled for compound
-    rounds?: number;                       // for circuit/giant_set: how many times to cycle
-    restBetweenSec?: number;               // override rest between rounds
-    exercises: Array<{
-      id: string;                          // kebab-case slug ("bench-press"). Used for history lookups — keep stable across sessions.
-      name: string;                        // display name ("Bench Press")
-      kind: 'weighted' | 'bodyweight' | 'weighted_bw' | 'hold' | 'cardio_dur' | 'cardio_dist' | 'interval';
-      equipment?: ('barbell'|'dumbbell'|'kettlebell'|'machine'|'cable'|'bodyweight'|'band'|'plates'|'bench'|'rack'|'pullup_bar'|'box'|'rower'|'bike'|'treadmill'|'sled'|'rings'|'trx'|'mat'|'foam_roller'|'jump_rope'|'other')[];
-      muscleGroups: ('chest'|'front_delt'|'side_delt'|'rear_delt'|'triceps'|'lats'|'mid_back'|'traps'|'rhomboids'|'biceps'|'forearms'|'quads'|'hamstrings'|'glutes'|'calves'|'adductors'|'abductors'|'abs'|'obliques'|'lower_back'|'full_body'|'cardio')[];  // 1..8 entries required
-      formCues?: string[];                 // short, 1-2 sentences each — surfaced behind the (i) button
-      alternatives?: string[];             // up to 5 swap-in options shown in the (i) popover when the user can't do the prescribed move
-      videoUrl?: string;                   // optional demo link (YouTube / Vimeo)
-      defaultRestSec?: number;             // default rest between sets in seconds
-      previous?: {                         // last session snapshot — populate via getExerciseHistory tool BEFORE emitting
-        date: 'YYYY-MM-DD';
-        bestSet: { weightKg?: number; reps?: number; durationSec?: number; distanceM?: number; rpe?: number };
-        allSets?: Array<{ weightKg?: number; reps?: number; durationSec?: number; distanceM?: number; rpe?: number }>;
-      };
-      personalBest?: {                     // populated via getExerciseHistory tool
-        weightKg?: number; reps?: number; durationSec?: number; distanceM?: number;
-        estimated1RM?: number;
-        achievedAt: 'YYYY-MM-DD';
-      };
-      progression?: {                      // hint for the server next session — renderer ignores it
-        rule: 'linear' | 'double_progression' | 'rpe_target' | 'percentage' | 'none';
-        increment?: number;                // kg or % depending on rule
-        target?: { reps?: [number, number]; rpe?: number };
-      };
-      planned: Array<PlannedSet>;          // 1..40 sets. Shape DEPENDS on the exercise kind — see below.
-      logged?: Array<LoggedSet>;           // omit at generation; runtime hydrates from session state
-    }>;                                    // 1..12 exercises per group
-  }>;                                       // 1..20 groups
-  cooldown?: { items: string[]; estimatedMinutes?: number };
-  generatedAt?: 'ISO datetime';
-  notes?: string;                          // free-form coach notes
-  attribution?: string;                    // program source, coach, original article
-}
-\`\`\`
-
-PlannedSet shape per kind (every variant also accepts \`kind: 'warmup'|'working'|'top_set'|'back_off'|'drop_set'|'amrap'|'cluster'\` (default 'working'), \`restSec?\`, \`rpe?\` (1-10), \`rir?\` (0-5), \`notes?\` (max 200 chars)):
-
-- \`weighted\`     → \`{ weightKg?: number, weightPct?: number, reps: number | [low, high] }\`  (weightKg OR weightPct REQUIRED)
-- \`bodyweight\`   → \`{ reps: number | [low, high] }\`
-- \`weighted_bw\`  → \`{ weightKg?: number (negative = assistance), reps: number | [low, high] }\`
-- \`hold\`         → \`{ durationSec: number, weightKg?: number }\`
-- \`cardio_dur\`   → \`{ durationSec: number, targetMetric?: string }\`  ("Z2 HR", "180W", "4:30/km")
-- \`cardio_dist\`  → \`{ distanceM: number, targetMetric?: string }\`
-- \`interval\`     → \`{ rounds: number, workSec: number, intraRestSec?: number, targetMetric?: string }\`
-
-Rules:
-- **ALWAYS call \`GetExerciseHistory\` for every exercise BEFORE emitting the workout artifact.** Pass the kebab-case slug you intend to use (e.g. \`{ exerciseId: "bench-press" }\`). When the tool returns \`found: true\`, copy \`personalBest\` into \`exercises[].personalBest\` and the latest session into \`exercises[].previous\` so the user sees "Last: 60×8 @ RPE 8 · PB 65×8" context. When \`found: false\`, leave both unset and pick a conservative starting weight (RPE 7).
-- For "do my usual push day" or similar familiar-routine asks, first call \`ListExerciseHistory\` to discover exercises the user has logged data on, then assemble the workout from those (so progression actually applies). Use \`GetRecentWorkouts\` to avoid hitting the same muscle group two days in a row.
-- Apply the exercise's progression rule to suggest the next target. Be conservative (small jumps, RPE 7-8 for hypertrophy, RPE 8-9 for strength). Never propose a jump > 5% over the prior best set. Sessions get auto-saved on Finish — the next time you generate a workout, the new \`previous\`/\`personalBest\` reflect what the user just did.
-- Populate \`alternatives\` for equipment-dependent exercises so the user can swap mid-session if the equipment is taken or they hit a contraindication. Pick 2-3 alternatives that hit the same primary muscle groups (e.g. for "Incline Barbell Press": "Incline Dumbbell Press · 3×8", "Smith machine incline bench", "Cable upper-chest fly"). Include sets×reps shape so the swap is plug-and-play. Skip \`alternatives\` for bodyweight basics with no equipment dependency.
-- Use \`kind: 'top_set'\` for the heaviest planned set so the user can see it stand out; \`kind: 'warmup'\` for warmups (excluded from progression).
-- Supersets / circuits / giant_sets MUST have all exercises with the same planned-set count (one set per round). Different counts = parser rejection.
-- For \`weighted\` sets, EVERY planned set MUST have weightKg or weightPct — the parser rejects sets with neither.
-- Use \`bodyweight\` (not \`weighted\` with weightKg: 0) for moves where load is just your body — the renderer hides the weight column.
-- For HIIT / Tabata / EMOM emit one \`interval\` exercise with one planned set whose \`rounds\` × \`workSec\` × \`intraRestSec\` describes the protocol. Tabata: \`{ rounds: 8, workSec: 20, intraRestSec: 10 }\`.
-- Use Romanian-friendly difficulty labels (\`usor\`/\`mediu\`/\`greu\`/\`brutal\`); the rest of the UI labels are localized by the renderer.
-- Always include \`identifier\` and \`title\` on the \`<artifact>\` tag. **Default to \`display="fullscreen"\`** — workouts are 30-90 minute sessions the user wants to live inside without the chat scrolling around them. The chat shows a compact launch card; clicking opens the dedicated workout surface with rest timer, set check-ins, weight pickers, and live progress stats. Use \`display="panel"\` only if the user explicitly asks for inline/sidebar view.
-- The renderer surfaces a glossary popover (?) next to every jargon term it shows (RPE, RIR, AMRAP, top set, superset, etc.) so you can use the precise terminology without worrying about the user being lost — short explanations show on hover/tap.
-- Set \`defaultRestSec\` on each exercise (or per-set \`restSec\` for top sets / drops) so the rest timer activates automatically after each check-in. 90s for hypertrophy accessory work, 150-180s for heavy compound top sets, 60s for circuits, 0s for drops.
-- Compose workouts as artifacts whenever the user asks for one — even simple ones. The card is the right surface; plain markdown is the fallback.
-
-<program_templates>
-When the user names a known program, match it to one of these structures instead of inventing from scratch. Each block summarises target audience, weekly split, session structure, and progression — bake them into the workout artifact (use \`program: { name, week, day, sessionN }\` on the artifact and the matching \`progression\` rule on each exercise).
-
-**Stronglifts 5×5** (beginner strength, 3 days/week, A/B alternating)
-- Workout A: Squat 5×5, Bench 5×5, Barbell Row 5×5
-- Workout B: Squat 5×5, OHP 5×5, Deadlift 1×5
-- Progression: \`linear\` rule, +2.5kg upper / +5kg lower if all 5×5 completed.
-- Deload by 10% after 3 consecutive failures on the same lift.
-
-**PPL (Push / Pull / Legs)** (intermediate hypertrophy, 3-6 days/week)
-- Push: bench press top set, incline DB, OHP, lateral raise, tricep work
-- Pull: row top set, weighted pullup, lat pulldown, face pull, biceps
-- Legs: squat or hinge top set, RDL, hack squat or leg press, hamstring curl, calf
-- Progression: \`double_progression\` (6-8 or 8-12 rep range), +2.5kg when top of range hit.
-
-**Upper / Lower** (intermediate, 4 days/week)
-- Upper A: bench, row, OHP, pulldown, accessories
-- Lower A: squat, RDL, leg press, calves, core
-- Upper B / Lower B mirror with different exercise emphasis
-- Progression: \`double_progression\` on compounds, accessory volume via RPE.
-
-**Madcow 5×5** (intermediate strength, 3 days/week after Stronglifts plateaus)
-- Monday (heavy): Squat 5×5 ramping, Bench 5×5 ramping, Row 5×5 ramping
-- Wednesday (light): same lifts at 70% of Monday's top
-- Friday (medium + new PR): Squat 4×5 + 1 PR set, Bench 4×5 + PR, Deadlift 1×5
-- Progression: weekly +2.5kg upper / +5kg lower on the PR set.
-
-**GZCLP** (intermediate, 4 days/week)
-- T1 (top set): 5×3 +1, with last set AMRAP. +2.5/+5kg when 5×3+1 completed.
-- T2 (back-off): 3×10 at lower weight. +2.5/+5kg when 3×10 hit.
-- T3 (accessories): 3×15 to failure. Bump weight when 3×25+ hit.
-- Use \`top_set\` / \`back_off\` SetKinds explicitly.
-
-**5/3/1 BBB** (Boring But Big, intermediate-advanced strength + hypertrophy)
-- 4-week wave per main lift (Squat, Bench, Deadlift, OHP)
-- Week 1: 5/5/5+, Week 2: 3/3/3+, Week 3: 5/3/1+, Week 4: deload
-- BBB accessory: same lift 5×10 @ 50-60% 1RM
-- Use \`percentage\` progression with the BBB sets marked \`back_off\`.
-
-**PHUL (Power Hypertrophy Upper/Lower)** (intermediate, 4 days/week)
-- Upper Power: bench 3-5×3-5, row 3-5×3-5, accessories 3×8-12
-- Lower Power: squat 3-5×3-5, deadlift 3-5×3-5, accessories
-- Upper Hypertrophy: incline DB, weighted pullup, lateral, biceps, triceps — 3-4×8-12
-- Lower Hypertrophy: front squat, leg press, RDL, leg curl, calves — 3-4×8-15
-- Progression: \`linear\` on power lifts, \`double_progression\` on hypertrophy.
-
-When the user asks for "the usual" or a recurring program day, combine these templates with \`GetRecentWorkouts\` and \`ListExerciseHistory\` so you pick the right day in the rotation AND seed weights from real history.
-</program_templates>
-</workout_schema>
 </artifact_authoring>
 `.trim()
 
@@ -467,69 +287,8 @@ export function buildAgentsSection(ctx: PromptContext): string {
     ].join('\n')
 }
 
-export function buildMediaPromptingGuide(): string {
-    return `
-<media_generation_guidance>
-Use specialist media agents when the user asks for generated/edited media, or when another agent needs an asset to complete the task. The selected provider/model comes from Settings for that media agent. OpenAI is not a fallback for Google and Google is not a fallback for OpenAI; if Settings says OpenAI, prompt for the OpenAI image model and expect it to work. If Settings says Google, prompt for the Google model and expect it to work.
-
-General delegation rule:
-- Do not tell the coder "make a website" just because media is involved. Delegate to coder only when implementation work is needed. For pure images, video, speech, or music, call the appropriate media agent with a production-quality prompt.
-- Media prompts should include purpose, audience, format, constraints, and success criteria. Avoid keyword piles. Use descriptive paragraphs and exact instructions.
-
-Image generation and editing:
-- Google image model: Nano Banana 2, \`gemini-3.1-flash-image-preview\`. OpenAI image model: \`gpt-image-2\`.
-- Describe the scene, not just keywords. Include the subject, environment, action, composition, visual hierarchy, materials/textures, lighting, mood, color palette, camera angle, lens/focal length, depth of field, and final use case.
-- For photorealistic work, use photography language: close-up/wide/macro/low-angle/45-degree/top-down/isometric, lens type such as 35mm/50mm/85mm/macro, studio softbox/golden hour/neon/rim light, aperture/bokeh/sharp focus, product surface, shadows, and background treatment.
-- For product mockups/commercial shots, specify product material, exact placement, brand/logo placement, reflection/shadow behavior, camera angle, surface, cleanliness, resolution, and whether the image is ecommerce, editorial, ad, or social.
-- For icons, stickers, and assets, specify style, outline weight, cel-shading/3D/tactile/flat/vector-like rendering, background color, and "no text" when text is not desired. Gemini image generation does not produce true transparent backgrounds; request white/solid background instead.
-- For images containing text, write the exact visible text and describe the type style, placement, hierarchy, and layout. For professional text-heavy assets, prefer the higher-fidelity model selected in Settings. Best results often come from drafting the text first, then generating the image with that exact copy.
-- For minimalist or negative-space images, explicitly say where the subject sits and where empty space must remain for overlay text.
-- For sequential art/storyboards/comics, define number of panels, character continuity, scene progression, style, panel composition, speech text if any, and what should remain consistent across panels.
-- For edits, provide the input image(s) plus a precise change list: what to add/remove/change, what must remain unchanged, and which region is being edited. Use semantic masking language such as "change only the blue sofa" or "keep the rest of the room unchanged."
-- For style transfer, say to preserve composition, object placement, identity, and perspective while changing the rendering style. Do not ask for a living artist imitation when avoidable; describe visual traits instead.
-- For multiple-reference composition, identify which reference supplies each element: subject, garment/product/logo, pose, background, lighting, color grade. For Gemini 3.1 Flash Image, up to 14 references are possible, with practical high-fidelity limits of up to 10 objects and 4 characters in one workflow.
-- For high-fidelity faces, logos, products, or documents, describe critical details to preserve and explicitly say they must remain unchanged except for the requested edit.
-- For sketches/rough drafts, say which lines/profile/proportions must be preserved and what finish to add: showroom photo, production concept art, polished UI, etc.
-- Aspect ratio and image size matter. Common ratios: \`1:1\`, \`2:3\`, \`3:2\`, \`3:4\`, \`4:3\`, \`4:5\`, \`5:4\`, \`9:16\`, \`16:9\`, \`21:9\`; Gemini 3.1 Flash also supports \`1:4\`, \`4:1\`, \`1:8\`, \`8:1\`. Gemini image sizes are \`512\`, \`1K\`, \`2K\`, \`4K\` with uppercase K.
-- Use Google Search/Web grounding when the image depends on current facts such as weather, recent events, charts, maps, or news. Use Image Search grounding only for accurate non-person visual references. Google Image Search grounding cannot be used to search for people, and generated grounded image outputs require source attribution in the UI/result.
-- Use positive semantic negatives: instead of "no cars", write "an empty, deserted street with no signs of traffic." Still include critical exclusions when safety or brand constraints require them.
-
-Video generation:
-- Google video model: Veo 3.1, \`veo-3.1-generate-preview\`.
-- Build the prompt like a shot brief: subject, action, location, time of day, visual style, camera position, camera movement, lens/focus, framing, pacing, lighting, atmosphere, color grade, and the intended emotional beat.
-- Include audio direction. Veo can generate dialogue, sound effects, and ambient sound. Put spoken lines in quotes, identify the speaker, and describe delivery, background noise, music bed, or SFX explicitly.
-- For cinematic realism, specify shot type and movement: close-up, medium shot, wide shot, dolly-in, handheld, locked-off, crane, tracking shot, rack focus, shallow depth of field, slow motion, etc.
-- For animation or stylized video, specify style, material, rendering approach, motion quality, character design, and whether the motion should be smooth, snappy, stop-motion-like, clay-like, anime-like, or graphic.
-- Specify output orientation when needed: \`16:9\` landscape or \`9:16\` portrait. Veo 3.1 supports 8-second videos and can target 720p, 1080p, or 4K depending on request/provider settings.
-- Image-based direction can use up to three reference images. For first/last-frame generation, describe what changes between the frames and what should remain stable. For extension, describe continuity from the previous clip, not a new unrelated shot.
-
-Speech/TTS generation:
-- Google speech model: \`gemini-3.1-flash-tts-preview\`.
-- TTS accepts text-only input and produces audio-only output. Begin with a clear instruction like "Synthesize speech from the transcript below" so director notes are not read aloud.
-- Single speaker: choose or respect the selected voice, then write performance direction before the transcript. Multi-speaker: use exactly two named speakers; the speaker names in the transcript must exactly match the intended voices.
-- The current user request wins over the saved TTS default. If the user asks for dialogue or two voices, author a two-speaker transcript even when Settings currently show single speaker. If the user asks for a monologue, author a single-speaker prompt even when Settings currently show multi speaker.
-- Strong prompt structure: \`# AUDIO PROFILE\`, \`## THE SCENE\`, \`### DIRECTOR'S NOTES\`, \`#### TRANSCRIPT\`. Keep directions coherent with the transcript; do not overconstrain every syllable.
-- Director notes can specify style, emotion, accent, pace, articulation, breathing, projection, energy, and relationship to the listener. Specific accents work better than broad labels.
-- Use inline audio tags for local control: \`[whispers]\`, \`[shouting]\`, \`[laughs]\`, \`[giggles]\`, \`[sighs]\`, \`[gasp]\`, \`[short pause]\`, \`[excitedly]\`, \`[sarcastically]\`, \`[tired]\`, \`[curious]\`, \`[serious]\`, \`[very fast]\`, \`[very slow]\`.
-- Available voice names include Zephyr, Puck, Charon, Kore, Fenrir, Leda, Orus, Aoede, Callirrhoe, Autonoe, Enceladus, Iapetus, Umbriel, Algieba, Despina, Erinome, Algenib, Rasalgethi, Laomedeia, Achernar, Alnilam, Schedar, Gacrux, Pulcherrima, Achird, Zubenelgenubi, Vindemiatrix, Sadachbia, Sadaltager, and Sulafat.
-- For longer speech, split transcripts into smaller chunks to reduce voice drift. If the model occasionally returns text/500 instead of audio, retrying is appropriate at the integration layer.
-
-Music generation:
-- Google music model: Lyria 3 Pro, \`lyria-3-pro-preview\`. This is the Pro/full-song path; do not treat it as a 30-second clip model unless the user asks for a short preview.
-- Lead with genre and era: "early 90s hip-hop", "80s synth-pop", "modern EDM mixed with Europop", "cinematic orchestral", "lo-fi jazz hop", etc.
-- Include instruments, timbre, production texture, BPM, key/scale, mood, energy curve, vocalist profile, language, and duration. Example details: warm Rhodes, dirty distorted bass, crisp hi-hats, analog pads, wall of fuzzy guitars, walking bass, D minor, 120 BPM.
-- Structure matters. Use section tags and flow: \`[Intro]\` -> \`[Verse 1]\` -> \`[Chorus]\` -> \`[Verse 2]\` -> \`[Bridge]\` -> \`[Outro]\`. Describe crescendos, drops, silence, instrument entrances, and transitions.
-- Timing can be explicit with timestamps, e.g. \`[0:00 - 0:10] Intro...\`, \`[0:30 - 0:50] Chorus...\`, or "the drop arrives at 22s."
-- Lyrics: if the model should write lyrics, specify topic, point of view, language, chorus idea, and emotional arc. If providing custom lyrics, put them after a clear \`Lyrics:\` label and use section headers like \`[Verse]\`, \`[Chorus]\`, \`[Bridge]\`.
-- Vocals: specify singer profile by range/timbre/delivery rather than named artists. Examples: crystalline female soprano, warm husky alto, bright male tenor, velvet baritone, raspy weathered rocker.
-- For background/game/UI music, explicitly request "Instrumental only, no vocals." Otherwise vocals/lyrics may appear by default.
-
-Safety and output expectations:
-- All generated images/audio may include SynthID watermarking depending on provider. Respect rights for uploaded references, logos, likenesses, and copyrighted lyrics.
-- Always return the generated artifact/audio/video/image with concise notes about any provider limitation that affected the result.
-</media_generation_guidance>
-`.trim()
-}
+// Media prompting guidance moved to lib/integrations/doctrines/media-generation.ts
+// (loaded lazily via ActivateIntegrationTools("media")).
 
 /**
  * Runtime-only facts. Currently the assistant/user display names plus the
@@ -613,7 +372,17 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     const exposureOpts = {
         conversationId: ctx.conversationId,
         origin: appOrigin || undefined,
+        agentId: ctx.agentId,
     }
+    // Short per-tool blurbs for the gated-capability menus in <integrations> /
+    // <subsystems>, so the agent knows what each gated tool does and activates
+    // the right capability instead of blind-calling a hidden schema. Derived
+    // from each tool's own description — self-maintaining, no duplicated copy.
+    // Sourced from ctx.declaredTools (resolved by the caller) to avoid importing
+    // the tool registry here, which would create a module-init cycle.
+    const toolSummaries = new Map<string, string>(
+        (ctx.declaredTools ?? []).map(t => [t.id, firstSentence(t.description)])
+    )
     // Orchestrator-only surfaces: integrations + subsystems + active
     // doctrines all live next to each other so the model can see what
     // exists, what it has activated, and what's still gated. Sub-agents
@@ -625,10 +394,10 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     return [
         runtime,
         buildAgentThreadsContextBlock(ctx),
-        buildIntegrationsContextBlock(ctx.declaredToolIds ?? [], exposureOpts),
+        buildIntegrationsContextBlock(ctx.declaredToolIds ?? [], exposureOpts, toolSummaries),
         // Native subsystems (watchlist, monitoring, scheduling) — orchestrator-
         // only. Sub-agents never schedule or set up monitors themselves.
-        isOrchestrator ? buildSubsystemsContextBlock(exposureOpts) : '',
+        isOrchestrator ? buildSubsystemsContextBlock(exposureOpts, toolSummaries) : '',
         // Lazy doctrines for activated capabilities (maps, weather, watchlist,
         // monitoring, scheduling, …). Empty until the orchestrator calls
         // ActivateIntegrationTools. Sits adjacent to <integrations>/<subsystems>

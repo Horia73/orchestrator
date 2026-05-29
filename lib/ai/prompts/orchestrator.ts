@@ -2,7 +2,6 @@ import type { PromptContext } from '@/lib/ai/agents/types'
 import {
     buildAgentsSection,
     buildArtifactAuthoring,
-    buildMediaPromptingGuide,
     buildRuntimeContext,
     buildSafetyCore,
     buildToolsSection,
@@ -16,7 +15,6 @@ export function buildOrchestratorPrompt(ctx: PromptContext): string {
         ORCHESTRATOR_PROMPT,
         buildSafetyCore(),
         buildArtifactAuthoring(),
-        buildMediaPromptingGuide(),
         buildRuntimeContext(ctx),
         buildToolsSection(ctx),
         buildAgentsSection(ctx), // Populated from orchestrator.canCallAgents via route.ts.

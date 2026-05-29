@@ -40,7 +40,7 @@ export function AgentCard({
   agentId: string
   className?: string
 }) {
-  const { data, setAgentOverride, setBrowserAgentModel, setBrowserAgentBackend } = useSettings()
+  const { data, setAgentOverride, setBrowserAgentModel, setBrowserAgentBackend, setBrowserAgentProEnabled } = useSettings()
   const [status, setStatus] = React.useState<SaveStatus>({ kind: "idle" })
   const [fallbacksOpen, setFallbacksOpen] = React.useState(false)
 
@@ -71,6 +71,7 @@ export function AgentCard({
         data={data}
         setBrowserAgentModel={setBrowserAgentModel}
         setBrowserAgentBackend={setBrowserAgentBackend}
+        setBrowserAgentProEnabled={setBrowserAgentProEnabled}
         className={className}
       />
     )
@@ -401,12 +402,14 @@ function BrowserAgentCard({
   data,
   setBrowserAgentModel,
   setBrowserAgentBackend,
+  setBrowserAgentProEnabled,
   className,
 }: {
   agent: AgentInfo
   data: SettingsBootstrap
   setBrowserAgentModel: (slot: BrowserAgentModelSlot, override: BrowserAgentModelSettings) => Promise<void>
   setBrowserAgentBackend: (backend: BrowserAgentSettings["backend"]) => Promise<void>
+  setBrowserAgentProEnabled: (proEnabled: boolean) => Promise<void>
   className?: string
 }) {
   const [status, setStatus] = React.useState<SaveStatus>({ kind: "idle" })
@@ -438,9 +441,21 @@ function BrowserAgentCard({
     }
   }
 
+  const saveProEnabled = async (proEnabled: boolean) => {
+    if (proEnabled === data.config.browserAgent.proEnabled) return
+    setStatus({ kind: "saving" })
+    try {
+      await setBrowserAgentProEnabled(proEnabled)
+      setStatus({ kind: "saved", at: Date.now() })
+    } catch (err) {
+      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Save failed" })
+    }
+  }
+
+  const proEnabled = data.config.browserAgent.proEnabled
   const selectedProviders = new Set([
     data.config.browserAgent.light.provider,
-    data.config.browserAgent.pro.provider,
+    ...(proEnabled ? [data.config.browserAgent.pro.provider] : []),
   ])
   const missingProvider = [...selectedProviders].find(providerId => {
     const provider = data.providers[providerId]
@@ -478,13 +493,45 @@ function BrowserAgentCard({
             data={data}
             onChange={save}
           />
-          <BrowserModelSlotControls
-            title="Pro model"
-            slot="pro"
-            value={data.config.browserAgent.pro}
-            data={data}
-            onChange={save}
-          />
+
+          <div className="flex items-start justify-between gap-3 rounded-lg border border-border/60 bg-background px-2.5 py-2">
+            <div className="min-w-0">
+              <p className="text-[13px] font-medium text-foreground">Enable Pro model</p>
+              <p className="mt-0.5 text-[12px] text-foreground/60">
+                {proEnabled
+                  ? "Multi mode: the light model escalates to the pro model on hard blockers."
+                  : "Single mode: the light model runs solo, with no escalation."}
+              </p>
+            </div>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={proEnabled}
+              aria-label="Enable Pro model"
+              onClick={() => saveProEnabled(!proEnabled)}
+              className={cn(
+                "relative mt-0.5 h-5 w-9 shrink-0 rounded-full transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+                proEnabled ? "bg-emerald-500" : "bg-muted-foreground/25"
+              )}
+            >
+              <span
+                className={cn(
+                  "absolute left-0.5 top-0.5 size-4 rounded-full bg-background shadow-sm transition-transform",
+                  proEnabled ? "translate-x-4" : "translate-x-0"
+                )}
+              />
+            </button>
+          </div>
+
+          {proEnabled && (
+            <BrowserModelSlotControls
+              title="Pro model"
+              slot="pro"
+              value={data.config.browserAgent.pro}
+              data={data}
+              onChange={save}
+            />
+          )}
         </div>
 
         {missingProviderDef && (

@@ -12,6 +12,10 @@ import { CLI_SPECS } from '@/lib/cli/specs'
 import { resolveBin } from '@/lib/cli/resolve-bin'
 import { codexCliEnv } from '@/lib/cli/codex-env'
 import { executeTool } from '@/lib/ai/tools/executor'
+import { getAgent } from '@/lib/ai/agents/registry'
+import { getToolsForAgent } from '@/lib/ai/tools/registry'
+import { operationalIntegrationFor } from '@/lib/integrations/manifest'
+import { subsystemForGatedTool } from '@/lib/integrations/subsystem-manifest'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 import { latestUserPromptWithPortableHistory } from './history'
 import {
@@ -427,7 +431,22 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             const callId = typeof params?.callId === 'string' ? params.callId : `codex_tool_${requestId}`
             const toolName = typeof params?.tool === 'string' ? params.tool : ''
             const callArgs = toRecord(params?.arguments)
-            const tool = tools.find(t => t.name === toolName || t.id === toolName)
+            let tool = tools.find(t => t.name === toolName || t.id === toolName)
+            if (!tool && toolContext?.callerAgentId) {
+                // Codex's dynamicTools list is fixed for the run, so a gated
+                // capability tool the model wants mid-run (maps/weather/monitor/
+                // schedule/watchlist/microscript/integration ops) isn't advertised
+                // even after ActivateIntegrationTools. Resolve it from the caller's
+                // own declared grant (gated capability tools only) and run it, so
+                // the model doesn't dead-end on "Unknown tool".
+                const agent = getAgent(toolContext.callerAgentId)
+                if (agent) {
+                    const candidate = getToolsForAgent(agent.tools).find(t => t.name === toolName || t.id === toolName)
+                    if (candidate && (operationalIntegrationFor(candidate.id) || subsystemForGatedTool(candidate.id))) {
+                        tool = candidate
+                    }
+                }
+            }
             const surfacedName = tool?.name ?? (toolName || 'tool')
 
             fireToolCall(callId, surfacedName, callArgs)

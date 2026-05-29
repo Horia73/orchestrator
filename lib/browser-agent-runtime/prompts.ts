@@ -32,26 +32,45 @@ export function buildMemoryContext(memories: RetrievedMemory): string {
 export function buildSystemPrompt(
    isAdvancedMode: boolean = false,
    coordinateSpace: BrowserCoordinateSpace = 'normalized-viewport',
+   escalationEnabled: boolean = true,
 ): string {
    const now = new Date();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
    const responseActionList = isAdvancedMode
-      ? '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "ask" | "yield_control"'
-      : '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads" | "done" | "ask" | "error" | "escalate"';
+      ? `${baseActions} | "ask" | "yield_control"`
+      : escalationEnabled
+         ? `${baseActions} | "done" | "ask" | "error" | "escalate"`
+         : `${baseActions} | "done" | "ask" | "error"`;
    const modeSpecificActionDocs = isAdvancedMode
       ? `- **ask**: Ask the user for clarification.
 - **yield_control**: Yield control back to the Base Model. Use this when you have cleared the blocker and normal automation can resume. Never return \`escalate\` while in advanced mode.`
-      : `- **done**: Task complete.
+      : escalationEnabled
+         ? `- **done**: Task complete.
 - **ask**: Ask the user for clarification.
 - **error**: Report a bounded, non-recoverable failure after you tried the allowed recovery path. Include what was attempted and the observed status.
-- **escalate**: Call the Advanced Reasoning Model. Don't hesitate to use this! Escalate whenever you feel stuck, trapped in a loop, repeat an action multiple times without success, or face complex visual challenges/captcha reasoning. You MUST provide a clear \`sub_objective\` for the advanced agent.`;
-   const subObjectiveField = isAdvancedMode
+- **escalate**: Call the Advanced Reasoning Model. Don't hesitate to use this! Escalate whenever you feel stuck, trapped in a loop, repeat an action multiple times without success, or face complex visual challenges/captcha reasoning. You MUST provide a clear \`sub_objective\` for the advanced agent.`
+         : `- **done**: Task complete.
+- **ask**: Ask the user for clarification.
+- **error**: Report a bounded, non-recoverable failure after you tried the allowed recovery path. Include what was attempted and the observed status.`;
+   const subObjectiveField = (isAdvancedMode || !escalationEnabled)
       ? ''
       : '\n  "sub_objective": "<string>", // REQUIRED for \'escalate\' action';
 
    const advancedPrefix = isAdvancedMode
       ? `\n\n## 🚨 ROLE OVERRIDE: ADVANCED INTERVENTION AGENT 🚨\nYou are currently operating as the Advanced Intervention AI. You were summoned by the Base Agent because it got stuck.\nYour temporary goal is specifically to clear the blocker described in the Goal. However, use your own independent judgment. If the Goal suggests an action that does not make sense for the current visual state, adapt your approach.\n**CRITICAL INSTRUCTIONS:** \n- Think out of the box: if an expected element is missing, blank, or stuck loading, do not interact with empty space. Look for workarounds, close blocking overlays, or refresh the page.\n- Do NOT attempt to complete the user's entire task. Once you have cleared the immediate hurdle and the interface is ready for normal automation again, you MUST return the \`yield_control\` action. Do not return \`done\` or \`escalate\` in advanced mode.\n`
       : '';
+   const soloModeNote = (!isAdvancedMode && !escalationEnabled)
+      ? `\n\n## 🧭 SOLO MODE\nYou are the only model on this task. There is NO advanced model to escalate to — \`escalate\` is not available. When you hit a hard blocker (a loop, a captcha, complex visual reasoning, a stuck/blank page), slow down and solve it yourself: try a materially different approach, close blocking overlays, refresh, or navigate a different way. Only return \`error\` after you have genuinely exhausted the recovery paths, or \`ask\` when you need input the user alone can provide.\n`
+      : '';
+   // Prose that nudges the model toward escalation must disappear in solo mode,
+   // where `escalate` is not a valid action.
+   const escalationVisualClause = escalationEnabled
+      ? ', and `escalate` for complex visual reasoning'
+      : '';
+   const loopDetectionRule = escalationEnabled
+      ? '1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Escalate to the advanced agent if you feel stuck.'
+      : '1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Re-evaluate and try a materially different approach — a different element, a refresh, or a new navigation path.';
    const coordinateInstructions = coordinateSpace === 'absolute-display'
       ? `2. You estimate ABSOLUTE PIXEL COORDINATES of the element you want to interact with.
    - The screenshot shows the full browser display, including tabs, address bar, toolbar, page content, popups, and context menus.
@@ -85,7 +104,7 @@ export function buildSystemPrompt(
       : '13. **When To Use inspectPage**: Use `inspectPage` mainly for orientation on large pages. It is usually more helpful than blind repeated scrolling when the task is about scanning long result pages, comparing many sections, or finding content far away. If you already know where the target area is and need precise details, prefer viewport verification before requesting another overview.';
 
    return `You are an AI browser automation agent. You control a web browser by providing COORDINATES (x, y) to click.
-Current Date: ${dateString}${advancedPrefix}
+Current Date: ${dateString}${advancedPrefix}${soloModeNote}
 
 ## 🤝 CONTINUED TASKS & REPLIES
 If the Goal contains "[Previous Goal: ...]", it means the user is replying to you!
@@ -136,7 +155,7 @@ ${modeSpecificActionDocs}
 ${coordinateAccuracyRule}
 2. **Form Submission**: You can optionally use \`"submit": true\` in the \`type\` action to press Enter immediately. If you need to review the input or click a button manually, set \`"submit": false\`.
 3. **Long Text Entry**: Use the normal \`type\` action for long or multiline text. The runtime will automatically paste long text through the clipboard instead of typing it character by character.
-4. **Login/Auth & Challenges**: If you need credentials, account choice, 2FA/codes, or a human-controlled login step, ASK the user for that narrow input or yield browser control. Do not guess, and do not frame login/signup as a refusal. If a browser challenge or captcha appears inside the authorized flow, first try ordinary in-session interaction using visible controls, coordinates, drag/hold, batch selection, refresh/retry, and \`escalate\` for complex visual reasoning. Do not use deception, external solving services, credential guessing, or mechanisms that defeat access-control/anti-bot systems. If the page requires human verification, 2FA/codes, credentials, or cannot be completed through legitimate browser interaction, ask/yield with the precise blocker. If the task is a free setup/API-key flow, continue reversible navigation and dashboard inspection, use existing sessions when available, and stop only at the actual commit/consent boundary. If an API key or token is visible as the requested setup result in an authorized account/dashboard, you may return the exact value in \`done.reasoning\` or \`ask.text\` when the goal asks to retrieve, copy, display, or configure it. Do not save keys/tokens to browser memory. Do not deliberately use \`screenshot\` or \`recordVideo\` just to capture a visible key unless the user or parent asks for visual evidence; this does not restrict the internal page frames you receive to operate or any automatic final-state capture made by the runtime.
+4. **Login/Auth & Challenges**: If you need credentials, account choice, 2FA/codes, or a human-controlled login step, ASK the user for that narrow input or yield browser control. Do not guess, and do not frame login/signup as a refusal. If a browser challenge or captcha appears inside the authorized flow, first try ordinary in-session interaction using visible controls, coordinates, drag/hold, batch selection, refresh/retry${escalationVisualClause}. Do not use deception, external solving services, credential guessing, or mechanisms that defeat access-control/anti-bot systems. If the page requires human verification, 2FA/codes, credentials, or cannot be completed through legitimate browser interaction, ask/yield with the precise blocker. If the task is a free setup/API-key flow, continue reversible navigation and dashboard inspection, use existing sessions when available, and stop only at the actual commit/consent boundary. If an API key or token is visible as the requested setup result in an authorized account/dashboard, you may return the exact value in \`done.reasoning\` or \`ask.text\` when the goal asks to retrieve, copy, display, or configure it. Do not save keys/tokens to browser memory. Do not deliberately use \`screenshot\` or \`recordVideo\` just to capture a visible key unless the user or parent asks for visual evidence; this does not restrict the internal page frames you receive to operate or any automatic final-state capture made by the runtime.
 5. **Cookie Consent**: If a cookie banner is present, click "Accept" or "OK" immediately.
 6. **Forms/Reservations/Orders**: Ask user for any missing information before proceeding.
 7. **Hard Commit Boundary**: NEVER click final payment, start a paid trial/subscription, place/cancel a final order, confirm/cancel a booking, send a message, perform an irreversible submit, change account/security settings, grant permissions, upload/submit sensitive personal documents/data to an external service, publicly share content, do destructive actions, submit account creation, or accept legal terms unless the delegated task explicitly confirms that exact final action. If confirmation is missing, stop with \`ask\` and include the exact action, visible details, URL, and a screenshot if useful.
@@ -168,7 +187,7 @@ Manage tabs like a person would — check OPEN TABS before acting:
 - **Auto-opened tabs**: New tabs from popups/links are auto-switched. Decide if useful or close and go back.
 
 ## 🛑 STOP & THINK: HISTORY CHECK
-1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Escalate to the advanced agent if you feel stuck.
+${loopDetectionRule}
 2. **Scroll if needed**: If you don't see what you need, SCROLL.
 3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, DO NOT interact with empty space. Search for a close button, a fallback option, or rethink the approach.
 4. **Long Task Continuity**: Treat earlier action summaries as completed work. Do not restart from the original checklist just because the task is long; verify the current file/page and continue from the latest unfinished step.
@@ -407,14 +426,18 @@ export function buildActionPrompt(
    goal: string,
    actionHistory: ActionHistoryItem[],
    openTabs?: TabInfo[],
-   downloads?: BrowserDownloadFile[]
+   downloads?: BrowserDownloadFile[],
+   escalationEnabled: boolean = true
 ): string {
    const recentActions = actionHistory.slice(-ACTION_HISTORY_PROMPT_LIMIT);
    const earlierActions = actionHistory.slice(0, Math.max(0, actionHistory.length - ACTION_HISTORY_PROMPT_LIMIT));
 
    const loopDescription = detectActionLoop(recentActions);
+   const loopEscape = escalationEnabled
+      ? 'ask for the missing input, or escalate'
+      : 'or ask for the missing input';
    const loopWarning = loopDescription
-      ? `\n\n## ⚠️ LOOP DETECTED! ⚠️\nRecent actions are repeating without new evidence: ${loopDescription}.\nStop repeating this sequence. If you are diagnosing page loading/API behavior, use \`inspectDiagnostics\` and same-origin \`fetchUrl\` instead of bouncing between tabs. Otherwise choose a materially different action, return \`done\` with the evidence already collected, ask for the missing input, or escalate.\n`
+      ? `\n\n## ⚠️ LOOP DETECTED! ⚠️\nRecent actions are repeating without new evidence: ${loopDescription}.\nStop repeating this sequence. If you are diagnosing page loading/API behavior, use \`inspectDiagnostics\` and same-origin \`fetchUrl\` instead of bouncing between tabs. Otherwise choose a materially different action, return \`done\` with the evidence already collected, ${loopEscape}.\n`
       : '';
 
    const earlierSummary = formatEarlierActionSummary(earlierActions, actionHistory.length);

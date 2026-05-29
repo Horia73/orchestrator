@@ -41,6 +41,8 @@ export interface LlmConfig {
     advancedModel: string;
     advancedThinkingLevel: AdvancedThinkingLevel;
     advancedMediaResolution: MediaResolutionLevel;
+    /** When false, the base model runs solo with no escalation to advancedModel. */
+    escalationEnabled: boolean;
 }
 
 export interface AgentConfig {
@@ -100,6 +102,7 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
         advancedModel: 'gemini-3.1-pro-preview',
         advancedThinkingLevel: 'low',
         advancedMediaResolution: 'high',
+        escalationEnabled: true,
     },
 };
 
@@ -343,6 +346,9 @@ function sanitizeConfig(config: AgentConfig): AgentConfig {
             advancedModel: config.llm.advancedModel || DEFAULT_AGENT_CONFIG.llm.advancedModel,
             advancedThinkingLevel: parseAdvancedThinkingLevel(config.llm.advancedThinkingLevel) || DEFAULT_AGENT_CONFIG.llm.advancedThinkingLevel,
             advancedMediaResolution: parseMediaResolutionLevel(config.llm.advancedMediaResolution) || DEFAULT_AGENT_CONFIG.llm.advancedMediaResolution,
+            escalationEnabled: typeof config.llm.escalationEnabled === 'boolean'
+                ? config.llm.escalationEnabled
+                : DEFAULT_AGENT_CONFIG.llm.escalationEnabled,
         },
     };
 }

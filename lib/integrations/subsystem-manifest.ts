@@ -2,6 +2,10 @@ import { MONITORING_DOCTRINE } from '@/lib/integrations/doctrines/monitoring'
 import { SCHEDULING_DOCTRINE } from '@/lib/integrations/doctrines/scheduling'
 import { WATCHLIST_DOCTRINE } from '@/lib/integrations/doctrines/watchlist'
 import { MICROSCRIPTS_DOCTRINE } from '@/lib/integrations/doctrines/microscripts'
+import { MEDIA_GENERATION_DOCTRINE } from '@/lib/integrations/doctrines/media-generation'
+import { BROWSER_AGENT_DOCTRINE } from '@/lib/integrations/doctrines/browser-agent'
+import { RECIPE_DOCTRINE } from '@/lib/integrations/doctrines/recipe'
+import { WORKOUT_DOCTRINE } from '@/lib/integrations/doctrines/workout'
 
 // ---------------------------------------------------------------------------
 // Subsystem manifest — orchestrator-native capabilities that mirror the
@@ -20,7 +24,18 @@ import { MICROSCRIPTS_DOCTRINE } from '@/lib/integrations/doctrines/microscripts
 // builders pick it up automatically.
 // ---------------------------------------------------------------------------
 
-export type SubsystemId = 'watchlist' | 'monitoring' | 'scheduling' | 'microscripts'
+export type SubsystemId =
+    | 'watchlist'
+    | 'monitoring'
+    | 'scheduling'
+    | 'microscripts'
+    // Doctrine-only "playbooks": no tools of their own, just heavy guidance that
+    // used to sit always-on in the base prompt. Activated on demand like any
+    // other capability so the orchestrator pays for them only when relevant.
+    | 'media'
+    | 'browser'
+    | 'recipe'
+    | 'workout'
 
 export interface SubsystemManifestEntry {
     /** Stable id used by ActivateIntegrationTools and the activation store. */
@@ -31,6 +46,15 @@ export interface SubsystemManifestEntry {
     capability: string
     /** Heavy operating doctrine loaded lazily — flow, rules, protocols, gotchas. */
     doctrine: string
+    /**
+     * Operational tool ids gated behind activation (schemas loaded only after
+     * ActivateIntegrationTools). Deliberately a SAFE SUBSET — tools shared with
+     * always-on flows (e.g. notify_inbox, set_task_state used by scheduled-task
+     * wakes, monitor_wake_feedback used by Smart Monitor wakes) are intentionally
+     * left OUT so those flows never lose access. Omit/empty for a doctrine-only
+     * subsystem whose tools (if any) must stay always-on.
+     */
+    toolIds?: string[]
 }
 
 export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
@@ -39,24 +63,88 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
         label: 'Watchlist',
         capability: 'Track financial instruments (stocks, ETFs, indexes, FX, crypto) and products with local price observations and charts. The Watchlist surface itself is local; background market monitoring is one consolidated heartbeat that auto-arms once a market-data key + at least one monitor-enabled item exists.',
         doctrine: WATCHLIST_DOCTRINE,
+        toolIds: [
+            'WatchlistAddFinancialInstrument',
+            'WatchlistAddProduct',
+            'WatchlistRemoveItem',
+            'WatchlistListItems',
+            'WatchlistRecordProductPrice',
+        ],
     },
     {
         id: 'monitoring',
         label: 'Smart Monitor',
         capability: 'Ongoing recurring model-owned work: persistent source monitoring, recurring summaries, recurring maintenance, and tell-me-when subscriptions. One consolidated scheduled agent wake handles connector-backed and custom prompt-backed watches; the agent decides what to inspect, notify, digest, and how to self-pace from history.',
         doctrine: MONITORING_DOCTRINE,
+        // monitor_wake_feedback is deliberately NOT gated — it is called at the
+        // end of every consolidated wake, where the brief restricts the agent to
+        // notify_inbox + monitor_wake_feedback only and never activates anything.
+        toolIds: [
+            'monitor_describe_sources',
+            'monitor_watch_list',
+            'monitor_watch_get',
+            'monitor_watch_add',
+            'monitor_watch_update',
+            'monitor_watch_remove',
+        ],
     },
     {
         id: 'scheduling',
         label: 'Scheduled tasks',
         capability: 'Real runtime automation for one-shot, delayed, bounded, and time-critical future work. Two action types: "tool" (cheap, no model at fire time) or "agent" (wakes a model with your prompt). Ongoing recurring model-owned work belongs in Smart Monitor.',
         doctrine: SCHEDULING_DOCTRINE,
+        // notify_inbox and set_task_state are intentionally left always-on: they
+        // are general inbox/notification primitives used by scheduled-task wakes
+        // and inbox flows, not scheduling-lifecycle tools.
+        toolIds: [
+            'schedule_task',
+            'list_tasks',
+            'cancel_task',
+            'reschedule_task',
+        ],
     },
     {
         id: 'microscripts',
         label: 'Microscripts',
         capability: 'Bounded Python automations for small stateful watchers: run short checks, request permitted operations through the parent runtime, notify or act when conditions are met, then pause/complete/expire so they do not run forever.',
         doctrine: MICROSCRIPTS_DOCTRINE,
+        toolIds: [
+            'microscript_describe_capabilities',
+            'microscript_create',
+            'microscript_list',
+            'microscript_get',
+            'microscript_update',
+            'microscript_pause',
+            'microscript_resume',
+            'microscript_delete',
+            'microscript_run_now',
+            'microscript_get_run',
+        ],
+    },
+    // --- Doctrine-only playbooks (no tools) ---------------------------------
+    {
+        id: 'media',
+        label: 'Media production prompts',
+        capability: 'Per-modality prompting playbook for the image/video/speech/music specialist agents (composition, camera/lens, audio direction, song structure, edits). Activate before you author a production prompt to delegate to a media agent.',
+        doctrine: MEDIA_GENERATION_DOCTRINE,
+    },
+    {
+        id: 'browser',
+        label: 'Browser agent handoff',
+        capability: 'Handoff playbook for browser_agent: session/thread reuse, the time-critical execution contract, data in/out boundaries, stop boundary, evidence, runtime-error recovery, checkpoint/continue/abort, and the confirmation flow. Activate before your first browser_agent delegation in this conversation.',
+        doctrine: BROWSER_AGENT_DOCTRINE,
+    },
+    {
+        id: 'recipe',
+        label: 'Recipe artifact schema',
+        capability: 'The exact JSON schema for application/vnd.ant.recipe artifacts (scalable ingredients, timed steps, metric units). Activate before emitting a recipe artifact.',
+        doctrine: RECIPE_DOCTRINE,
+    },
+    {
+        id: 'workout',
+        label: 'Workout artifact schema',
+        capability: 'The exact JSON schema + named program templates for application/vnd.ant.workout artifacts (per-exercise sets, history seeding, progression). Activate before emitting a workout artifact.',
+        doctrine: WORKOUT_DOCTRINE,
     },
 ]
 
@@ -67,3 +155,14 @@ export function getSubsystemManifest(id: string): SubsystemManifestEntry | undef
 }
 
 export const ALL_SUBSYSTEM_IDS: SubsystemId[] = SUBSYSTEM_MANIFEST.map((entry) => entry.id)
+
+/** Every gated subsystem tool id mapped back to its subsystem id (for exposure gating). */
+const SUBSYSTEM_TOOL_TO_ID = new Map<string, SubsystemId>()
+for (const entry of SUBSYSTEM_MANIFEST) {
+    for (const toolId of entry.toolIds ?? []) SUBSYSTEM_TOOL_TO_ID.set(toolId, entry.id)
+}
+
+/** Returns the subsystem id if `toolId` is a gated subsystem tool, else undefined. */
+export function subsystemForGatedTool(toolId: string): SubsystemId | undefined {
+    return SUBSYSTEM_TOOL_TO_ID.get(toolId)
+}

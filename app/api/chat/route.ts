@@ -393,7 +393,7 @@ export async function POST(request: Request) {
         ...getToolsForAgent(orchestrator.tools),
         ...getToolsForBuiltins(orchestrator.builtins),
       ]),
-      { conversationId, origin: requestOrigin }
+      { conversationId, origin: requestOrigin, agentId: orchestrator.id }
     )
     const toolSurface = resolveProviderToolSurface(
       candidateTools,
@@ -409,6 +409,7 @@ export async function POST(request: Request) {
       availableAgents,
       conversationId,
       declaredToolIds: orchestrator.tools,
+      declaredTools: getToolsForAgent(orchestrator.tools),
       delegationDepth: 0,
       maxDelegationDepth: MAX_AGENT_DEPTH,
       pendingUpdate: pendingUpdate ?? undefined,
@@ -1383,7 +1384,8 @@ export async function POST(request: Request) {
                   })
                   if (finalContextUsage) {
                     publishContextUsage(
-                      prepared.settings.provider === "codex" &&
+                      (prepared.settings.provider === "codex" ||
+                        prepared.settings.provider === "claude-code") &&
                         latestContextUsage
                         ? {
                             ...finalContextUsage,
@@ -1394,13 +1396,15 @@ export async function POST(request: Request) {
                             contextWindow:
                               latestContextUsage.contextWindow ??
                               finalContextUsage.contextWindow,
-                            // Codex's final `meta.usage` is the cumulative
-                            // whole-run total (`.total`) — correct for billing,
-                            // but the context-window gauge must show the LAST
-                            // turn's occupancy (≤ the window). The live stream
-                            // already captured that from `.last`, so keep those
-                            // numbers instead of the cumulative ones, which
-                            // otherwise blow past the window (e.g. 2.0M / 258K).
+                            // Codex and Claude Code both report the cumulative
+                            // whole-run usage at turn end (codex's `.total`,
+                            // claude's cumulative result.usage incl. cache
+                            // reads) — correct for billing, but the context
+                            // window gauge must show the LAST request's
+                            // occupancy (≤ the window). The live stream already
+                            // captured that per request, so keep those numbers
+                            // instead of the cumulative ones, which otherwise
+                            // blow past the window (e.g. 2.0M/258K, 1.3M/1M).
                             contextTokens:
                               latestContextUsage.contextTokens ??
                               finalContextUsage.contextTokens,

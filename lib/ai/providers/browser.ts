@@ -213,6 +213,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
             advancedModel: pro.model,
             advancedThinkingLevel: mapAdvancedThinkingLevel(pro.thinkingLevel),
             advancedMediaResolution: mapMediaResolution(pro.modelOptions?.media_resolution ?? legacyBrowserOptions?.media_resolution),
+            escalationEnabled: appConfig.browserAgent.proEnabled,
         },
     }
 }

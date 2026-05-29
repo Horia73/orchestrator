@@ -9,8 +9,8 @@ import { createAgentRuntime, type AgentRuntime, type AgentRuntimeStatus } from '
 import { DEFAULT_VIEWPORT } from '@/lib/browser-agent-runtime/viewport'
 import { WORKSPACE_DIR } from '@/lib/runtime-paths'
 
-const AWAITING_USER_TTL_MS = 30 * 60 * 1000
-const COMPLETED_TTL_MS = 5 * 60 * 1000
+const AWAITING_USER_TTL_MS = 60 * 60 * 1000
+const COMPLETED_TTL_MS = 60 * 60 * 1000
 const ERROR_TTL_MS = 2 * 60 * 1000
 const CLEANUP_INTERVAL_MS = 60 * 1000
 
@@ -132,11 +132,15 @@ function normalizeMaxConcurrent(value: number): number {
     return Number.isFinite(value) && value > 0 ? Math.floor(value) : 3
 }
 
-function getEffectiveMaxConcurrent(config: BrowserRuntimeConfig): number {
-    if (config.browser.backend === 'official-display' && config.browser.profileMode === 'shared-serial') {
-        return 1
-    }
-    return normalizeMaxConcurrent(config.browser.maxConcurrent)
+function getEffectiveMaxConcurrent(): number {
+    // One browser agent at a time, globally. The browser shares a single
+    // logged-in profile, and two Chromium processes cannot open the same
+    // profile dir concurrently — so real parallelism would mean either separate
+    // (logged-out) profiles or multiple windows fighting over one virtual
+    // display. We keep the shared profile (logins preserved) and serialize:
+    // additional runs queue on runSlots and start automatically when the active
+    // one finishes. browser.maxConcurrent is intentionally not honored here.
+    return 1
 }
 
 function usesSharedBrowserManager(config: BrowserRuntimeConfig): boolean {
@@ -168,9 +172,9 @@ class BrowserSessionManager {
     private runSlots = new AsyncSemaphore()
 
     async acquire(options: AcquireBrowserSessionOptions): Promise<BrowserSessionLease> {
-        const maxConcurrent = getEffectiveMaxConcurrent(options.config)
+        const maxConcurrent = getEffectiveMaxConcurrent()
         if (this.runSlots.isSaturated(maxConcurrent)) {
-            options.onStatus(`⏳ Browser agent queued; ${maxConcurrent} run${maxConcurrent === 1 ? '' : 's'} already active.`)
+            options.onStatus('⏳ The browser is busy with another conversation. Your task is queued and will start automatically as soon as it is free.')
         }
         const releaseRunSlot = await this.runSlots.acquire(maxConcurrent)
 

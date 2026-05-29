@@ -134,6 +134,12 @@ export interface BrowserAgentSettings {
   backend: BrowserBackendPreference
   light: BrowserAgentModelSettings
   pro: BrowserAgentModelSettings
+  /**
+   * When false (default), the browser agent runs solo on the light model with
+   * no escalation path ("single mode"). When true, the light model can escalate
+   * to the pro model on hard blockers ("multi mode").
+   */
+  proEnabled: boolean
 }
 
 export interface SmartMonitorQuietHours {
@@ -337,6 +343,7 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
       media_resolution: "media_resolution_high",
     },
   },
+  proEnabled: false,
 }
 
 const DEFAULT_CONFIG: AppConfig = {
@@ -670,6 +677,10 @@ function normalizeBrowserAgentSettings(value: unknown): BrowserAgentSettings {
       raw.pro,
       DEFAULT_BROWSER_AGENT_SETTINGS.pro
     ),
+    proEnabled:
+      typeof raw.proEnabled === "boolean"
+        ? raw.proEnabled
+        : DEFAULT_BROWSER_AGENT_SETTINGS.proEnabled,
   }
 }
 
@@ -936,6 +947,16 @@ export function setBrowserAgentBackend(
     browserAgent: {
       ...current.browserAgent,
       backend,
+    },
+  })
+}
+
+export function setBrowserAgentProEnabled(proEnabled: boolean): AppConfig {
+  const current = getConfig()
+  return updateConfig({
+    browserAgent: {
+      ...current.browserAgent,
+      proEnabled,
     },
   })
 }

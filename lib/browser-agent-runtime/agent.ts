@@ -41,6 +41,8 @@ export interface AgentControllerOptions {
     advancedThinkingLevel?: 'low' | 'medium' | 'high';
     advancedMediaResolution?: VisionConfig['mediaResolution'];
     maxEscalationIterations?: number;
+    /** When false, the base model runs solo: no escalate action, no advanced model. */
+    escalationEnabled?: boolean;
     onEvidence?: (capture: BrowserEvidenceCapture) => void | Promise<void>;
 }
 
@@ -119,6 +121,7 @@ export function createAgentController(
     const advancedThinkingLevel = options.advancedThinkingLevel ?? 'low';
     const advancedMediaResolution = options.advancedMediaResolution ?? 'medium';
     const maxEscalationIterations = options.maxEscalationIterations ?? 10;
+    const escalationEnabled = options.escalationEnabled ?? true;
     const onEvidence = options.onEvidence;
 
     let currentGoal: string | null = null;
@@ -311,7 +314,8 @@ export function createAgentController(
                             isInterrupt,
                             openTabs,
                             isAdvancedMode,
-                            downloads
+                            downloads,
+                            escalationEnabled
                         );
                     }
                     pendingTrace = null;
@@ -412,6 +416,19 @@ export function createAgentController(
                         }
 
                         if (action.action === 'escalate') {
+                            if (!escalationEnabled) {
+                                onStatusUpdate('⚠️ Escalation is disabled (single mode). Handle this yourself.');
+                                pushConversationHistory('SYSTEM: Escalation is disabled. There is no advanced model — resolve the blocker yourself, or return ask/error.');
+                                actionHistory.push({
+                                    action: 'escalate',
+                                    reasoning: action.reasoning,
+                                    success: false
+                                });
+                                pendingTrace = null;
+                                shouldRestartLoop = true;
+                                break;
+                            }
+
                             if (escalationState?.active) {
                                 onStatusUpdate('⚠️ Ignoring nested escalation request while already in advanced mode.');
                                 shouldRestartLoop = true;

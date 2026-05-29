@@ -53,7 +53,8 @@ export interface VisionService {
         isInterrupt?: boolean,
         openTabs?: TabInfo[],
         isAdvancedMode?: boolean,
-        downloads?: BrowserDownloadFile[]
+        downloads?: BrowserDownloadFile[],
+        escalationEnabled?: boolean
     ): Promise<AgentAction[]>;
     reflectOnIterationLimit(
         frame: BrowserFrameSnapshot,
@@ -404,16 +405,17 @@ export function createVisionService(
             isInterrupt = false,
             openTabs: TabInfo[] = [],
             isAdvancedMode: boolean = false,
-            downloads: BrowserDownloadFile[] = []
+            downloads: BrowserDownloadFile[] = [],
+            escalationEnabled: boolean = true
         ): Promise<AgentAction[]> {
             // Static instructions → cacheable systemInstruction (stable across the segment).
-            const systemPrompt = buildSystemPrompt(isAdvancedMode, frame.coordinateSpace);
+            const systemPrompt = buildSystemPrompt(isAdvancedMode, frame.coordinateSpace, escalationEnabled);
             // Dynamic per-session memories (semantic + procedural) → user content.
             const memoryContext = buildMemoryContext(getMemories(frame.url, goal));
 
             const actionPrompt = isInterrupt
                 ? buildInterruptPrompt(goal)
-                : buildActionPrompt(goal, actionHistory, openTabs, downloads);
+                : buildActionPrompt(goal, actionHistory, openTabs, downloads, escalationEnabled);
 
             try {
                 // Add conversation history context

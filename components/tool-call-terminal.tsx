@@ -13,6 +13,11 @@ type ParsedData = Record<string, unknown> | null
 
 export const TERMINAL_MIN_WIDTH_CLASS = "min-w-[560px]"
 
+// Original default kept for inline Bash tool terminals. The browser-agent
+// terminal overrides this so its full transcript stays scrollable.
+const DEFAULT_SCROLLBACK = 8000
+export const FULL_HISTORY_SCROLLBACK = 100_000
+
 export function LiveTerminal({
   entry,
   data,
@@ -39,11 +44,18 @@ export function TerminalOutput({
   cursorBlink = false,
   resetKey,
   className,
+  autoScroll = false,
+  scrollback = DEFAULT_SCROLLBACK,
 }: {
   text: string
   cursorBlink?: boolean
   resetKey?: string
   className?: string
+  // When true, the viewport follows new output (sticky bottom). When false
+  // (default, used by inline Bash tool terminals) it snaps to the top once the
+  // command finishes — the original, untouched behavior.
+  autoScroll?: boolean
+  scrollback?: number
 }) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const termRef = React.useRef<Terminal | null>(null)
@@ -51,6 +63,17 @@ export function TerminalOutput({
   const renderedTextRef = React.useRef("")
   const resetKeyRef = React.useRef(resetKey)
   const cursorBlinkRef = React.useRef(cursorBlink)
+  // Follow the tail as long as the user is parked at the bottom; once they
+  // scroll up to read history we stop yanking them back down. Only consulted
+  // when autoScroll is on.
+  const stickToBottomRef = React.useRef(true)
+  const autoScrollRef = React.useRef(autoScroll)
+  // Captured once: the terminal is created a single time on mount.
+  const scrollbackRef = React.useRef(scrollback)
+
+  React.useEffect(() => {
+    autoScrollRef.current = autoScroll
+  }, [autoScroll])
 
   React.useEffect(() => {
     if (!containerRef.current) return
@@ -62,7 +85,7 @@ export function TerminalOutput({
       fontFamily: '"SF Mono", Menlo, Consolas, monospace',
       fontSize: 12,
       lineHeight: 1.22,
-      scrollback: 8000,
+      scrollback: scrollbackRef.current,
       theme: {
         background: "#0c0c0e",
         foreground: "#e4e4e7",
@@ -94,7 +117,16 @@ export function TerminalOutput({
     try {
       fit.fit()
     } catch {}
+    // Autoscroll terminals re-arm / disable follow based on where the user
+    // leaves the viewport. Default terminals don't track scroll at all.
+    const scrollDisposable = autoScrollRef.current
+      ? term.onScroll(() => {
+          const buffer = term.buffer.active
+          stickToBottomRef.current = buffer.viewportY >= buffer.baseY
+        })
+      : null
     return () => {
+      scrollDisposable?.dispose()
       term.dispose()
       termRef.current = null
       fitRef.current = null
@@ -116,29 +148,37 @@ export function TerminalOutput({
       term.reset()
       renderedTextRef.current = ""
       resetKeyRef.current = resetKey
+      stickToBottomRef.current = true
     }
     const next = text.slice(renderedTextRef.current.length)
     if (next) {
       renderedTextRef.current = text
-      // xterm.write() is async: it sticks to the bottom as it ingests output.
-      // The completion callback fires AFTER the buffer has grown and settled,
-      // so snapping to the top here (when no longer streaming) actually wins —
-      // a plain rAF runs before the write is processed and gets overridden.
+      // xterm.write() is async; the buffer grows and settles before the
+      // callback fires, so any scroll snap here reliably wins over the native
+      // ingest scroll.
+      const shouldStick = autoScrollRef.current && stickToBottomRef.current
       term.write(next, () => {
-        if (!cursorBlinkRef.current) {
-          try {
+        try {
+          if (autoScrollRef.current) {
+            // Autoscroll: follow the tail when the user is at the bottom; if
+            // they scrolled up to read history, leave their position alone.
+            if (shouldStick) term.scrollToBottom()
+          } else if (!cursorBlinkRef.current) {
+            // Default (unchanged): snap to the top once the command finishes
+            // so the output reads from the start.
             term.scrollToTop()
-          } catch {}
-        }
+          }
+        } catch {}
       })
     }
   }, [resetKey, text])
 
   // Covers the case where the status flips to "done" with no trailing write
   // (output already fully rendered while streaming): the write callback won't
-  // fire again, so snap to the top here. While streaming we leave xterm's
-  // native scroll-to-bottom alone so the user can watch the tail.
+  // fire again, so snap to the top here. Default terminals only — autoscroll
+  // terminals stay pinned to the tail.
   React.useEffect(() => {
+    if (autoScrollRef.current) return
     const term = termRef.current
     if (!term || cursorBlink) return
     const id = requestAnimationFrame(() => {
@@ -156,6 +196,9 @@ export function TerminalOutput({
     const ro = new ResizeObserver(() => {
       try {
         fit.fit()
+        if (autoScrollRef.current && stickToBottomRef.current) {
+          termRef.current?.scrollToBottom()
+        }
       } catch {}
     })
     ro.observe(el)

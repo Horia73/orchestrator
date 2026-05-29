@@ -84,6 +84,8 @@ interface SettingsContextValue {
   setBrowserAgentBackend: (
     backend: BrowserAgentSettings["backend"]
   ) => Promise<void>
+  /** Toggle the browser agent's pro/escalation model (single vs multi mode). */
+  setBrowserAgentProEnabled: (proEnabled: boolean) => Promise<void>
   /** Clear the override for an agent — falls back to global defaults. */
   clearAgentOverride: (agentId: string) => Promise<void>
   /** Replace the agent settings sidebar order. Optimistic with rollback. */
@@ -408,6 +410,43 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ backend }),
+      })
+
+      if (!res.ok) {
+        const json = await res.json().catch(() => ({}))
+        const refresh = await fetch("/api/settings/bootstrap")
+        if (refresh.ok) setData(await refresh.json())
+        throw new Error(json.error || `Save failed (${res.status})`)
+      }
+
+      const json = (await res.json()) as { config: RuntimeConfig }
+      setData((prev) =>
+        prev ? { ...prev, config: { ...prev.config, ...json.config } } : prev
+      )
+    },
+    []
+  )
+
+  const setBrowserAgentProEnabled = React.useCallback(
+    async (proEnabled: boolean) => {
+      setData((prev) => {
+        if (!prev) return prev
+        return {
+          ...prev,
+          config: {
+            ...prev.config,
+            browserAgent: {
+              ...prev.config.browserAgent,
+              proEnabled,
+            },
+          },
+        }
+      })
+
+      const res = await fetch("/api/config/browser-agent/pro-enabled", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ proEnabled }),
       })
 
       if (!res.ok) {
@@ -893,6 +932,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       setAgentOverride,
       setBrowserAgentModel,
       setBrowserAgentBackend,
+      setBrowserAgentProEnabled,
       clearAgentOverride,
       setAgentOrder,
       setFavorites,
@@ -914,6 +954,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       setAgentOverride,
       setBrowserAgentModel,
       setBrowserAgentBackend,
+      setBrowserAgentProEnabled,
       clearAgentOverride,
       setAgentOrder,
       setFavorites,

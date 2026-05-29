@@ -270,6 +270,7 @@ export function createAgentRuntime(
                 advancedModel: config.llm.advancedModel,
                 advancedThinkingLevel: config.llm.advancedThinkingLevel,
                 advancedMediaResolution: config.llm.advancedMediaResolution,
+                escalationEnabled: config.llm.escalationEnabled,
                 onEvidence: options.onEvidence,
             });
 

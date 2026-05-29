@@ -447,3 +447,11 @@ html[data-orch-settings-page="true"] *::-webkit-scrollbar,
   height: 0 !important;
   display: none !important;
 }
+
+/* New-chat (HomeView) has nothing to scroll — lock the document so the page
+   can't drag or rubber-band, especially on mobile. */
+html[data-orch-home-page="true"],
+html[data-orch-home-page="true"] body {
+  overflow: hidden;
+  overscroll-behavior: none;
+}

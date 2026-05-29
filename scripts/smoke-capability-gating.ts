@@ -30,7 +30,7 @@ import { MAX_AGENT_DEPTH, type ToolDef } from '@/lib/ai/agents/types'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 import { activateIntegrations } from '@/lib/integrations/activation-store'
 import { executeTool } from '@/lib/ai/tools/executor'
-import { activateIntegrationToolsTool } from '@/lib/ai/tools/integrations'
+import { activateIntegrationToolsTool, runActivatedIntegrationTool } from '@/lib/ai/tools/integrations'
 import { resolveProviderToolSurface } from '@/lib/ai/tools/registry'
 import { ALL_CAPABILITY_IDS, ALL_INTEGRATION_IDS, isSubsystemId } from '@/lib/integrations/exposure'
 import { ALL_SUBSYSTEM_IDS } from '@/lib/integrations/subsystem-manifest'
@@ -274,6 +274,40 @@ check(
     toolPrompt.includes('<doctrine for="watchlist">') && toolPrompt.includes(DOCTRINE_MARKERS.watchlist)
 )
 
+// --- RunActivatedIntegrationTool resolves subsystem + activationOnly tools --
+// Regression guard: gated subsystem tools and activationOnly integration tools
+// (maps/weather) must be dispatchable via RunActivatedIntegrationTool, since on
+// CLI-backed providers that is the ONLY way to reach a gated tool (frozen tool
+// list). It must NOT reject them at the resolution/connection stage.
+const runCtx = (cid: string) => ({
+    callerAgentId: 'orchestrator',
+    depth: 0,
+    conversationId: cid,
+    parentRequestId: 'smoke',
+})
+
+const subRun = await executeTool(
+    runActivatedIntegrationTool,
+    { tool_id: 'microscript_list', arguments: {} },
+    runCtx(`smoke-cap-run-sub-${randomUUID()}`)
+)
+check(
+    'RunActivatedIntegrationTool resolves a subsystem tool (no "not an operational integration tool")',
+    !/not an operational integration tool|not a gated capability tool/i.test(subRun.error ?? ''),
+    subRun.error
+)
+
+const wxRun = await executeTool(
+    runActivatedIntegrationTool,
+    { tool_id: 'WeatherShow', arguments: {} },
+    runCtx(`smoke-cap-run-wx-${randomUUID()}`)
+)
+check(
+    'RunActivatedIntegrationTool does not block activationOnly weather on connection state',
+    !/is not connected|not a gated capability tool/i.test(wxRun.error ?? ''),
+    wxRun.error
+)
+
 // --- provider tool surface compatibility ----------------------------------
 
 const mockFunctionTool: ToolDef = {
@@ -318,10 +352,15 @@ console.log(`  after maps + scheduling activated: ${activatedTokensApprox} token
 console.log(`  delta from activation: +${activatedTokensApprox - baselineTokensApprox} tokens`)
 
 // Keep the baseline prompt under a broad ceiling while allowing core policy
-// text to grow independently from lazily loaded capability doctrines.
+// text to grow independently from lazily loaded capability doctrines. The
+// ceiling moved up slightly when the gated-tool menus (the "Tools when active"
+// lines in <integrations>/<subsystems>) landed: those cheap menus live in the
+// baseline text but let us gate ~6k tokens of always-on operational tool
+// schemas out of the runtime tools section — a large net reduction the
+// no-tools baseline here does not capture.
   check(
-    `Baseline orchestrator prompt stays under 34.5k tokens (got ~${baselineTokensApprox})`,
-    baselineTokensApprox < 34_500
+    `Baseline orchestrator prompt stays under 35.5k tokens (got ~${baselineTokensApprox})`,
+    baselineTokensApprox < 35_500
   )
 
 // --- summary ---------------------------------------------------------------

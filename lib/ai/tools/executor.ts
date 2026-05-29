@@ -16,11 +16,12 @@ import { executeWebFetch } from "./web"
 import { executeTodoWrite } from "./todo-write"
 import { executeReportAgentNeed } from "./agent-needs"
 import { executeSetEnv } from "./set-env"
-import { getActivatedIntegrations } from "@/lib/integrations/activation-store"
+import { activateIntegrations } from "@/lib/integrations/activation-store"
 import {
   getIntegrationManifest,
   operationalIntegrationFor,
 } from "@/lib/integrations/manifest"
+import { subsystemForGatedTool } from "@/lib/integrations/subsystem-manifest"
 import {
   getIntegrationStatusSnapshot,
   refreshIntegrationStatusSnapshot,
@@ -590,40 +591,51 @@ async function executeRunActivatedIntegrationTool(
     return { success: false, error: "arguments must be an object." }
   }
 
+  // Resolve the capability this gated tool belongs to — an integration
+  // (maps/weather/gmail/…) or a native subsystem (monitoring/scheduling/
+  // watchlist/microscripts). Without the subsystem branch, gated subsystem
+  // tools were rejected outright, leaving them uncallable on CLI-backed
+  // providers (whose tool list is frozen at launch, so RunActivatedIntegrationTool
+  // is the ONLY way to reach a gated tool).
   const integrationId = operationalIntegrationFor(toolId)
-  if (!integrationId) {
+  const subsystemId = integrationId ? undefined : subsystemForGatedTool(toolId)
+  if (!integrationId && !subsystemId) {
     return {
       success: false,
-      error: `${toolId} is not an operational integration tool.`,
+      error: `${toolId} is not a gated capability tool — it is always available, so call it directly instead of via RunActivatedIntegrationTool.`,
     }
   }
+  const capabilityId = (integrationId ?? subsystemId)!
 
-  const entry = getIntegrationManifest(integrationId)
-  if (!entry) {
+  // Connection-bearing integrations must actually be connected. activationOnly
+  // integrations (maps, weather — keyless/local) and native subsystems have no
+  // connection handshake; a missing key/config surfaces as a per-call error
+  // from the tool itself, not a hard block here.
+  const entry = integrationId ? getIntegrationManifest(integrationId) : undefined
+  if (integrationId && !entry) {
     return { success: false, error: `Unknown integration for tool: ${toolId}` }
   }
-
-  let state = getIntegrationStatusSnapshot(ctx.appOrigin)[entry.statusKind]
-    ?.state
-  if (state !== "connected") {
-    state = (await refreshIntegrationStatusSnapshot(ctx.appOrigin))[
-      entry.statusKind
-    ]?.state
-  }
-  if (state !== "connected") {
-    return {
-      success: false,
-      error: `${entry.label} is not connected; current state is ${state ?? "unknown"}.`,
+  if (entry && !entry.activationOnly) {
+    let state = getIntegrationStatusSnapshot(ctx.appOrigin)[entry.statusKind]?.state
+    if (state !== "connected") {
+      state = (await refreshIntegrationStatusSnapshot(ctx.appOrigin))[
+        entry.statusKind
+      ]?.state
+    }
+    if (state !== "connected") {
+      return {
+        success: false,
+        error: `${entry.label} is not connected; current state is ${state ?? "unknown"}. Connect it first via its setup runbook.`,
+      }
     }
   }
 
-  const activated = getActivatedIntegrations(conversationId)
-  if (!activated.has(integrationId)) {
-    return {
-      success: false,
-      error: `${entry.label} tools are not active for this conversation. Call ActivateIntegrationTools with "${integrationId}" first.`,
-    }
-  }
+  // Auto-activate the capability for this conversation. RunActivatedIntegrationTool
+  // is the explicit "run this gated tool now" request, so a separate prior
+  // ActivateIntegrationTools call must never be a precondition — requiring it
+  // only created dead-ends (especially on CLI). Activation is side-effect-free
+  // (it just loads schemas/doctrine into later prompts) and idempotent.
+  activateIntegrations(conversationId, [capabilityId])
 
   const executor = executors[toolId]
   if (

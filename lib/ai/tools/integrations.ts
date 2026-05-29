@@ -93,10 +93,13 @@ export async function executeActivateIntegrationTools(
         }
     }
 
-    // Refresh the snapshot once, lazily — only when an integration id is in
-    // the list. Subsystems have no connection state so they skip the probe.
-    const integrationIds = ids.filter((id) => !isSubsystemId(id))
-    const snapshot = integrationIds.length > 0
+    // Refresh the snapshot once, lazily — only when a connection-bearing
+    // integration is in the list. Subsystems and activationOnly capabilities
+    // (maps, weather) have no connection state, so they skip the probe.
+    const needsProbe = ids.some(
+        (id) => !isSubsystemId(id) && !getIntegrationManifest(id)?.activationOnly
+    )
+    const snapshot = needsProbe
         ? await refreshIntegrationStatusSnapshot(ctx?.appOrigin)
         : null
     const activatedNow: string[] = []
@@ -114,6 +117,13 @@ export async function executeActivateIntegrationTools(
 
         const entry = getIntegrationManifest(id)
         if (!entry) continue
+        // activationOnly capabilities load regardless of connection state —
+        // the schemas just become available; a missing key surfaces per-call.
+        if (entry.activationOnly) {
+            activatedNow.push(id)
+            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.`)
+            continue
+        }
         const state = snapshot?.[entry.statusKind]?.state
         if (state === 'connected') {
             activatedNow.push(id)

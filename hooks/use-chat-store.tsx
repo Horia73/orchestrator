@@ -386,6 +386,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     dispatch({ type: "SET_STREAMING", isStreaming: false })
   }, [cleanupStream])
 
+  // Leaving the chat route (Settings, Watchlist, Monitor, …) hands completion
+  // tracking back to the global /api/sync stream. Otherwise this tab keeps
+  // streamingRef=true, which gates the sync-driven unread + notification path
+  // (the `!streamingRef.current` guard in the SSE handler), so a run that
+  // finishes while you're on another page never marks its conversation unread.
+  React.useEffect(() => {
+    if (pathname === "/") return
+    if (!streamingRef.current) return
+    detachStreaming()
+  }, [pathname, detachStreaming])
+
   const stopStreaming = React.useCallback(() => {
     const conversationId = activeConversationIdRef.current
     clientStreamMessageIdRef.current = null

@@ -7,6 +7,8 @@ import {
   GOOGLE_SHEETS_TOOL_IDS,
   GOOGLE_SLIDES_TOOL_IDS,
   HOME_ASSISTANT_TOOL_IDS,
+  MAPS_TOOL_IDS,
+  WEATHER_TOOL_IDS,
   WHATSAPP_TOOL_IDS,
 } from "@/lib/ai/agents/builtins"
 import { GOOGLE_WORKSPACE_DOCTRINE } from "@/lib/integrations/doctrines/google-workspace"
@@ -67,6 +69,16 @@ export interface IntegrationManifestEntry {
   note?: string
   /** Include in the always-on block even when it has no tool schemas. */
   alwaysInScope?: boolean
+  /**
+   * Gate operational tools by activation ALONE, not by connection state.
+   * Use for composition capabilities (maps, weather) that work without an
+   * external connection handshake (keyless fallbacks, local computation) or
+   * surface a clear per-call error when a key is missing. With this set,
+   * ActivateIntegrationTools always succeeds — it just loads the schemas —
+   * and the exposure filter drops the connection requirement so the agent
+   * can never get stuck unable to load a tool it can see in <integrations>.
+   */
+  activationOnly?: boolean
 }
 
 /** Tool ids that are part of the setup/lifecycle surface, by family. */
@@ -172,14 +184,17 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     runbookId: "maps",
     statusKind: "maps",
     setupToolIds: MAPS_SETUP,
-    // MapRender et al. are granted directly to the orchestrator (no
-    // activation gate on the tools themselves). The doctrine block —
-    // schema + cross-integration recipes — is gated: it only enters
-    // the prompt once the orchestrator activates maps for the
-    // conversation, keeping the always-on base prompt slim.
-    operationalToolIds: [],
+    // Lifecycle/status tools (MapsStatus, MapsCurrentLocation, list/set
+    // location source) stay always-on. The heavy composition tools
+    // (geocode, places, directions, stop optimizer, render) plus the
+    // doctrine are gated behind activation — activationOnly, so the
+    // orchestrator can load them whenever it is about to compose a map,
+    // regardless of whether a Maps key is configured (a missing key
+    // surfaces as a clear per-call error, not a dead end).
+    operationalToolIds: operationalOnly(MAPS_TOOL_IDS, MAPS_SETUP),
+    activationOnly: true,
     doctrine: MAPS_DOCTRINE,
-    note: "MapRender, MapsCurrentLocation, MapsListLocationSources, MapsSetLocationSource, MapsGeocode, MapsReverseGeocode, MapsPlaces, MapsOptimizeStops, and MapsDirections are always visible to the orchestrator. Maps uses GOOGLE_MAPS_API_KEY for Maps JavaScript, Geocoding, Places, and Routes APIs. MapsOptimizeStops itself is local and works without an upstream call once coordinates are known.",
+    note: "MapsStatus, MapsCurrentLocation, MapsListLocationSources, and MapsSetLocationSource stay always visible. MapsGeocode, MapsReverseGeocode, MapsPlaces, MapsOptimizeStops, MapsDirections, and MapRender load on ActivateIntegrationTools(\"maps\"). Maps uses GOOGLE_MAPS_API_KEY for Maps JavaScript, Geocoding, Places, and Routes APIs. MapsOptimizeStops itself is local and works without an upstream call once coordinates are known.",
   },
   {
     id: "weather",
@@ -189,12 +204,15 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     runbookId: "weather",
     statusKind: "weather",
     setupToolIds: WEATHER_SETUP,
-    // Same shape as maps: WeatherShow is always granted to the
-    // orchestrator, but the doctrine (flow, cross-integration, when-
-    // to-use, monitoring) is lazy via activation.
-    operationalToolIds: [],
+    // Same shape as maps: WeatherStatus stays always-on; the WeatherShow
+    // composition tool (and its outfit/why/calendar-context refiners) plus
+    // the doctrine load on activation. activationOnly because forecasts
+    // work keyless via Open-Meteo — there is no connection handshake to
+    // gate on.
+    operationalToolIds: operationalOnly(WEATHER_TOOL_IDS, WEATHER_SETUP),
+    activationOnly: true,
     doctrine: WEATHER_DOCTRINE,
-    note: "WeatherShow is always visible to the orchestrator. Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.",
+    note: "WeatherStatus stays always visible. WeatherShow, WeatherSetOutfit, WeatherSetWhy, and WeatherSetCalendarContext load on ActivateIntegrationTools(\"weather\"). Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.",
   },
   {
     id: "location-intelligence",

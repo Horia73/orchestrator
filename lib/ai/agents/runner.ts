@@ -202,7 +202,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         dedupeTools(canDelegate
             ? [...baseTools, ...getToolsForBuiltins(target.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
             : [...baseTools, ...getToolsForBuiltins(target.builtins)]),
-        { conversationId: parentCtx.conversationId, origin: parentCtx.appOrigin }
+        { conversationId: parentCtx.conversationId, origin: parentCtx.appOrigin, agentId: target.id }
     )
     const toolSurface = resolveProviderToolSurface(candidateTools, target.builtins, provider.capabilities)
     const agentTools = toolSurface.tools
@@ -276,6 +276,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             conversationId: parentCtx.conversationId,
             agentThreadId,
             declaredToolIds: target.tools,
+            declaredTools: getToolsForAgent(target.tools),
             delegationDepth: subDepth,
             maxDelegationDepth: MAX_AGENT_DEPTH,
             extra: parentCtx.appOrigin ? { appOrigin: parentCtx.appOrigin } : undefined,

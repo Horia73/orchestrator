@@ -43,7 +43,7 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
                 ...getToolsForAgent(orchestrator.tools),
                 ...getToolsForBuiltins(orchestrator.builtins),
             ].filter(tool => (seen.has(tool.id) ? false : (seen.add(tool.id), true))),
-            { conversationId: undefined, origin }
+            { conversationId: undefined, origin, agentId: orchestrator.id }
         )
         const surface = resolveProviderToolSurface(candidateTools, orchestrator.builtins, providerCaps)
         const config = getConfig()
@@ -58,6 +58,7 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
             availableBuiltins: surface.builtins,
             availableAgents,
             declaredToolIds: orchestrator.tools,
+            declaredTools: getToolsForAgent(orchestrator.tools),
             delegationDepth: 0,
             maxDelegationDepth: MAX_AGENT_DEPTH,
             extra: { appOrigin: origin },
