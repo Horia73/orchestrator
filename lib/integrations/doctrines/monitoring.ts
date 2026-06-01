@@ -7,13 +7,13 @@ Smart Monitor is the runtime surface for recurring model-owned work: persistent 
 Use the lightest runtime that satisfies the accepted automation. If a small deterministic check can decide when attention is needed, prefer a Microscript gate and wake a model only on match. Use Smart Monitor when the recurring check itself needs model judgement, broad triage, synthesis, adaptive digesting, or ongoing model-owned planning.
 
 Important architecture:
-- There is ONE Smart Monitor scheduled agent wake. It defaults to 15 minutes.
-- Smart Monitor must have exactly one Scheduling runtime entry: the consolidated Smart monitor heartbeat. Do not create separate scheduled tasks for Smart Monitor digests, summaries, maintenance, source-specific wakeups, retries, or catch-up runs. Store cadence and check instructions as durable Smart Monitor preferences/specs in MONITORS.md and watch records, and store execution bookkeeping in the Smart Monitor task_state. On every heartbeat, use current runtime time to perform overdue still-useful work that has not already been completed, skipped, or deduplicated for the relevant period.
-- The agent, not a deterministic rule engine, owns cadence after that. At each wake it can keep 15m, widen to 30m/1h/2h/etc., or move to a wall-clock schedule by calling reschedule_task on the Smart Monitor task.
+- A cheap, code-only pass runs the consolidated Smart Monitor heartbeat every ~5 minutes with NO model cost. It watermarks each connector source (Gmail, Calendar, WhatsApp, Home Assistant, Web, Weather) and buffers only genuinely-new, rule-matching items. The AI wake fires only when that buffer is non-empty AND the agent-chosen minimum sleep elapsed, or when a safety ceiling elapses during total quiet. When nothing changes, the model is not woken — that is the intended cost saving.
+- Smart Monitor must have exactly one Scheduling runtime entry: the consolidated Smart monitor heartbeat. Do not create separate scheduled tasks for Smart Monitor digests, summaries, maintenance, source-specific wakeups, retries, or catch-up runs. Store check instructions and durable specs in MONITORS.md and watch records, and store execution bookkeeping in the Smart Monitor task_state. On every wake, use current runtime time to perform overdue still-useful work that has not already been completed, skipped, or deduplicated for the relevant period.
+- The cheap poll cadence is fixed and engine-owned; the agent does NOT reschedule the Smart Monitor task. Instead it tunes how soon it can be re-woken by writing minWakeGapMs (minimum sleep / debounce floor, default ~15m, as low as 5m for urgent periods) and maxWakeGapMs (safety ceiling, default ~6h) at the top level of task_state. New matches buffer during the floor and arrive together at the next wake.
 - Watches are recurring-work boundaries and user-intent hints. A connector watch rule is a fetch/candidate-scope hint. A custom watch rule is a model-owned check prompt. Neither is proof that the user should be interrupted.
 - Do not create separate scheduled tasks, separate agents, or separate urgent/digest/noise tiers for the same source. One Smart Monitor wake should inspect the relevant sources and make the judgment.
 - Digest behavior is model-owned. If the user wants summaries, keep a compact digest queue and lastDigestAt in task_state, then choose the next wake accordingly. Do not encode digest time as fixed watch policy.
-- Quiet/active hours are model-owned context. Use the current local time, user history, task_state, and urgency to decide whether to notify now, defer, summarize, or reschedule. Do not rely on hard code gates.
+- Quiet/active hours are model-owned context. Use the current local time, user history, task_state, and urgency to decide whether to notify now, defer, summarize, or widen minWakeGapMs. Do not rely on hard code gates.
 - Every durable recurring monitor spec should be documented in MONITORS.md with status, watchId when active, cadence/check timing, source or custom scope, check prompt, notify threshold, and silence rule. The runtime watch is what executes; MONITORS.md is the durable spec the model can audit and maintain.
 
 Tool roles:
@@ -54,8 +54,8 @@ When the Smart Monitor scheduled task wakes you:
 4. Decide what is important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable.
 5. Call notify_inbox only for items worth interrupting the user about now. Group related findings into the fewest useful Inbox messages.
 6. For lower-priority items, either keep them silent or append compact entries to a digestQueue in task_state and schedule the next appropriate wake.
-7. Always call set_task_state with the full updated state, even when silent.
-8. Call reschedule_task only when there is a clear reason to change cadence. For the ongoing Smart Monitor task, use recurring timing such as every/daily_at/weekly/cron, not one-shot in/at.
+7. Always call set_task_state with the full updated state, even when silent. Include minWakeGapMs/maxWakeGapMs so your sleep preference persists; never write the reserved _smartGate field (the engine owns it).
+8. Do not call reschedule_task for the Smart Monitor task. Tune minWakeGapMs/maxWakeGapMs in task_state to change how soon you are re-woken; the cheap 5-minute poll cadence is fixed.
 
 Stay conservative: no source-side writes unless the watch explicitly allowed that exact action boundary. If the current capability is insufficient, record the gap in the run output or notify only if it blocks an important user expectation.
 </smart_monitor_agent_wake_protocol>

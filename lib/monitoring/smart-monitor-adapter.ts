@@ -9,28 +9,25 @@
 // lib/monitoring/smart-monitor.ts; this adapter is just the bridge between the
 // watch store and the scheduler's system-task surface.
 
-import {
-    floorToMonitorSlot,
-    isMonitorSlotAligned,
-    nextMonitorSlotAfter,
-    MONITOR_CADENCE_STEP_MS,
-} from '../monitor/cadence'
 import { countEnabledWatches } from '../monitor/store'
+import { SMART_MONITOR_POLL_INTERVAL_MS } from './smart-monitor-cheap-pass'
 
 // ---------------------------------------------------------------------------
 // System task lifecycle
 // ---------------------------------------------------------------------------
 
-/** Default Smart Monitor wake cadence. The agent may later reschedule this
- *  single system task; boot reconciliation only repairs invalid schedules and
- *  does not force a valid agent-chosen cadence back to 15 minutes. */
-const SMART_DEFAULT_INTERVAL_MS = MONITOR_CADENCE_STEP_MS
+/** Fixed Smart Monitor cheap-poll cadence. The task runs the no-model cheap
+ *  pass (lib/monitoring/smart-monitor-cheap-pass.ts) at this interval and gates
+ *  the AI wake itself. The agent no longer reschedules this task; it tunes its
+ *  wake floor/ceiling via minWakeGapMs/maxWakeGapMs in task_state instead. So
+ *  boot reconciliation now PINS the cadence to this value (mirrors the markets
+ *  heartbeat), rather than honouring an agent-chosen interval. */
+const SMART_POLL_INTERVAL_MS = SMART_MONITOR_POLL_INTERVAL_MS
 
-function desiredSmartMonitorSchedule(): { kind: 'every'; everyMs: number; startAt: number } {
+function desiredSmartMonitorSchedule(): { kind: 'every'; everyMs: number } {
     return {
         kind: 'every',
-        everyMs: SMART_DEFAULT_INTERVAL_MS,
-        startAt: nextMonitorSlotAfter(Date.now()),
+        everyMs: SMART_POLL_INTERVAL_MS,
     }
 }
 
@@ -38,40 +35,22 @@ function validMs(value: unknown): value is number {
     return typeof value === 'number' && Number.isFinite(value) && value > 0
 }
 
-function snappedIntervalMs(value: number): number {
-    const snapped = Math.round(value / MONITOR_CADENCE_STEP_MS) * MONITOR_CADENCE_STEP_MS
-    return Math.max(MONITOR_CADENCE_STEP_MS, snapped)
-}
-
+/** Return a corrected schedule when the existing one drifts from the fixed
+ *  cheap cadence (e.g. a legacy 15-minute or agent-rescheduled task), else
+ *  null when it is already correct. */
 function repairedSmartMonitorSchedule(existing: {
     schedule: unknown
     nextRunAt: number | null
     lastRunAt: number | null
-}): { kind: 'every'; everyMs: number; startAt: number } | null {
+}): { kind: 'every'; everyMs: number } | null {
     const schedule = existing.schedule
     if (!schedule || typeof schedule !== 'object' || Array.isArray(schedule)) return desiredSmartMonitorSchedule()
-    const spec = schedule as {
-        kind?: unknown
-        everyMs?: unknown
-        startAt?: unknown
-        fireAt?: unknown
+    const spec = schedule as { kind?: unknown; everyMs?: unknown }
+    if (spec.kind !== 'every') return desiredSmartMonitorSchedule()
+    if (!validMs(spec.everyMs) || spec.everyMs !== SMART_POLL_INTERVAL_MS) {
+        return desiredSmartMonitorSchedule()
     }
-    if (spec.kind === 'once') return desiredSmartMonitorSchedule()
-    if (spec.kind !== 'every') return null
-    if (!validMs(spec.everyMs)) return desiredSmartMonitorSchedule()
-
-    const everyMs = snappedIntervalMs(spec.everyMs)
-    const startAt = validMs(spec.startAt) && isMonitorSlotAligned(spec.startAt)
-        ? spec.startAt
-        : floorToMonitorSlot(
-            validMs(existing.lastRunAt)
-                ? existing.lastRunAt
-                : validMs(existing.nextRunAt)
-                    ? existing.nextRunAt
-                    : nextMonitorSlotAfter(Date.now()),
-        )
-    if (everyMs === spec.everyMs && startAt === spec.startAt) return null
-    return { kind: 'every', everyMs, startAt }
+    return null
 }
 
 /**

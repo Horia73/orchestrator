@@ -70,6 +70,16 @@ const INTERACTION_MAX_AGE_MS = 50 * 24 * 60 * 60 * 1000
 const FILE_CONTEXT_REFRESH_MAX_AGE_MS = 47 * 60 * 60 * 1000
 
 type MessageAttachment = NonNullable<ProviderSendOptions['messages'][number]['attachments']>[number]
+type GeminiStreamEvent = Record<string, unknown>
+type PendingGeminiToolCall = ToolCallInfo & { parseError?: string }
+
+interface StreamingFunctionCallState {
+    id: string
+    name: string
+    arguments: Record<string, unknown>
+    argumentChunks: string[]
+    emitted: boolean
+}
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 function readThinkingDelta(delta: any): string {
@@ -89,6 +99,83 @@ function readThinkingDelta(delta: any): string {
     if (typeof delta.thought === 'string') return delta.thought
     if (typeof delta.summary === 'string') return delta.summary
     return ''
+}
+
+function eventTypeOf(event: GeminiStreamEvent): string {
+    return stringValue(event.event_type) ?? stringValue(event.eventType) ?? stringValue(event.type) ?? ''
+}
+
+function stringValue(value: unknown): string | undefined {
+    return typeof value === 'string' && value.length > 0 ? value : undefined
+}
+
+function interactionIdFromEvent(event: GeminiStreamEvent): string | null {
+    const interaction = objectValue(event.interaction)
+    return stringValue(interaction?.id) ?? stringValue(event.interaction_id) ?? stringValue(event.id) ?? null
+}
+
+function usageFromEvent(event: GeminiStreamEvent): unknown {
+    const interaction = objectValue(event.interaction)
+    const metadata = objectValue(event.metadata)
+    return interaction?.usage ?? metadata?.usage ?? event.usage
+}
+
+function objectValue(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? value as Record<string, unknown>
+        : null
+}
+
+function contentTexts(value: unknown): string[] {
+    if (!Array.isArray(value)) return []
+    const out: string[] = []
+    for (const item of value) {
+        const record = objectValue(item)
+        if (!record) continue
+        const text = stringValue(record.text)
+        if (text) out.push(text)
+    }
+    return out
+}
+
+function readThinkingStep(step: GeminiStreamEvent): string {
+    const summary = step.summary
+    if (typeof summary === 'string') return summary
+    const text = contentTexts(summary).join('')
+    return text
+}
+
+function parseFunctionArguments(raw: string): { arguments: Record<string, unknown>; error?: string } {
+    const text = raw.trim()
+    if (!text) return { arguments: {} }
+    try {
+        const parsed = JSON.parse(text) as unknown
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            return { arguments: parsed as Record<string, unknown> }
+        }
+        return { arguments: {}, error: `Function call arguments must be a JSON object, got ${Array.isArray(parsed) ? 'array' : typeof parsed}` }
+    } catch (error) {
+        const message = error instanceof Error ? error.message : String(error)
+        return { arguments: {}, error: `Invalid streamed function call arguments: ${message}` }
+    }
+}
+
+function normalizeArguments(value: unknown): Record<string, unknown> {
+    if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return value as Record<string, unknown>
+    }
+    if (typeof value === 'string') {
+        return parseFunctionArguments(value).arguments
+    }
+    return {}
+}
+
+function serverToolName(type: string): string | null {
+    if (type.startsWith('google_search_')) return 'web_search'
+    if (type.startsWith('url_context_')) return 'url_context'
+    if (type.startsWith('code_execution_')) return 'code_execution'
+    if (type.startsWith('file_search_')) return 'file_search'
+    return null
 }
 
 function toContentType(mimeType: string): 'audio' | 'image' | 'video' | 'document' {
@@ -306,14 +393,10 @@ export class GoogleProvider implements AIProvider {
             }
         } else {
             const portableUserMessage = latestUserMessageWithPortableHistory(options.messages, false)
-            if (portableUserMessage && options.messages.length > 1) {
+            if (portableUserMessage) {
                 input = await this.buildMessageContent(portableUserMessage)
             } else {
-                // Stateless first turn — resolve the message normally (may need Files API upload).
-                input = await Promise.all(options.messages.map(async m => ({
-                    role: m.role === 'assistant' ? 'model' : 'user',
-                    content: await this.buildMessageContent(m),
-                })))
+                input = ''
             }
         }
 
@@ -390,6 +473,14 @@ export class GoogleProvider implements AIProvider {
             thinkingDoneSent = true
         }
 
+        const emitModelText = (text: unknown) => {
+            const value = stringValue(text)
+            if (!value) return
+            if (!hasContent) emitThinkingDone()
+            hasContent = true
+            cb.onContent(value)
+        }
+
         const abortStream = () => {
             emitThinkingDone()
             cb.onError('Aborted')
@@ -404,7 +495,106 @@ export class GoogleProvider implements AIProvider {
             }
 
             round++
-            const pendingToolCalls: ToolCallInfo[] = []
+            const pendingToolCalls: PendingGeminiToolCall[] = []
+            const streamingFunctionCalls = new Map<number, StreamingFunctionCallState>()
+            const emittedServerToolCalls = new Set<string>()
+            const emittedServerToolResults = new Set<string>()
+
+            const emitServerToolStep = (step: GeminiStreamEvent, index: number) => {
+                const stepType = stringValue(step.type)
+                if (!stepType) return
+                const toolName = serverToolName(stepType)
+                if (!toolName) return
+
+                emitThinkingDone()
+
+                if (stepType.endsWith('_call')) {
+                    const id = stringValue(step.id) ?? `${stepType}_${round}_${index}`
+                    const key = `${stepType}:${id}`
+                    if (emittedServerToolCalls.has(key)) return
+                    emittedServerToolCalls.add(key)
+                    cb.onToolCall({
+                        id,
+                        name: toolName,
+                        arguments: normalizeArguments(step.arguments),
+                    })
+                    return
+                }
+
+                if (stepType.endsWith('_result')) {
+                    const callId = stringValue(step.call_id) ?? `${stepType}_${round}_${index}`
+                    const key = `${stepType}:${callId}`
+                    if (emittedServerToolResults.has(key)) return
+                    emittedServerToolResults.add(key)
+                    cb.onToolResult(callId, toolName, {
+                        success: !step.is_error,
+                        data: {
+                            provider: 'google',
+                            type: stepType,
+                            results: step.result ?? [],
+                        },
+                        error: step.is_error ? `Google ${toolName} failed` : undefined,
+                    })
+                }
+            }
+
+            const startFunctionCall = (step: GeminiStreamEvent, index: number) => {
+                const name = stringValue(step.name)
+                if (!name) return
+                streamingFunctionCalls.set(index, {
+                    id: stringValue(step.id) ?? `call_${round}_${index}`,
+                    name,
+                    arguments: normalizeArguments(step.arguments),
+                    argumentChunks: [],
+                    emitted: false,
+                })
+            }
+
+            const appendFunctionArguments = (index: number, delta: GeminiStreamEvent) => {
+                let state = streamingFunctionCalls.get(index)
+                if (!state) {
+                    state = {
+                        id: `call_${round}_${index}`,
+                        name: '',
+                        arguments: {},
+                        argumentChunks: [],
+                        emitted: false,
+                    }
+                    streamingFunctionCalls.set(index, state)
+                }
+                const chunk = stringValue(delta.arguments)
+                if (chunk) state.argumentChunks.push(chunk)
+            }
+
+            const flushFunctionCall = (index: number) => {
+                const state = streamingFunctionCalls.get(index)
+                if (!state || state.emitted) return
+
+                let args = state.arguments
+                let parseError: string | undefined
+                const rawArgs = state.argumentChunks.join('')
+                if (rawArgs.trim()) {
+                    const parsed = parseFunctionArguments(rawArgs)
+                    args = parsed.arguments
+                    parseError = parsed.error
+                }
+                if (!state.name) {
+                    parseError = parseError
+                        ? `${parseError}; missing function tool name`
+                        : 'Missing function tool name in streamed function_call step'
+                }
+
+                const toolCall: PendingGeminiToolCall = {
+                    id: state.id,
+                    name: state.name || 'unknown',
+                    arguments: args,
+                }
+                if (parseError) toolCall.parseError = parseError
+                emitThinkingDone()
+                pendingToolCalls.push(toolCall)
+                cb.onToolCall(toolCall)
+                state.emitted = true
+            }
 
             const streamResult = await this.client.interactions.create(
                 params,
@@ -414,107 +604,94 @@ export class GoogleProvider implements AIProvider {
             for await (const chunk of streamResult) {
                 if (options.signal?.aborted) break
 
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                const event = chunk as any
-                const eventType = (event.event_type ?? event.eventType) as string
-
-                if (eventType === 'interaction.start') {
-                    interactionId = event.interaction?.id ?? null
-                }
+                const event = chunk as GeminiStreamEvent
+                const eventType = eventTypeOf(event)
+                const currentInteractionId = interactionIdFromEvent(event)
+                if (currentInteractionId) interactionId = currentInteractionId
 
                 if (eventType === 'content.start') {
-                    if (event.content?.type === 'thought') {
+                    const content = objectValue(event.content)
+                    if (content?.type === 'thought') {
                         startThinking()
                     }
                 }
 
-                if (eventType === 'content.delta') {
-                    const delta = event.delta
-                    if (!delta) continue
+                if (eventType === 'step.start') {
+                    const step = objectValue(event.step) ?? objectValue(event.content)
+                    if (!step) continue
+                    const stepType = stringValue(step.type)
 
-                    if (delta.type === 'thought' || delta.type === 'thought_summary') {
+                    if (stepType === 'thought') {
+                        startThinking()
+                        const text = readThinkingStep(step)
+                        if (text) cb.onThinking(text)
+                    } else if (stepType === 'model_output') {
+                        for (const text of contentTexts(step.content)) {
+                            emitModelText(text)
+                        }
+                    } else if (stepType === 'function_call') {
+                        startFunctionCall(step, Number(event.index) || 0)
+                    } else {
+                        emitServerToolStep(step, Number(event.index) || 0)
+                    }
+                }
+
+                if (eventType === 'content.delta' || eventType === 'step.delta') {
+                    const delta = objectValue(event.delta)
+                    if (!delta) continue
+                    const deltaType = stringValue(delta.type)
+
+                    if (deltaType === 'thought' || deltaType === 'thought_summary') {
                         startThinking()
                         const text = readThinkingDelta(delta)
                         if (text) cb.onThinking(text)
                     }
 
-                    if (delta.type === 'text') {
-                        if (!hasContent) emitThinkingDone()
-                        hasContent = true
-                        const text = delta.text ?? ''
-                        if (text) cb.onContent(text)
+                    if (deltaType === 'text') {
+                        emitModelText(delta.text)
                     }
 
-                    if (delta.type === 'function_call') {
+                    if (deltaType === 'function_call') {
                         emitThinkingDone()
-                        // Function call arguments arrive as a complete JSON object
-                        const toolCall: ToolCallInfo = {
-                            id: delta.id ?? `call_${round}_${pendingToolCalls.length}`,
-                            name: delta.name,
-                            arguments: delta.arguments ?? {},
+                        const parsedArgs = typeof delta.arguments === 'string'
+                            ? parseFunctionArguments(delta.arguments)
+                            : { arguments: normalizeArguments(delta.arguments) }
+                        const toolCall: PendingGeminiToolCall = {
+                            id: stringValue(delta.id) ?? `call_${round}_${pendingToolCalls.length}`,
+                            name: stringValue(delta.name) ?? 'unknown',
+                            arguments: parsedArgs.arguments,
                         }
+                        if (parsedArgs.error) toolCall.parseError = parsedArgs.error
                         pendingToolCalls.push(toolCall)
                         cb.onToolCall(toolCall)
                     }
 
-                    if (delta.type === 'google_search_call') {
-                        emitThinkingDone()
-                        const id = typeof delta.id === 'string' ? delta.id : `google_search_${round}_${pendingToolCalls.length}`
-                        cb.onToolCall({
-                            id,
-                            name: 'web_search',
-                            arguments: delta.arguments ?? {},
-                        })
+                    if (deltaType === 'arguments_delta') {
+                        appendFunctionArguments(Number(event.index) || 0, delta)
                     }
 
-                    if (delta.type === 'google_search_result') {
-                        emitThinkingDone()
-                        const callId = typeof delta.call_id === 'string' ? delta.call_id : `google_search_result_${round}`
-                        cb.onToolResult(callId, 'web_search', {
-                            success: !delta.is_error,
-                            data: {
-                                provider: 'google',
-                                type: delta.type,
-                                results: Array.isArray(delta.result) ? delta.result : [],
-                            },
-                            error: delta.is_error ? 'Google Search grounding failed' : undefined,
-                        })
-                    }
-
-                    if (delta.type === 'url_context_call') {
-                        emitThinkingDone()
-                        const id = typeof delta.id === 'string' ? delta.id : `url_context_${round}_${pendingToolCalls.length}`
-                        cb.onToolCall({
-                            id,
-                            name: 'url_context',
-                            arguments: delta.arguments ?? {},
-                        })
-                    }
-
-                    if (delta.type === 'url_context_result') {
-                        emitThinkingDone()
-                        const callId = typeof delta.call_id === 'string' ? delta.call_id : `url_context_result_${round}`
-                        cb.onToolResult(callId, 'url_context', {
-                            success: !delta.is_error,
-                            data: {
-                                provider: 'google',
-                                type: delta.type,
-                                results: Array.isArray(delta.result) ? delta.result : [],
-                            },
-                            error: delta.is_error ? 'Google URL Context failed' : undefined,
-                        })
+                    if (deltaType) {
+                        emitServerToolStep(delta, Number(event.index) || 0)
                     }
                 }
 
-                if (eventType === 'interaction.complete') {
-                    if (event.interaction?.id) interactionId = event.interaction.id
-                    usage = accumulateGeminiUsage(usage, event.interaction?.usage)
+                if (eventType === 'step.stop') {
+                    flushFunctionCall(Number(event.index) || 0)
+                }
+
+                if (eventType === 'interaction.complete' || eventType === 'interaction.completed') {
+                    usage = accumulateGeminiUsage(usage, usageFromEvent(event))
                 }
 
                 if (eventType === 'error') {
-                    cb.onError(event.error?.message ?? 'Unknown API error')
+                    const error = objectValue(event.error)
+                    cb.onError(stringValue(error?.message) ?? 'Unknown API error')
                     return
                 }
+            }
+
+            for (const index of streamingFunctionCalls.keys()) {
+                flushFunctionCall(index)
             }
 
             if (options.signal?.aborted) {
@@ -537,6 +714,19 @@ export class GoogleProvider implements AIProvider {
                     return
                 }
 
+                if (tc.parseError) {
+                    const result = { success: false, error: tc.parseError }
+                    cb.onToolResult(tc.id, tc.name, result)
+                    functionResults.push({
+                        type: 'function_result',
+                        name: tc.name,
+                        call_id: tc.id,
+                        result: JSON.stringify(result),
+                        is_error: true,
+                    })
+                    continue
+                }
+
                 const toolDef = runtimeTools.find(t => t.name === tc.name || t.id === tc.name)
                 if (!toolDef) {
                     const result = { success: false, error: `Unknown tool: ${tc.name}` }
@@ -546,6 +736,7 @@ export class GoogleProvider implements AIProvider {
                         name: tc.name,
                         call_id: tc.id,
                         result: JSON.stringify(result),
+                        is_error: true,
                     })
                     continue
                 }
@@ -564,6 +755,7 @@ export class GoogleProvider implements AIProvider {
                     name: tc.name,
                     call_id: tc.id,
                     result: JSON.stringify(result),
+                    is_error: !result.success,
                 })
             }
 
@@ -597,6 +789,7 @@ export class GoogleProvider implements AIProvider {
         if (builtins?.includes('web_search')) tools.push({ type: 'google_search' })
         if (builtins?.includes('url_context')) tools.push({ type: 'url_context' })
         if (builtins?.includes('code_execution')) tools.push({ type: 'code_execution' })
+        if (builtins?.includes('file_search')) tools.push({ type: 'file_search' })
         return tools
     }
 

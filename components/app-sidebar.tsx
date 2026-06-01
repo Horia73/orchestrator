@@ -574,7 +574,7 @@ export function AppSidebar() {
 
   return (
     <Sidebar collapsible="icon" className="border-r-0">
-      <SidebarHeader className="pb-2">
+      <SidebarHeader className="shrink-0 pb-2">
         <div className="flex h-9 items-center justify-between gap-2 px-1 md:h-7">
           {!isCollapsed && (
             <span
@@ -588,9 +588,9 @@ export function AppSidebar() {
         </div>
       </SidebarHeader>
 
-      <SidebarContent>
+      <SidebarContent className="overflow-hidden">
         {/* Main actions */}
-        <SidebarGroup className="py-0">
+        <SidebarGroup className="shrink-0 py-0">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -634,7 +634,7 @@ export function AppSidebar() {
         </SidebarGroup>
 
         {/* Watchlist + Scheduling + Inbox */}
-        <SidebarGroup className="py-0">
+        <SidebarGroup className="shrink-0 py-0">
           <SidebarGroupContent>
             <SidebarMenu>
               <SidebarMenuItem>
@@ -734,7 +734,7 @@ export function AppSidebar() {
         {!isCollapsed && (
           <>
             {/* Recents section */}
-            <SidebarGroup className="group/archive-section flex-1 py-0">
+            <SidebarGroup className="group/archive-section min-h-0 flex-1 py-0">
               <SidebarGroupLabel className="justify-between text-[12px] tracking-wider text-foreground/50 uppercase">
                 <span>{conversationSectionLabel}</span>
                 {!isFiltering && (
@@ -759,7 +759,7 @@ export function AppSidebar() {
                   </button>
                 )}
               </SidebarGroupLabel>
-              <SidebarGroupContent>
+              <SidebarGroupContent className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
                 {conversationsLoading ? (
                   <SidebarMenu className="space-y-0.5 px-2">
                     {[1, 2, 3, 4, 5].map((i) => (
@@ -914,7 +914,7 @@ export function AppSidebar() {
         )}
       </SidebarContent>
 
-      <SidebarFooter>
+      <SidebarFooter className="shrink-0">
         <SidebarMenu>
           <SidebarMenuItem>
             <SidebarMenuButton

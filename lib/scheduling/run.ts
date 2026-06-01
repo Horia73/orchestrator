@@ -1,6 +1,7 @@
 import { randomUUID } from "crypto"
 
 import type { AgentRunEvent, ToolExecutionContext } from "@/lib/ai/agents/types"
+import type { SmartCheapPassResult } from "@/lib/monitoring/smart-monitor-cheap-pass"
 import type {
   ContentSegment,
   InboxReplyAction,
@@ -209,15 +210,30 @@ export async function runScheduledTask(
       // Microscripts execute their own due scripts and surface directly.
       let briefPrompt: string | undefined
       let summary: string
+      // Set on the Smart Monitor branch so the post-wake block can finalize the
+      // cheap-pass gate (advance lastWakeAt, clear the pending buffer on success).
+      let smartPass: SmartCheapPassResult | null = null
       if (task.action.monitorKind === "smart") {
-        const { buildSmartMonitorAgentPrompt } =
-          await import("@/lib/monitoring/smart-monitor")
-        summary = "Smart monitor agent wake completed."
-        briefPrompt = buildSmartMonitorAgentPrompt({
+        // The CHEAP, no-model pass. It watermarks every connector source and
+        // only returns a wake prompt when a genuinely-new item is buffered AND
+        // the agent-chosen minimum sleep elapsed (or the safety ceiling hit).
+        // Otherwise the tick is silent — the model is NOT woken.
+        const { runSmartMonitorCheapPass } =
+          await import("@/lib/monitoring/smart-monitor-cheap-pass")
+        smartPass = await runSmartMonitorCheapPass({
+          priorState: getTaskState(task.id),
           now: firedAt,
           taskId: task.id,
-          taskState: getTaskState(task.id),
         })
+        // Persist gate bookkeeping BEFORE any wake (full buffer + prior
+        // lastWakeAt) so a crashed wake never loses buffered items.
+        try {
+          setTaskState(task.id, smartPass.nextState)
+        } catch {
+          /* best-effort */
+        }
+        summary = smartPass.summary
+        briefPrompt = smartPass.noteworthy ? smartPass.briefPrompt : undefined
       } else if (task.action.monitorKind === "microscripts") {
         const { runMicroscriptsHeartbeat } =
           await import("@/lib/microscripts/heartbeat")
@@ -322,7 +338,31 @@ export async function runScheduledTask(
             assistantContent = `❌ ${task.action.monitorKind === "smart" ? "Smart" : "Markets"} monitor wake failed.\n\n${result.error ?? "Unknown error"}`
             reasoning = done?.reasoning
           }
-          if (capturedState !== undefined) {
+          if (smartPass) {
+            // Smart Monitor: merge the agent's post-wake state with the gate
+            // bookkeeping. Advances lastWakeAt (natural backoff) and clears the
+            // pending buffer only on a successful wake, while honouring any
+            // minWakeGapMs/maxWakeGapMs the agent tuned.
+            try {
+              const { finalizeSmartMonitorWake } = await import(
+                "@/lib/monitoring/smart-monitor-cheap-pass"
+              )
+              setTaskState(
+                task.id,
+                finalizeSmartMonitorWake({
+                  aiState: capturedState as
+                    | Record<string, unknown>
+                    | undefined,
+                  preWakeState: smartPass.nextState,
+                  gate: smartPass.gate,
+                  firedAt,
+                  ok,
+                })
+              )
+            } catch {
+              /* best-effort */
+            }
+          } else if (capturedState !== undefined) {
             try {
               setTaskState(task.id, capturedState)
             } catch {

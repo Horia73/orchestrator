@@ -291,8 +291,7 @@ export const rescheduleTaskTool: ToolDef = {
     name: 'reschedule_task',
     description: [
         'Change the cadence/timing of an existing scheduled task (keeps its history and state).',
-        'For Smart Monitor, the agent starts from the consolidated heartbeat and chooses the next recurring cadence or wall-clock schedule itself.',
-        'For the ongoing Smart Monitor task, use recurring timing (every/daily_at/weekly/cron), not one-shot in/at unless the user explicitly wants the task to stop after one more run.',
+        'Do NOT use this on the Smart Monitor heartbeat: its cheap-poll cadence is fixed and engine-owned. To change how soon the Smart Monitor wakes you, set minWakeGapMs/maxWakeGapMs in its task_state via set_task_state instead.',
         'Use list_tasks to find the id; pass the same timing fields as schedule_task (in/at/daily_at/weekly/every/cron).',
     ].join(' '),
     input_schema: {

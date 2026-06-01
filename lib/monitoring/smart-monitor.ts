@@ -115,39 +115,93 @@ function buildRuntimeTimeBlock(now: number, watches: Array<{ notify: { quietHour
  * raw `check` events (very noisy) and `cadence_change` (bookkeeping). */
 const WAKE_HISTORY_KINDS = ['wake', 'notify', 'suppress', 'feedback', 'match', 'action', 'error'] as const
 
+/** One concrete change the cheap pass detected and is escalating to this wake.
+ *  Structurally compatible with SmartPendingMatch in smart-monitor-cheap-pass.ts
+ *  (kept defined here so the cheap pass imports the builder, not vice-versa). */
+export interface DetectedChange {
+    watchId: string
+    watchTitle: string
+    source: string
+    summary: string
+    ts: number
+    details?: Record<string, unknown>
+}
+
+function buildDetectedBlock(detected: DetectedChange[]): string[] {
+    const lines = ['<detected_changes>']
+    lines.push(`The cheap pass already detected these ${detected.length} new item(s) since the last wake. Anchor this wake on them — do not blindly re-scan every source; fetch more only when an item needs context to judge.`)
+    const byWatch = new Map<string, DetectedChange[]>()
+    for (const d of detected) {
+        const arr = byWatch.get(d.watchId) ?? []
+        arr.push(d)
+        byWatch.set(d.watchId, arr)
+    }
+    for (const [, items] of byWatch) {
+        const head = items[0]
+        lines.push(`- ${head.watchTitle} (${head.source}, ${items.length} item${items.length === 1 ? '' : 's'}):`)
+        for (const it of items.slice(0, 12)) {
+            lines.push(`    • ${clipLine(it.summary, 240)}`)
+        }
+        if (items.length > 12) lines.push(`    • …and ${items.length - 12} more`)
+    }
+    lines.push('</detected_changes>')
+    return lines
+}
+
 export function buildSmartMonitorAgentPrompt(options: {
     now: number
     taskId: string
     taskState: unknown
+    /** Concrete changes the cheap pass surfaced for this wake. Empty/undefined
+     *  on a safety-ceiling wake where nothing new was detected. */
+    detected?: DetectedChange[]
+    /** Why this wake fired: 'matches' (new items past min sleep) or 'ceiling'
+     *  (periodic safety wake during quiet). */
+    wakeReason?: 'matches' | 'ceiling'
+    /** Current gate knobs, so the agent knows the floor/ceiling it can tune. */
+    gate?: { minWakeGapMs: number; maxWakeGapMs: number }
 }): string {
-    const { now, taskId, taskState } = options
+    const { now, taskId, taskState, detected = [], wakeReason, gate } = options
     const watches = listMonitorWatches({ enabled: true })
     const lines: string[] = []
+    const minMinutes = gate ? Math.round(gate.minWakeGapMs / 60_000) : 15
+    const maxHours = gate ? Math.max(1, Math.round(gate.maxWakeGapMs / 3_600_000)) : 6
 
     lines.push('You are the Smart Monitor agent wake.')
-    lines.push('You are awake because the single Smart Monitor schedule fired. Your job is to inspect enabled watch intents that need model judgement, decide what matters, notify sparingly, update task state, and adjust your next cadence when useful.')
+    if (wakeReason === 'ceiling') {
+        lines.push(`You are awake because the safety ceiling (~${maxHours}h with no detected change) elapsed, not because the cheap pass found something. Re-derive intent, run any due model-owned (custom) checks, flush a digest if one is pending, and otherwise stay silent.`)
+    } else {
+        lines.push('You are awake because a cheap, no-model pass detected new items (listed under <detected_changes>) and your minimum sleep elapsed. Judge those items, decide what matters, notify sparingly, and update task state.')
+    }
     lines.push('')
     lines.push('Operating model:')
+    lines.push('- A cheap, code-only pass runs every ~5 minutes and watermarks each connector source. It does NOT wake you on its own; it only buffers genuinely-new, rule-matching items and wakes you once the buffer is non-empty AND your minimum sleep has elapsed (or the safety ceiling is hit). When nothing changes, you stay asleep — that is intended.')
     lines.push('- There is one consolidated Smart Monitor agent for recurring monitoring, recurring summaries, and recurring model-owned maintenance. Do not create separate scheduled tasks or extra agents for urgent/digest/noise tiers.')
     lines.push('- Smart Monitor must have exactly one Scheduling runtime entry: this consolidated Smart monitor heartbeat. Do not create separate scheduled tasks for Smart Monitor digests, summaries, maintenance, source-specific wakeups, retries, or catch-up runs.')
     lines.push('- Store durable recurring requirements as Smart Monitor watch specs in MONITORS.md, and store execution bookkeeping in this Smart Monitor task_state. On every heartbeat, use current runtime time to perform overdue still-useful work that has not already been completed, skipped, or deduplicated for the relevant period.')
     lines.push('- Watch records below are recurring-work boundaries and user-intent hints. Connector rules are fetch hints; custom rules are model-owned check prompts. They are not preset notification rules and not proof that the user should be interrupted.')
     lines.push('- Do not invent canned urgent keyword lists. Extract the user intent from the watch title/target/rule, the durable memory already in your prompt, and your task state. If the intent is too vague, stay conservative and mention the missing capability in your normal output without notifying unless there is a real issue.')
     lines.push('- Use only the tools needed by each watch. For connector watches, activate the matching integration before reading. For custom watches, follow the custom_prompt with the available workspace, memory, runtime-history, and integration tools that fit that instruction.')
-    lines.push('- If a watch needs current public-web research, do not try to combine native web search with this wake\'s action tools. Use delegate_to with the Researcher for a compact search-only subtask, then use the returned facts in this wake to decide notify_inbox, monitor_wake_feedback, set_task_state, and reschedule_task.')
+    lines.push('- If a watch needs current public-web research, do not try to combine native web search with this wake\'s action tools. Use delegate_to with the Researcher for a compact search-only subtask, then use the returned facts in this wake to decide notify_inbox, monitor_wake_feedback, and set_task_state.')
     lines.push('- Notify Inbox only for things that are important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the watch intent.')
     lines.push('- For non-urgent accumulated items, summarize only when the watch/user preference calls for it or the volume is meaningfully high. Otherwise stay silent.')
-    lines.push('- Digest behavior is model-owned, not a fixed watch policy. If items should be batched for a later summary, store a compact digestQueue/lastDigestAt in task_state and choose an appropriate future wake cadence.')
+    lines.push('- Digest behavior is model-owned, not a fixed watch policy. If items should be batched for a later summary, store a compact digestQueue/lastDigestAt in task_state and widen your minimum sleep so the next wake lands at the digest time.')
     lines.push('- Never perform source-side write actions unless the watch allowed action explicitly permits it AND the user already approved the exact rule/action boundary. Notify-only remains the default.')
     lines.push('- When a surfaced item leaves the user with an obvious decision, include notify_inbox `actions` with short quick-reply labels. Use actions for archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review-first choices; do not make the user type the same command manually.')
     lines.push('- For triage/digest messages, especially Gmail or WhatsApp routine cleanup, include 2-4 actions when you mention candidates. Example labels: "Archive candidates", "Keep all", "Review first". Each action value must state the exact scope and tell the agent to skip ambiguous items.')
     lines.push('')
-    lines.push('Cadence policy:')
-    lines.push(`- Current task id: ${taskId}. Default cadence is 15m.`)
-    lines.push('- You MAY call reschedule_task for this task to self-pace. Keep the 15m default when it still fits; tighten only for clearly time-sensitive periods; widen to 30m, 1h, 2h, or longer after sustained quiet periods, low-signal hours, or known inactive windows. Do not thrash; reschedule only on a clear tier change.')
-    lines.push('- Smart Monitor interval schedules are anchored to the existing monitor slot grid. If a wake happened on the :30 slot and you widen to every 1h, the next wake should stay on :30, not slide to the time this run finishes.')
-    lines.push('- Quiet-hour preferences are context only, not a hard upstream gate. Use local time, task history, and urgency to decide whether to notify now, defer, or widen cadence.')
-    lines.push('- Always call set_task_state with the full updated small state: per-source watermarks/lastSeen ids, quietRuns/activeRuns, lastNotifiedAt, cadenceTier, lastCheckedAt, digestQueue/lastDigestAt if useful, and any useful time-of-day signal.')
+    if (detected.length > 0) {
+        lines.push(...buildDetectedBlock(detected))
+        lines.push('')
+    }
+    lines.push('Sleep policy (you control how soon the cheap pass may wake you again):')
+    lines.push(`- The cheap poll itself is FIXED at ~5 minutes and is not yours to reschedule. Do NOT call reschedule_task for this task; it stays on its cheap cadence.`)
+    lines.push(`- You control two knobs by writing them at the TOP LEVEL of task_state via set_task_state (milliseconds):`)
+    lines.push(`  • minWakeGapMs — minimum sleep between wakes / debounce floor. Currently ~${minMinutes}m. Lower it (down to 5m) for clearly time-sensitive periods so changes reach you faster; raise it (30m, 1h, 2h+) during sustained quiet, low-signal hours, or known inactive windows. New matches keep buffering during the floor and arrive together at the next wake.`)
+    lines.push(`  • maxWakeGapMs — safety ceiling. Currently ~${maxHours}h. You will be woken at least this often even with zero detected changes, to re-derive intent / flush digests / run due custom checks. Widen it during long quiet stretches, tighten it if you need guaranteed periodic housekeeping.`)
+    lines.push('- Do NOT touch the reserved `_smartGate` field in task_state; the engine owns it (last wake time + buffered items). Changing it can drop pending notifications.')
+    lines.push('- Quiet-hour preferences are context, not a hard gate. Use local time, task history, and urgency to decide whether to notify now, defer, or widen minWakeGapMs.')
+    lines.push('- Always call set_task_state with the full updated small state: per-source watermarks/lastSeen ids, quietRuns/activeRuns, lastNotifiedAt, lastCheckedAt, digestQueue/lastDigestAt if useful, minWakeGapMs/maxWakeGapMs, and any useful time-of-day signal.')
     lines.push('')
     lines.push(...buildRuntimeTimeBlock(now, watches))
     lines.push('')
@@ -213,8 +267,8 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push('1. If nothing is noteworthy, do not call notify_inbox. Return a short internal summary only; it will stay in Past runs.')
     lines.push('2. If something matters, call notify_inbox with a specific email-style `title` plus one compact message per real issue. Group related source findings.')
     lines.push('3. If the notification asks for or implies a user decision, include notify_inbox.actions in the same tool call. Missing quick actions is a UX failure for digest/triage notifications.')
-    lines.push('4. Persist set_task_state every run, even when silent.')
-    lines.push('5. Optionally call reschedule_task if the next cadence should change based on the activity/time pattern. For this ongoing Smart Monitor task, use recurring timing such as when.every/daily_at/cron, not one-shot when.in/at.')
+    lines.push('4. Persist set_task_state every wake, even when silent — include minWakeGapMs/maxWakeGapMs so your sleep preference sticks.')
+    lines.push('5. Do NOT call reschedule_task for this task. Tune minWakeGapMs/maxWakeGapMs in task_state instead; the cheap 5-minute poll cadence is fixed and engine-owned.')
 
     return lines.join('\n')
 }
