@@ -278,8 +278,12 @@ export function AppSidebar() {
   const [archivedLoading, setArchivedLoading] = React.useState(false)
   const [archivedError, setArchivedError] = React.useState<string | null>(null)
   const [currentTime, setCurrentTime] = React.useState<number | null>(null)
+  const [isConversationScrollbarVisible, setIsConversationScrollbarVisible] =
+    React.useState(false)
   const deferredSearchQuery = React.useDeferredValue(searchQuery)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
+  const conversationScrollbarVisibleRef = React.useRef(false)
+  const conversationScrollbarFadeTimeoutRef = React.useRef<number | null>(null)
   const { assistantName } = useRuntimeConfig()
   const normalizedSearchQuery = normalizeSearchText(deferredSearchQuery.trim())
   const isFiltering = normalizedSearchQuery.length > 0
@@ -313,6 +317,56 @@ export function AppSidebar() {
     updateClock()
     const timer = window.setInterval(updateClock, 30_000)
     return () => window.clearInterval(timer)
+  }, [])
+
+  const revealConversationScrollbar = React.useCallback(() => {
+    if (!conversationScrollbarVisibleRef.current) {
+      conversationScrollbarVisibleRef.current = true
+      setIsConversationScrollbarVisible(true)
+    }
+
+    if (conversationScrollbarFadeTimeoutRef.current !== null) {
+      window.clearTimeout(conversationScrollbarFadeTimeoutRef.current)
+    }
+
+    conversationScrollbarFadeTimeoutRef.current = window.setTimeout(() => {
+      conversationScrollbarVisibleRef.current = false
+      conversationScrollbarFadeTimeoutRef.current = null
+      setIsConversationScrollbarVisible(false)
+    }, 700)
+  }, [])
+
+  const handleConversationWheel = React.useCallback(
+    (event: React.WheelEvent<HTMLDivElement>) => {
+      const target = event.currentTarget
+      const maxScrollTop = target.scrollHeight - target.clientHeight
+
+      if (maxScrollTop <= 0) return
+
+      const isMovingDown = event.deltaY > 0 && target.scrollTop < maxScrollTop
+      const isMovingUp = event.deltaY < 0 && target.scrollTop > 0
+
+      if (isMovingDown || isMovingUp) revealConversationScrollbar()
+    },
+    [revealConversationScrollbar]
+  )
+
+  const handleConversationTouchMove = React.useCallback(
+    (event: React.TouchEvent<HTMLDivElement>) => {
+      const target = event.currentTarget
+      if (target.scrollHeight > target.clientHeight) {
+        revealConversationScrollbar()
+      }
+    },
+    [revealConversationScrollbar]
+  )
+
+  React.useEffect(() => {
+    return () => {
+      if (conversationScrollbarFadeTimeoutRef.current !== null) {
+        window.clearTimeout(conversationScrollbarFadeTimeoutRef.current)
+      }
+    }
   }, [])
 
   React.useEffect(() => {
@@ -759,7 +813,15 @@ export function AppSidebar() {
                   </button>
                 )}
               </SidebarGroupLabel>
-              <SidebarGroupContent className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]">
+              <SidebarGroupContent
+                data-scrollbar-visible={
+                  isConversationScrollbarVisible ? "true" : "false"
+                }
+                onScroll={revealConversationScrollbar}
+                onWheel={handleConversationWheel}
+                onTouchMove={handleConversationTouchMove}
+                className="sidebar-conversation-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]"
+              >
                 {conversationsLoading ? (
                   <SidebarMenu className="space-y-0.5 px-2">
                     {[1, 2, 3, 4, 5].map((i) => (

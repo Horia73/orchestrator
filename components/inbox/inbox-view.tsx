@@ -25,6 +25,7 @@ import { MessageBubble } from "@/components/message-bubble"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { useChatStore } from "@/hooks/use-chat-store"
+import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
@@ -638,6 +639,8 @@ function InboxViewInner() {
   >(new Set())
   const keyboardInset = useMobileKeyboardInset()
 
+  useDocumentViewportLock()
+
   const handledItemParam = React.useRef<string | null>(null)
   React.useEffect(() => {
     const id = searchParams.get("item")
@@ -790,11 +793,11 @@ function InboxViewInner() {
   }, [selectedId])
 
   return (
-    <div className="flex h-full min-h-0 bg-background text-foreground">
+    <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
       {dialog}
       <div
         className={cn(
-          "min-h-0 w-full shrink-0 flex-col border-r border-border/60 bg-background md:flex md:w-[430px] xl:w-[520px] dark:border-white/10",
+          "min-h-0 w-full shrink-0 flex-col overflow-hidden border-r border-border/60 bg-background md:flex md:w-[430px] xl:w-[520px] dark:border-white/10",
           selectedId ? "hidden md:flex" : "flex"
         )}
       >
@@ -883,7 +886,14 @@ function InboxViewInner() {
               </div>
             )}
 
-            <div className="min-h-0 flex-1 overflow-y-auto bg-background">
+            <div
+              className="min-h-0 flex-1 overflow-y-auto bg-background"
+              style={{
+                WebkitOverflowScrolling: "touch",
+                overscrollBehaviorY: "contain",
+                touchAction: "pan-y",
+              }}
+            >
               {loading && items.length === 0 ? (
                 <div className="divide-y divide-border/60 dark:divide-white/10">
                   {[1, 2, 3, 4, 5].map((i) => (
@@ -929,7 +939,7 @@ function InboxViewInner() {
 
       <div
         className={cn(
-          "min-w-0 flex-1 flex-col bg-background md:flex",
+          "min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-background md:flex",
           selectedId ? "flex" : "hidden md:flex"
         )}
       >
@@ -1013,8 +1023,17 @@ function InboxViewInner() {
               className="min-h-0 flex-1 overflow-y-auto bg-background transition-[padding-bottom] duration-150 ease-out"
               style={
                 keyboardInset > 0
-                  ? { paddingBottom: keyboardInset }
-                  : undefined
+                  ? {
+                      WebkitOverflowScrolling: "touch",
+                      overscrollBehaviorY: "contain",
+                      paddingBottom: keyboardInset,
+                      touchAction: "pan-y",
+                    }
+                  : {
+                      WebkitOverflowScrolling: "touch",
+                      overscrollBehaviorY: "contain",
+                      touchAction: "pan-y",
+                    }
               }
             >
               <div className="mx-auto w-full max-w-[920px]">

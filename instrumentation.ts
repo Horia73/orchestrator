@@ -71,6 +71,16 @@ export async function register(): Promise<void> {
     } catch (err) {
         console.error('[microscripts] failed to wire heartbeat', err)
     }
+    // Arm the nightly Memory reflection system task. Idempotent — creates the
+    // single "Memory reflection" agent wake on first boot and reconciles its
+    // schedule/prompt on each boot. Stays enabled unconditionally; the heavy
+    // logic is model-owned in <memory_reflection_protocol>, not in code.
+    try {
+        const { wireMemoryReflection } = await import('@/lib/monitoring/memory-reflection-adapter')
+        await wireMemoryReflection()
+    } catch (err) {
+        console.error('[memory] failed to wire memory reflection', err)
+    }
     // Confirm managed self-updates after the restarted process is alive. The
     // update runner/host bridge records the expected commit before restart;
     // this boot hook compares it to the running build and posts one Inbox item.

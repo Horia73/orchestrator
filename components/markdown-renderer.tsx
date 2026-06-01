@@ -166,6 +166,10 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   )
 }
 
+// Inline code that is exactly a single http(s) URL (e.g. a preview link the
+// model wrapped in backticks) should still be clickable, not an inert code span.
+const INLINE_URL_RE = /^https?:\/\/[^\s]+$/i
+
 const WORKSPACE_PATH_MARKER = "/.orchestrator/workspace/"
 const DOWNLOADABLE_WORKSPACE_EXT_RE =
   /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp)(?:[?#].*)?$/i
@@ -241,6 +245,21 @@ const baseComponents: Components = {
 
     if (match) {
       return <CodeBlock language={language} code={code} />
+    }
+
+    // Inline code that is exactly a URL renders as a clickable link.
+    const trimmed = code.trim()
+    if (INLINE_URL_RE.test(trimmed)) {
+      return (
+        <a
+          href={trimmed}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="font-mono text-[13px] break-all text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
+        >
+          {children}
+        </a>
+      )
     }
 
     // Inline code

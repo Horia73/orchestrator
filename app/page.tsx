@@ -7,6 +7,7 @@ import { ChatView } from "@/components/chat-view"
 import { HomeView } from "@/components/home-view"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { SidebarInset } from "@/components/ui/sidebar"
+import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { cn } from "@/lib/utils"
 
 function useViewFadeIn(viewKey: string, enabled: boolean) {
@@ -67,6 +68,8 @@ export default function Page() {
   const viewEntered = useViewFadeIn(viewKey, viewReady)
   const viewVisible = viewReady && viewEntered && !isSwitchingConversation
 
+  useDocumentViewportLock()
+
   return (
     <>
       <AppSidebar />
@@ -74,7 +77,7 @@ export default function Page() {
         {viewReady && (
           <div
             className={cn(
-              "flex min-h-0 flex-1 flex-col bg-background transition-opacity duration-150 ease-out motion-reduce:transition-none",
+              "relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background transition-opacity duration-150 ease-out motion-reduce:transition-none",
               viewVisible ? "opacity-100" : "pointer-events-none opacity-0"
             )}
           >

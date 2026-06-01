@@ -1360,7 +1360,7 @@ function ShellBody({
               : "w-0 translate-x-4 opacity-0"
           )}
         >
-          <div className="pointer-events-auto h-full w-[380px] shrink-0 overflow-hidden">
+          <div className="pointer-events-auto h-full w-[380px] max-w-[100vw] shrink-0 overflow-hidden">
             {sidePanelOverrideActive ? (
               sidePanelOverride
             ) : (

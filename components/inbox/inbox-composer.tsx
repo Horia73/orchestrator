@@ -91,7 +91,7 @@ export function InboxComposer({ itemId, responding, onSend }: InboxComposerProps
     return (
         <form
             className={cn(
-                "relative z-10 border-t border-border/60 bg-background px-3 pt-3 transition-[padding-bottom,transform] duration-150 ease-out md:px-6",
+                "relative z-10 shrink-0 border-t border-border/60 bg-background px-3 pt-3 transition-[padding-bottom,transform] duration-150 ease-out md:px-6",
                 keyboardInset > 0
                     ? "pb-2"
                     : "pb-[calc(0.75rem+env(safe-area-inset-bottom))] md:pb-3",

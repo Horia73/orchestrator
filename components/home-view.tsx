@@ -20,7 +20,7 @@ export function HomeView() {
   const { userName } = useRuntimeConfig()
   const greeting = getGreeting(userName)
 
-  React.useEffect(() => {
+  React.useLayoutEffect(() => {
     const root = document.documentElement
     const previous = root.dataset.orchHomePage
     root.dataset.orchHomePage = "true"
@@ -31,7 +31,7 @@ export function HomeView() {
   }, [])
 
   return (
-    <div className="relative flex flex-1 flex-col items-center justify-center px-4 pb-52">
+    <div className="absolute inset-0 flex min-h-0 flex-col items-center justify-center overflow-hidden px-4 pb-[clamp(5rem,22dvh,13rem)]">
       <div className="absolute top-[calc(0.75rem+env(safe-area-inset-top))] left-3 md:hidden">
         <SidebarTrigger className="size-10 text-foreground/60 hover:text-foreground" />
       </div>

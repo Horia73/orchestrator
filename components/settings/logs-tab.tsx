@@ -310,10 +310,79 @@ function LogsTable({
         getItemKey: idx => rows[idx]?.id ?? idx,
     })
 
-    React.useEffect(() => {
-        virtualizer.measure()
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [expanded])
+    // Pin the scroll position when the user expands/collapses a row. By default
+    // tanstack nudges `scrollTop` by a resized row's size delta whenever that row's
+    // top sits above the scroll offset — so toggling a row near the top of the
+    // viewport makes the whole list lurch by the ~500px expand delta. Suppress that
+    // correction for the toggled row only: its `start` offset doesn't move when it
+    // resizes, so the row stays put and its detail just opens below. Every other row
+    // keeps tanstack's default correction (`start < scrollOffset`) so the one-time
+    // estimate→actual remeasure of collapsed rows never makes scrolling jitter.
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = item =>
+        item.key !== expanded && item.start < (virtualizer.scrollOffset ?? 0)
+
+    // Push a row's live layout height into the virtualizer. We measure
+    // imperatively — from the row's mount ref and from a layout effect inside the
+    // expanded detail — rather than via `virtualizer.measureElement`/ResizeObserver:
+    // each row sits in an absolutely-positioned, `translateY`-offset wrapper, and a
+    // ResizeObserver does NOT fire when that wrapper grows as the expanded detail
+    // loads. The cached size therefore stayed at the collapsed ~89px and every row
+    // below overlapped the bottom of the expanded one ("se condensează între ele").
+    // A direct `resizeItem` from guaranteed lifecycle callbacks keeps rows flush.
+    const resizeRow = React.useCallback(
+        (node: HTMLElement | null) => {
+            if (!node) return
+            const apply = () => {
+                if (!node.isConnected) return
+                const index = Number(node.dataset.index)
+                if (Number.isInteger(index)) {
+                    virtualizer.resizeItem(
+                        index,
+                        Math.round(node.getBoundingClientRect().height)
+                    )
+                }
+            }
+            apply()
+            requestAnimationFrame(apply)
+        },
+        [virtualizer]
+    )
+
+    // Re-measure every rendered row across an expand/collapse toggle. The opening
+    // row is handled by the detail's own layout effect once its async content
+    // loads, but the *collapsing* row shrinks back to ~89px after its detail
+    // unmounts and nothing else re-measures it — leaving a gap below. Sweeping all
+    // rendered rows on the next frame after the toggle keeps them flush both ways.
+    React.useLayoutEffect(() => {
+        const container = parentRef.current
+        if (!container) return
+        const sweep = () => {
+            container.querySelectorAll<HTMLElement>("[data-index]").forEach(node => {
+                const index = Number(node.dataset.index)
+                if (Number.isInteger(index)) {
+                    virtualizer.resizeItem(
+                        index,
+                        Math.round(node.getBoundingClientRect().height)
+                    )
+                }
+            })
+        }
+        // Sweep across several frames: a collapsing row shrinks back to ~89px
+        // over a frame or two, and a single early measurement can still read the
+        // expanded height (leaving a gap). Re-measuring on the next two frames
+        // and once more shortly after reliably captures the settled height.
+        let raf2 = 0
+        const raf1 = requestAnimationFrame(() => {
+            sweep()
+            raf2 = requestAnimationFrame(sweep)
+        })
+        const timer = window.setTimeout(sweep, 90)
+        return () => {
+            cancelAnimationFrame(raf1)
+            cancelAnimationFrame(raf2)
+            window.clearTimeout(timer)
+        }
+    }, [expanded, virtualizer])
 
     // Trigger load-more when the last row enters the viewport.
     const items = virtualizer.getVirtualItems()
@@ -355,7 +424,7 @@ function LogsTable({
                             <div
                                 key={v.key}
                                 data-index={v.index}
-                                ref={virtualizer.measureElement}
+                                ref={resizeRow}
                                 style={{
                                     position: "absolute",
                                     top: 0,
@@ -368,6 +437,7 @@ function LogsTable({
                                     row={row}
                                     expanded={isExpanded}
                                     onToggle={() => setExpanded(isExpanded ? null : row.id)}
+                                    onMeasure={resizeRow}
                                 />
                             </div>
                         )
@@ -389,10 +459,11 @@ function LogsTable({
     )
 }
 
-function LogRow({ row, expanded, onToggle }: {
+function LogRow({ row, expanded, onToggle, onMeasure }: {
     row: RequestLogRow
     expanded: boolean
     onToggle: () => void
+    onMeasure: (node: HTMLElement | null) => void
 }) {
     return (
         <div className={cn("border-b border-border/50", expanded && "bg-muted/30")}>
@@ -441,16 +512,48 @@ function LogRow({ row, expanded, onToggle }: {
                 <div />
             </button>
 
-            {expanded && <ExpandedDetail requestId={row.id} row={row} />}
+            {expanded && <ExpandedDetail requestId={row.id} row={row} onMeasure={onMeasure} />}
         </div>
     )
 }
 
-function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLogRow }) {
+function ExpandedDetail({ requestId, row, onMeasure }: {
+    requestId: string
+    row: RequestLogRow
+    onMeasure: (node: HTMLElement | null) => void
+}) {
     const { data, loading, error } = useRequestDetail(requestId)
+    const rootRef = React.useRef<HTMLDivElement>(null)
+    // Render nothing heavy until the detail request settles, then fade the whole
+    // panel in at once. Showing the transcript/tool-calls as they trickle in is
+    // what made the expand feel janky ("load progresiv buggy"). The detail body
+    // is also height-capped with an internal scroll so a tall transcript can't
+    // grow the row after it mounts — that async growth is exactly what left the
+    // virtualized rows below overlapping the bottom of the expanded panel.
+    const ready = data !== null || error !== null
+
+    // The detail lives in an absolutely-positioned virtualized row whose growth a
+    // ResizeObserver doesn't report, so re-measure the row from here on every
+    // height change that matters: opening (spinner), the loaded fade-in, and
+    // unmount (collapse, via the cleanup). `onMeasure` walks up to the row
+    // wrapper and writes its real height into the virtualizer.
+    React.useLayoutEffect(() => {
+        const wrapper = rootRef.current?.closest<HTMLElement>("[data-index]") ?? null
+        if (wrapper) onMeasure(wrapper)
+        return () => {
+            if (wrapper) onMeasure(wrapper)
+        }
+    }, [ready, onMeasure])
 
     return (
-        <div className="flex flex-col gap-4 border-t border-border/50 px-3 py-3 md:px-4 md:py-4">
+        <div ref={rootRef} className="border-t border-border/50">
+            {!ready ? (
+                <div className="flex items-center justify-center gap-2 px-3 py-10 text-[13px] text-foreground/55">
+                    <Loader2 className="size-4 animate-spin" /> Loading…
+                </div>
+            ) : (
+            <div className="max-h-[55vh] overflow-y-auto overscroll-contain animate-in fade-in-0 duration-300">
+            <div className="flex flex-col gap-4 px-3 py-3 md:px-4 md:py-4">
             <LogChatTranscript
                 row={row}
                 transcript={data?.transcript ?? null}
@@ -539,6 +642,9 @@ function ExpandedDetail({ requestId, row }: { requestId: string; row: RequestLog
                     )}
                 </div>
             </div>
+            </div>
+            </div>
+            )}
         </div>
     )
 }

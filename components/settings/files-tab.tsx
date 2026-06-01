@@ -701,8 +701,10 @@ function StatusBadge({
 }) {
   if (readOnly) return <span className="text-[11.5px] text-foreground/45">Read-only</span>
   if (invalidJson) return <span className="text-[11.5px] text-destructive">Invalid JSON</span>
-  if (state.kind === "pending") return <span className="text-[11.5px] text-foreground/50">Auto-saving</span>
-  if (state.kind === "saving") return <span className="text-[11.5px] text-foreground/50">Saving</span>
+  // The gray in-progress states (pending "Auto-saving" / saving "Saving") are
+  // intentionally not rendered: they flickered on every keystroke and shifted
+  // the header layout while typing. The green "Saved" confirmation below stays —
+  // it appears once after the save settles, then clears.
   if (state.kind === "saved") {
     return (
       <span className="inline-flex items-center gap-1 text-[11.5px] text-emerald-700 dark:text-emerald-500">
@@ -714,12 +716,12 @@ function StatusBadge({
   if (state.kind === "error") {
     return <span className="max-w-[260px] truncate text-[11.5px] text-destructive" title={state.message}>{state.message}</span>
   }
-  if (explicitSave) {
-    if (!dirty) return null
+  // Explicit-save files (.env.local) still show an unsaved hint since there is
+  // no autosave to clear it.
+  if (explicitSave && dirty) {
     return <span className="text-[11.5px] text-amber-700 dark:text-amber-500">Unsaved changes</span>
   }
-  if (!dirty) return null
-  return <span className="text-[11.5px] text-foreground/45">Unsaved</span>
+  return null
 }
 
 function FileIcon({ kind, className }: { kind: FileKind; className?: string }) {

@@ -504,6 +504,7 @@ const CONTEXT_FILE_IDS = new Set([
     'memory',
     'memory-day',
     'monitors',
+    'playbooks',
     'integration-index',
 ])
 
@@ -553,7 +554,10 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
 
     for (const file of WORKSPACE_FILE_DEFINITIONS) {
         if (!CONTEXT_FILE_IDS.has(file.id)) continue
-        if (!isOrchestrator && (file.id === 'boot' || file.id === 'onboarding')) continue
+        // PLAYBOOKS.md is captured/replayed by the orchestrator class; other
+        // sub-agents (researcher, coder, …) never replay procedures, so keep it
+        // out of their prompts alongside the onboarding script.
+        if (!isOrchestrator && (file.id === 'boot' || file.id === 'onboarding' || file.id === 'playbooks')) continue
         if (remaining <= 0) break
 
         if (file.id === 'memory-day') {

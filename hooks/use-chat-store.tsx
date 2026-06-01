@@ -1014,6 +1014,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           full: false,
         })
       }
+      // Claim the target conversation synchronously. SELECT_CONVERSATION below
+      // is dispatched inside a transition, so state.activeConversationId (and
+      // the effect that syncs this ref to it) only settles on a later commit.
+      // detachStreaming() fires an urgent SET_STREAMING dispatch that re-renders
+      // before then; without this, a deep-link caller like the `?chat=` effect
+      // in page.tsx re-runs and calls selectConversation again with a still-stale
+      // ref, defeating the guard above and spinning into "Maximum update depth
+      // exceeded". Setting the ref now makes that re-entry return early.
+      activeConversationIdRef.current = id
       detachStreaming()
       markConversationRead(id)
       void loadInitialMessages(id)
