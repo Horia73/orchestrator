@@ -26,6 +26,16 @@ const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const MAX_ROUTE_POINTS = 700
 const MAX_STOP_COUNT = 80
 const MAX_NOTABLE_PLACES = 6
+const DEFAULT_COORDINATE_ALIAS_RADIUS_METERS = 300
+const MAX_ACCURACY_ALIAS_RADIUS_BONUS_METERS = 100
+const MAX_OBSERVATION_STOP_MATCH_METERS = 100
+const INFERRED_STAY_MINUTES = 7
+const MOTION_ACTIVITY_LABELS = new Set([
+  "automotive",
+  "cycling",
+  "walking",
+  "running",
+])
 const LOCATION_CAPABILITIES = [
   "Home Assistant webhook ingestion through an opt-in microscript journal",
   "Daily scheduled agent intelligence over local location summaries",
@@ -54,6 +64,18 @@ interface DayReadResult {
   updatedAt: number | null
 }
 
+interface PlaceAliasIndex {
+  exact: Map<string, string>
+  coordinate: CoordinateAlias[]
+}
+
+interface CoordinateAlias {
+  key: string
+  label: string
+  center: LocationCoordinate
+  radiusMeters: number
+}
+
 export async function listLocationPlaceDays(
   limit: number
 ): Promise<LocationPlacesList> {
@@ -65,9 +87,11 @@ export async function listLocationPlaceDays(
   const journalPath = resolveJournalPath(getConfig().locationIntelligence)
   if (!journalPath.absolutePath) return { status, days: [], total: 0 }
 
+  const aliases = readPlaceAliases(journalPath.absolutePath)
   const dayFiles = listDayFiles(journalPath.absolutePath)
   const pointSummaries = await readPointSummaries(
-    path.join(journalPath.absolutePath, "points.jsonl")
+    path.join(journalPath.absolutePath, "points.jsonl"),
+    aliases
   )
   const dates = new Set<string>([
     ...dayFiles.map((file) => file.date),
@@ -75,7 +99,6 @@ export async function listLocationPlaceDays(
   ])
   const sortedDates = [...dates].sort().reverse()
   const limitedDates = sortedDates.slice(0, Math.max(1, Math.min(limit, 365)))
-  const aliases = readPlaceAliases(journalPath.absolutePath)
   const days: LocationDaySummary[] = []
 
   for (const date of limitedDates) {
@@ -111,7 +134,8 @@ export async function getLocationPlaceDay(
   const day = readDayJson(dayPath)
   const pointSummary = await readPointSummaryForDate(
     path.join(journalPath.absolutePath, "points.jsonl"),
-    date
+    date,
+    aliases
   )
   if (!day && !pointSummary) return { status, day: null }
 
@@ -301,13 +325,16 @@ function buildDayDetail({
 }: {
   date: string
   day: DayReadResult | null
-  aliases: Map<string, string>
+  aliases: PlaceAliasIndex
   pointSummary: PointSummary | null
   includeRouteFallback: boolean
 }): LocationDayDetail {
   const raw = day?.raw
-  const stops = extractStops(raw, aliases)
   const observations = pointSummary?.observations ?? []
+  const stops = withInferredSampleStopDurations(
+    extractStops(raw, aliases),
+    observations
+  )
   const route = thinCoordinates(
     extractRoute(raw) ??
       (includeRouteFallback ? (pointSummary?.route ?? []) : []),
@@ -381,10 +408,7 @@ function stripDayDetail(day: LocationDayDetail): LocationDaySummary {
   }
 }
 
-function extractStops(
-  raw: unknown,
-  aliases: Map<string, string>
-): LocationStop[] {
+function extractStops(raw: unknown, aliases: PlaceAliasIndex): LocationStop[] {
   const candidates = firstArrayFromKeys(raw, [
     "stops",
     "visits",
@@ -403,22 +427,20 @@ function extractStops(
 function normalizeStop(
   value: unknown,
   index: number,
-  aliases: Map<string, string>
+  aliases: PlaceAliasIndex
 ): LocationStop | null {
   if (!isRecord(value)) return null
-  const alias = aliasForRecord(value, aliases)
-  const rawLabel =
-    alias ||
-    stringFromKeys(value, [
-      "label",
-      "name",
-      "place",
-      "placeName",
-      "zone",
-      "semanticLabel",
-      "category",
-      "type",
-    ])
+  const rawLabel = stringFromKeys(value, [
+    "label",
+    "name",
+    "place",
+    "placeName",
+    "zone",
+    "semanticLabel",
+    "category",
+    "type",
+  ])
+  const alias = aliasForRecord(value, aliases, rawLabel)
   const label = sanitizePlaceLabel(rawLabel, index)
   const id =
     cleanText(stringFromKeys(value, ["id", "placeId", "place_id"]), 80) ||
@@ -427,7 +449,7 @@ function normalizeStop(
 
   return {
     id,
-    label,
+    label: alias ? sanitizePlaceLabel(alias, index) : label,
     startTime: normalizeTimeString(
       stringFromKeys(value, ["startTime", "start", "arrivedAt", "firstSeenAt"])
     ),
@@ -437,20 +459,32 @@ function normalizeStop(
     durationMinutes,
     position: coordinateFromUnknown(value),
     kind:
-      cleanText(stringFromKeys(value, ["kind", "type", "category"]), 80) ||
-      null,
+      cleanText(
+        stringFromKeys(value, [
+          "kind",
+          "event",
+          "interpretation",
+          "type",
+          "category",
+          "activity",
+        ]),
+        80
+      ) || null,
   }
 }
 
 function observationFromPoint(
   point: unknown,
-  index: number
+  index: number,
+  aliases: PlaceAliasIndex
 ): LocationStop | null {
   if (!isRecord(point)) return null
   const position = coordinateFromUnknown(point)
   if (!position) return null
   const timestamp = timestampForPoint(point)
-  const label = labelForPoint(point, index)
+  const rawLabel = labelForPoint(point, index)
+  const alias = aliasForRecord(point, aliases, rawLabel)
+  const label = alias || rawLabel
   const rawKind =
     cleanText(stringFromKeys(point, ["event", "activity", "state"]), 80) ||
     "raw"
@@ -491,14 +525,161 @@ function withObservationDurations(
     const durationMinutes = Math.max(0, Math.round((nextMs - startMs) / 60000))
     return {
       ...observation,
+      label:
+        durationMinutes >= INFERRED_STAY_MINUTES
+          ? withInferredStayLabel(observation.label)
+          : observation.label,
       endTime: next?.startTime ?? observation.endTime,
       durationMinutes,
       kind:
-        durationMinutes >= 7
-          ? `${observation.kind ?? "raw"} · inferred_stay`
+        durationMinutes >= INFERRED_STAY_MINUTES
+          ? withInferredStayKind(observation.kind ?? "raw")
           : observation.kind,
     }
   })
+}
+
+function withInferredSampleStopDurations(
+  stops: LocationStop[],
+  observations: LocationStop[]
+): LocationStop[] {
+  if (stops.length < 2 || !stops.some(isInferableSampleStop)) return stops
+
+  const matchedObservations = matchStopsToObservations(stops, observations)
+
+  return stops.map((stop, index) => {
+    if (!isInferableSampleStop(stop)) return stop
+
+    const observation = matchedObservations.get(index)
+    const observationDuration =
+      typeof observation?.durationMinutes === "number" &&
+      observation.durationMinutes > 0
+        ? observation.durationMinutes
+        : null
+    const localGapDuration =
+      observationDuration ?? minutesUntilNextStop(stops, index)
+
+    if (localGapDuration === null || localGapDuration <= 0) return stop
+
+    const durationMinutes = Math.max(0, Math.round(localGapDuration))
+    return {
+      ...stop,
+      label:
+        durationMinutes >= INFERRED_STAY_MINUTES
+          ? withInferredStayLabel(stop.label)
+          : stop.label,
+      endTime:
+        addMinutesToClockTime(stop.startTime, durationMinutes) ??
+        observation?.endTime ??
+        stop.endTime,
+      durationMinutes,
+      kind:
+        durationMinutes >= INFERRED_STAY_MINUTES
+          ? withInferredStayKind(stop.kind ?? "sample")
+          : stop.kind,
+    }
+  })
+}
+
+function isInferableSampleStop(stop: LocationStop): boolean {
+  if (typeof stop.durationMinutes === "number" && stop.durationMinutes > 0) {
+    return false
+  }
+  const kind = stop.kind?.toLowerCase() ?? ""
+  return kind.includes("single_ha_sample_no_clustering") || kind === "sample"
+}
+
+function matchStopsToObservations(
+  stops: LocationStop[],
+  observations: LocationStop[]
+): Map<number, LocationStop> {
+  const matches = new Map<number, LocationStop>()
+  if (observations.length === 0) return matches
+
+  const used = new Set<number>()
+  stops.forEach((stop, stopIndex) => {
+    if (!stop.position) return
+    const stopPosition = stop.position
+    let bestIndex = -1
+    let bestDistance = Number.POSITIVE_INFINITY
+    observations.forEach((observation, observationIndex) => {
+      if (used.has(observationIndex) || !observation.position) return
+      const distance = distanceMeters(stopPosition, observation.position)
+      if (
+        distance <= MAX_OBSERVATION_STOP_MATCH_METERS &&
+        distance < bestDistance
+      ) {
+        bestDistance = distance
+        bestIndex = observationIndex
+      }
+    })
+    if (bestIndex < 0) return
+    used.add(bestIndex)
+    matches.set(stopIndex, observations[bestIndex])
+  })
+
+  return matches
+}
+
+function minutesUntilNextStop(
+  stops: LocationStop[],
+  index: number
+): number | null {
+  const start = clockMinutes(stops[index]?.startTime)
+  if (start === null) return null
+
+  for (let nextIndex = index + 1; nextIndex < stops.length; nextIndex += 1) {
+    const next = clockMinutes(stops[nextIndex]?.startTime)
+    if (next === null) continue
+    const diff = next >= start ? next - start : next + 24 * 60 - start
+    return diff > 0 ? diff : null
+  }
+
+  return null
+}
+
+function clockMinutes(value: string | null | undefined): number | null {
+  if (!value) return null
+  const match = /^(\d{1,2}):(\d{2})/.exec(value)
+  if (!match) return null
+  const hours = Number(match[1])
+  const minutes = Number(match[2])
+  if (hours < 0 || hours > 23 || minutes < 0 || minutes > 59) return null
+  return hours * 60 + minutes
+}
+
+function addMinutesToClockTime(
+  value: string | null | undefined,
+  minutesToAdd: number
+): string | null {
+  const start = clockMinutes(value)
+  if (start === null) return null
+  const total = (start + minutesToAdd) % (24 * 60)
+  const hours = Math.floor(total / 60)
+  const minutes = total % 60
+  return `${String(hours).padStart(2, "0")}:${String(minutes).padStart(2, "0")}`
+}
+
+function withInferredStayKind(kind: string | null): string {
+  const base = cleanText(kind, 80) || "sample"
+  return base.toLowerCase().includes("inferred_stay")
+    ? base
+    : `${base} · inferred_stay`
+}
+
+function withInferredStayLabel(label: string): string {
+  const clean = cleanText(label, 120)
+  const normalized = clean.toLowerCase()
+  if (!clean) return "Inferred stay"
+  if (normalized === "home" || normalized.includes("gym")) return clean
+  if (
+    normalized === "unknown" ||
+    normalized.startsWith("observation ") ||
+    MOTION_ACTIVITY_LABELS.has(normalized)
+  ) {
+    return "Inferred stay"
+  }
+  return clean
 }
 
 function labelForPoint(point: Record<string, unknown>, index: number): string {
@@ -592,7 +773,8 @@ function routeFromRawExists(raw: unknown): boolean {
 }
 
 async function readPointSummaries(
-  filePath: string
+  filePath: string,
+  aliases: PlaceAliasIndex
 ): Promise<Map<string, PointSummary>> {
   const summaries = new Map<string, PointSummary>()
   if (!isFile(filePath)) return summaries
@@ -621,7 +803,11 @@ async function readPointSummaries(
     if (coord && summary.route.length < MAX_ROUTE_POINTS * 4) {
       summary.route.push(coord)
     }
-    const observation = observationFromPoint(point, summary.sampleCount - 1)
+    const observation = observationFromPoint(
+      point,
+      summary.sampleCount - 1,
+      aliases
+    )
     if (observation && summary.observations.length < MAX_STOP_COUNT) {
       summary.observations.push(observation)
     }
@@ -641,7 +827,8 @@ async function readPointSummaries(
 
 async function readPointSummaryForDate(
   filePath: string,
-  targetDate: string
+  targetDate: string,
+  aliases: PlaceAliasIndex
 ): Promise<PointSummary | null> {
   if (!isFile(filePath)) return null
   const summary: PointSummary = {
@@ -667,7 +854,11 @@ async function readPointSummaryForDate(
       }
     }
     if (coord) summary.route.push(coord)
-    const observation = observationFromPoint(point, summary.sampleCount - 1)
+    const observation = observationFromPoint(
+      point,
+      summary.sampleCount - 1,
+      aliases
+    )
     if (observation && summary.observations.length < MAX_STOP_COUNT) {
       summary.observations.push(observation)
     }
@@ -707,30 +898,58 @@ async function readPoints(
   }
 }
 
-function readPlaceAliases(absolutePath: string): Map<string, string> {
-  const aliases = new Map<string, string>()
+function readPlaceAliases(absolutePath: string): PlaceAliasIndex {
+  const aliases: PlaceAliasIndex = { exact: new Map(), coordinate: [] }
   const parsed = safeReadJson(path.join(absolutePath, "place_aliases.json"))
   collectAliases(parsed, aliases)
   return aliases
 }
 
-function collectAliases(value: unknown, aliases: Map<string, string>): void {
+function collectAliases(value: unknown, aliases: PlaceAliasIndex): void {
   if (!isRecord(value)) return
-  for (const [key, raw] of Object.entries(value)) {
+  const entries = isRecord(value.aliases) ? value.aliases : value
+  for (const [key, raw] of Object.entries(entries)) {
+    if (isAliasMetadataKey(key)) continue
     if (typeof raw === "string") {
       const alias = cleanText(raw, 120)
-      if (alias) aliases.set(key, alias)
+      if (alias) setExactAlias(aliases, key, alias)
     } else if (isRecord(raw)) {
       const alias = stringFromKeys(raw, ["alias", "label", "name"])
-      if (alias) aliases.set(key, cleanText(alias, 120))
-      collectAliases(raw, aliases)
+      const label = cleanText(alias, 120)
+      if (!label) continue
+
+      setExactAlias(aliases, key, label)
+      for (const exactKey of [
+        "id",
+        "key",
+        "placeId",
+        "place_id",
+        "aliasId",
+        "alias_id",
+      ]) {
+        const exactValue = raw[exactKey]
+        if (typeof exactValue === "string") {
+          setExactAlias(aliases, exactValue, label)
+        }
+      }
+
+      const center = coordinateFromUnknown(raw)
+      if (center) {
+        aliases.coordinate.push({
+          key,
+          label,
+          center,
+          radiusMeters: aliasRadiusMeters(raw),
+        })
+      }
     }
   }
 }
 
 function aliasForRecord(
   value: Record<string, unknown>,
-  aliases: Map<string, string>
+  aliases: PlaceAliasIndex,
+  fallbackLabel = ""
 ): string {
   for (const key of [
     "placeId",
@@ -744,10 +963,80 @@ function aliasForRecord(
   ]) {
     const raw = value[key]
     if (typeof raw !== "string") continue
-    const direct = aliases.get(raw)
+    const direct = exactAlias(aliases, raw)
     if (direct) return direct
   }
+
+  if (
+    isHomeLabel(fallbackLabel) ||
+    isHomeLabel(stringFromKeys(value, ["state"]))
+  ) {
+    return ""
+  }
+
+  const coord = coordinateFromUnknown(value)
+  if (!coord) return ""
+
+  const accuracyBonus = Math.min(
+    Math.max(
+      numberFromKeys(value, ["accuracy_m", "accuracyMeters", "accuracy"]) ?? 0,
+      0
+    ),
+    MAX_ACCURACY_ALIAS_RADIUS_BONUS_METERS
+  )
+  let best: { label: string; distance: number } | null = null
+  for (const alias of aliases.coordinate) {
+    const distance = distanceMeters(coord, alias.center)
+    if (distance > alias.radiusMeters + accuracyBonus) continue
+    if (!best || distance < best.distance) {
+      best = { label: alias.label, distance }
+    }
+  }
+
+  if (best) return best.label
   return ""
+}
+
+function setExactAlias(
+  aliases: PlaceAliasIndex,
+  rawKey: string,
+  label: string
+): void {
+  const key = cleanText(rawKey, 160)
+  const alias = cleanText(label, 120)
+  if (!key || !alias) return
+  aliases.exact.set(key, alias)
+  aliases.exact.set(key.toLowerCase(), alias)
+}
+
+function exactAlias(aliases: PlaceAliasIndex, rawKey: string): string {
+  const key = cleanText(rawKey, 160)
+  if (!key) return ""
+  return aliases.exact.get(key) ?? aliases.exact.get(key.toLowerCase()) ?? ""
+}
+
+function aliasRadiusMeters(value: Record<string, unknown>): number {
+  const explicit = numberFromKeys(value, [
+    "radiusMeters",
+    "radius_meters",
+    "radius_m",
+    "radius",
+  ])
+  if (explicit !== null && explicit > 0) {
+    return Math.min(Math.max(Math.round(explicit), 25), 2000)
+  }
+  return DEFAULT_COORDINATE_ALIAS_RADIUS_METERS
+}
+
+function isAliasMetadataKey(key: string): boolean {
+  return ["version", "updated_at", "updatedAt", "schema", "metadata"].includes(
+    key
+  )
+}
+
+function isHomeLabel(value: string): boolean {
+  const label = cleanText(value, 120).toLowerCase()
+  return label === "home" || label === "zone.home"
 }
 
 function retentionStatus(
@@ -882,6 +1171,18 @@ function coordinateFromArray(
   if (isValidLatLng(second, first)) return [first, second]
   if (isValidLatLng(first, second)) return [second, first]
   return null
+}
+
+function distanceMeters(a: LocationCoordinate, b: LocationCoordinate): number {
+  const earthRadiusMeters = 6_371_000
+  const lat1 = (a[1] * Math.PI) / 180
+  const lat2 = (b[1] * Math.PI) / 180
+  const deltaLat = ((b[1] - a[1]) * Math.PI) / 180
+  const deltaLng = ((b[0] - a[0]) * Math.PI) / 180
+  const sinLat = Math.sin(deltaLat / 2)
+  const sinLng = Math.sin(deltaLng / 2)
+  const h = sinLat * sinLat + Math.cos(lat1) * Math.cos(lat2) * sinLng * sinLng
+  return 2 * earthRadiusMeters * Math.asin(Math.min(1, Math.sqrt(h)))
 }
 
 function isValidLatLng(
