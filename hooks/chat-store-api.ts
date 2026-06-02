@@ -86,11 +86,25 @@ export async function fetchConversationMessagePage(
   const beforeParam =
     before === undefined ? "" : `&before=${encodeURIComponent(before)}`
   const res = await fetch(
-    `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}${beforeParam}`,
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&detail=slim${beforeParam}`,
     { cache: "no-store" }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)
   return res.json() as Promise<MessagePageResponse>
+}
+
+export async function fetchConversationMessageDetails(
+  conversationId: string,
+  messageId: string
+): Promise<Message> {
+  const res = await fetch(
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages/${encodeURIComponent(messageId)}`,
+    { cache: "no-store" }
+  )
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+  const data = (await res.json()) as { message?: Message }
+  if (!data.message) throw new Error("Missing message")
+  return data.message
 }
 
 export async function fetchActiveChatStream(

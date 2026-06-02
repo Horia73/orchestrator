@@ -186,6 +186,15 @@ export interface Message {
   toolCalls?: { text: string; content: string }[]
   attachments?: Attachment[]
   replyActions?: InboxReplyAction[]
+  /**
+   * Heavy fields intentionally omitted from a list/page payload. The UI can
+   * request the full message when the user opens the collapsed detail block.
+   */
+  deferred?: {
+    reasoning?: boolean
+    contentSegments?: boolean
+    toolCalls?: boolean
+  }
   timestamp: number
 }
 

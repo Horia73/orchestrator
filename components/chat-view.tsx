@@ -51,7 +51,7 @@ import { cn } from "@/lib/utils"
 import type { AgentCallReasoningEntry, Attachment } from "@/lib/types"
 
 export function ChatView() {
-  const { state, loadOlderMessages } = useChatStore()
+  const { state, loadOlderMessages, loadMessageDetails } = useChatStore()
   const layoutContainerRef = React.useRef<HTMLDivElement>(null)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const inputContainerRef = React.useRef<HTMLDivElement>(null)
@@ -760,6 +760,10 @@ export function ChatView() {
 
       const nextTop = Math.min(targetScrollTop, maxScrollTop)
       if (behavior === "smooth") {
+        if (Math.abs(nextTop - element.scrollTop) <= 2) {
+          element.scrollTop = nextTop
+          return true
+        }
         try {
           element.scrollTo({ top: nextTop, behavior: "smooth" })
         } catch {
@@ -1691,6 +1695,14 @@ export function ChatView() {
     restoreSidebar()
   }, [restoreSidebar])
 
+  const handleLoadMessageDetails = React.useCallback(
+    (messageId: string) => {
+      if (!conversationId) return Promise.resolve()
+      return loadMessageDetails(conversationId, messageId)
+    },
+    [conversationId, loadMessageDetails]
+  )
+
   const hasArtifact =
     (artifactOpen && !!artifact) || !!genArtifact || !!activePanelAgentRun
   const activeArtifactResizeKey = React.useMemo(() => {
@@ -2129,6 +2141,7 @@ export function ChatView() {
                               onArtifactExpand={handleArtifactExpand}
                               onAttachmentClick={setPreviewAttachment}
                               onAgentOpen={handleAgentOpen}
+                              onLoadMessageDetails={handleLoadMessageDetails}
                             />
                           </div>
                         )

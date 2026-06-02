@@ -69,6 +69,11 @@ export type ChatAction =
       nextCursor: string | null
       mode: "replace" | "prepend"
     }
+  | {
+      type: "MERGE_MESSAGE_DETAILS"
+      conversationId: string
+      message: Message
+    }
   | { type: "LOAD_OLDER_MESSAGES_START"; id: string }
   | { type: "LOAD_OLDER_MESSAGES_ERROR"; id: string; error: string }
   | { type: "NEW_CHAT" }
@@ -427,6 +432,26 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         },
       }
     }
+    case "MERGE_MESSAGE_DETAILS":
+      return {
+        ...state,
+        conversations: state.conversations.map((conversation) =>
+          conversation.id === action.conversationId
+            ? {
+                ...conversation,
+                messages: conversation.messages.map((message) =>
+                  message.id === action.message.id
+                    ? {
+                        ...message,
+                        ...action.message,
+                        deferred: undefined,
+                      }
+                    : message
+                ),
+              }
+            : conversation
+        ),
+      }
     case "LOAD_OLDER_MESSAGES_START": {
       const page = state.conversationMessagePages[action.id]
       return {

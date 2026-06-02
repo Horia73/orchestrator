@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, RefreshCw } from "lucide-react"
+import { Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react"
 import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
@@ -189,6 +189,7 @@ function ThoughtBlock({
     thoughtAutoOpen = true,
     thoughtAutoExpandTools = false,
     liveCollapsedTitle = false,
+    openOnMount = false,
 }: {
     reasoning: ReasoningEntry[]
     isStreaming?: boolean
@@ -204,6 +205,7 @@ function ThoughtBlock({
     thoughtAutoOpen?: boolean
     thoughtAutoExpandTools?: boolean
     liveCollapsedTitle?: boolean
+    openOnMount?: boolean
 }) {
     const latestEntry = reasoning[reasoning.length - 1]
     const latestTitle = getEntryTitle(latestEntry)
@@ -243,6 +245,7 @@ function ThoughtBlock({
     const expandedStorageKey = storageKey ? `${storageKey}:expanded:v3` : null
 
     const [isOpen, setIsOpen] = React.useState(() => {
+        if (openOnMount) return true
         if (openStorageKey) {
             const saved = localStorage.getItem(openStorageKey)
             if (saved !== null) return saved === 'true'
@@ -278,6 +281,10 @@ function ThoughtBlock({
         setIsExpanded(true)
         if (expandedStorageKey) localStorage.setItem(expandedStorageKey, "true")
     }, [expandedStorageKey])
+
+    React.useEffect(() => {
+        if (openOnMount) updateOpen(true)
+    }, [openOnMount, updateOpen])
 
     React.useEffect(() => {
         if (!shouldDefaultExpand || hasStoredExpanded || userToggledExpandedRef.current) return
@@ -845,6 +852,48 @@ function TerminalMessageStatusLine({ status }: { status?: Message["status"] }) {
     return null
 }
 
+function DeferredThoughtBlock({
+    loading,
+    thinkingDuration,
+    hasToolCalls,
+    onOpen,
+}: {
+    loading: boolean
+    thinkingDuration?: number
+    hasToolCalls: boolean
+    onOpen: () => void
+}) {
+    const seconds = Math.round(thinkingDuration ?? 0)
+    const title =
+        seconds > 0
+            ? `Thought for ${seconds}s`
+            : hasToolCalls
+                ? "Tools and thinking"
+                : "Thinking"
+
+    return (
+        <div className="relative z-10 w-full max-w-[760px]">
+            <button
+                type="button"
+                onClick={onOpen}
+                disabled={loading}
+                className="group flex w-full items-center gap-2 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/55 hover:text-foreground disabled:cursor-default disabled:opacity-70"
+                aria-label="Open thinking and tool details"
+            >
+                <ChevronDown className="size-4 shrink-0 -rotate-90 transition-transform group-hover:text-foreground" />
+                <span className="min-w-0 flex-1 truncate">{title}</span>
+                {loading ? (
+                    <Loader2 className="size-3.5 shrink-0 animate-spin" />
+                ) : (
+                    <span className="shrink-0 text-[12px] text-muted-foreground/70">
+                        Open
+                    </span>
+                )}
+            </button>
+        </div>
+    )
+}
+
 // ---------------------------------------------------------------------------
 // MessageBubble
 // ---------------------------------------------------------------------------
@@ -864,6 +913,7 @@ interface MessageBubbleProps {
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAttachmentClick?: (attachment: Attachment) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
+    onLoadMessageDetails?: (messageId: string) => Promise<void>
 }
 
 function MessageBubbleComponent({
@@ -876,9 +926,12 @@ function MessageBubbleComponent({
     onArtifactExpand,
     onAttachmentClick,
     onAgentOpen,
+    onLoadMessageDetails,
 }: MessageBubbleProps) {
     const [copied, setCopied] = React.useState(false)
     const [hovered, setHovered] = React.useState(false)
+    const [detailLoading, setDetailLoading] = React.useState(false)
+    const [openLoadedDetails, setOpenLoadedDetails] = React.useState(false)
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -890,6 +943,17 @@ function MessageBubbleComponent({
         setCopied(true)
         window.setTimeout(() => setCopied(false), 1500)
     }, [message.content])
+
+    const handleOpenDeferredDetails = React.useCallback(async () => {
+        if (!message.deferred || !onLoadMessageDetails || detailLoading) return
+        setDetailLoading(true)
+        try {
+            await onLoadMessageDetails(message.id)
+            setOpenLoadedDetails(true)
+        } finally {
+            setDetailLoading(false)
+        }
+    }, [detailLoading, message.deferred, message.id, onLoadMessageDetails])
 
     // Latest version per identifier produced by this message — those are the
     // artifacts the hover-meta row exposes copy/download/expand for.
@@ -960,6 +1024,11 @@ function MessageBubbleComponent({
     }
 
     const hasReasoning = Array.isArray(message.reasoning) && message.reasoning.length > 0
+    const hasDeferredDetails = Boolean(
+        (message.deferred?.reasoning || message.deferred?.toolCalls) &&
+        !hasReasoning
+    )
+    const canLoadDeferredDetails = hasDeferredDetails && Boolean(onLoadMessageDetails)
     const reasoningGroups = hasReasoning ? groupReasoningByPhase(message.reasoning!) : []
     const contentSegments = message.contentSegments ?? (
         message.content.length > 0 ? [{ phase: 0, content: message.content }] : []
@@ -988,6 +1057,14 @@ function MessageBubbleComponent({
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
+            {canLoadDeferredDetails && (
+                <DeferredThoughtBlock
+                    loading={detailLoading}
+                    thinkingDuration={message.thinkingDuration}
+                    hasToolCalls={Boolean(message.deferred?.toolCalls)}
+                    onOpen={handleOpenDeferredDetails}
+                />
+            )}
             {timeline.map((item) => (
                 item.type === "reasoning" ? (
                     <ThoughtBlock
@@ -1000,6 +1077,7 @@ function MessageBubbleComponent({
                         isStreaming={isInProgressReasoning && lastReasoningPhase === item.phase}
                         thinkingDuration={message.thinkingDuration}
                         messageStatus={message.status}
+                        openOnMount={openLoadedDetails}
                     />
                 ) : (
                     <div key={`content-${message.id}-${item.phase}`} className="min-w-0 break-words text-[16px] leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-1">

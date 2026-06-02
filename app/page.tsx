@@ -66,7 +66,15 @@ export default function Page() {
       : "home"
   const viewReady = !state.isLoading
   const viewEntered = useViewFadeIn(viewKey, viewReady)
-  const viewVisible = viewReady && viewEntered && !isSwitchingConversation
+  const activeConversationPending =
+    state.activeConversationId != null &&
+    (activeConversationStatus === "summary" ||
+      activeConversationStatus === "loading")
+  const viewVisible =
+    viewReady &&
+    viewEntered &&
+    !isSwitchingConversation &&
+    !activeConversationPending
 
   useDocumentViewportLock()
 

@@ -41,7 +41,12 @@ export async function GET(
       DEFAULT_MESSAGE_PAGE_SIZE
     )
     const before = parseCursor(searchParams.get("before"))
-    const page = getConversationMessagesPage(id, { limit, before })
+    const detail = searchParams.get("detail")
+    const page = getConversationMessagesPage(id, {
+      limit,
+      before,
+      hydration: detail === "full" ? "full" : "slim",
+    })
 
     return NextResponse.json({
       messages: page.messages,

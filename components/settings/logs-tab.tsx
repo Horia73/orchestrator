@@ -474,7 +474,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
                 <div className="flex min-w-0 items-start justify-between gap-3">
                     <div className="min-w-0">
                         <div className="flex min-w-0 items-center gap-1.5">
-                            <ChevronRight className={cn("size-3.5 shrink-0 text-foreground/40 transition-transform", expanded && "rotate-90")} />
+                            <ChevronRight className={cn("size-3.5 shrink-0 text-foreground/40", expanded && "rotate-90")} />
                             <ProviderDot providerId={row.provider} />
                             <span className="truncate font-medium text-foreground">{row.model}</span>
                         </div>
@@ -496,7 +496,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
                     "hover:bg-muted/50"
                 )}
             >
-                <ChevronRight className={cn("size-3.5 text-foreground/40 transition-transform", expanded && "rotate-90")} />
+                <ChevronRight className={cn("size-3.5 text-foreground/40", expanded && "rotate-90")} />
                 <div className="min-w-0">
                     <div className="truncate text-foreground tabular-nums">{formatTime(row.startedAt)}</div>
                     <div className="truncate text-[11.5px] text-foreground/45 tabular-nums">{relativeTime(row.startedAt)}</div>
@@ -546,12 +546,8 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
     }, [ready, onMeasure])
 
     return (
-        <div ref={rootRef} className="border-t border-border/50">
-            {!ready ? (
-                <div className="flex items-center justify-center gap-2 px-3 py-10 text-[13px] text-foreground/55">
-                    <Loader2 className="size-4 animate-spin" /> Loading…
-                </div>
-            ) : (
+        <div ref={rootRef} className={cn(ready && "border-t border-border/50")}>
+            {ready && (
             <div className="max-h-[55vh] overflow-y-auto overscroll-contain animate-in fade-in-0 duration-300">
             <div className="flex flex-col gap-4 px-3 py-3 md:px-4 md:py-4">
             <LogChatTranscript

@@ -22,6 +22,7 @@ import {
   deleteConversationRequest,
   fetchActiveChatStream,
   fetchActiveChatStreams,
+  fetchConversationMessageDetails,
   fetchConversationMessagePage,
   fetchConversationSummaries,
   startChatStreamRequest,
@@ -73,6 +74,7 @@ interface ChatContextType {
   newChat: () => void
   selectConversation: (id: string, conversation?: Conversation) => void
   prefetchConversationMessages: (id: string) => Promise<void>
+  loadMessageDetails: (conversationId: string, messageId: string) => Promise<void>
   loadOlderMessages: (id: string) => Promise<void>
   archiveConversation: (id: string) => void
   unarchiveConversation: (id: string, conversation?: Conversation) => void
@@ -136,6 +138,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     Record<string, ConversationLoadState>
   >({})
   const initialMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(
+    new Map()
+  )
+  const messageDetailLoadsRef = React.useRef<Map<string, Promise<void>>>(
     new Map()
   )
   const summaryRefreshPromiseRef = React.useRef<Promise<void> | null>(null)
@@ -565,6 +570,40 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       })()
 
       initialMessageLoadsRef.current.set(conversationId, load)
+      return load
+    },
+    []
+  )
+
+  const loadMessageDetails = React.useCallback(
+    async (conversationId: string, messageId: string) => {
+      const conversation = conversationsRef.current.find(
+        (item) => item.id === conversationId
+      )
+      const message = conversation?.messages.find(
+        (item) => item.id === messageId
+      )
+      if (!message?.deferred) return
+
+      const key = `${conversationId}:${messageId}`
+      const existingLoad = messageDetailLoadsRef.current.get(key)
+      if (existingLoad) return existingLoad
+
+      const load = (async () => {
+        const fullMessage = await fetchConversationMessageDetails(
+          conversationId,
+          messageId
+        )
+        dispatch({
+          type: "MERGE_MESSAGE_DETAILS",
+          conversationId,
+          message: fullMessage,
+        })
+      })().finally(() => {
+        messageDetailLoadsRef.current.delete(key)
+      })
+
+      messageDetailLoadsRef.current.set(key, load)
       return load
     },
     []
@@ -2067,6 +2106,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       newChat,
       selectConversation,
       prefetchConversationMessages: loadInitialMessages,
+      loadMessageDetails,
       loadOlderMessages,
       archiveConversation,
       unarchiveConversation,
@@ -2082,6 +2122,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       newChat,
       selectConversation,
       loadInitialMessages,
+      loadMessageDetails,
       loadOlderMessages,
       archiveConversation,
       unarchiveConversation,

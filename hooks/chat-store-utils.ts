@@ -149,8 +149,40 @@ export function mergeMessagesById(
 ): Message[] {
   const byId = new Map<string, Message>()
   for (const message of existingMessages) byId.set(message.id, message)
-  for (const message of incomingMessages) byId.set(message.id, message)
+  for (const message of incomingMessages) {
+    const existing = byId.get(message.id)
+    byId.set(
+      message.id,
+      existing ? mergeMessagePreservingDetails(existing, message) : message
+    )
+  }
   return sortMessagesByTimeline(Array.from(byId.values()))
+}
+
+function mergeMessagePreservingDetails(
+  existing: Message,
+  incoming: Message
+): Message {
+  if (!incoming.deferred) return incoming
+
+  const reasoning = existing.reasoning ?? incoming.reasoning
+  const contentSegments = existing.contentSegments ?? incoming.contentSegments
+  const toolCalls = existing.toolCalls ?? incoming.toolCalls
+  const deferred = {
+    reasoning: incoming.deferred.reasoning && !reasoning,
+    contentSegments: incoming.deferred.contentSegments && !contentSegments,
+    toolCalls: incoming.deferred.toolCalls && !toolCalls,
+  }
+  const hasDeferred =
+    deferred.reasoning || deferred.contentSegments || deferred.toolCalls
+
+  return {
+    ...incoming,
+    reasoning,
+    contentSegments,
+    toolCalls,
+    ...(hasDeferred ? { deferred } : { deferred: undefined }),
+  }
 }
 
 export function readUnreadConversationIds(): Set<string> {

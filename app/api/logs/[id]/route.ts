@@ -22,42 +22,67 @@ type RequestLogTranscript = {
 }
 
 function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {
-    const inboxTranscript = getInboxThreadTranscript(log)
-    if (inboxTranscript) {
-        return inboxTranscript
-    }
+    // Several stores can hold this run's transcript — an inbox thread, a user
+    // conversation, a delegated agent run, or a scheduled-task run — and they do
+    // NOT all carry the same fidelity. The interleaved thinking+tool reasoning
+    // that the main chat renders lives only on the richest of them. Gather every
+    // candidate in priority order and return the first that actually has
+    // reasoning, falling back to the highest-priority bare candidate when none
+    // do. Without this a reasoning-less inbox/summary message shadows the
+    // scheduled-run record that holds the real step-by-step, and the Logs detail
+    // collapses to its lossy text-only view ("nu văd tool calls în logs").
+    const candidates = [
+        getInboxThreadTranscript(log),
+        getConversationTranscript(log),
+        getScheduledRunTranscript(log),
+    ]
 
+    let fallback: RequestLogTranscript | null = null
+    for (const candidate of candidates) {
+        if (!candidate) continue
+        if (!fallback) fallback = candidate
+        if (transcriptHasReasoning(candidate)) return candidate
+    }
+    return fallback
+}
+
+function transcriptHasReasoning(transcript: RequestLogTranscript): boolean {
+    const reasoning = transcript.assistantMessage.reasoning
+    return Array.isArray(reasoning) && reasoning.length > 0
+}
+
+function getConversationTranscript(log: RequestLogRow): RequestLogTranscript | null {
     const conversation = getConversation(log.conversationId)
-    if (conversation) {
-        const assistantMessage = conversation.messages.find(
-            message => message.id === log.id && message.role === 'assistant'
-        )
-        if (assistantMessage) {
-            const assistantIndex = conversation.messages.indexOf(assistantMessage)
-            return {
-                userMessage: findUserMessageForAssistant(conversation.messages, assistantIndex, log),
-                assistantMessage,
-            }
-        }
+    if (!conversation) return null
 
-        const run = findAgentRun(conversation.messages, log.id)
-        if (run) {
-            return {
-                userMessage: messageFromAgentPrompt(run, log),
-                assistantMessage: messageFromAgentRun(run, log),
-            }
-        }
-    }
-
-    const scheduledRunMessage = messageFromScheduledRun(log)
-    if (scheduledRunMessage) {
+    const assistantMessage = conversation.messages.find(
+        message => message.id === log.id && message.role === 'assistant'
+    )
+    if (assistantMessage) {
+        const assistantIndex = conversation.messages.indexOf(assistantMessage)
         return {
-            userMessage: messageFromLogInput(log),
-            assistantMessage: scheduledRunMessage,
+            userMessage: findUserMessageForAssistant(conversation.messages, assistantIndex, log),
+            assistantMessage,
         }
     }
 
+    const run = findAgentRun(conversation.messages, log.id)
+    if (run) {
+        return {
+            userMessage: messageFromAgentPrompt(run, log),
+            assistantMessage: messageFromAgentRun(run, log),
+        }
+    }
     return null
+}
+
+function getScheduledRunTranscript(log: RequestLogRow): RequestLogTranscript | null {
+    const scheduledRunMessage = messageFromScheduledRun(log)
+    if (!scheduledRunMessage) return null
+    return {
+        userMessage: messageFromLogInput(log),
+        assistantMessage: scheduledRunMessage,
+    }
 }
 
 function getInboxThreadTranscript(log: RequestLogRow): RequestLogTranscript | null {
@@ -197,7 +222,12 @@ function scheduledRunScore(log: RequestLogRow, run: { startedAt: number; summary
     const summary = run.summary.trim()
     if (logOutput && summary && logOutput === summary) score += 10 * 60 * 1000
     if (logOutput && summary && (logOutput.includes(summary) || summary.includes(logOutput))) score += 60_000
-    if (run.reasoning?.length) score += 30_000
+    // A run that captured the interleaved reasoning must outrank any
+    // reasoning-less run in the window — that record is the only one the Logs
+    // detail can render exactly like the main chat. Use a weight larger than the
+    // max possible time+text score (~1.26M) so reasoning presence dominates the
+    // pick instead of raw time proximity.
+    if (run.reasoning?.length) score += 5_000_000
     return score
 }
 

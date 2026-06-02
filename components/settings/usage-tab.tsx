@@ -323,6 +323,9 @@ function UsageContent({ data }: { data: UsageReport }) {
 function KpiCards({ totals, previous }: { totals: UsageTotals; previous: UsageTotals | null }) {
     const errorRate = totals.requests > 0 ? totals.errors / totals.requests : 0
     const previousErrorRate = previous && previous.requests > 0 ? previous.errors / previous.requests : null
+    // Headline excludes cache reads — cached is a near-free, run-inflating subset
+    // of input (see usage-mapper mapAnthropic). Cached stays visible in the By model table.
+    const freshTokens = Math.max(0, totals.totalTokens - totals.cachedTokens)
 
     return (
         <div className="grid min-w-0 grid-cols-1 gap-3 min-[420px]:grid-cols-2 md:grid-cols-4">
@@ -333,9 +336,9 @@ function KpiCards({ totals, previous }: { totals: UsageTotals; previous: UsageTo
             />
             <Kpi
                 label="Total tokens"
-                value={formatTokensCompact(totals.totalTokens)}
-                hint={`${formatTokensCompact(totals.inputTokens)} in · ${formatTokensCompact(totals.outputTokens)} out · ${formatTokensCompact(totals.thinkingTokens)} thinking`}
-                delta={previous ? pctDelta(totals.totalTokens, previous.totalTokens) : null}
+                value={formatTokensCompact(freshTokens)}
+                hint={`${formatTokensCompact(Math.max(0, totals.inputTokens - totals.cachedTokens))} in · ${formatTokensCompact(totals.outputTokens)} out · ${formatTokensCompact(totals.thinkingTokens)} thinking`}
+                delta={previous ? pctDelta(freshTokens, Math.max(0, previous.totalTokens - previous.cachedTokens)) : null}
             />
             <Kpi
                 label="Estimated cost"

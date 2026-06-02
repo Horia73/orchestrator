@@ -668,6 +668,29 @@ def restart_container_async(delay: float = 0.4) -> None:
     threading.Thread(target=_do, daemon=True).start()
 
 
+# npm stages each package into node_modules/.<name>-<hash> (and the scoped
+# variant node_modules/@scope/.<name>-<hash>) before renaming it into place. An
+# install interrupted mid-rename (container restart, OOM, `docker system prune`
+# racing the volume, a download slower than the timeout) orphans that temp dir,
+# and then EVERY later `npm install` dies with
+# `ENOTEMPTY: rename ... -> .<name>-<hash>`, freezing the CLI half-written —
+# typically the placeholder stub with no native binary, which exits 1 on every
+# invocation. Sweep the orphans before installing so the update self-heals.
+NPM_GLOBAL_NODE_MODULES = "/home/node/.npm-global/lib/node_modules"
+NPM_STAGING_SWEEP = (
+    'for d in "$N" "$N"/@*; do [ -d "$d" ] || continue; '
+    'for t in "$d"/.*-*; do [ -d "$t" ] && rm -rf "$t"; done; done; true'
+)
+# `npm install` exits 0 even when a platform-native optionalDependency silently
+# failed to download — that leaves `claude` as a stub that errors on every run.
+# Probe each bin so we report a broken install instead of a false success.
+CLI_VERIFY_PROBE = (
+    'rc=0; for b in /home/node/.npm-global/bin/claude /home/node/.npm-global/bin/codex; do '
+    '[ -e "$b" ] || continue; '
+    '"$b" --version >/dev/null 2>&1 || { echo "BROKEN: $b"; rc=1; }; done; exit $rc'
+)
+
+
 def update_clis() -> dict:
     """Update the CLIs inside the running container's npm-global volume, then
     restart the container. Returns the install result; the restart runs in the
@@ -675,12 +698,37 @@ def update_clis() -> dict:
     if not CLI_UPDATE_PACKAGES:
         return {"ok": False, "error": "No CLI packages configured to update."}
     write_log("Starting CLI update: " + ", ".join(CLI_UPDATE_PACKAGES))
+
+    # Clear orphaned npm staging temp dirs that would otherwise block the
+    # install with ENOTEMPTY (see NPM_STAGING_SWEEP).
+    run_capture(
+        [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc",
+         f"N={NPM_GLOBAL_NODE_MODULES}; {NPM_STAGING_SWEEP}"],
+        timeout=30,
+    )
+
     code, output = run_capture(
-        [*compose_command(), "exec", "-T", SERVICE_NAME, "npm", "install", "-g", *CLI_UPDATE_PACKAGES],
-        timeout=180,
+        [*compose_command(), "exec", "-T", SERVICE_NAME, "npm", "install", "-g",
+         "--include=optional", "--foreground-scripts", *CLI_UPDATE_PACKAGES],
+        timeout=300,
     )
     if code != 0:
         return {"ok": False, "error": f"npm install failed (exit {code}).", "log": output[-2000:]}
+
+    # Verify the binaries actually run — a 0 exit from npm doesn't guarantee the
+    # native binary landed (see CLI_VERIFY_PROBE).
+    verify_code, verify_out = run_capture(
+        [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERIFY_PROBE],
+        timeout=30,
+    )
+    if verify_code != 0:
+        return {
+            "ok": False,
+            "error": "CLI update finished but a binary is broken (native install did not land). "
+                     "Cleared the orphaned temp dir — re-run the update.",
+            "log": (output + "\n" + verify_out)[-2000:],
+        }
+
     _, versions = run_capture(
         [*compose_command(), "exec", "-T", SERVICE_NAME, "sh", "-lc", CLI_VERSION_PROBE],
         timeout=30,

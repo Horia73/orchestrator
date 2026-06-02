@@ -586,6 +586,8 @@ export interface ConversationMessagesPage {
   nextCursor: MessagePageCursor | null
 }
 
+type MessageHydrationMode = "full" | "slim"
+
 function parseJsonField<T>(value: string | null): T | undefined {
   if (!value) return undefined
   try {
@@ -593,6 +595,12 @@ function parseJsonField<T>(value: string | null): T | undefined {
   } catch {
     return undefined
   }
+}
+
+function hasJsonPayload(value: string | null): boolean {
+  if (!value) return false
+  const trimmed = value.trim()
+  return trimmed.length > 0 && trimmed !== "[]" && trimmed !== "{}"
 }
 
 function messageFromRow(msgRow: MessageRow): Message {
@@ -612,6 +620,49 @@ function messageFromRow(msgRow: MessageRow): Message {
     replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
     timestamp: msgRow.timestamp,
   })
+}
+
+function slimMessageFromRow(msgRow: MessageRow): Message {
+  const deferred: NonNullable<Message["deferred"]> = {}
+  if (hasJsonPayload(msgRow.reasoning)) deferred.reasoning = true
+  if (hasJsonPayload(msgRow.contentSegments)) deferred.contentSegments = true
+  if (hasJsonPayload(msgRow.toolCalls)) deferred.toolCalls = true
+
+  const hasDeferred =
+    deferred.reasoning || deferred.contentSegments || deferred.toolCalls
+
+  return {
+    id: msgRow.id,
+    role: msgRow.role,
+    content: msgRow.content,
+    status: msgRow.status ?? undefined,
+    thinkingDuration: msgRow.thinkingDuration ?? undefined,
+    attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
+    replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
+    ...(hasDeferred ? { deferred } : {}),
+    timestamp: msgRow.timestamp,
+  }
+}
+
+function slimMessageForClient(message: Message): Message {
+  const deferred: NonNullable<Message["deferred"]> = {}
+  if (message.reasoning?.length) deferred.reasoning = true
+  if (message.contentSegments?.length) deferred.contentSegments = true
+  if (message.toolCalls?.length) deferred.toolCalls = true
+  const hasDeferred =
+    deferred.reasoning || deferred.contentSegments || deferred.toolCalls
+
+  return {
+    id: message.id,
+    role: message.role,
+    content: message.content,
+    status: message.status,
+    thinkingDuration: message.thinkingDuration,
+    attachments: message.attachments,
+    replyActions: message.replyActions,
+    ...(hasDeferred ? { deferred } : {}),
+    timestamp: message.timestamp,
+  }
 }
 
 function compactPreview(
@@ -840,10 +891,16 @@ export function getConversation(id: string): Conversation | null {
 
 export function getConversationMessagesPage(
   id: string,
-  options: { limit?: number; before?: MessagePageCursor | null } = {}
+  options: {
+    limit?: number
+    before?: MessagePageCursor | null
+    hydration?: MessageHydrationMode
+  } = {}
 ): ConversationMessagesPage {
   const limit = Math.max(1, Math.min(options.limit ?? 80, 200))
   const before = options.before
+  const hydrate =
+    options.hydration === "full" ? messageFromRow : slimMessageFromRow
   const conversationRow = db
     .prepare("SELECT messageCount FROM conversations WHERE id = ?")
     .get(id) as { messageCount: number | null } | undefined
@@ -877,7 +934,7 @@ export function getConversationMessagesPage(
   const oldestRow = pageRows[pageRows.length - 1]
 
   return {
-    messages: pageRows.reverse().map(messageFromRow),
+    messages: pageRows.reverse().map(hydrate),
     total: conversationRow?.messageCount ?? 0,
     hasMore: rows.length > limit,
     nextCursor:
@@ -885,6 +942,27 @@ export function getConversationMessagesPage(
         ? { timestamp: oldestRow.timestamp, id: oldestRow.id }
         : null,
   }
+}
+
+export function getConversationMessage(
+  conversationId: string,
+  messageId: string
+): Message | null {
+  const row = db
+    .prepare(
+      `
+        SELECT m.*
+        FROM messages m
+        JOIN conversations c ON c.id = m.conversationId
+        WHERE m.conversationId = ?
+          AND m.id = ?
+          AND (c.origin IS NULL OR c.origin = 'user')
+        LIMIT 1
+      `
+    )
+    .get(conversationId, messageId) as MessageRow | undefined
+
+  return row ? messageFromRow(row) : null
 }
 
 /**
@@ -1173,7 +1251,7 @@ export function createConversation(conversation: Conversation) {
         title: conversation.title,
         createdAt: conversation.createdAt,
         updatedAt: now,
-        messages: conversation.messages,
+        messages: conversation.messages.map(slimMessageForClient),
         messageCount: conversation.messages.length,
         lastMessagePreview: compactPreview(latestMessage?.content),
         lastMessageAt: latestMessage?.timestamp ?? undefined,
