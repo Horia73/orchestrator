@@ -14,6 +14,7 @@ import { browserAgent } from './browser-agent'
 import { modelMetadataResearcher } from './model-metadata-researcher'
 import { inboxAgent } from './inbox-agent'
 import { smartMonitorAgent } from './smart-monitor-agent'
+import { audioContextAgent } from './audio-context-agent'
 
 // ---------------------------------------------------------------------------
 // Agent Registry
@@ -33,6 +34,7 @@ register(researcher)
 register(modelMetadataResearcher)
 register(inboxAgent)
 register(smartMonitorAgent)
+register(audioContextAgent)
 register(multipurpose)
 register(coder)
 register(conciergeAgent)

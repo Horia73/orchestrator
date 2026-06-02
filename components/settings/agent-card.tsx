@@ -18,6 +18,7 @@ type SaveStatus =
 
 type ModelFeature = NonNullable<import("@/lib/config").ModelDef["features"]>[number]
 type EnumModelFeature = Extract<ModelFeature, { type: "enum" }>
+const AUDIO_CONTEXT_AGENT_ID = "audio_context_agent"
 
 const KNOWN_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
 
@@ -104,6 +105,8 @@ export function AgentCard({
   }
   const effectiveFallbacks = normalizeUiFallbacks(override?.fallbacks)
   const fallbackCapable = supportsAgentFallbacks(agent)
+  const modelFilter =
+    agent.id === AUDIO_CONTEXT_AGENT_ID ? isAudioContextCompatibleModel : undefined
 
   const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue>; fallbacks?: AgentFallback[] }) => {
     setStatus({ kind: "saving" })
@@ -198,6 +201,7 @@ export function AgentCard({
           <ModelPicker
             value={`${effectiveProvider}:${effectiveModel}`}
             onChange={handleModelChange}
+            filterModel={modelFilter}
           />
         </Field>
 
@@ -731,6 +735,10 @@ function isBrowserCompatibleModel(option: ModelPickerOption): boolean {
   return option.providerId === "google" && (option.model.kinds.includes("text") || option.model.capabilities.includes("text"))
 }
 
+function isAudioContextCompatibleModel(option: ModelPickerOption): boolean {
+  return option.providerId === "google" && isTextCompatibleModel(option)
+}
+
 function isTextCompatibleModel(option: ModelPickerOption): boolean {
   return option.model.kinds.includes("text") || option.model.capabilities.includes("text")
 }
@@ -739,6 +747,7 @@ function supportsAgentFallbacks(agent: AgentInfo): boolean {
   return (
     (agent.kind === "text" || agent.kind === "concierge") &&
     agent.id !== "browser_agent" &&
+    agent.id !== AUDIO_CONTEXT_AGENT_ID &&
     agent.id !== "phone_agent" &&
     agent.id !== "android_agent"
   )

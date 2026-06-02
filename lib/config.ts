@@ -271,6 +271,7 @@ const PROVIDER_FILE_SUPPORT: Record<string, ProviderFileSupport> = {
       audio: [
         "audio/wav",
         "audio/mp3",
+        "audio/mpeg",
         "audio/aiff",
         "audio/aac",
         "audio/ogg",
@@ -317,7 +318,7 @@ export function isFileSupportedByProvider(
     ...support.supportedMimeTypes.document,
   ]
   // Strip codec params (e.g. "audio/webm;codecs=opus" → "audio/webm")
-  const baseMime = mimeType.split(";")[0].trim()
+  const baseMime = mimeType.split(";")[0].trim().toLowerCase()
   return all.includes(baseMime)
 }
 

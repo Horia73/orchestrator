@@ -80,7 +80,7 @@ export function HomeView() {
       </div>
       <div
         ref={contentRef}
-        className="flex w-full max-w-[672px] flex-col items-center gap-7 transition-transform duration-150 ease-out"
+        className="flex w-full max-w-[672px] flex-col items-center gap-7"
         style={{
           transform:
             keyboardLift > 0

@@ -253,6 +253,25 @@ db.exec(`
         ON inbox_direct_action_log(createdAt DESC);
     CREATE INDEX IF NOT EXISTS idx_inbox_direct_action_log_source
         ON inbox_direct_action_log(sourceKind, createdAt DESC);
+
+    CREATE TABLE IF NOT EXISTS audio_context_cache (
+        cacheKey TEXT PRIMARY KEY,
+        attachmentId TEXT NOT NULL,
+        filename TEXT,
+        mimeType TEXT NOT NULL,
+        size INTEGER NOT NULL,
+        fileMtimeMs REAL NOT NULL,
+        promptVersion INTEGER NOT NULL,
+        provider TEXT NOT NULL,
+        model TEXT NOT NULL,
+        content TEXT NOT NULL,
+        createdAt INTEGER NOT NULL,
+        updatedAt INTEGER NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_audio_context_cache_attachment
+        ON audio_context_cache(attachmentId);
+    CREATE INDEX IF NOT EXISTS idx_audio_context_cache_updated
+        ON audio_context_cache(updatedAt DESC);
 `)
 
 // Migration: add interaction tracking columns if missing
@@ -1063,6 +1082,87 @@ export interface DeleteLibraryAttachmentsResult {
   affectedMessages: number
 }
 
+export interface AudioContextCacheRecord {
+  cacheKey: string
+  attachmentId: string
+  filename: string | null
+  mimeType: string
+  size: number
+  fileMtimeMs: number
+  promptVersion: number
+  provider: string
+  model: string
+  content: string
+  createdAt: number
+  updatedAt: number
+}
+
+export function getAudioContextCache(
+  cacheKey: string
+): AudioContextCacheRecord | null {
+  if (!cacheKey) return null
+  const row = db
+    .prepare(
+      `
+        SELECT cacheKey, attachmentId, filename, mimeType, size, fileMtimeMs,
+               promptVersion, provider, model, content, createdAt, updatedAt
+        FROM audio_context_cache
+        WHERE cacheKey = ?
+      `
+    )
+    .get(cacheKey) as AudioContextCacheRecord | undefined
+  return row ?? null
+}
+
+export function upsertAudioContextCache(
+  record: Omit<AudioContextCacheRecord, "createdAt" | "updatedAt">
+): AudioContextCacheRecord {
+  const now = Date.now()
+  db.prepare(
+    `
+      INSERT INTO audio_context_cache (
+        cacheKey, attachmentId, filename, mimeType, size, fileMtimeMs,
+        promptVersion, provider, model, content, createdAt, updatedAt
+      )
+      VALUES (
+        @cacheKey, @attachmentId, @filename, @mimeType, @size, @fileMtimeMs,
+        @promptVersion, @provider, @model, @content, @now, @now
+      )
+      ON CONFLICT(cacheKey) DO UPDATE SET
+        filename = excluded.filename,
+        mimeType = excluded.mimeType,
+        size = excluded.size,
+        fileMtimeMs = excluded.fileMtimeMs,
+        promptVersion = excluded.promptVersion,
+        provider = excluded.provider,
+        model = excluded.model,
+        content = excluded.content,
+        updatedAt = excluded.updatedAt
+    `
+  ).run({ ...record, now })
+  return getAudioContextCache(record.cacheKey) ?? {
+    ...record,
+    createdAt: now,
+    updatedAt: now,
+  }
+}
+
+export function deleteAudioContextCacheForAttachmentIds(ids: string[]): number {
+  const cleanIds = Array.from(
+    new Set(ids.filter((id) => typeof id === "string" && id.trim()).map((id) => id.trim()))
+  )
+  if (cleanIds.length === 0) return 0
+  const stmt = db.prepare(
+    `DELETE FROM audio_context_cache WHERE attachmentId = ?`
+  )
+  const transaction = db.transaction(() => {
+    let deleted = 0
+    for (const id of cleanIds) deleted += stmt.run(id).changes
+    return deleted
+  })
+  return transaction() as number
+}
+
 function collectAllReferencedAttachmentIds(): Set<string> {
   const rows = db
     .prepare("SELECT attachments FROM messages WHERE attachments IS NOT NULL")
@@ -1138,7 +1238,10 @@ export function deleteLibraryAttachments(
 
   const stillReferenced = collectAllReferencedAttachmentIds()
   for (const id of removedIds) {
-    if (!stillReferenced.has(id)) unlinkUploadIfExists(id)
+    if (!stillReferenced.has(id)) {
+      unlinkUploadIfExists(id)
+      deleteAudioContextCacheForAttachmentIds([id])
+    }
   }
 
   return {
@@ -2068,6 +2171,7 @@ export function deleteConversation(id: string) {
   const attachmentIds = collectConversationAttachmentIds(id)
   const artifactFilePaths = collectConversationArtifactFilePaths(id)
   for (const att of attachmentIds) unlinkUploadIfExists(att)
+  deleteAudioContextCacheForAttachmentIds(attachmentIds)
   for (const filePath of artifactFilePaths) unlinkArtifactIfExists(filePath)
 
   // Foreign key constraint with ON DELETE CASCADE will handle messages

@@ -13,6 +13,7 @@ import type {
 } from './types'
 import { MAX_AGENT_DEPTH } from './types'
 import { getAgent } from './registry'
+import { AUDIO_CONTEXT_AGENT_ID } from './audio-context-agent'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
 import {
@@ -856,6 +857,7 @@ function supportsModelFallbacks(target: AgentConfig): boolean {
     return (
         (target.kind === 'text' || target.kind === 'concierge') &&
         target.provider !== 'browser' &&
+        target.id !== AUDIO_CONTEXT_AGENT_ID &&
         target.id !== 'phone_agent' &&
         target.id !== 'android_agent'
     )

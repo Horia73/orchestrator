@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { getAgent } from '@/lib/ai'
+import { AUDIO_CONTEXT_AGENT_ID, isAudioContextAgentModel } from '@/lib/ai/audio-context'
 import { getEffectiveModel } from '@/lib/models/registry'
 import { setAgentOverride, modelExists, type AgentFallback, type AgentOverride, type ThinkingLevel, type ModelFeatureValue } from '@/lib/config'
 import type { AgentConfig } from '@/lib/ai/agents/types'
@@ -21,6 +22,7 @@ function supportsModelFallbacks(agent: AgentConfig): boolean {
     return (
         (agent.kind === 'text' || agent.kind === 'concierge') &&
         agent.provider !== 'browser' &&
+        agent.id !== AUDIO_CONTEXT_AGENT_ID &&
         agent.id !== 'phone_agent' &&
         agent.id !== 'android_agent'
     )
@@ -108,6 +110,13 @@ export async function PUT(
 
     if (!modelExists(provider, model)) {
         return NextResponse.json({ error: `Unknown model: ${provider}:${model}` }, { status: 400 })
+    }
+
+    if (agent.id === AUDIO_CONTEXT_AGENT_ID && !isAudioContextAgentModel(provider, model)) {
+        return NextResponse.json(
+            { error: 'Audio Context Agent must use a Google/Gemini text model that can receive audio.' },
+            { status: 400 }
+        )
     }
 
     const override: AgentOverride = { provider, model }

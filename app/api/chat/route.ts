@@ -58,6 +58,7 @@ import {
   stripDirectEmitPayload,
 } from "@/lib/artifacts/direct-emit"
 import { redactToolArgs } from "@/lib/ai/tools/redaction"
+import { prepareAudioContextsForProvider } from "@/lib/ai/audio-context"
 import { filterIntegrationToolExposure } from "@/lib/integrations/exposure"
 import { activateIntegrations } from "@/lib/integrations/activation-store"
 import { resolveExistingUploadPath } from "@/lib/uploads"
@@ -882,7 +883,30 @@ export async function POST(request: Request) {
             prepared.settings.provider
           )
 
-          const resolvedMessages = messagesForProvider.map((m) => {
+          const buildResolvedMessages = async (): Promise<
+            Array<{
+              role: string
+              content: string
+              attachments?: MessageAttachment[]
+            }>
+          > => {
+            const audioContextByMessageId =
+              await prepareAudioContextsForProvider({
+                messages: messagesForProvider,
+                provider: prepared.settings.provider,
+                parentCtx: {
+                  callerAgentId: orchestrator.id,
+                  depth: 0,
+                  conversationId,
+                  parentRequestId: messageId,
+                  signal: serverAbortController.signal,
+                  parentAgentRunId: messageId,
+                  onAgentEvent: (event) => handleAgentEvent(event, send),
+                  appOrigin: requestOrigin,
+                },
+              })
+
+            return messagesForProvider.map((m) => {
             const messageAttachments = Array.isArray(m.attachments)
               ? m.attachments
               : []
@@ -894,6 +918,8 @@ export async function POST(request: Request) {
                 : ""
             const messageContent =
               typeof m.content === "string" ? m.content : ""
+            const audioContext =
+              m.role === "user" ? (audioContextByMessageId.get(m.id) ?? "") : ""
             const runtimePromptContext =
               m.id === promptContextMessageId
                 ? [
@@ -910,7 +936,10 @@ export async function POST(request: Request) {
             } = {
               role: m.role,
               content: appendPromptContext(
-                appendPromptContext(messageContent, localAttachmentContext),
+                appendPromptContext(
+                  appendPromptContext(messageContent, localAttachmentContext),
+                  audioContext
+                ),
                 runtimePromptContext
               ),
             }
@@ -944,6 +973,7 @@ export async function POST(request: Request) {
 
             return result
           })
+          }
 
           // Shared content-chunk pipeline. Called for every text fragment that
           // arrives — either real model output (`onContent`) or a server-side
@@ -1023,6 +1053,7 @@ export async function POST(request: Request) {
           }
 
           try {
+            const resolvedMessages = await buildResolvedMessages()
             await prepared.providerStream.call(
               prepared.provider,
               {

@@ -21,6 +21,25 @@ import type { Attachment } from "@/lib/types"
 
 const CHAT_INPUT_FOCUS_EVENT = "chat-input-focus"
 
+function focusWithoutViewportScroll(textarea: HTMLTextAreaElement | null) {
+    if (!textarea) return
+
+    const scrollX = window.scrollX
+    const scrollY = window.scrollY
+
+    try {
+        textarea.focus({ preventScroll: true })
+    } catch {
+        textarea.focus()
+    }
+
+    window.requestAnimationFrame(() => {
+        if (window.scrollX !== scrollX || window.scrollY !== scrollY) {
+            window.scrollTo(scrollX, scrollY)
+        }
+    })
+}
+
 interface ChatInputProps {
     variant?: "home" | "chat"
     placeholder?: string
@@ -102,9 +121,27 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
     }, [activeConversationId]) // eslint-disable-line react-hooks/exhaustive-deps
 
     React.useEffect(() => {
-        const handleFocusRequest = () => textareaRef.current?.focus()
+        const handleFocusRequest = () => focusWithoutViewportScroll(textareaRef.current)
         window.addEventListener(CHAT_INPUT_FOCUS_EVENT, handleFocusRequest)
         return () => window.removeEventListener(CHAT_INPUT_FOCUS_EVENT, handleFocusRequest)
+    }, [])
+
+    React.useEffect(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+
+        const handleTouchStart = (event: TouchEvent) => {
+            if (document.activeElement === textarea) return
+            if (!isMobileKeyboardViewport()) return
+
+            if (event.cancelable) event.preventDefault()
+            focusWithoutViewportScroll(textarea)
+        }
+
+        textarea.addEventListener("touchstart", handleTouchStart, {
+            passive: false,
+        })
+        return () => textarea.removeEventListener("touchstart", handleTouchStart)
     }, [])
 
     const resizeTextarea = React.useCallback(() => {
@@ -140,7 +177,7 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
         if (isMobileKeyboardViewport()) {
             textareaRef.current?.blur()
         } else {
-            textareaRef.current?.focus()
+            focusWithoutViewportScroll(textareaRef.current)
         }
     }, [buildSendOptions, draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, onSend, sendMessage])
 

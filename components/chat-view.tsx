@@ -2114,7 +2114,7 @@ export function ChatView() {
               isScrollbarVisible && !isScrollbarSuppressed ? "true" : "false"
             }
             data-scrollbar-suppressed={isScrollbarSuppressed ? "true" : "false"}
-            className="chat-scroll-container min-h-0 flex-1 overflow-y-scroll transition-[margin-bottom] duration-150 ease-out"
+            className="chat-scroll-container min-h-0 flex-1 overflow-y-scroll"
             style={{
               WebkitOverflowScrolling: "touch",
               marginBottom: keyboardInset > 0 ? keyboardInset : undefined,
@@ -2238,7 +2238,7 @@ export function ChatView() {
             ref={inputContainerRef}
             data-chat-input-container="true"
             className={cn(
-              "pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4 transition-[padding-bottom,transform] duration-150 ease-out",
+              "pointer-events-none absolute bottom-0 left-0 z-10 bg-background px-4",
               keyboardInset > 0
                 ? "pb-0.5"
                 : "pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:pb-3"

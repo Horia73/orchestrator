@@ -15,7 +15,9 @@ const DEFAULT_FACTORY_RESET_SCOPES: FactoryResetScope[] = ['chat', 'automations'
 
 const CHAT_TABLES = [
     'tool_logs',
+    'request_log_reasoning',
     'request_logs',
+    'audio_context_cache',
     'agent_thread_messages',
     'agent_threads',
     'artifacts',
