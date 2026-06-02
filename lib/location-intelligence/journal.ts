@@ -203,7 +203,7 @@ export function getLocationIntelligenceStatus(): LocationIntelligenceIntegration
     dailyTask,
     capabilities: [...LOCATION_CAPABILITIES],
     setupPrompt:
-      "Help me set up optional Location Intelligence. I want Home Assistant location updates to flow into a local microscript journal, preserve raw points in points.jsonl, infer stays from gaps until the next webhook, run daily summaries, support retention including keep everything, and show Library Places with Places/Raw layers. Do not enable tracking until I explicitly opt in.",
+      "Help me set up optional Location Intelligence. I want Home Assistant location updates to flow into a local microscript journal, preserve raw points in points.jsonl, infer stays from gaps until the next webhook, run daily summaries, persist useful non-home reverse-geocoded labels to place_aliases.json for Library Places, support retention including keep everything, and show Library Places with Places/Raw layers. Do not enable tracking until I explicitly opt in.",
     ...(configured &&
     enabled &&
     config?.journalScriptId &&
