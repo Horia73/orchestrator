@@ -262,11 +262,11 @@ export function UpdateTab() {
   const [resetScopes, setResetScopes] = React.useState<FactoryResetScope[]>(DEFAULT_RESET_SCOPES)
   const [error, setError] = React.useState<string | null>(null)
   const [resetMessage, setResetMessage] = React.useState<string | null>(null)
-  const [memoryBusy, setMemoryBusy] = React.useState<"export" | "import" | null>(null)
-  const [memoryMessage, setMemoryMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
+  const [backupBusy, setBackupBusy] = React.useState<"export" | "restore" | null>(null)
+  const [backupMessage, setBackupMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
   const [cliBusy, setCliBusy] = React.useState<"update" | "restart" | null>(null)
   const [cliMessage, setCliMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
-  const memoryImportInputRef = React.useRef<HTMLInputElement | null>(null)
+  const backupRestoreInputRef = React.useRef<HTMLInputElement | null>(null)
 
   const loadStatus = React.useCallback(async (refresh = false) => {
     const res = await fetch(`/api/update/status${refresh ? "?refresh=1" : ""}`, { cache: "no-store" })
@@ -409,67 +409,62 @@ export function UpdateTab() {
     setResetModalOpen(true)
   }
 
-  const handleMemoryExport = async () => {
-    setMemoryBusy("export")
-    setMemoryMessage(null)
+  const handleBackupExport = async () => {
+    setBackupBusy("export")
+    setBackupMessage(null)
     try {
-      const res = await fetch("/api/settings/memory/export", { cache: "no-store" })
-      const text = await res.text()
+      const res = await fetch("/api/settings/backup", { cache: "no-store" })
       if (!res.ok) {
-        const parsed = parseJsonObject(text)
-        throw new Error(parsed?.error || `Memory export failed (${res.status})`)
+        const parsed = parseJsonObject(await res.text())
+        throw new Error(parsed?.error || `Backup failed (${res.status})`)
       }
-      const blob = new Blob([text], { type: "application/json" })
+      const blob = await res.blob()
       const url = URL.createObjectURL(blob)
       const link = document.createElement("a")
       link.href = url
-      link.download = filenameFromContentDisposition(res.headers.get("content-disposition")) ?? `orchestrator-memory-${new Date().toISOString().slice(0, 10)}.json`
+      link.download = filenameFromContentDisposition(res.headers.get("content-disposition")) ?? `orchestrator-backup-${new Date().toISOString().slice(0, 10)}.tar.gz`
       document.body.appendChild(link)
       link.click()
       link.remove()
       URL.revokeObjectURL(url)
-      setMemoryMessage({ tone: "success", text: "Memory export downloaded." })
+      setBackupMessage({ tone: "success", text: "Backup downloaded." })
     } catch (err) {
-      setMemoryMessage({ tone: "error", text: err instanceof Error ? err.message : "Memory export failed." })
+      setBackupMessage({ tone: "error", text: err instanceof Error ? err.message : "Backup failed." })
     } finally {
-      setMemoryBusy(null)
+      setBackupBusy(null)
     }
   }
 
-  const handleMemoryImportFile = async (file: File | null | undefined) => {
+  const handleBackupRestoreFile = async (file: File | null | undefined) => {
     if (!file) return
-    setMemoryBusy("import")
-    setMemoryMessage(null)
+    setBackupBusy("restore")
+    setBackupMessage(null)
     try {
-      const text = await file.text()
-      const bundle = JSON.parse(text) as unknown
-      const count = bundle && typeof bundle === "object" && Array.isArray((bundle as { files?: unknown }).files)
-        ? (bundle as { files: unknown[] }).files.length
-        : null
       const ok = window.confirm(
-        count === null
-          ? "Import this memory file and replace matching local memory files?"
-          : `Import ${count} memory file${count === 1 ? "" : "s"} and replace matching local memory files?`
+        "Restore this backup? Matching local files (database, workspace, uploads, connected-account tokens) will be overwritten. WhatsApp and browser sessions are left untouched. The database is applied after the next restart."
       )
       if (!ok) return
 
-      const res = await fetch("/api/settings/memory/import", {
+      const res = await fetch("/api/settings/backup/restore", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/gzip" },
         cache: "no-store",
-        body: JSON.stringify(bundle),
+        body: file,
       })
-      const json = await res.json().catch(() => null) as { importedFiles?: unknown[]; error?: string } | null
-      if (!res.ok) throw new Error(json?.error || `Memory import failed (${res.status})`)
-      setMemoryMessage({
+      const json = await res.json().catch(() => null) as { restoredFiles?: number; restartRequired?: boolean; error?: string } | null
+      if (!res.ok) throw new Error(json?.error || `Restore failed (${res.status})`)
+      const fileCount = json?.restoredFiles ?? 0
+      setBackupMessage({
         tone: "success",
-        text: `Imported ${json?.importedFiles?.length ?? count ?? 0} memory file${(json?.importedFiles?.length ?? count ?? 0) === 1 ? "" : "s"}.`,
+        text: json?.restartRequired
+          ? `Restored ${fileCount} file${fileCount === 1 ? "" : "s"}. Restart Orchestrator to finish restoring the database.`
+          : `Restored ${fileCount} file${fileCount === 1 ? "" : "s"}.`,
       })
     } catch (err) {
-      setMemoryMessage({ tone: "error", text: err instanceof Error ? err.message : "Memory import failed." })
+      setBackupMessage({ tone: "error", text: err instanceof Error ? err.message : "Restore failed." })
     } finally {
-      setMemoryBusy(null)
-      if (memoryImportInputRef.current) memoryImportInputRef.current.value = ""
+      setBackupBusy(null)
+      if (backupRestoreInputRef.current) backupRestoreInputRef.current.value = ""
     }
   }
 
@@ -728,7 +723,7 @@ export function UpdateTab() {
           <div>
             <h3 className="text-[13px] font-medium text-foreground/70">Danger zone</h3>
             <p className="mt-0.5 text-[12.5px] text-foreground/45">
-              Reset selected local data, or move memory between Orchestrator installs.
+              Reset selected local data, or back up and restore your Orchestrator data.
             </p>
           </div>
         </div>
@@ -737,49 +732,49 @@ export function UpdateTab() {
           <div className="rounded-xl border border-border/70 bg-card px-3 py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
-                <h4 className="text-[13px] font-medium text-foreground/75">Memory portability</h4>
+                <h4 className="text-[13px] font-medium text-foreground/75">Backup &amp; restore</h4>
                 <p className="mt-0.5 text-[12.5px] leading-relaxed text-foreground/45">
-                  Export or import USER, MEMORY, daily memory, onboarding, and monitor notes. Review exports before sharing.
+                  Download a full backup (database, workspace, uploads, connected-account tokens) as a .tar.gz, or restore one. WhatsApp and browser sessions are excluded — re-link them after a restore. Restoring the database takes effect after the next restart.
                 </p>
               </div>
               <div className="flex shrink-0 items-center gap-2">
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleMemoryExport}
-                  disabled={memoryBusy !== null}
-                  aria-label="Export memory"
+                  onClick={handleBackupExport}
+                  disabled={backupBusy !== null}
+                  aria-label="Create backup"
                 >
-                  {memoryBusy === "export" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-                  Export
+                  {backupBusy === "export" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  Backup
                 </Button>
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => memoryImportInputRef.current?.click()}
-                  disabled={memoryBusy !== null}
-                  aria-label="Import memory"
+                  onClick={() => backupRestoreInputRef.current?.click()}
+                  disabled={backupBusy !== null}
+                  aria-label="Restore backup"
                 >
-                  {memoryBusy === "import" ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                  Import
+                  {backupBusy === "restore" ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+                  Restore
                 </Button>
                 <input
-                  ref={memoryImportInputRef}
+                  ref={backupRestoreInputRef}
                   type="file"
-                  accept="application/json,.json"
+                  accept=".gz,.tgz,application/gzip,application/x-gzip"
                   className="hidden"
-                  onChange={event => { void handleMemoryImportFile(event.target.files?.[0]) }}
+                  onChange={event => { void handleBackupRestoreFile(event.target.files?.[0]) }}
                 />
               </div>
             </div>
-            {memoryMessage && (
+            {backupMessage && (
               <p
                 className={cn(
                   "mt-2 text-[12px]",
-                  memoryMessage.tone === "success" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
+                  backupMessage.tone === "success" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
                 )}
               >
-                {memoryMessage.text}
+                {backupMessage.text}
               </p>
             )}
           </div>

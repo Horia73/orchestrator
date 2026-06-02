@@ -161,6 +161,15 @@ export interface PromptContext {
   availableTools: ToolDef[]
   /** Native provider built-ins enabled for this agent (web_search, file_search, etc.). */
   availableBuiltins?: ProviderBuiltin[]
+  /**
+   * Prefix the active provider exposes the custom tools above under (see
+   * ProviderCapabilities.customToolNamePrefix). When set, the runtime_tools
+   * block renders each tool by its real callable name (`<prefix><id>`) and
+   * states the bare→prefixed mapping, so a tool the prompt names without the
+   * prefix elsewhere (e.g. `set_task_state`) is still called correctly.
+   * Undefined for providers that expose custom tools by their bare name.
+   */
+  customToolNamePrefix?: string
   /** List of agent configs this agent can delegate to */
   availableAgents: AgentConfig[]
   /** Conversation this prompt is built for. Drives per-conversation integration activation. */
@@ -522,6 +531,17 @@ export interface ProviderCapabilities {
    * provider key internally, such as the browser agent's Gemini vision loop.
    */
   requiresApiKey: boolean
+  /**
+   * Prefix the provider exposes our custom (non-native) tools under, as the
+   * model actually sees and must call them. Claude Code bridges custom tools
+   * through a stdio MCP server, so it surfaces them as
+   * `mcp__<server>__<tool>` — the model cannot call the bare id. Providers
+   * that pass custom tools under their bare names (codex dynamicTools, the
+   * API providers' function tools) leave this undefined. The prompt layer
+   * renders tool names and the calling convention with this prefix so the
+   * advertised name always matches the callable name.
+   */
+  customToolNamePrefix?: string
 }
 
 export interface AIProvider {

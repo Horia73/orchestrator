@@ -20,6 +20,15 @@ import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { latestUserPromptWithPortableHistory } from './history'
 
+// Our custom tools reach Claude Code through one stdio MCP server. Claude Code
+// surfaces MCP tools to the model as `mcp__<server>__<tool>`, never the bare
+// id — so this name drives both the MCP config below and the tool-name prefix
+// the prompt advertises (capabilities.customToolNamePrefix). Keep them derived
+// from this single const so the advertised name can never drift from the
+// callable one.
+const ORCH_TOOLS_MCP_SERVER_NAME = 'orch-tools'
+const ORCH_TOOLS_TOOL_NAME_PREFIX = `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}__`
+
 /**
  * Claude Code CLI provider — wraps the `claude` binary, no API key required.
  *
@@ -71,6 +80,10 @@ export class ClaudeCodeProvider implements AIProvider {
         attachmentMode: 'none',
         thinkingSupport: true,
         requiresApiKey: false,
+        // Custom tools are bridged via the orch-tools MCP server, so the model
+        // sees them namespaced. The prompt renders names with this prefix so it
+        // never tells the model to call a bare id Claude Code cannot resolve.
+        customToolNamePrefix: ORCH_TOOLS_TOOL_NAME_PREFIX,
     }
 
     // No API key for CLI — we accept one for interface uniformity but ignore it.
@@ -127,14 +140,14 @@ export class ClaudeCodeProvider implements AIProvider {
             const port = process.env.PORT ?? '3000'
             const mcpConfig = {
                 mcpServers: {
-                    'orch-tools': {
+                    [ORCH_TOOLS_MCP_SERVER_NAME]: {
                         type: 'stdio' as const,
                         command: process.execPath,  // current node binary
                         args: [serverScript],
                         env: {
                             MCP_APP_URL: `http://127.0.0.1:${port}`,
                             MCP_AUTH_TOKEN: token,
-                            MCP_SERVER_NAME: 'orch-tools',
+                            MCP_SERVER_NAME: ORCH_TOOLS_MCP_SERVER_NAME,
                         },
                     },
                 },
@@ -149,7 +162,7 @@ export class ClaudeCodeProvider implements AIProvider {
                 // caller requested them via AgentConfig.builtins.
                 args.push('--tools', '')
             }
-            args.push('--allowedTools', [...nativeToolNames, 'mcp__orch-tools'].join(','))
+            args.push('--allowedTools', [...nativeToolNames, `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}`].join(','))
             // No human in the loop — accept whatever tools we expose.
             args.push('--permission-mode', 'bypassPermissions')
         } else if (nativeToolNames.length > 0) {
@@ -304,14 +317,38 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
         let thinkingStartedAt: number | null = null
         let thinkingTotalMs = 0
 
-        const rememberUsage = (usage: unknown) => {
+        // Claude Code reports usage twice over a turn: once per internal API
+        // call (`assistant` / `stream_event`, reflecting that single call's
+        // context occupancy) and once in the final `result` envelope, which is
+        // CUMULATIVE across every step of an agentic turn — it re-sums the
+        // cache reads each step, so a 6-7 step turn over a ~116K thread reports
+        // ~800K. That cumulative figure is correct for cost accounting (handed
+        // to onDone via finalUsage) but must NOT drive the context-window ring,
+        // which has to stay ≤ the model window (app/api/chat/route.ts relies on
+        // the per-request snapshot here). So we split the two paths:
+        //   • finalUsage → whatever arrives last (the cumulative result), for cost
+        //   • onUsage    → per-call snapshots only, for the live context gauge
+        const rememberFinalUsage = (usage: unknown) => {
             finalUsage = usage
+        }
+        const emitContextSnapshot = (usage: unknown) => {
             const snapshot = claudeCodeContextUsageSnapshot({
                 raw: usage,
                 model,
                 sessionId: finalSessionId,
             })
-            if (snapshot) callbacks.onUsage?.(snapshot)
+            // Skip output-only partials (e.g. a message_delta carrying just
+            // output_tokens): they hold no input/cache signal and would
+            // momentarily collapse the ring. Keep the last input-bearing one.
+            if (snapshot && (snapshot.inputTokens !== null || snapshot.cachedTokens !== null)) {
+                callbacks.onUsage?.(snapshot)
+            }
+        }
+        // Per-call usage feeds both the gauge and the cost fallback; the
+        // cumulative `result` usage (handled below) overwrites finalUsage last.
+        const rememberPerCallUsage = (usage: unknown) => {
+            rememberFinalUsage(usage)
+            emitContextSnapshot(usage)
         }
 
         // Track tool_use blocks we've already surfaced so the same id from
@@ -323,8 +360,11 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
 
         const handleEnvelope = (env: AnyObj) => {
             const t = env.type as string | undefined
-            if (env.usage && typeof env.usage === 'object') {
-                rememberUsage(env.usage)
+            // A top-level `usage` rides on the cumulative `result` envelope
+            // (handled in its own branch below as final/cost usage). Any other
+            // envelope shape carrying one is per-call → feeds the gauge too.
+            if (t !== 'result' && env.usage && typeof env.usage === 'object') {
+                rememberPerCallUsage(env.usage)
             }
 
             if (t === 'system' && (env.subtype === 'init')) {
@@ -336,7 +376,7 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
                 const event = env.event as AnyObj | undefined
                 if (!event) return
                 if (event.usage && typeof event.usage === 'object') {
-                    rememberUsage(event.usage)
+                    rememberPerCallUsage(event.usage)
                 }
                 const eventType = event.type as string | undefined
                 if (eventType === 'content_block_start') {
@@ -378,7 +418,7 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
             if (t === 'assistant') {
                 const msg = env.message as AnyObj | undefined
                 if (msg?.usage && typeof msg.usage === 'object') {
-                    rememberUsage(msg.usage)
+                    rememberPerCallUsage(msg.usage)
                 }
                 const content = msg?.content as AnyObj[] | undefined
                 if (!Array.isArray(content)) return
@@ -428,7 +468,8 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
 
             if (t === 'result') {
                 if (typeof env.session_id === 'string') finalSessionId = env.session_id
-                if (env.usage) rememberUsage(env.usage)
+                // Cumulative whole-turn usage — for cost/onDone only, never the gauge.
+                if (env.usage) rememberFinalUsage(env.usage)
                 if (typeof env.duration_ms === 'number') finalDurationMs = env.duration_ms
                 if (env.is_error && typeof env.result === 'string') {
                     callbacks.onError(env.result)

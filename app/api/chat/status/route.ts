@@ -56,6 +56,7 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
             assistantName: config.assistantName,
             availableTools: surface.tools,
             availableBuiltins: surface.builtins,
+            customToolNamePrefix: providerCaps.customToolNamePrefix,
             availableAgents,
             declaredToolIds: orchestrator.tools,
             declaredTools: getToolsForAgent(orchestrator.tools),

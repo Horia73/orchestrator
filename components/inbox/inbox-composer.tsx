@@ -122,7 +122,6 @@ export function InboxComposer({ itemId, responding, onSend }: InboxComposerProps
                         ref={fileInputRef}
                         type="file"
                         multiple
-                        accept="image/*,.pdf,.txt,.csv,.json,.md,.doc,.docx,.xls,.xlsx,.mp3,.wav,.mp4,.webm"
                         className="hidden"
                         onChange={handleFileChange}
                     />

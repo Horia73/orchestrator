@@ -59,10 +59,29 @@ RUN apt-get update \
     xdotool \
     binutils \
     jq \
+    cups-client \
+    file \
+    netcat-openbsd \
+    openssh-client \
     poppler-utils \
+    python3 \
+    python3-pip \
     ripgrep \
     sqlite3 \
   && rm -rf /var/lib/apt/lists/*
+
+# Python document-processing libraries for the in-container agent. The base
+# image only pulls a bare python3 transitively (stdlib only, no pip), which
+# forced the agent to fall back to raw OOXML zip parsing. Bake the common libs
+# in as wheels (lxml/Pillow ship aarch64+amd64 wheels, so no compiler is needed
+# in this runner stage) so docx/xlsx/pptx/pdf work directly. PEP 668 marks the
+# system env externally-managed; --break-system-packages is the standard escape
+# hatch inside a throwaway container image.
+RUN pip3 install --break-system-packages --no-cache-dir \
+    python-docx \
+    openpyxl \
+    python-pptx \
+    pypdf
 
 COPY --from=builder --chown=node:node /app /app
 

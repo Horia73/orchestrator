@@ -1,6 +1,6 @@
 import fs from "fs"
 import path from "path"
-import { randomUUID } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import { z } from "zod"
 
 import { AGENT_WORKSPACE_DIR } from "@/lib/config"
@@ -164,27 +164,6 @@ const AppConfigFileSchema = z
   .passthrough()
 
 export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
-  {
-    id: "agents",
-    label: "Agents",
-    relativePath: "AGENTS.md",
-    kind: "markdown",
-    category: "behavior",
-    surface: "editor",
-    description: "Project notes intended for agents.",
-    defaultContent: [
-      "# AGENTS",
-      "",
-      "Global agent instructions for this workspace.",
-      "",
-      "## Operating Notes",
-      "",
-      "## Project Rules",
-      "",
-      "## Things To Avoid",
-      "",
-    ].join("\n"),
-  },
   {
     id: "user",
     label: "User",
@@ -514,6 +493,104 @@ function isMaterializable(def: WorkspaceFileDefinition): boolean {
 }
 
 /**
+ * Per-install record of the scaffold signature each materialized file was
+ * created with: { "<relativePath>": "<sha256 of the trimmed default>" }.
+ *
+ * The prompt builder skips workspace files the user never touched, so an empty
+ * template adds no prompt noise. Comparing live content against the *current*
+ * code default is brittle: when a default's text changes in a later release,
+ * an already-materialized untouched file (still holding the OLD default) no
+ * longer matches and silently starts leaking into every prompt. Freezing the
+ * signature at write time keeps "untouched" stable across template edits, with
+ * no hardcoded history of past defaults to maintain.
+ */
+const SCAFFOLD_HASHES_FILE = ".workspace-templates.json"
+
+function scaffoldHash(text: string): string {
+  return createHash("sha256").update(text.trim()).digest("hex")
+}
+
+export function readScaffoldHashes(
+  root: string = AGENT_WORKSPACE_DIR
+): Record<string, string> {
+  try {
+    const raw = fs.readFileSync(
+      /* turbopackIgnore: true */ path.join(root, SCAFFOLD_HASHES_FILE),
+      "utf-8"
+    )
+    const parsed: unknown = JSON.parse(raw)
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      const out: Record<string, string> = {}
+      for (const [key, value] of Object.entries(
+        parsed as Record<string, unknown>
+      )) {
+        if (typeof value === "string") out[key] = value
+      }
+      return out
+    }
+  } catch {
+    // Missing or malformed: treat as no recorded scaffolds.
+  }
+  return {}
+}
+
+/**
+ * True when `trimmedContent` still equals the scaffold this install wrote for
+ * `def`. Prefers the signature frozen at materialization time; falls back to
+ * the live default for files/installs that predate the manifest.
+ */
+export function isUntouchedScaffold(
+  def: WorkspaceFileDefinition,
+  trimmedContent: string,
+  hashes: Record<string, string>
+): boolean {
+  const recorded = hashes[def.relativePath]
+  if (recorded) return scaffoldHash(trimmedContent) === recorded
+  const liveDefault = def.defaultContent?.trim()
+  return Boolean(liveDefault) && trimmedContent === liveDefault
+}
+
+/**
+ * Freeze the scaffold signature of any materialized file that still equals the
+ * current default and has no recorded signature yet — fresh writes, plus a
+ * backfill for installs that predate the manifest or were just reset. Never
+ * overwrites an existing entry, so a later default-text change cannot rewrite
+ * an install's frozen signature. Best effort: failures never block a build.
+ */
+function recordScaffoldHashes(
+  root: string,
+  defs: WorkspaceFileDefinition[]
+): void {
+  const hashes = readScaffoldHashes(root)
+  let changed = false
+  for (const def of defs) {
+    if (def.dynamic === "daily" || !def.defaultContent) continue
+    if (hashes[def.relativePath]) continue
+    try {
+      const target = resolveDefinitionPath(def)
+      if (!fs.existsSync(/* turbopackIgnore: true */ target)) continue
+      const current = fs
+        .readFileSync(/* turbopackIgnore: true */ target, "utf-8")
+        .trim()
+      if (current !== def.defaultContent.trim()) continue
+      hashes[def.relativePath] = scaffoldHash(def.defaultContent)
+      changed = true
+    } catch {
+      // Best effort per file.
+    }
+  }
+  if (!changed) return
+  try {
+    writeTextAtomic(
+      path.join(root, SCAFFOLD_HASHES_FILE),
+      `${JSON.stringify(hashes, null, 2)}\n`
+    )
+  } catch {
+    // Best effort: a failed manifest write must not block the request.
+  }
+}
+
+/**
  * Idempotently writes any missing template files so the workspace always works,
  * even after the user deletes one. Called from the settings file API and at the
  * start of every agent prompt build.
@@ -574,6 +651,10 @@ export function ensureWorkspaceTemplates(): void {
       }
     }
   }
+
+  // Freeze each materialized file's scaffold signature so a future change to a
+  // default's text cannot make an untouched template leak into prompts.
+  recordScaffoldHashes(root, standard)
 
   if (!markerExists) {
     try {

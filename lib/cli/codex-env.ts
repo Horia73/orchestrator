@@ -38,6 +38,29 @@ export function prepareCodexRuntimeHome(): string {
     return CODEX_RUNTIME_HOME
 }
 
+/**
+ * Cheap, synchronous check for whether Codex has credentials on disk.
+ *
+ * Used as a fallback "logged in" signal when `codex login status` is too slow
+ * to answer (cold Node start / CPU contention / transient network) — the
+ * presence of a non-empty `auth.json` is a far more stable truth than a probe
+ * that timed out. We check the isolated runtime home first (where device-auth
+ * and {@link syncAuthFile} land tokens), then the user's real `~/.codex`.
+ *
+ * Absence is NOT treated as proof of logout by callers — this only provides a
+ * positive signal to override an inconclusive probe.
+ */
+export function codexAuthFileExists(): boolean {
+    const candidates = [CODEX_RUNTIME_AUTH_PATH, path.join(os.homedir(), '.codex', 'auth.json')]
+    return candidates.some(candidate => {
+        try {
+            return fs.statSync(candidate).size > 0
+        } catch {
+            return false
+        }
+    })
+}
+
 function writeSanitizedConfig(): void {
     try {
         const existing = fs.existsSync(RUNTIME_CONFIG_PATH)

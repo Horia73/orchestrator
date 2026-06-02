@@ -5,7 +5,7 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 import { AGENT_WORKSPACE_DIR, getEnvValue, WORKSPACE_DIR } from '@/lib/config'
-import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates } from '@/lib/settings/workspace-files'
+import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates, readScaffoldHashes, isUntouchedScaffold } from '@/lib/settings/workspace-files'
 import { buildIntegrationRunbooksContext } from '@/lib/integrations/runbooks'
 import {
     buildActiveCapabilityDoctrinesBlock,
@@ -226,6 +226,12 @@ export function buildSubAgentCollaboration(): string {
 export function buildToolsSection(ctx: PromptContext): string {
     const builtins = ctx.availableBuiltins ?? []
     if (ctx.availableTools.length === 0 && builtins.length === 0) return ''
+    // Render each tool by the name the model must actually call. On providers
+    // that namespace custom tools (Claude Code's MCP bridge → `mcp__orch-tools__`),
+    // the bare id is NOT callable; advertising it here makes the model dead-end
+    // with "No such tool available". Empty prefix = bare names (codex / API
+    // providers), so this is a no-op for them.
+    const prefix = ctx.customToolNamePrefix ?? ''
     const details = ctx.availableTools.map(t => {
         const properties = t.input_schema.properties ?? {}
         const names = Object.keys(properties)
@@ -236,7 +242,7 @@ export function buildToolsSection(ctx: PromptContext): string {
                 const required = t.input_schema.required?.includes(name) ? ' (required)' : ''
                 return `  - ${name}: ${p.type}${required}${p.description ? ` - ${p.description}` : ''}`
             }).join('\n')
-        return [`- ${t.name}: ${t.description}`, params].join('\n')
+        return [`- ${prefix}${t.name}: ${t.description}`, params].join('\n')
     }).join('\n')
     const builtinDetails = builtins.length > 0
         ? [
@@ -248,9 +254,16 @@ export function buildToolsSection(ctx: PromptContext): string {
         ].filter(Boolean).join('\n')
         : ''
 
+    // When custom tools are namespaced, the names elsewhere in this prompt
+    // (briefs, doctrine, prose) use the bare id. State the mapping once so a
+    // bare reference like `set_task_state` is still called as the prefixed name.
+    const namingNote = prefix && ctx.availableTools.length > 0
+        ? `Call each tool above by the exact name shown — your runtime exposes them under the \`${prefix}\` namespace, so the bare id is not callable. Anywhere else in these instructions a tool is named without that prefix (e.g. \`${ctx.availableTools[0].name}\`), prepend \`${prefix}\` and call \`${prefix}${ctx.availableTools[0].name}\`. Native built-ins keep their bare names.`
+        : 'Tools available in this runtime:'
+
     return [
         '<runtime_tools>',
-        'Tools available in this runtime:',
+        namingNote,
         details,
         builtinDetails,
         '</runtime_tools>',
@@ -499,7 +512,6 @@ function cleanOrigin(value: string | undefined): string {
 }
 
 const CONTEXT_FILE_IDS = new Set([
-    'agents',
     'user',
     'boot',
     'memory',
@@ -538,6 +550,10 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
     // doesn't bloat their prompts every turn while BOOT.md exists. The
     // Inbox/Smart Monitor aliases ARE the orchestrator, so they keep it.
     const isOrchestrator = isOrchestratorClassAgent(agentId)
+
+    // Per-install scaffold signatures, read once: lets us detect untouched
+    // templates even after a default's text changes across releases.
+    const scaffoldHashes = readScaffoldHashes()
 
     // Returns false when the char budget is exhausted so callers stop.
     const pushBlock = (relPath: string, id: string, raw: string): boolean => {
@@ -583,7 +599,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         // Skip files the user never filled in: a materialized-but-untouched
         // template carries no signal and only adds prompt noise. BOOT is
         // exempt — its "template" is the active onboarding script itself.
-        if (file.id !== 'boot' && file.defaultContent && trimmed === file.defaultContent.trim()) continue
+        if (file.id !== 'boot' && isUntouchedScaffold(file, trimmed, scaffoldHashes)) continue
 
         if (!pushBlock(file.relativePath, file.id, content)) break
     }

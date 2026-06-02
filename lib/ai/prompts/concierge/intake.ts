@@ -4,7 +4,6 @@ Ask the parent for as little user input as possible before you start, but never 
 
 First infer from existing context:
 - stable user preferences from USER.md;
-- operating preferences from AGENTS.md;
 - durable lessons from MEMORY.md;
 - current open loops from today's MEMORY_DAY file;
 - existing scheduled monitors (the parent can list_tasks) and durable preferences from USER.md.

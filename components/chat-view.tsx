@@ -802,7 +802,7 @@ export function ChatView() {
         }
         messageTopAnchorReleaseTimeoutRef.current = window.setTimeout(() => {
           messageTopAnchorReleaseTimeoutRef.current = null
-          if (isMessageNearTopAnchor(messageId, 140)) {
+          if (isMessageNearTopAnchor(messageId, 8)) {
             scrollMessageToTop(messageId, "auto")
           }
           if (messageTopAnchorMessageIdRef.current === messageId) {

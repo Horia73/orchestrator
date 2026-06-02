@@ -407,6 +407,7 @@ export async function POST(request: Request) {
       assistantName: config.assistantName,
       availableTools: toolSurface.tools,
       availableBuiltins: toolSurface.builtins,
+      customToolNamePrefix: provider.capabilities.customToolNamePrefix,
       availableAgents,
       conversationId,
       declaredToolIds: orchestrator.tools,

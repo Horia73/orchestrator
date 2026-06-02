@@ -212,7 +212,7 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     operationalToolIds: operationalOnly(WEATHER_TOOL_IDS, WEATHER_SETUP),
     activationOnly: true,
     doctrine: WEATHER_DOCTRINE,
-    note: "WeatherStatus stays always visible. WeatherShow, WeatherSetOutfit, WeatherSetWhy, and WeatherSetCalendarContext load on ActivateIntegrationTools(\"weather\"). Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.",
+    note: "Whenever a forecast is the natural answer — current conditions, an hourly/daily forecast, \"will it rain\", \"do I need a jacket\", or any weather-sensitive plan — you MUST call ActivateIntegrationTools(\"weather\") and render the card via WeatherShow; do not answer these from general knowledge in plain prose, because that skips the artifact (only pure climatology trivia or a specific past-date lookup stay prose). WeatherStatus stays always visible. WeatherShow, WeatherSetOutfit, WeatherSetWhy, and WeatherSetCalendarContext load on ActivateIntegrationTools(\"weather\"). Forecasts work without Google via Open-Meteo (keyless, ECMWF-backed); GOOGLE_MAPS_API_KEY + Weather API upgrades the primary provider, Air Quality API upgrades local AQI, and Pollen API upgrades pollen. Open-Meteo remains the keyless fallback for AQ, historical comparison, and seasonal pollen.",
   },
   {
     id: "location-intelligence",

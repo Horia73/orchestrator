@@ -16,7 +16,7 @@
  *     polls every 60s; see codex-rs/backend-client/src/client.rs::
  *     get_rate_limits).
  */
-import { readFileSync, existsSync } from 'fs'
+import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
@@ -24,6 +24,7 @@ import { spawn as ptySpawn } from 'node-pty'
 import { resolveBin, augmentedEnv } from './resolve-bin'
 import { CODEX_RUNTIME_AUTH_PATH, prepareCodexRuntimeHome } from './codex-env'
 import { getAllCliStatuses } from './status'
+import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
 
 export interface CliQuotaWindow {
     /** Percent of the window used, 0–100. */
@@ -71,7 +72,6 @@ export type CliQuotaId = CliQuotaSnapshot['cliId']
 
 const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
-const CLAUDE_USAGE_DOCKER_TUI_ENABLED = process.env.CLAUDE_USAGE_DOCKER_TUI === '1'
 const CLAUDE_USAGE_HOST_BRIDGE_TIMEOUT_MS = 35_000
 
 interface ClaudeUsageRaw {
@@ -89,6 +89,78 @@ interface ClaudeUsageBridgeResponse {
 }
 
 /**
+ * Make an interactive `claude` session usable for the /usage scrape with no
+ * human at the keyboard. The chat path uses `claude -p`, which skips first-run
+ * onboarding; the interactive TUI does NOT, so without these flags claude shows
+ * the theme + "Select login method" pickers and `/usage` never renders (this
+ * was verified end-to-end on the live container). The account is already
+ * authenticated via the stored OAuth token — we're only suppressing cosmetic
+ * first-run UI, exactly the state a one-time interactive login would leave:
+ *   • global: hasCompletedOnboarding / numStartups / theme → skip onboarding
+ *   • per-folder: hasTrustDialogAccepted → skip the "trust this folder?" prompt
+ * Idempotent: writes ~/.claude.json once (atomically, temp + rename) and never
+ * again once the flags stick, keeping the race with claude's own writes to a
+ * single one-time pass.
+ */
+function ensureClaudeInteractiveReady(dir: string): void {
+    const configPath = join(homedir(), '.claude.json')
+    let data: Record<string, unknown>
+    try {
+        data = existsSync(configPath)
+            ? (JSON.parse(readFileSync(configPath, 'utf-8')) as Record<string, unknown>)
+            : {}
+    } catch {
+        // Malformed/locked config — don't clobber it; the scrape will surface a
+        // clear error (login/trust prompt) if the session really isn't ready.
+        return
+    }
+    if (!data || typeof data !== 'object') return
+
+    let changed = false
+
+    // Global onboarding — skips the theme + login-method pickers.
+    if (data.hasCompletedOnboarding !== true) { data.hasCompletedOnboarding = true; changed = true }
+    if (typeof data.numStartups !== 'number' || (data.numStartups as number) < 1) { data.numStartups = 1; changed = true }
+    if (!data.theme) { data.theme = 'dark'; changed = true }
+
+    // Per-folder trust — skips the "Do you trust this folder?" prompt.
+    const projects = (data.projects && typeof data.projects === 'object')
+        ? (data.projects as Record<string, Record<string, unknown>>)
+        : ((data.projects = {}) as Record<string, Record<string, unknown>>)
+    const existing = projects[dir]
+    const project = (existing && typeof existing === 'object') ? existing : (projects[dir] = {})
+    if (project.hasTrustDialogAccepted !== true) {
+        const defaults: Record<string, unknown> = {
+            allowedTools: [],
+            mcpContextUris: [],
+            mcpServers: {},
+            enabledMcpjsonServers: [],
+            disabledMcpjsonServers: [],
+            hasClaudeMdExternalIncludesApproved: false,
+            hasClaudeMdExternalIncludesWarningShown: false,
+        }
+        for (const [k, v] of Object.entries(defaults)) {
+            if (!(k in project)) project[k] = v
+        }
+        project.hasTrustDialogAccepted = true
+        changed = true
+    }
+    if (typeof project.projectOnboardingSeenCount !== 'number' || (project.projectOnboardingSeenCount as number) < 1) {
+        project.projectOnboardingSeenCount = 1
+        changed = true
+    }
+
+    if (!changed) return
+    try {
+        const tmp = `${configPath}.orch-usage-tmp`
+        writeFileSync(tmp, JSON.stringify(data, null, 2), 'utf-8')
+        renameSync(tmp, configPath)
+    } catch {
+        // Best effort — a failed write just means the next scrape retries.
+    }
+}
+
+/**
  * Drive `claude` in a PTY: wait for the prompt, send `/usage`, capture the
  * rendered panel, then Ctrl+C out. Returns the cleaned panel text.
  */
@@ -98,20 +170,27 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
         return { error: 'Claude Code CLI is not installed.' }
     }
 
-    // Run from a directory claude has already trusted — the orchestrator's own
-    // cwd (process.cwd()) is being used interactively right now, so it's the
-    // safest choice. If we ran from /tmp claude would block on a trust prompt.
-    const cwd = process.cwd()
+    // Run from the agent workspace — the same directory the chat path drives
+    // claude in. Prime ~/.claude.json so the interactive TUI opens straight to a
+    // usable session (no onboarding/trust prompts) where /usage can render.
+    const cwd = AGENT_WORKSPACE_DIR
+    ensureClaudeInteractiveReady(cwd)
 
     return new Promise(resolve => {
         let pty: ReturnType<typeof ptySpawn>
         try {
-            pty = ptySpawn(claudeBin, [], {
+            // `--strict-mcp-config --mcp-config {}` mirrors the host bridge: it
+            // stops claude from loading the user/project MCP servers on startup
+            // (which can hang for tens of seconds and is what made the
+            // in-container scrape unsafe to run inline before). DISABLE_AUTOUPDATER
+            // is critical — an auto-update kicking off on launch corrupts the TUI
+            // mid-scrape so /usage never settles (verified on the live container).
+            pty = ptySpawn(claudeBin, ['--strict-mcp-config', '--mcp-config', '{"mcpServers":{}}'], {
                 name: 'xterm-256color',
                 cols: 140,
                 rows: 50,
                 cwd,
-                env: augmentedEnv() as { [key: string]: string },
+                env: augmentedEnv({ DISABLE_AUTOUPDATER: '1', DISABLE_TELEMETRY: '1' }) as { [key: string]: string },
             })
         } catch (err) {
             resolve({ error: `Failed to spawn claude: ${err instanceof Error ? err.message : 'unknown error'}` })
@@ -476,7 +555,15 @@ function nowDayInTz(tz: string, when: Date): number {
     return Number(new Intl.DateTimeFormat('en-US', { timeZone: tz, day: 'numeric' }).format(when))
 }
 
-async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
+/**
+ * One actual read of the Claude /usage panel. In Docker we try the host bridge
+ * first (for deployments where claude is installed on the host), then fall back
+ * to scraping claude *inside the container* — which is where the binary and the
+ * user's subscription login live on container installs, so the host bridge is
+ * a no-op there. Always run via getClaudeCodeQuota(), never directly: this can
+ * take 5-10s+ and must not block the request thread (see the cache below).
+ */
+async function scrapeClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
     const fetchedAt = Date.now()
     const runningInDocker = process.env.ORCHESTRATOR_SERVICE_MANAGER === 'docker'
     let captured: ClaudeUsageRaw | { error: string } | null = null
@@ -485,17 +572,6 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
     if (runningInDocker) {
         captured = await captureClaudeUsagePanelFromHostBridge()
         if (captured && !('error' in captured)) source = 'host-bridge'
-    }
-
-    if (runningInDocker && (!captured || 'error' in captured) && !CLAUDE_USAGE_DOCKER_TUI_ENABLED) {
-        const bridgeError = captured && 'error' in captured ? ` Host bridge error: ${captured.error}` : ''
-        return {
-            cliId: 'claude-code',
-            available: false,
-            error: `Claude Code usage scraping is disabled in Docker to avoid hanging the usage page.${bridgeError} Set CLAUDE_USAGE_DOCKER_TUI=1 to opt in.`,
-            source: 'none',
-            fetchedAt,
-        }
     }
 
     if (!captured || 'error' in captured) {
@@ -549,6 +625,84 @@ async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
         source,
         fetchedAt,
         dataTimestamp: fetchedAt,
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Claude usage cache (stale-while-revalidate)
+//
+// Scraping the /usage TUI takes 5-10s+, which is why it used to be disabled in
+// Docker — running it inline blocked the request and the popover's 15s fetch
+// would abort. We decouple it: serve a cached snapshot instantly and refresh in
+// the background under a single-flight lock. A cold cache waits a bounded slice
+// (< the client abort) so the very first open still gets live data when it can;
+// otherwise it returns a "warming" placeholder and the next open is populated.
+// Module-level state persists for the life of the server process.
+// ---------------------------------------------------------------------------
+
+const CLAUDE_QUOTA_TTL_MS = 90_000
+const CLAUDE_QUOTA_COLD_WAIT_MS = 12_000
+
+interface ClaudeQuotaCacheEntry {
+    snapshot: CliQuotaSnapshot
+    storedAt: number
+}
+
+let claudeQuotaCache: ClaudeQuotaCacheEntry | null = null
+let claudeQuotaInflight: Promise<CliQuotaSnapshot> | null = null
+
+function refreshClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
+    if (!claudeQuotaInflight) {
+        claudeQuotaInflight = scrapeClaudeCodeQuota()
+            .catch((err): CliQuotaSnapshot => ({
+                cliId: 'claude-code',
+                available: false,
+                error: err instanceof Error ? err.message : 'Failed to read Claude usage.',
+                source: 'none',
+                fetchedAt: Date.now(),
+            }))
+            .then(snapshot => {
+                // Store every result (success or error) so the UI surfaces the
+                // real state — but never let an error clobber a still-fresh good
+                // read (transient scrape failures shouldn't blank the gauge).
+                const prev = claudeQuotaCache
+                const keepPrevGood = !snapshot.available
+                    && prev?.snapshot.available === true
+                    && Date.now() - prev.storedAt < CLAUDE_QUOTA_TTL_MS
+                if (!keepPrevGood) claudeQuotaCache = { snapshot, storedAt: Date.now() }
+                return claudeQuotaCache?.snapshot ?? snapshot
+            })
+            .finally(() => { claudeQuotaInflight = null })
+    }
+    return claudeQuotaInflight
+}
+
+async function getClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
+    const now = Date.now()
+    const cached = claudeQuotaCache
+    if (cached && now - cached.storedAt < CLAUDE_QUOTA_TTL_MS) {
+        return cached.snapshot
+    }
+
+    const inflight = refreshClaudeCodeQuota()
+
+    // Stale snapshot present → serve it now, let the refresh update for next time.
+    if (cached) return cached.snapshot
+
+    // Cold cache → wait a bounded slice (under the client's 15s abort) so the
+    // first open gets live data when the scrape is quick; otherwise hand back a
+    // placeholder and let the background refresh land before the next open.
+    const winner = await Promise.race([
+        inflight,
+        sleep(CLAUDE_QUOTA_COLD_WAIT_MS).then(() => null),
+    ])
+    if (winner) return winner
+    return {
+        cliId: 'claude-code',
+        available: false,
+        error: 'Fetching Claude usage… reopen this in a moment.',
+        source: 'none',
+        fetchedAt: now,
     }
 }
 

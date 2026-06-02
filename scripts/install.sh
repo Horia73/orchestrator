@@ -286,22 +286,41 @@ install_linux_native_dependencies() {
   log "Ensuring Linux native build/runtime dependencies"
   if command -v apt-get >/dev/null 2>&1; then
     run_sudo apt-get update
-    run_sudo apt-get install -y git curl ca-certificates python3 make g++ pkg-config chromium || \
-      run_sudo apt-get install -y git curl ca-certificates python3 make g++ pkg-config chromium-browser || \
-      run_sudo apt-get install -y git curl ca-certificates python3 make g++ pkg-config
+    run_sudo apt-get install -y git curl ca-certificates python3 python3-pip make g++ pkg-config chromium || \
+      run_sudo apt-get install -y git curl ca-certificates python3 python3-pip make g++ pkg-config chromium-browser || \
+      run_sudo apt-get install -y git curl ca-certificates python3 python3-pip make g++ pkg-config
   elif command -v dnf >/dev/null 2>&1; then
-    run_sudo dnf install -y git curl ca-certificates python3 make gcc-c++ pkgconf-pkg-config chromium || \
-      run_sudo dnf install -y git curl ca-certificates python3 make gcc-c++ pkgconf-pkg-config
+    run_sudo dnf install -y git curl ca-certificates python3 python3-pip make gcc-c++ pkgconf-pkg-config chromium || \
+      run_sudo dnf install -y git curl ca-certificates python3 python3-pip make gcc-c++ pkgconf-pkg-config
   elif command -v yum >/dev/null 2>&1; then
-    run_sudo yum install -y git curl ca-certificates python3 make gcc-c++ pkgconfig chromium || \
-      run_sudo yum install -y git curl ca-certificates python3 make gcc-c++ pkgconfig
+    run_sudo yum install -y git curl ca-certificates python3 python3-pip make gcc-c++ pkgconfig chromium || \
+      run_sudo yum install -y git curl ca-certificates python3 python3-pip make gcc-c++ pkgconfig
   elif command -v pacman >/dev/null 2>&1; then
-    run_sudo pacman -Sy --noconfirm git curl ca-certificates python make gcc pkgconf chromium
+    run_sudo pacman -Sy --noconfirm git curl ca-certificates python python-pip make gcc pkgconf chromium
   else
     log "Could not detect a supported package manager; assuming native dependencies are already installed."
   fi
 
   install_agent_runtime_tools
+  install_python_doc_libs
+}
+
+# Python document-processing libraries the in-app agent uses for docx/xlsx/pptx/
+# pdf work. Without them the agent falls back to raw OOXML zip parsing. The
+# Docker runner stage bakes the same set in (see Dockerfile); this keeps native
+# Linux installs at parity. Best-effort: PEP 668 (Debian/recent Arch) marks the
+# system env externally-managed, hence --break-system-packages, and the whole
+# step is non-fatal (`|| true`) since a missing wheel or older pip must never
+# abort the install.
+install_python_doc_libs() {
+  [ "$(uname -s)" = "Linux" ] || return
+  command -v python3 >/dev/null 2>&1 || return
+  log "Ensuring Python document libraries (python-docx, openpyxl, python-pptx, pypdf)"
+  run_sudo python3 -m pip install --break-system-packages --no-cache-dir \
+    python-docx openpyxl python-pptx pypdf >/dev/null 2>&1 || \
+    run_sudo python3 -m pip install --no-cache-dir \
+      python-docx openpyxl python-pptx pypdf >/dev/null 2>&1 || \
+    log "Could not install Python document libraries automatically; the agent will fall back to raw file parsing."
 }
 
 # CLI tools the in-app agent shells out to (ripgrep/jq/sqlite3/pdftotext/strings/ffmpeg).

@@ -242,9 +242,17 @@ function ThoughtBlock({
 
     // State: open/expanded, persisted via localStorage keyed by messageId
     const storageKey = messageId ? `thought:${messageId}` : null
-    const openStorageKey = storageKey ? `${storageKey}:open:v2` : null
+    // v3: discard the polluted v2 open-state — a prior auto-load bug persisted
+    // `open:true` for every assistant block, re-expanding them all on refresh.
+    const openStorageKey = storageKey ? `${storageKey}:open:v3` : null
     const expandedStorageKey = storageKey ? `${storageKey}:expanded:v3` : null
 
+    // A saved open-state is an explicit user choice and is authoritative — no
+    // auto-open effect (browser-session, streaming) may override it on refresh.
+    const [hasStoredOpen] = React.useState(() => {
+        if (!openStorageKey) return false
+        return localStorage.getItem(openStorageKey) !== null
+    })
     const [isOpen, setIsOpen] = React.useState(() => {
         if (openOnMount) return true
         if (openStorageKey) {
@@ -330,7 +338,9 @@ function ThoughtBlock({
     const userOpenedRef = React.useRef(false)
     React.useEffect(() => {
         if (keepOpenForBrowser) {
-            updateOpen(true)
+            // Keep a live browser session visible by default, but never clobber
+            // an explicit user choice — that's what makes the state stick on refresh.
+            if (!hasStoredOpen) updateOpen(true)
             wasStreamingRef.current = isLiveStreaming
             return
         }
@@ -346,7 +356,7 @@ function ThoughtBlock({
             userOpenedRef.current = false
         }
         wasStreamingRef.current = isLiveStreaming
-    }, [autoExpand, isLiveStreaming, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
+    }, [autoExpand, hasStoredOpen, isLiveStreaming, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
 
     // Auto-scroll content during streaming
     React.useEffect(() => {
@@ -982,7 +992,10 @@ function MessageBubbleComponent({
         if (!autoLoadDeferredDetails || !canLoadDeferredDetails || detailLoading) return
         if (autoLoadAttemptedRef.current === message.id) return
         autoLoadAttemptedRef.current = message.id
-        void loadDeferredDetails(true)
+        // Background load only — never force the block open. Forcing open here
+        // re-expanded (and persisted as open) every assistant thought/tool block
+        // on each refresh. Explicit clicks still open via handleOpenDeferredDetails.
+        void loadDeferredDetails(false)
     }, [
         autoLoadDeferredDetails,
         canLoadDeferredDetails,

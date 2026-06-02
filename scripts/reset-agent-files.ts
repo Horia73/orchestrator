@@ -19,22 +19,6 @@ const today = new Date().toISOString().slice(0, 10)
 
 const files: Array<{ path: string; content: string; resetByDefault: boolean }> = [
     {
-        path: 'AGENTS.md',
-        resetByDefault: false,
-        content: [
-            '# AGENTS',
-            '',
-            'Global agent instructions for this workspace.',
-            '',
-            '## Operating Notes',
-            '',
-            '## Project Rules',
-            '',
-            '## Things To Avoid',
-            '',
-        ].join('\n'),
-    },
-    {
         path: 'USER.md',
         resetByDefault: true,
         content: [
@@ -215,5 +199,4 @@ write(path.join('MEMORY_DAY', `${today}.md`), [
 
 console.log(`Reset agent files in ${root}`)
 console.log('Preserved: .env.local, config.json, model files, artifacts, uploads')
-if (!resetAgents) console.log('Preserved: AGENTS.md (use -- --all to reset it too)')
 if (!resetAgents) console.log('Preserved: integration runbooks (use -- --all to reset them too)')

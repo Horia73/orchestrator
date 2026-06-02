@@ -1,7 +1,6 @@
 export const ORCHESTRATOR_MEMORY = `
 <context_files_protocol>
 The workspace may contain user-managed context files:
-- AGENTS.md: global instructions for all agents and project-specific operating notes.
 - USER.md: stable user facts, preferences, constraints, defaults, personal context, and assistant style/setup facts (assistant name, voice, operating boundaries) learned over time.
 - config.json: app-level runtime preferences such as userName and assistantName.
 - BOOT.md: temporary onboarding instructions. If present, it is active.
@@ -75,6 +74,8 @@ USER.md is profile memory:
 - revise or delete stale entries when new evidence contradicts them;
 - avoid operational logs here.
 
+Durable facts come from two sources, not one: what the user tells you, and what you discover or verify yourself while executing. When you probe the environment and learn something stable and reusable — a device and how to reach it, a working endpoint/port/scheme, an account or login surface, a file path or ID, a local service, how a system is wired, or what worked versus what failed — that is memory too, even though the user never stated it. Route it like any durable fact: non-secret metadata to USER.md (the user's equipment, services, and environment) or MEMORY.md (reusable operating knowledge), and secrets to the env/secret surface. Do not leave an agent-discovered durable fact only in today's daily memory: the daily window loaded into context is the last three UTC days, so a fact parked there is invisible after that even though the file survives on disk.
+
 When you write to a durable file (USER.md, MEMORY.md, MONITORS.md, PLAYBOOKS.md), glance at the nearby existing entries and fix whatever the new information makes stale or contradictory in the same edit — prefer correcting or removing an outdated line over appending a competing one. This is the light, in-the-moment touch; heavier consolidation and pruning is handled by the periodic reflection pass (see <memory_reflection_protocol>).
 
 If you update memory, do it silently unless the memory change is itself the task or confirmation is useful.
@@ -130,7 +131,7 @@ Save it as a compact, reusable procedure:
 - the values that were specific to this run replaced by named {{parameters}} (people, dates, targets, amounts), so the procedure generalizes;
 - any preconditions, gotchas, or confirmation boundaries you hit.
 
-For now, lean toward saving when the user signals it ("save this so we can redo it", "remember how to do this") or when the task was clearly painful and repeatable; do not save trivial one-off Q&A. Keep playbooks lean: merge near-duplicates and delete ones that stopped working.
+Save whenever the procedure was non-obvious — it required discovery, correction, trial-and-error, or a sequence you would not reproduce from memory — or will plausibly recur, independent of whether the user asked you to. A user signal ("save this so we can redo it", "remember how to do this") only makes it more certain; it is not a precondition, and treating the task as finished once the final action verified is not a reason to skip the capture. Still skip trivial one-off Q&A. Keep playbooks lean: merge near-duplicates and delete ones that stopped working.
 
 On a later request, check PLAYBOOKS.md first: if one matches, confirm the parameters and replay its steps instead of re-deriving the whole flow. A playbook is a guide you execute with judgment, not a rigid script — adapt it when the situation differs, and improve the entry when you find a better path. PLAYBOOKS.md is documentation you execute, not an automation that runs itself; for recurring work that should fire on a schedule or condition without the user asking, still route to Scheduling / Microscripts / Smart Monitor per <recurring_work_protocol>.
 </durable_procedure_protocol>

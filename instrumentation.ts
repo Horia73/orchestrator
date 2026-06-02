@@ -4,6 +4,16 @@
 // run in the Edge runtime, and the scheduler itself is idempotent.
 export async function register(): Promise<void> {
     if (process.env.NEXT_RUNTIME !== 'nodejs') return
+    // Apply a staged backup restore BEFORE anything opens the database. The
+    // connection in '@/lib/db' is created at import time, so a restored data.db
+    // can only be swapped in here, on the next boot after a restore. The boot
+    // module intentionally imports nothing that touches '@/lib/db'.
+    try {
+        const { applyPendingDbRestore } = await import('@/lib/settings/backup-boot')
+        applyPendingDbRestore()
+    } catch (err) {
+        console.error('[backup] pending restore check failed', err)
+    }
     if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()

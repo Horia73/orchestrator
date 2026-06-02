@@ -272,6 +272,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             assistantName: target.name,
             availableTools: agentTools,
             availableBuiltins: agentBuiltins,
+            customToolNamePrefix: provider.capabilities.customToolNamePrefix,
             availableAgents,
             conversationId: parentCtx.conversationId,
             agentThreadId,

@@ -122,7 +122,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const [isSwitchingConversation, startSwitchTransition] = React.useTransition()
 
   const abortControllerRef = React.useRef<AbortController | null>(null)
-  const thinkingTimerRef = React.useRef<number | null>(null)
+  // Start timestamp for the live "Thinking (Ns)" counter. Elapsed seconds are
+  // derived from this on every tick AND on tab refocus, so backgrounding the
+  // tab (which throttles/suspends interval timers) or a stream interruption
+  // can't leave the counter frozen — it snaps to real elapsed time on return.
+  const thinkingStartRef = React.useRef<number | null>(null)
   const streamingRef = React.useRef(false)
   const streamDoneRef = React.useRef(false)
   const clientStreamMessageIdRef = React.useRef<string | null>(null)
@@ -223,6 +227,41 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("pagehide", markHiddenDuringStream)
     }
   }, [])
+
+  // Own the live "Thinking (Ns)" seconds counter here rather than via an
+  // interval created inside sendMessage. Browsers throttle or fully suspend
+  // setInterval in backgrounded tabs, and a stream interruption tears the
+  // original ticker down without restarting it on recovery — both leave the
+  // counter stuck on return. Deriving elapsed from thinkingStartRef on a 1s
+  // tick AND recomputing immediately on visibility/focus keeps it honest: the
+  // value snaps to the real elapsed time the instant the tab is refocused.
+  React.useEffect(() => {
+    if (!state.isStreaming || state.thinkingDone) return
+    if (thinkingStartRef.current === null) return
+
+    const sync = () => {
+      if (thinkingStartRef.current === null) return
+      const elapsed = Math.round(
+        (Date.now() - thinkingStartRef.current) / 1000
+      )
+      dispatch({ type: "SET_THINKING_SECONDS", seconds: elapsed })
+    }
+
+    sync()
+    const interval = window.setInterval(sync, 1000)
+    const onVisible = () => {
+      if (document.visibilityState === "visible") sync()
+    }
+    document.addEventListener("visibilitychange", onVisible)
+    window.addEventListener("focus", onVisible)
+    window.addEventListener("pageshow", onVisible)
+    return () => {
+      window.clearInterval(interval)
+      document.removeEventListener("visibilitychange", onVisible)
+      window.removeEventListener("focus", onVisible)
+      window.removeEventListener("pageshow", onVisible)
+    }
+  }, [state.isStreaming, state.thinkingDone, state.streamingMessageId])
 
   const updateUnreadConversationIds = React.useCallback(
     (updater: (current: Set<string>) => Set<string>) => {
@@ -374,10 +413,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const cleanupStream = React.useCallback(() => {
     streamingRef.current = false
-    if (thinkingTimerRef.current !== null) {
-      window.clearInterval(thinkingTimerRef.current)
-      thinkingTimerRef.current = null
-    }
+    thinkingStartRef.current = null
     if (abortControllerRef.current) {
       abortControllerRef.current.abort()
       abortControllerRef.current = null
@@ -692,6 +728,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         const activeStream = stream.status === "fulfilled" ? stream.value : null
 
         if (activeStream) {
+          // Keep the live thinking counter alive through recovery. A refocus
+          // after a long absence often interrupts the original stream and its
+          // ticker, so re-anchor elapsed time to the server's stream start;
+          // the counter effect resumes ticking the moment streaming is set.
+          thinkingStartRef.current = activeStream.startedAt
           const activeMessage =
             (activeStream.messageId
               ? messages.find((message) => message.id === activeStream.messageId)
@@ -1316,12 +1357,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         messageId: assistantMsgId,
       })
 
-      // Start thinking timer (live seconds counter)
-      const thinkingStart = Date.now()
-      thinkingTimerRef.current = window.setInterval(() => {
-        const elapsed = Math.round((Date.now() - thinkingStart) / 1000)
-        dispatch({ type: "SET_THINKING_SECONDS", seconds: elapsed })
-      }, 1000)
+      // Seed the live thinking counter; the dedicated effect drives the ticks
+      // and keeps it correct across tab backgrounding and stream recovery.
+      thinkingStartRef.current = Date.now()
 
       const finalConvId = conversationId
       dispatch({
@@ -1450,10 +1488,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     phase: reasoningPhase,
                   })
                 } else if (data.type === "thinking_done") {
-                  if (thinkingTimerRef.current !== null) {
-                    window.clearInterval(thinkingTimerRef.current)
-                    thinkingTimerRef.current = null
-                  }
+                  thinkingStartRef.current = null
                   finalThinkingDuration = data.seconds
                   dispatch({ type: "SET_THINKING_DONE", seconds: data.seconds })
                 } else if (data.type === "content") {
@@ -2121,10 +2156,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             streamingRef.current = false
             abortControllerRef.current = null
             clientStreamMessageIdRef.current = null
-            if (thinkingTimerRef.current !== null) {
-              window.clearInterval(thinkingTimerRef.current)
-              thinkingTimerRef.current = null
-            }
+            // The thinking counter is owned by a dedicated effect keyed on
+            // state.isStreaming, so it tears its own interval down when
+            // streaming ends — and it must NOT be killed here, or a stream
+            // that was interrupted and recovered would freeze the counter.
             // Only dispatch SET_STREAMING if 'done' didn't already handle it
             // (ADD_ASSISTANT_MESSAGE includes stoppedStreamState)
             if (!streamDoneRef.current) {

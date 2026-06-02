@@ -28,6 +28,10 @@ export async function GET(
             'Content-Type': uploadContentType(id),
             'Content-Length': String(stat.size),
             'Cache-Control': 'private, max-age=86400',
+            // Uploads can now be any file type, so never let the browser sniff a
+            // served file into a more dangerous type than we declared (e.g.
+            // treating uploaded markup as executable HTML).
+            'X-Content-Type-Options': 'nosniff',
         },
     })
 }

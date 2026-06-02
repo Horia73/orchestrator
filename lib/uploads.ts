@@ -14,44 +14,17 @@ export const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024
 const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[a-z0-9][a-z0-9-]{0,15}$/i
 const UPLOADS_ROOT = path.resolve(UPLOADS_DIR)
 
-const SAFE_UPLOAD_EXTENSIONS = new Set([
-    '.png',
-    '.jpg',
-    '.jpeg',
-    '.gif',
-    '.webp',
-    '.heic',
-    '.heif',
-    '.pdf',
-    '.txt',
-    '.md',
-    '.csv',
-    '.json',
-    '.xml',
-    '.log',
-    '.rtf',
-    '.doc',
-    '.docx',
-    '.xls',
-    '.xlsx',
-    '.ppt',
-    '.pptx',
-    '.mp3',
-    '.wav',
-    '.m4a',
-    '.aac',
-    '.aiff',
-    '.flac',
-    '.ogg',
-    '.mp4',
-    '.webm',
-    '.mov',
-    '.mpeg',
-    '.mpg',
-    '.avi',
-    '.wmv',
-    '.3gp',
-])
+// Any file type is allowed. The stored upload id is {uuid}{ext}, and the ext
+// must fit the extension portion of UPLOAD_ID_RE so the file can be persisted
+// and served back by /api/uploads/{id}. Extensions that don't fit (missing,
+// too long, or odd characters) fall back to .bin — the bytes are still kept and
+// served, just as application/octet-stream (which browsers download instead of
+// execute). Agents that can read local uploads (canProviderReadLocalUploads)
+// read the bytes straight off disk, so the model never needs a per-type
+// allowlist; the per-provider API allowlist (isFileSupportedByProvider) decides
+// what is sent to each model API natively.
+const STORABLE_EXTENSION_RE = /^\.[a-z0-9][a-z0-9-]{0,15}$/
+const FALLBACK_EXTENSION = '.bin'
 
 export interface UploadFileLike {
     name: string
@@ -102,10 +75,8 @@ export function validateUploadFileName(name: string): UploadFileNameValidation {
         return { ok: false, error: 'File name is too long' }
     }
 
-    const extension = path.extname(filename).toLowerCase()
-    if (!extension || !SAFE_UPLOAD_EXTENSIONS.has(extension)) {
-        return { ok: false, error: `Unsupported or unsafe file extension: ${extension || '(none)'}` }
-    }
+    const rawExtension = path.extname(filename).toLowerCase()
+    const extension = STORABLE_EXTENSION_RE.test(rawExtension) ? rawExtension : FALLBACK_EXTENSION
 
     return { ok: true, filename, extension }
 }
@@ -187,12 +158,12 @@ export interface PersistedUpload {
 
 function uploadExtensionForMime(mimeType: string, originalName?: string): string {
     const fromName = originalName ? path.extname(originalName).toLowerCase() : ''
-    if (fromName && SAFE_UPLOAD_EXTENSIONS.has(fromName)) return fromName
+    if (fromName && STORABLE_EXTENSION_RE.test(fromName)) return fromName
     const clean = mimeType.split(';')[0].trim().toLowerCase()
     for (const [ext, mime] of Object.entries(UPLOAD_MIME_MAP)) {
         if (mime === clean) return ext
     }
-    return '.bin'
+    return FALLBACK_EXTENSION
 }
 
 function uploadBaseName(originalName: string | undefined, fallback: string): string {

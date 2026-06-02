@@ -62,6 +62,10 @@ function baseMime(mimeType: string): string {
 function normalizeUploadMimeType(mimeType: string, extension: string): string {
     const clean = baseMime(mimeType)
     if (extension === '.m4a' && (!clean || clean === 'audio/mp4')) return 'audio/m4a'
+    // For source/text files, trust our mapping over a browser-reported type:
+    // browsers may label them text/x-python, text/javascript, etc., which model
+    // APIs don't accept — normalizing to text/plain keeps them ingestible.
+    if (UPLOAD_MIME_MAP[extension] === 'text/plain') return 'text/plain'
     return clean || UPLOAD_MIME_MAP[extension] || 'application/octet-stream'
 }
 
