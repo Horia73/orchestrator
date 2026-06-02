@@ -103,7 +103,6 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         lastResult = result
         if (index >= runtimes.length - 1) break
         if (!isFallbackSafeToolResult(result)) break
-        if (!shouldTryModelFallback(result.error)) break
     }
 
     return lastResult ?? {
@@ -883,35 +882,6 @@ function isFallbackSafeToolResult(result: ToolResult): boolean {
         typeof data === 'object' &&
         !Array.isArray(data) &&
         (data as { fallbackSafe?: unknown }).fallbackSafe === true
-    )
-}
-
-function shouldTryModelFallback(error: string | undefined): boolean {
-    const message = (error ?? '').toLowerCase()
-    if (!message || message.includes('aborted')) return false
-    if (message.includes('missing buildprompt')) return false
-    return (
-        message.includes('api key missing') ||
-        message.includes('missing api key') ||
-        message.includes('quota') ||
-        message.includes('rate limit') ||
-        message.includes('rate_limit') ||
-        message.includes('out of usage') ||
-        message.includes('usage limit') ||
-        message.includes('session limit') ||
-        (message.includes('hit your') && message.includes('limit')) ||
-        message.includes('resource_exhausted') ||
-        message.includes('exhausted') ||
-        message.includes('overloaded') ||
-        message.includes('capacity') ||
-        message.includes('unavailable') ||
-        message.includes('expired') ||
-        message.includes('exited with code') ||
-        message.includes('429') ||
-        message.includes('503') ||
-        message.includes('401') ||
-        message.includes('model') ||
-        message.includes('streaming')
     )
 }
 
