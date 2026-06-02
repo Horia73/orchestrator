@@ -1087,7 +1087,8 @@ function MessageBubbleComponent({
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
-            {canLoadDeferredDetails && detailLoadFailed && (
+            {canLoadDeferredDetails &&
+                (!autoLoadDeferredDetails || detailLoadFailed) && (
                 <DeferredThoughtBlock
                     loading={detailLoading}
                     thinkingDuration={message.thinkingDuration}

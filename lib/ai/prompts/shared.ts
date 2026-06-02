@@ -354,6 +354,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`file_tools_root: ${AGENT_WORKSPACE_DIR}`)
     lines.push(`runtime_state_dir: ${WORKSPACE_DIR}`)
     lines.push('filesystem_scope: relative file paths start in workspace_cwd. File tools reject paths outside that workspace unless a native CLI provider grants broader access; shell commands also start in workspace_cwd but may use host commands and absolute paths permitted by the runtime user.')
+    lines.push('library_outputs: save files meant for the user (documents, exports, generated media, downloaded sources) under the `files/` directory in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in the user-facing Library — files written elsewhere in workspace_cwd (scratch, intermediate, or working files) stay out of it. Use the workspace root and other paths for transient/working files; promote anything the user should keep or see into `files/`.')
     lines.push('discovery_scope: file discovery tools may omit provider-private CLI metadata; shell command output is returned as produced by the command.')
     lines.push('workspace_files: these workspace files are intentionally accessible to every agent by exact path, relative to workspace_cwd (some are edited from dedicated Settings surfaces rather than the file editor):')
     const todayStamp = new Date().toISOString().slice(0, 10)

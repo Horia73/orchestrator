@@ -2189,8 +2189,7 @@ export function ChatView() {
                                 message.id === activeStreamingMessageId
                               }
                               autoLoadDeferredDetails={
-                                message.id === latestAssistantMessageId ||
-                                message.id === activeStreamingMessageId
+                                message.role === "assistant"
                               }
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
