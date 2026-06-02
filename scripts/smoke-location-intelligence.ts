@@ -90,6 +90,12 @@ fs.writeFileSync(
           center: { lat: 46.728299, lng: 23.590288 },
           confidence: "user_confirmed",
         },
+        alba_iulia_francisca_area: {
+          label: "Strada Francisca 1, Alba Iulia",
+          formattedAddress: "Strada Francisca 1, Alba Iulia, Romania",
+          center: { lat: 46.069393, lng: 23.543894 },
+          confidence: "inferred_reverse_geocode",
+        },
       },
     },
     null,
@@ -109,6 +115,7 @@ const points = [
     zone: "zone.cluj",
     activity: "Automotive",
     event: "sample",
+    speed_kmh_from_previous: 0,
   },
   {
     timestamp_ms: Date.parse("2026-05-30T19:14:09Z"),
@@ -120,6 +127,7 @@ const points = [
     zone: "zone.cluj",
     activity: "Automotive",
     event: "sample",
+    speed_kmh_from_previous: 0,
   },
   {
     timestamp_ms: Date.parse("2026-05-30T19:20:00Z"),
@@ -143,6 +151,7 @@ const points = [
     activity: "Automotive",
     near_gym: true,
     event: "gym_candidate",
+    speed_kmh_from_previous: 20,
   },
   {
     timestamp_ms: Date.parse("2026-05-30T20:00:00Z"),
@@ -153,6 +162,7 @@ const points = [
     accuracy_m: 10,
     activity: "Automotive",
     event: "sample",
+    speed_kmh_from_previous: 0,
   },
   {
     timestamp_ms: Date.parse("2026-05-30T20:10:00Z"),
@@ -163,6 +173,51 @@ const points = [
     accuracy_m: 10,
     activity: "Automotive",
     event: "sample",
+    speed_kmh_from_previous: 0,
+  },
+  {
+    timestamp_ms: Date.parse("2026-05-30T20:20:00Z"),
+    reported_at: "2026-05-30T20:20:00Z",
+    state: "not_home",
+    lat: 46.2,
+    lng: 23.2,
+    accuracy_m: 10,
+    activity: "Unknown",
+    event: "sample",
+    speed_kmh_from_previous: 42,
+  },
+  {
+    timestamp_ms: Date.parse("2026-05-30T20:24:00Z"),
+    reported_at: "2026-05-30T20:24:00Z",
+    state: "not_home",
+    lat: 46.22,
+    lng: 23.22,
+    accuracy_m: 10,
+    activity: "Unknown",
+    event: "sample",
+    speed_kmh_from_previous: 45,
+  },
+  {
+    timestamp_ms: Date.parse("2026-05-30T20:30:00Z"),
+    reported_at: "2026-05-30T20:30:00Z",
+    state: "not_home",
+    lat: 46.069393,
+    lng: 23.543894,
+    accuracy_m: 10,
+    activity: "Automotive",
+    event: "sample",
+    speed_kmh_from_previous: 0,
+  },
+  {
+    timestamp_ms: Date.parse("2026-05-30T20:45:00Z"),
+    reported_at: "2026-05-30T20:45:00Z",
+    state: "not_home",
+    lat: 46.0695,
+    lng: 23.54395,
+    accuracy_m: 10,
+    activity: "Unknown",
+    event: "sample",
+    speed_kmh_from_previous: 0,
   },
 ]
 
@@ -234,6 +289,42 @@ fs.writeFileSync(
           samples: 1,
           interpretation: "single_ha_sample_no_clustering",
         },
+        {
+          label: "unknown",
+          start: "23:20",
+          end: "23:20",
+          duration_min: 0,
+          center: { lat: 46.2, lng: 23.2 },
+          samples: 1,
+          interpretation: "single_ha_sample_no_clustering",
+        },
+        {
+          label: "unknown",
+          start: "23:24",
+          end: "23:24",
+          duration_min: 0,
+          center: { lat: 46.22, lng: 23.22 },
+          samples: 1,
+          interpretation: "single_ha_sample_no_clustering",
+        },
+        {
+          label: "unknown",
+          start: "23:30",
+          end: "23:30",
+          duration_min: 0,
+          center: { lat: 46.069393, lng: 23.543894 },
+          samples: 1,
+          interpretation: "single_ha_sample_no_clustering",
+        },
+        {
+          label: "unknown",
+          start: "23:45",
+          end: "23:45",
+          duration_min: 0,
+          center: { lat: 46.0695, lng: 23.54395 },
+          samples: 1,
+          interpretation: "single_ha_sample_no_clustering",
+        },
       ],
     },
     null,
@@ -301,6 +392,24 @@ try {
     "unresolved long automotive raw gap becomes inferred stay",
     day?.observations[4]?.label === "Inferred stay",
     { label: day?.observations[4]?.label }
+  )
+  check("short moving day stop uses speed-derived label", day?.stops[6]?.label === "Driving", {
+    label: day?.stops[6]?.label,
+  })
+  check(
+    "short moving raw observation uses speed-derived label",
+    day?.observations[6]?.label === "Driving",
+    { label: day?.observations[6]?.label }
+  )
+  check(
+    "reverse-geocoded coordinate alias beats inferred stay",
+    day?.stops[8]?.label === "Strada Francisca 1, Alba Iulia",
+    { label: day?.stops[8]?.label }
+  )
+  check(
+    "reverse-geocoded raw alias beats inferred stay",
+    day?.observations[8]?.label === "Strada Francisca 1, Alba Iulia",
+    { label: day?.observations[8]?.label }
   )
 
   const list = await listLocationPlaceDays(10)

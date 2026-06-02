@@ -30,11 +30,15 @@ const DEFAULT_COORDINATE_ALIAS_RADIUS_METERS = 300
 const MAX_ACCURACY_ALIAS_RADIUS_BONUS_METERS = 100
 const MAX_OBSERVATION_STOP_MATCH_METERS = 100
 const INFERRED_STAY_MINUTES = 7
+const STATIONARY_SPEED_KMH = 1
+const DRIVING_SPEED_KMH = 12
 const MOTION_ACTIVITY_LABELS = new Set([
   "automotive",
   "cycling",
+  "driving",
   "walking",
   "running",
+  "stationary",
 ])
 const LOCATION_CAPABILITIES = [
   "Home Assistant webhook ingestion through an opt-in microscript journal",
@@ -562,12 +566,10 @@ function withInferredSampleStopDurations(
     if (localGapDuration === null || localGapDuration <= 0) return stop
 
     const durationMinutes = Math.max(0, Math.round(localGapDuration))
+    const label = labelForInferredSampleStop(stop, observation, durationMinutes)
     return {
       ...stop,
-      label:
-        durationMinutes >= INFERRED_STAY_MINUTES
-          ? withInferredStayLabel(stop.label)
-          : stop.label,
+      label,
       endTime:
         addMinutesToClockTime(stop.startTime, durationMinutes) ??
         observation?.endTime ??
@@ -579,6 +581,38 @@ function withInferredSampleStopDurations(
           : stop.kind,
     }
   })
+}
+
+function labelForInferredSampleStop(
+  stop: LocationStop,
+  observation: LocationStop | undefined,
+  durationMinutes: number
+): string {
+  const label =
+    betterStopLabel(stop.label, observation?.label) || stop.label || "unknown"
+  return durationMinutes >= INFERRED_STAY_MINUTES
+    ? withInferredStayLabel(label)
+    : label
+}
+
+function betterStopLabel(
+  stopLabel: string,
+  observationLabel: string | null | undefined
+): string {
+  const cleanStop = cleanText(stopLabel, 120)
+  const cleanObservation = cleanText(observationLabel, 120)
+  if (!isLowInformationLabel(cleanStop)) return cleanStop
+  return cleanObservation || cleanStop
+}
+
+function isLowInformationLabel(label: string): boolean {
+  const normalized = cleanText(label, 120).toLowerCase()
+  return (
+    !normalized ||
+    normalized === "unknown" ||
+    normalized === "inferred stay" ||
+    normalized.startsWith("observation ")
+  )
 }
 
 function isInferableSampleStop(stop: LocationStop): boolean {
@@ -686,6 +720,8 @@ function labelForPoint(point: Record<string, unknown>, index: number): string {
   const state = cleanText(stringFromKeys(point, ["state"]), 80).toLowerCase()
   if (state === "home") return "home"
   if (booleanFromKeys(point, ["near_gym", "nearGym"])) return "gym area"
+  const motionLabel = motionLabelForPoint(point)
+  if (motionLabel) return motionLabel
   const zone = cleanText(stringFromKeys(point, ["zone"]), 120)
   if (zone) {
     const firstZone = zone.split(",")[0]?.trim()
@@ -694,6 +730,33 @@ function labelForPoint(point: Record<string, unknown>, index: number): string {
   const activity = cleanText(stringFromKeys(point, ["activity"]), 80)
   if (activity && activity.toLowerCase() !== "unknown") return activity
   return `Observation ${index + 1}`
+}
+
+function motionLabelForPoint(point: Record<string, unknown>): string {
+  const activity = cleanText(stringFromKeys(point, ["activity"]), 80)
+    .toLowerCase()
+    .replace(/[_-]+/g, " ")
+  const speedKmh = numberFromKeys(point, [
+    "speed_kmh_from_previous",
+    "speedKmhFromPrevious",
+    "speedKmh",
+    "speed_kmh",
+    "speed",
+  ])
+
+  if (activity === "automotive" || activity === "driving") return "Driving"
+  if (activity === "cycling") return "Cycling"
+  if (activity === "walking") return "Walking"
+  if (activity === "running") return "Running"
+  if (activity === "stationary") return "Stationary"
+
+  if (speedKmh !== null) {
+    if (speedKmh >= DRIVING_SPEED_KMH) return "Driving"
+    if (speedKmh > STATIONARY_SPEED_KMH) return "Walking"
+    return "Stationary"
+  }
+
+  return ""
 }
 
 function extractStats(
