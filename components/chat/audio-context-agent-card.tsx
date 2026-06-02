@@ -16,6 +16,8 @@ import type { AgentCallReasoningEntry, ReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 export const AUDIO_CONTEXT_AGENT_ID = "audio_context_agent"
+const PANEL_BODY_CLASS =
+  "h-[132px] overflow-x-hidden overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] sm:h-[148px]"
 
 export function AudioContextAgentCard({
   entry,
@@ -93,7 +95,7 @@ export function AudioContextAgentCard({
             <div className="mt-0.5 flex min-w-0 flex-wrap gap-x-2 gap-y-0.5 text-[11.5px] text-muted-foreground">
               <span className="max-w-full truncate">{meta.filename ?? entry.agentName}</span>
               {meta.mime && <span className="shrink-0">mime {meta.mime}</span>}
-              {duration && <span className="shrink-0">{duration}</span>}
+              {duration && <span className="min-w-8 shrink-0 tabular-nums">{duration}</span>}
             </div>
           </div>
 
@@ -117,34 +119,39 @@ export function AudioContextAgentCard({
             <Sparkles className="size-3.5" />
             Gemini thinking
           </div>
-          {hasThinking ? (
-            <div className="max-h-32 overflow-auto border-l-2 border-cyan-500/25 pl-3 pr-1 text-[12.5px] leading-relaxed text-muted-foreground">
+          <div
+            className={cn(
+              PANEL_BODY_CLASS,
+              "border-l-2 border-cyan-500/25 pl-3 text-[12.5px] leading-relaxed text-muted-foreground"
+            )}
+          >
+            {hasThinking ? (
               <MarkdownRenderer content={thinking} compact />
-            </div>
-          ) : running ? (
-            <LiveLines compact />
-          ) : (
-            <p className="text-[12.5px] text-muted-foreground/70">
-              No separate thinking stream was returned.
-            </p>
-          )}
+            ) : running ? (
+              <LiveLines />
+            ) : (
+              <p className="text-[12.5px] text-muted-foreground/70">
+                No separate thinking stream was returned.
+              </p>
+            )}
+          </div>
         </div>
 
         <div className="border-t border-border/60 px-3 py-2.5 pl-4">
           <div className="mb-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             Transcript and overview
           </div>
-          {hasContent ? (
-            <div className="max-h-72 overflow-auto pr-1 text-[13px] leading-relaxed text-foreground/85">
+          <div className={cn(PANEL_BODY_CLASS, "text-[13px] leading-relaxed text-foreground/85")}>
+            {hasContent ? (
               <MarkdownRenderer content={content} compact />
-            </div>
-          ) : running ? (
-            <LiveLines />
-          ) : (
-            <p className="text-[12.5px] text-muted-foreground/70">
-              No audio report was returned.
-            </p>
-          )}
+            ) : running ? (
+              <LiveLines />
+            ) : (
+              <p className="text-[12.5px] text-muted-foreground/70">
+                No audio report was returned.
+              </p>
+            )}
+          </div>
         </div>
 
         {entry.error && (

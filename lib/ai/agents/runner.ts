@@ -433,6 +433,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                 finalUsage = meta.usage
                 finalThinkingDuration = meta.thinkingDuration
                 finalAttachments = meta.attachments ?? []
+                if (providerError) return
                 logRequestComplete({
                     requestId: subRequestId,
                     endedAt: Date.now(),
@@ -449,7 +450,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                 }
             },
             onError(err) {
-                providerError = err
+                providerError = mergeProviderError(providerError, err)
                 const reasoningExtra = {
                     reasoning: sanitizeReasoningForPersistence(reasoning),
                     contentSegments,
@@ -457,7 +458,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                 if (parentCtx.signal?.aborted) {
                     logRequestAbort(subRequestId, Date.now(), accContent || null, reasoningExtra)
                 } else {
-                    logRequestFail(subRequestId, err, Date.now(), accContent || null, reasoningExtra)
+                    logRequestFail(subRequestId, providerError, Date.now(), accContent || null, reasoningExtra)
                 }
             },
         })
@@ -897,18 +898,31 @@ function shouldTryModelFallback(error: string | undefined): boolean {
         message.includes('rate_limit') ||
         message.includes('out of usage') ||
         message.includes('usage limit') ||
+        message.includes('session limit') ||
+        (message.includes('hit your') && message.includes('limit')) ||
         message.includes('resource_exhausted') ||
         message.includes('exhausted') ||
         message.includes('overloaded') ||
         message.includes('capacity') ||
         message.includes('unavailable') ||
         message.includes('expired') ||
+        message.includes('exited with code') ||
         message.includes('429') ||
         message.includes('503') ||
         message.includes('401') ||
         message.includes('model') ||
         message.includes('streaming')
     )
+}
+
+function mergeProviderError(current: string | null, next: string): string {
+    if (!current) return next
+    if (isGenericProcessExit(next) && !isGenericProcessExit(current)) return current
+    return next
+}
+
+function isGenericProcessExit(message: string): boolean {
+    return /\bexited with code\s+\d+\b/i.test(message)
 }
 
 function withSupportedThinkingLevel(runtime: RuntimeAgentSettings): RuntimeAgentSettings {
