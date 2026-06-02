@@ -21,6 +21,16 @@ import type { Attachment } from "@/lib/types"
 
 const CHAT_INPUT_FOCUS_EVENT = "chat-input-focus"
 
+function voiceRecordingExtension(mimeType: string): string {
+    const baseMime = mimeType.split(";")[0].trim().toLowerCase()
+    if (baseMime === "audio/wav" || baseMime === "audio/wave") return "wav"
+    if (baseMime === "audio/ogg") return "ogg"
+    if (baseMime === "audio/mp4" || baseMime === "audio/m4a") return "m4a"
+    if (baseMime === "audio/aac") return "aac"
+    if (baseMime === "audio/mpeg" || baseMime === "audio/mp3") return "mp3"
+    return "webm"
+}
+
 function focusWithoutViewportScroll(textarea: HTMLTextAreaElement | null) {
     if (!textarea) return
 
@@ -80,7 +90,7 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
     const voice = useVoiceRecording({
         isChat: variant === "chat",
         onSend: React.useCallback(async (blob: Blob, mimeType: string) => {
-            const extension = mimeType.includes("mp4") ? "m4a" : "webm"
+            const extension = voiceRecordingExtension(mimeType)
             const file = new File([blob], `voice-message.${extension}`, { type: mimeType })
             const formData = new FormData()
             formData.append("files", file)

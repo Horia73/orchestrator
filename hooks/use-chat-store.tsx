@@ -584,7 +584,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       const message = conversation?.messages.find(
         (item) => item.id === messageId
       )
-      if (!message?.deferred) return
+      if (message && !message.deferred) return
 
       const key = `${conversationId}:${messageId}`
       const existingLoad = messageDetailLoadsRef.current.get(key)

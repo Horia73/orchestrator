@@ -2188,6 +2188,10 @@ export function ChatView() {
                               isStreamingMessage={
                                 message.id === activeStreamingMessageId
                               }
+                              autoLoadDeferredDetails={
+                                message.id === latestAssistantMessageId ||
+                                message.id === activeStreamingMessageId
+                              }
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
                               onAttachmentClick={setPreviewAttachment}

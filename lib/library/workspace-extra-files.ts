@@ -29,6 +29,27 @@ export interface ExtraWorkspaceLibraryEntry {
 const WORKSPACE_INIT_MARKER = ".workspace-initialized"
 const MAX_EXTRA_WORKSPACE_FILES = 2_000
 
+/**
+ * The user-facing Library sources workspace content from these designated
+ * output directories only (an allowlist). Previously the whole workspace was
+ * walked and structural files were denylisted, so every task byproduct the
+ * agent dropped in the workspace root (scratch files, crash dumps, stray
+ * downloads) leaked into the Library. An allowlist is robust: new junk
+ * elsewhere in the workspace never shows up, with no excludes to maintain.
+ * `uploads/` (chat attachments) is surfaced separately via listAllAttachments().
+ */
+const LIBRARY_SOURCE_DIRS = [
+  "files",
+  "browser-downloads",
+  "gmail-attachments",
+  "artifacts",
+] as const
+
+function isInsideLibrarySourceDir(relativePath: string): boolean {
+  const top = normalizeRelativePath(relativePath).split("/")[0]
+  return (LIBRARY_SOURCE_DIRS as readonly string[]).includes(top)
+}
+
 const standardWorkspaceFiles = new Set(
   WORKSPACE_FILE_DEFINITIONS.filter((def) => def.dynamic !== "daily").map(
     (def) => normalizeRelativePath(def.relativePath)
@@ -76,8 +97,13 @@ function workspaceEntryId(relativePath: string): string {
   return `workspace:${relativePath}`
 }
 
+function isMacOsJunk(name: string): boolean {
+  return name === ".DS_Store" || name.startsWith("._")
+}
+
 function shouldSkipPath(absolutePath: string, relativePath: string): boolean {
   if (isStandardWorkspacePath(relativePath)) return true
+  if (isMacOsJunk(path.basename(relativePath))) return true
   if (isInsideHiddenDiscoveryPath(absolutePath)) return true
   return isInsideProtectedAgentPath(absolutePath)
 }
@@ -143,13 +169,18 @@ export function listExtraWorkspaceFiles(): ExtraWorkspaceLibraryEntry[] {
     }
   }
 
-  if (fs.existsSync(root)) walk(root)
+  for (const sourceDir of LIBRARY_SOURCE_DIRS) {
+    if (out.length >= MAX_EXTRA_WORKSPACE_FILES) break
+    const sourceRoot = path.join(root, sourceDir)
+    if (fs.existsSync(sourceRoot)) walk(sourceRoot)
+  }
   return out.sort((a, b) => b.workspaceUpdatedAt - a.workspaceUpdatedAt)
 }
 
 export function deleteExtraWorkspaceFile(relativePath: string): boolean {
   const normalized = normalizeRelativePath(relativePath)
   if (!normalized || isStandardWorkspacePath(normalized)) return false
+  if (!isInsideLibrarySourceDir(normalized)) return false
 
   const resolved = resolveSandboxedWritable(normalized)
   if (!resolved.ok) return false

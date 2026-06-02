@@ -13,6 +13,7 @@ import { useConversationArtifacts } from "@/components/artifacts/use-conversatio
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
 import { InlineToolCallView, InlineWebSearchGroup, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
+import { AUDIO_CONTEXT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
 import { useMessageSelectionGutter } from "@/components/message-bubble/use-message-selection-gutter"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 
@@ -688,6 +689,9 @@ function AgentCallBlock({
     if (entry.agentId === "browser_agent") {
         return <BrowserAgentCallBlock entry={entry} onOpen={onOpen} onAttachmentClick={onAttachmentClick} />
     }
+    if (entry.agentId === AUDIO_CONTEXT_AGENT_ID) {
+        return <AudioContextAgentCard entry={entry} onOpen={onOpen} />
+    }
 
     return <GenericAgentCallBlock entry={entry} onOpen={onOpen} />
 }
@@ -914,6 +918,7 @@ interface MessageBubbleProps {
     onAttachmentClick?: (attachment: Attachment) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onLoadMessageDetails?: (messageId: string) => Promise<void>
+    autoLoadDeferredDetails?: boolean
 }
 
 function MessageBubbleComponent({
@@ -927,11 +932,14 @@ function MessageBubbleComponent({
     onAttachmentClick,
     onAgentOpen,
     onLoadMessageDetails,
+    autoLoadDeferredDetails = false,
 }: MessageBubbleProps) {
     const [copied, setCopied] = React.useState(false)
     const [hovered, setHovered] = React.useState(false)
     const [detailLoading, setDetailLoading] = React.useState(false)
+    const [detailLoadFailed, setDetailLoadFailed] = React.useState(false)
     const [openLoadedDetails, setOpenLoadedDetails] = React.useState(false)
+    const autoLoadAttemptedRef = React.useRef<string | null>(null)
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -944,16 +952,44 @@ function MessageBubbleComponent({
         window.setTimeout(() => setCopied(false), 1500)
     }, [message.content])
 
-    const handleOpenDeferredDetails = React.useCallback(async () => {
+    const loadDeferredDetails = React.useCallback(async (openAfterLoad: boolean) => {
         if (!message.deferred || !onLoadMessageDetails || detailLoading) return
         setDetailLoading(true)
+        setDetailLoadFailed(false)
         try {
             await onLoadMessageDetails(message.id)
-            setOpenLoadedDetails(true)
+            if (openAfterLoad) setOpenLoadedDetails(true)
+        } catch {
+            setDetailLoadFailed(true)
         } finally {
             setDetailLoading(false)
         }
     }, [detailLoading, message.deferred, message.id, onLoadMessageDetails])
+
+    const handleOpenDeferredDetails = React.useCallback(() => {
+        void loadDeferredDetails(true)
+    }, [loadDeferredDetails])
+
+    const hasReasoning = Array.isArray(message.reasoning) && message.reasoning.length > 0
+    const hasDeferredDetails = Boolean(
+        message.role === "assistant" &&
+        (message.deferred?.reasoning || message.deferred?.toolCalls) &&
+        !hasReasoning
+    )
+    const canLoadDeferredDetails = hasDeferredDetails && Boolean(onLoadMessageDetails)
+
+    React.useEffect(() => {
+        if (!autoLoadDeferredDetails || !canLoadDeferredDetails || detailLoading) return
+        if (autoLoadAttemptedRef.current === message.id) return
+        autoLoadAttemptedRef.current = message.id
+        void loadDeferredDetails(true)
+    }, [
+        autoLoadDeferredDetails,
+        canLoadDeferredDetails,
+        detailLoading,
+        loadDeferredDetails,
+        message.id,
+    ])
 
     // Latest version per identifier produced by this message — those are the
     // artifacts the hover-meta row exposes copy/download/expand for.
@@ -1023,12 +1059,6 @@ function MessageBubbleComponent({
         )
     }
 
-    const hasReasoning = Array.isArray(message.reasoning) && message.reasoning.length > 0
-    const hasDeferredDetails = Boolean(
-        (message.deferred?.reasoning || message.deferred?.toolCalls) &&
-        !hasReasoning
-    )
-    const canLoadDeferredDetails = hasDeferredDetails && Boolean(onLoadMessageDetails)
     const reasoningGroups = hasReasoning ? groupReasoningByPhase(message.reasoning!) : []
     const contentSegments = message.contentSegments ?? (
         message.content.length > 0 ? [{ phase: 0, content: message.content }] : []
@@ -1057,7 +1087,7 @@ function MessageBubbleComponent({
             onMouseEnter={() => setHovered(true)}
             onMouseLeave={() => setHovered(false)}
         >
-            {canLoadDeferredDetails && (
+            {canLoadDeferredDetails && detailLoadFailed && (
                 <DeferredThoughtBlock
                     loading={detailLoading}
                     thinkingDuration={message.thinkingDuration}

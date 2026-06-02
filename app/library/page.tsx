@@ -197,7 +197,7 @@ function LibraryView() {
 
         <div
           className={cn(
-            "mt-1 min-w-0 transition-opacity duration-150 ease-out motion-reduce:transition-none",
+            "mt-1 min-w-0 transition-opacity duration-150 ease-out will-change-[opacity] motion-reduce:transition-none",
             contentVisible ? "opacity-100" : "opacity-0"
           )}
         >

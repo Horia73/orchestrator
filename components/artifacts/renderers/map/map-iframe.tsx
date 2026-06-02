@@ -305,7 +305,7 @@ export const MapIframe = React.forwardRef<MapIframeApi, MapIframeProps>(
           sandbox="allow-scripts allow-same-origin allow-popups allow-popups-to-escape-sandbox"
           srcDoc={srcDoc}
           className={cn(
-            "block h-full w-full border-0 transition-opacity duration-300",
+            "block h-full w-full border-0 transition-opacity duration-300 transform-gpu [backface-visibility:hidden]",
             rendered ? "opacity-100" : "opacity-0"
           )}
         />

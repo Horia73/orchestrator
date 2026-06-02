@@ -367,14 +367,54 @@ const contextComponents: Components = {
   },
 }
 
+const compactComponents: Components = {
+  ...contextComponents,
+  h1: ({ children }) => (
+    <h1 className="mt-3 mb-1.5 text-[15px] font-semibold tracking-tight">
+      {children}
+    </h1>
+  ),
+  h2: ({ children }) => (
+    <h2 className="mt-3 mb-1.5 text-[14px] font-semibold tracking-tight">
+      {children}
+    </h2>
+  ),
+  h3: ({ children }) => (
+    <h3 className="mt-2.5 mb-1 text-[13px] font-semibold tracking-tight">
+      {children}
+    </h3>
+  ),
+  p: ({ children }) => <p className="my-1.5 leading-relaxed">{children}</p>,
+  ul: ({ children }) => (
+    <ul className="my-1.5 list-disc space-y-1 pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5">
+      {children}
+    </ul>
+  ),
+  ol: ({ children, start }) => (
+    <ol
+      start={start}
+      className="my-1.5 list-decimal space-y-1 pl-5 [&_ol]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_ul]:my-1 [&_ul]:list-disc [&_ul]:pl-5"
+    >
+      {children}
+    </ol>
+  ),
+  blockquote: ({ children }) => (
+    <blockquote className="my-2 border-l-2 border-border pl-3 text-muted-foreground">
+      {children}
+    </blockquote>
+  ),
+}
+
 // ---------------------------------------------------------------------------
 // Exported renderer
 // ---------------------------------------------------------------------------
 
 export const MarkdownRenderer = React.memo(function MarkdownRenderer({
   content,
+  compact = false,
 }: {
   content: string
+  compact?: boolean
 }) {
   React.useEffect(() => {
     if (
@@ -390,7 +430,7 @@ export const MarkdownRenderer = React.memo(function MarkdownRenderer({
     <ReactMarkdown
       remarkPlugins={[remarkGfm, [remarkMath, remarkMathOptions]]}
       rehypePlugins={[rehypeKatex]}
-      components={contextComponents}
+      components={compact ? compactComponents : contextComponents}
     >
       {content}
     </ReactMarkdown>

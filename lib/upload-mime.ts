@@ -22,7 +22,7 @@ export const UPLOAD_MIME_MAP: Record<string, string> = {
     '.pptx': 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
     '.mp3': 'audio/mpeg',
     '.wav': 'audio/wav',
-    '.m4a': 'audio/mp4',
+    '.m4a': 'audio/m4a',
     '.aac': 'audio/aac',
     '.aiff': 'audio/aiff',
     '.flac': 'audio/flac',

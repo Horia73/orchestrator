@@ -143,7 +143,7 @@ function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
                 loading="lazy"
                 referrerPolicy="no-referrer"
                 onError={() => setFailed(true)}
-                className="size-full object-cover group-hover/recipe-card:scale-[1.03]"
+                className="size-full transform-gpu object-cover [backface-visibility:hidden] group-hover/recipe-card:scale-[1.03]"
             />
         </div>
     )

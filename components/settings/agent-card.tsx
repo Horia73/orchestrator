@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, Check, CheckCircle2, ChevronDown, FlaskConical, KeyRound } from "lucide-react"
+import { AlertCircle, Check, CheckCircle2, ChevronDown, FileAudio, FlaskConical, KeyRound } from "lucide-react"
 
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
@@ -195,6 +195,8 @@ export function AgentCard({
       </CardHeader>
 
       <CardContent>
+        {agent.id === AUDIO_CONTEXT_AGENT_ID && <AudioContextAgentNote />}
+
         {/* Browser agent gets the same picker as every other text agent —
             user chooses which LLM drives the browser-automation script. */}
         <Field label="Model" hint={modelDef ? formatModelHint(modelDef) : undefined}>
@@ -270,6 +272,20 @@ export function AgentCard({
         )}
       </CardContent>
     </Card>
+  )
+}
+
+function AudioContextAgentNote() {
+  return (
+    <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-2.5 py-2.5 text-[12px] text-cyan-900 dark:text-cyan-100">
+      <FileAudio className="mt-0.5 size-3.5 shrink-0 text-cyan-700 dark:text-cyan-300" />
+      <div className="min-w-0">
+        <p className="font-medium text-foreground">Automatic audio pre-pass</p>
+        <p className="mt-0.5 text-foreground/65">
+          Runs for audio uploads when the selected chat model cannot read audio natively. Gemini streams thinking and the audio report live, then Orchestrator receives that context with the original file still attached.
+        </p>
+      </div>
+    </div>
   )
 }
 
