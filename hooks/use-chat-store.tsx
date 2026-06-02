@@ -127,6 +127,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const streamDoneRef = React.useRef(false)
   const clientStreamMessageIdRef = React.useRef<string | null>(null)
   const streamPageWasHiddenRef = React.useRef(false)
+  const streamSnapshotRefreshAtRef = React.useRef(0)
   const activeConversationIdRef = React.useRef<string | null>(null)
   const pathnameRef = React.useRef(pathname)
   const conversationsRef = React.useRef<Conversation[]>([])
@@ -642,6 +643,32 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     []
   )
 
+  const hydrateStreamMessage = React.useCallback(
+    async (
+      conversationId: string,
+      message: Message | null,
+      messageId?: string | null
+    ): Promise<Message | null> => {
+      const targetId = message?.id ?? messageId
+      if (!targetId || targetId === "unknown") return message
+
+      const needsDetails = Boolean(
+        !message ||
+          message.deferred?.reasoning ||
+          message.deferred?.contentSegments ||
+          message.deferred?.toolCalls
+      )
+      if (!needsDetails) return message
+
+      try {
+        return await fetchConversationMessageDetails(conversationId, targetId)
+      } catch {
+        return message
+      }
+    },
+    []
+  )
+
   const recoverInterruptedStream = React.useCallback(
     async (
       conversationId: string,
@@ -664,12 +691,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           null
         const activeStream = stream.status === "fulfilled" ? stream.value : null
 
-        if (recoveredMessage) {
-          if (activeStream) {
+        if (activeStream) {
+          const activeMessage =
+            (activeStream.messageId
+              ? messages.find((message) => message.id === activeStream.messageId)
+              : null) ??
+            recoveredMessage ??
+            null
+          const snapshot = await hydrateStreamMessage(
+            conversationId,
+            activeMessage,
+            activeStream.messageId
+          )
+          if (snapshot) {
             dispatch({
               type: "ADD_ASSISTANT_MESSAGE",
               conversationId,
-              message: recoveredMessage,
+              message: snapshot,
               stopStreaming: false,
             })
             dispatch({
@@ -677,11 +715,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               isStreaming: true,
               conversationId,
               messageId: activeStream.messageId,
+              snapshot,
             })
             dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
             return "running"
           }
 
+          dispatch({
+            type: "SET_STREAMING",
+            isStreaming: true,
+            conversationId,
+            messageId: activeStream.messageId,
+          })
+          dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
+          return "running"
+        }
+
+        if (recoveredMessage) {
           if (isTerminalAssistantMessage(recoveredMessage)) {
             dispatch({
               type: "ADD_ASSISTANT_MESSAGE",
@@ -720,17 +770,6 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
-        if (activeStream) {
-          dispatch({
-            type: "SET_STREAMING",
-            isStreaming: true,
-            conversationId,
-            messageId: activeStream.messageId,
-          })
-          dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
-          return "running"
-        }
-
         if (attempt < STREAM_RECOVERY_ATTEMPTS - 1) {
           await sleep(STREAM_RECOVERY_DELAY_MS)
         }
@@ -738,7 +777,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
       return null
     },
-    [checkServerStreaming, handleAssistantFinished, refreshConversationMessages]
+    [
+      checkServerStreaming,
+      handleAssistantFinished,
+      hydrateStreamMessage,
+      refreshConversationMessages,
+    ]
   )
 
   const refreshActiveChatStreams = React.useCallback(async (): Promise<
@@ -802,19 +846,21 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         streamingRef.current
       )
         return
-      dispatch({
-        type: "SET_STREAMING",
-        isStreaming: Boolean(stream),
-        conversationId,
-        messageId: stream?.messageId,
-      })
-      if (stream) dispatch({ type: "CHAT_STREAM_STARTED", stream })
+      if (stream) {
+        void recoverInterruptedStream(conversationId, stream.messageId)
+      } else {
+        dispatch({
+          type: "SET_STREAMING",
+          isStreaming: false,
+          conversationId,
+        })
+      }
     })
 
     return () => {
       cancelled = true
     }
-  }, [checkServerStreaming, state.activeConversationId])
+  }, [checkServerStreaming, recoverInterruptedStream, state.activeConversationId])
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
@@ -831,6 +877,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     const streamMessageId =
       state.streamingMessageId ??
       activeChatStreamsRef.current[conversationId]?.messageId
+    const hasStreamingPayload =
+      state.streamingContent.length > 0 ||
+      state.streamingContentSegments.some(
+        (segment) => segment.content.length > 0
+      ) ||
+      state.streamingReasoning.length > 0
     const tick = () => {
       checkServerStreaming(conversationId).then((stream) => {
         if (
@@ -840,13 +892,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         )
           return
         if (stream) {
-          dispatch({
-            type: "SET_STREAMING",
-            isStreaming: true,
-            conversationId,
-            messageId: stream.messageId,
-          })
-          dispatch({ type: "CHAT_STREAM_STARTED", stream })
+          const now = Date.now()
+          const shouldRefreshSnapshot =
+            !hasStreamingPayload ||
+            stream.messageId !== streamMessageId ||
+            now - streamSnapshotRefreshAtRef.current > 2500
+          if (shouldRefreshSnapshot && !recovering) {
+            recovering = true
+            streamSnapshotRefreshAtRef.current = now
+            void recoverInterruptedStream(conversationId, stream.messageId)
+              .finally(() => {
+                recovering = false
+              })
+          } else {
+            dispatch({
+              type: "SET_STREAMING",
+              isStreaming: true,
+              conversationId,
+              messageId: stream.messageId,
+            })
+            dispatch({ type: "CHAT_STREAM_STARTED", stream })
+          }
         } else {
           if (recovering) return
           recovering = true
@@ -874,8 +940,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     recoverInterruptedStream,
     state.activeConversationId,
     state.isStreaming,
+    state.streamingContent,
+    state.streamingContentSegments,
     state.streamingConversationId,
     state.streamingMessageId,
+    state.streamingReasoning,
   ])
 
   // --- SSE LIVE SYNC ---

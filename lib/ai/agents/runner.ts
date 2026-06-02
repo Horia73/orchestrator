@@ -423,7 +423,10 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             },
             onDone(meta) {
                 if (parentCtx.signal?.aborted) {
-                    logRequestAbort(subRequestId, Date.now(), accContent || null)
+                    logRequestAbort(subRequestId, Date.now(), accContent || null, {
+                        reasoning: sanitizeReasoningForPersistence(reasoning),
+                        contentSegments,
+                    })
                     return
                 }
                 finalUsage = meta.usage
@@ -437,6 +440,8 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
                     usage: meta.usage,
                     provider: runtime.provider,
                     outputText: accContent || null,
+                    reasoning: sanitizeReasoningForPersistence(reasoning),
+                    contentSegments,
                 })
                 if (agentThreadId && meta.sessionId) {
                     updateAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model, meta.sessionId)
@@ -444,17 +449,25 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             },
             onError(err) {
                 providerError = err
+                const reasoningExtra = {
+                    reasoning: sanitizeReasoningForPersistence(reasoning),
+                    contentSegments,
+                }
                 if (parentCtx.signal?.aborted) {
-                    logRequestAbort(subRequestId, Date.now(), accContent || null)
+                    logRequestAbort(subRequestId, Date.now(), accContent || null, reasoningExtra)
                 } else {
-                    logRequestFail(subRequestId, err, Date.now(), accContent || null)
+                    logRequestFail(subRequestId, err, Date.now(), accContent || null, reasoningExtra)
                 }
             },
         })
     } catch (err) {
         const msg = err instanceof Error ? err.message : 'Unknown sub-agent error'
+        const reasoningExtra = {
+            reasoning: sanitizeReasoningForPersistence(reasoning),
+            contentSegments,
+        }
         if (parentCtx.signal?.aborted) {
-            logRequestAbort(subRequestId, Date.now(), accContent || null)
+            logRequestAbort(subRequestId, Date.now(), accContent || null, reasoningExtra)
             emitAgent(parentCtx, {
                 type: 'agent_done',
                 runId: subRequestId,
@@ -467,7 +480,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             })
             return { success: false, error: `Sub-agent ${target.id} aborted`, data: { fallbackSafe: false } }
         }
-        logRequestFail(subRequestId, msg, Date.now(), accContent || null)
+        logRequestFail(subRequestId, msg, Date.now(), accContent || null, reasoningExtra)
         emitAgent(parentCtx, {
             type: 'agent_done',
             runId: subRequestId,

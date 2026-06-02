@@ -482,7 +482,7 @@ export const MonitorWatchSchema = z.object({
     /** Human-meaningful identifier for the thing being watched. Format is
      *  source-specific (Gmail: address/query, Calendar: primary/all/calendar
      *  ids, HA: entity_id, Web: URL, Weather: location, etc.). */
-    target: z.string().min(1).max(500),
+    target: z.string().min(1).max(2000),
     rule: MonitorRuleSchema,
     allowedActions: z.array(MonitorActionSchema).max(16).default([]),
     cadence: CadencePolicySchema,
@@ -511,7 +511,7 @@ export type MonitorWatch = z.infer<typeof MonitorWatchSchema>
 export const CreateMonitorWatchInputSchema = z.object({
     title: z.string().min(1).max(200),
     source: WatchSourceSchema,
-    target: z.string().min(1).max(500),
+    target: z.string().min(1).max(2000),
     rule: MonitorRuleSchema,
     allowedActions: z.array(MonitorActionSchema).max(16).default([]),
     cadence: CadencePolicySchema.optional(),
@@ -526,7 +526,7 @@ export type CreateMonitorWatchInput = z.input<typeof CreateMonitorWatchInputSche
  *  the whole policy. */
 export const UpdateMonitorWatchInputSchema = z.object({
     title: z.string().min(1).max(200).optional(),
-    target: z.string().min(1).max(500).optional(),
+    target: z.string().min(1).max(2000).optional(),
     rule: MonitorRuleSchema.optional(),
     allowedActions: z.array(MonitorActionSchema).max(16).optional(),
     cadence: CadencePolicyPartialInputSchema.optional(),

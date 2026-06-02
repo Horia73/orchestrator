@@ -23,16 +23,11 @@ export function useDocumentViewportLock(active = true) {
 
     keepWindowPinned()
 
-    const visualViewport = window.visualViewport
     window.addEventListener("scroll", keepWindowPinned, { passive: true })
-    visualViewport?.addEventListener("resize", keepWindowPinned)
-    visualViewport?.addEventListener("scroll", keepWindowPinned)
 
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame)
       window.removeEventListener("scroll", keepWindowPinned)
-      visualViewport?.removeEventListener("resize", keepWindowPinned)
-      visualViewport?.removeEventListener("scroll", keepWindowPinned)
 
       if (previous === undefined) delete root.dataset.orchViewportLock
       else root.dataset.orchViewportLock = previous

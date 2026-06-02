@@ -90,6 +90,7 @@ export type ChatAction =
       isStreaming: boolean
       conversationId?: string
       messageId?: string
+      snapshot?: Message
     }
   | { type: "APPEND_STREAMING_THINKING_CHUNK"; chunk: string; phase: number }
   | { type: "APPEND_STREAMING_CONTENT"; chunk: string; phase: number }
@@ -221,6 +222,21 @@ function sortConversationsByActivity(
 
     return b.createdAt - a.createdAt
   })
+}
+
+function inferStreamingMode(
+  reasoning: StreamingReasoning,
+  contentSegments: NonNullable<Message["contentSegments"]>
+): "reasoning" | "content" | null {
+  const lastReasoningPhase = reasoning.at(-1)?.phase
+  const lastContentPhase = contentSegments.at(-1)?.phase
+
+  if (typeof lastReasoningPhase !== "number") {
+    return typeof lastContentPhase === "number" ? "content" : null
+  }
+  if (typeof lastContentPhase !== "number") return "reasoning"
+
+  return lastContentPhase >= lastReasoningPhase ? "content" : "reasoning"
 }
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
@@ -657,18 +673,59 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : state.conversationMessagePages,
       }
     }
-    case "SET_STREAMING":
-      return action.isStreaming
-        ? {
-            ...state,
-            ...stoppedStreamState,
-            isStreaming: true,
-            streamingConversationId:
-              action.conversationId ?? state.streamingConversationId,
-            streamingMessageId:
-              action.messageId ?? state.streamingMessageId ?? null,
-          }
-        : { ...state, ...stoppedStreamState }
+    case "SET_STREAMING": {
+      if (!action.isStreaming) return { ...state, ...stoppedStreamState }
+
+      const nextConversationId =
+        action.conversationId ?? state.streamingConversationId ?? null
+      const nextMessageId = action.messageId ?? state.streamingMessageId ?? null
+      const sameStream =
+        state.isStreaming &&
+        state.streamingConversationId === nextConversationId &&
+        state.streamingMessageId === nextMessageId
+      const snapshot = action.snapshot
+      const snapshotSegments =
+        snapshot?.contentSegments && snapshot.contentSegments.length > 0
+          ? snapshot.contentSegments
+          : snapshot?.content
+            ? [{ phase: 0, content: snapshot.content }]
+            : undefined
+      const snapshotReasoning = snapshot?.reasoning ?? undefined
+      const hasSnapshotPayload = Boolean(
+        snapshot &&
+          ((snapshotReasoning?.length ?? 0) > 0 ||
+            (snapshotSegments?.some((segment) => segment.content.length > 0) ??
+              false) ||
+            snapshot.content.length > 0)
+      )
+
+      return {
+        ...state,
+        ...(sameStream ? {} : stoppedStreamState),
+        isStreaming: true,
+        streamingConversationId: nextConversationId,
+        streamingMessageId: nextMessageId,
+        ...(hasSnapshotPayload
+          ? {
+              streamingContent: snapshot?.content ?? "",
+              streamingContentSegments: snapshotSegments ?? [],
+              streamingReasoning: snapshotReasoning ?? [],
+              streamingMode: inferStreamingMode(
+                snapshotReasoning ?? [],
+                snapshotSegments ?? []
+              ),
+              thinkingDone:
+                typeof snapshot?.thinkingDuration === "number"
+                  ? true
+                  : state.thinkingDone,
+              thinkingSeconds:
+                typeof snapshot?.thinkingDuration === "number"
+                  ? Math.round(snapshot.thinkingDuration)
+                  : state.thinkingSeconds,
+            }
+          : {}),
+      }
+    }
     case "APPEND_STREAMING_THINKING_CHUNK": {
       const reasoning = [...state.streamingReasoning]
       const last = reasoning[reasoning.length - 1]

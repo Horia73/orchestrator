@@ -57,6 +57,11 @@ RUN apt-get update \
     xauth \
     xclip \
     xdotool \
+    binutils \
+    jq \
+    poppler-utils \
+    ripgrep \
+    sqlite3 \
   && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder --chown=node:node /app /app

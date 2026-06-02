@@ -131,6 +131,7 @@ export function ChatView() {
   const scrollButtonLockedUntilStreamingEndRef = React.useRef(false)
   const [inputOffset, setInputOffset] = React.useState(88)
   const keyboardInset = useMobileKeyboardInset()
+  const lastDistanceFromBottomRef = React.useRef(Number.POSITIVE_INFINITY)
   const [artifactPanelWidth, setArtifactPanelWidth] = React.useState(
     ARTIFACT_PANEL_DEFAULT_WIDTH
   )
@@ -374,7 +375,7 @@ export function ChatView() {
       const gapAfterUser = responseRect
         ? Math.max(0, Math.round(responseRect.top - userRect.bottom))
         : MESSAGE_VERTICAL_GAP
-      const bottomPadding = inputOffset + keyboardInset + 24
+      const bottomPadding = inputOffset + 24
       const neededAfterUser =
         scrollElement.clientHeight -
         MESSAGE_ANCHOR_TOP_OFFSET -
@@ -384,7 +385,7 @@ export function ChatView() {
 
       return Math.max(0, Math.ceil(neededAfterUser))
     },
-    [inputOffset, keyboardInset]
+    [inputOffset]
   )
 
   const getCommittedTailSpacer = React.useCallback(
@@ -683,6 +684,7 @@ export function ChatView() {
 
     const distanceFromBottom =
       element.scrollHeight - element.scrollTop - element.clientHeight
+    lastDistanceFromBottomRef.current = distanceFromBottom
     const isPinnedToBottom = distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
 
     if (activeIdRef.current && !ignoreSyncRef.current) {
@@ -917,6 +919,38 @@ export function ChatView() {
     }
   }, [cancelMessageTopAnchor, syncScrollState, conversationId])
 
+  React.useEffect(() => {
+    const element = scrollContainerRef.current
+    if (!element) return
+
+    let previousClientHeight = element.clientHeight
+    let frame: number | null = null
+    const observer = new ResizeObserver(() => {
+      if (frame !== null) return
+      frame = window.requestAnimationFrame(() => {
+        frame = null
+        const nextClientHeight = element.clientHeight
+        if (Math.abs(nextClientHeight - previousClientHeight) <= 1) return
+        previousClientHeight = nextClientHeight
+
+        if (
+          lastDistanceFromBottomRef.current <= STICKY_BOTTOM_THRESHOLD ||
+          autoScrollEnabledRef.current
+        ) {
+          scrollToBottom("auto")
+        }
+        syncScrollState()
+      })
+    })
+
+    observer.observe(element)
+
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      observer.disconnect()
+    }
+  }, [conversationId, scrollToBottom, syncScrollState])
+
   React.useLayoutEffect(() => {
     const anchor = olderLoadAnchorRef.current
     if (!anchor) return
@@ -938,6 +972,22 @@ export function ChatView() {
 
     return () => window.cancelAnimationFrame(frame)
   }, [conversationId, isLoadingOlderMessages, messageCount, syncScrollState])
+
+  React.useLayoutEffect(() => {
+    const element = scrollContainerRef.current
+    if (!element) return
+
+    if (
+      lastDistanceFromBottomRef.current <= STICKY_BOTTOM_THRESHOLD ||
+      autoScrollEnabledRef.current
+    ) {
+      scrollToBottom("auto")
+      syncScrollState()
+      return
+    }
+
+    syncScrollState()
+  }, [keyboardInset, scrollToBottom, syncScrollState])
 
   React.useEffect(() => {
     const element = inputContainerRef.current
@@ -2064,9 +2114,10 @@ export function ChatView() {
               isScrollbarVisible && !isScrollbarSuppressed ? "true" : "false"
             }
             data-scrollbar-suppressed={isScrollbarSuppressed ? "true" : "false"}
-            className="chat-scroll-container min-h-0 flex-1 overflow-y-scroll"
+            className="chat-scroll-container min-h-0 flex-1 overflow-y-scroll transition-[margin-bottom] duration-150 ease-out"
             style={{
               WebkitOverflowScrolling: "touch",
+              marginBottom: keyboardInset > 0 ? keyboardInset : undefined,
               overscrollBehaviorY: "contain",
               scrollbarGutter: isMobile ? "auto" : "stable both-edges",
               touchAction: "pan-y",
@@ -2079,7 +2130,7 @@ export function ChatView() {
                   "flex-1 pt-8 transition-opacity duration-150",
                   isMessageListHidden && "pointer-events-none opacity-0"
                 )}
-                style={{ paddingBottom: inputOffset + keyboardInset + 24 }}
+                style={{ paddingBottom: inputOffset + 24 }}
                 aria-busy={isRestoringInitialFrame}
               >
                 <div className="mx-auto max-w-[700px] space-y-6 px-2 select-none">

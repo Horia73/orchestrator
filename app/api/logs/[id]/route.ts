@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getRequestLog, getToolLogsForRequest } from '@/lib/observability/store'
+import { getRequestLog, getToolLogsForRequest, getRequestLogReasoning } from '@/lib/observability/store'
 import { getConversation } from '@/lib/db'
 import { getInboxConversation, searchTaskRuns } from '@/lib/scheduling/store'
 import type { RequestLogRow } from '@/lib/observability/schema'
@@ -32,6 +32,7 @@ function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {
     // scheduled-run record that holds the real step-by-step, and the Logs detail
     // collapses to its lossy text-only view ("nu văd tool calls în logs").
     const candidates = [
+        getPersistedLogTranscript(log),
         getInboxThreadTranscript(log),
         getConversationTranscript(log),
         getScheduledRunTranscript(log),
@@ -49,6 +50,33 @@ function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {
 function transcriptHasReasoning(transcript: RequestLogTranscript): boolean {
     const reasoning = transcript.assistantMessage.reasoning
     return Array.isArray(reasoning) && reasoning.length > 0
+}
+
+// The run's OWN interleaved transcript, persisted at completion. This is the
+// most reliable source — no fuzzy time/text matching, and it exists for
+// background/scheduled/sub-agent runs that never land in a conversation. When
+// present it lets the Logs detail render exactly like the main chat.
+function getPersistedLogTranscript(log: RequestLogRow): RequestLogTranscript | null {
+    const persisted = getRequestLogReasoning(log.id)
+    if (!persisted || (!persisted.reasoning?.length && !persisted.contentSegments?.length)) {
+        return null
+    }
+    const content = log.outputText ?? ''
+    const reasoning = persisted.reasoning ?? undefined
+    return {
+        userMessage: messageFromLogInput(log),
+        assistantMessage: {
+            id: log.id,
+            role: 'assistant',
+            content,
+            status: log.status === 'streaming' ? undefined : log.status,
+            reasoning,
+            contentSegments:
+                persisted.contentSegments
+                ?? (content ? [{ phase: finalContentPhase(reasoning), content }] : undefined),
+            timestamp: log.endedAt ?? log.startedAt,
+        },
+    }
 }
 
 function getConversationTranscript(log: RequestLogRow): RequestLogTranscript | null {

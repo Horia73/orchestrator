@@ -74,6 +74,11 @@ export interface RequestLogRow {
 /** Cap each text column so a giant prompt can't blow up the DB or the UI. */
 export const LOG_TEXT_MAX_CHARS = 64_000
 
+/** Cap the serialized per-request reasoning+segments JSON. Tool results can be
+ *  large even after per-entry sanitization, so bound the whole blob — if it
+ *  exceeds this, we skip persisting it rather than store a giant/partial row. */
+export const LOG_REASONING_MAX_CHARS = 200_000
+
 export interface ToolLogRow {
     id: number
     requestId: string

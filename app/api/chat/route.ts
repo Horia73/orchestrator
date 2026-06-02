@@ -1293,7 +1293,10 @@ export async function POST(request: Request) {
                   if (serverAbortController.signal.aborted) {
                     terminalStreamError = "Aborted"
                     terminalMessageStatus = "aborted"
-                    logRequestAbort(messageId, Date.now(), accContent || null)
+                    logRequestAbort(messageId, Date.now(), accContent || null, {
+                      reasoning: sanitizeReasoningForPersistence(accReasoning),
+                      contentSegments: accContentSegments,
+                    })
                     persistAssistantProgress({
                       force: true,
                       thinkingDuration: 0,
@@ -1454,6 +1457,8 @@ export async function POST(request: Request) {
                     usage: meta.usage,
                     provider: prepared.settings.provider,
                     outputText: accContent || null,
+                    reasoning: sanitizeReasoningForPersistence(accReasoning),
+                    contentSegments: accContentSegments,
                   })
 
                   send({
@@ -1486,7 +1491,10 @@ export async function POST(request: Request) {
                   if (aborted) {
                     terminalStreamError = error
                     terminalMessageStatus = "aborted"
-                    logRequestAbort(messageId, Date.now(), accContent || null)
+                    logRequestAbort(messageId, Date.now(), accContent || null, {
+                      reasoning: sanitizeReasoningForPersistence(accReasoning),
+                      contentSegments: accContentSegments,
+                    })
                     persistAssistantProgress({
                       force: true,
                       thinkingDuration: 0,
@@ -1499,7 +1507,11 @@ export async function POST(request: Request) {
                     messageId,
                     error,
                     Date.now(),
-                    accContent || null
+                    accContent || null,
+                    {
+                      reasoning: sanitizeReasoningForPersistence(accReasoning),
+                      contentSegments: accContentSegments,
+                    }
                   )
                 },
               }
@@ -1513,7 +1525,10 @@ export async function POST(request: Request) {
               if (aborted) {
                 terminalStreamError = msg
                 terminalMessageStatus = "aborted"
-                logRequestAbort(messageId, Date.now(), accContent || null)
+                logRequestAbort(messageId, Date.now(), accContent || null, {
+                  reasoning: sanitizeReasoningForPersistence(accReasoning),
+                  contentSegments: accContentSegments,
+                })
                 persistAssistantProgress({
                   force: true,
                   thinkingDuration: 0,
@@ -1521,7 +1536,10 @@ export async function POST(request: Request) {
                 })
                 send({ type: "stopped", messageId })
               } else {
-                logRequestFail(messageId, msg, Date.now(), accContent || null)
+                logRequestFail(messageId, msg, Date.now(), accContent || null, {
+                  reasoning: sanitizeReasoningForPersistence(accReasoning),
+                  contentSegments: accContentSegments,
+                })
               }
             }
           }
@@ -1593,9 +1611,15 @@ export async function POST(request: Request) {
         })
 
         if (aborted) {
-          logRequestAbort(messageId, Date.now(), accContent || null)
+          logRequestAbort(messageId, Date.now(), accContent || null, {
+            reasoning: sanitizeReasoningForPersistence(accReasoning),
+            contentSegments: accContentSegments,
+          })
         } else {
-          logRequestFail(messageId, msg, Date.now(), accContent || null)
+          logRequestFail(messageId, msg, Date.now(), accContent || null, {
+            reasoning: sanitizeReasoningForPersistence(accReasoning),
+            contentSegments: accContentSegments,
+          })
         }
 
         send(

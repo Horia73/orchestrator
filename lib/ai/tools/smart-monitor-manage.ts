@@ -221,7 +221,7 @@ export const monitorWatchGetTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            watch_id: { type: 'string', description: 'The watch id (mw_…).' },
+            watch_id: { type: 'string', description: 'The watch id (mw_…) — the value returned as `id` by monitor_watch_list / monitor_watch_get. Pass it as `watch_id`, not `id`.' },
             event_limit: { type: 'number', description: 'How many recent audit events to include (default 20, max 100).' },
         },
         required: ['watch_id'],
@@ -305,8 +305,8 @@ export const monitorWatchAddTool: ToolDef = {
             title: { type: 'string', description: 'Short human-readable label shown in /monitor and the wake brief.' },
             source: { type: 'string', description: 'One of: gmail, google_calendar, whatsapp, home_assistant, web, weather, custom. Use custom for model-owned recurring instructions.' },
             target: { type: 'string', description: 'Human-readable scope of the thing being watched. Format is source-specific; for custom, describe the recurring responsibility.' },
-            rule: { type: 'object', description: 'Structured MonitorRule. Predicate kinds must match the source; for custom use custom_prompt with the check instructions. Use any_of / all_of for composition.' },
-            allowed_actions: { type: 'array', description: 'MonitorAction[] the model is permitted to execute when matches survive. notify_inbox is implicit and need NOT be listed; everything else requires explicit user consent (gmail_archive, gmail_mark_read, gmail_label_add, ha_call_service, wa_send_reply).' },
+            rule: { type: 'object', description: 'Structured MonitorRule: an object with a `kind` plus kind-specific fields. Field names are exact — e.g. gmail: {kind:"gmail_query", q:"in:inbox is:unread -in:spam"} (the field is `q`, NOT `query`); whatsapp: {kind:"wa_unread"}; calendar: {kind:"calendar_event_needs_response"}; custom: {kind:"custom_prompt", prompt:"…"}. Predicate kinds must match the source; use any_of / all_of for composition. Call monitor_describe_sources for the supported kinds per source.' },
+            allowed_actions: { type: 'array', description: 'MonitorAction objects the model may execute when matches survive. Each entry is an OBJECT, not a string — e.g. {kind:"gmail_archive"} or {kind:"gmail_label_add", label:"…"}. Do NOT include notify_inbox (it is always implicitly allowed). Everything else requires explicit user consent (gmail_archive, gmail_mark_read, gmail_label_add, ha_call_service, wa_send_reply).' },
             cadence: {
                 type: 'object',
                 description: 'Cadence policy. Accepts {current, min, max} as numbers (seconds) OR duration strings, plus {adaptive: bool}.',
@@ -424,7 +424,7 @@ export const monitorWatchUpdateTool: ToolDef = {
     input_schema: {
         type: 'object',
         properties: {
-            watch_id: { type: 'string' },
+            watch_id: { type: 'string', description: 'The watch id (mw_…) — the value returned as `id` by monitor_watch_list / monitor_watch_get. Pass it as `watch_id`, not `id`.' },
             title: { type: 'string' },
             target: { type: 'string' },
             rule: { type: 'object', description: 'Full replacement rule. Must be source-compatible.' },
@@ -514,7 +514,7 @@ export const monitorWatchRemoveTool: ToolDef = {
     description: 'Delete a Smart Monitor watch by id. Suppress patterns, audit events, and private state are cascade-deleted with it. If this was the last enabled watch, the Smart Monitor system wake task auto-pauses.',
     input_schema: {
         type: 'object',
-        properties: { watch_id: { type: 'string' } },
+        properties: { watch_id: { type: 'string', description: 'The watch id (mw_…) — the value returned as `id` by monitor_watch_list / monitor_watch_get. Pass it as `watch_id`, not `id`.' } },
         required: ['watch_id'],
     },
     tags: ['monitoring'],

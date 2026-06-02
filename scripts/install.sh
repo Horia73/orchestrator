@@ -300,6 +300,27 @@ install_linux_native_dependencies() {
   else
     log "Could not detect a supported package manager; assuming native dependencies are already installed."
   fi
+
+  install_agent_runtime_tools
+}
+
+# CLI tools the in-app agent shells out to (ripgrep/jq/sqlite3/pdftotext/strings).
+# Best-effort: a package name that differs or is missing on a given distro must
+# never abort the install, hence the trailing `|| true`. The container build
+# installs the same set in the Dockerfile runner stage; this keeps native
+# installs at parity.
+install_agent_runtime_tools() {
+  [ "$(uname -s)" = "Linux" ] || return
+  log "Ensuring agent runtime CLI tools (ripgrep, jq, sqlite3, poppler-utils, binutils)"
+  if command -v apt-get >/dev/null 2>&1; then
+    run_sudo apt-get install -y ripgrep jq sqlite3 poppler-utils binutils || true
+  elif command -v dnf >/dev/null 2>&1; then
+    run_sudo dnf install -y ripgrep jq sqlite poppler-utils binutils || true
+  elif command -v yum >/dev/null 2>&1; then
+    run_sudo yum install -y ripgrep jq sqlite poppler-utils binutils || true
+  elif command -v pacman >/dev/null 2>&1; then
+    run_sudo pacman -Sy --noconfirm ripgrep jq sqlite poppler binutils || true
+  fi
 }
 
 install_docker_packages_if_needed() {

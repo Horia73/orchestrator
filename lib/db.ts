@@ -114,6 +114,16 @@ db.exec(`
         errorMessage TEXT
     );
 
+    -- Heavy per-request transcript (interleaved thinking + tool_call entries and
+    -- the matching content segments) kept OUT of request_logs so the Logs list
+    -- query stays slim. Written once at request completion, read only when a row
+    -- is expanded in the Logs detail. One row per request; cleared with the logs.
+    CREATE TABLE IF NOT EXISTS request_log_reasoning (
+        requestId TEXT PRIMARY KEY,
+        reasoning TEXT,
+        contentSegments TEXT
+    );
+
     CREATE TABLE IF NOT EXISTS agent_threads (
         id TEXT PRIMARY KEY,
         conversationId TEXT NOT NULL,

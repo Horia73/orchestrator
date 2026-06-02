@@ -16,7 +16,9 @@ import {
     type UsageByAgent,
     type UsageByTool,
     LOG_TEXT_MAX_CHARS,
+    LOG_REASONING_MAX_CHARS,
 } from './schema'
+import type { ContentSegment, ReasoningEntry } from '@/lib/types'
 import { normalizeUsage } from './usage-mapper'
 import { estimateCost, type PricingState } from './cost'
 import { getEffectiveRegistry } from '@/lib/models/registry'
@@ -116,6 +118,46 @@ function truncate(s: string | null | undefined): string | null {
     return s.slice(0, LOG_TEXT_MAX_CHARS) + `\n…[truncated, original was ${s.length} chars]`
 }
 
+// Heavy transcript reasoning lives in its own row so the Logs list query never
+// has to read it. The interleaved reasoning is what lets the Logs detail render
+// a background/scheduled run exactly like the main chat instead of collapsing
+// to a flat text-only view.
+export interface LogReasoningExtra {
+    reasoning?: ReasoningEntry[] | null
+    contentSegments?: ContentSegment[] | null
+}
+
+const upsertReasoningStmt = db.prepare(`
+    INSERT INTO request_log_reasoning (requestId, reasoning, contentSegments)
+    VALUES (@requestId, @reasoning, @contentSegments)
+    ON CONFLICT(requestId) DO UPDATE SET
+        reasoning = COALESCE(excluded.reasoning, request_log_reasoning.reasoning),
+        contentSegments = COALESCE(excluded.contentSegments, request_log_reasoning.contentSegments)
+`)
+
+/** Serialize a reasoning/segments array, or null when empty, unserializable, or
+ *  over the size cap — never a partial/corrupt string. */
+function serializeBoundedJson(value: unknown): string | null {
+    if (!Array.isArray(value) || value.length === 0) return null
+    try {
+        const json = JSON.stringify(value)
+        if (json.length > LOG_REASONING_MAX_CHARS) return null
+        return json
+    } catch {
+        return null
+    }
+}
+
+/** Persist (or merge) the per-request interleaved transcript. No-op when there
+ *  is nothing useful to store, so a reasoning-less run leaves no row. */
+function persistRequestReasoning(requestId: string, extra?: LogReasoningExtra): void {
+    if (!extra) return
+    const reasoning = serializeBoundedJson(extra.reasoning)
+    const contentSegments = serializeBoundedJson(extra.contentSegments)
+    if (reasoning === null && contentSegments === null) return
+    upsertReasoningStmt.run({ requestId, reasoning, contentSegments })
+}
+
 const incToolCountStmt = db.prepare(`UPDATE request_logs SET toolCallCount = toolCallCount + 1 WHERE id = ?`)
 const insertToolStmt = db.prepare(`
     INSERT INTO tool_logs (requestId, toolName, success, startedAt, durationMs, errorMessage)
@@ -155,6 +197,10 @@ interface CompleteArgs {
     provider: string
     /** Final assistant content. Saved truncated to LOG_TEXT_MAX_CHARS. */
     outputText?: string | null
+    /** Interleaved thinking + tool_call reasoning, sanitized by the caller. */
+    reasoning?: ReasoningEntry[] | null
+    /** Content segments aligned with the reasoning phases. */
+    contentSegments?: ContentSegment[] | null
 }
 
 const updateCompleteStmt = db.prepare(`
@@ -201,6 +247,10 @@ export function logRequestComplete(args: CompleteArgs): void {
             interactionId: args.interactionId ?? null,
             outputText: truncate(args.outputText),
         })
+        persistRequestReasoning(args.requestId, {
+            reasoning: args.reasoning,
+            contentSegments: args.contentSegments,
+        })
         indexRequestLog(args.requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId: args.requestId })
     })
@@ -217,7 +267,7 @@ const updateFailStmt = db.prepare(`
     WHERE id = @id
 `)
 
-export function logRequestFail(requestId: string, errorMessage: string, endedAt: number, outputText?: string | null): void {
+export function logRequestFail(requestId: string, errorMessage: string, endedAt: number, outputText?: string | null, extra?: LogReasoningExtra): void {
     safe(() => {
         const startedAtRow = db
             .prepare(`SELECT startedAt FROM request_logs WHERE id = ?`)
@@ -230,13 +280,14 @@ export function logRequestFail(requestId: string, errorMessage: string, endedAt:
             errorMessage,
             outputText: truncate(outputText),
         })
+        persistRequestReasoning(requestId, extra)
         indexRequestLog(requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId })
     })
     activeRequestLogIds.delete(requestId)
 }
 
-export function logRequestAbort(requestId: string, endedAt: number, outputText?: string | null): void {
+export function logRequestAbort(requestId: string, endedAt: number, outputText?: string | null, extra?: LogReasoningExtra): void {
     safe(() => {
         const startedAtRow = db
             .prepare(`SELECT startedAt FROM request_logs WHERE id = ?`)
@@ -249,6 +300,7 @@ export function logRequestAbort(requestId: string, endedAt: number, outputText?:
             errorMessage: null,
             outputText: truncate(outputText),
         })
+        persistRequestReasoning(requestId, extra)
         indexRequestLog(requestId)
         emitObservabilityEvent({ type: 'request_completed', requestId })
     })
@@ -408,9 +460,37 @@ export function getToolLogsForRequest(requestId: string): ToolLogRow[] {
     return rows.map(parseToolLogRow)
 }
 
+export interface RequestLogReasoning {
+    reasoning: ReasoningEntry[] | null
+    contentSegments: ContentSegment[] | null
+}
+
+/** Heavy per-request transcript, read only when a Logs row is expanded. */
+export function getRequestLogReasoning(requestId: string): RequestLogReasoning | null {
+    const row = db
+        .prepare(`SELECT reasoning, contentSegments FROM request_log_reasoning WHERE requestId = ?`)
+        .get(requestId) as { reasoning: string | null; contentSegments: string | null } | undefined
+    if (!row) return null
+    const reasoning = parseJsonArray<ReasoningEntry>(row.reasoning)
+    const contentSegments = parseJsonArray<ContentSegment>(row.contentSegments)
+    if (!reasoning && !contentSegments) return null
+    return { reasoning, contentSegments }
+}
+
+function parseJsonArray<T>(value: string | null): T[] | null {
+    if (!value) return null
+    try {
+        const parsed = JSON.parse(value) as unknown
+        return Array.isArray(parsed) && parsed.length > 0 ? (parsed as T[]) : null
+    } catch {
+        return null
+    }
+}
+
 export function clearAllLogs(): { deletedRequests: number; deletedTools: number } {
     const tx = db.transaction(() => {
         const t = db.prepare(`DELETE FROM tool_logs`).run()
+        db.prepare(`DELETE FROM request_log_reasoning`).run()
         const r = db.prepare(`DELETE FROM request_logs`).run()
         return { deletedRequests: r.changes, deletedTools: t.changes }
     })
