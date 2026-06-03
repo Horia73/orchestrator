@@ -429,7 +429,6 @@ function TokensChart({ daily }: { daily: UsageReport["daily"] }) {
     const data = daily.map(d => ({
         date: d.date,
         input: Math.max(0, d.inputTokens - (d.cachedTokens ?? 0)),
-        cached: d.cachedTokens ?? 0,
         output: d.outputTokens,
         thinking: d.thinkingTokens,
     }))
@@ -448,7 +447,6 @@ function TokensChart({ daily }: { daily: UsageReport["daily"] }) {
                     wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
                 />
                 <Area type="monotone" dataKey="input" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25} name="Input" />
-                <Area type="monotone" dataKey="cached" stackId="1" stroke="#06b6d4" fill="#06b6d4" fillOpacity={0.25} name="Cached" />
                 <Area type="monotone" dataKey="output" stackId="1" stroke="#10b981" fill="#10b981" fillOpacity={0.25} name="Output" />
                 <Area type="monotone" dataKey="thinking" stackId="1" stroke="#a855f7" fill="#a855f7" fillOpacity={0.25} name="Thinking" />
             </AreaChart>
