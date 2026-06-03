@@ -18,6 +18,7 @@ import type {
     VideoGenJob,
     VideoGenOptions,
 } from '@/lib/ai/agents/types'
+import type { ContextUsageSnapshot } from '@/lib/types'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { getToolsForBuiltins } from '@/lib/ai/tools/registry'
 import { latestUserMessageWithPortableHistory } from './history'
@@ -230,6 +231,49 @@ function accumulateGeminiUsage(acc: unknown, next: unknown): unknown {
 
 function geminiUsageNumber(value: unknown): number {
     return typeof value === 'number' && Number.isFinite(value) && value > 0 ? value : 0
+}
+
+function geminiUsageNumberOrNull(value: unknown): number | null {
+    return typeof value === 'number' && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function geminiContextUsageSnapshot(args: {
+    usage: unknown
+    provider: string
+    model: string
+    interactionId?: string | null
+}): ContextUsageSnapshot | null {
+    const raw = objectValue(args.usage)
+    if (!raw) return null
+    const inputTokens = geminiUsageNumberOrNull(raw.total_input_tokens)
+    const outputTokens = geminiUsageNumberOrNull(raw.total_output_tokens)
+    const thinkingTokens = geminiUsageNumberOrNull(raw.total_thought_tokens)
+    const cachedTokens = geminiUsageNumberOrNull(raw.total_cached_tokens)
+    const totalTokens = geminiUsageNumberOrNull(raw.total_tokens)
+    if (
+        inputTokens === null &&
+        outputTokens === null &&
+        thinkingTokens === null &&
+        cachedTokens === null &&
+        totalTokens === null
+    ) {
+        return null
+    }
+
+    return {
+        provider: args.provider,
+        model: args.model,
+        source: 'provider-live',
+        accuracy: 'actual',
+        updatedAt: Date.now(),
+        interactionId: args.interactionId ?? undefined,
+        contextTokens: inputTokens,
+        inputTokens,
+        outputTokens,
+        thinkingTokens,
+        cachedTokens,
+        totalTokens,
+    }
 }
 
 function mergeGeminiModality(a: unknown, b: unknown): Array<{ modality: string; tokens: number }> | null {
@@ -680,7 +724,15 @@ export class GoogleProvider implements AIProvider {
                 }
 
                 if (eventType === 'interaction.complete' || eventType === 'interaction.completed') {
-                    usage = accumulateGeminiUsage(usage, usageFromEvent(event))
+                    const interactionUsage = usageFromEvent(event)
+                    usage = accumulateGeminiUsage(usage, interactionUsage)
+                    const snapshot = geminiContextUsageSnapshot({
+                        usage: interactionUsage,
+                        provider: 'google',
+                        model: options.model,
+                        interactionId: currentInteractionId ?? interactionId,
+                    })
+                    if (snapshot) cb.onUsage?.(snapshot)
                 }
 
                 if (eventType === 'error') {

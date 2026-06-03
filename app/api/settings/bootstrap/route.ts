@@ -19,6 +19,7 @@ export async function GET() {
         description: a.description,
         kind: a.kind,
         status: a.status ?? 'active',
+        tier: a.tier ?? 'primary',
         defaultProvider: a.provider,
         defaultModel: a.model,
         defaultThinkingLevel: a.thinkingLevel,

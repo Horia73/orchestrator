@@ -42,6 +42,7 @@ import {
   DropdownMenuItem,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
+import { AnimatedTitle } from "@/components/animated-title"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useRuntimeConfig } from "@/hooks/use-runtime-config"
 import { useInboxUnread } from "@/hooks/use-inbox-unread"
@@ -1019,7 +1020,7 @@ export function AppSidebar() {
                               <span
                                 className={`block truncate ${unread ? "font-semibold" : ""}`}
                               >
-                                {conv.title}
+                                <AnimatedTitle title={conv.title} />
                               </span>
                               {isFiltering && (
                                 <span className="mt-0.5 block truncate text-[12px] font-normal text-foreground/45">

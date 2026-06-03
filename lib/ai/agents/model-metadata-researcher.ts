@@ -15,6 +15,7 @@ export const modelMetadataResearcher: AgentConfig = {
     name: 'Model Metadata Researcher',
     description: 'Researches official AI model metadata (pricing, context, capabilities) for the registry.',
     kind: 'text',
+    tier: 'system',
     buildPrompt: buildModelMetadataResearcherPrompt,
     tools: ['WebFetch'],
     builtins: ['web_fetch', 'web_search'],

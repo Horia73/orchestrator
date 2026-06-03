@@ -46,6 +46,11 @@ import {
 import { weatherSetCalendarContextTool, weatherSetOutfitTool, weatherSetWhyTool, weatherShowTool, weatherStatusTool } from './weather'
 import { getExerciseHistoryTool, getRecentWorkoutsTool, listExerciseHistoryTool } from './workout-history'
 import { applyUpdateTool } from './update-app'
+import { memorySearchTool } from './memory-search'
+import { librarySearchTool } from './library-search'
+import { findPastUploadsTool } from './find-past-uploads'
+import { createBackupTool } from './create-backup'
+import { hostStatusTool } from './host-status'
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -215,3 +220,8 @@ registerTool(getExerciseHistoryTool)
 registerTool(listExerciseHistoryTool)
 registerTool(getRecentWorkoutsTool)
 registerTool(applyUpdateTool)
+registerTool(memorySearchTool)
+registerTool(librarySearchTool)
+registerTool(findPastUploadsTool)
+registerTool(createBackupTool)
+registerTool(hostStatusTool)

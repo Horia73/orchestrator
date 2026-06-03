@@ -57,6 +57,15 @@
                     "capabilities": ["audio"],
                     "intelligenceTier": "frontier",
                     "notes": "Google Lyria 3 Pro full-length music generation. Supports structure, lyrics, and MP3/WAV output."
+                },
+                "gemini-embedding-2": {
+                    "name": "Gemini Embedding 2",
+                    "kinds": ["embedding"],
+                    "contextWindow": 8192,
+                    "pricing": null,
+                    "capabilities": ["embedding", "image", "audio", "video"],
+                    "intelligenceTier": "frontier",
+                    "notes": "Google's natively multimodal embedding model — text, images (PNG/JPEG), PDFs, audio, video into one space. Matryoshka dims 768/1536/3072. Powers semantic memory recall + Library image/file search."
                 }
             }
         },
@@ -78,6 +87,22 @@
                     "capabilities": ["image"],
                     "intelligenceTier": "frontier",
                     "notes": "OpenAI state-of-the-art image generation/editing model. Provider is selected explicitly in agent settings."
+                },
+                "text-embedding-3-large": {
+                    "name": "text-embedding-3-large",
+                    "kinds": ["embedding"],
+                    "pricing": null,
+                    "capabilities": ["embedding"],
+                    "intelligenceTier": "frontier",
+                    "notes": "OpenAI text embeddings (TEXT ONLY — no image/multimodal). Matryoshka dims up to 3072. For memory text recall."
+                },
+                "text-embedding-3-small": {
+                    "name": "text-embedding-3-small",
+                    "kinds": ["embedding"],
+                    "pricing": null,
+                    "capabilities": ["embedding"],
+                    "intelligenceTier": "balanced",
+                    "notes": "OpenAI text embeddings (TEXT ONLY). Cheapest; Matryoshka dims up to 1536. For memory text recall."
                 }
             }
         },

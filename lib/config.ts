@@ -190,6 +190,20 @@ export interface LocationIntelligenceSettings {
   mapsMode: LocationIntelligenceMapsMode
 }
 
+/** Semantic-memory embedding configuration, editable from Settings. */
+export interface MemoryEmbeddingSettings {
+  /** Master switch for automatic recall + the memory_search tool. */
+  enabled: boolean
+  /** Embedding provider. */
+  provider: "google" | "openai"
+  /** Model id, e.g. "gemini-embedding-2". */
+  model: string
+  /** Output dimensionality (768 | 1536 | 3072 — Matryoshka truncation). */
+  dim: number
+  /** Cosine threshold (0..1) for the automatic per-turn recall pass. */
+  threshold: number
+}
+
 export interface AppConfig {
   assistantName: string
   userName: string
@@ -207,6 +221,8 @@ export interface AppConfig {
   favorites: string[]
   /** Smart Monitor app-wide settings (quiet hours, future flags). */
   smartMonitor?: SmartMonitorSettings
+  /** Semantic memory embedding settings. Absent => env/defaults apply. */
+  memoryEmbedding?: MemoryEmbeddingSettings
   /** Optional location history intelligence. Absent by default; user opt-in only. */
   locationIntelligence?: LocationIntelligenceSettings
   updatedAt: number
@@ -433,6 +449,9 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
     smartMonitor: normalizeSmartMonitorSettings(parsed.smartMonitor),
     locationIntelligence: normalizeLocationIntelligenceSettings(
       (parsed as { locationIntelligence?: unknown }).locationIntelligence
+    ),
+    memoryEmbedding: normalizeMemoryEmbeddingSettings(
+      (parsed as { memoryEmbedding?: unknown }).memoryEmbedding
     ),
   }
 }
@@ -743,6 +762,123 @@ export function updateConfig(newConfig: Partial<AppConfig>): AppConfig {
   emitAppEvent({ type: "config.updated" })
   emitAppEvent({ type: "settings.changed", reason: "config" })
   return updated
+}
+
+// --- Semantic memory embedding settings ---
+
+export type EmbeddingProviderId = "google" | "openai"
+
+export interface EmbeddingModelOption {
+  provider: EmbeddingProviderId
+  model: string
+  label: string
+  /** Supported output dimensionalities (Matryoshka). First entry = default. */
+  dims: number[]
+}
+
+/**
+ * Curated embedding-capable models per provider. We deliberately do NOT live-
+ * discover from provider model lists (those are dominated by chat models and
+ * dims aren't reported) — this is the filtered "embeddings only" set with known
+ * Matryoshka dimensions. The Settings card shows entries whose provider has a
+ * key configured.
+ */
+export const EMBEDDING_MODEL_OPTIONS: ReadonlyArray<EmbeddingModelOption> = [
+  {
+    provider: "google",
+    model: "gemini-embedding-2",
+    label: "Gemini Embedding 2 (multilingual, multimodal)",
+    dims: [768, 1536, 3072],
+  },
+  {
+    provider: "openai",
+    model: "text-embedding-3-large",
+    label: "OpenAI text-embedding-3-large",
+    dims: [3072, 1536, 768, 256],
+  },
+  {
+    provider: "openai",
+    model: "text-embedding-3-small",
+    label: "OpenAI text-embedding-3-small",
+    dims: [1536, 768, 256],
+  },
+]
+
+/** Supported dims for a model id (Matryoshka). Falls back to [768]. */
+export function embeddingDimsForModel(model: string): number[] {
+  return (
+    EMBEDDING_MODEL_OPTIONS.find((o) => o.model === model)?.dims ?? [768]
+  )
+}
+
+const MEMORY_EMBEDDING_DEFAULTS: MemoryEmbeddingSettings = {
+  enabled: true,
+  provider: "google",
+  model: "gemini-embedding-2",
+  dim: 768,
+  threshold: 0.62,
+}
+
+function coerceProvider(value: unknown): EmbeddingProviderId {
+  return value === "openai" ? "openai" : "google"
+}
+
+function coerceDim(model: string, rawDim: unknown, fallback: number): number {
+  const dims = embeddingDimsForModel(model)
+  const n = Number(rawDim)
+  if (Number.isFinite(n) && dims.includes(n)) return n
+  return dims.includes(fallback) ? fallback : dims[0]
+}
+
+function normalizeMemoryEmbeddingSettings(
+  value: unknown
+): MemoryEmbeddingSettings | undefined {
+  if (!value || typeof value !== "object" || Array.isArray(value))
+    return undefined
+  const raw = value as Partial<MemoryEmbeddingSettings>
+  const model =
+    typeof raw.model === "string" && raw.model.trim()
+      ? raw.model.trim()
+      : MEMORY_EMBEDDING_DEFAULTS.model
+  const threshold =
+    typeof raw.threshold === "number" && Number.isFinite(raw.threshold)
+      ? Math.min(1, Math.max(0, raw.threshold))
+      : MEMORY_EMBEDDING_DEFAULTS.threshold
+  return {
+    enabled: typeof raw.enabled === "boolean" ? raw.enabled : true,
+    provider: coerceProvider(raw.provider),
+    model,
+    dim: coerceDim(model, raw.dim, MEMORY_EMBEDDING_DEFAULTS.dim),
+    threshold,
+  }
+}
+
+function memoryEmbeddingFromEnv(): MemoryEmbeddingSettings {
+  const model =
+    process.env.ORCHESTRATOR_MEMORY_EMBED_MODEL?.trim() ||
+    MEMORY_EMBEDDING_DEFAULTS.model
+  const thrRaw = Number(process.env.ORCHESTRATOR_MEMORY_RECALL_THRESHOLD)
+  const threshold = Number.isFinite(thrRaw)
+    ? Math.min(1, Math.max(0, thrRaw))
+    : MEMORY_EMBEDDING_DEFAULTS.threshold
+  return {
+    enabled: (process.env.ORCHESTRATOR_MEMORY_RECALL ?? "on").toLowerCase() !== "off",
+    provider: coerceProvider(process.env.ORCHESTRATOR_MEMORY_EMBED_PROVIDER),
+    model,
+    dim: coerceDim(model, process.env.ORCHESTRATOR_MEMORY_EMBED_DIM, MEMORY_EMBEDDING_DEFAULTS.dim),
+    threshold,
+  }
+}
+
+/**
+ * Resolved embedding settings: the Settings/config value when present, else the
+ * env-derived defaults. `ORCHESTRATOR_MEMORY_RECALL=off` is a hard ops
+ * kill-switch that disables recall regardless of the UI toggle.
+ */
+export function getMemoryEmbeddingSettings(): MemoryEmbeddingSettings {
+  const base = getConfig().memoryEmbedding ?? memoryEmbeddingFromEnv()
+  const killed = (process.env.ORCHESTRATOR_MEMORY_RECALL ?? "").toLowerCase() === "off"
+  return { ...base, enabled: base.enabled && !killed }
 }
 
 /** Get the API key for the active provider from environment */

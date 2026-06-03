@@ -62,6 +62,34 @@ export function updateConversationArchiveState(
   })
 }
 
+export async function requestConversationTitle(
+  conversationId: string,
+  body: {
+    userText?: string
+    assistantText?: string
+    attachmentNames?: string[]
+    currentTitle?: string
+  }
+): Promise<{ title: string; changed: boolean } | null> {
+  try {
+    const res = await fetch(
+      `/api/conversations/${encodeURIComponent(conversationId)}/title`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      }
+    )
+    if (!res.ok) return null
+    const data = await res.json()
+    return typeof data?.title === "string"
+      ? { title: data.title, changed: Boolean(data.changed) }
+      : null
+  } catch {
+    return null
+  }
+}
+
 export function stopChatStream(conversationId: string) {
   return fetch("/api/chat/stop", {
     method: "POST",

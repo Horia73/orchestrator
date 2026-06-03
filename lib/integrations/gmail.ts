@@ -154,6 +154,12 @@ export interface GmailSearchResult {
     to: string
     date: string
     snippet: string
+    /** Raw RFC 2369 List-Unsubscribe header value ('' when absent). Presence
+     *  means the sender offers an unsubscribe mechanism — see gmailGetUnsubscribeInfo. */
+    listUnsubscribe: string
+    /** Raw RFC 8058 List-Unsubscribe-Post header value ('' when absent).
+     *  "List-Unsubscribe=One-Click" here enables one-click HTTPS unsubscribe. */
+    listUnsubscribePost: string
 }
 
 export interface GmailThreadMessage {
@@ -168,6 +174,8 @@ export interface GmailThreadMessage {
     snippet: string
     body: string
     attachments: GmailAttachmentInfo[]
+    listUnsubscribe: string
+    listUnsubscribePost: string
 }
 
 export interface GmailCreateDraftInput {
@@ -446,6 +454,8 @@ export async function gmailReadThread(threadId: string, maxChars: number): Promi
             snippet: message.snippet ?? '',
             body: extractMessageText(message.payload),
             attachments: collectAttachments(message.payload, message.id),
+            listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
+            listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
         }
     })
 
@@ -631,6 +641,219 @@ export async function gmailCreateLabel(name: string): Promise<GmailLabel> {
     })
 }
 
+// ---------------------------------------------------------------------------
+// Unsubscribe — RFC 2369 (List-Unsubscribe) + RFC 8058 (one-click).
+//
+// The model can read List-Unsubscribe headers (surfaced on GmailSearch /
+// GmailReadThread) but must NOT POST arbitrary URLs itself. These helpers do
+// the parsing and the actual unsubscribe under guard:
+//   - one_click → RFC 8058 HTTPS POST `List-Unsubscribe=One-Click`, behind an
+//     HTTPS-only + private-address (SSRF) guard.
+//   - mailto    → an unsubscribe email sent from the connected account via the
+//     normal authenticated send path.
+//   - link_only → a web link returned for the user to open (we never auto-GET
+//     an unknown unsubscribe page; it may be a confirmation flow).
+//   - none      → no mechanism; caller should fall back to auto-archive/filter.
+// ---------------------------------------------------------------------------
+
+export type GmailUnsubscribeMethod = 'one_click' | 'mailto' | 'link_only' | 'none'
+
+export interface GmailUnsubscribeTarget {
+    method: GmailUnsubscribeMethod
+    httpsUrl: string | null
+    mailto: { to: string; subject: string } | null
+    oneClick: boolean
+}
+
+export interface GmailUnsubscribeInfo extends GmailUnsubscribeTarget {
+    messageId: string
+    from: string
+    subject: string
+    hasUnsubscribe: boolean
+}
+
+export interface GmailUnsubscribeResult {
+    messageId: string
+    from: string
+    method: GmailUnsubscribeMethod
+    performed: boolean
+    httpStatus?: number
+    mailtoSentMessageId?: string
+    link?: string
+    detail: string
+}
+
+/** HTTPS-only SSRF guard for the one-click unsubscribe POST. RFC 8058 mandates
+ *  HTTPS; we additionally block localhost and literal private/link-local IPs so
+ *  a crafted List-Unsubscribe header can't turn the connected account into an
+ *  internal-network probe. Mirrors the web-source guard. */
+export function isSafeUnsubscribeHttpsUrl(raw: string): { ok: true; url: URL } | { ok: false; reason: string } {
+    let url: URL
+    try {
+        url = new URL(raw)
+    } catch {
+        return { ok: false, reason: 'invalid URL' }
+    }
+    if (url.protocol !== 'https:') return { ok: false, reason: `protocol ${url.protocol} not allowed (RFC 8058 one-click requires HTTPS)` }
+    const host = url.hostname.toLowerCase()
+    if (host === 'localhost' || host === '::1') return { ok: false, reason: 'localhost blocked' }
+    const ipv4 = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/)
+    if (ipv4) {
+        const [a, b] = ipv4.slice(1).map(Number)
+        if (
+            a === 10 ||
+            a === 127 ||
+            (a === 169 && b === 254) ||
+            (a === 172 && b >= 16 && b <= 31) ||
+            (a === 192 && b === 168) ||
+            a === 0 ||
+            a >= 224
+        ) {
+            return { ok: false, reason: 'private/link-local address blocked' }
+        }
+    }
+    if (host.startsWith('fe80:') || host.startsWith('fc') || host.startsWith('fd')) {
+        return { ok: false, reason: 'private/link-local address blocked' }
+    }
+    return { ok: true, url }
+}
+
+/** Parse RFC 2369 List-Unsubscribe (angle-bracketed, comma-separated) plus the
+ *  RFC 8058 List-Unsubscribe-Post header into a structured target. Pure. */
+export function parseListUnsubscribe(listUnsubscribe: string, listUnsubscribePost: string): GmailUnsubscribeTarget {
+    const entries = [...(listUnsubscribe || '').matchAll(/<([^>]+)>/g)].map(m => m[1].trim()).filter(Boolean)
+    let httpsUrl: string | null = null
+    let mailto: { to: string; subject: string } | null = null
+    for (const entry of entries) {
+        if (/^https:\/\//i.test(entry)) {
+            if (!httpsUrl) httpsUrl = entry
+        } else if (/^mailto:/i.test(entry)) {
+            if (!mailto) {
+                try {
+                    const u = new URL(entry)
+                    const to = decodeURIComponent(u.pathname).trim()
+                    const subject = u.searchParams.get('subject')?.trim() || 'unsubscribe'
+                    if (to) mailto = { to, subject }
+                } catch {
+                    /* malformed mailto — ignore */
+                }
+            }
+        }
+    }
+    // RFC 8058: presence of "List-Unsubscribe=One-Click" enables one-click POST.
+    const oneClick = /one-?click/i.test(listUnsubscribePost || '')
+    let method: GmailUnsubscribeMethod = 'none'
+    if (httpsUrl && oneClick) method = 'one_click'
+    else if (mailto) method = 'mailto'
+    else if (httpsUrl) method = 'link_only'
+    return { method, httpsUrl, mailto, oneClick }
+}
+
+async function gmailFetchUnsubscribeHeaders(messageId: string): Promise<{
+    from: string
+    subject: string
+    listUnsubscribe: string
+    listUnsubscribePost: string
+}> {
+    const params = new URLSearchParams({ format: 'metadata' })
+    for (const header of ['From', 'Subject', 'List-Unsubscribe', 'List-Unsubscribe-Post']) {
+        params.append('metadataHeaders', header)
+    }
+    const message = await gmailApi<GmailMessage>(`/users/me/messages/${encodeURIComponent(messageId)}?${params.toString()}`)
+    const headers = message.payload?.headers ?? []
+    return {
+        from: getHeader(headers, 'From'),
+        subject: getHeader(headers, 'Subject'),
+        listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
+        listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
+    }
+}
+
+/** Read-only: report whether and how a sender can be unsubscribed from. */
+export async function gmailGetUnsubscribeInfo(messageId: string): Promise<GmailUnsubscribeInfo> {
+    const cleanId = cleanHeaderValue(messageId)
+    if (!cleanId) throw new Error('Message ID is required.')
+    const h = await gmailFetchUnsubscribeHeaders(cleanId)
+    const target = parseListUnsubscribe(h.listUnsubscribe, h.listUnsubscribePost)
+    return {
+        messageId: cleanId,
+        from: h.from,
+        subject: h.subject,
+        hasUnsubscribe: target.method !== 'none',
+        ...target,
+    }
+}
+
+/** Perform the unsubscribe. Call only after explicit user approval. */
+export async function gmailUnsubscribe(messageId: string): Promise<GmailUnsubscribeResult> {
+    const info = await gmailGetUnsubscribeInfo(messageId)
+
+    if (info.method === 'one_click' && info.httpsUrl) {
+        const safe = isSafeUnsubscribeHttpsUrl(info.httpsUrl)
+        if (!safe.ok) throw new Error(`Refusing one-click unsubscribe: ${safe.reason}.`)
+        const controller = new AbortController()
+        const timer = setTimeout(() => controller.abort(), 10_000)
+        try {
+            const res = await fetch(safe.url, {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                body: 'List-Unsubscribe=One-Click',
+                redirect: 'follow',
+                signal: controller.signal,
+            })
+            return {
+                messageId: info.messageId,
+                from: info.from,
+                method: 'one_click',
+                performed: res.ok,
+                httpStatus: res.status,
+                detail: res.ok
+                    ? `One-click unsubscribe POST succeeded (HTTP ${res.status}).`
+                    : `Unsubscribe endpoint returned HTTP ${res.status}; the sender may not have honored it.`,
+            }
+        } finally {
+            clearTimeout(timer)
+        }
+    }
+
+    if (info.method === 'mailto' && info.mailto) {
+        const to = info.mailto.to.split(',').map(s => s.trim()).filter(Boolean)
+        if (to.length === 0) throw new Error('Unsubscribe mailto had no usable recipient.')
+        const sent = await gmailSendMessage({
+            to,
+            subject: info.mailto.subject || 'unsubscribe',
+            body: 'Please unsubscribe this address from your mailing list.',
+        })
+        return {
+            messageId: info.messageId,
+            from: info.from,
+            method: 'mailto',
+            performed: true,
+            mailtoSentMessageId: sent.messageId,
+            detail: `Sent an unsubscribe email to ${to.join(', ')}.`,
+        }
+    }
+
+    if (info.method === 'link_only' && info.httpsUrl) {
+        return {
+            messageId: info.messageId,
+            from: info.from,
+            method: 'link_only',
+            performed: false,
+            link: info.httpsUrl,
+            detail: 'This sender only offers a web unsubscribe link (no one-click). Open the link to finish, or set up auto-archive instead.',
+        }
+    }
+
+    return {
+        messageId: info.messageId,
+        from: info.from,
+        method: 'none',
+        performed: false,
+        detail: 'No List-Unsubscribe mechanism on this message. Offer to auto-archive future mail from this sender, or create a Gmail filter, instead.',
+    }
+}
+
 export async function gmailDownloadAttachment(messageId: string, attachmentId: string): Promise<GmailAttachmentDownload> {
     const cleanMessageId = cleanHeaderValue(messageId)
     const cleanAttachmentId = cleanHeaderValue(attachmentId)
@@ -650,7 +873,9 @@ export async function gmailDownloadAttachment(messageId: string, attachmentId: s
 
 async function gmailGetMessageMetadata(id: string): Promise<GmailSearchResult> {
     const params = new URLSearchParams({ format: 'metadata' })
-    for (const header of ['Subject', 'From', 'To', 'Date']) params.append('metadataHeaders', header)
+    for (const header of ['Subject', 'From', 'To', 'Date', 'List-Unsubscribe', 'List-Unsubscribe-Post']) {
+        params.append('metadataHeaders', header)
+    }
 
     const message = await gmailApi<GmailMessage>(`/users/me/messages/${encodeURIComponent(id)}?${params.toString()}`)
     const headers = message.payload?.headers ?? []
@@ -663,6 +888,8 @@ async function gmailGetMessageMetadata(id: string): Promise<GmailSearchResult> {
         to: getHeader(headers, 'To'),
         date: getHeader(headers, 'Date'),
         snippet: message.snippet ?? '',
+        listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
+        listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
     }
 }
 

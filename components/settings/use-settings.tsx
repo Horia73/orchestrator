@@ -12,7 +12,7 @@ import type {
   RuntimeConfig,
   ThinkingLevel,
 } from "@/lib/config"
-import type { AgentKind, AgentStatus } from "@/lib/ai/agents/types"
+import type { AgentKind, AgentStatus, AgentTier } from "@/lib/ai/agents/types"
 import { useAppEvent } from "@/hooks/use-app-events"
 import {
   RESEARCH_EVENTS_STORAGE_KEY,
@@ -33,6 +33,7 @@ export interface AgentInfo {
   description: string
   kind: AgentKind
   status: AgentStatus
+  tier: AgentTier
   defaultProvider?: string
   defaultModel?: string
   defaultThinkingLevel?: ThinkingLevel

@@ -1409,6 +1409,47 @@ export function setConversationArchived(
   return storedArchivedAt
 }
 
+export function setConversationTitle(
+  id: string,
+  title: string,
+  expectedTitle?: string
+): string | null {
+  const cleaned = title.replace(/\s+/g, " ").trim().slice(0, 120)
+  if (!cleaned) return null
+
+  // Optimistic guard: when `expectedTitle` is supplied, only overwrite if the
+  // stored title still matches it. Keeps auto-naming from clobbering a title
+  // the user (or a prior run) already changed. The origin filter keeps us off
+  // system-owned conversations (scheduled runs, inbox).
+  db.prepare(
+    `
+        UPDATE conversations
+        SET title = @title
+        WHERE id = @id
+          AND (origin IS NULL OR origin = 'user')
+          AND (@expectedTitle IS NULL OR title = @expectedTitle)
+    `
+  ).run({ id, title: cleaned, expectedTitle: expectedTitle ?? null })
+
+  const row = db
+    .prepare(
+      "SELECT title FROM conversations WHERE id = ? AND (origin IS NULL OR origin = 'user')"
+    )
+    .get(id) as { title: string } | undefined
+  const storedTitle = row?.title ?? null
+
+  // Only broadcast when our write actually landed — a no-op (guard miss) must
+  // not flicker other tabs back and forth.
+  if (storedTitle === cleaned) {
+    emitChatEvent({
+      type: "conversation_title",
+      payload: { conversationId: id, title: cleaned },
+    })
+  }
+
+  return storedTitle
+}
+
 export function markConversationRead(
   id: string,
   readAt = Date.now()

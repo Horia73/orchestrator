@@ -64,6 +64,28 @@ export interface ContextCompactionReasoningEntry {
   at: number
 }
 
+export interface MemoryRecallHit {
+  /** Stable memory-index chunk id when available; old saved entries may omit it. */
+  id?: string
+  /** "file › heading" label for the recalled chunk. */
+  title: string
+  /** Source memory file the chunk came from. */
+  source: string
+  /** Cosine similarity to the current message (0..1). */
+  score: number
+  /** Recalled chunk text shown in the UI. Old saved entries may still be clipped. */
+  snippet: string
+}
+
+export interface MemoryRecallReasoningEntry {
+  type: "memory_recall"
+  /** Stable item id (used as React key and persistence merge key). */
+  id: string
+  /** Reasoning phase index; increments when model starts emitting content. */
+  phase: number
+  hits: MemoryRecallHit[]
+}
+
 export interface ToolStreamDelta {
   stream: "stdout" | "stderr" | "pty" | "message"
   text: string
@@ -172,6 +194,7 @@ export type ReasoningEntry =
   | ToolCallReasoningEntry
   | AgentCallReasoningEntry
   | ContextCompactionReasoningEntry
+  | MemoryRecallReasoningEntry
 
 export interface Message {
   id: string

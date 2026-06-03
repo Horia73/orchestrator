@@ -2,6 +2,7 @@ import { MONITORING_DOCTRINE } from '@/lib/integrations/doctrines/monitoring'
 import { SCHEDULING_DOCTRINE } from '@/lib/integrations/doctrines/scheduling'
 import { WATCHLIST_DOCTRINE } from '@/lib/integrations/doctrines/watchlist'
 import { MICROSCRIPTS_DOCTRINE } from '@/lib/integrations/doctrines/microscripts'
+import { APP_GUIDE_DOCTRINE } from '@/lib/integrations/doctrines/app-guide'
 import { MEDIA_GENERATION_DOCTRINE } from '@/lib/integrations/doctrines/media-generation'
 import { BROWSER_AGENT_DOCTRINE } from '@/lib/integrations/doctrines/browser-agent'
 import { RECIPE_DOCTRINE } from '@/lib/integrations/doctrines/recipe'
@@ -29,6 +30,7 @@ export type SubsystemId =
     | 'monitoring'
     | 'scheduling'
     | 'microscripts'
+    | 'app_guide'
     // Doctrine-only "playbooks": no tools of their own, just heavy guidance that
     // used to sit always-on in the base prompt. Activated on demand like any
     // other capability so the orchestrator pays for them only when relevant.
@@ -120,6 +122,13 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'microscript_run_now',
             'microscript_get_run',
         ],
+    },
+    {
+        id: 'app_guide',
+        label: 'App & host guide',
+        capability: 'Self-knowledge about Orchestrator itself: what each page/Settings tab does and where a feature lives, how backup/restore/factory-reset work (you can create a backup; restore + factory reset stay user-only), and the host_status tool for a live machine snapshot. Activate when the user asks what the app can do, where to do something in the UI, how to back up / reset, or how the server/disk/memory is doing.',
+        doctrine: APP_GUIDE_DOCTRINE,
+        toolIds: ['host_status'],
     },
     // --- Doctrine-only playbooks (no tools) ---------------------------------
     {

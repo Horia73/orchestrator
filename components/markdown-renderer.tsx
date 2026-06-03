@@ -11,6 +11,38 @@ import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { appApiPath, appPath } from "@/lib/app-path"
 import type { Components } from "react-markdown"
+import type { Attachment } from "@/lib/types"
+
+// ---------------------------------------------------------------------------
+// Inline image preview
+//
+// Images an agent embeds inline as markdown (e.g. `![](/api/uploads/<id>)`)
+// render as plain <img> tags with no way to open them in the file preview
+// lightbox. A surface that wants those images clickable (the chat view) wraps
+// its content in MarkdownImagePreviewProvider; MarkdownImage then reconstructs
+// a minimal Attachment from the upload URL and hands it to the provided
+// handler. Surfaces without a provider keep the previous static behavior.
+// ---------------------------------------------------------------------------
+
+type MarkdownImageClickHandler = (attachment: Attachment) => void
+const MarkdownImageClickContext =
+  React.createContext<MarkdownImageClickHandler | null>(null)
+
+export function MarkdownImagePreviewProvider({
+  onPreview,
+  children,
+}: {
+  onPreview: MarkdownImageClickHandler
+  children: React.ReactNode
+}) {
+  return (
+    <MarkdownImageClickContext.Provider value={onPreview}>
+      {children}
+    </MarkdownImageClickContext.Provider>
+  )
+}
+
+const UPLOAD_IMAGE_ID_RE = /\/api\/uploads\/([^/?#]+)/
 
 // ---------------------------------------------------------------------------
 // KaTeX CSS (loaded once)
@@ -140,11 +172,16 @@ function CodeBlock({ language, code }: { language: string; code: string }) {
 }
 
 function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
+  const onPreview = React.useContext(MarkdownImageClickContext)
   const [failed, setFailed] = React.useState(false)
-  const imageSrc = typeof src === "string" ? appPath(src) : undefined
+  const rawSrc = typeof src === "string" ? src : undefined
+  const imageSrc = rawSrc ? appPath(rawSrc) : undefined
   const isWhatsAppQr =
     typeof imageSrc === "string" &&
     imageSrc.includes("/api/integrations/whatsapp/qr")
+
+  const uploadId = rawSrc?.match(UPLOAD_IMAGE_ID_RE)?.[1]
+  const canPreview = !!onPreview && !!uploadId && !isWhatsAppQr
 
   if (!imageSrc) return null
   if (failed) {
@@ -155,13 +192,36 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
     )
   }
 
+  const handleClick =
+    canPreview && uploadId
+      ? () => {
+          const id = decodeURIComponent(uploadId)
+          const ext = id.includes(".")
+            ? id.slice(id.lastIndexOf(".") + 1).toLowerCase()
+            : ""
+          onPreview?.({
+            id,
+            filename: alt || id,
+            mimeType: ext ? `image/${ext === "jpg" ? "jpeg" : ext}` : "image/*",
+            size: 0,
+            type: "image",
+          })
+        }
+      : undefined
+
   return (
     // eslint-disable-next-line @next/next/no-img-element
     <img
       src={imageSrc}
       alt={alt || ""}
-      className="my-2 max-w-full rounded-lg"
+      className={cn(
+        "my-2 max-w-full rounded-lg",
+        canPreview && "cursor-zoom-in transition-opacity hover:opacity-90"
+      )}
       onError={() => setFailed(true)}
+      onClick={handleClick}
+      role={canPreview ? "button" : undefined}
+      title={canPreview ? "Open image" : undefined}
     />
   )
 }

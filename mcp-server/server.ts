@@ -13,6 +13,7 @@ import {
 
 import type { ToolExecutionContext } from '@/lib/ai/agents/types'
 import { delegateToTool } from '@/lib/ai/tools/delegate-to'
+import { findPastUploadsTool, executeFindPastUploads } from '@/lib/ai/tools/find-past-uploads'
 import {
     cancelTaskTool,
     executeCancelTask,
@@ -32,7 +33,7 @@ const server = new Server(
     { capabilities: { tools: {} } }
 )
 
-const TOOL_DEFS = [delegateToTool, scheduleTaskTool, listTasksTool, cancelTaskTool]
+const TOOL_DEFS = [delegateToTool, scheduleTaskTool, listTasksTool, cancelTaskTool, findPastUploadsTool]
 
 server.setRequestHandler(ListToolsRequestSchema, async () => ({
     tools: TOOL_DEFS.map(tool => ({
@@ -69,6 +70,9 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
     }
     if (toolName === cancelTaskTool.name) {
         return toolResultToContent(await executeCancelTask(toolArgs))
+    }
+    if (toolName === findPastUploadsTool.name) {
+        return toolResultToContent(executeFindPastUploads(toolArgs))
     }
 
     if (toolName !== delegateToTool.name) {

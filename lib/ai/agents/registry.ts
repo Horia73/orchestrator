@@ -15,6 +15,7 @@ import { modelMetadataResearcher } from './model-metadata-researcher'
 import { inboxAgent } from './inbox-agent'
 import { smartMonitorAgent } from './smart-monitor-agent'
 import { audioContextAgent } from './audio-context-agent'
+import { conversationNamer } from './conversation-namer'
 
 // ---------------------------------------------------------------------------
 // Agent Registry
@@ -35,6 +36,7 @@ register(modelMetadataResearcher)
 register(inboxAgent)
 register(smartMonitorAgent)
 register(audioContextAgent)
+register(conversationNamer)
 register(multipurpose)
 register(coder)
 register(conciergeAgent)

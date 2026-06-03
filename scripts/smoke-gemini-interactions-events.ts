@@ -17,6 +17,7 @@ const firstRoundUsage = {
     total_input_tokens: 3,
     total_output_tokens: 1,
     total_thought_tokens: 2,
+    total_cached_tokens: 1,
     total_tokens: 6,
 }
 
@@ -24,6 +25,7 @@ const secondRoundUsage = {
     total_input_tokens: 5,
     total_output_tokens: 4,
     total_thought_tokens: 0,
+    total_cached_tokens: 2,
     total_tokens: 9,
 }
 
@@ -118,6 +120,7 @@ const thoughts: string[] = []
 const thinkingDone: number[] = []
 const toolCalls: ToolCallInfo[] = []
 const toolResults: Array<{ id: string; name: string; result: ToolResult }> = []
+const usageSnapshots: Array<Parameters<NonNullable<StreamCallbacks['onUsage']>>[0]> = []
 let doneMeta: Parameters<StreamCallbacks['onDone']>[0] | null = null
 
 const callbacks: StreamCallbacks = {
@@ -126,6 +129,7 @@ const callbacks: StreamCallbacks = {
     onContent: (text) => contents.push(text),
     onToolCall: (toolCall) => toolCalls.push(toolCall),
     onToolResult: (id, name, result) => toolResults.push({ id, name, result }),
+    onUsage: (usage) => usageSnapshots.push(usage),
     onDone: (meta) => { doneMeta = meta },
     onError: (error) => { throw new Error(error) },
 }
@@ -161,6 +165,31 @@ assert.deepEqual(toolResults, [
         result: { success: false, error: 'Unknown tool: lookup' },
     },
 ])
+assert.deepEqual(
+    usageSnapshots.map((usage) => ({
+        interactionId: usage.interactionId,
+        contextTokens: usage.contextTokens,
+        inputTokens: usage.inputTokens,
+        cachedTokens: usage.cachedTokens,
+        totalTokens: usage.totalTokens,
+    })),
+    [
+        {
+            interactionId: 'int_tool',
+            contextTokens: 3,
+            inputTokens: 3,
+            cachedTokens: 1,
+            totalTokens: 6,
+        },
+        {
+            interactionId: 'int_final',
+            contextTokens: 5,
+            inputTokens: 5,
+            cachedTokens: 2,
+            totalTokens: 9,
+        },
+    ]
+)
 assert.equal(contents.join(''), 'Final answer.')
 assert.deepEqual(doneMeta, {
     sessionId: 'int_final',
@@ -168,6 +197,7 @@ assert.deepEqual(doneMeta, {
         total_input_tokens: 8,
         total_output_tokens: 5,
         total_thought_tokens: 2,
+        total_cached_tokens: 3,
         total_tokens: 15,
     },
     thinkingDuration: 1,

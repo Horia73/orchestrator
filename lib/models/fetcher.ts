@@ -50,6 +50,12 @@ function classifyGoogleModel(m: GoogleApiModel): ModelKind[] {
     const id = m.name.replace(/^models\//, '').toLowerCase()
     const methods = new Set(m.supportedGenerationMethods ?? [])
 
+    // Embeddings — the embedContent method (or an *embedding* name) is the
+    // signal. Tagged as their own kind so they stay OUT of the chat/agent model
+    // pickers (which require kind/capability 'text') and surface only in the
+    // dedicated embedding picker (Settings → Memory).
+    if (methods.has('embedContent') || id.includes('embedding')) return ['embedding']
+
     // Video — long-running predict with veo prefix.
     if (methods.has('predictLongRunning') || id.startsWith('veo-')) return ['video']
 

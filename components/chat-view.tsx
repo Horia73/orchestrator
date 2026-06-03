@@ -41,6 +41,7 @@ import { ChatInput } from "@/components/chat-input"
 import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
 import { FilePreviewModal } from "@/components/file-preview-modal"
+import { MarkdownImagePreviewProvider } from "@/components/markdown-renderer"
 import { ArtifactPanel as AntArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
@@ -2081,6 +2082,7 @@ export function ChatView() {
 
   return (
     <ConversationArtifactsProvider conversationId={conversationId ?? ""}>
+      <MarkdownImagePreviewProvider onPreview={setPreviewAttachment}>
       <div
         ref={layoutContainerRef}
         className={cn(
@@ -2378,6 +2380,7 @@ export function ChatView() {
           onClose={() => setPreviewAttachment(null)}
         />
       </div>
+      </MarkdownImagePreviewProvider>
     </ConversationArtifactsProvider>
   )
 }

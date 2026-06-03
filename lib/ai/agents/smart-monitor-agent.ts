@@ -16,4 +16,5 @@ export const smartMonitorAgent: AgentConfig = {
     id: 'smart-monitor-agent',
     name: 'Smart Monitor',
     description: 'Wakes on Smart Monitor matches; decides notify/action.',
+    tier: 'system',
 }

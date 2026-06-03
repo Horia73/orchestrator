@@ -16,4 +16,5 @@ export const inboxAgent: AgentConfig = {
     id: 'inbox-agent',
     name: 'Inbox',
     description: 'Continues inline replies inside Inbox items (no chat fork).',
+    tier: 'system',
 }

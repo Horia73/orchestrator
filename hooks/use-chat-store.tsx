@@ -8,6 +8,7 @@ import type {
   ContextCompactionReasoningEntry,
   ContextUsageSnapshot,
   Conversation,
+  MemoryRecallReasoningEntry,
   Message,
   ToolStreamDelta,
 } from "@/lib/types"
@@ -25,6 +26,7 @@ import {
   fetchConversationMessageDetails,
   fetchConversationMessagePage,
   fetchConversationSummaries,
+  requestConversationTitle,
   startChatStreamRequest,
   stopChatStream,
   updateConversationArchiveState,
@@ -321,6 +323,45 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       }
     },
     [updateUnreadConversationIds]
+  )
+
+  const applyConversationTitle = React.useCallback(
+    (id: string, title: string) => {
+      const clean = title.trim()
+      if (!clean) return
+      dispatch({ type: "SET_CONVERSATION_TITLE", conversationId: id, title: clean })
+    },
+    []
+  )
+
+  // Ask the Conversation Namer to generate a sidebar title for a freshly
+  // created conversation, then animate it in. Best-effort: any failure leaves
+  // the instant first-words/filename seed in place. `seed.currentTitle` lets
+  // the server refuse to overwrite a title that has since changed.
+  const autoNameConversation = React.useCallback(
+    (seed: {
+      conversationId: string
+      currentTitle: string
+      userText: string
+      attachmentNames: string[]
+      assistantText?: string
+    }) => {
+      void requestConversationTitle(seed.conversationId, {
+        userText: seed.userText,
+        assistantText: seed.assistantText,
+        attachmentNames: seed.attachmentNames,
+        currentTitle: seed.currentTitle,
+      })
+        .then((res) => {
+          if (res?.title && res.title !== seed.currentTitle) {
+            applyConversationTitle(seed.conversationId, res.title)
+          }
+        })
+        .catch((err) => {
+          console.error("Auto-name failed", err)
+        })
+    },
+    [applyConversationTitle]
   )
 
   const persistConversationReadState = React.useCallback(
@@ -1095,6 +1136,20 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             )
             reconcileConversationSummaries("after archive-state update")
           }
+        } else if (data.type === "conversation_title") {
+          reconcileUnknownConversation(
+            data.payload?.conversationId,
+            "after title update for unknown conversation"
+          )
+          if (
+            typeof data.payload?.conversationId === "string" &&
+            typeof data.payload?.title === "string"
+          ) {
+            applyConversationTitle(
+              data.payload.conversationId,
+              data.payload.title
+            )
+          }
         } else if (data.type === "delete_conversation") {
           dispatch({ type: "DELETE_CONVERSATION", id: data.payload.id })
         } else if (data.type === "chat_stream_started") {
@@ -1132,6 +1187,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [
     applyConversationReadState,
     applyConversationArchiveState,
+    applyConversationTitle,
     handleAssistantFinished,
     reconcileConversationSummaries,
     reconcileUnknownConversation,
@@ -1300,12 +1356,23 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       let conversationId = targetConversationId
       let allMessages: Message[]
 
+      // Set when a file-only turn creates a conversation: it carries the
+      // material the auto-namer needs, and is fired from the stream's "done"
+      // handler once the assistant reply gives us something to summarize.
+      let autoNameAfterStream: {
+        conversationId: string
+        currentTitle: string
+        userText: string
+        attachmentNames: string[]
+      } | null = null
+
       if (!conversationId) {
         conversationId = generateId()
         const createdAt = Date.now()
+        const seedTitle = generateTitle(content, finalAttachments)
         const newConv: Conversation = {
           id: conversationId,
-          title: generateTitle(content, finalAttachments),
+          title: seedTitle,
           messages: [userMessage],
           createdAt,
           updatedAt: userMessage.timestamp,
@@ -1314,7 +1381,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           lastMessageAt: userMessage.timestamp,
           readAt: userMessage.timestamp,
         }
-        createConversationRequest(newConv).catch(console.error)
+        const createPromise = createConversationRequest(newConv).catch(
+          console.error
+        )
 
         dispatch({
           type: "CREATE_CONVERSATION",
@@ -1322,6 +1391,25 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           activate: options?.activateConversation !== false,
         })
         allMessages = [userMessage]
+
+        // Auto-name the new conversation. With text, name immediately and in
+        // parallel with the model turn; with only files, defer to the reply.
+        const attachmentNames = (finalAttachments ?? [])
+          .map((att) => att.filename)
+          .filter((name): name is string => Boolean(name && name.trim()))
+        const nameSeed = {
+          conversationId,
+          currentTitle: seedTitle,
+          userText: content,
+          attachmentNames,
+        }
+        if (content.trim()) {
+          // Wait for the create round-trip so the row exists when the title
+          // endpoint reads it and applies its overwrite guard.
+          void createPromise.then(() => autoNameConversation(nameSeed))
+        } else {
+          autoNameAfterStream = nameSeed
+        }
       } else {
         addConversationMessageRequest(conversationId, userMessage).catch(
           console.error
@@ -1944,6 +2032,32 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       entry: { ...entry, phase: reasoningPhase },
                     })
                   }
+                } else if (data.type === "memory_recall") {
+                  const entry =
+                    data.entry && typeof data.entry === "object"
+                      ? (data.entry as MemoryRecallReasoningEntry)
+                      : null
+                  if (
+                    entry?.type === "memory_recall" &&
+                    typeof entry.id === "string"
+                  ) {
+                    if (streamMode === "content") {
+                      reasoningPhase += 1
+                      streamMode = "reasoning"
+                    }
+                    if (
+                      !accReasoning.some(
+                        (item) =>
+                          item.type === "memory_recall" && item.id === entry.id
+                      )
+                    ) {
+                      accReasoning.push({ ...entry, phase: reasoningPhase })
+                    }
+                    dispatch({
+                      type: "ADD_STREAMING_MEMORY_RECALL",
+                      entry: { ...entry, phase: reasoningPhase },
+                    })
+                  }
                 } else if (data.type === "context_usage") {
                   if (
                     data.contextUsage &&
@@ -2034,6 +2148,15 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     message: finalMsg,
                   })
                   handleAssistantFinished(finalConvId, finalMsg)
+                  // File-only first turn: now that the assistant replied, name
+                  // the conversation from the exchange.
+                  if (autoNameAfterStream) {
+                    autoNameConversation({
+                      ...autoNameAfterStream,
+                      assistantText: accContent,
+                    })
+                    autoNameAfterStream = null
+                  }
                 } else if (data.type === "stopped") {
                   streamDoneRef.current = true
                   const finalMsg: Message = {
@@ -2174,6 +2297,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       return finalConvId
     },
     [
+      autoNameConversation,
       handleAssistantFinished,
       markConversationRead,
       recoverInterruptedStream,

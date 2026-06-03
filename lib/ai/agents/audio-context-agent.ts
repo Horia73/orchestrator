@@ -27,6 +27,7 @@ export const audioContextAgent: AgentConfig = {
     name: 'Audio Context Agent',
     description: 'Uses Gemini to transcribe and summarize audio before non-audio chat models handle the turn.',
     kind: 'text',
+    tier: 'system',
     provider: 'google',
     model: 'gemini-3-flash-preview',
     thinkingLevel: 'medium',

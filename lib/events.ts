@@ -27,6 +27,7 @@ export type ChatEvent =
     | { type: 'context_usage'; payload: { conversationId: string; contextUsage: ContextUsageSnapshot } }
     | { type: 'conversation_read_state'; payload: { conversationId: string; readAt: number | null } }
     | { type: 'conversation_archive_state'; payload: { conversationId: string; archivedAt: number | null } }
+    | { type: 'conversation_title'; payload: { conversationId: string; title: string } }
     | { type: 'delete_conversation'; payload: { id: string } }
     | { type: 'chat_stream_started'; payload: { conversationId: string; messageId: string; startedAt: number } }
     | { type: 'chat_stream_ended'; payload: { conversationId: string; messageId?: string } };

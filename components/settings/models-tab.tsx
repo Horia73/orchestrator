@@ -5,6 +5,7 @@ import { useRouter, useSearchParams } from "next/navigation"
 import {
   AlertCircle,
   CheckCircle2,
+  ChevronRight,
   GripVertical,
   Loader2,
   RefreshCcw,
@@ -16,6 +17,7 @@ import { cn } from "@/lib/utils"
 
 import { AgentCard } from "@/components/settings/agent-card"
 import { ModelRegistrySummary } from "@/components/settings/models-registry-summary"
+import { MemoryCard } from "@/components/settings/memory-card"
 import {
   ResearchProgressPanel,
   type CurrentModelResearchStatus,
@@ -98,6 +100,19 @@ export function ModelsTab() {
   const savedAgentIds = React.useMemo(
     () => savedOrderedAgents.map((agent) => agent.id),
     [savedOrderedAgents]
+  )
+  // Drag-reorder is allowed within a tier but not across tiers — a primary
+  // agent can't be dropped into the System group, and vice versa.
+  const agentTierById = React.useMemo(() => {
+    const map = new Map<string, AgentInfo["tier"]>()
+    for (const agent of data?.agents ?? []) map.set(agent.id, agent.tier)
+    return map
+  }, [data])
+  const isSameTier = React.useCallback(
+    (a: string, b: string) =>
+      (agentTierById.get(a) ?? "primary") ===
+      (agentTierById.get(b) ?? "primary"),
+    [agentTierById]
   )
   const orderedAgents = React.useMemo(
     () =>
@@ -201,6 +216,7 @@ export function ModelsTab() {
         draggingAgentIdRef.current ||
         draggingAgentId
       if (!draggedId || draggedId === targetAgentId) return
+      if (!isSameTier(draggedId, targetAgentId)) return
 
       const rect = event.currentTarget.getBoundingClientRect()
       const placeAfterTarget = event.clientY > rect.top + rect.height / 2
@@ -216,7 +232,7 @@ export function ModelsTab() {
         setDragPreviewOrder(nextOrder)
       }
     },
-    [draggingAgentId, savedAgentIds]
+    [draggingAgentId, isSameTier, savedAgentIds]
   )
 
   const handleAgentDrop = React.useCallback(
@@ -226,7 +242,11 @@ export function ModelsTab() {
         event.dataTransfer.getData("text/plain") ||
         draggingAgentIdRef.current ||
         draggingAgentId
-      if (!draggedId || draggedId === targetAgentId) {
+      if (
+        !draggedId ||
+        draggedId === targetAgentId ||
+        !isSameTier(draggedId, targetAgentId)
+      ) {
         setDraggingAgentId(null)
         setDragPreviewOrder(null)
         draggingAgentIdRef.current = null
@@ -254,7 +274,7 @@ export function ModelsTab() {
         void persistAgentOrder(nextOrder)
       }
     },
-    [draggingAgentId, persistAgentOrder, savedAgentIds]
+    [draggingAgentId, isSameTier, persistAgentOrder, savedAgentIds]
   )
 
   const handleAgentDragOverEnd = React.useCallback(
@@ -605,6 +625,8 @@ export function ModelsTab() {
         onDropEnd={handleAgentDropEnd}
       />
 
+      <MemoryCard />
+
       <ModelRegistrySummary
         providers={data.providers}
         providerStatus={data.providerStatus}
@@ -648,12 +670,39 @@ function AgentSettingsLayout({
   onDragOverEnd: (event: React.DragEvent) => void
   onDropEnd: (event: React.DragEvent) => void
 }) {
+  // The roster splits into the user-facing primary agents (reorderable) and the
+  // internal/background "system" agents the runtime drives on its own (pinned,
+  // collapsed by default). Both groups preserve their order from orderedAgents.
+  const primaryAgents = orderedAgents.filter(
+    (agent) => agent.tier !== "system"
+  )
+  const systemAgents = orderedAgents.filter((agent) => agent.tier === "system")
+  const selectedIsSystem = selectedAgent?.tier === "system"
+  const [systemOpen, setSystemOpen] = React.useState(false)
+
+  // Deep-linking to (or otherwise selecting) a system agent expands the group so
+  // the active row is visible; the user can still collapse it again afterward.
+  React.useEffect(() => {
+    if (selectedIsSystem) setSystemOpen(true)
+  }, [selectedIsSystem, selectedAgent?.id])
+
   return (
     <>
       <div data-agent-mobile-list className="flex flex-col gap-3 lg:hidden">
-        {orderedAgents.map((agent) => (
+        {primaryAgents.map((agent) => (
           <AgentCard key={agent.id} agentId={agent.id} />
         ))}
+        {systemAgents.length > 0 && (
+          <>
+            <div className="flex items-center gap-2 px-1 pt-1 text-[11.5px] font-medium tracking-wide text-foreground/45 uppercase">
+              System
+              <span className="h-px flex-1 bg-border/60" />
+            </div>
+            {systemAgents.map((agent) => (
+              <AgentCard key={agent.id} agentId={agent.id} />
+            ))}
+          </>
+        )}
       </div>
 
       <div className="hidden lg:grid lg:grid-cols-[280px_minmax(0,460px)_minmax(220px,1fr)] lg:items-start lg:gap-4">
@@ -667,9 +716,9 @@ function AgentSettingsLayout({
                 Agents
               </h3>
               <p className="mt-0.5 text-[11.5px] text-foreground/45">
-                {orderedAgents.length}{" "}
-                {orderedAgents.length === 1 ? "agent" : "agents"} · Settings
-                order
+                {primaryAgents.length}{" "}
+                {primaryAgents.length === 1 ? "agent" : "agents"} · drag to
+                reorder
               </p>
             </div>
           </div>
@@ -689,7 +738,7 @@ function AgentSettingsLayout({
             }}
           >
             <div className="flex flex-col gap-1">
-              {orderedAgents.map((agent) => (
+              {primaryAgents.map((agent) => (
                 <AgentSidebarRow
                   key={agent.id}
                   agent={agent}
@@ -704,6 +753,50 @@ function AgentSettingsLayout({
                 />
               ))}
             </div>
+            {systemAgents.length > 0 && (
+              <div className="mt-2 border-t border-border/50 pt-2">
+                <button
+                  type="button"
+                  aria-expanded={systemOpen}
+                  onClick={() => setSystemOpen((open) => !open)}
+                  className="group flex w-full items-center gap-1.5 rounded-lg px-2 py-1.5 text-left outline-none transition-colors hover:bg-muted/45 focus-visible:ring-2 focus-visible:ring-ring/50"
+                >
+                  <ChevronRight
+                    className={cn(
+                      "size-3.5 shrink-0 text-foreground/40 transition-transform duration-150",
+                      systemOpen && "rotate-90"
+                    )}
+                  />
+                  <span className="text-[12px] font-medium tracking-wide text-foreground/55 uppercase">
+                    System
+                  </span>
+                  <span className="ml-0.5 rounded-full bg-muted px-1.5 py-px text-[10.5px] font-medium text-foreground/45 tabular-nums">
+                    {systemAgents.length}
+                  </span>
+                  <span className="ml-auto truncate text-[11px] text-foreground/35">
+                    Run automatically
+                  </span>
+                </button>
+                {systemOpen && (
+                  <div className="mt-1 flex flex-col gap-1">
+                    {systemAgents.map((agent) => (
+                      <AgentSidebarRow
+                        key={agent.id}
+                        agent={agent}
+                        data={data}
+                        active={agent.id === selectedAgent?.id}
+                        dragging={draggingAgentId === agent.id}
+                        onSelect={() => onSelectAgent(agent.id)}
+                        onDragStart={(event) => onDragStart(event, agent.id)}
+                        onDragOver={(event) => onDragOver(event, agent.id)}
+                        onDragEnd={onDragEnd}
+                        onDrop={(event) => onDrop(event, agent.id)}
+                      />
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
           <div
             data-agent-drop-end
@@ -905,6 +998,7 @@ function AgentSidebarRow({
   data,
   active,
   dragging,
+  draggable = true,
   onSelect,
   onDragStart,
   onDragOver,
@@ -915,11 +1009,13 @@ function AgentSidebarRow({
   data: SettingsBootstrap
   active: boolean
   dragging: boolean
+  /** System rows are pinned (registry order), so dragging is disabled for them. */
+  draggable?: boolean
   onSelect: () => void
-  onDragStart: (event: React.DragEvent) => void
-  onDragOver: (event: React.DragEvent) => void
-  onDragEnd: () => void
-  onDrop: (event: React.DragEvent) => void
+  onDragStart?: (event: React.DragEvent) => void
+  onDragOver?: (event: React.DragEvent) => void
+  onDragEnd?: () => void
+  onDrop?: (event: React.DragEvent) => void
 }) {
   const warning = agentHasProviderWarning(agent, data)
   const summary = formatAgentSidebarSummary(agent, data)
@@ -928,7 +1024,7 @@ function AgentSidebarRow({
     <div
       data-agent-row
       data-agent-id={agent.id}
-      draggable
+      draggable={draggable}
       role="button"
       tabIndex={0}
       aria-current={active ? "true" : undefined}
@@ -939,31 +1035,34 @@ function AgentSidebarRow({
         event.preventDefault()
         onSelect()
       }}
-      onDragStart={onDragStart}
-      onDragEnter={onDragOver}
-      onDragOver={onDragOver}
-      onDragEnd={onDragEnd}
-      onDrop={onDrop}
+      onDragStart={draggable ? onDragStart : undefined}
+      onDragEnter={draggable ? onDragOver : undefined}
+      onDragOver={draggable ? onDragOver : undefined}
+      onDragEnd={draggable ? onDragEnd : undefined}
+      onDrop={draggable ? onDrop : undefined}
       className={cn(
-        "group relative flex min-w-0 cursor-pointer items-center rounded-lg border px-2 py-1.5 transition-[background-color,border-color,opacity,transform] duration-150 outline-none hover:cursor-grab focus-visible:ring-2 focus-visible:ring-ring/50 active:cursor-grabbing",
+        "group relative flex min-w-0 cursor-pointer items-center rounded-lg border px-2 py-1.5 transition-[background-color,border-color,opacity,transform] duration-150 outline-none focus-visible:ring-2 focus-visible:ring-ring/50",
+        draggable && "hover:cursor-grab active:cursor-grabbing",
         active
           ? "border-foreground/12 bg-foreground/[0.04]"
           : "border-transparent hover:border-border/70 hover:bg-muted/45",
         dragging && "opacity-45"
       )}
     >
-      <span
-        data-agent-drag-handle
-        aria-hidden="true"
-        title="Drag to reorder"
-        className={cn(
-          "pointer-events-none absolute top-1/2 left-1 grid size-4 -translate-y-1/2 place-items-center text-foreground/35 opacity-0 transition-opacity duration-150",
-          "group-hover:opacity-70 group-focus-visible:opacity-70",
-          dragging && "opacity-70"
-        )}
-      >
-        <GripVertical className="size-3.5" />
-      </span>
+      {draggable && (
+        <span
+          data-agent-drag-handle
+          aria-hidden="true"
+          title="Drag to reorder"
+          className={cn(
+            "pointer-events-none absolute top-1/2 left-1 grid size-4 -translate-y-1/2 place-items-center text-foreground/35 opacity-0 transition-opacity duration-150",
+            "group-hover:opacity-70 group-focus-visible:opacity-70",
+            dragging && "opacity-70"
+          )}
+        >
+          <GripVertical className="size-3.5" />
+        </span>
+      )}
       <div className="min-w-0 flex-1 rounded-md py-0.5 pr-1 pl-4 text-left">
         <div className="flex min-w-0 items-center gap-1.5">
           <span

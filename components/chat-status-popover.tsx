@@ -519,6 +519,7 @@ function buildContextDisplay(args: {
     const realTokens = usageMatches
         ? finiteNumber(usage?.contextTokens) ?? finiteNumber(usage?.inputTokens)
         : null
+    const cachedTokens = usageMatches ? finiteNumber(usage?.cachedTokens) : null
     const draftTokens = realTokens !== null
         ? estimateDraftTokens(args.draftValue, args.attachments)
         : 0
@@ -531,7 +532,7 @@ function buildContextDisplay(args: {
         ? Math.max(0, Math.min(100, (tokens / contextWindow) * 100))
         : null
     const source = realTokens !== null
-        ? `${usage?.accuracy === "live" ? "Live provider tokens" : "Actual provider tokens"}${draftTokens > 0 ? " + draft estimate" : ""}`
+        ? `${usage?.accuracy === "live" ? "Live provider input" : "Actual provider input"}${cachedTokens && cachedTokens > 0 ? " (cache included)" : ""}${draftTokens > 0 ? " + draft estimate" : ""}`
         : "Local estimate"
 
     return {
@@ -546,6 +547,10 @@ function buildContextDisplay(args: {
 
 function ContextUsageDetails({ display }: { display: ContextDisplay }) {
     const usage = display.usage
+    const freshInput = usage ? freshInputTokens(usage) : null
+    const providerInput = usage ? finiteNumber(usage.inputTokens) : null
+    const cachedInput = usage ? finiteNumber(usage.cachedTokens) : null
+    const showFreshInput = freshInput !== null && providerInput !== null && cachedInput !== null && cachedInput > 0
     const requestParts = usage ? [
         usage.inputTokens != null ? `${formatTokens(usage.inputTokens)} in` : null,
         usage.outputTokens != null ? `${formatTokens(usage.outputTokens)} out` : null,
@@ -564,6 +569,14 @@ function ContextUsageDetails({ display }: { display: ContextDisplay }) {
                 <div className="flex justify-between gap-3">
                     <span>Last request</span>
                     <span className="text-right tabular-nums text-foreground/60">{requestParts}</span>
+                </div>
+            )}
+            {showFreshInput && (
+                <div className="flex justify-between gap-3">
+                    <span>Fresh input</span>
+                    <span className="text-right tabular-nums text-foreground/60">
+                        {formatTokens(freshInput)} ({formatTokens(providerInput)} minus cached)
+                    </span>
                 </div>
             )}
             {usage?.threadTokens != null && usage.threadTokens !== usage.totalTokens && (
@@ -669,6 +682,18 @@ function formatTokens(value: number): string {
 
 function finiteNumber(value: unknown): number | null {
     return typeof value === "number" && Number.isFinite(value) && value >= 0 ? value : null
+}
+
+function excludeCachedTokens(tokens: number, cached: number | null): number {
+    if (!cached || cached <= 0) return tokens
+    return Math.max(0, tokens - Math.min(tokens, cached))
+}
+
+function freshInputTokens(usage: ContextUsageSnapshot): number | null {
+    const input = finiteNumber(usage.inputTokens)
+    if (input === null) return null
+    const cached = finiteNumber(usage.cachedTokens) ?? 0
+    return excludeCachedTokens(input, cached)
 }
 
 function formatTimeAgo(timestamp: number): string {

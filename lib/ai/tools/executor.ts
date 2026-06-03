@@ -6,6 +6,9 @@ import type {
 import { isOrchestratorClassAgent } from "@/lib/ai/agents/orchestrator-class"
 import { executeListDir } from "./list-dir"
 import { executeReadFile } from "./read-file"
+import { executeFindPastUploads } from "./find-past-uploads"
+import { executeCreateBackup } from "./create-backup"
+import { executeHostStatus } from "./host-status"
 import { executeDelegateParallel, executeDelegateTo } from "./delegate-to"
 import { executeRead } from "./read"
 import { executeWrite } from "./write"
@@ -43,6 +46,8 @@ import {
   executeGmailSendEmail,
   executeGmailTrash,
   executeGmailUntrash,
+  executeGmailUnsubscribe,
+  executeGmailUnsubscribeInfo,
 } from "./gmail"
 import {
   executeGoogleCalendarConfigure,
@@ -244,6 +249,8 @@ import {
 } from "./workout-history"
 import { executeSetTaskState } from "./task-state"
 import { executeApplyUpdate } from "./update-app"
+import { executeMemorySearch } from "./memory-search"
+import { executeLibrarySearch } from "./library-search"
 import { executeMonitorWakeFeedback } from "./smart-monitor-feedback"
 import {
   executeMonitorDescribeSources,
@@ -324,6 +331,9 @@ const executeBashLazy: ToolExecutor = async (args, ctx) => {
 const executors: Record<string, ToolExecutor> = {
   list_dir: executeListDir,
   read_file: executeReadFile,
+  find_past_uploads: executeFindPastUploads,
+  create_backup: executeCreateBackup,
+  host_status: executeHostStatus,
   delegate_to: executeDelegateTo,
   delegate_parallel: executeDelegateParallel,
   Read: executeRead,
@@ -350,6 +360,8 @@ const executors: Record<string, ToolExecutor> = {
   GmailTrash: executeGmailTrash,
   GmailUntrash: executeGmailUntrash,
   GmailDeletePermanently: executeGmailDeletePermanently,
+  GmailUnsubscribeInfo: executeGmailUnsubscribeInfo,
+  GmailUnsubscribe: executeGmailUnsubscribe,
   GmailListLabels: executeGmailListLabels,
   GmailCreateLabel: executeGmailCreateLabel,
   GmailDownloadAttachment: executeGmailDownloadAttachment,
@@ -511,6 +523,8 @@ const executors: Record<string, ToolExecutor> = {
   [LIST_EXERCISE_HISTORY_TOOL_ID]: executeListExerciseHistory,
   [GET_RECENT_WORKOUTS_TOOL_ID]: executeGetRecentWorkouts,
   apply_update: executeApplyUpdate,
+  memory_search: executeMemorySearch,
+  library_search: executeLibrarySearch,
   WatchlistAddFinancialInstrument: executeWatchlistAddFinancialInstrument,
   WatchlistAddProduct: executeWatchlistAddProduct,
   WatchlistRemoveItem: executeWatchlistRemoveItem,
@@ -559,6 +573,9 @@ const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
   "search_agent_logs",
   "get_agent_log",
   "read_runtime_index",
+  // Backup is a full credential dump (DB + OAuth tokens + provider keys) — keep
+  // it on the user-facing orchestrator, not reachable from a delegated sub-agent.
+  "create_backup",
 ])
 
 async function executeRunActivatedIntegrationTool(

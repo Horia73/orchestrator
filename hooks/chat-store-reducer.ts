@@ -3,6 +3,7 @@ import type {
   ContextCompactionReasoningEntry,
   ContextUsageSnapshot,
   Conversation,
+  MemoryRecallReasoningEntry,
   Message,
   ToolStreamDelta,
 } from "@/lib/types"
@@ -169,6 +170,10 @@ export type ChatAction =
       entry: ContextCompactionReasoningEntry
     }
   | {
+      type: "ADD_STREAMING_MEMORY_RECALL"
+      entry: MemoryRecallReasoningEntry
+    }
+  | {
       type: "UPDATE_CONTEXT_USAGE"
       conversationId: string
       contextUsage: ContextUsageSnapshot
@@ -177,6 +182,11 @@ export type ChatAction =
       type: "SET_CONVERSATION_READ_STATE"
       conversationId: string
       readAt: number | null
+    }
+  | {
+      type: "SET_CONVERSATION_TITLE"
+      conversationId: string
+      title: string
     }
   | {
       type: "SET_CONVERSATION_ARCHIVE_STATE"
@@ -285,15 +295,18 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
       )
       const mergedIncoming = action.conversations.map((conversation) => {
         const previous = previousById.get(conversation.id)
-        if (
-          !action.full &&
-          previous &&
-          conversation.messages.length === 0 &&
-          previous.messages.length > 0
-        ) {
+        if (!action.full && previous) {
+          // A summary refresh is not the authority on titles. Auto-naming and
+          // renames arrive via SET_CONVERSATION_TITLE and the conversation_title
+          // SSE event; keep the locally-tracked title so an in-flight summary
+          // snapshot (read before auto-naming persisted) can't revert a freshly
+          // generated title mid-turn and make the sidebar flicker.
+          const keepMessages =
+            conversation.messages.length === 0 && previous.messages.length > 0
           return {
             ...conversation,
-            messages: previous.messages,
+            title: previous.title,
+            messages: keepMessages ? previous.messages : conversation.messages,
             contextUsage: conversation.contextUsage ?? previous.contextUsage,
           }
         }
@@ -983,6 +996,20 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingReasoning: [...state.streamingReasoning, action.entry],
         streamingMode: "reasoning",
       }
+    case "ADD_STREAMING_MEMORY_RECALL":
+      if (
+        state.streamingReasoning.some(
+          (entry) =>
+            entry.type === "memory_recall" && entry.id === action.entry.id
+        )
+      ) {
+        return { ...state, streamingMode: "reasoning" }
+      }
+      return {
+        ...state,
+        streamingReasoning: [...state.streamingReasoning, action.entry],
+        streamingMode: "reasoning",
+      }
     case "UPDATE_CONTEXT_USAGE":
       return {
         ...state,
@@ -998,6 +1025,15 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         conversations: state.conversations.map((conv) =>
           conv.id === action.conversationId
             ? { ...conv, readAt: action.readAt }
+            : conv
+        ),
+      }
+    case "SET_CONVERSATION_TITLE":
+      return {
+        ...state,
+        conversations: state.conversations.map((conv) =>
+          conv.id === action.conversationId
+            ? { ...conv, title: action.title }
             : conv
         ),
       }

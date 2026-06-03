@@ -20,6 +20,8 @@ import {
     gmailSendMessage,
     gmailTrash,
     gmailUntrash,
+    gmailGetUnsubscribeInfo,
+    gmailUnsubscribe,
 } from '@/lib/integrations/gmail'
 import { clamp, ensureParentDir, numberArg, stringArg } from './helpers'
 import { displayPath, resolveSandboxed, resolveSandboxedWritable } from './sandbox'
@@ -127,6 +129,35 @@ export const gmailDeleteTool: ToolDef = {
     tags: ['write', 'gmail', 'email', 'destructive'],
 }
 
+export const gmailUnsubscribeInfoTool: ToolDef = {
+    id: 'GmailUnsubscribeInfo',
+    name: 'GmailUnsubscribeInfo',
+    description: 'Reads a message\'s List-Unsubscribe headers and reports whether (and how) the user can be unsubscribed from the sender: "one_click" (RFC 8058 HTTPS POST), "mailto", "link_only" (a web link to open), or "none". Read-only — performs no unsubscribe. Use to check feasibility before offering to unsubscribe the user from a sender they keep archiving.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            message_id: { type: 'string', description: 'Gmail message ID of a recent message from the sender.' },
+        },
+        required: ['message_id'],
+    },
+    tags: ['read', 'gmail', 'email'],
+}
+
+export const gmailUnsubscribeTool: ToolDef = {
+    id: 'GmailUnsubscribe',
+    name: 'GmailUnsubscribe',
+    description: 'Unsubscribes the user from a sender using the message List-Unsubscribe headers. one_click sends an RFC 8058 HTTPS POST (SSRF-guarded); mailto sends an unsubscribe email from the connected account; link_only returns the web link for the user to open. Only call after the user explicitly approved unsubscribing from this exact sender. Check GmailUnsubscribeInfo first.',
+    input_schema: {
+        type: 'object',
+        properties: {
+            message_id: { type: 'string', description: 'Gmail message ID from the sender to unsubscribe from.' },
+            confirmed_by_user: { type: 'boolean', description: 'Must be true only after explicit user approval to unsubscribe from this sender.' },
+        },
+        required: ['message_id', 'confirmed_by_user'],
+    },
+    tags: ['write', 'gmail', 'email', 'external_action'],
+}
+
 export const gmailListLabelsTool: ToolDef = {
     id: 'GmailListLabels',
     name: 'GmailListLabels',
@@ -180,6 +211,8 @@ export const gmailTools: ToolDef[] = [
     gmailTrashTool,
     gmailUntrashTool,
     gmailDeleteTool,
+    gmailUnsubscribeInfoTool,
+    gmailUnsubscribeTool,
     gmailListLabelsTool,
     gmailCreateLabelTool,
     gmailDownloadAttachmentTool,
@@ -264,6 +297,19 @@ export async function executeGmailDeletePermanently(args: Record<string, unknown
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
     return { success: true, data: await gmailDeletePermanently(parsed.targetType, parsed.id) }
+}
+
+export async function executeGmailUnsubscribeInfo(args: Record<string, unknown>): Promise<ToolResult> {
+    const messageId = stringArg(args, ['message_id', 'messageId', 'id'])
+    if (!messageId) return { success: false, error: 'Missing required parameter: message_id' }
+    return { success: true, data: await gmailGetUnsubscribeInfo(messageId) }
+}
+
+export async function executeGmailUnsubscribe(args: Record<string, unknown>): Promise<ToolResult> {
+    if (args.confirmed_by_user !== true) return { success: false, error: 'confirmed_by_user must be true before unsubscribing from a sender.' }
+    const messageId = stringArg(args, ['message_id', 'messageId', 'id'])
+    if (!messageId) return { success: false, error: 'Missing required parameter: message_id' }
+    return { success: true, data: await gmailUnsubscribe(messageId) }
 }
 
 export async function executeGmailListLabels(): Promise<ToolResult> {

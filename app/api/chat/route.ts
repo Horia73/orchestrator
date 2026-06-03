@@ -18,6 +18,7 @@ import type {
   ContextCompactionReasoningEntry,
   ContextUsageSnapshot,
   Conversation,
+  MemoryRecallReasoningEntry,
   Message,
 } from "@/lib/types"
 import type {
@@ -34,6 +35,7 @@ import {
   getToolsForBuiltins,
   resolveProviderToolSurface,
 } from "@/lib/ai/tools/registry"
+import { extractUploadAttachmentsFromContent } from "@/lib/ai/media-assets"
 import { clearChatStream, registerChatStream } from "@/lib/chat-streams"
 import {
   getCachedPendingUpdate,
@@ -86,6 +88,11 @@ import {
   sanitizeCapabilityActivations,
   sanitizePromptContext,
 } from "./route-support"
+import {
+  buildRecallUiHits,
+  getRecalledMemory,
+  type RecalledMemory,
+} from "@/lib/memory/recall"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
@@ -489,6 +496,21 @@ export async function POST(request: Request) {
     .reverse()
     .find((m) => m.role === "user")
 
+  // Automatic semantic memory recall for this user turn. Computed once (a turn
+  // may build resolved messages more than once across attempts), fail-open: an
+  // empty string when disabled, no key, timeout, or no match — i.e. the turn
+  // proceeds exactly as it did before this feature existed. See lib/memory.
+  let recalledMemoryPromise: Promise<RecalledMemory> | null = null
+  let recallNoteEmitted = false
+  const getRecall = (): Promise<RecalledMemory> => {
+    if (!recalledMemoryPromise) {
+      recalledMemoryPromise = getRecalledMemory(latestUserMessage?.content).catch(
+        () => ({ block: "", hits: [] })
+      )
+    }
+    return recalledMemoryPromise
+  }
+
   // Start time per tool call so we can record durationMs in tool_logs.
   const toolStartTimes = new Map<string, number>()
 
@@ -513,6 +535,21 @@ export async function POST(request: Request) {
   let streamMode: "reasoning" | "content" = "reasoning"
   let lastProgressPersistAt = 0
   let accAttachments: Attachment[] = []
+
+  // Merge attachments the provider reported with any upload assets the agent
+  // embedded inline as markdown (e.g. a browser sub-agent screenshot the
+  // orchestrator re-emits). This makes those files first-class so the Library
+  // lists them and the preview lightbox can open them. Deduped by id, with
+  // provider-reported attachments taking precedence.
+  const withInlineUploadAttachments = (
+    content: string,
+    base: Attachment[]
+  ): Attachment[] => {
+    const inline = extractUploadAttachmentsFromContent(content)
+    if (inline.length === 0) return base
+    const ids = new Set(base.map((a) => a.id))
+    return [...base, ...inline.filter((a) => !ids.has(a.id))]
+  }
   let latestContextUsage: ContextUsageSnapshot | null =
     existingConversation?.contextUsage ?? null
   let lastPublishedContextUsageKey = latestContextUsage
@@ -535,6 +572,11 @@ export async function POST(request: Request) {
       return
     lastProgressPersistAt = now
 
+    const persistAttachments = withInlineUploadAttachments(
+      accContent || "",
+      accAttachments
+    )
+
     addMessage(
       conversationId,
       sanitizeMessageForPersistence({
@@ -547,7 +589,7 @@ export async function POST(request: Request) {
         thinking: accThinking || "",
         thinkingDuration: opts?.thinkingDuration,
         toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
-        attachments: accAttachments.length > 0 ? accAttachments : undefined,
+        attachments: persistAttachments.length > 0 ? persistAttachments : undefined,
         // Keep stable ordering for this assistant message.
         timestamp: assistantMsg.timestamp,
       })
@@ -907,6 +949,37 @@ export async function POST(request: Request) {
                 },
               })
 
+            const recall = await getRecall()
+            const recalledMemoryContext = recall.block
+            // Surface the recall as a structured, collapsible card in the
+            // assistant's thinking stream once per turn (auditable: which notes
+            // and scores were used). Mirrors the context_compaction
+            // reasoning-entry plumbing.
+            if (recall.hits.length > 0 && !recallNoteEmitted) {
+              recallNoteEmitted = true
+              if (streamMode === "content") {
+                reasoningPhase += 1
+                streamMode = "reasoning"
+              }
+              const entryId = `memory_recall_${messageId}`
+              if (
+                !accReasoning.some(
+                  (entry) =>
+                    entry.type === "memory_recall" && entry.id === entryId
+                )
+              ) {
+                const entry: MemoryRecallReasoningEntry = {
+                  type: "memory_recall",
+                  id: entryId,
+                  phase: reasoningPhase,
+                  hits: buildRecallUiHits(recall.hits),
+                }
+                accReasoning.push(entry)
+                send({ type: "memory_recall", entry })
+                persistAssistantProgress({ force: true })
+              }
+            }
+
             return messagesForProvider.map((m) => {
             const messageAttachments = Array.isArray(m.attachments)
               ? m.attachments
@@ -930,6 +1003,8 @@ export async function POST(request: Request) {
                     "</runtime_context>",
                   ].join("\n")
                 : ""
+            const recalledMemory =
+              m.id === latestUserMessage?.id ? recalledMemoryContext : ""
             const result: {
               role: string
               content: string
@@ -938,10 +1013,13 @@ export async function POST(request: Request) {
               role: m.role,
               content: appendPromptContext(
                 appendPromptContext(
-                  appendPromptContext(messageContent, localAttachmentContext),
-                  audioContext
+                  appendPromptContext(
+                    appendPromptContext(messageContent, localAttachmentContext),
+                    audioContext
+                  ),
+                  runtimePromptContext
                 ),
-                runtimePromptContext
+                recalledMemory
               ),
             }
 
@@ -1420,7 +1498,8 @@ export async function POST(request: Request) {
                   if (finalContextUsage) {
                     publishContextUsage(
                       (prepared.settings.provider === "codex" ||
-                        prepared.settings.provider === "claude-code") &&
+                        prepared.settings.provider === "claude-code" ||
+                        prepared.settings.provider === "google") &&
                         latestContextUsage
                         ? {
                             ...finalContextUsage,
@@ -1431,15 +1510,14 @@ export async function POST(request: Request) {
                             contextWindow:
                               latestContextUsage.contextWindow ??
                               finalContextUsage.contextWindow,
-                            // Codex and Claude Code both report the cumulative
-                            // whole-run usage at turn end (codex's `.total`,
-                            // claude's cumulative result.usage incl. cache
-                            // reads) — correct for billing, but the context
-                            // window gauge must show the LAST request's
-                            // occupancy (≤ the window). The live stream already
-                            // captured that per request, so keep those numbers
-                            // instead of the cumulative ones, which otherwise
-                            // blow past the window (e.g. 2.0M/258K, 1.3M/1M).
+                            // Some providers report cumulative whole-run usage at
+                            // turn end (codex's `.total`, claude's cumulative
+                            // result.usage incl. cache reads, Gemini's sum across
+                            // Interactions tool-loop rounds). That's correct for
+                            // billing/logs, but the context window gauge must show
+                            // the LAST provider request's prompt occupancy. The
+                            // live stream already captured that per request, so
+                            // keep those numbers instead of the cumulative ones.
                             contextTokens:
                               latestContextUsage.contextTokens ??
                               finalContextUsage.contextTokens,
@@ -1624,6 +1702,11 @@ export async function POST(request: Request) {
         const aborted = serverAbortController.signal.aborted
         console.error("Streaming error:", msg)
 
+        const errorPersistAttachments = withInlineUploadAttachments(
+          accContent || "",
+          accAttachments
+        )
+
         addMessage(conversationId, {
           id: messageId,
           role: "assistant",
@@ -1639,7 +1722,10 @@ export async function POST(request: Request) {
           thinkingDuration: 0,
           timestamp: assistantMsg.timestamp,
           toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
-          attachments: accAttachments.length > 0 ? accAttachments : undefined,
+          attachments:
+            errorPersistAttachments.length > 0
+              ? errorPersistAttachments
+              : undefined,
         })
 
         if (aborted) {

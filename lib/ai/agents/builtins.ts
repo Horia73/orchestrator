@@ -44,6 +44,8 @@ export const GMAIL_TOOL_IDS: string[] = [
     'GmailTrash',
     'GmailUntrash',
     'GmailDeletePermanently',
+    'GmailUnsubscribeInfo',
+    'GmailUnsubscribe',
     'GmailListLabels',
     'GmailCreateLabel',
     'GmailDownloadAttachment',
@@ -219,6 +221,38 @@ export const OBSERVABILITY_TOOL_IDS: string[] = [
     'search_agent_logs',
     'get_agent_log',
     'read_runtime_index',
+]
+
+// Deliberate semantic lookup over the user's long-term memory (durable files +
+// full daily-memory history). Complements the automatic per-turn
+// <recalled_memory> hint injected by the chat route.
+export const MEMORY_TOOL_IDS: string[] = [
+    'memory_search',
+    'library_search',
+]
+
+// Cross-conversation lookup for files the user uploaded in the past. The
+// per-message attachment context only surfaces the CURRENT message's files;
+// this lets the agent find an older upload ("the photo I sent last week") and
+// get a local path to Read.
+export const UPLOADS_TOOL_IDS: string[] = [
+    'find_past_uploads',
+]
+
+// Self-service backup. Always-on single tool that creates the same portable
+// archive the user can download from Settings → Updates → Danger zone and saves
+// it into the Library so the agent can deliver it on request. Restore and
+// factory reset stay user-only (no tool); the app_guide doctrine explains them.
+// Orchestrator-only at execution (executor.ts) — a backup is a credential dump.
+export const BACKUP_TOOL_IDS: string[] = [
+    'create_backup',
+]
+
+// App & host guide subsystem tools — gated behind ActivateIntegrationTools
+// ('app_guide'). host_status is a live machine snapshot (disk/mem/uptime); the
+// doctrine that activates alongside it documents the app's UI + data management.
+export const APP_GUIDE_TOOL_IDS: string[] = [
+    'host_status',
 ]
 
 export const WATCHLIST_TOOL_IDS: string[] = [

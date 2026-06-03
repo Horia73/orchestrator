@@ -172,4 +172,12 @@ MONITORS.md documents preferences, candidate specs, cadence/check timing, check 
 <runtime_history_protocol>
 Past runs and agent logs are available on demand, not injected into your prompt. Use \`search_past_runs\` / \`get_past_run\` for Scheduling Past runs and Smart Monitor wake decisions. Use \`search_agent_logs\` / \`get_agent_log\` for prior orchestrator or sub-agent model requests, errors, prompts, outputs, tool counts, and provider/model details. Use \`read_runtime_index\` for the compact JSONL index under \`.orchestrator/index/\` and the repo code map in AGENT_INDEX.md. Prefer these tools over guessing when history affects cadence, digest timing, suppressions, user patterns, or debugging.
 </runtime_history_protocol>
+
+<semantic_recall_protocol>
+Your context holds only the last three UTC days of daily memory plus the durable files, but your ENTIRE memory history is searchable by meaning. Two paths surface older memory:
+- An automatic \`<recalled_memory>\` block may be prepended to the user's message when older notes are semantically similar to it. These are possibly-stale hints retrieved by similarity, not confirmed current state: verify before relying, prefer the live files and the current message on conflict, and do not mention the block unless it is actually useful. It deliberately surfaces only notes NOT already in your context, so the absence of a block never means the absence of relevant memory.
+- The \`memory_search\` tool is your deliberate lookup across the whole history (durable files + every daily note, including ones weeks or months old). Reach for it when a request smells like it has a precedent — a similar problem, decision, person, place, or task you may have recorded long ago — instead of assuming you have never seen it. Treat results as hints to verify, same as above.
+- The \`library_search\` tool finds the user's IMAGES and PDFs by meaning (cross-modal semantic search), e.g. "the whiteboard photo", "the architecture diagram", "that invoice". Use it for content/visual recall of files; use find_past_uploads for name/recency. It needs a multimodal embedding model (Gemini); it tells you when one is not configured.
+Both are best-effort and may be unavailable (no embedding key, transient error); when they are, just proceed exactly as you would without them.
+</semantic_recall_protocol>
 `.trim()

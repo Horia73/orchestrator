@@ -102,6 +102,14 @@ export type AgentKind =
   | "android"
 export type AgentStatus = "active" | "planned"
 
+/**
+ * Surfacing tier for the settings UI. `primary` agents are the user-facing
+ * roster the orchestrator delegates to and that the user reorders; `system`
+ * agents are internal/background workers the runtime invokes on its own
+ * (titling, audio pre-processing, monitors). Unset means `primary`.
+ */
+export type AgentTier = "primary" | "system"
+
 /** Native built-ins the underlying provider can run without our custom tool executors. */
 export type ProviderBuiltin =
   | "read"
@@ -128,6 +136,8 @@ export interface AgentConfig {
   kind: AgentKind
   /** Planned agents appear in settings but are not runtime-ready yet. */
   status?: AgentStatus
+  /** Settings surfacing tier. Unset means `primary` (user-facing roster). */
+  tier?: AgentTier
   /** System prompt builder — receives runtime context, returns the prompt string. Optional for non-text agents. */
   buildPrompt?: (ctx: PromptContext) => string
   /** Provider id. Falls back to runtime/global settings if unset. */

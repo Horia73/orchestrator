@@ -1,8 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react"
-import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
+import { Brain, Check, ChevronDown, Copy, CheckCircle2, CircleAlert, CircleStop, Clock, Download, ExternalLink, FileText, Loader2, RefreshCw } from "lucide-react"
+import type { AgentCallReasoningEntry, Attachment, ContentSegment, ContextCompactionReasoningEntry, MemoryRecallReasoningEntry, Message, ReasoningEntry, ToolCallReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import type { ArtifactPayload } from "@/components/artifact-panel"
@@ -49,12 +49,16 @@ function getEntryTitle(entry: ReasoningEntry | undefined): string {
     if (entry.type === "tool_call") return getToolCallDisplayTitle(entry)
     if (entry.type === "agent_call") return entry.title || entry.agentName
     if (entry.type === "context_compaction") return entry.title
+    if (entry.type === "memory_recall") {
+        const n = entry.hits.length
+        return `Recalled ${n} memor${n === 1 ? "y" : "ies"}`
+    }
     return getThoughtTitle(entry.content)
 }
 
 function buildSummary(reasoning: ReasoningEntry[], seconds: number, fallback: string): string {
     const hasThought = reasoning.some(e => e.type === "thought")
-    let readFiles = 0, listedDirs = 0, agents = 0, compactions = 0
+    let readFiles = 0, listedDirs = 0, agents = 0, compactions = 0, recalls = 0
     for (const e of reasoning) {
         if (e.type === "agent_call") {
             agents++
@@ -62,6 +66,10 @@ function buildSummary(reasoning: ReasoningEntry[], seconds: number, fallback: st
         }
         if (e.type === "context_compaction") {
             compactions++
+            continue
+        }
+        if (e.type === "memory_recall") {
+            recalls += e.hits.length
             continue
         }
         if (e.type !== "tool_call") continue
@@ -72,6 +80,7 @@ function buildSummary(reasoning: ReasoningEntry[], seconds: number, fallback: st
     const parts: string[] = []
     const wholeSecs = Math.round(seconds)
     if (hasThought && wholeSecs > 0) parts.push(`Thought for ${wholeSecs}s`)
+    if (recalls > 0) parts.push(`recalled ${recalls} memor${recalls === 1 ? "y" : "ies"}`)
     if (compactions > 0) parts.push(compactions === 1 ? "compacted context" : `compacted context ${compactions}x`)
     if (agents > 0) parts.push(`called ${agents} agent${agents === 1 ? "" : "s"}`)
     if (readFiles > 0) parts.push(`read ${readFiles} file${readFiles === 1 ? "" : "s"}`)
@@ -634,6 +643,13 @@ function ReasoningEntryList({
                     entry={entry}
                 />
             )
+        } else if (entry.type === "memory_recall") {
+            nodes.push(
+                <MemoryRecallBlock
+                    key={`${entry.id}-${index}`}
+                    entry={entry}
+                />
+            )
         } else {
             nodes.push(
                 <AgentCallBlock
@@ -651,7 +667,7 @@ function ReasoningEntryList({
 
 function ContextCompactionBlock({ entry }: { entry: ContextCompactionReasoningEntry }) {
     return (
-        <div className="relative z-10 flex max-w-full items-start gap-3 bg-background py-1 text-left">
+        <div className="relative z-10 flex max-w-full items-start gap-3 py-1 text-left">
             <RefreshCw className="mt-[3px] size-4 shrink-0 text-muted-foreground bg-background rounded-full" />
             <span className="min-w-0">
                 <span className="block truncate text-[14px] font-medium tracking-tight text-muted-foreground">
@@ -663,6 +679,116 @@ function ContextCompactionBlock({ entry }: { entry: ContextCompactionReasoningEn
             </span>
         </div>
     )
+}
+
+function MemoryRecallBlock({ entry }: { entry: MemoryRecallReasoningEntry }) {
+    const [expanded, setExpanded] = React.useState<Set<number>>(() => new Set())
+    const [fullSnippets, setFullSnippets] = React.useState<Record<number, string>>({})
+    const loadingFullSnippetsRef = React.useRef<Set<number>>(new Set())
+
+    const loadFullSnippet = React.useCallback(async (i: number, hit: MemoryRecallReasoningEntry["hits"][number]) => {
+        if (fullSnippets[i] || loadingFullSnippetsRef.current.has(i)) return
+        loadingFullSnippetsRef.current.add(i)
+        try {
+            const res = await fetch("/api/memory/chunk", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                cache: "no-store",
+                body: JSON.stringify({
+                    id: hit.id,
+                    source: hit.source,
+                    title: hit.title,
+                    snippet: hit.snippet,
+                }),
+            })
+            if (!res.ok) return
+            const data = (await res.json().catch(() => null)) as { text?: unknown } | null
+            const text = data?.text
+            if (typeof text === "string" && text.trim()) {
+                setFullSnippets((prev) => ({ ...prev, [i]: text.trim() }))
+            }
+        } finally {
+            loadingFullSnippetsRef.current.delete(i)
+        }
+    }, [fullSnippets])
+
+    const toggle = (i: number, hit: MemoryRecallReasoningEntry["hits"][number]) => {
+        const willOpen = !expanded.has(i)
+        setExpanded((prev) => {
+            const next = new Set(prev)
+            if (next.has(i)) next.delete(i)
+            else next.add(i)
+            return next
+        })
+        if (willOpen) void loadFullSnippet(i, hit)
+    }
+
+    const n = entry.hits.length
+    return (
+        <div className="relative z-10 flex max-w-full items-start gap-3 py-1 text-left">
+            <Brain className="mt-[3px] size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
+            <div className="min-w-0 flex-1">
+                <span className="block text-[14px] font-medium tracking-tight text-muted-foreground">
+                    Recalled {n} {n === 1 ? "note" : "notes"} from memory
+                </span>
+                <span className="mb-1 block text-[11px] text-muted-foreground/75">
+                    Surfaced by similarity to your message · click a note to see what was injected
+                </span>
+                <ul className="flex max-h-[360px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+                    {entry.hits.map((hit, i) => {
+                        const isOpen = expanded.has(i)
+                        const displayTitle = displayMemoryHitTitle(hit.source, hit.title)
+                        const displaySnippet = fullSnippets[i] ?? hit.snippet
+                        return (
+                            <li key={`${hit.source}-${i}`} className="min-w-0">
+                                <button
+                                    type="button"
+                                    onClick={() => toggle(i, hit)}
+                                    aria-expanded={isOpen}
+                                    className="flex w-full min-w-0 items-start gap-2 rounded-md px-2 py-1 text-left transition-colors hover:bg-muted/60"
+                                >
+                                    <ChevronDown
+                                        className={cn(
+                                            "mt-0.5 size-3.5 shrink-0 text-muted-foreground/60 transition-transform",
+                                            isOpen ? "rotate-0" : "-rotate-90"
+                                        )}
+                                    />
+                                    <span className="min-w-0 flex-1 whitespace-normal break-words text-[12.5px] leading-snug text-muted-foreground" title={displayTitle}>
+                                        {displayTitle}
+                                    </span>
+                                    <span className="mt-0.5 shrink-0 rounded-full bg-muted px-1.5 py-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/75" title={`relevance ${hit.score.toFixed(2)}`}>
+                                        {hit.score.toFixed(2)}
+                                    </span>
+                                </button>
+                                {isOpen && (
+                                    <p className="mb-1 ml-7 mr-2 mt-0.5 whitespace-pre-wrap break-words rounded-md border-l-2 border-border bg-muted/40 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground/90">
+                                        {displaySnippet}
+                                    </p>
+                                )}
+                            </li>
+                        )
+                    })}
+                </ul>
+            </div>
+        </div>
+    )
+}
+
+function displayMemoryHitTitle(source: string, rawTitle: string): string {
+    const cleanSource = source.trim()
+    const cleanTitle = rawTitle.trim() || cleanSource
+    const prefix = `${cleanSource} › `
+    if (!cleanTitle.startsWith(prefix)) return cleanTitle
+
+    const heading = cleanTitle.slice(prefix.length).trim()
+    const sourceLabel = cleanSource.replace(/\.md$/i, "").replace(/[\\/]+/g, " ")
+    return normalizeMemoryTitlePart(sourceLabel) === normalizeMemoryTitlePart(heading)
+        ? cleanSource
+        : cleanTitle
+}
+
+function normalizeMemoryTitlePart(value: string): string {
+    return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "")
 }
 
 function ToolCallBlock({
@@ -716,13 +842,13 @@ function GenericAgentCallBlock({
     const toolCount = countAgentTools(entry)
     const statusText = formatAgentStatus(entry.status)
     return (
-        <div className="relative z-10 flex max-w-full bg-background py-1 text-left">
+        <div className="relative z-10 flex max-w-full py-1 text-left">
             <button
                 type="button"
                 onClick={() => onOpen?.(entry)}
                 className="group flex w-max max-w-full items-start gap-3 text-left"
             >
-                <FileText className="mt-[3px] size-4 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors" />
+                <FileText className="mt-[3px] size-4 shrink-0 rounded-full bg-background text-muted-foreground transition-colors group-hover:text-foreground" />
                 <span className="min-w-0">
                     <span className="block truncate text-[14px] font-medium tracking-tight text-muted-foreground group-hover:text-foreground transition-colors">
                         {entry.title || entry.agentName}
@@ -748,7 +874,7 @@ function BrowserAgentCallBlock({
     const awaitingUser = isBrowserAgentAwaitingUser(entry)
     const browserSessionId = browserSessionIdFromContent(entry.content)
     return (
-        <div className="relative z-10 flex max-w-full flex-col gap-2 bg-background py-1 text-left">
+        <div className="relative z-10 flex max-w-full flex-col gap-2 py-1 text-left">
             <div className="ml-7 grid w-[calc(100%_-_1.75rem)] max-w-[760px] gap-2">
                 <BrowserAgentLiveView active={entry.status === "running" || awaitingUser} sessionId={browserSessionId} onOpenDetails={onOpen ? () => onOpen(entry) : undefined} />
                 {awaitingUser && (

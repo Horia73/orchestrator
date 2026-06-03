@@ -18,7 +18,6 @@ import {
     Bar,
     BarChart,
     CartesianGrid,
-    Legend,
     ResponsiveContainer,
     Tooltip,
     XAxis,
@@ -289,7 +288,7 @@ function UsageContent({ data }: { data: UsageReport }) {
             <KpiCards totals={data.totals} previous={data.previousTotals} />
 
             <div className="grid min-w-0 grid-cols-1 gap-4 lg:grid-cols-2">
-                <ChartCard title="Tokens per day" subtitle="Stacked input · output · thinking">
+                <ChartCard title="Tokens per day" subtitle="Total tokens (input + output + thinking, excl. cached)">
                     <TokensChart daily={data.daily} />
                 </ChartCard>
                 <ChartCard title="Estimated cost per day" subtitle="USD, based on registry pricing">
@@ -428,9 +427,7 @@ function ChartCard({ title, subtitle, children }: {
 function TokensChart({ daily }: { daily: UsageReport["daily"] }) {
     const data = daily.map(d => ({
         date: d.date,
-        input: Math.max(0, d.inputTokens - (d.cachedTokens ?? 0)),
-        output: d.outputTokens,
-        thinking: d.thinkingTokens,
+        total: Math.max(0, d.inputTokens - (d.cachedTokens ?? 0)) + d.outputTokens + d.thinkingTokens,
     }))
 
     return (
@@ -442,13 +439,7 @@ function TokensChart({ daily }: { daily: UsageReport["daily"] }) {
                 <Tooltip
                     content={<ChartTooltip valueFormatter={v => v.toLocaleString()} />}
                 />
-                <Legend
-                    iconSize={8}
-                    wrapperStyle={{ fontSize: 11, paddingTop: 8 }}
-                />
-                <Area type="monotone" dataKey="input" stackId="1" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.25} name="Input" />
-                <Area type="monotone" dataKey="output" stackId="1" stroke="#10b981" fill="#10b981" fillOpacity={0.25} name="Output" />
-                <Area type="monotone" dataKey="thinking" stackId="1" stroke="#a855f7" fill="#a855f7" fillOpacity={0.25} name="Thinking" />
+                <Area type="monotone" dataKey="total" stroke="#3b82f6" fill="#3b82f6" fillOpacity={0.2} name="Total tokens" />
             </AreaChart>
         </ResponsiveContainer>
     )

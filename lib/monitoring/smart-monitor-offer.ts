@@ -112,8 +112,9 @@ const GMAIL_COPY: OfferCopy = {
         "- mail from specific senders (Mom, your boss, particular customers)",
         "- subjects containing urgent words (\"urgent\", \"action required\", whatever you tell me)",
         "- anything matching specific Gmail labels or search queries",
+        "- triage the noise: I can learn which newsletters and notifications you always archive, then offer to auto-archive them — or unsubscribe you — once I'm sure",
         "",
-        "Nothing happens until you tell me what to watch. I learn over time which alerts you ignore and quiet them down on my own.",
+        "Nothing happens until you tell me what to watch. I learn over time which alerts you ignore and quiet them down on my own, and I never archive or unsubscribe without asking first.",
     ].join("\n"),
 }
 
