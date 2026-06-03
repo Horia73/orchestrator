@@ -128,11 +128,23 @@ export class ClaudeCodeProvider implements AIProvider {
         // access to the registry, db, and delegation runner.
         const tools = customToolsForClaudeCode(options.tools ?? [])
         const nativeToolNames = claudeCodeToolNames(options.builtins ?? [])
-        if (nativeToolNames.length > 0) {
-            args.push('--tools', nativeToolNames.join(','))
+        const hasMcpTools = tools.length > 0 && Boolean(options.toolContext)
+        // Claude Code 2.x DEFERS MCP (custom) tool schemas: they are not placed
+        // in the active tool list at launch — the model must load them on demand
+        // via the ToolSearch built-in (e.g. `select:mcp__orch-tools__set_task_state`).
+        // Our `--tools` allowlist restricts the built-in set to the workspace
+        // tools and would exclude ToolSearch, which leaves EVERY orch tool
+        // (set_task_state, notify_inbox, delegate_to, …) undiscoverable — the
+        // model then dead-ends on "No such tool available". So expose ToolSearch
+        // whenever we bridge custom tools through the MCP server.
+        const nativeToolsForRun = hasMcpTools && !nativeToolNames.includes('ToolSearch')
+            ? [...nativeToolNames, 'ToolSearch']
+            : nativeToolNames
+        if (nativeToolsForRun.length > 0) {
+            args.push('--tools', nativeToolsForRun.join(','))
         }
 
-        if (tools.length > 0 && options.toolContext) {
+        if (hasMcpTools && options.toolContext) {
             const token = createBinding(options.toolContext, tools)
             cleanups.push(() => clearBinding(token))
 
@@ -157,12 +169,7 @@ export class ClaudeCodeProvider implements AIProvider {
             // and project-level .mcp.json. Otherwise stale entries from the
             // user's own dev environment leak into agent runs.
             args.push('--strict-mcp-config')
-            if (nativeToolNames.length === 0) {
-                // Keep orchestrated runs explicit: no native tools unless the
-                // caller requested them via AgentConfig.builtins.
-                args.push('--tools', '')
-            }
-            args.push('--allowedTools', [...nativeToolNames, `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}`].join(','))
+            args.push('--allowedTools', [...nativeToolsForRun, `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}`].join(','))
             // No human in the loop — accept whatever tools we expose.
             args.push('--permission-mode', 'bypassPermissions')
         } else if (nativeToolNames.length > 0) {

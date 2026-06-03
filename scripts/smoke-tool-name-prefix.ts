@@ -82,14 +82,17 @@ const prefixed = buildToolsSection(ctx(CLAUDE_CODE_PREFIX))
 check('prefixed: set_task_state listed as mcp__orch-tools__set_task_state', prefixed.includes(`- ${CLAUDE_CODE_PREFIX}set_task_state:`))
 check('prefixed: ReportAgentNeed listed as mcp__orch-tools__ReportAgentNeed', prefixed.includes(`- ${CLAUDE_CODE_PREFIX}ReportAgentNeed:`))
 check('prefixed: no bare "- set_task_state:" list entry', !prefixed.includes('- set_task_state:'))
-check('prefixed: mapping note instructs to prepend the prefix', prefixed.includes('prepend') && prefixed.includes(CLAUDE_CODE_PREFIX))
+check(
+    'prefixed: note instructs on-demand load via ToolSearch select:<prefix>',
+    prefixed.includes('ToolSearch') && prefixed.includes(`select:${CLAUDE_CODE_PREFIX}`)
+)
 
 // --- bare rendering (codex / API providers) ---------------------------------
 
 const bare = buildToolsSection(ctx(undefined))
 check('bare: set_task_state listed by bare id', bare.includes('- set_task_state:'))
 check('bare: no mcp__orch-tools__ prefix anywhere', !bare.includes('mcp__orch-tools__'))
-check('bare: plain header, no mapping note', bare.includes('Tools available in this runtime:') && !bare.includes('prepend'))
+check('bare: plain header, no ToolSearch note', bare.includes('Tools available in this runtime:') && !bare.includes('ToolSearch'))
 
 if (failures) {
     console.error(`\n${failures} check(s) failed`)

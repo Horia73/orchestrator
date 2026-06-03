@@ -255,10 +255,15 @@ export function buildToolsSection(ctx: PromptContext): string {
         : ''
 
     // When custom tools are namespaced, the names elsewhere in this prompt
-    // (briefs, doctrine, prose) use the bare id. State the mapping once so a
-    // bare reference like `set_task_state` is still called as the prefixed name.
+    // (briefs, doctrine, prose) use the bare id. State the mapping AND the
+    // on-demand load step once, so a bare reference like `set_task_state` is
+    // both resolved to the prefixed name and actually loaded before the call.
+    // The prefix is set by providers that defer custom-tool schemas (Claude
+    // Code's MCP bridge): the tool is NOT in the active list until loaded via
+    // ToolSearch, so a direct call without loading fails "No such tool available".
+    const example = ctx.availableTools[0]?.name ?? 'tool'
     const namingNote = prefix && ctx.availableTools.length > 0
-        ? `Call each tool above by the exact name shown — your runtime exposes them under the \`${prefix}\` namespace, so the bare id is not callable. Anywhere else in these instructions a tool is named without that prefix (e.g. \`${ctx.availableTools[0].name}\`), prepend \`${prefix}\` and call \`${prefix}${ctx.availableTools[0].name}\`. Native built-ins keep their bare names.`
+        ? `The tools above are exposed under the \`${prefix}\` namespace and load on demand — each may NOT be in your active tool list until you load it. To use one, first call ToolSearch with \`select:${prefix}<name>\` (e.g. \`select:${prefix}${example}\`), then call it by that exact prefixed name. Anywhere else in these instructions a tool is named without the prefix (e.g. \`${example}\`), it means \`${prefix}${example}\`. Native built-ins keep their bare names and need no loading.`
         : 'Tools available in this runtime:'
 
     return [
