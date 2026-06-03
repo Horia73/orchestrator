@@ -48,8 +48,6 @@ import {
   logRequestAbort,
   logToolCall,
 } from "@/lib/observability/store"
-import { ArtifactParser } from "@/lib/artifacts/parser"
-import type { ArtifactOpenAttrs } from "@/lib/artifacts/schema"
 import { insertArtifact } from "@/lib/artifacts/store"
 import { stripWrappingCodeFence } from "@/lib/artifacts/sanitize"
 import {
@@ -93,74 +91,15 @@ import {
   getRecalledMemory,
   type RecalledMemory,
 } from "@/lib/memory/recall"
+import {
+  requestMessagesFromBody,
+  shouldTryModelFallback,
+  type ChatRequestBody,
+} from "./route-request"
+import { createArtifactStreamBridge } from "./artifact-stream"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
 const STREAM_PROGRESS_PERSIST_INTERVAL_MS = 250
-
-type ChatRequestBody = {
-  conversationId?: unknown
-  messageId?: unknown
-  newMessage?: unknown
-  messages?: unknown
-  promptContext?: unknown
-  activateIntegrations?: unknown
-}
-
-function isRequestMessage(value: unknown): value is Message {
-  if (!value || typeof value !== "object") return false
-  const candidate = value as Partial<Message>
-  return (
-    typeof candidate.id === "string" &&
-    (candidate.role === "user" || candidate.role === "assistant") &&
-    typeof candidate.content === "string" &&
-    typeof candidate.timestamp === "number" &&
-    Number.isFinite(candidate.timestamp)
-  )
-}
-
-function slimRequestMessage(message: Message): Message {
-  return {
-    id: message.id,
-    role: message.role,
-    content: message.content,
-    attachments: Array.isArray(message.attachments)
-      ? message.attachments
-      : undefined,
-    timestamp: message.timestamp,
-  }
-}
-
-function requestMessagesFromBody(body: ChatRequestBody): Message[] {
-  if (isRequestMessage(body.newMessage)) {
-    return [slimRequestMessage(body.newMessage)]
-  }
-  if (!Array.isArray(body.messages)) return []
-  return body.messages.filter(isRequestMessage).map(slimRequestMessage)
-}
-
-function shouldTryModelFallback(error: string | null | undefined): boolean {
-  const message = (error ?? "").toLowerCase()
-  if (!message || message.includes("aborted")) return false
-  return (
-    message.includes("api key") ||
-    message.includes("quota") ||
-    message.includes("rate limit") ||
-    message.includes("rate_limit") ||
-    message.includes("out of usage") ||
-    message.includes("usage limit") ||
-    message.includes("resource_exhausted") ||
-    message.includes("exhausted") ||
-    message.includes("overloaded") ||
-    message.includes("capacity") ||
-    message.includes("unavailable") ||
-    message.includes("expired") ||
-    message.includes("429") ||
-    message.includes("503") ||
-    message.includes("401") ||
-    message.includes("model") ||
-    message.includes("streaming")
-  )
-}
 
 export async function POST(request: Request) {
   const requestOrigin = resolveRequestOrigin(request)
@@ -504,26 +443,15 @@ export async function POST(request: Request) {
   let recallNoteEmitted = false
   const getRecall = (): Promise<RecalledMemory> => {
     if (!recalledMemoryPromise) {
-      recalledMemoryPromise = getRecalledMemory(latestUserMessage?.content).catch(
-        () => ({ block: "", hits: [] })
-      )
+      recalledMemoryPromise = getRecalledMemory(
+        latestUserMessage?.content
+      ).catch(() => ({ block: "", hits: [] }))
     }
     return recalledMemoryPromise
   }
 
   // Start time per tool call so we can record durationMs in tool_logs.
   const toolStartTimes = new Map<string, number>()
-
-  // Per-request artifact parser. Accumulates per-token buffers so we can
-  // persist the finished artifact to SQLite on close. The full assistant
-  // text (including tags) still goes to messages.content so reload works
-  // even before the artifact-aware renderer ships.
-  const artifactParser = new ArtifactParser()
-  interface PendingArtifact {
-    attrs: ArtifactOpenAttrs
-    content: string
-  }
-  const pendingArtifacts = new Map<string, PendingArtifact>()
 
   // Accumulators for the final DB update
   let accThinking = ""
@@ -589,7 +517,8 @@ export async function POST(request: Request) {
         thinking: accThinking || "",
         thinkingDuration: opts?.thinkingDuration,
         toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
-        attachments: persistAttachments.length > 0 ? persistAttachments : undefined,
+        attachments:
+          persistAttachments.length > 0 ? persistAttachments : undefined,
         // Keep stable ordering for this assistant message.
         timestamp: assistantMsg.timestamp,
       })
@@ -851,6 +780,11 @@ export async function POST(request: Request) {
           /* controller closed */
         }
       }
+      const artifactStream = createArtifactStreamBridge({
+        conversationId,
+        messageId,
+        send,
+      })
       let activeAttempt = preparedInitial
 
       const publishContextUsage = (
@@ -981,77 +915,82 @@ export async function POST(request: Request) {
             }
 
             return messagesForProvider.map((m) => {
-            const messageAttachments = Array.isArray(m.attachments)
-              ? m.attachments
-              : []
-            const localAttachmentContext =
-              m.role === "user"
-                ? buildAttachmentContext(messageAttachments, {
-                    includeLocalPath: includeLocalAttachmentContext,
-                  })
-                : ""
-            const messageContent =
-              typeof m.content === "string" ? m.content : ""
-            const audioContext =
-              m.role === "user" ? (audioContextByMessageId.get(m.id) ?? "") : ""
-            const runtimePromptContext =
-              m.id === promptContextMessageId
-                ? [
-                    '<runtime_context source="Smart Maps UI">',
-                    "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with map-aware tools and artifacts; do not quote it back verbatim.",
-                    promptContext,
-                    "</runtime_context>",
-                  ].join("\n")
-                : ""
-            const recalledMemory =
-              m.id === latestUserMessage?.id ? recalledMemoryContext : ""
-            const result: {
-              role: string
-              content: string
-              attachments?: MessageAttachment[]
-            } = {
-              role: m.role,
-              content: appendPromptContext(
-                appendPromptContext(
+              const messageAttachments = Array.isArray(m.attachments)
+                ? m.attachments
+                : []
+              const localAttachmentContext =
+                m.role === "user"
+                  ? buildAttachmentContext(messageAttachments, {
+                      includeLocalPath: includeLocalAttachmentContext,
+                    })
+                  : ""
+              const messageContent =
+                typeof m.content === "string" ? m.content : ""
+              const audioContext =
+                m.role === "user"
+                  ? (audioContextByMessageId.get(m.id) ?? "")
+                  : ""
+              const runtimePromptContext =
+                m.id === promptContextMessageId
+                  ? [
+                      '<runtime_context source="Smart Maps UI">',
+                      "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with map-aware tools and artifacts; do not quote it back verbatim.",
+                      promptContext,
+                      "</runtime_context>",
+                    ].join("\n")
+                  : ""
+              const recalledMemory =
+                m.id === latestUserMessage?.id ? recalledMemoryContext : ""
+              const result: {
+                role: string
+                content: string
+                attachments?: MessageAttachment[]
+              } = {
+                role: m.role,
+                content: appendPromptContext(
                   appendPromptContext(
-                    appendPromptContext(messageContent, localAttachmentContext),
-                    audioContext
+                    appendPromptContext(
+                      appendPromptContext(
+                        messageContent,
+                        localAttachmentContext
+                      ),
+                      audioContext
+                    ),
+                    runtimePromptContext
                   ),
-                  runtimePromptContext
+                  recalledMemory
                 ),
-                recalledMemory
-              ),
-            }
-
-            if (messageAttachments.length) {
-              const atts: MessageAttachment[] = []
-              for (const att of messageAttachments) {
-                if (
-                  !att ||
-                  typeof att.id !== "string" ||
-                  typeof att.mimeType !== "string"
-                )
-                  continue
-                // Only include files the provider supports natively
-                if (
-                  !isFileSupportedByProvider(
-                    prepared.settings.provider,
-                    att.mimeType
-                  )
-                )
-                  continue
-                const filePath = resolveExistingUploadPath(att.id)
-                if (!filePath) continue
-                atts.push({
-                  filePath,
-                  mimeType: att.mimeType.split(";")[0].trim(),
-                })
               }
-              if (atts.length) result.attachments = atts
-            }
 
-            return result
-          })
+              if (messageAttachments.length) {
+                const atts: MessageAttachment[] = []
+                for (const att of messageAttachments) {
+                  if (
+                    !att ||
+                    typeof att.id !== "string" ||
+                    typeof att.mimeType !== "string"
+                  )
+                    continue
+                  // Only include files the provider supports natively
+                  if (
+                    !isFileSupportedByProvider(
+                      prepared.settings.provider,
+                      att.mimeType
+                    )
+                  )
+                    continue
+                  const filePath = resolveExistingUploadPath(att.id)
+                  if (!filePath) continue
+                  atts.push({
+                    filePath,
+                    mimeType: att.mimeType.split(";")[0].trim(),
+                  })
+                }
+                if (atts.length) result.attachments = atts
+              }
+
+              return result
+            })
           }
 
           // Shared content-chunk pipeline. Called for every text fragment that
@@ -1070,64 +1009,7 @@ export async function POST(request: Request) {
             appendContentChunk(text)
             if (text.length > 0) streamMode = "content"
             if (text.length > 0) send({ type: "content", content: text })
-            for (const ev of artifactParser.feed(text)) {
-              switch (ev.kind) {
-                case "prose":
-                  break
-                case "artifact_start":
-                  pendingArtifacts.set(ev.clientToken, {
-                    attrs: ev.attrs,
-                    content: "",
-                  })
-                  send({
-                    type: "artifact_start",
-                    clientToken: ev.clientToken,
-                    attrs: ev.attrs,
-                  })
-                  break
-                case "artifact_chunk": {
-                  const p = pendingArtifacts.get(ev.clientToken)
-                  if (p) p.content += ev.text
-                  break
-                }
-                case "artifact_end": {
-                  const p = pendingArtifacts.get(ev.clientToken)
-                  pendingArtifacts.delete(ev.clientToken)
-                  if (p) {
-                    try {
-                      const row = insertArtifact({
-                        conversationId,
-                        messageId,
-                        identifier: p.attrs.identifier,
-                        type: p.attrs.type,
-                        title: p.attrs.title,
-                        language: p.attrs.language ?? null,
-                        display: p.attrs.display ?? null,
-                        content: stripWrappingCodeFence(p.content),
-                      })
-                      send({
-                        type: "artifact_end",
-                        clientToken: ev.clientToken,
-                        artifact: row,
-                      })
-                    } catch (err) {
-                      send({
-                        type: "artifact_error",
-                        clientToken: ev.clientToken,
-                        message:
-                          err instanceof Error ? err.message : "persist failed",
-                      })
-                    }
-                  } else {
-                    send({ type: "artifact_end", clientToken: ev.clientToken })
-                  }
-                  break
-                }
-                case "artifact_error":
-                  send({ type: "artifact_error", message: ev.message })
-                  break
-              }
-            }
+            artifactStream.feed(text)
             persistAssistantProgress()
           }
 
@@ -1417,58 +1299,10 @@ export async function POST(request: Request) {
                   }
 
                   accAttachments = meta.attachments ?? []
-                  // Flush any trailing parser state (unterminated tags
-                  // become prose; unterminated artifacts are closed
-                  // and persisted with whatever content arrived).
-                  for (const ev of artifactParser.end()) {
-                    if (ev.kind === "prose") {
-                      // Unterminated tag bytes (e.g. '<artifac'
-                      // at end-of-stream). The bytes were already
-                      // sent to the client via the raw content
-                      // stream above — don't duplicate.
-                    } else if (ev.kind === "artifact_chunk") {
-                      // Accumulate for DB persistence only — body
-                      // bytes already on the wire as raw content.
-                      const p = pendingArtifacts.get(ev.clientToken)
-                      if (p) p.content += ev.text
-                    } else if (ev.kind === "artifact_end") {
-                      const p = pendingArtifacts.get(ev.clientToken)
-                      pendingArtifacts.delete(ev.clientToken)
-                      if (p) {
-                        try {
-                          const row = insertArtifact({
-                            conversationId,
-                            messageId,
-                            identifier: p.attrs.identifier,
-                            type: p.attrs.type,
-                            title: p.attrs.title,
-                            language: p.attrs.language ?? null,
-                            display: p.attrs.display ?? null,
-                            content: p.content,
-                          })
-                          send({
-                            type: "artifact_end",
-                            clientToken: ev.clientToken,
-                            artifact: row,
-                          })
-                        } catch (err) {
-                          send({
-                            type: "artifact_error",
-                            clientToken: ev.clientToken,
-                            message:
-                              err instanceof Error
-                                ? err.message
-                                : "persist failed",
-                          })
-                        }
-                      } else {
-                        send({
-                          type: "artifact_end",
-                          clientToken: ev.clientToken,
-                        })
-                      }
-                    }
-                  }
+                  // Flush any trailing parser state (unterminated tags become
+                  // prose; unterminated artifacts are closed and persisted with
+                  // whatever content arrived).
+                  artifactStream.flush()
 
                   // Save final message and emit an add_message sync event.
                   terminalMessageStatus = "ok"

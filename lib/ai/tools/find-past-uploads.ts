@@ -1,6 +1,7 @@
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import { listAllAttachments } from '@/lib/db'
 import { resolveExistingUploadPath } from '@/lib/uploads'
+import { kickLibrarySync } from '@/lib/memory/library'
 
 // ---------------------------------------------------------------------------
 // find_past_uploads — locate a file the user uploaded in a PAST conversation.
@@ -74,6 +75,12 @@ export function executeFindPastUploads(args: Record<string, unknown>): ToolResul
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Failed to read uploads.' }
     }
+
+    // The user is in "find a file I sent before" mode. This keyword lookup's
+    // natural follow-up is library_search (content/visual search over the same
+    // assets), so warm its multimodal index in the background now — debounced,
+    // and a no-op unless a multimodal embedding model is active.
+    kickLibrarySync()
 
     const seen = new Set<string>()
     const matches: Array<Record<string, unknown>> = []

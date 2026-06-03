@@ -1,7 +1,4 @@
-import type {
-  ToolExecutionContext,
-  ToolResult,
-} from "@/lib/ai/agents/types"
+import type { ToolExecutionContext, ToolResult } from "@/lib/ai/agents/types"
 
 /**
  * Executor signature: tools may be sync or async, and may consult an
