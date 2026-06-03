@@ -392,6 +392,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         conversationId: ctx.conversationId,
         origin: appOrigin || undefined,
         agentId: ctx.agentId,
+        preactivatedCapabilities: ctx.preactivatedCapabilities,
     }
     // Short per-tool blurbs for the gated-capability menus in <integrations> /
     // <subsystems>, so the agent knows what each gated tool does and activates

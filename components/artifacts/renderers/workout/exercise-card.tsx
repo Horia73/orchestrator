@@ -25,6 +25,7 @@ export function ExerciseCard({
     units,
     sessionApi,
     interactive = false,
+    groupRestSec,
     barKg,
     plates,
     className,
@@ -33,6 +34,7 @@ export function ExerciseCard({
     units: WorkoutUnits
     sessionApi?: WorkoutSessionApi
     interactive?: boolean
+    groupRestSec?: number
     barKg?: number
     plates?: readonly number[]
     className?: string
@@ -77,6 +79,7 @@ export function ExerciseCard({
                         sessionApi={sessionApi}
                         interactive={interactive}
                         isCurrent={i === currentIndex}
+                        groupRestSec={groupRestSec}
                         barKg={barKg}
                         plates={plates}
                     />
@@ -97,6 +100,7 @@ export function ExerciseCard({
                             units={units}
                             sessionApi={sessionApi}
                             interactive={interactive}
+                            groupRestSec={groupRestSec}
                             barKg={barKg}
                             plates={plates}
                         />

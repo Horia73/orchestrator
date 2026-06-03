@@ -263,12 +263,19 @@ export const WATCHLIST_TOOL_IDS: string[] = [
     'WatchlistRecordProductPrice',
 ]
 
+export const WORKOUT_HISTORY_TOOL_IDS: string[] = [
+    'GetExerciseHistory',
+    'ListExerciseHistory',
+    'GetRecentWorkouts',
+]
+
 // Smart Monitor — watch CRUD + capability discovery + the learning-loop
 // feedback channel called at the end of every consolidated wake.
 //
-// The wake brief restricts the orchestrator to notify_inbox +
-// monitor_wake_feedback only — the monitor_watch_* lifecycle tools are for
-// the user-conversation context (set up, adjust, inspect), not for wakes.
+// The monitor_watch_* lifecycle tools are for the user-conversation context
+// (set up, adjust, inspect), not for scheduled wakes. Wakes still get
+// notify_inbox/monitor_wake_feedback and per-source connector tools through
+// run-scoped capability warmup.
 export const MONITORING_TOOL_IDS: string[] = [
     'monitor_describe_sources',
     'monitor_watch_list',

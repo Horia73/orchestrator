@@ -37,6 +37,8 @@ export interface ExposureOptions {
     origin?: string
     /** Agent the exposure is for. Drives per-agent default activation (below). */
     agentId?: string
+    /** Capability ids warmed up for this single run without storing activation. */
+    preactivatedCapabilities?: readonly string[]
 }
 
 // ---------------------------------------------------------------------------
@@ -72,6 +74,7 @@ export function getDefaultActivatedCapabilities(agentId: string | undefined): re
 function effectiveActivated(opts: ExposureOptions): Set<string> {
     const set = getActivatedIntegrations(opts.conversationId)
     for (const id of getDefaultActivatedCapabilities(opts.agentId)) set.add(id)
+    for (const id of opts.preactivatedCapabilities ?? []) set.add(id)
     return set
 }
 

@@ -2,10 +2,30 @@
 // model judgement. Deterministic gates belong in Microscripts.
 
 import { describeAction, describeRule } from '../monitor/describe'
-import type { SuppressPattern, WatchEvent } from '../monitor/schema'
+import type { MonitorWatch, SuppressPattern, WatchEvent } from '../monitor/schema'
 import { listMonitorWatches, listWatchEvents } from '../monitor/store'
 import { listTaskRuns, type TaskRunRecord } from '../scheduling/store'
 import { getConfig } from '../config'
+
+const SMART_MONITOR_SOURCE_CAPABILITIES: Record<string, readonly string[]> = {
+    gmail: ['gmail'],
+    google_calendar: ['google-calendar'],
+    whatsapp: ['whatsapp'],
+    home_assistant: ['home-assistant'],
+    weather: ['weather'],
+}
+
+export function getSmartMonitorWakePreactivatedCapabilities(
+    watches: readonly MonitorWatch[] = listMonitorWatches({ enabled: true }),
+): string[] {
+    const ids = new Set<string>(['monitoring'])
+    for (const watch of watches) {
+        for (const id of SMART_MONITOR_SOURCE_CAPABILITIES[watch.source] ?? []) {
+            ids.add(id)
+        }
+    }
+    return Array.from(ids)
+}
 
 function clipUnknownJson(value: unknown, maxChars = 4000): string {
     let s: string
@@ -163,6 +183,7 @@ export function buildSmartMonitorAgentPrompt(options: {
 }): string {
     const { now, taskId, taskState, detected = [], wakeReason, gate } = options
     const watches = listMonitorWatches({ enabled: true })
+    const preactivated = getSmartMonitorWakePreactivatedCapabilities(watches)
     const lines: string[] = []
     const minMinutes = gate ? Math.round(gate.minWakeGapMs / 60_000) : 15
     const maxHours = gate ? Math.max(1, Math.round(gate.maxWakeGapMs / 3_600_000)) : 6
@@ -183,7 +204,8 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push('- Beyond deciding what to notify, harvest durable knowledge from what you observe. When an observed message or change reveals a useful, non-secret fact about the user\'s world — who a person is and their role, a commitment or date, a recurring sender/context, an order or trip in progress, a clearly revealed preference — record it compactly in today\'s MEMORY_DAY working-memory file (via the Write/Edit file tools), labeled inferred when you are not certain. This is separate from notifying: most harvested facts are NOT worth interrupting the user, so harvest silently without a notify_inbox. Keep it to genuinely useful facts, never secrets (no codes, tokens, card numbers), and never a transcript dump. The nightly Memory reflection promotes the facts that recur or stay relevant into USER.md and prunes the rest, so you do not need to perfect them now — a compact daily note is enough.')
     lines.push('- Watch records below are recurring-work boundaries and user-intent hints. Connector rules are fetch hints; custom rules are model-owned check prompts. They are not preset notification rules and not proof that the user should be interrupted.')
     lines.push('- Do not invent canned urgent keyword lists. Extract the user intent from the watch title/target/rule, the durable memory already in your prompt, and your task state. If the intent is too vague, stay conservative and mention the missing capability in your normal output without notifying unless there is a real issue.')
-    lines.push('- Use only the tools needed by each watch. For connector watches, activate the matching integration before reading. For custom watches, follow the custom_prompt with the available workspace, memory, runtime-history, and integration tools that fit that instruction.')
+    lines.push(`- Matching source capabilities are pre-activated for this wake when they have enabled watches: ${preactivated.join(', ')}. Their connected/read tools should already be visible; activate only additional capabilities that a custom watch genuinely needs.`)
+    lines.push('- Use only the tools needed by each watch. For connector watches, read the matching source directly when its tools are already visible; if a needed capability is not visible, activate that exact integration before reading. For custom watches, follow the custom_prompt with the available workspace, memory, runtime-history, and integration tools that fit that instruction.')
     lines.push('- If a watch needs current public-web research, do not try to combine native web search with this wake\'s action tools. Use delegate_to with the Researcher for a compact search-only subtask, then use the returned facts in this wake to decide notify_inbox, monitor_wake_feedback, and set_task_state.')
     lines.push('- Notify Inbox only for things that are important, time-sensitive, personally directed, account/security/payment related, deadline/travel/order affecting, operationally relevant, or clearly actionable under the watch intent.')
     lines.push('- For non-urgent accumulated items, summarize only when the watch/user preference calls for it or the volume is meaningfully high. Otherwise stay silent.')

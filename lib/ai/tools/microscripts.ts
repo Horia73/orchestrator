@@ -216,7 +216,7 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
                 'Runs may be triggered manually, on an interval, or by an inbound webhook subscription.',
                 'ctx is dict-like and also exposes helpers: ctx.notify, ctx.http_fetch, ctx.file_read, ctx.file_write, ctx.call_tool, ctx.continue_after, ctx.complete, ctx.pause.',
                 'trusted_python direct networking is allowed by default; direct file access is confined to the script workspace; env secrets and shell/process control are blocked by default.',
-                'A script with agent_wake permission may wake a text agent after its deterministic gate passes; the woken agent receives only the script prompt and notify_inbox if allowed.',
+                'A script with agent_wake permission may wake a text agent after its deterministic gate passes; the woken agent receives the script prompt plus read-only/context tools, may activate exactly relevant capabilities for context, and may call notify_inbox if allowed.',
                 'Parent-mediated helpers still enforce manifest permissions when they touch app integrations, Inbox notifications, or app tools.',
                 'Any blocked action error includes why it was blocked, a safe alternative, and instructions to ask the user/record AGENT_NEEDS.md if implementation is needed.',
                 'Use ctx["state"] for durable private state and return {"state": {...}} with the full next state.',

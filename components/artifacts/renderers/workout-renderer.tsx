@@ -14,6 +14,7 @@ import { WorkoutChecklist } from "./workout/workout-checklist"
 import { WorkoutActionBar } from "./workout/workout-action-bar"
 import { GroupCard } from "./workout/group-card"
 import { RestTimerBar } from "./workout/rest-timer-bar"
+import { SetTimerBar } from "./workout/set-timer-bar"
 import { SessionSummary } from "./workout/session-summary"
 
 /**
@@ -84,14 +85,6 @@ function WorkoutView({
                 <WorkoutHeader workout={workout} />
                 <WorkoutProgressStats workout={workout} sessionApi={sessionApi} />
 
-                {sessionApi.isFinished ? (
-                    <SessionSummary
-                        workout={workout}
-                        sessionApi={sessionApi}
-                        artifactId={artifactId}
-                    />
-                ) : null}
-
                 <WorkoutActionBar sessionApi={sessionApi} placement="top" />
 
                 {workout.warmup ? (
@@ -133,6 +126,14 @@ function WorkoutView({
 
                 <WorkoutActionBar sessionApi={sessionApi} placement="bottom" />
 
+                {sessionApi.isFinished ? (
+                    <SessionSummary
+                        workout={workout}
+                        sessionApi={sessionApi}
+                        artifactId={artifactId}
+                    />
+                ) : null}
+
                 {workout.attribution ? (
                     <footer className="text-xs text-muted-foreground">
                         Sursă: {workout.attribution}
@@ -140,7 +141,13 @@ function WorkoutView({
                 ) : null}
             </article>
 
-            {sessionApi.session.rest ? (
+            {sessionApi.session.activeSet ? (
+                <SetTimerBar
+                    activeSet={sessionApi.session.activeSet}
+                    onFinish={sessionApi.finishActiveSet}
+                    onCancel={sessionApi.cancelActiveSet}
+                />
+            ) : sessionApi.session.rest ? (
                 <RestTimerBar
                     rest={sessionApi.session.rest}
                     onAdjust={sessionApi.adjustRest}

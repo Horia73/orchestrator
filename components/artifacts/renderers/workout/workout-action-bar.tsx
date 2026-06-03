@@ -27,6 +27,7 @@ export function WorkoutActionBar({
     className?: string
 }) {
     const { isActive, isFinished, start, finish, reset } = sessionApi
+    const activeSet = sessionApi.session.activeSet
 
     if (isFinished) {
         if (placement === 'top') {
@@ -96,15 +97,18 @@ export function WorkoutActionBar({
         <button
             type="button"
             onClick={finish}
+            disabled={!!activeSet}
+            title={activeSet ? "Salvează sau anulează setul curent înainte de Finish workout" : undefined}
             className={cn(
                 "flex w-full items-center justify-center gap-2 rounded-xl bg-emerald-600 px-4 py-3 text-sm font-semibold text-white shadow-sm transition-transform",
                 "hover:opacity-95 active:scale-[0.99]",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-emerald-400 focus-visible:ring-offset-2",
+                "disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:opacity-100 disabled:active:scale-100",
                 className,
             )}
         >
             <CheckCircle className="size-4" strokeWidth={2} />
-            Finish workout
+            {activeSet ? "Salvează setul curent" : "Finish workout"}
         </button>
     )
 }

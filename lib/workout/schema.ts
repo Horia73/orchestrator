@@ -398,6 +398,17 @@ const ExerciseBaseSchema = z.object({
     muscleGroups: z.array(MuscleGroupSchema).min(1).max(8),
     /** Short form cues — shown in a popover behind the (i) button. */
     formCues: z.array(z.string().min(1).max(280)).max(8).optional(),
+    /** Longer exercise description shown in the info popover. Useful for
+     *  machine setup, seat/pad adjustment, range-of-motion notes, and
+     *  "what this is supposed to feel like" guidance. */
+    description: z.string().min(1).max(1000).optional(),
+    /** Optional direct demo image. Prefer stable, attribution-friendly URLs
+     *  (Wikimedia Commons, uploaded assets, vendor docs) over hotlinked
+     *  third-party thumbnails. */
+    imageUrl: z.string().url().max(2048).optional(),
+    /** Optional query for the lazy exercise-image endpoint. When absent, the
+     *  renderer searches by exercise name only after the user opens info. */
+    imageQuery: z.string().min(1).max(180).optional(),
     /** Optional alternative movements the user can swap in when the prescribed
      *  exercise isn't available (no machine, injury, etc.). Renderer surfaces
      *  these in the (i) popover under an "Alternatives" section. Each entry is

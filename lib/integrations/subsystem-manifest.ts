@@ -79,8 +79,9 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
         capability: 'Ongoing recurring model-owned work: persistent source monitoring, recurring summaries, recurring maintenance, and tell-me-when subscriptions. One consolidated scheduled agent wake handles connector-backed and custom prompt-backed watches; the agent decides what to inspect, notify, digest, and how to self-pace from history.',
         doctrine: MONITORING_DOCTRINE,
         // monitor_wake_feedback is deliberately NOT gated — it is called at the
-        // end of every consolidated wake, where the brief restricts the agent to
-        // notify_inbox + monitor_wake_feedback only and never activates anything.
+        // end of every consolidated wake. Watch lifecycle tools stay gated for
+        // user-conversation setup/inspection; source connector capabilities are
+        // warmed up per wake from the enabled watch sources.
         toolIds: [
             'monitor_describe_sources',
             'monitor_watch_list',
@@ -152,8 +153,13 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     {
         id: 'workout',
         label: 'Workout artifact schema',
-        capability: 'The exact JSON schema + named program templates for application/vnd.ant.workout artifacts (per-exercise sets, history seeding, progression). Activate before emitting a workout artifact.',
+        capability: 'The exact JSON schema + named program templates for application/vnd.ant.workout artifacts (per-exercise sets, history seeding, progression). Activate before emitting a workout artifact or answering gym/antrenament requests; use the history tools to seed weights, read notes/failures/RPE, and rotate muscle groups from recent sessions.',
         doctrine: WORKOUT_DOCTRINE,
+        toolIds: [
+            'GetExerciseHistory',
+            'ListExerciseHistory',
+            'GetRecentWorkouts',
+        ],
     },
 ]
 

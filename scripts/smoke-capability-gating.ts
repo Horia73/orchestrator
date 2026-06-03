@@ -307,6 +307,11 @@ check(
     !/is not connected|not a gated capability tool/i.test(wxRun.error ?? ''),
     wxRun.error
 )
+check(
+    'RunActivatedIntegrationTool appends target schema on gated tool validation errors',
+    /Expected WeatherShow arguments schema/i.test(wxRun.error ?? ''),
+    wxRun.error
+)
 
 // --- provider tool surface compatibility ----------------------------------
 

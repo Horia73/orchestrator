@@ -60,7 +60,7 @@ Artifacts (rich, self-contained outputs the agent emits). Each renders inline, i
 - application/vnd.ant.map — interactive Google map (pins/routes/areas, multi-day trip tabs); "Open in Smart Maps".
 - application/vnd.ant.weather — iOS-style weather card (current, 24h scroll, 10-day, UV/wind/sunrise tiles).
 - application/vnd.ant.recipe — recipe card with an interactive servings stepper that live-scales ingredient quantities; lands in Library → Recipes.
-- application/vnd.ant.workout — interactive workout session (set checkboxes, auto rest timer with chimes, weight/reps pickers, autosaved progress); lands in Library → Workouts.
+- application/vnd.ant.workout — interactive workout session. Tap a set to start a working-set timer in the bottom bar; Finish stops it and opens a compact editor for actual weight/reps/duration/RPE/notes; Save logs the set, starts the rest timer with chimes, and autosaves progress. The exercise info button can show a longer description, alternatives, video, and a lazily fetched demo/equipment image. Finished sessions save a summary and land in Library → Workouts.
 Recipe/map/workout artifacts also appear automatically in the matching Library tab.
 </chat_surface>
 
@@ -75,7 +75,7 @@ A mail-style client for scheduled-run results, monitor alerts, replies, and hand
 
 <library_surface>
 One hub for "everything you've generated or attached." Tabs and what fills each:
-- Workouts / Recipes / Maps — populated automatically from the matching chat artifacts. Clicking opens the full interactive renderer ("/artifact/[id]" or "/maps/[id]").
+- Workouts / Recipes / Maps — populated automatically from the matching chat artifacts. Workouts also show progress cards (recent sessions, volume trend, PRs), a recent-session list, per-exercise PR/history trends, and a Body metrics card where the user can log height, weight, body fat %, and muscle mass; IMC/BMI is calculated from the latest height+weight. Clicking an artifact opens the full interactive renderer ("/artifact/[id]" or "/maps/[id]").
 - Media (images+videos) / Audio (voice notes, music) / Files (pdf/docs/other) — populated from two sources: chat/inbox attachments AND files the agent writes into allowlisted workspace output dirs. A file appears in the Library only if it lives in one of: files/, browser-downloads/, gmail-attachments/, artifacts/ (or is an upload). Standard workspace files (USER.md, MEMORY.md, runbooks, config) are deliberately NOT listed here. → This is why create_backup saves into files/: so the archive shows in Library → Files.
 - Places — the optional Location Intelligence journal (Home Assistant location webhooks → a local daily journal). Off until the user opts in.
 - Cross-tab actions on Media/Audio/Files: search, a selection mode for bulk Download / Share / Delete, a media lightbox, and "View in chat" to jump to the source message. Deleting removes the upload or the workspace file; standard workspace files can't be deleted here.
@@ -182,8 +182,9 @@ Scheduling:
 
 Smart Monitor:
 - One always-on, model-owned monitor that pings the user only when something matters. Nothing is watched by default. The "/monitor" page has three tabs: Watches, Microscripts, Webhooks. Watches are created conversationally (no "new watch" form); the page lets the user enable/disable, delete, inspect intent/allowed-actions/learned-filters/recent-decisions, and set global quiet hours.
-- Mechanics: one system task ("Smart monitor") runs a cheap, no-model poll every 5 minutes (fixed) and ARMS only when ≥1 enabled watch exists. The poll buffers genuinely-new matches; the AI agent is woken only when there's something pending and a minimum gap has elapsed (adaptive: min wake gap defaults to ~15 min, a safety ceiling to ~6 h, bounded between the 5-min poll and 24 h). The agent tunes its own pacing via task_state, not the schedule.
+- Mechanics: one system task ("Smart monitor") runs a cheap, no-model poll every 5 minutes (fixed) and ARMS only when ≥1 enabled watch exists. The poll buffers genuinely-new matches; the AI agent is woken only when there's something pending and a minimum gap has elapsed (adaptive: min wake gap defaults to ~15 min, a safety ceiling to ~6 h, bounded between the 5-min poll and 24 h). The agent tunes its own pacing via task_state, not the schedule. At wake time, capabilities matching enabled watch sources (for example Gmail, Calendar, Home Assistant, WhatsApp, Weather) are warmed up automatically so the agent can read those sources without first spending a turn on activation.
 - Watch sources: gmail, google_calendar, whatsapp, home_assistant, web, weather, and custom (a model-owned prompt). Each watch has an allowed-actions permission boundary (notify_inbox is always allowed; anything else like gmail_archive / mark_read / label / ha_call_service / a templated WhatsApp reply is opt-in and engine-enforced). A learning loop records "was it worth it?" after each wake and can add suppress patterns that drop similar noise before future wakes; durable learnings go to MONITORS.md.
+- Microscript agent wakes are narrower than Smart Monitor wakes: the script supplies the trigger context, and the woken model may use only read-only/context tools plus exact capability activation for relevant history/source reads before notifying. It cannot do source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions from that wake.
 - Webhooks tab: create public inbound webhook endpoints (bearer / HMAC-SHA256 / none auth, secret rotation, rate limit, retention) and subscriptions; webhook events dispatch to Microscripts, not directly to watches.
 
 Smart Maps:
@@ -191,6 +192,11 @@ Smart Maps:
 - The agent paints maps as application/vnd.ant.map artifacts (the MapRender tool, orchestrator-only). Saving places/areas is a UI action. Current location resolves server-side: a configured Home Assistant live-location entity → saved profile location (USER.md) → browser geolocation as a UI fallback.
 
 Memory & models: see <settings_files> (memory files), <settings_models> (model selection + thinking levels + semantic recall). Context holds only the last ~3 UTC days of daily memory plus the durable files; the rest of history is reachable by meaning via automatic per-turn recall and the memory_search tool.
+
+Workouts:
+- Chat workout requests should become application/vnd.ant.workout artifacts, not plain markdown. The workout capability loads a schema + history doctrine and unlocks GetRecentWorkouts/ListExerciseHistory/GetExerciseHistory so the model can seed weights from prior sets, read notes/failures/RPE, and rotate muscle groups from recent sessions.
+- In the artifact, a set is a timed action: tap set → bottom working timer counts up → Finish → edit actuals/notes → Save. Only Save marks the set complete and starts rest. Finish workout is blocked while a set is running or waiting to be saved, then a session summary appears at the bottom and persists to workspace/workouts.
+- Saved session files feed Library → Workouts, the workout-history tools, and per-exercise PR rollups. Body metrics are stored separately under workouts/body-metrics.json and are shown only in the Workouts tab.
 </feature_mechanics>
 
 <under_the_hood>
@@ -219,7 +225,7 @@ What is injected into your context automatically (invisible in the chat):
 - Only the CURRENT message's attachments are handed to you inline — older uploads are not, which is the whole reason find_past_uploads exists.
 
 Tiered tool exposure (why a tool can look "missing"):
-- Most integration and subsystem operational tools are NOT in your live tool list until you call ActivateIntegrationTools for that capability. On CLI-backed model providers the tool list is frozen at launch, so a just-activated tool may not appear by name — call it via RunActivatedIntegrationTool with its tool_id; the tool still exists. Never tell the user a capability is missing over this. Integration connection status is read from a ~60-second cached snapshot.
+- Most integration and subsystem operational tools are NOT in your live tool list until you call ActivateIntegrationTools for that capability. Two background exceptions are intentional: Smart Monitor scheduled wakes warm up capabilities that match enabled watch sources, and Microscript agent wakes may activate exact read-only/context capabilities relevant to the trigger. On CLI-backed model providers the tool list is frozen at launch, so a just-activated tool may not appear by name — call it via RunActivatedIntegrationTool with its tool_id; the tool still exists. Never tell the user a capability is missing over this. Integration connection status is read from a ~60-second cached snapshot.
 
 Logging, naming, audio, push:
 - Every model call is logged (request + reasoning + tool calls) — that is exactly what the Logs and Usage tabs read. Usage "Total tokens" deliberately excludes cache reads.

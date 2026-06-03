@@ -33,7 +33,8 @@ export const getExerciseHistoryTool: ToolDef = {
     description: [
         'Look up the user\'s history for a specific exercise (e.g. "bench-press", "front-squat") to populate `previous` and `personalBest` on the next workout artifact.',
         'Call this for EVERY exercise you intend to include in a workout BEFORE emitting the artifact, so the user sees "Last 60×8 @ RPE 8" context and the renderer can highlight new PRs.',
-        'Returns the personal best, the last few sessions with all sets, average RPE, and an estimated 1RM. Returns `found: false` if the exercise has no recorded history — that\'s a "first time doing this" signal; pick a conservative starting weight (RPE 7).',
+        'Returns the personal best, the last few sessions with all sets, average RPE, notes/comments, failures, partial reps, and an estimated 1RM. Read notes and failed sets before progressing weight; pain/form-breakdown notes should trigger substitutions or deloads.',
+        'Returns `found: false` if the exercise has no recorded history — that\'s a "first time doing this" signal; pick a conservative starting weight (RPE 7).',
         'Exercise IDs are kebab-case slugs ("bench-press", "rdl", "ohp"). Use the same slug here that you put in the artifact\'s `exercises[].id` field.',
     ].join(' '),
     input_schema: {
@@ -74,6 +75,7 @@ export const getRecentWorkoutsTool: ToolDef = {
     description: [
         'Return summaries of the user\'s most recent N completed workout sessions (title, date, duration, sets, tonnage, PR count).',
         'Useful for "what did I do this week", deload-detection ("3 sessions in a row with RPE > 8.5"), or to avoid scheduling the same muscle group two days in a row.',
+        'Includes aggregate muscle groups and compact per-exercise summaries so you can rotate push/pull/legs/upper/lower from what the user actually trained recently.',
         'Does NOT return the full session log — call this for a quick overview, then optionally call GetExerciseHistory for deep dives per movement.',
     ].join(' '),
     input_schema: {
@@ -132,7 +134,10 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
                 durationSec: set.actualDurationSec,
                 distanceM: set.actualDistanceM,
                 rpe: set.actualRpe,
+                rir: set.actualRir,
                 failed: set.failed,
+                partialReps: set.partialReps,
+                notes: set.notes,
             })),
             totalVolumeKg: s.totalVolumeKg,
             rpeAvg: s.rpeAvg,
@@ -188,6 +193,7 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
     const sessions = slugs.map((slug) => {
         const log = readSessionLog(slug)
         if (!log) return null
+        const muscleGroups = [...new Set(log.exercises.flatMap((e) => e.muscleGroups))]
         return {
             slug,
             sessionId: log.sessionId,
@@ -204,6 +210,25 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
             program: log.program,
             difficulty: log.difficulty,
             exerciseCount: log.exercises.length,
+            muscleGroups,
+            exercises: log.exercises.map((exercise) => ({
+                id: exercise.id,
+                name: exercise.name,
+                muscleGroups: exercise.muscleGroups,
+                setsCompleted: exercise.loggedSets.filter((set) => set.completed && !set.failed).length,
+                setsFailed: exercise.loggedSets.filter((set) => set.failed).length,
+                bestSet: exercise.bestSet ? {
+                    weightKg: exercise.bestSet.actualWeightKg,
+                    reps: exercise.bestSet.actualReps,
+                    durationSec: exercise.bestSet.actualDurationSec,
+                    distanceM: exercise.bestSet.actualDistanceM,
+                    rpe: exercise.bestSet.actualRpe,
+                } : null,
+                notes: exercise.loggedSets
+                    .map((set) => set.notes)
+                    .filter((note): note is string => typeof note === 'string' && note.trim().length > 0)
+                    .slice(0, 5),
+            })),
         }
     }).filter((s): s is NonNullable<typeof s> => !!s)
     return {

@@ -82,6 +82,10 @@ export const weatherShowTool: ToolDef = {
             },
             days: { type: 'number', description: '1..10. The model should choose what fits the user request: "tomorrow" => 2, "this week" => 7, vague weather => usually 3-7. If omitted, the server uses 5 as a safety fallback.' },
             hours: { type: 'number', description: '1..240. Minimum effective value is days * 24 plus a calendar-boundary buffer so the daily-row expansion has hourly data for every visible day. Leave unset unless you specifically need a longer horizon.' },
+            targetDate: { type: 'string', description: 'Optional focus date as YYYY-MM-DD, or "today"/"tomorrow". Use for requests like "tomorrow"; the server still fetches from today but expands days so this date is included.' },
+            start: { type: 'string', description: 'Alias for targetDate. Accepted because some schedulers/providers call the requested forecast date "start".' },
+            startDate: { type: 'string', description: 'Alias for targetDate.' },
+            date: { type: 'string', description: 'Alias for targetDate.' },
             languageCode: { type: 'string', description: 'BCP-47 ("en", "ro", "fr"). Default "en".' },
             identifier: { type: 'string', description: 'Stable kebab-case handle. Reuse to refresh the same location.' },
             title: { type: 'string', description: 'Defaults to "Weather in <resolved name>".' },
@@ -251,6 +255,96 @@ export function effectiveWeatherHours(days: number, requestedHours: unknown): nu
         : minimumHoursForVisibleDays
 }
 
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/
+const DAY_MS = 24 * 60 * 60 * 1000
+
+export function effectiveWeatherDays(requestedDays: number, targetDate: string, todayDate: string): number {
+    const safeDays = Math.max(1, Math.min(10, Math.floor(requestedDays)))
+    const offset = calendarDayOffset(todayDate, targetDate)
+    if (!Number.isFinite(offset) || offset < 0) return safeDays
+    return Math.max(safeDays, Math.min(10, offset + 1))
+}
+
+function resolveWeatherTargetDate(
+    args: Record<string, unknown>,
+    timezone: string | undefined,
+): { targetDate?: string; todayDate: string } | { error: string } {
+    const raw = firstStringArg(args, ['targetDate', 'target_date', 'startDate', 'start', 'date'])
+    const todayDate = localDateString(new Date(), timezone || 'UTC')
+    if (!raw) return { todayDate }
+
+    const targetDate = normalizeTargetDate(raw, todayDate)
+    if (!targetDate) {
+        return {
+            error: `WeatherShow targetDate/start must be YYYY-MM-DD, "today", or "tomorrow"; received "${raw}".`,
+        }
+    }
+    const offset = calendarDayOffset(todayDate, targetDate)
+    if (offset < 0) {
+        return {
+            error: `WeatherShow only returns current/future forecasts. targetDate/start "${targetDate}" is before today (${todayDate}).`,
+        }
+    }
+    if (offset >= 10) {
+        return {
+            error: `WeatherShow can forecast up to 10 days ahead. targetDate/start "${targetDate}" is outside that window from today (${todayDate}).`,
+        }
+    }
+    return { targetDate, todayDate }
+}
+
+function firstStringArg(args: Record<string, unknown>, keys: string[]): string {
+    for (const key of keys) {
+        const value = args[key]
+        if (typeof value === 'string' && value.trim()) return value.trim()
+    }
+    return ''
+}
+
+function normalizeTargetDate(raw: string, todayDate: string): string | null {
+    const value = raw.trim().toLowerCase()
+    if (YMD_RE.test(value)) return value
+    const ascii = value.normalize('NFKD').replace(/[̀-ͯ]/g, '')
+    if (ascii === 'today' || ascii === 'azi') return todayDate
+    if (ascii === 'tomorrow' || ascii === 'maine') return addCalendarDays(todayDate, 1)
+    return null
+}
+
+function localDateString(date: Date, timezone: string): string {
+    try {
+        const parts = new Intl.DateTimeFormat('en-CA', {
+            timeZone: timezone || 'UTC',
+            year: 'numeric',
+            month: '2-digit',
+            day: '2-digit',
+        }).formatToParts(date)
+        const y = parts.find(part => part.type === 'year')?.value
+        const m = parts.find(part => part.type === 'month')?.value
+        const d = parts.find(part => part.type === 'day')?.value
+        if (y && m && d) return `${y}-${m}-${d}`
+    } catch { /* ignore invalid timezone */ }
+    return date.toISOString().slice(0, 10)
+}
+
+function calendarDayOffset(fromDate: string, toDate: string): number {
+    const from = ymdUtcMs(fromDate)
+    const to = ymdUtcMs(toDate)
+    if (!Number.isFinite(from) || !Number.isFinite(to)) return Number.NaN
+    return Math.round((to - from) / DAY_MS)
+}
+
+function addCalendarDays(date: string, days: number): string {
+    const ms = ymdUtcMs(date)
+    if (!Number.isFinite(ms)) return date
+    return new Date(ms + days * DAY_MS).toISOString().slice(0, 10)
+}
+
+function ymdUtcMs(date: string): number {
+    if (!YMD_RE.test(date)) return Number.NaN
+    const [y, m, d] = date.split('-').map(Number)
+    return Date.UTC(y, m - 1, d)
+}
+
 function hourLocalDate(iso: string, timezone: string): string {
     if (!iso) return ''
     if (!hasExplicitTimezone(iso)) return iso.slice(0, 10)
@@ -370,13 +464,8 @@ export async function executeWeatherShow(
     }
 
     const units: WeatherUnits = args.units === 'imperial' ? 'imperial' : 'metric'
-    const days = typeof args.days === 'number' && Number.isFinite(args.days)
+    const requestedDays = typeof args.days === 'number' && Number.isFinite(args.days)
         ? Math.max(1, Math.min(10, Math.floor(args.days))) : 5
-    // Default hours scale with days so the daily-row "expand to see hourly"
-    // gesture has data for every day. Some models still pass hours: 24 for a
-    // 3-day card because the top strip says "next 24h"; treat days * 24 as
-    // the minimum effective horizon so lower rows do not look broken.
-    const hours = effectiveWeatherHours(days, args.hours)
     const languageCode = typeof args.languageCode === 'string' && args.languageCode.trim()
         ? args.languageCode.trim() : 'en'
     const includeAirQuality = args.includeAirQuality !== false
@@ -411,6 +500,18 @@ export async function executeWeatherShow(
     if ('error' in resolved) {
         return { success: false, error: resolved.error }
     }
+    const target = resolveWeatherTargetDate(args, resolved.timezone)
+    if ('error' in target) {
+        return { success: false, error: target.error }
+    }
+    const days = target.targetDate
+        ? effectiveWeatherDays(requestedDays, target.targetDate, target.todayDate)
+        : requestedDays
+    // Default hours scale with days so the daily-row "expand to see hourly"
+    // gesture has data for every day. Some models still pass hours: 24 for a
+    // 3-day card because the top strip says "next 24h"; treat days * 24 as
+    // the minimum effective horizon so lower rows do not look broken.
+    const hours = effectiveWeatherHours(days, args.hours)
     const [lng, lat] = resolved.coordinates
 
     // --- pick provider ---------------------------------------------------
@@ -434,6 +535,7 @@ export async function executeWeatherShow(
                     enrichmentOptions,
                     conversationId: ctx?.conversationId,
                     deferDisplay: shouldDeferWeatherDisplay(args, ctx),
+                    targetDate: target.targetDate,
                 })
             }
         }
@@ -493,6 +595,7 @@ export async function executeWeatherShow(
         enrichmentOptions,
         conversationId: ctx?.conversationId,
         deferDisplay: shouldDeferWeatherDisplay(args, ctx),
+        targetDate: target.targetDate,
     })
 }
 
@@ -514,6 +617,7 @@ interface AssembleArgs {
     enrichmentOptions: WeatherEnrichmentOptions
     conversationId?: string
     deferDisplay?: boolean
+    targetDate?: string
 }
 
 interface PendingWeatherArtifact {
@@ -525,6 +629,7 @@ interface PendingWeatherArtifact {
     providerUsed: 'google' | 'open-meteo'
     googleAvailable: boolean
     createdAt: number
+    targetDate?: string
 }
 
 const pendingWeatherArtifacts = new Map<string, PendingWeatherArtifact>()
@@ -589,7 +694,7 @@ function weatherDirectEmitData(entry: PendingWeatherArtifact): Record<string, un
         type: 'application/vnd.ant.weather',
         display: entry.display,
         body: JSON.stringify(entry.artifact),
-        modelContext: buildWeatherModelContext(entry.artifact),
+        modelContext: buildWeatherModelContext(entry.artifact, entry.targetDate),
         providerUsed: entry.providerUsed,
         googleAvailable: entry.googleAvailable,
         suggestGoogleUpgrade: entry.providerUsed === 'open-meteo' && !entry.googleAvailable,
@@ -658,6 +763,7 @@ async function assembleSuccess(args: AssembleArgs): Promise<ToolResult> {
             providerUsed: args.providerUsed,
             googleAvailable: args.googleAvailable,
             createdAt: Date.now(),
+            targetDate: args.targetDate,
         })
         return {
             success: true,
@@ -668,12 +774,13 @@ async function assembleSuccess(args: AssembleArgs): Promise<ToolResult> {
                 title,
                 type: 'application/vnd.ant.weather',
                 display: 'inline',
-                modelContext: buildWeatherModelContext(parsed.data),
+                modelContext: buildWeatherModelContext(parsed.data, args.targetDate),
                 providerUsed: args.providerUsed,
                 googleAvailable: args.googleAvailable,
                 suggestGoogleUpgrade: args.providerUsed === 'open-meteo' && !args.googleAvailable,
                 waitingFor: ['WeatherSetWhy', 'WeatherSetOutfit'],
-                note: 'Weather data is staged but not mounted yet. Call WeatherSetWhy and WeatherSetOutfit; the card mounts once both are present.',
+                nextStepUsage: weatherRefinementUsage(identifier),
+                note: 'Weather data is staged but not mounted yet. Call WeatherSetWhy and WeatherSetOutfit with the schemas in nextStepUsage; the card mounts once both are present.',
             },
         }
     }
@@ -692,16 +799,16 @@ async function assembleSuccess(args: AssembleArgs): Promise<ToolResult> {
             type: 'application/vnd.ant.weather',
             display: 'inline',
             body,
-            modelContext: buildWeatherModelContext(parsed.data),
+            modelContext: buildWeatherModelContext(parsed.data, args.targetDate),
             providerUsed: args.providerUsed,
             googleAvailable: args.googleAvailable,
             suggestGoogleUpgrade: args.providerUsed === 'open-meteo' && !args.googleAvailable,
-            usage: `Card mounted automatically — do NOT emit an <artifact> tag. Use modelContext with WeatherSetWhy and WeatherSetOutfit when those smart rows belong in the card, then write 1-2 sentences of framing prose. Identifier "${identifier}".`,
+            usage: `Card mounted automatically — do NOT emit an <artifact> tag. ${weatherRefinementUsage(identifier)} Then write 1-2 sentences of framing prose.`,
         },
     }
 }
 
-function buildWeatherModelContext(artifact: WeatherArtifact): Record<string, unknown> {
+function buildWeatherModelContext(artifact: WeatherArtifact, targetDate?: string): Record<string, unknown> {
     const current = artifact.current
     const next12 = nextForecastHours(artifact, 12)
     const next24 = nextForecastHours(artifact, 24)
@@ -717,10 +824,18 @@ function buildWeatherModelContext(artifact: WeatherArtifact): Record<string, unk
     const tempUnit = artifact.units === 'metric' ? 'C' : 'F'
     const windUnit = artifact.units === 'metric' ? 'm/s' : 'mph'
 
+    const daily = artifact.daily.slice(0, 5).map(compactDailyForModel)
+    const targetDay = targetDate
+        ? artifact.daily.find(day => day.date === targetDate)
+        : undefined
     return {
         location: artifact.location.name,
         timezone: artifact.location.timezone,
         units: artifact.units,
+        ...(targetDate ? {
+            targetDate,
+            targetDay: targetDay ? compactDailyForModel(targetDay) : null,
+        } : {}),
         localTime: localNow,
         now: {
             temperature: Math.round(current.temperature),
@@ -768,20 +883,28 @@ function buildWeatherModelContext(artifact: WeatherArtifact): Record<string, unk
             primary: artifact.pollen.primary ?? null,
             summary: artifact.pollen.summary,
         } : null,
-        daily: artifact.daily.slice(0, 5).map(day => ({
-            date: day.date,
-            condition: day.conditionLabel,
-            low: Math.round(day.temperatureLow),
-            high: Math.round(day.temperatureHigh),
-            precipitationProbability: Math.round(day.precipitationProbability),
-            uvIndexMax: Math.round(day.uvIndexMax),
-        })),
+        daily,
         proseGuidance: [
             'Use this compact weather context to write any outfit/clothing suggestion yourself.',
             'Keep it short and practical; mention umbrella/jacket/sun protection only when the numbers justify it.',
             'Respect localTime. If it is night or early morning, separate what is useful right now from what matters later today; do not present midday UV as a current condition.',
         ],
     }
+}
+
+function compactDailyForModel(day: WeatherArtifact['daily'][number]): Record<string, unknown> {
+    return {
+        date: day.date,
+        condition: day.conditionLabel,
+        low: Math.round(day.temperatureLow),
+        high: Math.round(day.temperatureHigh),
+        precipitationProbability: Math.round(day.precipitationProbability),
+        uvIndexMax: Math.round(day.uvIndexMax),
+    }
+}
+
+function weatherRefinementUsage(identifier: string): string {
+    return `Use WeatherSetWhy arguments {"identifier":"${identifier}","rows":[{"kind":"precipitation","title":"Rain chance","value":"45%","explanation":"One grounded sentence from modelContext.","severity":"caution"}]} and WeatherSetOutfit arguments {"identifier":"${identifier}","headline":"Short practical headline","summary":"One grounded sentence","items":["26 C high","45% rain"]}. If direct schemas are not visible, run both via RunActivatedIntegrationTool.`
 }
 
 function localTimeContext(iso: string, timezone: string): Record<string, unknown> {
@@ -976,7 +1099,7 @@ export async function executeWeatherSetWhy(
         return { success: false, error: `WeatherSetWhy identifier "${identifier}" must be kebab-case.` }
     }
 
-    const rows = cleanWhyRows(args.rows)
+    const rows = cleanWhyRows(args.rows ?? args.why ?? args.items)
     if (rows.length === 0) {
         return { success: false, error: 'WeatherSetWhy requires at least one valid row.' }
     }
@@ -1158,10 +1281,19 @@ function cleanWhyRows(value: unknown): WeatherWhy[] {
         const item = raw as Record<string, unknown>
         const kind = typeof item.kind === 'string' && kinds.has(item.kind as WeatherWhy['kind'])
             ? item.kind as WeatherWhy['kind']
-            : null
+            : inferWeatherWhyKind(item)
         const title = cleanOutfitText(item.title, 70)
-        const rowValue = cleanOutfitText(item.value, 40)
+            || cleanOutfitText(item.label, 70)
+            || fallbackWeatherWhyTitle(kind)
         const explanation = cleanOutfitText(item.explanation, 180)
+            || cleanOutfitText(item.body, 180)
+            || cleanOutfitText(item.text, 180)
+            || cleanOutfitText(item.summary, 180)
+            || cleanOutfitText(item.value, 180)
+        const rowValue = cleanOutfitText(item.value, 40)
+            || cleanOutfitText(item.metric, 40)
+            || cleanOutfitText(item.label, 40)
+            || cleanOutfitText(item.title, 40)
         if (!kind || !title || !rowValue || !explanation) continue
         const severity = typeof item.severity === 'string' && severities.has(item.severity as WeatherWhy['severity'])
             ? item.severity as WeatherWhy['severity']
@@ -1177,6 +1309,44 @@ function cleanWhyRows(value: unknown): WeatherWhy[] {
         if (out.length >= 5) break
     }
     return out
+}
+
+function inferWeatherWhyKind(item: Record<string, unknown>): WeatherWhy['kind'] {
+    const haystack = [
+        item.title,
+        item.label,
+        item.value,
+        item.explanation,
+        item.body,
+        item.text,
+        item.summary,
+    ]
+        .filter((value): value is string => typeof value === 'string')
+        .join(' ')
+        .normalize('NFKD')
+        .replace(/[̀-ͯ]/g, '')
+        .toLowerCase()
+    if (/rain|ploaie|precip|umbrela|snow|ninsoare|storm|furtuna/.test(haystack)) return 'precipitation'
+    if (/\buv\b|solar|soare|sun/.test(haystack)) return 'uv'
+    if (/wind|vant|vint|gust/.test(haystack)) return 'wind'
+    if (/humid|umid|dew/.test(haystack)) return 'humidity'
+    if (/air|aer|aqi|pollen|polen|pollut|polu/.test(haystack)) return 'air_quality'
+    if (/pressure|presiune|hpa|mbar/.test(haystack)) return 'pressure'
+    return 'feels_like'
+}
+
+function fallbackWeatherWhyTitle(kind: WeatherWhy['kind']): string {
+    switch (kind) {
+        case 'precipitation': return 'Precipitation'
+        case 'uv': return 'UV'
+        case 'wind': return 'Wind'
+        case 'humidity': return 'Humidity'
+        case 'air_quality': return 'Air quality'
+        case 'pressure': return 'Pressure'
+        case 'feels_like':
+        default:
+            return 'Feels like'
+    }
 }
 
 function cleanCalendarContext(value: unknown): WeatherCalendarContext[] {

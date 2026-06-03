@@ -26,7 +26,7 @@ import {
     windCompass,
 } from '@/lib/weather/weather-codes'
 import { executeTool } from '@/lib/ai/tools/executor'
-import { effectiveWeatherHours, executeWeatherShow, weatherShowTool } from '@/lib/ai/tools/weather'
+import { effectiveWeatherDays, effectiveWeatherHours, executeWeatherSetWhy, executeWeatherShow, weatherShowTool } from '@/lib/ai/tools/weather'
 import {
     readCachedWeather,
     weatherCacheSize,
@@ -410,6 +410,31 @@ check('aqi: 400 → Hazardous', aqiLabel(400) === 'Hazardous')
     check('WeatherShow: hours default to days horizon plus boundary buffer', effectiveWeatherHours(3, undefined) === 96)
     check('WeatherShow: hours cannot undershoot visible days', effectiveWeatherHours(3, 24) === 96)
     check('WeatherShow: hours can request longer horizon', effectiveWeatherHours(3, 96) === 96)
+    check('WeatherShow: targetDate expands a 1-day tomorrow request to include tomorrow', effectiveWeatherDays(1, '2026-06-04', '2026-06-03') === 2)
+    check('WeatherShow: targetDate keeps a longer requested horizon', effectiveWeatherDays(7, '2026-06-04', '2026-06-03') === 7)
+
+    const whyAlias = await executeWeatherSetWhy(
+        {
+            identifier: 'smoke-weather',
+            items: [
+                {
+                    label: 'Ploaie',
+                    value: 'Probabilitate pana la 45%; merita sa ai o umbrela subtire la tine.',
+                },
+            ],
+        },
+        {
+            callerAgentId: 'orchestrator',
+            depth: 0,
+            conversationId: 'smoke-weather-aliases',
+            parentRequestId: 'smoke-parent',
+        }
+    )
+    check(
+        'WeatherSetWhy: accepts common alias rows before artifact lookup',
+        !/valid row/i.test(whyAlias.error ?? '') && /No weather artifact/i.test(whyAlias.error ?? ''),
+        whyAlias
+    )
 }
 
 // --- orchestrator-only runtime guard --------------------------------------

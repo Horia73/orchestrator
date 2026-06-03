@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Check, Circle, MoreVertical, Sparkles, Zap } from "lucide-react"
+import { Check, MoreVertical, Play, Save, Sparkles, Timer, Zap } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type {
@@ -17,7 +17,7 @@ import {
     formatSetKind,
     formatWeightNumber,
 } from "@/lib/workout/format"
-import { isNewPersonalBest, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
+import { isNewPersonalBest, type ActiveSetState, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
 
 import { GlossaryInfo } from "./glossary-info"
 import { WeightPicker } from "./weight-picker"
@@ -48,6 +48,7 @@ export function SetRow({
     sessionApi,
     isCurrent = false,
     interactive,
+    groupRestSec,
     barKg,
     plates,
     className,
@@ -62,6 +63,8 @@ export function SetRow({
     sessionApi?: WorkoutSessionApi
     /** Whether the workout session has started — sets are inert before Start. */
     interactive?: boolean
+    /** Group-level rest fallback for supersets/circuits. */
+    groupRestSec?: number
     /** Bar weight in kg for the plate calculator. */
     barKg?: number
     /** Available plates in kg, descending. */
@@ -71,15 +74,25 @@ export function SetRow({
     className?: string
 }) {
     const logged = sessionApi?.getLogged(exercise.id, index - 1)
-    const status = computeStatus(logged)
+    const activeSet = sessionApi?.session.activeSet
+    const isThisActiveSet = activeSet?.exerciseId === exercise.id && activeSet.setIndex === index - 1
+    const status = computeStatus(logged, isThisActiveSet, activeSet?.finishedAt)
     const setKind = plannedSet.kind ?? 'working'
 
     const [weightPickerOpen, setWeightPickerOpen] = React.useState(false)
     const [repsPickerOpen, setRepsPickerOpen] = React.useState(false)
     const [menuOpen, setMenuOpen] = React.useState(false)
     const [prPulse, setPrPulse] = React.useState(false)
+    const editorOpen = isThisActiveSet && !!activeSet?.finishedAt
+    const [draft, setDraft] = React.useState<SetDraft>(() => buildSetDraft(plannedSet, logged, exercise.kind, activeSet))
 
-    const isInteractive = interactive && !!sessionApi
+    const isInteractive = !!interactive && !!sessionApi
+    const metricEditable = isInteractive && (status === 'done' || status === 'failed')
+
+    React.useEffect(() => {
+        if (!editorOpen) return
+        setDraft(buildSetDraft(plannedSet, logged, exercise.kind, activeSet))
+    }, [editorOpen, plannedSet, logged, exercise.kind, activeSet])
 
     // PR celebration: when status flips from pending → done AND the logged
     // set beats the PB, briefly pulse a sparkle and a golden ring.
@@ -101,25 +114,26 @@ export function SetRow({
         if (!isInteractive || !sessionApi) return
         if (status === 'done' || status === 'failed') {
             sessionApi.undoSet(exercise.id, index - 1)
+        } else if (status === 'running') {
+            sessionApi.finishActiveSet()
+        } else if (status === 'editing') {
+            return
         } else {
-            sessionApi.logSet(exercise, index - 1, undefined, {
-                plannedSet,
-                startRest: true,
-            })
+            sessionApi.startSet(exercise, index - 1)
         }
-    }, [isInteractive, sessionApi, status, exercise, index, plannedSet])
+    }, [isInteractive, sessionApi, status, exercise, index])
 
     const handleWeightApply = React.useCallback((newKg: number) => {
         if (!sessionApi) return
-        sessionApi.logSet(exercise, index - 1, { actualWeightKg: newKg }, { plannedSet, startRest: status !== 'done' })
+        sessionApi.logSet(exercise, index - 1, { actualWeightKg: newKg }, { plannedSet, startRest: false })
         setWeightPickerOpen(false)
-    }, [sessionApi, exercise, index, plannedSet, status])
+    }, [sessionApi, exercise, index, plannedSet])
 
     const handleRepsApply = React.useCallback((newReps: number) => {
         if (!sessionApi) return
-        sessionApi.logSet(exercise, index - 1, { actualReps: newReps }, { plannedSet, startRest: status !== 'done' })
+        sessionApi.logSet(exercise, index - 1, { actualReps: newReps }, { plannedSet, startRest: false })
         setRepsPickerOpen(false)
-    }, [sessionApi, exercise, index, plannedSet, status])
+    }, [sessionApi, exercise, index, plannedSet])
 
     const handleSkip = React.useCallback(() => {
         if (!sessionApi) return
@@ -151,10 +165,23 @@ export function SetRow({
         )
     }, [sessionApi, exercise, index, plannedSet, status])
 
+    const editorElapsedSec = activeSet?.finishedAt && activeSet.startedAt
+        ? Math.max(0, Math.round((activeSet.finishedAt - activeSet.startedAt) / 1000))
+        : 0
+
+    const handleSaveActiveSet = React.useCallback(() => {
+        if (!sessionApi || !activeSet) return
+        sessionApi.logSet(exercise, index - 1, draftToLoggedSet(draft, exercise.kind, activeSet), {
+            plannedSet,
+            groupRestSec,
+            startRest: true,
+        })
+    }, [sessionApi, activeSet, exercise, index, draft, plannedSet, groupRestSec])
+
     return (
         <li
             className={cn(
-                "group/set-row relative grid grid-cols-[auto_5rem_1fr_auto_auto] items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors",
+                "group/set-row relative grid grid-cols-[auto_minmax(3.75rem,4.75rem)_minmax(0,1fr)_auto] items-center gap-2 rounded-md px-2 py-1.5 text-sm transition-colors sm:grid-cols-[auto_5rem_1fr_auto_auto]",
                 rowKindClass(setKind, status),
                 isCurrent && isInteractive && status === 'pending' && "ring-2 ring-primary/40 ring-offset-1 ring-offset-background",
                 prPulse && "ring-2 ring-amber-400/80 ring-offset-1 ring-offset-background motion-safe:animate-pulse",
@@ -188,7 +215,7 @@ export function SetRow({
                     logged={logged}
                     exerciseKind={exercise.kind}
                     units={units}
-                    interactive={!!isInteractive}
+                    interactive={metricEditable}
                     onWeightClick={() => setWeightPickerOpen(true)}
                     onRepsClick={() => setRepsPickerOpen(true)}
                 />
@@ -199,7 +226,9 @@ export function SetRow({
                 ) : null}
             </div>
 
-            <RpePill rpe={plannedSet.rpe} rir={plannedSet.rir} loggedRpe={logged?.actualRpe} loggedRir={logged?.actualRir} />
+            <div className="hidden sm:block">
+                <RpePill rpe={plannedSet.rpe} rir={plannedSet.rir} loggedRpe={logged?.actualRpe} loggedRir={logged?.actualRir} />
+            </div>
 
             <div className="relative">
                 <button
@@ -235,6 +264,22 @@ export function SetRow({
                 >
                     <Sparkles className="size-3.5" strokeWidth={1.85} />
                 </span>
+            ) : null}
+
+            <div className="col-start-3 col-end-5 sm:hidden">
+                <RpePill rpe={plannedSet.rpe} rir={plannedSet.rir} loggedRpe={logged?.actualRpe} loggedRir={logged?.actualRir} />
+            </div>
+
+            {editorOpen ? (
+                <ActiveSetEditor
+                    draft={draft}
+                    setDraft={setDraft}
+                    exerciseKind={exercise.kind}
+                    units={units}
+                    elapsedSec={editorElapsedSec}
+                    onSave={handleSaveActiveSet}
+                    onCancel={() => sessionApi?.cancelActiveSet()}
+                />
             ) : null}
 
             {weightPickerOpen && (
@@ -283,9 +328,10 @@ export function SetRow({
     )
 }
 
-type SetStatus = 'pending' | 'done' | 'failed' | 'modified'
+type SetStatus = 'pending' | 'running' | 'editing' | 'done' | 'failed' | 'modified'
 
-function computeStatus(logged?: LoggedSet): SetStatus {
+function computeStatus(logged?: LoggedSet, active?: boolean, finishedAt?: number): SetStatus {
+    if (active) return finishedAt ? 'editing' : 'running'
     if (!logged) return 'pending'
     if (logged.failed) return 'failed'
     if (!logged.completed) return 'pending'
@@ -303,9 +349,28 @@ function StatusButton({
     interactive: boolean
     onClick: () => void
 }) {
-    const ariaLabel = status === 'done' ? 'Anulează setul' : status === 'failed' ? 'Anulează setul' : 'Marchează setul ca făcut'
+    const ariaLabel =
+        status === 'done' || status === 'failed'
+            ? 'Anulează setul'
+            : status === 'running'
+                ? 'Finalizează setul'
+                : status === 'editing'
+                    ? 'Editează și salvează setul'
+                    : 'Pornește timerul setului'
     const inner = (() => {
         switch (status) {
+            case 'running':
+                return (
+                    <span className="flex size-5 items-center justify-center rounded-full bg-primary/15 text-primary motion-safe:animate-pulse">
+                        <Timer className="size-3" strokeWidth={2.5} />
+                    </span>
+                )
+            case 'editing':
+                return (
+                    <span className="flex size-5 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
+                        <Save className="size-3" strokeWidth={2.5} />
+                    </span>
+                )
             case 'done':
                 return (
                     <span className="flex size-5 items-center justify-center rounded-full bg-emerald-500/20 text-emerald-600 dark:text-emerald-400">
@@ -334,7 +399,7 @@ function StatusButton({
                                 ? "border-primary/65 text-primary"
                                 : "border-border text-muted-foreground/55",
                     )}>
-                        {setKind === 'amrap' ? <Zap className="size-2.5" /> : <Circle className="size-2 fill-current" />}
+                        {setKind === 'amrap' ? <Zap className="size-2.5" /> : <Play className="ml-0.5 size-2.5 fill-current" />}
                     </span>
                 )
         }
@@ -358,6 +423,8 @@ function StatusButton({
 }
 
 function rowKindClass(setKind: string, status: SetStatus): string {
+    if (status === 'running') return 'bg-primary/[0.06] ring-1 ring-primary/25'
+    if (status === 'editing') return 'bg-emerald-500/[0.06] ring-1 ring-emerald-500/30'
     if (status === 'done') return 'bg-emerald-500/[0.05]'
     if (status === 'failed') return 'bg-rose-500/[0.06]'
     if (status === 'modified') return 'bg-amber-500/[0.06]'
@@ -387,6 +454,233 @@ function setKindBadgeClass(setKind: string): string {
         case 'cluster': return 'text-sky-600 dark:text-sky-400'
         default: return 'text-muted-foreground'
     }
+}
+
+interface SetDraft {
+    weightKg?: number
+    reps?: number
+    durationSec?: number
+    distanceM?: number
+    rpe?: number
+    rir?: number
+    notes: string
+}
+
+function buildSetDraft(
+    plannedSet: PlannedSet,
+    logged: LoggedSet | undefined,
+    exerciseKind: Exercise['kind'],
+    activeSet: ActiveSetState | undefined,
+): SetDraft {
+    const planned = plannedSet as unknown as Record<string, unknown>
+    const elapsedSec = activeSet
+        ? Math.max(0, Math.round(((activeSet.finishedAt ?? Date.now()) - activeSet.startedAt) / 1000))
+        : undefined
+    const reps = logged?.actualReps
+        ?? logged?.partialReps
+        ?? (typeof planned.reps === 'number'
+            ? planned.reps
+            : Array.isArray(planned.reps)
+                ? (planned.reps as [number, number])[1]
+                : undefined)
+
+    return {
+        weightKg: logged?.actualWeightKg ?? (typeof planned.weightKg === 'number' ? planned.weightKg : undefined),
+        reps,
+        durationSec: logged?.actualDurationSec
+            ?? (exerciseKind === 'interval'
+                ? elapsedSec
+                : typeof planned.durationSec === 'number'
+                    ? planned.durationSec
+                    : elapsedSec),
+        distanceM: logged?.actualDistanceM ?? (typeof planned.distanceM === 'number' ? planned.distanceM : undefined),
+        rpe: logged?.actualRpe,
+        rir: logged?.actualRir,
+        notes: logged?.notes ?? '',
+    }
+}
+
+function draftToLoggedSet(
+    draft: SetDraft,
+    exerciseKind: Exercise['kind'],
+    activeSet: ActiveSetState,
+): Partial<LoggedSet> {
+    const logged: Partial<LoggedSet> = {
+        completed: true,
+        startedAt: new Date(activeSet.startedAt).toISOString(),
+        completedAt: new Date(activeSet.finishedAt ?? Date.now()).toISOString(),
+        actualRpe: draft.rpe,
+        actualRir: draft.rir,
+        notes: draft.notes.trim() || undefined,
+    }
+
+    if (exerciseKind === 'weighted' || exerciseKind === 'weighted_bw') {
+        logged.actualWeightKg = draft.weightKg
+        logged.actualReps = draft.reps
+    } else if (exerciseKind === 'bodyweight') {
+        logged.actualReps = draft.reps
+    } else if (exerciseKind === 'hold' || exerciseKind === 'cardio_dur' || exerciseKind === 'interval') {
+        logged.actualDurationSec = draft.durationSec
+    } else if (exerciseKind === 'cardio_dist') {
+        logged.actualDistanceM = draft.distanceM
+    }
+
+    return logged
+}
+
+function ActiveSetEditor({
+    draft,
+    setDraft,
+    exerciseKind,
+    units,
+    elapsedSec,
+    onSave,
+    onCancel,
+}: {
+    draft: SetDraft
+    setDraft: React.Dispatch<React.SetStateAction<SetDraft>>
+    exerciseKind: Exercise['kind']
+    units: WorkoutUnits
+    elapsedSec: number
+    onSave: () => void
+    onCancel: () => void
+}) {
+    return (
+        <div className="col-span-full mt-1 rounded-lg border border-emerald-500/25 bg-background/90 p-2.5 shadow-sm">
+            <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
+                <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-emerald-700 dark:text-emerald-300">
+                    <Timer className="size-3.5" strokeWidth={1.85} />
+                    Set time <span className="tabular-nums">{formatDuration(elapsedSec)}</span>
+                </div>
+                <div className="text-[11px] text-muted-foreground">Confirmă valorile actuale</div>
+            </div>
+
+            <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
+                {(exerciseKind === 'weighted' || exerciseKind === 'weighted_bw') ? (
+                    <NumberField
+                        label={`Greutate (${units})`}
+                        value={draft.weightKg}
+                        step={0.5}
+                        onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))}
+                    />
+                ) : null}
+
+                {(exerciseKind === 'weighted' || exerciseKind === 'weighted_bw' || exerciseKind === 'bodyweight') ? (
+                    <NumberField
+                        label="Reps"
+                        value={draft.reps}
+                        step={1}
+                        onChange={(reps) => setDraft((d) => ({ ...d, reps }))}
+                    />
+                ) : null}
+
+                {(exerciseKind === 'hold' || exerciseKind === 'cardio_dur' || exerciseKind === 'interval') ? (
+                    <NumberField
+                        label="Durată (sec)"
+                        value={draft.durationSec}
+                        step={5}
+                        onChange={(durationSec) => setDraft((d) => ({ ...d, durationSec }))}
+                    />
+                ) : null}
+
+                {exerciseKind === 'cardio_dist' ? (
+                    <NumberField
+                        label="Distanță (m)"
+                        value={draft.distanceM}
+                        step={10}
+                        onChange={(distanceM) => setDraft((d) => ({ ...d, distanceM }))}
+                    />
+                ) : null}
+
+                <NumberField
+                    label="RPE"
+                    value={draft.rpe}
+                    step={0.5}
+                    min={1}
+                    max={10}
+                    onChange={(rpe) => setDraft((d) => ({ ...d, rpe }))}
+                />
+                <NumberField
+                    label="RIR"
+                    value={draft.rir}
+                    step={1}
+                    min={0}
+                    max={5}
+                    onChange={(rir) => setDraft((d) => ({ ...d, rir }))}
+                />
+            </div>
+
+            <label className="mt-2 block">
+                <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+                    Notă
+                </span>
+                <input
+                    value={draft.notes}
+                    onChange={(event) => setDraft((d) => ({ ...d, notes: event.target.value }))}
+                    placeholder="ex: formă bună, prea greu, umăr ok"
+                    className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[12.5px] text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring"
+                />
+            </label>
+
+            <div className="mt-2 flex items-center justify-end gap-1.5">
+                <button
+                    type="button"
+                    onClick={onCancel}
+                    className="inline-flex h-8 items-center rounded-md border border-border bg-background px-2.5 text-[11.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                    Anulează
+                </button>
+                <button
+                    type="button"
+                    onClick={onSave}
+                    className="inline-flex h-8 items-center gap-1.5 rounded-md bg-emerald-600 px-3 text-[11.5px] font-semibold text-white transition-colors hover:bg-emerald-700"
+                >
+                    <Save className="size-3" strokeWidth={2} />
+                    Save set
+                </button>
+            </div>
+        </div>
+    )
+}
+
+function NumberField({
+    label,
+    value,
+    step,
+    min = 0,
+    max,
+    onChange,
+}: {
+    label: string
+    value?: number
+    step: number
+    min?: number
+    max?: number
+    onChange: (value: number | undefined) => void
+}) {
+    return (
+        <label className="min-w-0">
+            <span className="mb-1 block truncate text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+                {label}
+            </span>
+            <input
+                type="number"
+                value={value ?? ''}
+                step={step}
+                min={min}
+                max={max}
+                onChange={(event) => {
+                    if (event.target.value === '') {
+                        onChange(undefined)
+                        return
+                    }
+                    const next = Number.parseFloat(event.target.value)
+                    onChange(Number.isFinite(next) ? next : undefined)
+                }}
+                className="h-9 w-full rounded-md border border-border bg-background px-2 text-right text-[13px] font-semibold tabular-nums text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring"
+            />
+        </label>
+    )
 }
 
 function RpePill({

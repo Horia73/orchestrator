@@ -45,8 +45,16 @@ export function ExerciseHeader({
                 <h3 className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-foreground">
                     {exercise.name}
                 </h3>
-                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl ? (
-                    <FormCuesPopover cues={cues} videoUrl={exercise.videoUrl} alternatives={alternatives} />
+                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl || exercise.description || exercise.imageUrl || exercise.imageQuery ? (
+                    <FormCuesPopover
+                        exerciseName={exercise.name}
+                        cues={cues}
+                        description={exercise.description}
+                        imageUrl={exercise.imageUrl}
+                        imageQuery={exercise.imageQuery}
+                        videoUrl={exercise.videoUrl}
+                        alternatives={alternatives}
+                    />
                 ) : null}
             </div>
             <MuscleChips muscles={exercise.muscleGroups} />
@@ -124,20 +132,33 @@ function PrBadge({
 }
 
 function FormCuesPopover({
+    exerciseName,
     cues,
+    description,
+    imageUrl,
+    imageQuery,
     videoUrl,
     alternatives,
 }: {
+    exerciseName: string
     cues: string[]
+    description?: string
+    imageUrl?: string
+    imageQuery?: string
     videoUrl?: string
     alternatives?: string[]
 }) {
     const hasAlternatives = alternatives && alternatives.length > 0
+    const [open, setOpen] = React.useState(false)
     return (
-        <details className="group/cues relative">
+        <details
+            className="group/cues relative"
+            open={open}
+            onToggle={(event) => setOpen(event.currentTarget.open)}
+        >
             <summary
-                aria-label="Form cues"
-                title="Form cues"
+                aria-label="Exercise info"
+                title="Exercise info"
                 className={cn(
                     "flex size-7 cursor-pointer list-none items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-colors",
                     "hover:bg-muted hover:text-foreground",
@@ -146,7 +167,19 @@ function FormCuesPopover({
             >
                 <Info className="size-3.5" strokeWidth={1.75} />
             </summary>
-            <div className="absolute right-0 top-full z-20 mt-1 w-80 rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-lg">
+            <div className="absolute right-0 top-full z-20 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-lg">
+                {open ? (
+                    <ExerciseDemoImage
+                        exerciseName={exerciseName}
+                        imageUrl={imageUrl}
+                        imageQuery={imageQuery}
+                    />
+                ) : null}
+                {description ? (
+                    <p className="mb-3 text-[12.5px] leading-relaxed text-foreground/85">
+                        {description}
+                    </p>
+                ) : null}
                 {cues.length > 0 ? (
                     <>
                         <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55">
@@ -197,6 +230,103 @@ function FormCuesPopover({
                 ) : null}
             </div>
         </details>
+    )
+}
+
+interface WorkoutImage {
+    url: string
+    sourceUrl: string
+    attribution: string
+    width: number
+    height: number
+}
+
+interface WorkoutImageResponse {
+    images?: WorkoutImage[]
+}
+
+function ExerciseDemoImage({
+    exerciseName,
+    imageUrl,
+    imageQuery,
+}: {
+    exerciseName: string
+    imageUrl?: string
+    imageQuery?: string
+}) {
+    const [result, setResult] = React.useState<WorkoutImage | null>(
+        imageUrl ? {
+            url: imageUrl,
+            sourceUrl: imageUrl,
+            attribution: 'Demo image',
+            width: 16,
+            height: 9,
+        } : null,
+    )
+    const [failed, setFailed] = React.useState(false)
+    const [imageBroken, setImageBroken] = React.useState(false)
+    const query = imageQuery ?? `${exerciseName} exercise machine`
+    const [fallbackReady, setFallbackReady] = React.useState(false)
+
+    React.useEffect(() => {
+        if (imageUrl || failed) return
+        const controller = new AbortController()
+        fetch(`/api/workout-images?q=${encodeURIComponent(query)}&limit=1`, { signal: controller.signal })
+            .then(async (response) => {
+                if (!response.ok) throw new Error(`HTTP ${response.status}`)
+                const data = await response.json() as WorkoutImageResponse
+                setResult(data.images?.[0] ?? null)
+            })
+            .catch((error) => {
+                if (error instanceof DOMException && error.name === 'AbortError') return
+                setFailed(true)
+            })
+        return () => controller.abort()
+    }, [query, imageUrl, failed])
+
+    React.useEffect(() => {
+        if (imageUrl || result) return
+        const timer = window.setTimeout(() => setFallbackReady(true), 1200)
+        return () => window.clearTimeout(timer)
+    }, [imageUrl, result, query])
+
+    const display = result ?? (fallbackReady ? {
+        url: `/api/workout-images/first?q=${encodeURIComponent(query)}`,
+        sourceUrl: `https://commons.wikimedia.org/w/index.php?search=${encodeURIComponent(query)}&title=Special:MediaSearch&type=image`,
+        attribution: 'Wikimedia Commons',
+        width: 16,
+        height: 9,
+    } satisfies WorkoutImage : null)
+
+    if (!display || imageBroken) return null
+
+    const ratio = display.width > 0 && display.height > 0
+        ? `${display.width} / ${display.height}`
+        : '16 / 9'
+
+    return (
+        <figure className="mb-3 overflow-hidden rounded-md border border-border/50 bg-muted/35">
+            {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary Commons/uploaded URLs are lazy previews, not LCP content. */}
+            <img
+                src={display.url}
+                alt={`${exerciseName} demo`}
+                loading="lazy"
+                className="block w-full object-cover"
+                style={{ aspectRatio: ratio }}
+                onError={() => setImageBroken(true)}
+            />
+            <figcaption className="flex items-center justify-between gap-2 px-2 py-1 text-[10px] text-muted-foreground">
+                <span className="min-w-0 truncate">{display.attribution}</span>
+                <a
+                    href={display.sourceUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="shrink-0 text-primary hover:underline"
+                >
+                    source
+                </a>
+            </figcaption>
+        </figure>
     )
 }
 

@@ -284,6 +284,12 @@ export async function runScheduledTask(
             scheduledTaskId: task.id,
             scheduledFiredAt: firedAt,
             appOrigin,
+            preactivatedCapabilities:
+              task.action.monitorKind === "smart"
+                ? (
+                    await import("@/lib/monitoring/smart-monitor")
+                  ).getSmartMonitorWakePreactivatedCapabilities()
+                : undefined,
             onAgentEvent: (event) => {
               if (event.type === "agent_start" && topRunId === null)
                 topRunId = event.runId

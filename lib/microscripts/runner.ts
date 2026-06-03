@@ -5,6 +5,7 @@ import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
 
 import { WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { resolveAppOrigin } from '@/lib/app-origin'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
 import { normalizeInboxReplyActions } from '@/lib/ai/tools/notify'
@@ -851,7 +852,7 @@ async function executeAgentWake(
 
     const target = {
         ...baseAgent,
-        tools: permission.allowNotifyInbox ? ['notify_inbox'] : [],
+        tools: buildAgentWakeToolGrant(baseAgent.tools, permission.allowNotifyInbox),
         builtins: [],
         canCallAgents: [],
     }
@@ -863,6 +864,8 @@ async function executeAgentWake(
         depth: 0,
         conversationId,
         parentRequestId: `microscript_${script.id}_${randomUUID()}`,
+        appOrigin: resolveAppOrigin(),
+        toolSurfaceMode: 'read-only',
         onAgentEvent: (event) => {
             if (event.type !== 'agent_tool_call' || event.toolCall?.name !== 'notify_inbox') return
             const args = event.toolCall.arguments as { title?: unknown; body?: unknown; actions?: unknown }
@@ -1020,7 +1023,9 @@ function globPatternMatches(pattern: string, value: string): boolean {
 function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyInbox: boolean): string {
     return [
         'You were woken by a Microscript after a deterministic runtime condition matched.',
-        'Use only the context supplied in this prompt. Do not assume you can perform source-side actions.',
+        'Use only the context supplied in this prompt plus read-only/context tools exposed to this wake. Do not assume you can perform source-side actions.',
+        'If the payload asks for planning or judgement that depends on user history, durable memory, local subsystems such as workouts, or connected source reads, activate exactly the relevant capability first and use its read-only tools before deciding. Do not activate broad unrelated capabilities.',
+        'Do not perform source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions from this wake; notify or return an internal summary instead.',
         allowNotifyInbox
             ? 'If the user should be interrupted, call notify_inbox with a specific title and concise body. If the item is not worth interrupting the user about, do not call notify_inbox; return a short internal summary.'
             : 'Do not notify the user. Return a short internal summary with your judgement.',
@@ -1033,6 +1038,12 @@ function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyIn
         prompt,
         '</microscript_payload>',
     ].join('\n')
+}
+
+function buildAgentWakeToolGrant(baseToolIds: readonly string[], allowNotifyInbox: boolean): string[] {
+    const ids = new Set(baseToolIds)
+    if (!allowNotifyInbox) ids.delete('notify_inbox')
+    return Array.from(ids)
 }
 
 function operationKey(operation: MicroscriptOperation, index: number): string {

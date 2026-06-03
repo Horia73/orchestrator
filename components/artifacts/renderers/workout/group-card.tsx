@@ -44,6 +44,7 @@ export function GroupCard({
                 units={units}
                 sessionApi={sessionApi}
                 interactive={interactive}
+                groupRestSec={group.restBetweenSec}
                 barKg={barKg}
                 plates={plates}
                 className={className}
@@ -90,6 +91,7 @@ export function GroupCard({
                         units={units}
                         sessionApi={sessionApi}
                         interactive={interactive}
+                        groupRestSec={group.restBetweenSec}
                         barKg={barKg}
                         plates={plates}
                         className="border-border/40 bg-background/65"

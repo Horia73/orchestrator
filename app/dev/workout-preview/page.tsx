@@ -77,6 +77,9 @@ const SAMPLES = {
                             'Bar path slight diagonal toward shoulders, touch lower chest',
                             'Pause briefly at the bottom for top sets',
                         ],
+                        description: 'Setează banca sub rack astfel încât bara să fie deasupra ochilor. Omoplații rămân retrași, picioarele împing în podea, iar bara coboară controlat spre partea de jos a pieptului.',
+                        imageQuery: 'barbell bench press exercise setup',
+                        alternatives: ['Dumbbell bench press · 3×8-10', 'Machine chest press · 3×10', 'Push-ups weighted or banded · 3×AMRAP'],
                         videoUrl: 'https://www.youtube.com/watch?v=4Y2ZdHCOXok',
                         defaultRestSec: 150,
                         previous: {
@@ -125,6 +128,8 @@ const SAMPLES = {
                         kind: 'weighted',
                         equipment: ['cable'],
                         muscleGroups: ['chest'],
+                        description: 'Ajustează scripetele la nivelul pieptului sau ușor mai jos. Fă un pas în față, coatele rămân moi, iar mâinile se întâlnesc în fața sternului fără să pierzi tensiunea din piept.',
+                        imageQuery: 'cable fly machine exercise setup',
                         planned: [
                             { weightKg: 15, reps: 15 },
                             { weightKg: 15, reps: 15 },

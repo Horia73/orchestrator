@@ -90,6 +90,7 @@ function buildInlineReplyPrompt(args: {
     "You are continuing a scheduled-run Inbox item inline. Do not fork or open a normal chat; answer in this same Inbox thread.",
     "The user may have clicked a quick-reply button. Treat the latest user reply as their instruction, but all normal confirmation boundaries still apply.",
     "If the answer needs another simple choice, call notify_inbox with `body` and short `actions`; the actions become quick-reply buttons in this same Inbox thread. If no choice is needed, just answer normally.",
+    "When you call notify_inbox, that body is the user-visible reply. After the tool call, return only a short internal status, not a second user-facing answer.",
     "Quick actions are only user replies, not permission to perform irreversible, external, costly, destructive, message-sending, account-changing, or sensitive-data actions without the exact confirmation required by policy.",
     "</inbox_reply_context>",
     "",
@@ -225,16 +226,19 @@ async function continueInboxReply(args: {
       )
     }
 
+    const notificationSurface = result.success && notifications.length > 0
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",
       content: assistantContent,
       status: result.success ? "ok" : "error",
-      contentSegments: done?.contentSegments,
-      reasoning: done?.reasoning as ReasoningEntry[] | undefined,
-      attachments: done?.attachments,
+      contentSegments: notificationSurface ? undefined : done?.contentSegments,
+      reasoning: notificationSurface
+        ? undefined
+        : (done?.reasoning as ReasoningEntry[] | undefined),
+      attachments: notificationSurface ? undefined : done?.attachments,
       replyActions:
-        notifications.length > 0
+        notificationSurface
           ? notifications.flatMap((n) => n.actions ?? [])
           : undefined,
       timestamp: Date.now(),

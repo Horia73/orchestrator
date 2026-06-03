@@ -23,7 +23,7 @@ export const activateIntegrationToolsTool: ToolDef = {
     id: 'ActivateIntegrationTools',
     name: 'ActivateIntegrationTools',
     description:
-        'Load a capability for the rest of this conversation — either an integration from <integrations> (loads operational tool schemas + any doctrine) or a native subsystem from <subsystems> (loads doctrine only; the subsystem\'s tools are already granted). Use when you are about to operate the capability: an integration whose State is "connected" but whose Tools are "inactive", or a composition capability whose Doctrine says "not loaded". Does not connect or configure anything — for integration setup follow the runbook with the setup/lifecycle tools instead.',
+        'Load a capability for the rest of this conversation — either an integration from <integrations> or a native subsystem from <subsystems>. Activation loads operational tool schemas when that capability has gated tools, plus any doctrine. Use when you are about to operate the capability: an integration whose State is "connected" but whose Tools are "inactive", or a composition/subsystem capability whose Doctrine says "not loaded". Does not connect or configure anything — for integration setup follow the runbook with the setup/lifecycle tools instead.',
     input_schema: {
         type: 'object',
         properties: {

@@ -9,10 +9,16 @@ import {
   getIntegrationStatusSnapshot,
   refreshIntegrationStatusSnapshot,
 } from "@/lib/integrations/status-snapshot"
+import type { ToolDef } from "@/lib/ai/agents/types"
+import {
+  isReadOnlyWakeToolAllowed,
+  readOnlyWakeToolError,
+} from "@/lib/ai/tools/read-only-policy"
 import type { ToolExecutor } from "./types"
 
 export function createRunActivatedIntegrationToolExecutor(
-  resolveExecutor: (toolId: string) => ToolExecutor | undefined
+  resolveExecutor: (toolId: string) => ToolExecutor | undefined,
+  resolveTool?: (toolId: string) => ToolDef | undefined
 ): ToolExecutor {
   return async function executeRunActivatedIntegrationTool(
     args: Record<string, unknown>,
@@ -59,6 +65,18 @@ export function createRunActivatedIntegrationToolExecutor(
       }
     }
     const capabilityId = (integrationId ?? subsystemId)!
+    const toolDef = resolveTool?.(toolId)
+    if (ctx?.toolSurfaceMode === "read-only") {
+      if (!toolDef) {
+        return {
+          success: false,
+          error: `${toolId} is not available in this read-only wake because its tool definition could not be resolved.`,
+        }
+      }
+      if (!isReadOnlyWakeToolAllowed(toolDef)) {
+        return { success: false, error: readOnlyWakeToolError(toolDef) }
+      }
+    }
 
     // Connection-bearing integrations must actually be connected. activationOnly
     // integrations (maps, weather — keyless/local) and native subsystems have no
@@ -105,6 +123,23 @@ export function createRunActivatedIntegrationToolExecutor(
       }
     }
 
-    return executor(targetArgs as Record<string, unknown>, ctx)
+    const result = await executor(targetArgs as Record<string, unknown>, ctx)
+    if (!result.success && result.error && toolDef) {
+      return {
+        ...result,
+        error: `${result.error}\nExpected ${toolId} arguments schema: ${compactTargetToolSchema(toolDef)}`,
+      }
+    }
+    return result
   }
+}
+
+function compactTargetToolSchema(tool: ToolDef): string {
+  const payload = {
+    description: tool.description,
+    input_schema: tool.input_schema,
+  }
+  const text = JSON.stringify(payload)
+  const max = 4000
+  return text.length > max ? `${text.slice(0, max)}...` : text
 }

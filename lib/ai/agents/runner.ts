@@ -7,6 +7,7 @@ import type {
     ImageGenResult,
     MusicGenResult,
     SpeechGenResult,
+    ToolDef,
     ToolExecutionContext,
     ToolResult,
     VideoGenJob,
@@ -25,6 +26,7 @@ import { getApiKey, getEffectiveAgentSettings } from '@/lib/config'
 import { getEffectiveModel } from '@/lib/models/registry'
 import { getToolsForAgent, getToolsForBuiltins, resolveProviderToolSurface } from '@/lib/ai/tools/registry'
 import { redactToolArgs } from '@/lib/ai/tools/redaction'
+import { isReadOnlyWakeToolAllowed } from '@/lib/ai/tools/read-only-policy'
 import { filterIntegrationToolExposure } from '@/lib/integrations/exposure'
 import {
     appendPromptContext,
@@ -198,11 +200,19 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     })
     // Gate integration operational tools, then remove custom schemas that
     // duplicate this provider's native built-ins.
-    const candidateTools = filterIntegrationToolExposure(
-        dedupeTools(canDelegate
-            ? [...baseTools, ...getToolsForBuiltins(target.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
-            : [...baseTools, ...getToolsForBuiltins(target.builtins)]),
-        { conversationId: parentCtx.conversationId, origin: parentCtx.appOrigin, agentId: target.id }
+    const candidateTools = filterReadOnlyIfNeeded(
+        filterIntegrationToolExposure(
+            dedupeTools(canDelegate
+                ? [...baseTools, ...getToolsForBuiltins(target.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
+                : [...baseTools, ...getToolsForBuiltins(target.builtins)]),
+            {
+                conversationId: parentCtx.conversationId,
+                origin: parentCtx.appOrigin,
+                agentId: target.id,
+                preactivatedCapabilities: parentCtx.preactivatedCapabilities,
+            }
+        ),
+        parentCtx.toolSurfaceMode,
     )
     const toolSurface = resolveProviderToolSurface(candidateTools, target.builtins, provider.capabilities)
     const agentTools = toolSurface.tools
@@ -218,6 +228,8 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         parentAgentRunId: subRequestId,
         onAgentEvent: parentCtx.onAgentEvent,
         appOrigin: parentCtx.appOrigin,
+        preactivatedCapabilities: parentCtx.preactivatedCapabilities,
+        toolSurfaceMode: parentCtx.toolSurfaceMode,
     }
 
     const threadMessages = agentThreadId ? getAgentThreadMessages(agentThreadId) : []
@@ -278,6 +290,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             agentThreadId,
             declaredToolIds: target.tools,
             declaredTools: getToolsForAgent(target.tools),
+            preactivatedCapabilities: parentCtx.preactivatedCapabilities,
             delegationDepth: subDepth,
             maxDelegationDepth: MAX_AGENT_DEPTH,
             extra: parentCtx.appOrigin ? { appOrigin: parentCtx.appOrigin } : undefined,
@@ -807,6 +820,14 @@ function dedupeTools<T extends { id: string }>(tools: T[]): T[] {
         out.push(tool)
     }
     return out
+}
+
+function filterReadOnlyIfNeeded<T extends ToolDef>(
+    tools: T[],
+    mode: ToolExecutionContext['toolSurfaceMode'],
+): T[] {
+    if (mode !== 'read-only') return tools
+    return tools.filter(isReadOnlyWakeToolAllowed)
 }
 
 function resolveAgentRuntimeSettings(target: AgentConfig): RuntimeAgentSettings {

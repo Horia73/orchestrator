@@ -5,8 +5,9 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 //
 // These are the tools the orchestrator uses IN A USER CONVERSATION to set up,
 // adjust, and inspect Smart Monitor watches. Wakes (Step 4) must NOT call
-// these — the wake brief restricts the orchestrator to notify_inbox +
-// monitor_wake_feedback only. Watch lifecycle is a deliberate conversation.
+// these lifecycle tools; they may use notify_inbox, monitor_wake_feedback, and
+// source connector tools warmed up from enabled watch sources. Watch lifecycle
+// remains a deliberate conversation.
 //
 // Six tools in one file because they share validators and adapters:
 //   - monitor_describe_sources : capability snapshot (sources, predicate

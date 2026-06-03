@@ -29,7 +29,7 @@ Runtime contract:
 - Store all durable private memory in returned state. Read current memory from ctx["state"].
 - Direct Python networking is allowed by default in trusted_python. Direct file access is confined to the script workspace. Env secrets and shell/process control are blocked by default.
 - To access app integrations or other app tools, use ctx.call_tool/tool.call with tool_call permission, or return requests[]. The parent runtime enforces the manifest permissions and puts results in ctx["results"][request_id] on the next phase.
-- With explicit agent_wake permission, a script may request agent.wake after a deterministic condition matches. The woken text agent receives only the script's prompt context and a restricted tool surface; if allowNotifyInbox is true it may call notify_inbox, otherwise it returns an internal judgement.
+- With explicit agent_wake permission, a script may request agent.wake after a deterministic condition matches. The woken text agent receives the script's prompt context plus a restricted read-only/context tool surface; it may activate exactly relevant capabilities (for example workout history or connected source reads), but cannot perform source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions. If allowNotifyInbox is true it may call notify_inbox, otherwise it returns an internal judgement.
 
 Blocked-action rule:
 - If a microscript run or validation reports "Blocked microscript action", read the full error. It states what was blocked, why, the safe alternative, and the needed implementation/permission change.

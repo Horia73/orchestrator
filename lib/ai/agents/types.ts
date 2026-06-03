@@ -80,6 +80,10 @@ export interface ToolExecutionContext {
   scheduledTaskId?: string
   /** Scheduled-run fire time (epoch ms) that woke the current agent. */
   scheduledFiredAt?: number
+  /** Per-run capability ids treated as already activated without mutating the conversation store. */
+  preactivatedCapabilities?: readonly string[]
+  /** Restrict the run to read-only/context tools plus notification/control primitives. */
+  toolSurfaceMode?: "default" | "read-only"
 }
 
 // ---------------------------------------------------------------------------
@@ -221,6 +225,8 @@ export interface PromptContext {
     /** True if the GitHub lookup failed and we fell back to a tag-only source. */
     fallback?: boolean
   }
+  /** Per-run capability ids treated as already activated without mutating the conversation store. */
+  preactivatedCapabilities?: readonly string[]
   /** Any extra context the caller wants to inject */
   extra?: Record<string, string>
 }

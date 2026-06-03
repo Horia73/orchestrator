@@ -67,6 +67,17 @@ export interface RestState {
     key: number
 }
 
+export interface ActiveSetState {
+    /** Date.now() value when the working set started. */
+    startedAt: number
+    /** Date.now() value when the user tapped Finish. Undefined while running. */
+    finishedAt?: number
+    exerciseId: string
+    exerciseName: string
+    setIndex: number
+    key: number
+}
+
 export interface WorkoutSessionState {
     sessionId: string
     /** ISO timestamp; unset until user hits Start. */
@@ -77,6 +88,9 @@ export interface WorkoutSessionState {
     logsByExerciseId: Record<string, ExerciseSessionLog>
     /** Optional current rest timer state. */
     rest?: RestState
+    /** Optional current working-set timer. A set is logged only after
+     *  Finish -> edit actuals -> Save. */
+    activeSet?: ActiveSetState
     /** Schema version for forward-migration tolerance. */
     _v: number
 }
@@ -110,12 +124,16 @@ function readPersistedState(sessionId: string): WorkoutSessionState {
         if (parsed.rest && parsed.rest.endsAt && parsed.rest.endsAt < Date.now() - 10 * 60 * 1000) {
             parsed.rest = undefined
         }
+        if (parsed.activeSet?.startedAt && parsed.activeSet.startedAt < Date.now() - 12 * 60 * 60 * 1000) {
+            parsed.activeSet = undefined
+        }
         return {
             sessionId,
             startedAt: parsed.startedAt,
             completedAt: parsed.completedAt,
             logsByExerciseId: parsed.logsByExerciseId ?? {},
             rest: parsed.rest,
+            activeSet: parsed.activeSet,
             _v: STORAGE_VERSION,
         }
     } catch {
@@ -191,6 +209,10 @@ export interface WorkoutSessionApi {
     ) => void
     /** Clear the log for a set (mark not-done). */
     undoSet: (exerciseId: string, setIndex: number) => void
+    /** Start/finish/cancel a working set timer before actuals are saved. */
+    startSet: (exercise: Exercise, setIndex: number) => void
+    finishActiveSet: () => void
+    cancelActiveSet: () => void
     /** Mark an exercise skipped (or unskip). */
     setSkipped: (exerciseId: string, skipped: boolean) => void
     /** Append a freestyle set after the planned ones. */
@@ -235,7 +257,7 @@ export function useWorkoutSession(
     }, [])
 
     const finish = React.useCallback(() => {
-        setSession((s) => ({ ...s, completedAt: new Date().toISOString(), rest: undefined }))
+        setSession((s) => ({ ...s, completedAt: new Date().toISOString(), rest: undefined, activeSet: undefined }))
     }, [])
 
     const reset = React.useCallback(() => {
@@ -260,13 +282,15 @@ export function useWorkoutSession(
                 const prevLog = ensureLog(s, exercise.id)
                 const existing = prevLog.sets[setIndex]
                 const defaults = plannedDefaults(plannedSet, exercise.kind)
+                const completedAt = overrides?.completedAt ?? new Date().toISOString()
+                const startedAtForSet = overrides?.startedAt ?? existing?.startedAt ?? new Date().toISOString()
                 const next: LoggedSet = {
                     ...defaults,
                     ...existing,
                     ...overrides,
                     completed: true,
-                    completedAt: new Date().toISOString(),
-                    startedAt: existing?.startedAt ?? new Date().toISOString(),
+                    completedAt,
+                    startedAt: startedAtForSet,
                 }
                 const sets = prevLog.sets.slice()
                 sets[setIndex] = next
@@ -287,7 +311,11 @@ export function useWorkoutSession(
                     }
                     : s.rest
 
-                return { ...s, startedAt, logsByExerciseId, rest }
+                const activeSet = s.activeSet?.exerciseId === exercise.id && s.activeSet.setIndex === setIndex
+                    ? undefined
+                    : s.activeSet
+
+                return { ...s, startedAt, logsByExerciseId, rest, activeSet }
             })
         },
         [],
@@ -299,14 +327,53 @@ export function useWorkoutSession(
             if (!prevLog) return s
             const sets = prevLog.sets.slice()
             sets[setIndex] = { completed: false }
+            const activeSet = s.activeSet?.exerciseId === exerciseId && s.activeSet.setIndex === setIndex
+                ? undefined
+                : s.activeSet
             return {
                 ...s,
+                activeSet,
                 logsByExerciseId: {
                     ...s.logsByExerciseId,
                     [exerciseId]: { ...prevLog, sets },
                 },
             }
         })
+    }, [])
+
+    const startSet = React.useCallback<WorkoutSessionApi['startSet']>((exercise, setIndex) => {
+        const nowMs = Date.now()
+        const nowIso = new Date(nowMs).toISOString()
+        setSession((s) => ({
+            ...s,
+            startedAt: s.startedAt ?? nowIso,
+            completedAt: undefined,
+            rest: undefined,
+            activeSet: {
+                startedAt: nowMs,
+                exerciseId: exercise.id,
+                exerciseName: exercise.name,
+                setIndex,
+                key: (s.activeSet?.key ?? 0) + 1,
+            },
+        }))
+    }, [])
+
+    const finishActiveSet = React.useCallback(() => {
+        setSession((s) => {
+            if (!s.activeSet || s.activeSet.finishedAt) return s
+            return {
+                ...s,
+                activeSet: {
+                    ...s.activeSet,
+                    finishedAt: Date.now(),
+                },
+            }
+        })
+    }, [])
+
+    const cancelActiveSet = React.useCallback(() => {
+        setSession((s) => ({ ...s, activeSet: undefined }))
     }, [])
 
     const setSkipped = React.useCallback((exerciseId: string, skipped: boolean) => {
@@ -424,6 +491,9 @@ export function useWorkoutSession(
         reset,
         logSet,
         undoSet,
+        startSet,
+        finishActiveSet,
+        cancelActiveSet,
         setSkipped,
         addSet,
         startRest,
