@@ -101,6 +101,7 @@ export const notifyInboxTool: ToolDef = {
         'Surface a message to the user\'s Inbox. Use inside a scheduled run only when the result meets the task\'s notify criteria (something changed, something needs the user, an error), or inside an inline Inbox follow-up when you need quick-reply buttons.',
         'If nothing is noteworthy, do NOT call this — the run still gets recorded in Past runs, just silently. Default to staying silent.',
         'Use `title` as an email-style Inbox subject whenever you surface something user-facing. Make it specific to the result, not a generic source label like "Smart monitor" or "Scheduled run".',
+        'Write `body` as the message the user reads in their Inbox — written to them, like an email, not a run log. Lead with the point (what changed, what you need, the decision to make), then include as much detail as is genuinely useful to the user; write as long as the content warrants, no artificial length limit. NEVER paste your run narration, step-by-step reasoning, internal bookkeeping, or run/tool ids into it (no "first I run the microscript", "now I read the journal", "I persisted task_state with..."). All of that stays in the run output / Past runs; the Inbox shows only this clean, user-facing message.',
         'When asking the user to choose, include short `actions` buttons. Each action carries a `value` text reply, optionally a `direct_action` that executes a small whitelisted tool WITHOUT invoking the model when clicked.',
         'Use `direct_action` for non-destructive housekeeping on the source item: gmail.mark_read/mark_unread/archive against a gmail messageId, or whatsapp.mark_chat_read/mark_chat_unread against a whatsapp chat_id. The source ids are available in the candidate context when the trigger came from a monitor watcher. Do not invent ids.',
         'Use direct_action only when the user has indicated (in memory, history, or this conversation) a preference for one-click housekeeping; otherwise leave it out and rely on the plain value reply, which routes back through the model. Direct actions skip all model-level reasoning, so they must be safe to perform without further confirmation.',
@@ -112,7 +113,7 @@ export const notifyInboxTool: ToolDef = {
         type: 'object',
         properties: {
             title: { type: 'string', description: 'Short email-style subject for the Inbox item. Be specific, e.g. "WhatsApp: today\'s schedule changed" or "Garage door left open".' },
-            body: { type: 'string', description: 'The concise message to show the user (markdown ok). May include one artifact tag when the Inbox item needs a rich card or fullscreen launch surface.' },
+            body: { type: 'string', description: 'The user-facing message shown in the Inbox (markdown ok), written to the user like an email — lead with the point, then as much useful detail as the content warrants (no length limit). Not a run log: no process narration, step-by-step reasoning, or internal bookkeeping. May include one artifact tag when the Inbox item needs a rich card or fullscreen launch surface.' },
             actions: {
                 type: 'array',
                 description: 'Optional quick-reply buttons shown under the Inbox message. Use for choices like archive/keep, summarize now/later, approve/skip. Max 8.',
