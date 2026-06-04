@@ -22,6 +22,7 @@ import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
 import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
 import {
   appendMissingArtifactBlocks,
+  dedupeArtifactNotifications,
   stripArtifactBlocksForPreview,
 } from "@/lib/artifacts/text"
 import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
@@ -513,6 +514,12 @@ export async function runScheduledTask(
   }
 
   // ---- Surfacing decision (default: silent) -----------------------------
+  const visibleNotifications = dedupeArtifactNotifications(notifications)
+  if (visibleNotifications.length < notifications.length) {
+    console.warn(
+      `Deduplicated ${notifications.length - visibleNotifications.length} duplicate scheduled notification(s)`
+    )
+  }
   let surface = false
   let inboxBody = assistantContent
   if (!ok) {
@@ -520,10 +527,10 @@ export async function runScheduledTask(
   } else if (opts.trigger === "manual") {
     surface = true // the user pressed Run now and is watching
   } else if (task.action.kind === "agent" || task.action.kind === "monitor") {
-    if (notifications.length > 0) {
+    if (visibleNotifications.length > 0) {
       surface = true
       inboxBody = appendMissingArtifactBlocks(
-        bodyFromNotifications(notifications),
+        bodyFromNotifications(visibleNotifications),
         assistantContent
       )
     }
@@ -534,9 +541,9 @@ export async function runScheduledTask(
   let inboxConversationId: string | null = null
   if (surface) {
     inboxConversationId = conversationId
-    const notificationSurface = notifications.length > 0
+    const notificationSurface = visibleNotifications.length > 0
     const inboxTitle = notificationSurface
-      ? subjectFromNotifications(notifications, task.title)
+      ? subjectFromNotifications(visibleNotifications, task.title)
       : task.title
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
@@ -546,7 +553,7 @@ export async function runScheduledTask(
       contentSegments: notificationSurface ? undefined : contentSegments,
       attachments: notificationSurface ? undefined : attachments,
       replyActions: notificationSurface
-        ? notifications.flatMap((n) => n.actions ?? [])
+        ? visibleNotifications.flatMap((n) => n.actions ?? [])
         : undefined,
       timestamp: Date.now(),
     }

@@ -215,7 +215,9 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
                 'Runs are short-lived. Do not sleep or loop forever; return nextCheckAfterMs or nextRunAt.',
                 'Runs may be triggered manually, on an interval, or by an inbound webhook subscription.',
                 'ctx is dict-like and also exposes helpers: ctx.notify, ctx.http_fetch, ctx.file_read, ctx.file_write, ctx.call_tool, ctx.continue_after, ctx.complete, ctx.pause.',
+                'ctx includes runtime time fields from config.json: timezone (IANA), datetime_utc, and local_time. Use these for user-facing timestamps and relative time logic.',
                 'trusted_python direct networking is allowed by default; direct file access is confined to the script workspace; env secrets and shell/process control are blocked by default.',
+                'Python ZoneInfo works for the configured timezone because the sandbox permits read-only system timezone metadata under /usr/share/zoneinfo; arbitrary absolute file paths remain blocked.',
                 'A script with agent_wake permission may wake a text agent after its deterministic gate passes; the woken agent receives the script prompt plus read-only/context tools, may activate exactly relevant capabilities for context, and may call notify_inbox if allowed.',
                 'Parent-mediated helpers still enforce manifest permissions when they touch app integrations, Inbox notifications, or app tools.',
                 'Any blocked action error includes why it was blocked, a safe alternative, and instructions to ask the user/record AGENT_NEEDS.md if implementation is needed.',
@@ -245,6 +247,7 @@ export async function executeMicroscriptDescribeCapabilities(): Promise<ToolResu
                 allowWorkspaceFiles: 'default true, confined to script workspace',
                 allowEnvironment: 'default false; app/user secrets are never passed to Python',
                 allowShell: 'default false',
+                systemTimezoneData: 'read-only /usr/share/zoneinfo access for Python ZoneInfo',
             },
             operation_kinds: [
                 'notify.inbox',

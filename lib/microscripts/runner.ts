@@ -5,13 +5,14 @@ import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
 
 import { WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { getConfiguredTimezone } from '@/lib/config'
 import { resolveAppOrigin } from '@/lib/app-origin'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
 import { normalizeInboxReplyActions } from '@/lib/ai/tools/notify'
 import { operationalIntegrationFor } from '@/lib/integrations/manifest'
 import { persistArtifactsFromMessage } from '@/lib/artifacts/persist-message'
-import { appendMissingArtifactBlocks, stripArtifactBlocksForPreview } from '@/lib/artifacts/text'
+import { appendMissingArtifactBlocks, dedupeArtifactNotifications, stripArtifactBlocksForPreview } from '@/lib/artifacts/text'
 import type { ToolExecutionContext } from '@/lib/ai/agents/types'
 import type { InboxReplyAction, Message } from '@/lib/types'
 
@@ -46,6 +47,7 @@ import socket
 import stat
 import sys
 import traceback
+import zoneinfo
 
 ORIGINAL_STDOUT = sys.stdout
 ORIGINAL_STDERR = sys.stderr
@@ -55,6 +57,11 @@ ORIGINAL_IO_OPEN = io.open
 ORIGINAL_MAKEDIRS = os.makedirs
 ORIGINAL_MKDIR = os.mkdir
 ORIGINAL_STAT = os.stat
+
+READONLY_SYSTEM_PATH_ROOTS = tuple(dict.fromkeys([
+    *[item for item in getattr(zoneinfo, "TZPATH", ()) if os.path.isabs(item)],
+    "/usr/share/zoneinfo",
+]))
 
 BLOCKED_MODULE_ROOTS = {
     "_posixsubprocess",
@@ -75,6 +82,7 @@ FILE_ATTRS = {
     "makedirs", "open", "remove", "removedirs", "rename", "replace", "rmdir",
     "scandir", "stat", "symlink", "truncate", "unlink", "utime",
 }
+READONLY_FILE_ATTRS = {"listdir", "scandir", "stat"}
 
 logs = []
 pending_requests = []
@@ -211,7 +219,31 @@ def ensure_relative_path(value):
         ))
     return resolved
 
+def read_only_system_path(value):
+    raw = os.fspath(value)
+    if not os.path.isabs(raw):
+        return None
+    resolved = os.path.realpath(raw)
+    for root in READONLY_SYSTEM_PATH_ROOTS:
+        normalized = os.path.realpath(root)
+        if resolved == normalized or resolved.startswith(normalized + os.sep):
+            return resolved
+    return None
+
+def read_only_mode(mode):
+    return not any(flag in str(mode) for flag in ("w", "a", "x", "+"))
+
 def safe_open(file, mode="r", *args, **kwargs):
+    readonly_system = read_only_system_path(file)
+    if readonly_system is not None:
+        if not read_only_mode(mode):
+            raise RuntimeError(blocked_message(
+                "system timezone file write",
+                "Only read-only access to system timezone data is allowed.",
+                "Read timezone metadata, or write script data under the microscript workspace.",
+                "Add a reviewed path-specific bridge if an external write is truly required.",
+            ))
+        return ORIGINAL_OPEN(readonly_system, mode, *args, **kwargs)
     if not POLICY.get("allowWorkspaceFiles", True):
         raise RuntimeError(blocked_message(
             "Python file open",
@@ -273,8 +305,13 @@ def patch_os_module(module):
     for attr in FILE_ATTRS:
         if hasattr(module, attr):
             original = getattr(module, attr)
+            if not callable(original):
+                continue
             def make_file_wrapper(fn_name, fn):
                 def wrapped(path, *args, **kwargs):
+                    readonly_system = read_only_system_path(path)
+                    if readonly_system is not None and fn_name in READONLY_FILE_ATTRS:
+                        return fn(readonly_system, *args, **kwargs)
                     resolved = ensure_relative_path(path)
                     return fn(resolved, *args, **kwargs)
                 return wrapped
@@ -361,7 +398,7 @@ def guarded_import(name, globals=None, locals=None, fromlist=(), level=0):
             "Request a reviewed runtime permission/implementation if there is no safe bridge.",
         ))
     module = ORIGINAL_IMPORT(name, globals, locals, fromlist, level)
-    if root == "os":
+    if root == "os" and getattr(module, "__name__", "") == "os":
         patch_os_module(module)
     if root == "socket":
         patch_socket_module(module)
@@ -375,7 +412,10 @@ try:
     validate_only = bool(payload.get("validateOnly"))
 
     if not POLICY.get("allowEnvironment", False):
+        runtime_tz = os.environ.get("TZ")
         os.environ.clear()
+        if runtime_tz:
+            os.environ["TZ"] = runtime_tz
     builtins.__import__ = guarded_import
     builtins.open = safe_open
     io.open = safe_open
@@ -395,13 +435,12 @@ try:
         "__name__": "microscript",
         "ctx": None,
     }
-    locals_dict = {}
     ctx = MicroscriptContext(raw_ctx)
     globals_dict["ctx"] = ctx
 
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
-        exec(compile(code, "<microscript>", "exec"), globals_dict, locals_dict)
-        run = locals_dict.get("run") or globals_dict.get("run")
+        exec(compile(code, "<microscript>", "exec"), globals_dict, globals_dict)
+        run = globals_dict.get("run")
         if not callable(run):
             raise RuntimeError("Microscript must define run(ctx).")
         try:
@@ -651,9 +690,14 @@ async function runPythonPhase(
 ): Promise<PythonPhaseResult> {
     const cwd = scriptWorkDir(script.id)
     fs.mkdirSync(cwd, { recursive: true })
+    const now = typeof ctx.now === 'number' ? ctx.now : Date.now()
+    const timezone = getConfiguredTimezone()
     const payload = JSON.stringify({
         code: script.code,
         ctx: {
+            timezone,
+            datetime_utc: new Date(now).toISOString(),
+            local_time: new Date(now).toLocaleString('en-CA', { timeZone: timezone, hour12: false }),
             script: {
                 id: script.id,
                 title: script.title,
@@ -705,6 +749,7 @@ function spawnPython(
             PATH: process.env.PATH ?? '/usr/bin:/bin:/usr/local/bin',
             PYTHONIOENCODING: 'utf-8',
             PYTHONDONTWRITEBYTECODE: '1',
+            TZ: getConfiguredTimezone(),
         }
         const child: ChildProcessWithoutNullStreams = spawn('python3', ['-I', '-c', TRUSTED_PYTHON_WRAPPER], {
             cwd: options.cwd,
@@ -1102,12 +1147,18 @@ function summaryForRun(
 
 function postMicroscriptInbox(script: Microscript, notifications: PendingNotification[], conversationId: string): string {
     const now = Date.now()
-    const body = notifications
+    const visibleNotifications = dedupeArtifactNotifications(notifications)
+    if (visibleNotifications.length < notifications.length) {
+        console.warn(
+            `Deduplicated ${notifications.length - visibleNotifications.length} duplicate microscript notification(s)`,
+        )
+    }
+    const body = visibleNotifications
         .map((n) => n.title ? `**${n.title}**\n\n${n.body}` : n.body)
         .join('\n\n---\n\n')
-    const actions = notifications.flatMap((n) => n.actions ?? [])
-    const title = notifications.length === 1 && notifications[0]?.title
-        ? notifications[0].title
+    const actions = visibleNotifications.flatMap((n) => n.actions ?? [])
+    const title = visibleNotifications.length === 1 && visibleNotifications[0]?.title
+        ? visibleNotifications[0].title
         : script.title
     const assistantMsg: Message = {
         id: `msg_${randomUUID()}`,

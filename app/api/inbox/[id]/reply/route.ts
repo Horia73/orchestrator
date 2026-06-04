@@ -12,7 +12,10 @@ import type {
   ReasoningEntry,
 } from "@/lib/types"
 import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
-import { appendMissingArtifactBlocks } from "@/lib/artifacts/text"
+import {
+  appendMissingArtifactBlocks,
+  dedupeArtifactNotifications,
+} from "@/lib/artifacts/text"
 import { resolveExistingUploadPath } from "@/lib/uploads"
 import {
   appendInboxMessage,
@@ -207,9 +210,15 @@ async function continueInboxReply(args: {
       attachments: args.attachments,
     })
     const done = topRunId ? doneByRun.get(topRunId) : undefined
+    const visibleNotifications = dedupeArtifactNotifications(notifications)
+    if (visibleNotifications.length < notifications.length) {
+      console.warn(
+        `Deduplicated ${notifications.length - visibleNotifications.length} duplicate inbox notification(s)`
+      )
+    }
     let assistantContent = result.success
-      ? notifications.length > 0
-        ? notifications
+      ? visibleNotifications.length > 0
+        ? visibleNotifications
             .map((n) => (n.title ? `**${n.title}**\n\n${n.body}` : n.body))
             .join("\n\n---\n\n")
         : String(
@@ -219,14 +228,14 @@ async function continueInboxReply(args: {
           ).trim() || "(no output)"
       : `Scheduled Inbox reply failed.\n\n${result.error ?? "Unknown error"}`
 
-    if (result.success && notifications.length > 0) {
+    if (result.success && visibleNotifications.length > 0) {
       assistantContent = appendMissingArtifactBlocks(
         assistantContent,
         String((result.data as { output?: unknown } | undefined)?.output ?? done?.content ?? "")
       )
     }
 
-    const notificationSurface = result.success && notifications.length > 0
+    const notificationSurface = result.success && visibleNotifications.length > 0
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",
@@ -239,7 +248,7 @@ async function continueInboxReply(args: {
       attachments: notificationSurface ? undefined : done?.attachments,
       replyActions:
         notificationSurface
-          ? notifications.flatMap((n) => n.actions ?? [])
+          ? visibleNotifications.flatMap((n) => n.actions ?? [])
           : undefined,
       timestamp: Date.now(),
     }

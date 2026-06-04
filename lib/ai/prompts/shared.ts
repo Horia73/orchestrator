@@ -338,6 +338,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`datetime_utc: ${nowDate.toISOString()}`)
     lines.push(`timezone: ${tz}`)
     lines.push(`local_time: ${nowDate.toLocaleString('en-CA', { timeZone: tz, hour12: false })} (resolve the user's relative dates/times against this)`)
+    lines.push('time_basis: Use timezone/local_time as the default for relative dates, schedules, reminders, monitors, notifications, and user-facing timestamps. Use UTC only for raw logs, protocol timestamps, or when the user explicitly asks for UTC.')
     const hostTz = systemTimezone()
     if (hostTz !== tz) lines.push(`host_timezone: ${hostTz}`)
     const appOrigin = cleanOrigin(

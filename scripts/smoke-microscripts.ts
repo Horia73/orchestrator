@@ -20,6 +20,7 @@ const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'microscripts-smoke-'))
 process.chdir(tmpRoot)
 
 async function main(): Promise<void> {
+    const { updateConfig } = await import('@/lib/config')
     const {
         createMicroscript,
         getMicroscript,
@@ -29,6 +30,8 @@ async function main(): Promise<void> {
     const { runMicroscript, validateMicroscriptCode } = await import('@/lib/microscripts/runner')
     const { listInboxConversations } = await import('@/lib/scheduling/store')
     const { executeMicroscriptCreate } = await import('@/lib/ai/tools/microscripts')
+
+    updateConfig({ timezone: 'Europe/Bucharest' })
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -84,6 +87,60 @@ def run(ctx):
     const directFileResult = await runMicroscript(directFile, { trigger: 'manual', preserveEnabled: true })
     const directFileAfter = getMicroscript(directFile.id)
     check('trusted Python direct file access works inside workspace', directFileResult.ok && directFileAfter?.state.content === 'hello', directFileAfter)
+
+    const zoneInfoCode = `
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+def run(ctx):
+    tz = ctx["timezone"]
+    local = datetime.now(ZoneInfo(tz))
+    return ctx.complete(
+        state={"timezone": tz, "offset": local.strftime("%z"), "local_time": ctx.get("local_time")},
+        summary="zoneinfo ok",
+    )
+`.trim()
+    const zoneInfoScript = createMicroscript({
+        title: 'Smoke timezone ZoneInfo',
+        code: zoneInfoCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke Python ZoneInfo timezone data access',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const zoneInfoResult = await runMicroscript(zoneInfoScript, { trigger: 'manual', preserveEnabled: true })
+    const zoneInfoAfter = getMicroscript(zoneInfoScript.id)
+    check(
+        'trusted Python can read system timezone data read-only',
+        zoneInfoResult.ok
+            && zoneInfoAfter?.state.timezone === 'Europe/Bucharest'
+            && (zoneInfoAfter.state.offset === '+0200' || zoneInfoAfter.state.offset === '+0300'),
+        zoneInfoAfter,
+    )
+
+    const absoluteFileCode = `
+def run(ctx):
+    with open("/etc/passwd", "r") as f:
+        return ctx.complete(summary=f.read(1))
+`.trim()
+    const absoluteFile = createMicroscript({
+        title: 'Smoke blocked absolute file',
+        code: absoluteFileCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke absolute file path denial',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const absoluteFileResult = await runMicroscript(absoluteFile, { trigger: 'manual', preserveEnabled: true })
+    check('absolute non-timezone file access remains blocked', absoluteFileResult.ok === false && absoluteFileResult.error?.includes('absolute filesystem path'), absoluteFileResult)
 
     const blockedShellCode = `
 import subprocess
