@@ -150,3 +150,21 @@ export const GLOSSARY: Record<string, GlossaryEntry> = {
 export function getGlossary(term: string): GlossaryEntry | undefined {
     return GLOSSARY[term.toLowerCase().replace(/[\s-]/g, '_')]
 }
+
+const INLINE_GLOSSARY_PATTERNS: Array<[string, RegExp]> = [
+    ['rpe', /\brpe\b/i],
+    ['rir', /\brir\b/i],
+    ['1rm', /\b1\s*rm\b|\b1rm\b/i],
+    ['pb', /\bpb\b|\bpersonal\s+best\b/i],
+    ['amrap', /\bamrap\b/i],
+    ['emom', /\bemom\b/i],
+    ['tabata', /\btabata\b/i],
+]
+
+export function findGlossaryTermsInText(text: string): string[] {
+    const terms: string[] = []
+    for (const [term, pattern] of INLINE_GLOSSARY_PATTERNS) {
+        if (pattern.test(text) && getGlossary(term)) terms.push(term)
+    }
+    return terms
+}

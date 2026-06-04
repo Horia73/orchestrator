@@ -69,7 +69,7 @@ function WorkoutView({
     className?: string
 }) {
     const sessionApi = useWorkoutSession(workout.sessionId, workout)
-    const interactive = sessionApi.isActive
+    const interactive = sessionApi.isActive || sessionApi.isFinished
 
     return (
         <>

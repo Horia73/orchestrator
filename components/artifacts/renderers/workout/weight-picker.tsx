@@ -62,6 +62,10 @@ export function WeightPicker({
         () => (reps && reps > 0 ? estimated1RM(value, reps) : null),
         [value, reps],
     )
+    const weightPresets = React.useMemo(
+        () => buildWeightPresets(initialKg, effectiveBar, effectivePlates),
+        [initialKg, effectiveBar, effectivePlates],
+    )
 
     const step = (delta: number) => setValue((v) => Math.max(0, Math.round((v + delta) * 100) / 100))
 
@@ -105,6 +109,18 @@ export function WeightPicker({
                         est. 1RM <span className="font-semibold text-foreground">{est1RM}</span> kg
                     </span>
                 ) : null}
+            </div>
+
+            <div className="grid grid-cols-3 gap-1">
+                {weightPresets.map((preset) => (
+                    <PresetBtn
+                        key={preset}
+                        active={Math.abs(value - preset) < 0.001}
+                        onClick={() => setValue(preset)}
+                    >
+                        {formatWeightNumber(preset)}
+                    </PresetBtn>
+                ))}
             </div>
 
             <div className="grid grid-cols-6 gap-1">
@@ -163,6 +179,52 @@ export function WeightPicker({
                 </button>
             </div>
         </div>
+    )
+}
+
+function buildWeightPresets(initialKg: number, barKg: number, plates: readonly number[]): number[] {
+    const smallestPlate = plates
+        .filter((plate) => Number.isFinite(plate) && plate > 0)
+        .reduce((min, plate) => Math.min(min, plate), Number.POSITIVE_INFINITY)
+    const increment = Number.isFinite(smallestPlate)
+        ? Math.max(0.5, Math.round(smallestPlate * 2 * 100) / 100)
+        : 2.5
+    const center = Math.max(0, Math.round(initialKg / increment) * increment)
+    const presets = new Set<number>()
+    for (let offset = -4; offset <= 4; offset++) {
+        presets.add(Math.max(0, Math.round((center + offset * increment) * 100) / 100))
+    }
+    if (barKg > 0 && barKg <= center) presets.add(Math.round(barKg * 100) / 100)
+    presets.add(Math.round(initialKg * 100) / 100)
+    return Array.from(presets)
+        .filter((preset) => Number.isFinite(preset) && preset >= 0)
+        .sort((a, b) => a - b)
+        .slice(0, 12)
+}
+
+function PresetBtn({
+    active,
+    onClick,
+    children,
+}: {
+    active: boolean
+    onClick: () => void
+    children: React.ReactNode
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={cn(
+                "flex h-8 items-center justify-center rounded-md border px-1.5 text-[12px] font-semibold tabular-nums transition-colors",
+                active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-background text-foreground/85 hover:bg-muted hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+        >
+            {children}
+        </button>
     )
 }
 

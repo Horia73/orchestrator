@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { MessageSquare, SkipForward, XCircle } from "lucide-react"
+import { MessageSquare, Pencil, SkipForward, XCircle } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 
@@ -19,18 +19,22 @@ import { cn } from "@/lib/utils"
 export function SetActionsMenu({
     open,
     onClose,
+    onEdit,
     onSkip,
     onMarkFailed,
     onAddNote,
+    canEdit,
     canSkip,
     canMarkFailed,
     className,
 }: {
     open: boolean
     onClose: () => void
+    onEdit?: () => void
     onSkip: () => void
     onMarkFailed: () => void
     onAddNote: () => void
+    canEdit?: boolean
     canSkip: boolean
     canMarkFailed: boolean
     className?: string
@@ -67,6 +71,15 @@ export function SetActionsMenu({
                 className,
             )}
         >
+            {onEdit ? (
+                <MenuItem
+                    onClick={() => { onEdit(); onClose() }}
+                    disabled={!canEdit}
+                    icon={<Pencil className="size-3.5" strokeWidth={1.85} />}
+                    label="Editează setul"
+                    hint="Actuale, RPE, RIR, notă"
+                />
+            ) : null}
             <MenuItem
                 onClick={() => { onMarkFailed(); onClose() }}
                 disabled={!canMarkFailed}

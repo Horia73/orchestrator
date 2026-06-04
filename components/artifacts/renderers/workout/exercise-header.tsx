@@ -10,6 +10,7 @@ import {
     formatSetSequence,
     formatWeight,
 } from "@/lib/workout/format"
+import { findGlossaryTermsInText, getGlossary } from "@/lib/workout/glossary"
 
 import { GlossaryInfo } from "./glossary-info"
 import { MuscleChips } from "./muscle-chips"
@@ -38,6 +39,7 @@ export function ExerciseHeader({
     const cues = exercise.formCues ?? []
     const alternatives = exercise.alternatives ?? []
     const hasContext = !!(exercise.previous || exercise.personalBest)
+    const glossaryTerms = React.useMemo(() => collectExerciseGlossaryTerms(exercise), [exercise])
 
     return (
         <header className={cn("flex flex-col gap-1.5", className)}>
@@ -45,7 +47,7 @@ export function ExerciseHeader({
                 <h3 className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-foreground">
                     {exercise.name}
                 </h3>
-                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl || exercise.description || exercise.imageUrl || exercise.imageQuery ? (
+                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl || exercise.description || exercise.imageUrl || exercise.imageQuery || glossaryTerms.length > 0 ? (
                     <FormCuesPopover
                         exerciseName={exercise.name}
                         cues={cues}
@@ -54,6 +56,7 @@ export function ExerciseHeader({
                         imageQuery={exercise.imageQuery}
                         videoUrl={exercise.videoUrl}
                         alternatives={alternatives}
+                        glossaryTerms={glossaryTerms}
                     />
                 ) : null}
             </div>
@@ -70,6 +73,24 @@ export function ExerciseHeader({
             ) : null}
         </header>
     )
+}
+
+function collectExerciseGlossaryTerms(exercise: Exercise): string[] {
+    const terms = new Set<string>()
+    for (const set of exercise.planned) {
+        if (set.rpe !== undefined) terms.add('rpe')
+        if (set.rir !== undefined) terms.add('rir')
+        const kind = set.kind ?? 'working'
+        if (kind !== 'working') terms.add(kind)
+        const targetMetric = (set as unknown as { targetMetric?: unknown }).targetMetric
+        if (typeof targetMetric === 'string') {
+            for (const term of findGlossaryTermsInText(targetMetric)) terms.add(term)
+        }
+        if (typeof set.notes === 'string') {
+            for (const term of findGlossaryTermsInText(set.notes)) terms.add(term)
+        }
+    }
+    return Array.from(terms).filter((term) => !!getGlossary(term))
 }
 
 function PreviousLine({ exercise, units }: { exercise: Exercise; units: WorkoutUnits }) {
@@ -139,6 +160,7 @@ function FormCuesPopover({
     imageQuery,
     videoUrl,
     alternatives,
+    glossaryTerms,
 }: {
     exerciseName: string
     cues: string[]
@@ -147,8 +169,13 @@ function FormCuesPopover({
     imageQuery?: string
     videoUrl?: string
     alternatives?: string[]
+    glossaryTerms: string[]
 }) {
     const hasAlternatives = alternatives && alternatives.length > 0
+    const glossaryEntries = glossaryTerms
+        .map((term) => [term, getGlossary(term)] as const)
+        .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof getGlossary>>] => !!entry[1])
+    const hasDemoContext = !!(imageUrl || imageQuery || description || cues.length > 0 || videoUrl || hasAlternatives)
     const [open, setOpen] = React.useState(false)
     return (
         <details
@@ -168,7 +195,7 @@ function FormCuesPopover({
                 <Info className="size-3.5" strokeWidth={1.75} />
             </summary>
             <div className="absolute right-0 top-full z-20 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-lg">
-                {open ? (
+                {open && hasDemoContext ? (
                     <ExerciseDemoImage
                         exerciseName={exerciseName}
                         imageUrl={imageUrl}
@@ -192,6 +219,31 @@ function FormCuesPopover({
                                 </li>
                             ))}
                         </ul>
+                    </>
+                ) : null}
+                {glossaryEntries.length > 0 ? (
+                    <>
+                        <div className={cn(
+                            "mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55",
+                            (description || cues.length > 0) && "mt-3",
+                        )}>
+                            Termeni
+                        </div>
+                        <dl className="flex flex-col gap-2 text-foreground/85">
+                            {glossaryEntries.map(([term, entry]) => (
+                                <div key={term} className="rounded bg-muted/45 px-2 py-1.5">
+                                    <dt className="text-[11.5px] font-semibold text-foreground">
+                                        {entry.title}
+                                        {entry.aka ? (
+                                            <span className="ml-1 font-normal text-muted-foreground">({entry.aka})</span>
+                                        ) : null}
+                                    </dt>
+                                    <dd className="mt-0.5 text-[12px] leading-relaxed">
+                                        {entry.body}
+                                    </dd>
+                                </div>
+                            ))}
+                        </dl>
                     </>
                 ) : null}
                 {hasAlternatives ? (
@@ -264,9 +316,14 @@ function ExerciseDemoImage({
         } : null,
     )
     const [failed, setFailed] = React.useState(false)
-    const [imageBroken, setImageBroken] = React.useState(false)
+    const [brokenUrls, setBrokenUrls] = React.useState<ReadonlySet<string>>(() => new Set())
     const query = imageQuery ?? `${exerciseName} exercise machine`
     const [fallbackReady, setFallbackReady] = React.useState(false)
+
+    React.useEffect(() => {
+        setBrokenUrls(new Set())
+        setFallbackReady(false)
+    }, [query, imageUrl])
 
     React.useEffect(() => {
         if (imageUrl || failed) return
@@ -290,15 +347,19 @@ function ExerciseDemoImage({
         return () => window.clearTimeout(timer)
     }, [imageUrl, result, query])
 
-    const display = result ?? (fallbackReady ? {
+    const fallback = fallbackReady && !imageUrl ? {
         url: `/api/workout-images/first?q=${encodeURIComponent(query)}`,
         sourceUrl: `https://commons.wikimedia.org/w/index.php?search=${encodeURIComponent(query)}&title=Special:MediaSearch&type=image`,
         attribution: 'Wikimedia Commons',
         width: 16,
         height: 9,
-    } satisfies WorkoutImage : null)
+    } satisfies WorkoutImage : null
 
-    if (!display || imageBroken) return null
+    const display = [result, fallback].find((candidate): candidate is WorkoutImage => {
+        return !!candidate && !brokenUrls.has(candidate.url)
+    }) ?? null
+
+    if (!display) return null
 
     const ratio = display.width > 0 && display.height > 0
         ? `${display.width} / ${display.height}`
@@ -313,7 +374,14 @@ function ExerciseDemoImage({
                 loading="lazy"
                 className="block w-full object-cover"
                 style={{ aspectRatio: ratio }}
-                onError={() => setImageBroken(true)}
+                onError={() => {
+                    setBrokenUrls((prev) => {
+                        const next = new Set(prev)
+                        next.add(display.url)
+                        return next
+                    })
+                    if (!imageUrl) setFallbackReady(true)
+                }}
             />
             <figcaption className="flex items-center justify-between gap-2 px-2 py-1 text-[10px] text-muted-foreground">
                 <span className="min-w-0 truncate">{display.attribution}</span>

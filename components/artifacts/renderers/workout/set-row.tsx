@@ -17,6 +17,7 @@ import {
     formatSetKind,
     formatWeightNumber,
 } from "@/lib/workout/format"
+import { findGlossaryTermsInText } from "@/lib/workout/glossary"
 import { isNewPersonalBest, type ActiveSetState, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
 
 import { GlossaryInfo } from "./glossary-info"
@@ -82,17 +83,24 @@ export function SetRow({
     const [weightPickerOpen, setWeightPickerOpen] = React.useState(false)
     const [repsPickerOpen, setRepsPickerOpen] = React.useState(false)
     const [menuOpen, setMenuOpen] = React.useState(false)
+    const [manualEditorOpen, setManualEditorOpen] = React.useState(false)
     const [prPulse, setPrPulse] = React.useState(false)
-    const editorOpen = isThisActiveSet && !!activeSet?.finishedAt
-    const [draft, setDraft] = React.useState<SetDraft>(() => buildSetDraft(plannedSet, logged, exercise.kind, activeSet))
+    const activeEditorOpen = isThisActiveSet && !!activeSet?.finishedAt
+    const editorActiveSet = activeEditorOpen ? activeSet : undefined
+    const editorOpen = activeEditorOpen || manualEditorOpen
+    const [draft, setDraft] = React.useState<SetDraft>(() => buildSetDraft(plannedSet, logged, exercise.kind, editorActiveSet))
 
     const isInteractive = !!interactive && !!sessionApi
     const metricEditable = isInteractive && (status === 'done' || status === 'failed')
 
     React.useEffect(() => {
         if (!editorOpen) return
-        setDraft(buildSetDraft(plannedSet, logged, exercise.kind, activeSet))
-    }, [editorOpen, plannedSet, logged, exercise.kind, activeSet])
+        setDraft(buildSetDraft(plannedSet, logged, exercise.kind, editorActiveSet))
+    }, [editorOpen, plannedSet, logged, exercise.kind, editorActiveSet])
+
+    React.useEffect(() => {
+        if (!isInteractive) setManualEditorOpen(false)
+    }, [isInteractive])
 
     // PR celebration: when status flips from pending → done AND the logged
     // set beats the PB, briefly pulse a sparkle and a golden ring.
@@ -165,18 +173,30 @@ export function SetRow({
         )
     }, [sessionApi, exercise, index, plannedSet, status])
 
-    const editorElapsedSec = activeSet?.finishedAt && activeSet.startedAt
-        ? Math.max(0, Math.round((activeSet.finishedAt - activeSet.startedAt) / 1000))
-        : 0
+    const handleEditSet = React.useCallback(() => {
+        if (!metricEditable) return
+        setManualEditorOpen(true)
+    }, [metricEditable])
 
-    const handleSaveActiveSet = React.useCallback(() => {
-        if (!sessionApi || !activeSet) return
-        sessionApi.logSet(exercise, index - 1, draftToLoggedSet(draft, exercise.kind, activeSet), {
+    const editorElapsedSec = editorActiveSet?.finishedAt && editorActiveSet.startedAt
+        ? Math.max(0, Math.round((editorActiveSet.finishedAt - editorActiveSet.startedAt) / 1000))
+        : loggedDurationSec(logged)
+
+    const handleSaveEditor = React.useCallback(() => {
+        if (!sessionApi) return
+        const timing = editorTiming(editorActiveSet, logged)
+        sessionApi.logSet(exercise, index - 1, draftToLoggedSet(draft, exercise.kind, timing), {
             plannedSet,
             groupRestSec,
-            startRest: true,
+            startRest: !!editorActiveSet,
         })
-    }, [sessionApi, activeSet, exercise, index, draft, plannedSet, groupRestSec])
+        if (!editorActiveSet) setManualEditorOpen(false)
+    }, [sessionApi, editorActiveSet, logged, exercise, index, draft, plannedSet, groupRestSec])
+
+    const handleCancelEditor = React.useCallback(() => {
+        if (editorActiveSet) sessionApi?.cancelActiveSet()
+        else setManualEditorOpen(false)
+    }, [editorActiveSet, sessionApi])
 
     return (
         <li
@@ -218,6 +238,7 @@ export function SetRow({
                     interactive={metricEditable}
                     onWeightClick={() => setWeightPickerOpen(true)}
                     onRepsClick={() => setRepsPickerOpen(true)}
+                    onEditClick={handleEditSet}
                 />
                 {(plannedSet.notes || logged?.notes) ? (
                     <div className="mt-0.5 truncate text-[11px] text-muted-foreground" title={logged?.notes ?? plannedSet.notes}>
@@ -249,9 +270,11 @@ export function SetRow({
                 <SetActionsMenu
                     open={menuOpen}
                     onClose={() => setMenuOpen(false)}
+                    onEdit={handleEditSet}
                     onSkip={handleSkip}
                     onMarkFailed={handleMarkFailed}
                     onAddNote={handleAddNote}
+                    canEdit={metricEditable}
                     canSkip={status === 'done' || status === 'failed'}
                     canMarkFailed={true}
                 />
@@ -277,8 +300,8 @@ export function SetRow({
                     exerciseKind={exercise.kind}
                     units={units}
                     elapsedSec={editorElapsedSec}
-                    onSave={handleSaveActiveSet}
-                    onCancel={() => sessionApi?.cancelActiveSet()}
+                    onSave={handleSaveEditor}
+                    onCancel={handleCancelEditor}
                 />
             ) : null}
 
@@ -500,15 +523,50 @@ function buildSetDraft(
     }
 }
 
+interface EditorTiming {
+    startedAtMs: number
+    completedAtMs: number
+}
+
+function editorTiming(activeSet: ActiveSetState | undefined, logged: LoggedSet | undefined): EditorTiming {
+    if (activeSet) {
+        return {
+            startedAtMs: activeSet.startedAt,
+            completedAtMs: activeSet.finishedAt ?? Date.now(),
+        }
+    }
+    const completedAtMs = dateMs(logged?.completedAt) ?? Date.now()
+    return {
+        startedAtMs: dateMs(logged?.startedAt) ?? completedAtMs,
+        completedAtMs,
+    }
+}
+
+function dateMs(value: string | undefined): number | undefined {
+    if (!value) return undefined
+    const ms = new Date(value).getTime()
+    return Number.isFinite(ms) ? ms : undefined
+}
+
+function loggedDurationSec(logged: LoggedSet | undefined): number {
+    if (typeof logged?.actualDurationSec === 'number') return logged.actualDurationSec
+    const startedAtMs = dateMs(logged?.startedAt)
+    const completedAtMs = dateMs(logged?.completedAt)
+    if (startedAtMs !== undefined && completedAtMs !== undefined) {
+        return Math.max(0, Math.round((completedAtMs - startedAtMs) / 1000))
+    }
+    return 0
+}
+
 function draftToLoggedSet(
     draft: SetDraft,
     exerciseKind: Exercise['kind'],
-    activeSet: ActiveSetState,
+    timing: EditorTiming,
 ): Partial<LoggedSet> {
     const logged: Partial<LoggedSet> = {
         completed: true,
-        startedAt: new Date(activeSet.startedAt).toISOString(),
-        completedAt: new Date(activeSet.finishedAt ?? Date.now()).toISOString(),
+        startedAt: new Date(timing.startedAtMs).toISOString(),
+        completedAt: new Date(timing.completedAtMs).toISOString(),
         actualRpe: draft.rpe,
         actualRir: draft.rir,
         notes: draft.notes.trim() || undefined,
@@ -579,6 +637,7 @@ function ActiveSetEditor({
                         label="Durată (sec)"
                         value={draft.durationSec}
                         step={5}
+                        inputKind="duration"
                         onChange={(durationSec) => setDraft((d) => ({ ...d, durationSec }))}
                     />
                 ) : null}
@@ -588,6 +647,7 @@ function ActiveSetEditor({
                         label="Distanță (m)"
                         value={draft.distanceM}
                         step={10}
+                        inputKind="distance"
                         onChange={(distanceM) => setDraft((d) => ({ ...d, distanceM }))}
                     />
                 ) : null}
@@ -598,6 +658,7 @@ function ActiveSetEditor({
                     step={0.5}
                     min={1}
                     max={10}
+                    infoTerm="rpe"
                     onChange={(rpe) => setDraft((d) => ({ ...d, rpe }))}
                 />
                 <NumberField
@@ -606,6 +667,7 @@ function ActiveSetEditor({
                     step={1}
                     min={0}
                     max={5}
+                    infoTerm="rir"
                     onChange={(rir) => setDraft((d) => ({ ...d, rir }))}
                 />
             </div>
@@ -649,6 +711,8 @@ function NumberField({
     step,
     min = 0,
     max,
+    inputKind = 'number',
+    infoTerm,
     onChange,
 }: {
     label: string
@@ -656,31 +720,89 @@ function NumberField({
     step: number
     min?: number
     max?: number
+    inputKind?: 'number' | 'duration' | 'distance'
+    infoTerm?: string
     onChange: (value: number | undefined) => void
 }) {
     return (
         <label className="min-w-0">
-            <span className="mb-1 block truncate text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+            <span className="mb-1 flex min-w-0 items-center gap-1 truncate text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
                 {label}
+                {infoTerm ? <GlossaryInfo term={infoTerm} /> : null}
             </span>
             <input
-                type="number"
+                type="text"
+                inputMode={inputKind === 'number' ? (step % 1 === 0 ? "numeric" : "decimal") : "text"}
                 value={value ?? ''}
-                step={step}
-                min={min}
-                max={max}
                 onChange={(event) => {
-                    if (event.target.value === '') {
+                    const raw = event.target.value.trim()
+                    if (raw === '') {
                         onChange(undefined)
                         return
                     }
-                    const next = Number.parseFloat(event.target.value)
-                    onChange(Number.isFinite(next) ? next : undefined)
+                    const next = parseNumberFieldValue(raw, inputKind)
+                    if (next === undefined) return
+                    onChange(clampNumber(next, min, max))
                 }}
                 className="h-9 w-full rounded-md border border-border bg-background px-2 text-right text-[13px] font-semibold tabular-nums text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring"
             />
         </label>
     )
+}
+
+function parseNumberFieldValue(raw: string, inputKind: 'number' | 'duration' | 'distance'): number | undefined {
+    const normalized = raw.trim().toLowerCase().replace(',', '.')
+    if (!normalized) return undefined
+
+    if (inputKind === 'duration') {
+        const clock = parseClockDuration(normalized)
+        if (clock !== undefined) return clock
+
+        let total = 0
+        let sawToken = false
+        let sawUnit = false
+        for (const match of normalized.matchAll(/(-?\d+(?:\.\d+)?)\s*(h|hr|hrs|hour|hours|min|mins|minute|minutes|m|sec|secs|second|seconds|s)?/g)) {
+            const value = Number.parseFloat(match[1])
+            if (!Number.isFinite(value)) continue
+            sawToken = true
+            const unit = match[2]
+            if (!unit) {
+                total += value
+                continue
+            }
+            sawUnit = true
+            if (unit.startsWith('h')) total += value * 3600
+            else if (unit === 'm' || unit.startsWith('min')) total += value * 60
+            else total += value
+        }
+        if (sawToken && sawUnit) return total
+    }
+
+    if (inputKind === 'distance') {
+        const distance = normalized.match(/^(-?\d+(?:\.\d+)?)\s*(km|kilometer|kilometers|m|meter|meters)?$/)
+        if (distance) {
+            const value = Number.parseFloat(distance[1])
+            if (!Number.isFinite(value)) return undefined
+            const unit = distance[2]
+            return unit?.startsWith('k') ? value * 1000 : value
+        }
+    }
+
+    const next = Number.parseFloat(normalized)
+    return Number.isFinite(next) ? next : undefined
+}
+
+function parseClockDuration(value: string): number | undefined {
+    if (!/^\d{1,2}(:\d{1,2}){1,2}$/.test(value)) return undefined
+    const parts = value.split(':').map((part) => Number.parseInt(part, 10))
+    if (parts.some((part) => !Number.isFinite(part))) return undefined
+    if (parts.length === 2) return parts[0] * 60 + parts[1]
+    return parts[0] * 3600 + parts[1] * 60 + parts[2]
+}
+
+function clampNumber(value: number, min: number, max?: number): number {
+    const minBounded = Math.max(min, value)
+    return max === undefined ? minBounded : Math.min(max, minBounded)
 }
 
 function RpePill({
@@ -724,6 +846,7 @@ function PrimaryMetric({
     interactive,
     onWeightClick,
     onRepsClick,
+    onEditClick,
 }: {
     plannedSet: PlannedSet
     logged?: LoggedSet
@@ -732,6 +855,7 @@ function PrimaryMetric({
     interactive: boolean
     onWeightClick: () => void
     onRepsClick: () => void
+    onEditClick: () => void
 }) {
     const set = plannedSet as unknown as AnyPlanned
     const editableClass = interactive
@@ -805,37 +929,66 @@ function PrimaryMetric({
             const seconds = logged?.actualDurationSec ?? (set.durationSec as number)
             return (
                 <span className="font-medium tabular-nums text-foreground">
-                    {formatDuration(seconds)}
+                    <button
+                        type="button"
+                        disabled={!interactive}
+                        onClick={interactive ? onEditClick : undefined}
+                        className={editableClass}
+                    >
+                        {formatDuration(seconds)}
+                    </button>
                 </span>
             )
         }
         case 'cardio_dur': {
             const targetMetric = typeof set.targetMetric === 'string' ? set.targetMetric : undefined
+            const seconds = logged?.actualDurationSec ?? (set.durationSec as number)
             return (
                 <span className="font-medium tabular-nums text-foreground">
-                    {formatDuration(set.durationSec as number)}
-                    {targetMetric ? (
-                        <span className="ml-1 text-[11px] font-normal text-muted-foreground">· {targetMetric}</span>
-                    ) : null}
+                    <button
+                        type="button"
+                        disabled={!interactive}
+                        onClick={interactive ? onEditClick : undefined}
+                        className={editableClass}
+                    >
+                        {formatDuration(seconds)}
+                    </button>
+                    <TargetMetricText text={targetMetric} />
                 </span>
             )
         }
         case 'cardio_dist': {
             const targetMetric = typeof set.targetMetric === 'string' ? set.targetMetric : undefined
+            const distance = logged?.actualDistanceM ?? (set.distanceM as number)
             return (
                 <span className="font-medium tabular-nums text-foreground">
-                    {formatDistance(set.distanceM as number, units)}
-                    {targetMetric ? (
-                        <span className="ml-1 text-[11px] font-normal text-muted-foreground">· {targetMetric}</span>
-                    ) : null}
+                    <button
+                        type="button"
+                        disabled={!interactive}
+                        onClick={interactive ? onEditClick : undefined}
+                        className={editableClass}
+                    >
+                        {formatDistance(distance, units)}
+                    </button>
+                    <TargetMetricText text={targetMetric} />
                 </span>
             )
         }
         case 'interval': {
             const intraRestSec = typeof set.intraRestSec === 'number' ? set.intraRestSec : undefined
+            const actualDuration = logged?.actualDurationSec
             return (
                 <span className="font-medium tabular-nums text-foreground">
-                    {set.rounds as number}×{formatDuration(set.workSec as number)}
+                    <button
+                        type="button"
+                        disabled={!interactive}
+                        onClick={interactive ? onEditClick : undefined}
+                        className={editableClass}
+                    >
+                        {actualDuration !== undefined
+                            ? formatDuration(actualDuration)
+                            : `${set.rounds as number}×${formatDuration(set.workSec as number)}`}
+                    </button>
                     {intraRestSec ? (
                         <span className="text-muted-foreground/60"> / {formatDuration(intraRestSec)}</span>
                     ) : null}
@@ -845,4 +998,17 @@ function PrimaryMetric({
         default:
             return null
     }
+}
+
+function TargetMetricText({ text }: { text?: string }) {
+    if (!text) return null
+    const terms = findGlossaryTermsInText(text)
+    return (
+        <span className="ml-1 inline-flex items-center gap-0.5 text-[11px] font-normal text-muted-foreground">
+            · {text}
+            {terms.map((term) => (
+                <GlossaryInfo key={term} term={term} />
+            ))}
+        </span>
+    )
 }

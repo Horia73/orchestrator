@@ -36,15 +36,10 @@ export function RepsPicker({
 
     const step = (delta: number) => setValue((v) => Math.max(0, v + delta))
 
-    const quickPicks = React.useMemo(() => {
-        if (!plannedRange) return null
-        if (typeof plannedRange === 'number') return [plannedRange]
-        const [lo, hi] = plannedRange
-        if (hi - lo > 8) return null
-        const out: number[] = []
-        for (let n = lo; n <= hi; n++) out.push(n)
-        return out
-    }, [plannedRange])
+    const repPresets = React.useMemo(
+        () => buildRepPresets(initialReps, plannedRange),
+        [initialReps, plannedRange],
+    )
 
     return (
         <div
@@ -90,25 +85,17 @@ export function RepsPicker({
                 <StepBtn onClick={() => step(5)} label="+5" />
             </div>
 
-            {quickPicks ? (
-                <div className="flex flex-wrap gap-1">
-                    {quickPicks.map((n) => (
-                        <button
-                            key={n}
-                            type="button"
-                            onClick={() => setValue(n)}
-                            className={cn(
-                                "h-7 min-w-[2rem] rounded-md border px-1.5 text-[11.5px] font-medium tabular-nums transition-colors",
-                                value === n
-                                    ? "border-primary bg-primary text-primary-foreground"
-                                    : "border-border bg-background text-foreground/85 hover:bg-muted",
-                            )}
-                        >
-                            {n}
-                        </button>
-                    ))}
-                </div>
-            ) : null}
+            <div className="grid grid-cols-4 gap-1">
+                {repPresets.map((n) => (
+                    <PresetBtn
+                        key={n}
+                        active={value === n}
+                        onClick={() => setValue(n)}
+                    >
+                        {n}
+                    </PresetBtn>
+                ))}
+            </div>
 
             <div className="flex items-center justify-end gap-1.5">
                 <button
@@ -129,6 +116,64 @@ export function RepsPicker({
                 </button>
             </div>
         </div>
+    )
+}
+
+function buildRepPresets(initialReps: number, plannedRange?: [number, number] | number): number[] {
+    const values = new Set<number>()
+    const add = (value: number) => {
+        if (Number.isFinite(value) && value >= 0 && value <= 100) values.add(Math.round(value))
+    }
+
+    add(initialReps)
+    if (Array.isArray(plannedRange)) {
+        const [lo, hi] = plannedRange
+        if (hi - lo <= 10) {
+            for (let n = lo; n <= hi; n++) add(n)
+        } else {
+            add(lo)
+            add(Math.round((lo + hi) / 2))
+            add(hi)
+        }
+        for (const n of [lo - 2, lo - 1, hi + 1, hi + 2]) add(n)
+    } else {
+        const center = plannedRange ?? initialReps
+        for (let offset = -3; offset <= 3; offset++) add(center + offset)
+    }
+
+    for (const common of [1, 3, 5, 6, 8, 10, 12, 15, 20, 25, 30]) {
+        const center = Array.isArray(plannedRange)
+            ? (plannedRange[0] + plannedRange[1]) / 2
+            : plannedRange ?? initialReps
+        if (Math.abs(common - center) <= 8) add(common)
+    }
+
+    return Array.from(values).sort((a, b) => a - b).slice(0, 12)
+}
+
+function PresetBtn({
+    active,
+    onClick,
+    children,
+}: {
+    active: boolean
+    onClick: () => void
+    children: React.ReactNode
+}) {
+    return (
+        <button
+            type="button"
+            onClick={onClick}
+            className={cn(
+                "flex h-8 items-center justify-center rounded-md border px-1.5 text-[12px] font-semibold tabular-nums transition-colors",
+                active
+                    ? "border-primary bg-primary text-primary-foreground"
+                    : "border-border bg-background text-foreground/85 hover:bg-muted hover:text-foreground",
+                "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+            )}
+        >
+            {children}
+        </button>
     )
 }
 

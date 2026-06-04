@@ -52,9 +52,14 @@ export function SessionSummary({
             setSaveStatus('unavailable')
             return
         }
-        // Use sessionId+completedAt as a stable per-save key so we don't
-        // re-save the same finished session if the component re-mounts.
-        const key = `${sessionApi.session.sessionId}@${sessionApi.session.completedAt ?? ''}`
+        // Include the editable log payload so post-finish changes re-save,
+        // while identical remounts still avoid duplicate API calls.
+        const key = JSON.stringify({
+            sessionId: sessionApi.session.sessionId,
+            startedAt: sessionApi.session.startedAt ?? '',
+            completedAt: sessionApi.session.completedAt ?? '',
+            logsByExerciseId: sessionApi.session.logsByExerciseId,
+        })
         if (savedKeyRef.current === key) return
         savedKeyRef.current = key
         setSaveStatus('saving')
