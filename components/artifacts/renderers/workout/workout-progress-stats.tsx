@@ -54,7 +54,7 @@ export function WorkoutProgressStats({
     if (plannedStats.totalSets === 0) return null
 
     const showLive = !!sessionApi && (sessionApi.isActive || sessionApi.isFinished)
-    const completedFraction = liveStats ? liveStats.setsDone / Math.max(1, plannedStats.totalSets) : 0
+    const completedFraction = liveStats ? (liveStats.setsDone + liveStats.setsSkipped) / Math.max(1, plannedStats.totalSets) : 0
     const elapsed = showLive && sessionApi?.session.startedAt
         ? Math.floor(((sessionApi.session.completedAt ? new Date(sessionApi.session.completedAt).getTime() : (nowMs ?? new Date(sessionApi.session.startedAt).getTime())) - new Date(sessionApi.session.startedAt).getTime()) / 1000)
         : 0
@@ -75,6 +75,11 @@ export function WorkoutProgressStats({
                                 <span className="font-semibold text-foreground">{liveStats?.setsDone ?? 0}</span>
                                 <span className="text-muted-foreground">/{plannedStats.totalSets}</span>
                                 <span className="ml-0.5"> sets</span>
+                                {liveStats?.setsSkipped ? (
+                                    <span className="ml-1 text-amber-700 dark:text-amber-300">
+                                        · {liveStats.setsSkipped} skipped
+                                    </span>
+                                ) : null}
                             </>
                         ) : (
                             <>
@@ -163,22 +168,25 @@ function computePlannedStats(workout: WorkoutArtifact): PlannedStats {
 
 interface LiveStats {
     setsDone: number
+    setsSkipped: number
     actualTonnageKg: number
 }
 
 function computeLiveStats(workout: WorkoutArtifact, sessionApi: WorkoutSessionApi): LiveStats {
     let setsDone = 0
+    let setsSkipped = 0
     let actualTonnageKg = 0
     for (const group of workout.groups) {
         for (const ex of group.exercises) {
             for (let i = 0; i < ex.planned.length; i++) {
                 const logged = sessionApi.getLogged(ex.id, i)
                 if (logged?.completed && !logged.failed) setsDone++
+                if (logged?.skipped) setsSkipped++
                 if (logged?.completed && logged.actualWeightKg !== undefined && logged.actualReps !== undefined) {
                     actualTonnageKg += logged.actualWeightKg * logged.actualReps
                 }
             }
         }
     }
-    return { setsDone, actualTonnageKg }
+    return { setsDone, setsSkipped, actualTonnageKg }
 }

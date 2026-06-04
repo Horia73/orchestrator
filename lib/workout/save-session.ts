@@ -544,7 +544,8 @@ function computePersonalBest(
 export function formatHistoryEntryLine(log: SessionLog): string {
     const date = log.startedAt.slice(0, 10)
     const dur = formatDuration(log.totalDurationSec)
-    const setStats = `${log.totalSetsCompleted}/${log.totalSetsPlanned} sets`
+    const skipped = countSkippedSets(log)
+    const setStats = `${log.totalSetsCompleted}/${log.totalSetsPlanned} sets${skipped ? `, ${skipped} skipped` : ''}`
     const volume = log.totalVolumeKg > 0 ? `${Math.round(log.totalVolumeKg).toLocaleString()} ${log.units}` : ''
     const prs = log.prs.length > 0 ? `🏆 ${log.prs.length} PR${log.prs.length > 1 ? 's' : ''}` : ''
     const parts = [date, log.title, dur, setStats]
@@ -566,7 +567,8 @@ export function formatSessionMarkdown(log: SessionLog): string {
     const date = log.startedAt.slice(0, 10)
     lines.push(`- **Data**: ${date}`)
     lines.push(`- **Durată**: ${formatDuration(log.totalDurationSec)}`)
-    lines.push(`- **Sets**: ${log.totalSetsCompleted}/${log.totalSetsPlanned} completed${log.totalSetsFailed ? `, ${log.totalSetsFailed} failed` : ''}`)
+    const skippedSets = countSkippedSets(log)
+    lines.push(`- **Sets**: ${log.totalSetsCompleted}/${log.totalSetsPlanned} completed${log.totalSetsFailed ? `, ${log.totalSetsFailed} failed` : ''}${skippedSets ? `, ${skippedSets} skipped` : ''}`)
     if (log.totalVolumeKg > 0) {
         lines.push(`- **Tonnage**: ${Math.round(log.totalVolumeKg).toLocaleString()} ${log.units}`)
     }
@@ -597,10 +599,20 @@ export function formatSessionMarkdown(log: SessionLog): string {
         if (ex.totalVolumeKg > 0) lines.push(`- ${Math.round(ex.totalVolumeKg).toLocaleString()} ${log.units} volume`)
         const notes = ex.loggedSets.map((s) => s.notes).filter(Boolean)
         if (notes.length > 0) lines.push(`- Notes: ${notes.join(' · ')}`)
+        const skipReasons = ex.loggedSets.flatMap((s, i) =>
+            s.skipped ? [`set ${i + 1}${s.skipReason ? `: ${s.skipReason}` : ''}`] : [],
+        )
+        if (skipReasons.length > 0) lines.push(`- Skipped: ${skipReasons.join(' · ')}`)
         lines.push('')
     }
 
     return lines.join('\n')
+}
+
+function countSkippedSets(log: SessionLog): number {
+    return log.exercises.reduce((sum, exercise) => {
+        return sum + exercise.loggedSets.filter((set) => set.skipped).length
+    }, 0)
 }
 
 // === previous-snapshot builder for AI tool ================================

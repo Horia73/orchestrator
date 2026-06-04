@@ -39,17 +39,6 @@ export function ExerciseCard({
     plates?: readonly number[]
     className?: string
 }) {
-    // Determine which set is "current" — the next pending one, so the user's
-    // eye snaps to it after a set is logged.
-    const currentIndex = React.useMemo(() => {
-        if (!sessionApi) return -1
-        for (let i = 0; i < exercise.planned.length; i++) {
-            const logged = sessionApi.getLogged(exercise.id, i)
-            if (!logged?.completed) return i
-        }
-        return -1
-    }, [sessionApi, exercise.id, exercise.planned.length])
-
     // Surface any freestyle sets (logged beyond planned[]) so they render
     // after the planned rows. Phase 4 only — read directly from session state.
     const freestyleCount = React.useMemo(() => {
@@ -78,7 +67,7 @@ export function ExerciseCard({
                         units={units}
                         sessionApi={sessionApi}
                         interactive={interactive}
-                        isCurrent={i === currentIndex}
+                        isCurrent={!!sessionApi?.isNextSet(exercise.id, i)}
                         groupRestSec={groupRestSec}
                         barKg={barKg}
                         plates={plates}

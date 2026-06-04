@@ -326,6 +326,11 @@ export const LoggedSetSchema = z.object({
      *  completed (e.g. failed at 6 of 8). */
     failed: z.boolean().optional(),
     partialReps: z.number().int().min(0).max(1000).optional(),
+    /** Set intentionally skipped by the user. Used to advance the workout
+     *  order without counting the set as completed volume. */
+    skipped: z.boolean().optional(),
+    /** Optional reason captured when the user skips a set. */
+    skipReason: z.string().min(1).max(400).optional(),
     /** Free-form note: "shoulder felt tight", "form broke last 2 reps". */
     notes: z.string().min(1).max(400).optional(),
     /** ISO timestamps for set start (when the timer would have started)

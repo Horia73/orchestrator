@@ -121,7 +121,10 @@ export function SessionSummary({
                     icon={<ListChecks className="size-3.5" strokeWidth={1.85} />}
                     label="Sets"
                     value={`${log.totalSetsCompleted}/${log.totalSetsPlanned}`}
-                    sub={log.totalSetsFailed ? `${log.totalSetsFailed} failed` : undefined}
+                    sub={[
+                        log.totalSetsFailed ? `${log.totalSetsFailed} failed` : null,
+                        countSkippedSets(log) ? `${countSkippedSets(log)} skipped` : null,
+                    ].filter(Boolean).join(' · ') || undefined}
                 />
                 <StatTile
                     icon={<Sparkles className="size-3.5" strokeWidth={1.85} />}
@@ -243,12 +246,14 @@ function ExerciseRecap({ log, units }: { log: SessionLog; units: string }) {
                 {log.exercises.map((ex) => {
                     const completed = ex.loggedSets.filter((s) => s.completed && !s.failed).length
                     const failed = ex.loggedSets.filter((s) => s.failed).length
+                    const skipped = ex.loggedSets.filter((s) => s.skipped).length
                     return (
                         <li key={ex.id} className="flex items-center gap-2 rounded-md bg-background/55 px-2.5 py-1.5 text-[12.5px]">
                             <span className="min-w-0 flex-1 truncate font-medium text-foreground">{ex.name}</span>
                             <span className="shrink-0 tabular-nums text-muted-foreground">
                                 {completed}/{ex.plannedSetCount}
                                 {failed ? <span className="ml-1 text-rose-500">· {failed} failed</span> : null}
+                                {skipped ? <span className="ml-1 text-amber-600 dark:text-amber-300">· {skipped} skipped</span> : null}
                             </span>
                             {ex.totalVolumeKg > 0 ? (
                                 <span className="shrink-0 tabular-nums text-foreground/65">
@@ -262,6 +267,12 @@ function ExerciseRecap({ log, units }: { log: SessionLog; units: string }) {
             </ul>
         </div>
     )
+}
+
+function countSkippedSets(log: SessionLog): number {
+    return log.exercises.reduce((sum, exercise) => {
+        return sum + exercise.loggedSets.filter((set) => set.skipped).length
+    }, 0)
 }
 
 function SaveStatusBadge({

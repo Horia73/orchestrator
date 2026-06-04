@@ -67,7 +67,15 @@ const workout = (() => {
 })()
 
 function stateWithLogs(opts: {
-    sets: Array<{ completed: boolean; weight?: number; reps?: number; rpe?: number; failed?: boolean }>
+    sets: Array<{
+        completed: boolean
+        weight?: number
+        reps?: number
+        rpe?: number
+        failed?: boolean
+        skipped?: boolean
+        skipReason?: string
+    }>
     startedOffsetSec?: number
 }): WorkoutSessionState {
     const start = new Date(Date.now() - (opts.startedOffsetSec ?? 1800) * 1000).toISOString()
@@ -80,6 +88,8 @@ function stateWithLogs(opts: {
                 sets: opts.sets.map((s) => ({
                     completed: s.completed,
                     failed: s.failed,
+                    skipped: s.skipped,
+                    skipReason: s.skipReason,
                     actualWeightKg: s.weight,
                     actualReps: s.reps,
                     actualRpe: s.rpe,
@@ -251,6 +261,21 @@ function stateWithLogs(opts: {
     check('history line: contains date', /\d{4}-\d{2}-\d{2}/.test(line))
     check('history line: contains title', line.includes('Test Push'))
     check('history line: marks PR when present', log.prs.length > 0 ? line.includes('PR') : true)
+}
+
+{
+    const log = buildSessionLog(workout, stateWithLogs({
+        sets: [
+            { completed: true, weight: 60, reps: 8 },
+            { completed: false, skipped: true, skipReason: 'aparat ocupat' },
+        ],
+    }))
+    const line = formatHistoryEntryLine(log)
+    const md = formatSessionMarkdown(log)
+    check('skip: not counted as completed', log.totalSetsCompleted === 1, log.totalSetsCompleted)
+    check('skip: history line mentions skipped', line.includes('1 skipped'), line)
+    check('skip: markdown mentions skipped', md.includes('1 skipped'), md)
+    check('skip: markdown keeps reason', md.includes('set 2: aparat ocupat'), md)
 }
 
 {
