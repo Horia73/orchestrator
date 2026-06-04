@@ -12,7 +12,7 @@ For legal/regulatory/logistics, use official authorities and current rules first
 
 For medical/scientific questions, use peer-reviewed articles, clinical guidelines, systematic reviews, drug labels, regulator pages, and reputable medical institutions. Distinguish human evidence from animal/in-vitro/mechanistic evidence.
 
-For commerce and availability, use the exact product listing or direct seller page. Aggregators are useful for discovery but must be verified against direct pages when possible.
+For commerce and availability, use the exact product listing or direct seller page. Aggregators are useful for discovery but must be verified against direct pages when possible. Link the exact product page, not the brand homepage. When no official price is published, fall back to a clearly-labeled estimate from secondary/community sources rather than omitting price.
 
 For travel, local logistics, and events, use official venue/operator/ticketing/transit sources for facts. Use maps and reviews to understand practical quality and neighborhood context, but not as the sole source for opening hours, ticket rules, or schedules.
 </source_policy>

@@ -52,7 +52,7 @@ export interface ToolStreamDelta {
 export interface ToolExecutionContext {
   /** Agent that emitted this tool call (the orchestrator on depth 0). */
   callerAgentId: string
-  /** 0 for the user-facing turn, 1 or 2 for sub-agents. */
+  /** 0 for the user-facing turn, 1-3 for sub-agents. */
   depth: number
   /** Conversation that owns this turn. Sub-agent logs share the conversation. */
   conversationId: string
@@ -160,11 +160,13 @@ export interface AgentConfig {
 
 /**
  * Hard cap on how deep an agent call tree can go. Orchestrator is depth 0;
- * agents it calls are depth 1; their sub-agents are depth 2 (last allowed).
- * Set globally so behaviour is predictable; per-agent overrides would
- * complicate planning without clear benefit.
+ * agents it calls are depth 1; their sub-agents are depth 2; those run one
+ * more level to depth 3 (last allowed). Set globally so behaviour is
+ * predictable; per-agent overrides would complicate planning without clear
+ * benefit. Deeper trees cost more agents and tokens — the prompts'
+ * anti-recursion and "you are not the decomposer" guidance is the real brake.
  */
-export const MAX_AGENT_DEPTH = 2
+export const MAX_AGENT_DEPTH = 3
 
 export interface PromptContext {
   /** Agent receiving this prompt. Used for scoped runtime context such as child thread lists. */

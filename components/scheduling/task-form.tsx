@@ -6,11 +6,8 @@ import { Select } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
 import { cn } from "@/lib/utils"
 import type { ScheduledTask } from "@/lib/scheduling/schema"
+import { useRuntimeConfig } from "@/hooks/use-runtime-config"
 import type { NewTaskPayload } from "./use-scheduling"
-
-const SYSTEM_TZ = (() => {
-    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC" } catch { return "UTC" }
-})()
 
 type ActionType = "agent" | "tool" | "monitor"
 type MonitorKind = Extract<NewTaskPayload["action"], { kind: "monitor" }>["monitorKind"]
@@ -86,13 +83,13 @@ interface FormState {
     enabled: boolean
 }
 
-function initialState(task?: ScheduledTask): FormState {
+function initialState(task: ScheduledTask | undefined, timezone: string): FormState {
     const base: FormState = {
         title: "", actionType: "agent", agentId: "orchestrator", agentPrompt: "",
         toolId: "", toolSummary: "", toolArgs: "{}", monitorKind: "markets",
         schedKind: "in", onceLocal: toLocalInput(Date.now() + 3_600_000),
         inAmount: 7, inUnit: "h", timeHM: "09:00", weekdays: [1, 2, 3, 4, 5],
-        everyAmount: 1, everyUnit: "h", cronExpr: "0 9 * * *", timezone: SYSTEM_TZ, enabled: true,
+        everyAmount: 1, everyUnit: "h", cronExpr: "0 9 * * *", timezone, enabled: true,
     }
     if (!task) return base
     const next: FormState = { ...base, title: task.title, enabled: task.enabled }
@@ -154,14 +151,14 @@ function buildPayload(f: FormState): NewTaskPayload | { error: string } {
         schedule = { kind: "every", everyMs }
     } else if (f.schedKind === "dailyAt") {
         if (!hm) return { error: "Time must be HH:MM." }
-        schedule = { kind: "dailyAt", hour: +hm[1], minute: +hm[2], timezone: f.timezone.trim() || SYSTEM_TZ }
+        schedule = { kind: "dailyAt", hour: +hm[1], minute: +hm[2], timezone: f.timezone.trim() || "UTC" }
     } else if (f.schedKind === "weeklyAt") {
         if (!hm) return { error: "Time must be HH:MM." }
         if (f.weekdays.length === 0) return { error: "Pick at least one weekday." }
-        schedule = { kind: "weeklyAt", weekdays: [...f.weekdays].sort(), hour: +hm[1], minute: +hm[2], timezone: f.timezone.trim() || SYSTEM_TZ }
+        schedule = { kind: "weeklyAt", weekdays: [...f.weekdays].sort(), hour: +hm[1], minute: +hm[2], timezone: f.timezone.trim() || "UTC" }
     } else {
         if (!f.cronExpr.trim()) return { error: "Cron expression is required." }
-        schedule = { kind: "cron", expression: f.cronExpr.trim(), timezone: f.timezone.trim() || SYSTEM_TZ }
+        schedule = { kind: "cron", expression: f.cronExpr.trim(), timezone: f.timezone.trim() || "UTC" }
     }
     return { title: f.title.trim(), action, schedule, enabled: f.enabled }
 }
@@ -176,7 +173,8 @@ export function TaskForm({
     onSubmit: (payload: NewTaskPayload) => Promise<void>
     onCancel: () => void
 }) {
-    const [f, setF] = React.useState<FormState>(() => initialState(task))
+    const { timezone: configuredTimezone } = useRuntimeConfig()
+    const [f, setF] = React.useState<FormState>(() => initialState(task, configuredTimezone))
     const [error, setError] = React.useState<string | null>(null)
     const [saving, setSaving] = React.useState(false)
     const set = <K extends keyof FormState>(k: K, v: FormState[K]) => setF(prev => ({ ...prev, [k]: v }))
@@ -186,10 +184,15 @@ export function TaskForm({
     React.useEffect(() => {
         if (seededTaskId.current === taskId) return
         seededTaskId.current = taskId
-        setF(initialState(task))
+        setF(initialState(task, configuredTimezone))
         setError(null)
         setSaving(false)
-    }, [task, taskId])
+    }, [task, taskId, configuredTimezone])
+
+    React.useEffect(() => {
+        if (task) return
+        setF(prev => prev.timezone === configuredTimezone ? prev : { ...prev, timezone: configuredTimezone })
+    }, [configuredTimezone, task])
 
     const submit = async () => {
         const built = buildPayload(f)

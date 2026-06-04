@@ -3,6 +3,8 @@ import fs from 'fs'
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import type { ScheduledAction } from '@/lib/scheduling/schema'
 import { codeMapPath, getRuntimeIndexStatus, readRuntimeIndexEntries } from '@/lib/runtime-index'
+import { getConfiguredTimezone } from '@/lib/config'
+import { dateStampInTimezone } from '@/lib/timezone'
 import { booleanArg, clamp, numberArg, stringArg, truncateText } from './helpers'
 
 type Range = '1h' | '24h' | '7d' | '30d' | 'all'
@@ -97,7 +99,7 @@ export const readRuntimeIndexTool: ToolDef = {
         type: 'object',
         properties: {
             section: { type: 'string', enum: ['overview', 'code', 'runs', 'logs'], description: 'What to read. Defaults to overview.' },
-            date: { type: 'string', description: 'YYYY-MM-DD for runs/logs. Defaults to local today.' },
+            date: { type: 'string', description: 'YYYY-MM-DD for runs/logs. Defaults to today in the app-configured timezone.' },
             limit: { type: 'integer', description: 'Max JSONL entries for runs/logs. Defaults to 50, capped at 200.' },
             max_chars: { type: 'integer', description: 'Max chars for code map. Defaults to 30000.' },
         },
@@ -364,9 +366,5 @@ function describeAction(action: ScheduledAction | null): string | null {
 }
 
 function todayLocal(): string {
-    const d = new Date()
-    const y = d.getFullYear()
-    const m = String(d.getMonth() + 1).padStart(2, '0')
-    const day = String(d.getDate()).padStart(2, '0')
-    return `${y}-${m}-${day}`
+    return dateStampInTimezone(new Date(), getConfiguredTimezone())
 }

@@ -17,6 +17,12 @@ Use built-in web_search yourself when:
 - you are validating a small detail before continuing;
 - delegating would add more overhead than value.
 
+Delegate to worker when:
+- you need a heavy non-execution deliverable composed: a structured itinerary, an options comparison table, a long-form plan or analysis, or a document/deck/sheet;
+- the cognitive or drafting work would otherwise crowd your own context while you coordinate channels;
+- hand it the constraints, the verified options, and the decision it supports — it returns the finished deliverable, not advice.
+Worker does not execute real-world actions (no calls, bookings, carts, sends); keep execution on browser_agent / android_agent / phone_agent and reserve worker for the thinking-and-producing slice. Hand it everything it needs up front and keep the chain shallow rather than expecting it to go fetch.
+
 Delegate to browser_agent when:
 - the task needs interactive web navigation;
 - a form, checkout, account, calendar, ticketing page, reservation page, upload, or cart must be prepared;

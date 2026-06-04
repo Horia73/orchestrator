@@ -22,5 +22,5 @@ export const conciergeAgent: AgentConfig = {
     // the <integrations> summary are always in context.
     tools: [...DELEGATING_WORKSPACE_TOOLS, ...INTEGRATION_CONTROL_TOOL_IDS, ...GMAIL_TOOL_IDS, ...WHATSAPP_TOOL_IDS, ...GOOGLE_CALENDAR_TOOL_IDS, ...GOOGLE_DRIVE_TOOL_IDS, ...GOOGLE_CONTACTS_TOOL_IDS, ...GOOGLE_DOCS_TOOL_IDS, ...GOOGLE_SHEETS_TOOL_IDS, ...GOOGLE_SLIDES_TOOL_IDS],
     builtins: CLI_WORKSPACE_BUILTINS,
-    canCallAgents: ['researcher', 'browser_agent', 'android_agent', 'phone_agent'],
+    canCallAgents: ['researcher', 'worker', 'browser_agent', 'android_agent', 'phone_agent'],
 }

@@ -426,6 +426,10 @@ export async function POST(request: Request) {
   }
   addMessage(conversationId, assistantMsg)
 
+  // Wall-clock since the turn started — mirrors the durationMs persisted at
+  // finalize so the live client can stamp "Worked for …" without a reload.
+  const elapsedMs = () => Math.max(0, Date.now() - assistantMsg.timestamp)
+
   const serverAbortController = new AbortController()
   registerChatStream(conversationId, messageId, serverAbortController)
 
@@ -505,22 +509,42 @@ export async function POST(request: Request) {
       accAttachments
     )
 
+    const effectiveStatus = opts?.status ?? terminalMessageStatus ?? undefined
+    // Mid-stream progress saves keep the assistant row pinned to its start
+    // timestamp so it doesn't reorder while streaming. The FINAL (terminal)
+    // persist instead stamps the completion time — that's what advances the
+    // conversation's lastMessageAt past any readAt the user accumulated while
+    // watching the run live. Without it, a run that finishes after you've left
+    // the conversation (its completion arrives via /api/sync, not this tab's
+    // reader) leaves lastMessageAt frozen at start time, so the unread calc
+    // reads it as already-read: no bold + no "finished" dot in the sidebar.
+    // Mirrors the client's local-reader done/stopped/error paths, which all
+    // stamp Date.now() on the final message.
+    const isTerminalPersist =
+      effectiveStatus === "ok" ||
+      effectiveStatus === "error" ||
+      effectiveStatus === "aborted"
+
     addMessage(
       conversationId,
       sanitizeMessageForPersistence({
         id: messageId,
         role: "assistant",
         content: accContent || "",
-        status: opts?.status ?? terminalMessageStatus ?? undefined,
+        status: effectiveStatus,
         contentSegments: accContentSegments,
         reasoning: accReasoning,
         thinking: accThinking || "",
         thinkingDuration: opts?.thinkingDuration,
+        // Total turn wall-clock, stamped only on the terminal persist (the row's
+        // timestamp is rewritten to `now` here, so the start is otherwise lost).
+        durationMs: isTerminalPersist
+          ? Math.max(0, now - assistantMsg.timestamp)
+          : undefined,
         toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
         attachments:
           persistAttachments.length > 0 ? persistAttachments : undefined,
-        // Keep stable ordering for this assistant message.
-        timestamp: assistantMsg.timestamp,
+        timestamp: isTerminalPersist ? now : assistantMsg.timestamp,
       })
     )
   }
@@ -1294,7 +1318,7 @@ export async function POST(request: Request) {
                       thinkingDuration: 0,
                       status: "aborted",
                     })
-                    send({ type: "stopped", messageId })
+                    send({ type: "stopped", messageId, durationMs: elapsedMs() })
                     return
                   }
 
@@ -1410,6 +1434,7 @@ export async function POST(request: Request) {
                     messageId,
                     status: "ok",
                     thinkingDuration: meta.thinkingDuration,
+                    durationMs: elapsedMs(),
                     usage: meta.usage,
                     interactionId: meta.sessionId,
                     attachments: accAttachments,
@@ -1444,7 +1469,7 @@ export async function POST(request: Request) {
                       thinkingDuration: 0,
                       status: terminalMessageStatus,
                     })
-                    send({ type: "stopped", messageId })
+                    send({ type: "stopped", messageId, durationMs: elapsedMs() })
                     return
                   }
                   logRequestFail(
@@ -1478,7 +1503,7 @@ export async function POST(request: Request) {
                   thinkingDuration: 0,
                   status: terminalMessageStatus,
                 })
-                send({ type: "stopped", messageId })
+                send({ type: "stopped", messageId, durationMs: elapsedMs() })
               } else {
                 logRequestFail(messageId, msg, Date.now(), accContent || null, {
                   reasoning: sanitizeReasoningForPersistence(accReasoning),
@@ -1515,7 +1540,11 @@ export async function POST(request: Request) {
               thinkingDuration: 0,
               status: terminalMessageStatus,
             })
-            send({ type: "error", error: attemptStreamError })
+            send({
+              type: "error",
+              error: attemptStreamError,
+              durationMs: elapsedMs(),
+            })
             break
           }
         }
@@ -1529,7 +1558,7 @@ export async function POST(request: Request) {
             thinkingDuration: 0,
             status: terminalMessageStatus,
           })
-          send({ type: "error", error })
+          send({ type: "error", error, durationMs: elapsedMs() })
         }
       } catch (error: unknown) {
         const msg = error instanceof Error ? error.message : "Unknown error"
@@ -1554,6 +1583,7 @@ export async function POST(request: Request) {
           reasoning: accReasoning,
           thinking: accThinking || "",
           thinkingDuration: 0,
+          durationMs: elapsedMs(),
           timestamp: assistantMsg.timestamp,
           toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
           attachments:
@@ -1576,8 +1606,8 @@ export async function POST(request: Request) {
 
         send(
           aborted
-            ? { type: "stopped", messageId }
-            : { type: "error", error: msg }
+            ? { type: "stopped", messageId, durationMs: elapsedMs() }
+            : { type: "error", error: msg, durationMs: elapsedMs() }
         )
       } finally {
         clearChatStream(conversationId, messageId)

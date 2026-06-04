@@ -13,6 +13,11 @@
 //    (it excludes the durable files + the last 3 daily files, which the prompt
 //    builder already injects). That targets exactly the "months later, similar
 //    thing comes up" case.
+//  - Two precision filters keep that pass honest: near-duplicate suppression
+//    (selectDiverse) collapses the same fact re-logged across days, and a
+//    coverage gate (shouldSuppressByCoverage) drops the whole block when a broad,
+//    multi-intent message is matched only by a small tangential slice of memory.
+//    Both are silent-pass concerns; the explicit memory_search tool stays wide.
 //  - Everything is fail-open: disabled, no key, timeout, or error => "".
 
 import fs from "fs"
@@ -20,9 +25,11 @@ import path from "path"
 import { createHash } from "crypto"
 
 import type { MemoryRecallHit } from "@/lib/types"
-import { AGENT_WORKSPACE_DIR, getMemoryEmbeddingSettings } from "@/lib/config"
+import { AGENT_WORKSPACE_DIR, getConfiguredTimezone, getMemoryEmbeddingSettings } from "@/lib/config"
+import { dateStampInTimezone } from "@/lib/timezone"
 import {
   embedDocuments,
+  embedQueries,
   embedQuery,
   embeddingsAvailable,
   getEmbeddingDim,
@@ -106,6 +113,33 @@ const TOOL_THRESHOLD = clampNumber(
   1
 )
 
+// Near-duplicate suppression. Vectors are unit-normalized (cosine == dot), so
+// this is a similarity in [0,1]. Kept high/conservative: it only collapses hits
+// the model considers near-identical — e.g. the SAME fact re-logged across
+// several daily files — while distinct same-topic notes survive.
+const DEDUP_SIM = clampNumber(process.env.ORCHESTRATOR_MEMORY_RECALL_DEDUP, 0.92, 0.5, 1)
+
+// Coverage gate (SILENT per-turn pass only). A broad, multi-intent message whose
+// recalled hits address only a small tangential slice of it (the classic case:
+// a one-line "HA is cool" aside dragging in old Home-Assistant notes while the
+// message is really about new hardware) should surface nothing. We require a
+// genuinely broad message (>= MIN_SEGMENTS sentences) and suppress when at most
+// FLOOR of those segments are actually matched by the returned hits.
+const COVERAGE_MIN_SEGMENTS = clampInt(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_MIN_SEGMENTS,
+  4,
+  2,
+  32
+)
+const COVERAGE_FLOOR = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_COVERAGE_FLOOR,
+  0.34,
+  0,
+  1
+)
+const SEGMENT_MIN_CHARS = 12
+const MAX_SEGMENTS = 12
+
 const RECALL_TIMEOUT_MS = 1500
 const MIN_QUERY_CHARS = 8
 const MIN_CHUNK_CHARS = 24
@@ -184,13 +218,12 @@ export function listMemorySourceFiles(): string[] {
   return out
 }
 
-/** Sources already in the prompt this turn: durable files + last 3 UTC days. */
+/** Sources already in the prompt this turn: durable files + last 3 configured-local days. */
 function inContextSources(): Set<string> {
   const set = new Set<string>(DURABLE_SOURCES)
+  const timezone = getConfiguredTimezone()
   for (let back = 0; back <= 2; back++) {
-    const stamp = new Date(Date.now() - back * 86_400_000)
-      .toISOString()
-      .slice(0, 10)
+    const stamp = dateStampInTimezone(Date.now() - back * 86_400_000, timezone)
     set.add(`${MEMORY_DAY_DIR}/${stamp}.md`)
   }
   return set
@@ -420,6 +453,104 @@ export interface SearchOptions {
   excludeSources?: Set<string>
   /** "hybrid" blends keyword (FTS) hits in when semantic is thin/unavailable. */
   mode?: "semantic" | "hybrid"
+  /** Collapse near-duplicate hits (default true). Off for calibration dry-runs. */
+  dedup?: boolean
+  /** Silent per-turn pass only: suppress entirely when a broad, multi-intent
+   *  message is matched only by a small tangential slice of memory (default false). */
+  coverageGate?: boolean
+}
+
+/**
+ * Greedy near-duplicate suppression. Sorts candidates by score and keeps the
+ * highest-scoring representative of each near-identical cluster, capped at topK.
+ * Vector-based, so it only collapses chunks the model considers near-identical
+ * (DEDUP_SIM); distinct same-topic notes survive. FTS-only hits carry no vector
+ * and always pass through.
+ */
+export function selectDiverse(
+  candidates: MemoryHit[],
+  vectorById: Map<string, Float32Array>,
+  topK: number
+): MemoryHit[] {
+  const ranked = [...candidates].sort((a, b) => b.score - a.score)
+  const picked: MemoryHit[] = []
+  const pickedVecs: Float32Array[] = []
+  for (const cand of ranked) {
+    if (picked.length >= topK) break
+    const v = vectorById.get(cand.id)
+    if (v) {
+      let redundant = false
+      for (const pv of pickedVecs) {
+        if (pv.length === v.length && dot(pv, v) >= DEDUP_SIM) {
+          redundant = true
+          break
+        }
+      }
+      if (redundant) continue
+      pickedVecs.push(v)
+    }
+    picked.push(cand)
+  }
+  return picked
+}
+
+// Split a user message into substantive segments for the coverage gate.
+// Sentence/line level only — splitting on commas would shred a single intent
+// ("wifi, wake word instant, quality > apple"). Exported for tests.
+export function splitQuerySegments(query: string): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const raw of query.replace(/\r\n/g, "\n").split(/[\n.!?]+/)) {
+    const seg = raw.replace(/\s+/g, " ").trim()
+    if (seg.length < SEGMENT_MIN_CHARS) continue
+    const key = seg.toLowerCase()
+    if (seen.has(key)) continue
+    seen.add(key)
+    out.push(seg)
+    if (out.length >= MAX_SEGMENTS) break
+  }
+  return out
+}
+
+/**
+ * Coverage gate for the SILENT per-turn pass. Embeds the message's segments and
+ * counts how many are actually addressed by the returned hits; a genuinely broad
+ * message (>= COVERAGE_MIN_SEGMENTS) covered at or below COVERAGE_FLOOR is a
+ * tangential match (the recall locked onto one aside) and should surface nothing.
+ * Fail-open: any problem (no key, embed failure, too few segments) => no suppression.
+ */
+async function shouldSuppressByCoverage(
+  query: string,
+  hits: MemoryHit[],
+  vectorById: Map<string, Float32Array>,
+  threshold: number
+): Promise<boolean> {
+  try {
+    if (hits.length === 0) return false
+    const hitVecs = hits
+      .map((h) => vectorById.get(h.id))
+      .filter((v): v is Float32Array => v !== undefined)
+    if (hitVecs.length === 0) return false // FTS-only result: nothing to compare
+
+    const segments = splitQuerySegments(query)
+    if (segments.length < COVERAGE_MIN_SEGMENTS) return false // not broad enough to judge
+
+    const segVecs = await embedQueries(segments)
+    if (!segVecs || segVecs.length !== segments.length) return false // fail-open
+
+    let covered = 0
+    for (const sv of segVecs) {
+      for (const hv of hitVecs) {
+        if (sv.length === hv.length && dot(sv, hv) >= threshold) {
+          covered += 1
+          break
+        }
+      }
+    }
+    return covered / segments.length <= COVERAGE_FLOOR
+  } catch {
+    return false // fail-open
+  }
 }
 
 export async function searchMemory(
@@ -430,47 +561,54 @@ export async function searchMemory(
   const threshold = opts.threshold ?? getRecallThreshold()
   const exclude = opts.excludeSources ?? new Set<string>()
   const mode = opts.mode ?? "semantic"
+  const dedup = opts.dedup ?? true
 
-  const byId = new Map<string, MemoryHit>()
+  const candidates: MemoryHit[] = []
+  const seenIds = new Set<string>()
+  const vectorById = new Map<string, Float32Array>()
 
   const qVec = await embedQuery(query)
   if (qVec) {
     const rows = loadVectorRows(getEmbeddingModel(), getEmbeddingDim())
-    const scored: MemoryHit[] = []
     for (const r of rows) {
       if (exclude.has(r.source)) continue
       if (r.vector.length !== qVec.length) continue
       const score = dot(qVec, r.vector)
       if (score >= threshold) {
-        scored.push({
-          id: r.id,
-          source: r.source,
-          title: r.title,
-          text: r.text,
-          score,
-        })
+        candidates.push({ id: r.id, source: r.source, title: r.title, text: r.text, score })
+        seenIds.add(r.id)
+        vectorById.set(r.id, r.vector)
       }
     }
-    scored.sort((a, b) => b.score - a.score)
-    for (const hit of scored.slice(0, topK)) byId.set(hit.id, hit)
   }
 
-  if (mode === "hybrid" && byId.size < topK) {
+  if (mode === "hybrid" && candidates.length < topK) {
     const match = buildFtsMatch(query)
     if (match) {
       for (const hit of ftsSearch(match, topK * 2)) {
         if (exclude.has(hit.source)) continue
-        if (byId.has(hit.id)) continue
-        byId.set(hit.id, hit)
-        if (byId.size >= topK) break
+        if (seenIds.has(hit.id)) continue
+        candidates.push(hit)
+        seenIds.add(hit.id)
       }
     }
   }
 
-  return Array.from(byId.values())
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK)
-    .map((hit) => ({ ...hit, title: displayMemoryTitle(hit.source, hit.title) }))
+  const selected = dedup
+    ? selectDiverse(candidates, vectorById, topK)
+    : [...candidates].sort((a, b) => b.score - a.score).slice(0, topK)
+
+  if (
+    opts.coverageGate &&
+    (await shouldSuppressByCoverage(query, selected, vectorById, threshold))
+  ) {
+    return []
+  }
+
+  return selected.map((hit) => ({
+    ...hit,
+    title: displayMemoryTitle(hit.source, hit.title),
+  }))
 }
 
 // ---------------------------------------------------------------------------
@@ -544,6 +682,7 @@ export async function getRecalledMemory(
         threshold: getRecallThreshold(),
         excludeSources: inContextSources(),
         mode: "semantic",
+        coverageGate: true,
       }),
       RECALL_TIMEOUT_MS
     )
@@ -669,7 +808,8 @@ export async function dryRunSearch(
   } catch {
     /* search whatever is already indexed */
   }
-  return searchMemory(query, { topK: limit, threshold: 0, mode: "hybrid" })
+  // Calibration view: show the true score distribution, so keep near-duplicates.
+  return searchMemory(query, { topK: limit, threshold: 0, mode: "hybrid", dedup: false })
 }
 
 export async function searchMemoryForTool(

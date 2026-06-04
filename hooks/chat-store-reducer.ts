@@ -1185,6 +1185,11 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             thinkingDuration: state.thinkingDone
               ? state.thinkingSeconds
               : (existingAssistantMessage?.thinkingDuration ?? 0),
+            durationMs:
+              existingAssistantMessage?.durationMs ??
+              (stream?.startedAt != null
+                ? Math.max(0, action.timestamp - stream.startedAt)
+                : undefined),
             timestamp:
               existingAssistantMessage?.timestamp ??
               stream?.startedAt ??

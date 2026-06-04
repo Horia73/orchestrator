@@ -88,6 +88,13 @@ export async function register(): Promise<void> {
     try {
         const { wireMemoryReflection } = await import('@/lib/monitoring/memory-reflection-adapter')
         await wireMemoryReflection()
+        const { appEventEmitter } = await import('@/lib/events')
+        appEventEmitter.on('app:update', (event) => {
+            if (event?.type !== 'config.updated') return
+            wireMemoryReflection().catch((syncErr) => {
+                console.error('[memory] sync after config change failed', syncErr)
+            })
+        })
     } catch (err) {
         console.error('[memory] failed to wire memory reflection', err)
     }

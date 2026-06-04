@@ -9,7 +9,7 @@
 // bridge that keeps the scheduled wake armed. No scoring, dedup, or decay logic
 // runs in code — the model decides what to keep and what to forget.
 
-import { getConfig } from '../config'
+import { getConfiguredTimezone } from '../config'
 import type { CreateScheduledTaskInput } from '@/lib/scheduling/schema'
 
 export const REFLECTION_TASK_TITLE = 'Memory reflection'
@@ -31,28 +31,10 @@ const REFLECTION_PROMPT = [
   '6. Save changes with the Write/Edit tools (in-context edits do not persist). Keep every file compact. If nothing needs changing, change nothing and finish. Do NOT call notify_inbox.',
 ].join('\n')
 
-function validTimezone(tz: string): boolean {
-  try {
-    new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date(0))
-    return true
-  } catch {
-    return false
-  }
-}
-
-/** Prefer the user's configured Smart Monitor quiet-hours timezone (the one
- *  durable tz the app stores), else the host timezone, else UTC. Keeps the
- *  nightly run in the user's local late-night window when it is known. */
+/** Use the app-wide configured timezone so nightly reflection follows the same
+ *  local day boundary as daily memory, scheduling defaults, and runtime prompts. */
 export function resolveReflectionTimezone(): string {
-  const configured = getConfig().smartMonitor?.quietHours?.timezone
-  if (configured && validTimezone(configured)) return configured
-  try {
-    const system = Intl.DateTimeFormat().resolvedOptions().timeZone
-    if (system && validTimezone(system)) return system
-  } catch {
-    // fall through to UTC
-  }
-  return 'UTC'
+  return getConfiguredTimezone()
 }
 
 /** Pure builder for the system task spec — exported so smoke tests can validate

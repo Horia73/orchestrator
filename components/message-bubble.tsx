@@ -88,6 +88,23 @@ function buildSummary(reasoning: ReasoningEntry[], seconds: number, fallback: st
     return parts.length > 0 ? parts.join(", ") : fallback
 }
 
+// Wall-clock for the collapsed "Worked for …" header. Mirrors the terse format
+// the live thought header uses (seconds under a minute), escalating to m/s then
+// h/m so a long agentic run reads as "15m 3s" or "1h 2m" rather than "903s".
+function formatWorkDuration(ms: number): string {
+    const totalSec = Math.max(0, Math.round(ms / 1000))
+    if (totalSec < 60) return `${totalSec}s`
+    const h = Math.floor(totalSec / 3600)
+    const m = Math.floor((totalSec % 3600) / 60)
+    const s = totalSec % 60
+    if (h > 0) return `${h}h ${m}m`
+    return `${m}m ${s}s`
+}
+
+type MessageTimelineItem =
+    | { type: "reasoning"; phase: number; entries: ReasoningEntry[] }
+    | { type: "content"; phase: number; content: string }
+
 function groupReasoningByPhase(reasoning: ReasoningEntry[]): Array<{ phase: number; entries: ReasoningEntry[] }> {
     const groups: Array<{ phase: number; entries: ReasoningEntry[] }> = []
     for (const entry of reasoning) {
@@ -567,6 +584,153 @@ function ThoughtBlock({
                                                 ? "Failed"
                                         : "Done"
                                     }
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// WorkedForBlock
+//
+// Finalized-turn collapse: the entire working trace (every reasoning phase plus
+// any intermediate prose) is tucked behind one "Worked for …" disclosure so the
+// conversation reads clean — only the trailing final answer stays outside. This
+// is the committed-message counterpart to the live, per-phase ThoughtBlocks;
+// streaming keeps those expanded and this never renders mid-stream. Simpler than
+// ThoughtBlock by design (no live height/auto-scroll machinery): default closed,
+// open-state persisted, expanded body capped with internal scroll.
+// ---------------------------------------------------------------------------
+
+function WorkedForBlock({
+    items,
+    durationMs,
+    status,
+    messageId,
+    openOnMount = false,
+    onArtifactClick,
+    onArtifactExpand,
+    onAgentOpen,
+    onAttachmentClick,
+    suppressArtifactTypes,
+}: {
+    items: MessageTimelineItem[]
+    durationMs?: number
+    status?: Message["status"]
+    messageId: string
+    /** Open on first render — used when the user explicitly loads deferred details. */
+    openOnMount?: boolean
+    onArtifactClick?: (artifact: ArtifactPayload) => void
+    onArtifactExpand?: (artifact: ArtifactRow) => void
+    onAgentOpen?: (entry: AgentCallReasoningEntry) => void
+    onAttachmentClick?: (attachment: Attachment) => void
+    suppressArtifactTypes?: string[]
+}) {
+    const openStorageKey = `worked:${messageId}:open`
+    const [isOpen, setIsOpen] = React.useState(() => {
+        if (openOnMount) return true
+        const saved = localStorage.getItem(openStorageKey)
+        return saved === "true"
+    })
+    const toggleOpen = React.useCallback(() => {
+        setIsOpen((prev) => {
+            const next = !prev
+            localStorage.setItem(openStorageKey, String(next))
+            if (next) window.dispatchEvent(new Event("stop-chat-autoscroll"))
+            return next
+        })
+    }, [openStorageKey])
+
+    React.useEffect(() => {
+        if (openOnMount) setIsOpen(true)
+    }, [openOnMount])
+
+    const [isMounted, setIsMounted] = React.useState(false)
+    React.useEffect(() => { setIsMounted(true) }, [])
+
+    // Duration is the source of truth; older rows (and providers that never
+    // stamped it) fall back to the activity summary, then a bare "Worked".
+    const workEntries = React.useMemo(
+        () => items.flatMap((item) => (item.type === "reasoning" ? item.entries : [])),
+        [items]
+    )
+    const label = durationMs != null
+        ? `Worked for ${formatWorkDuration(durationMs)}`
+        : buildSummary(workEntries, 0, "") || "Worked"
+
+    const statusLabel = status === "aborted"
+        ? "Stopped"
+        : status === "error"
+            ? "Failed"
+            : "Done"
+
+    return (
+        <div className="flex w-full min-w-0 flex-col">
+            <button
+                type="button"
+                onClick={toggleOpen}
+                className="flex items-center gap-1.5 text-[15px] text-muted-foreground transition-colors hover:text-foreground group w-fit max-w-full min-w-0"
+            >
+                <span className="min-w-0 truncate">{label}</span>
+                <ChevronDown
+                    className={cn(
+                        "size-4 shrink-0 text-muted-foreground/70 group-hover:text-foreground transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        isOpen ? "rotate-0" : "-rotate-90"
+                    )}
+                />
+            </button>
+
+            <div
+                className={cn(
+                    "grid",
+                    isMounted && "transition-[grid-template-rows,opacity] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+                    isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
+                )}
+            >
+                <div className="overflow-hidden min-h-0">
+                    <div className="mt-2 max-h-[70vh] overflow-y-auto pr-1">
+                        <div className="relative flex flex-col pb-2">
+                            <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
+                            <div className="relative flex flex-col gap-2 pt-1 pb-[10px]">
+                                {items.map((item, index) =>
+                                    item.type === "reasoning" ? (
+                                        <ReasoningEntryList
+                                            key={`work-${item.phase}-${index}`}
+                                            reasoning={item.entries}
+                                            onArtifactClick={onArtifactClick}
+                                            onAgentOpen={onAgentOpen}
+                                            onAttachmentClick={onAttachmentClick}
+                                            searchToolDisplay="expanded"
+                                        />
+                                    ) : (
+                                        <div
+                                            key={`work-${item.phase}-${index}`}
+                                            className="pl-7 text-[14px] leading-relaxed text-muted-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+                                        >
+                                            <RenderMessageContent
+                                                content={item.content}
+                                                messageId={messageId}
+                                                onExpand={onArtifactExpand}
+                                                suppressArtifactTypes={suppressArtifactTypes}
+                                            />
+                                        </div>
+                                    )
+                                )}
+                            </div>
+                            <div className="relative flex items-center gap-3 mb-0.5 bg-background w-max py-0.5 z-10">
+                                {status === "aborted" ? (
+                                    <CircleStop className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
+                                ) : status === "error" ? (
+                                    <CircleAlert className="size-4 shrink-0 rounded-full bg-background text-destructive" />
+                                ) : (
+                                    <CheckCircle2 className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
+                                )}
+                                <span className="text-[14px] font-medium tracking-tight text-foreground">
+                                    {statusLabel}
                                 </span>
                             </div>
                         </div>
@@ -1215,6 +1379,50 @@ function MessageBubbleComponent({
         message.status == null
     )
 
+    // Once the turn is finalized, fold the working trace into one "Worked for …"
+    // disclosure and surface only the final answer. The answer is the trailing
+    // run of content items (text after the last reasoning/tool activity); the
+    // interleaved case (text → tool → text → tool → final text) keeps the
+    // intermediate prose inside the disclosure, and a turn that ends on reasoning
+    // (no trailing text) folds entirely — nothing dangles outside. During
+    // streaming we leave the live per-phase blocks untouched.
+    const collapseWork =
+        !isStreamingMessage && !isInProgressReasoning && timeline.length > 0
+    let workItems: MessageTimelineItem[] = []
+    let finalItems: MessageTimelineItem[] = timeline
+    if (collapseWork) {
+        let splitAt = timeline.length
+        while (splitAt > 0 && timeline[splitAt - 1].type === "content") splitAt--
+        workItems = timeline.slice(0, splitAt)
+        finalItems = timeline.slice(splitAt)
+    }
+    const showWorkedFor = workItems.length > 0
+
+    const renderTimelineItem = (item: MessageTimelineItem) =>
+        item.type === "reasoning" ? (
+            <ThoughtBlock
+                key={`reasoning-${message.id}-${item.phase}`}
+                reasoning={item.entries}
+                onArtifactClick={onArtifactClick}
+                onAgentOpen={onAgentOpen}
+                onAttachmentClick={onAttachmentClick}
+                messageId={`${message.id}:phase:${item.phase}`}
+                isStreaming={isInProgressReasoning && lastReasoningPhase === item.phase}
+                thinkingDuration={message.thinkingDuration}
+                messageStatus={message.status}
+                openOnMount={openLoadedDetails}
+            />
+        ) : (
+            <div key={`content-${message.id}-${item.phase}`} className="min-w-0 break-words text-[16px] leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-1">
+                <RenderMessageContent
+                    content={item.content}
+                    messageId={message.id}
+                    onExpand={onArtifactExpand}
+                    suppressArtifactTypes={suppressArtifactTypes}
+                />
+            </div>
+        )
+
     return (
         <div
             ref={selectionGutterRef}
@@ -1235,31 +1443,25 @@ function MessageBubbleComponent({
                     onOpen={handleOpenDeferredDetails}
                 />
             )}
-            {timeline.map((item) => (
-                item.type === "reasoning" ? (
-                    <ThoughtBlock
-                        key={`reasoning-${message.id}-${item.phase}`}
-                        reasoning={item.entries}
+            {showWorkedFor ? (
+                <>
+                    <WorkedForBlock
+                        items={workItems}
+                        durationMs={message.durationMs}
+                        status={message.status}
+                        messageId={message.id}
+                        openOnMount={openLoadedDetails}
                         onArtifactClick={onArtifactClick}
+                        onArtifactExpand={onArtifactExpand}
                         onAgentOpen={onAgentOpen}
                         onAttachmentClick={onAttachmentClick}
-                        messageId={`${message.id}:phase:${item.phase}`}
-                        isStreaming={isInProgressReasoning && lastReasoningPhase === item.phase}
-                        thinkingDuration={message.thinkingDuration}
-                        messageStatus={message.status}
-                        openOnMount={openLoadedDetails}
+                        suppressArtifactTypes={suppressArtifactTypes}
                     />
-                ) : (
-                    <div key={`content-${message.id}-${item.phase}`} className="min-w-0 break-words text-[16px] leading-relaxed [&>*:first-child]:mt-0 [&>*:last-child]:mb-1">
-                        <RenderMessageContent
-                            content={item.content}
-                            messageId={message.id}
-                            onExpand={onArtifactExpand}
-                            suppressArtifactTypes={suppressArtifactTypes}
-                        />
-                    </div>
-                )
-            ))}
+                    {finalItems.map(renderTimelineItem)}
+                </>
+            ) : (
+                timeline.map(renderTimelineItem)
+            )}
             {timeline.length === 0 && <TerminalMessageStatusLine status={message.status} />}
             {!!message.attachments?.length && (
                 <div className="mt-1 flex max-w-[85%] flex-wrap gap-2">

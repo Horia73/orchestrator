@@ -3,7 +3,7 @@ import path from "path"
 import { createHash, randomUUID } from "crypto"
 import { z } from "zod"
 
-import { AGENT_WORKSPACE_DIR } from "@/lib/config"
+import { AGENT_WORKSPACE_DIR, getConfig } from "@/lib/config"
 import {
   AGENT_NEEDS_DEFAULT_CONTENT,
   AGENT_NEEDS_RELATIVE_PATH,
@@ -28,6 +28,7 @@ import {
   syncWorkspaceEnvToProcess,
   type WorkspaceEnvValue,
 } from "@/lib/settings/workspace-files-env"
+import { dateStampInTimezone } from "@/lib/timezone"
 
 type WorkspaceFileKind = "json" | "env" | "markdown"
 type WorkspaceFileSource = "physical" | "virtual"
@@ -63,7 +64,7 @@ export interface WorkspaceFileDefinition {
   description: string
   readOnly?: boolean
   source?: WorkspaceFileSource
-  /** When 'daily', this id is a directory; reads/writes resolve to today's UTC file (MEMORY_DAY/<YYYY-MM-DD>.md). */
+  /** When 'daily', this id is a directory; reads/writes resolve to today's configured-local file (MEMORY_DAY/<YYYY-MM-DD>.md). */
   dynamic?: "daily"
   defaultContent?: string
 }
@@ -122,6 +123,7 @@ const AppConfigFileSchema = z
   .object({
     assistantName: z.string(),
     userName: z.string(),
+    timezone: z.string().min(1).optional(),
     activeProvider: z.string().min(1),
     activeModel: z.string().min(1),
     thinkingLevel: ThinkingLevelSchema,
@@ -221,7 +223,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
       "- preferred user name and language;",
       "- what name the user wants to give the assistant;",
       "- preferred assistant style/personality, including tone, verbosity, proactivity, and how much explanation the user wants by default;",
-      "- location, timezone, frequent cities, travel defaults, and optional home/work commute anchors;",
+      "- location, timezone, frequent cities, travel defaults, and optional home/work commute anchors. Infer the IANA timezone from explicit location, browser/host runtime, calendar/home-assistant metadata, or user wording when reliable; otherwise ask. Save the final timezone to config.json as `timezone`;",
       "- work context, projects, tools, repositories, and preferred ways to collaborate;",
       "- communication channels the user cares about and what counts as urgent;",
       "- proactive monitoring preference: default 15-minute adaptive checks versus fixed cadence, important-only Inbox notifications versus timed summaries, and quiet hours;",
@@ -241,7 +243,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
       "- any stable constraints the user explicitly wants remembered.",
       "",
       "After onboarding is complete:",
-      '1. Update config.json with userName and assistantName when the user gave them; keep defaults as "User" and "Orchestrator" if not specified.',
+      '1. Update config.json with userName, assistantName, and timezone when known; keep defaults as "User", "Orchestrator", and the detected system timezone if not specified.',
       "2. Update USER.md with stable facts and preferences, including assistant style/setup facts learned during onboarding (assistant name, style, operating boundaries).",
       "3. Update MEMORY.md with durable operating conclusions.",
       "4. Update ONBOARDING.md with Status complete or skipped and any missing fields that should be asked opportunistically later.",
@@ -304,7 +306,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
   {
     id: "memory-day",
     label: "Daily memory",
-    // Directory, not a single file: one note per UTC day at
+    // Directory, not a single file: one note per configured-local day at
     // MEMORY_DAY/<YYYY-MM-DD>.md. resolveDefinitionPath / summarizeFile /
     // getWorkspaceFile resolve "today"; the editor shows today's note.
     relativePath: "MEMORY_DAY",
@@ -396,7 +398,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
     category: "system",
     surface: "reference",
     description:
-      "Global defaults, per-agent model overrides, agent order, favorites, and app-level preferences. Edited from the Models tab.",
+      "Global defaults, app timezone, per-agent model overrides, agent order, favorites, and app-level preferences. Edited from the Models tab.",
   },
   {
     id: "env-local",
@@ -740,7 +742,7 @@ export function resetWorkspaceMemoryToInitialState(): { resetFiles: string[] } {
         recursive: true,
         force: true,
       })
-      const todayPath = resolveDefinitionPath(def, utcDateStamp())
+      const todayPath = resolveDefinitionPath(def, appDateStamp())
       writeTextAtomic(todayPath, buildDailyMemoryTemplate())
       resetFiles.push(dailyMemoryRelativePath())
       continue
@@ -1058,7 +1060,7 @@ function listDailyFileSummaries(
   def: WorkspaceFileDefinition
 ): WorkspaceFileSummary[] {
   const stamps = new Set<string>([
-    utcDateStamp(),
+    appDateStamp(),
     ...listDailyMemoryStamps(def),
   ])
 
@@ -1097,7 +1099,7 @@ function decorateDailySummary(
     id: dailyMemoryFileId(dailyStamp),
     label: dailyStamp,
     dailyDate: dailyStamp,
-    description: `Daily working memory for ${dailyStamp} (UTC).`,
+    description: `Daily working memory for ${dailyStamp} (${configuredTimezone()} date).`,
   }
 }
 
@@ -1119,13 +1121,15 @@ function isDailyStamp(value: string): boolean {
   )
 }
 
-function utcDateStamp(date: Date = new Date()): string {
-  // UTC so the path the agent computes from runtime_context `today`
-  // (also toISOString-derived) always matches the file the server writes.
-  return date.toISOString().slice(0, 10)
+function configuredTimezone(): string {
+  return getConfig().timezone
 }
 
-function dailyMemoryRelativePath(stamp: string = utcDateStamp()): string {
+function appDateStamp(date: Date = new Date()): string {
+  return dateStampInTimezone(date, configuredTimezone())
+}
+
+function dailyMemoryRelativePath(stamp: string = appDateStamp()): string {
   return `MEMORY_DAY/${stamp}.md`
 }
 
@@ -1139,11 +1143,11 @@ function effectiveRelativePath(
     : def.relativePath
 }
 
-function buildDailyMemoryTemplate(stamp: string = utcDateStamp()): string {
+function buildDailyMemoryTemplate(stamp: string = appDateStamp()): string {
   return [
     `# MEMORY_DAY ${stamp}`,
     "",
-    `Daily working memory for ${stamp} (UTC).`,
+    `Daily working memory for ${stamp} (${configuredTimezone()} date).`,
     "",
     "Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design.",
     "",

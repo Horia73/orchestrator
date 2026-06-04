@@ -6,6 +6,7 @@ import type { MonitorWatch, SuppressPattern, WatchEvent } from '../monitor/schem
 import { listMonitorWatches, listWatchEvents } from '../monitor/store'
 import { listTaskRuns, type TaskRunRecord } from '../scheduling/store'
 import { getConfig } from '../config'
+import { isValidTimezone } from '../timezone'
 
 const SMART_MONITOR_SOURCE_CAPABILITIES: Record<string, readonly string[]> = {
     gmail: ['gmail'],
@@ -69,23 +70,6 @@ function buildRecentRunHistoryBlock(taskId: string, now: number): string[] {
     return lines
 }
 
-function systemTimezone(): string {
-    try {
-        return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-    } catch {
-        return 'UTC'
-    }
-}
-
-function validTimezone(tz: string): boolean {
-    try {
-        new Intl.DateTimeFormat('en-US', { timeZone: tz }).format(new Date(0))
-        return true
-    } catch {
-        return false
-    }
-}
-
 function formatLocalDateTime(ms: number, timezone: string): string {
     const date = new Date(ms)
     const local = new Intl.DateTimeFormat('sv-SE', {
@@ -113,14 +97,12 @@ function formatLocalDateTime(ms: number, timezone: string): string {
 
 function buildRuntimeTimeBlock(now: number, watches: Array<{ notify: { quietHours?: { timezone: string } } }>): string[] {
     const zones = new Set<string>()
-    const configured = getConfig().smartMonitor?.quietHours?.timezone
-    if (configured && validTimezone(configured)) zones.add(configured)
+    const configured = getConfig().timezone
+    if (configured && isValidTimezone(configured)) zones.add(configured)
     for (const watch of watches) {
         const tz = watch.notify.quietHours?.timezone
-        if (tz && validTimezone(tz)) zones.add(tz)
+        if (tz && isValidTimezone(tz)) zones.add(tz)
     }
-    const system = systemTimezone()
-    if (validTimezone(system)) zones.add(system)
     if (zones.size === 0) zones.add('UTC')
 
     const lines = ['Runtime time:', `- UTC wake time: ${new Date(now).toISOString()}`]

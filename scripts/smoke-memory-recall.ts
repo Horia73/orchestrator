@@ -181,6 +181,57 @@ async function main(): Promise<void> {
   check("per-turn recall empty for trivial query", (await recall.buildRecalledMemoryContext("hi")) === "")
   check("per-turn recall empty for null query", (await recall.buildRecalledMemoryContext(null)) === "")
 
+  // --- selectDiverse: near-duplicate suppression --------------------------
+  // Three candidates: A and B are near-identical (dot ~0.999), C is orthogonal.
+  // Dedup must collapse A/B to the higher-scoring one and keep C.
+  const vA = unit([1, 0, 0, 0])
+  const vB = unit([0.999, 0.045, 0, 0]) // ~0.999 cosine to A -> near-duplicate
+  const vC = unit([0, 0, 1, 0]) // orthogonal -> distinct
+  const cand = [
+    { id: "a", source: src, title: "t", text: "fact one", score: 0.8 },
+    { id: "b", source: src, title: "t", text: "fact one (re-logged)", score: 0.75 },
+    { id: "c", source: src, title: "t", text: "different fact", score: 0.7 },
+  ]
+  const vmap = new Map<string, Float32Array>([
+    ["a", vA],
+    ["b", vB],
+    ["c", vC],
+  ])
+  const diverse = recall.selectDiverse(cand, vmap, 4)
+  check(
+    "selectDiverse collapses near-duplicates, keeps distinct",
+    diverse.length === 2 && diverse[0].id === "a" && diverse[1].id === "c",
+    diverse.map((h) => h.id)
+  )
+  check(
+    "selectDiverse keeps the higher-scoring of a duplicate pair",
+    diverse.every((h) => h.id !== "b")
+  )
+  // No vectors => nothing to compare => all pass through (e.g. FTS-only hits).
+  check(
+    "selectDiverse passes through vectorless hits",
+    recall.selectDiverse(cand, new Map(), 4).length === 3
+  )
+
+  // --- splitQuerySegments: broad multi-intent message ---------------------
+  const broad =
+    "vreau o singura boxa pe noptiera, wifi, wake word instant si quality > apple. HA doar ca e misto, dar streaming AI as face local? nu e limita de buget. on/off rapid nu stam dupa un RPI"
+  const segs = recall.splitQuerySegments(broad)
+  check(
+    "splitQuerySegments splits a broad message into >= 4 segments",
+    segs.length >= 4,
+    segs
+  )
+  check(
+    "splitQuerySegments does not over-split on commas (one intent stays whole)",
+    segs.some((s) => s.includes("wifi") && s.includes("wake word")),
+    segs
+  )
+  check(
+    "splitQuerySegments stays whole on a short single-intent message",
+    recall.splitQuerySegments("remind me about the HA quiet hours").length < 4
+  )
+
   // --- library (multimodal) fail-open without a key -----------------------
   const library = await import("@/lib/memory/library")
   check("library: no assets in empty workspace", library.listLibraryAssets().length === 0)

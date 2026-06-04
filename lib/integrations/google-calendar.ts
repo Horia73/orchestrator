@@ -1,7 +1,7 @@
 import path from 'path'
 import { randomBytes } from 'crypto'
 
-import { PRIVATE_STATE_DIR } from '@/lib/config'
+import { getConfiguredTimezone, PRIVATE_STATE_DIR } from '@/lib/config'
 import {
     GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS,
     type GoogleOAuthConfigInput,
@@ -560,7 +560,7 @@ export async function googleCalendarFindAvailability(options: GoogleCalendarAvai
     const durationMinutes = clampInt(options.durationMinutes, 1, 24 * 60)
     const stepMinutes = clampInt(options.slotStepMinutes ?? 15, 5, 240)
     const maxResults = clampInt(options.maxResults ?? 10, 1, 100)
-    const timeZone = options.timeZone?.trim() || Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
+    const timeZone = options.timeZone?.trim() || getConfiguredTimezone()
     const freeBusy = await googleCalendarFreeBusy(options)
     const busy = Object.entries(freeBusy.calendars ?? {}).flatMap(([calendarId, item]) =>
         (item.busy ?? []).map(slot => ({ calendarId, start: slot.start, end: slot.end }))

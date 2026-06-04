@@ -866,6 +866,9 @@ async function executeAgentWake(
         parentRequestId: `microscript_${script.id}_${randomUUID()}`,
         appOrigin: resolveAppOrigin(),
         toolSurfaceMode: 'read-only',
+        // notify_inbox is gated into the 'inbox' capability now; warm it up so a
+        // read-only microscript wake can still surface a notification.
+        preactivatedCapabilities: ['inbox'],
         onAgentEvent: (event) => {
             if (event.type !== 'agent_tool_call' || event.toolCall?.name !== 'notify_inbox') return
             const args = event.toolCall.arguments as { title?: unknown; body?: unknown; actions?: unknown }

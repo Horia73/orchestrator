@@ -206,6 +206,15 @@ export interface Message {
   reasoning?: ReasoningEntry[]
   thinking?: string
   thinkingDuration?: number
+  /**
+   * Total wall-clock for the assistant turn, in milliseconds: from when the
+   * placeholder row was created (turn start) to the terminal persist. Stamped
+   * server-side at finalize because the row's `timestamp` is rewritten to the
+   * completion time, so the start is otherwise lost on reload. Drives the
+   * "Worked for …" collapsed header. Absent on user messages and on rows
+   * persisted before this field existed.
+   */
+  durationMs?: number
   toolCalls?: { text: string; content: string }[]
   attachments?: Attachment[]
   replyActions?: InboxReplyAction[]

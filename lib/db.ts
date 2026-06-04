@@ -64,6 +64,7 @@ interface MessageRow {
   reasoning: string | null
   thinking: string | null
   thinkingDuration: number | null
+  durationMs: number | null
   toolCalls: string | null
   attachments: string | null
   replyActions: string | null
@@ -111,6 +112,7 @@ function messageFromRow(msgRow: MessageRow): Message {
     reasoning: parseJsonField<Message["reasoning"]>(msgRow.reasoning),
     thinking: msgRow.thinking || undefined,
     thinkingDuration: msgRow.thinkingDuration ?? undefined,
+    durationMs: msgRow.durationMs ?? undefined,
     toolCalls: parseJsonField<Message["toolCalls"]>(msgRow.toolCalls),
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
     replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
@@ -133,6 +135,7 @@ function slimMessageFromRow(msgRow: MessageRow): Message {
     content: msgRow.content,
     status: msgRow.status ?? undefined,
     thinkingDuration: msgRow.thinkingDuration ?? undefined,
+    durationMs: msgRow.durationMs ?? undefined,
     attachments: parseJsonField<Message["attachments"]>(msgRow.attachments),
     replyActions: parseJsonField<Message["replyActions"]>(msgRow.replyActions),
     ...(hasDeferred ? { deferred } : {}),
@@ -154,6 +157,7 @@ function slimMessageForClient(message: Message): Message {
     content: message.content,
     status: message.status,
     thinkingDuration: message.thinkingDuration,
+    durationMs: message.durationMs,
     attachments: message.attachments,
     replyActions: message.replyActions,
     ...(hasDeferred ? { deferred } : {}),
@@ -751,8 +755,8 @@ export function createConversation(conversation: Conversation) {
     `)
 
   const insertMsg = db.prepare(`
-        INSERT OR IGNORE INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, replyActions, timestamp)
-        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
+        INSERT OR IGNORE INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, durationMs, toolCalls, attachments, replyActions, timestamp)
+        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @durationMs, @toolCalls, @attachments, @replyActions, @timestamp)
     `)
 
   const refreshConversationSummary = db.prepare(`
@@ -808,6 +812,7 @@ export function createConversation(conversation: Conversation) {
         reasoning: msg.reasoning ? JSON.stringify(msg.reasoning) : null,
         thinking: msg.thinking || null,
         thinkingDuration: msg.thinkingDuration ?? null,
+        durationMs: msg.durationMs ?? null,
         toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
         attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
         replyActions: msg.replyActions
@@ -997,8 +1002,8 @@ export function addMessage(conversationId: string, message: Message) {
     .prepare("SELECT id FROM messages WHERE id = ?")
     .get(storedMessage.id) as { id: string } | undefined
   const insertMsg = db.prepare(`
-        INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, toolCalls, attachments, replyActions, timestamp)
-        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @toolCalls, @attachments, @replyActions, @timestamp)
+        INSERT INTO messages (id, conversationId, role, content, status, contentSegments, reasoning, thinking, thinkingDuration, durationMs, toolCalls, attachments, replyActions, timestamp)
+        VALUES (@id, @conversationId, @role, @content, @status, @contentSegments, @reasoning, @thinking, @thinkingDuration, @durationMs, @toolCalls, @attachments, @replyActions, @timestamp)
         ON CONFLICT(id) DO UPDATE SET
             content = excluded.content,
             status = excluded.status,
@@ -1006,6 +1011,7 @@ export function addMessage(conversationId: string, message: Message) {
             reasoning = excluded.reasoning,
             thinking = excluded.thinking,
             thinkingDuration = excluded.thinkingDuration,
+            durationMs = excluded.durationMs,
             toolCalls = excluded.toolCalls,
             attachments = excluded.attachments,
             replyActions = excluded.replyActions
@@ -1047,6 +1053,7 @@ export function addMessage(conversationId: string, message: Message) {
       reasoning: msg.reasoning ? JSON.stringify(msg.reasoning) : null,
       thinking: msg.thinking || null,
       thinkingDuration: msg.thinkingDuration ?? null,
+      durationMs: msg.durationMs ?? null,
       toolCalls: msg.toolCalls ? JSON.stringify(msg.toolCalls) : null,
       attachments: msg.attachments ? JSON.stringify(msg.attachments) : null,
       replyActions: msg.replyActions ? JSON.stringify(msg.replyActions) : null,

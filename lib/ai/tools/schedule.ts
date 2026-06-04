@@ -2,6 +2,7 @@ import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/
 import type { ScheduledAction, ScheduledTask, ScheduleSpec } from '@/lib/scheduling/schema'
 import { describeSchedule } from '@/lib/scheduling/compute'
 import { floorToMonitorSlot } from '@/lib/monitor/cadence'
+import { getConfiguredTimezone } from '@/lib/config'
 
 // ---------------------------------------------------------------------------
 // Agent-facing scheduling tools. The orchestrator decides ONCE, at creation
@@ -13,10 +14,6 @@ import { floorToMonitorSlot } from '@/lib/monitor/cadence'
 // Heavy modules (registry/store) are imported lazily to keep the tool
 // registry's import graph acyclic.
 // ---------------------------------------------------------------------------
-
-const SYSTEM_TZ = (() => {
-    try { return Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC' } catch { return 'UTC' }
-})()
 
 export const scheduleTaskTool: ToolDef = {
     id: 'schedule_task',
@@ -35,7 +32,7 @@ export const scheduleTaskTool: ToolDef = {
             title: { type: 'string', description: 'Short label shown in the scheduling list and Inbox.' },
             when: {
                 type: 'object',
-                description: 'Exactly one timing field. Use timezone for wall-clock timing; defaults to the server timezone.',
+                description: 'Exactly one timing field. Use timezone for wall-clock timing; defaults to the app-configured timezone.',
                 properties: {
                     at: { type: 'string', description: 'One-shot at an absolute time, ISO 8601.' },
                     in: { type: 'string', description: 'One-shot after a relative delay: "90s", "30m", "7h", "3d".' },
@@ -44,7 +41,7 @@ export const scheduleTaskTool: ToolDef = {
                     cron: { type: 'string', description: 'Recurring raw cron expression. Use only for bounded/non-monitor scheduling; ongoing recurring model-owned checks belong in Smart Monitor.' },
                     weekly_days: { type: 'array', items: { type: 'string' }, description: 'For weekly timing. Pair with weekly_at.' },
                     weekly_at: { type: 'string', description: 'For weekly: time "HH:MM" on weekly_days.' },
-                    timezone: { type: 'string', description: 'IANA timezone for daily_at/weekly/cron. Default: server timezone.' },
+                    timezone: { type: 'string', description: 'IANA timezone for daily_at/weekly/cron. Default: app-configured timezone.' },
                 },
             },
             action: {
@@ -127,7 +124,7 @@ function parseWeekdays(days: unknown): number[] | null {
 }
 
 function normalizeSchedule(when: Record<string, unknown>): { spec: ScheduleSpec } | { error: string } {
-    const tz = typeof when.timezone === 'string' && when.timezone.trim() ? when.timezone.trim() : SYSTEM_TZ
+    const tz = typeof when.timezone === 'string' && when.timezone.trim() ? when.timezone.trim() : getConfiguredTimezone()
     const now = Date.now()
 
     if (typeof when.at === 'string' && when.at.trim()) {

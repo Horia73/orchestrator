@@ -57,11 +57,12 @@ export interface ExposureOptions {
 // regardless, so it keeps working even with an empty default set.
 // ---------------------------------------------------------------------------
 const DEFAULT_ACTIVATED_BY_AGENT: Record<string, readonly string[]> = {
-    // Inbox replies frequently set reminders / schedule follow-ups.
-    'inbox-agent': ['scheduling'],
+    // Inbox replies post to the inbox and frequently schedule follow-ups.
+    'inbox-agent': ['scheduling', 'inbox'],
     // Smart Monitor's whole job is monitoring; give wakes the doctrine + watch
-    // tools up front so a wake can adjust a watch without a hop.
-    'smart-monitor-agent': ['monitoring'],
+    // tools up front, plus the inbox primitives (notify_inbox / set_task_state /
+    // monitor_wake_feedback) every wake relies on, without a hop.
+    'smart-monitor-agent': ['monitoring', 'inbox'],
 }
 
 /** Capability ids pre-activated for an agent without an explicit activation call. */
@@ -96,7 +97,6 @@ export function filterIntegrationToolExposure(
     return tools.filter(tool => {
         const integrationId = operationalIntegrationFor(tool.id)
         if (integrationId) {
-            if (integrationId === 'whatsapp') return true
             const entry = getIntegrationManifest(integrationId)
             if (!entry) return true
             // activationOnly capabilities (maps, weather) gate by activation
@@ -153,7 +153,6 @@ function toolsLabel(
     if (entry.operationalToolIds.length === 0) {
         return entry.setupToolIds.length > 0 ? 'setup/lifecycle only' : 'status/runbook only'
     }
-    if (entry.id === 'whatsapp') return `loaded (${entry.operationalToolIds.length} tools; writes require explicit confirmation; connect first when needed)`
     if (activated.has(entry.id)) return `loaded (${entry.operationalToolIds.length} tools)`
     // activationOnly (maps, weather): no connection gate — activatable anytime.
     if (entry.activationOnly) {
@@ -222,7 +221,7 @@ export function buildIntegrationsContextBlock(
         '<integrations>',
         'Integrations available in this runtime. This is the always-on summary — it tells you each integration exists, what it does, and its live connection state, WITHOUT loading heavy tool schemas or doctrine.',
         'How to use this:',
-        '- Setup/lifecycle tools (status, configure, OAuth) are always available for these integrations; use them plus the setup runbook to connect or repair an integration. Follow <integration_setup_policy>.',
+        '- Setup/lifecycle tools (status, configure, OAuth) are NOT loaded by default — live connection state is already shown above. When you are about to connect, repair, or reconfigure a connection-based integration (Gmail/Calendar/Drive/Home Assistant/WhatsApp), call ActivateIntegrationTools("setup") to load them, then follow <integration_setup_policy> + the setup runbook.',
         '- Operational tool schemas (search, send, read, control, …) are NOT loaded by default. When an integration is connected and you actually need to operate it, call ActivateIntegrationTools with its id once. Then call the direct tool if it is visible, or call RunActivatedIntegrationTool with the target tool_id and arguments in the same turn. This keeps context lean — do not activate integrations you are not about to use.',
         '- IMPORTANT — do not get stuck: if you try a capability tool by name and the runtime reports it is not available / no such tool, that only means its schema is not in your live tool list (some runtimes freeze the list at start); the tool still exists. Run it via RunActivatedIntegrationTool with its exact tool_id and arguments — never tell the user the capability is missing or silently abandon the task over this.',
         '- Composition integrations (maps, weather) gate BOTH their operational tool schemas AND their doctrine behind activation, with no connection handshake: their status/lifecycle tools stay visible, but call ActivateIntegrationTools with the id before composing to load the rendering/query tools (see the "Tools when active" menu) plus the schema + cross-integration recipes. A missing API key surfaces as a per-call error, not a reason to skip activation.',
@@ -264,7 +263,7 @@ export function buildActiveCapabilityDoctrinesBlock(opts: ExposureOptions): stri
 
 /** Rough token-cost label for a subsystem's doctrine ("~2.7k tokens"). */
 function subsystemDoctrineLabel(entry: SubsystemManifestEntry, activated: Set<string>): string {
-    const tokens = entry.doctrine.length / 4
+    const tokens = (entry.doctrine?.length ?? 0) / 4
     const kilo = tokens >= 1000 ? `~${(tokens / 1000).toFixed(1)}k` : `~${Math.round(tokens)}`
     if (activated.has(entry.id)) {
         return `loaded (${kilo} tokens; see <active_capability_doctrines>)`
@@ -289,18 +288,19 @@ export function buildSubsystemsContextBlock(
         const gated = entry.toolIds ?? []
         const isActive = activated.has(entry.id)
         const parts = [`- ${entry.label} (id: ${entry.id}) — ${entry.capability}`]
-        if (gated.length === 0) {
-            // Doctrine-only playbook: no tools of its own, just lazy guidance.
-            parts.push(`  Doctrine: ${subsystemDoctrineLabel(entry, activated)}.`)
-        } else {
-            const toolsState = isActive
+        const segs: string[] = []
+        if (gated.length > 0) {
+            segs.push(`Tools: ${isActive
                 ? `loaded (${gated.length} tools)`
-                : `inactive — call ActivateIntegrationTools("${entry.id}") to load the ${gated.length} tool schemas`
-            parts.push(`  Tools: ${toolsState}. Doctrine: ${subsystemDoctrineLabel(entry, activated)}.`)
-            if (!isActive) {
-                const menu = gatedToolsMenuLine(gated, toolSummaries)
-                if (menu) parts.push(menu)
-            }
+                : `inactive — call ActivateIntegrationTools("${entry.id}") to load the ${gated.length} tool schemas`}`)
+        }
+        if (entry.doctrine) {
+            segs.push(`Doctrine: ${subsystemDoctrineLabel(entry, activated)}`)
+        }
+        if (segs.length > 0) parts.push(`  ${segs.join('. ')}.`)
+        if (gated.length > 0 && !isActive) {
+            const menu = gatedToolsMenuLine(gated, toolSummaries)
+            if (menu) parts.push(menu)
         }
         return parts.join('\n')
     })
@@ -335,9 +335,12 @@ export function describeActivatedIntegration(capabilityId: string): string {
     if (subsystem) {
         const toolIds = subsystem.toolIds ?? []
         const toolPart = toolIds.length > 0
-            ? `${subsystem.label} tools are now active for this conversation: ${toolIds.join(', ')}. Use the direct tool when visible, or RunActivatedIntegrationTool with a listed tool_id and arguments in this same turn. `
+            ? `${subsystem.label} tools are now active for this conversation: ${toolIds.join(', ')}. Use the direct tool when visible, or RunActivatedIntegrationTool with a listed tool_id and arguments in this same turn.`
             : ''
-        return `${toolPart}${subsystem.label} doctrine is now loaded — the full doctrine for ${subsystem.id} (schema, flow, gotchas) is in your prompt under <active_capability_doctrines> from the next turn onward; read it there before composing.`
+        const doctrinePart = subsystem.doctrine
+            ? `${subsystem.label} doctrine is now loaded — the full doctrine for ${subsystem.id} (schema, flow, gotchas) is in your prompt under <active_capability_doctrines> from the next turn onward; read it there before composing.`
+            : ''
+        return [toolPart, doctrinePart].filter(Boolean).join(' ') || `${subsystem.label} activated.`
     }
 
     return `Unknown capability "${capabilityId}".`

@@ -10,12 +10,14 @@ import {
     INTEGRATION_INDEX_PATH,
     INTEGRATION_RUNBOOKS,
 } from '../lib/integrations/runbooks'
+import { dateStampInTimezone, normalizeTimezone, systemTimezone } from '../lib/timezone'
 
 const root = path.join(process.cwd(), '.orchestrator', 'workspace')
 const dryRun = process.argv.includes('--dry-run')
 const resetAgents = process.argv.includes('--all')
 
-const today = new Date().toISOString().slice(0, 10)
+const timezone = readConfiguredTimezone()
+const today = dateStampInTimezone(new Date(), timezone)
 
 const files: Array<{ path: string; content: string; resetByDefault: boolean }> = [
     {
@@ -121,7 +123,7 @@ const files: Array<{ path: string; content: string; resetByDefault: boolean }> =
             '- preferred user name and language;',
             '- what name the user wants to give the assistant;',
             '- preferred assistant style/personality, including tone, verbosity, proactivity, and how much explanation the user wants by default;',
-            '- location, timezone, frequent cities, and travel defaults;',
+            '- location, timezone, frequent cities, and travel defaults. Infer the IANA timezone when reliable; otherwise ask. Save the final timezone to config.json as `timezone`;',
             '- work context, projects, tools, repositories, and preferred ways to collaborate;',
             '- communication channels the user cares about and what counts as urgent;',
             '- proactive monitoring preference: default 15-minute adaptive checks versus fixed cadence, important-only Inbox notifications versus timed summaries, and quiet hours;',
@@ -139,7 +141,7 @@ const files: Array<{ path: string; content: string; resetByDefault: boolean }> =
             '- any stable constraints the user explicitly wants remembered.',
             '',
             'After onboarding is complete:',
-            '1. Update config.json with userName and assistantName when the user gave them; keep defaults as "User" and "Orchestrator" if not specified.',
+            '1. Update config.json with userName, assistantName, and timezone when known; keep defaults as "User", "Orchestrator", and the detected system timezone if not specified.',
             '2. Update USER.md with stable facts and preferences, including assistant style/setup facts learned during onboarding (assistant name, style, operating boundaries).',
             '3. Update MEMORY.md with durable operating conclusions.',
             '4. Update ONBOARDING.md with Status complete or skipped and any missing fields that should be asked opportunistically later.',
@@ -191,7 +193,7 @@ remove('MEMORY_DAY')
 write(path.join('MEMORY_DAY', `${today}.md`), [
     `# MEMORY_DAY ${today}`,
     '',
-    `Daily working memory for ${today} (UTC).`,
+    `Daily working memory for ${today} (${timezone} date).`,
     '',
     'Append compact entries for meaningful actions, decisions, open loops, promises, blockers, and follow-ups. This file is noisy by design.',
     '',
@@ -200,3 +202,13 @@ write(path.join('MEMORY_DAY', `${today}.md`), [
 console.log(`Reset agent files in ${root}`)
 console.log('Preserved: .env.local, config.json, model files, artifacts, uploads')
 if (!resetAgents) console.log('Preserved: integration runbooks (use -- --all to reset them too)')
+
+function readConfiguredTimezone(): string {
+    try {
+        const raw = fs.readFileSync(path.join(root, 'config.json'), 'utf-8')
+        const parsed = JSON.parse(raw) as { timezone?: unknown }
+        return normalizeTimezone(parsed.timezone, systemTimezone())
+    } catch {
+        return systemTimezone()
+    }
+}

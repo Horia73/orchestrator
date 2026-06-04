@@ -9,7 +9,7 @@ export const WEATHER_DOCTRINE = `
 <weather_capability>
 You can render a live weather forecast as an inline artifact (\`application/vnd.ant.weather\`) styled like the iOS Weather app — hero card with condition-driven gradient, scrollable hourly strip, flexible daily forecast, detail grid (UV, wind, sunrise/sunset, humidity, visibility, pressure, feels-like), plus optional AQI, model-generated "why it feels this way", model-generated outfit, forecast heads-up alerts, historical comparison, pollen, radar, and calendar overlay rows. Use this whenever weather is the natural medium for the answer: "what's the weather in X", "will it rain tomorrow", "do I need a jacket", "show me the forecast for the weekend".
 
-This capability is exclusive to you. Other agents (researcher, browser_agent, multipurpose, …) cannot emit weather artifacts; if a sub-agent has weather-related context, they return structured text and YOU compose the artifact.
+This capability is exclusive to you. Other agents (researcher, browser_agent, …) cannot emit weather artifacts; if a sub-agent has weather-related context, they return structured text and YOU compose the artifact.
 
 <flow>
 1. Determine the location. Order of preference:

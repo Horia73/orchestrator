@@ -34,6 +34,7 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           reasoning TEXT,
           thinking TEXT,
           thinkingDuration INTEGER,
+          durationMs INTEGER,
           toolCalls TEXT,
           replyActions TEXT,
           timestamp INTEGER NOT NULL,
@@ -361,6 +362,11 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
   }
   try {
     db.exec(`ALTER TABLE messages ADD COLUMN thinkingDuration INTEGER`)
+  } catch {
+    /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE messages ADD COLUMN durationMs INTEGER`)
   } catch {
     /* column already exists */
   }

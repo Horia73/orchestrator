@@ -38,6 +38,11 @@ export type SubsystemId =
     | 'browser'
     | 'recipe'
     | 'workout'
+    // Tool-only capability groups (no doctrine): rarely-needed-in-main-chat tool
+    // schemas pulled out of the always-on surface and loaded on demand.
+    | 'observability'
+    | 'inbox'
+    | 'setup'
 
 export interface SubsystemManifestEntry {
     /** Stable id used by ActivateIntegrationTools and the activation store. */
@@ -46,8 +51,12 @@ export interface SubsystemManifestEntry {
     label: string
     /** 1–2 line plain-language summary of what the subsystem does. Always in context. */
     capability: string
-    /** Heavy operating doctrine loaded lazily — flow, rules, protocols, gotchas. */
-    doctrine: string
+    /**
+     * Heavy operating doctrine loaded lazily — flow, rules, protocols, gotchas.
+     * Optional: tool-only capability groups (inbox/setup/observability) gate a
+     * set of tool schemas with no accompanying doctrine.
+     */
+    doctrine?: string
     /**
      * Operational tool ids gated behind activation (schemas loaded only after
      * ActivateIntegrationTools). Deliberately a SAFE SUBSET — tools shared with
@@ -78,8 +87,9 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
         label: 'Smart Monitor',
         capability: 'Ongoing recurring model-owned work: persistent source monitoring, recurring summaries, recurring maintenance, and tell-me-when subscriptions. One consolidated scheduled agent wake handles connector-backed and custom prompt-backed watches; the agent decides what to inspect, notify, digest, and how to self-pace from history.',
         doctrine: MONITORING_DOCTRINE,
-        // monitor_wake_feedback is deliberately NOT gated — it is called at the
-        // end of every consolidated wake. Watch lifecycle tools stay gated for
+        // monitor_wake_feedback now lives in the 'inbox' capability (pre-activated
+        // for every wake), so it is reachable during wakes without bloating the
+        // main-chat surface. Here we gate only the watch-lifecycle tools, used in
         // user-conversation setup/inspection; source connector capabilities are
         // warmed up per wake from the enabled watch sources.
         toolIds: [
@@ -96,9 +106,10 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
         label: 'Scheduled tasks',
         capability: 'Real runtime automation for one-shot, delayed, bounded, and time-critical future work. Two action types: "tool" (cheap, no model at fire time) or "agent" (wakes a model with your prompt). Ongoing recurring model-owned work belongs in Smart Monitor.',
         doctrine: SCHEDULING_DOCTRINE,
-        // notify_inbox and set_task_state are intentionally left always-on: they
-        // are general inbox/notification primitives used by scheduled-task wakes
-        // and inbox flows, not scheduling-lifecycle tools.
+        // notify_inbox and set_task_state are NOT here — they are general
+        // inbox/notification primitives (now in the 'inbox' capability, which is
+        // pre-activated for every wake/inbox/scheduled run), not scheduling
+        // lifecycle tools.
         toolIds: [
             'schedule_task',
             'list_tasks',
@@ -159,6 +170,46 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'GetExerciseHistory',
             'ListExerciseHistory',
             'GetRecentWorkouts',
+        ],
+    },
+    // --- Tool-only capability groups (no doctrine) --------------------------
+    {
+        id: 'observability',
+        label: 'Run & log inspection',
+        capability: 'Introspect past agent runs and logs: search/read prior request runs and sub-agent transcripts, and read the runtime index. Activate when you need to debug what happened on an earlier run, audit a tool call, or trace a failure across runs.',
+        toolIds: [
+            'search_past_runs',
+            'get_past_run',
+            'search_agent_logs',
+            'get_agent_log',
+            'read_runtime_index',
+        ],
+    },
+    {
+        id: 'inbox',
+        label: 'Inbox & wake notifications',
+        capability: 'Post a card to the Inbox surface (notify_inbox), persist per-run task state across wakes (set_task_state), and report the Smart Monitor learning-loop signal (monitor_wake_feedback). These are background/autonomous primitives — the main chat answers inline, so they load on demand. Auto-active for the Inbox and Smart Monitor agents and every scheduled/wake/microscript run.',
+        toolIds: [
+            'notify_inbox',
+            'set_task_state',
+            'monitor_wake_feedback',
+        ],
+    },
+    {
+        id: 'setup',
+        label: 'Integration setup',
+        capability: 'Connect, configure, and re-auth connection-based integrations: Gmail/Calendar/Drive (status/configure/OAuth), Home Assistant (status/configure), WhatsApp (status/connect). Live connection state is already shown in <integrations>, so activate this only when you are actually about to connect, repair, or reconfigure an integration.',
+        toolIds: [
+            'GoogleCalendarStatus',
+            'GoogleCalendarConfigure',
+            'GoogleCalendarStartOAuth',
+            'GoogleDriveStatus',
+            'GoogleDriveConfigure',
+            'GoogleDriveStartOAuth',
+            'HomeAssistantStatus',
+            'HomeAssistantConfigure',
+            'WhatsAppStatus',
+            'WhatsAppConnect',
         ],
     },
 ]

@@ -46,9 +46,11 @@ async function main(): Promise<void> {
     ensureMemoryReflectionTask,
     REFLECTION_TASK_TITLE,
   } = await import("@/lib/monitoring/memory-reflection-adapter")
+  const { updateConfig } = await import("@/lib/config")
 
+  updateConfig({ timezone: "Pacific/Kiritimati" })
   const tz = resolveReflectionTimezone()
-  check("resolveReflectionTimezone returns a non-empty tz", Boolean(tz), tz)
+  check("resolveReflectionTimezone uses app-configured timezone", tz === "Pacific/Kiritimati", tz)
 
   const spec = buildReflectionTaskInput(tz)
   const parsed = CreateScheduledTaskInputSchema.safeParse(spec)

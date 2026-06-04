@@ -29,6 +29,7 @@ import {
   WORKSPACE_DIR,
   WORKSPACE_ENV_PATH,
 } from "@/lib/runtime-paths"
+import { normalizeTimezone, systemTimezone } from "@/lib/timezone"
 
 export {
   AGENT_WORKSPACE_DIR,
@@ -104,7 +105,7 @@ export const PROVIDERS = new Proxy(
 )
 
 // ---------------------------------------------------------------------------
-// App config (persisted in .orchestrator/config.json)
+// App config (persisted in workspace/config.json)
 // ---------------------------------------------------------------------------
 
 export interface AgentOverride {
@@ -207,6 +208,8 @@ export interface MemoryEmbeddingSettings {
 export interface AppConfig {
   assistantName: string
   userName: string
+  /** App-wide IANA timezone used for relative dates, daily memory, and default schedules. */
+  timezone: string
   /** Global default — used when an agent has no override */
   activeProvider: string
   activeModel: string
@@ -370,6 +373,7 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
 const DEFAULT_CONFIG: AppConfig = {
   assistantName: "Orchestrator",
   userName: "User",
+  timezone: systemTimezone(),
   activeProvider: "google",
   activeModel: "gemini-3-flash-preview",
   thinkingLevel: "high",
@@ -438,9 +442,14 @@ export function getConfig(): AppConfig {
 }
 
 function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
+  const timezone = normalizeTimezone(
+    (parsed as { timezone?: unknown }).timezone,
+    DEFAULT_CONFIG.timezone
+  )
   return {
     ...DEFAULT_CONFIG,
     ...parsed,
+    timezone,
     agentOverrides: normalizeAgentOverrides(parsed.agentOverrides),
     agentOrder: normalizeStringList(
       (parsed as { agentOrder?: unknown }).agentOrder
@@ -757,11 +766,15 @@ export function getRuntimeConfig(): RuntimeConfig {
 
 export function updateConfig(newConfig: Partial<AppConfig>): AppConfig {
   const current = getConfig()
-  const updated = { ...current, ...newConfig, updatedAt: Date.now() }
+  const updated = normalizeAppConfig({ ...current, ...newConfig, updatedAt: Date.now() })
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2), "utf-8")
   emitAppEvent({ type: "config.updated" })
   emitAppEvent({ type: "settings.changed", reason: "config" })
   return updated
+}
+
+export function getConfiguredTimezone(): string {
+  return getConfig().timezone
 }
 
 // --- Semantic memory embedding settings ---

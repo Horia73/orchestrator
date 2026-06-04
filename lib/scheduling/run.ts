@@ -284,12 +284,18 @@ export async function runScheduledTask(
             scheduledTaskId: task.id,
             scheduledFiredAt: firedAt,
             appOrigin,
-            preactivatedCapabilities:
-              task.action.monitorKind === "smart"
+            // Every monitor wake notifies / records state, so the inbox
+            // primitives (notify_inbox, set_task_state, monitor_wake_feedback)
+            // must be warmed up regardless of monitor kind; smart wakes also get
+            // their monitoring + source capabilities.
+            preactivatedCapabilities: [
+              "inbox",
+              ...(task.action.monitorKind === "smart"
                 ? (
                     await import("@/lib/monitoring/smart-monitor")
                   ).getSmartMonitorWakePreactivatedCapabilities()
-                : undefined,
+                : []),
+            ],
             onAgentEvent: (event) => {
               if (event.type === "agent_start" && topRunId === null)
                 topRunId = event.runId
@@ -400,6 +406,10 @@ export async function runScheduledTask(
           scheduledTaskId: task.id,
           scheduledFiredAt: firedAt,
           appOrigin,
+          // Scheduled agent tasks routinely notify the inbox / persist task
+          // state, so warm up the inbox primitives even though the run is the
+          // plain orchestrator (which gates them out of the main-chat surface).
+          preactivatedCapabilities: ["inbox"],
           onAgentEvent: (event) => {
             if (event.type === "agent_start" && topRunId === null)
               topRunId = event.runId

@@ -6,12 +6,14 @@ import { useAppEvent } from "@/hooks/use-app-events"
 export interface RuntimeNameConfig {
   assistantName: string
   userName: string
+  timezone: string
   updatedAt?: number
 }
 
 const DEFAULT_CONFIG: RuntimeNameConfig = {
   assistantName: "Orchestrator",
   userName: "User",
+  timezone: "UTC",
 }
 
 let cachedConfig: RuntimeNameConfig | null = null
@@ -25,8 +27,11 @@ function normalizeConfig(raw: unknown): RuntimeNameConfig {
   const userName = typeof data.userName === "string" && data.userName.trim()
     ? data.userName.trim()
     : DEFAULT_CONFIG.userName
+  const timezone = typeof data.timezone === "string" && data.timezone.trim()
+    ? data.timezone.trim()
+    : DEFAULT_CONFIG.timezone
   const updatedAt = typeof data.updatedAt === "number" ? data.updatedAt : undefined
-  return { assistantName, userName, updatedAt }
+  return { assistantName, userName, timezone, updatedAt }
 }
 
 function publish(next: RuntimeNameConfig) {
@@ -35,6 +40,7 @@ function publish(next: RuntimeNameConfig) {
     current &&
     current.assistantName === next.assistantName &&
     current.userName === next.userName &&
+    current.timezone === next.timezone &&
     current.updatedAt === next.updatedAt
   ) {
     return

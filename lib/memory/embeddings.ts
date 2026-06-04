@@ -275,6 +275,27 @@ export async function embedQuery(query: string): Promise<Float32Array | null> {
   return vectors?.[0] ?? null
 }
 
+/**
+ * Embed several search queries in ONE batched call (same query-side treatment as
+ * embedQuery). Caller must pass non-empty, trimmed strings; the returned array is
+ * positionally aligned with the input. Returns null on any failure (fail-open).
+ */
+export async function embedQueries(
+  queries: string[]
+): Promise<Float32Array[] | null> {
+  if (queries.length === 0) return []
+  if (!embeddingsAvailable()) return null
+  const { provider, model, dim } = getMemoryEmbeddingSettings()
+  const texts = queries.map((q) => (provider === "openai" ? q : googleQueryText(q)))
+  const out: Float32Array[] = []
+  for (let i = 0; i < texts.length; i += EMBED_BATCH_SIZE) {
+    const vectors = await embedBatch(provider, texts.slice(i, i + EMBED_BATCH_SIZE), model, dim)
+    if (!vectors) return null
+    out.push(...vectors)
+  }
+  return out
+}
+
 // ---------------------------------------------------------------------------
 // Multimodal (images / PDFs) — Gemini only. OpenAI embeddings are text-only.
 // ---------------------------------------------------------------------------

@@ -17,7 +17,7 @@ export const orchestrator: AgentConfig = {
     builtins: CLI_WORKSPACE_BUILTINS,
     canCallAgents: [
         'researcher',
-        'multipurpose',
+        'worker',
         'coder',
         'browser_agent',
         'image_generator',
@@ -25,5 +25,7 @@ export const orchestrator: AgentConfig = {
         'speech_generator',
         'music_generator',
         'concierge_agent',
+        'phone_agent',
+        'android_agent',
     ],
 }

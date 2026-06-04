@@ -12,7 +12,7 @@ Default structure:
 
 Use compact tables for many comparable items. Use bullets for narrative findings. For very large result sets, group by country/source/seller/category and keep the exact links.
 
-For product price research, use a table/list with:
+Whenever you name a specific buyable product or component as an option or recommendation — not only on explicit price-research tasks — give it a direct link to its OWN product/listing page (never the brand homepage or a search URL) and its price. Use a table/list with:
 - exact product/listing link;
 - seller;
 - country;
@@ -23,6 +23,8 @@ For product price research, use a table/list with:
 - stock/availability;
 - image link if available;
 - notes and restrictions.
+
+If a product has no public web price (bespoke, industrial, used-only, made-to-order), return a clearly-labeled estimate with a range and its basis (secondary sources, community/forum figures, or your own knowledge) rather than omitting price — never return a named product with no price signal at all. If you cannot find a real product page, say so instead of linking the brand homepage as a substitute.
 
 If the user asked for completeness, include all viable verified options that fit the constraints, grouped if necessary. Do not hide additional matches behind "and more" unless you also state how many and why they were not fully expanded.
 

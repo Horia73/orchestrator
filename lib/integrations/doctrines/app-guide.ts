@@ -112,12 +112,12 @@ For OAuth on a remote/headless host where Google must redirect to localhost: the
 Browse and edit the agent's workspace files. Categories: Onboarding, Knowledge & memory, Behavior, System. Files:
 - USER.md — stable user facts, preferences, constraints, accounts, places, people.
 - MEMORY.md — permanent consolidated durable memory.
-- Daily memory — a FOLDER (MEMORY_DAY/), one note per UTC day; the working-memory ledger. Rendered as a collapsible folder with a date search box when there are many days.
+- Daily memory — a FOLDER (MEMORY_DAY/), one note per app-configured local day; the working-memory ledger. Rendered as a collapsible folder with a date search box when there are many days.
 - PLAYBOOKS.md — reusable distilled procedures.
 - AGENT_NEEDS.md — backlog of missing capabilities / failed tools / blockers.
 - MONITORS.md — monitoring preferences + the active Smart Monitor watch ids.
 - BOOT.md / ONBOARDING.md — first-run onboarding only (disappear once onboarding is done).
-- config.json — read-only here ("Edited from the Models tab").
+- config.json — read-only here ("Edited from the Models tab"); stores app-level defaults including userName, assistantName, and timezone.
 - .env.local — secrets. Uses EXPLICIT save (never autosaves), values redacted on read, stored with 0600 perms.
 Markdown files autosave ~0.7s after you stop typing. JSON files use a structured tree editor (typed inputs), and invalid JSON blocks saving. Integration runbook files exist (INTEGRATIONS/<id>.md) but are hidden from this list. You (the agent) can edit the markdown memory/behavior files directly with your file tools; config.json is owned by the Models tab.
 </settings_files>
@@ -191,7 +191,7 @@ Smart Maps:
 - Full-screen interactive Google map. Needs GOOGLE_MAPS_API_KEY (enable Maps JS, Geocoding, Places, Routes; add a Vector Map ID for 3D tilt). Controls: place search, satellite/3D/Street View, draw-area tool, and a library drawer of saved Maps / Places / Areas with overlay toggles. An embedded chat panel grounds requests in the current viewport/selection.
 - The agent paints maps as application/vnd.ant.map artifacts (the MapRender tool, orchestrator-only). Saving places/areas is a UI action. Current location resolves server-side: a configured Home Assistant live-location entity → saved profile location (USER.md) → browser geolocation as a UI fallback.
 
-Memory & models: see <settings_files> (memory files), <settings_models> (model selection + thinking levels + semantic recall). Context holds only the last ~3 UTC days of daily memory plus the durable files; the rest of history is reachable by meaning via automatic per-turn recall and the memory_search tool.
+Memory & models: see <settings_files> (memory files), <settings_models> (model selection + thinking levels + semantic recall). Context holds only the last ~3 app-configured local days of daily memory plus the durable files; the rest of history is reachable by meaning via automatic per-turn recall and the memory_search tool.
 
 Workouts:
 - Chat workout requests should become application/vnd.ant.workout artifacts, not plain markdown. The workout capability loads a schema + history doctrine and unlocks GetRecentWorkouts/ListExerciseHistory/GetExerciseHistory so the model can seed weights from prior sets, read notes/failures/RPE, and rotate muscle groups from recent sessions.
@@ -210,14 +210,15 @@ The one background loop:
 - A single scheduler ticks about every 30 seconds (first sweep a few seconds after boot) and is the ONLY long-lived background loop. Everything periodic rides on it as a scheduled task.
 - A one-shot task that fell overdue by more than ~5 minutes while the app was down is marked "missed" and NOT run (real-world actions never fire late). Tasks interrupted mid-run are recovered and reported on boot, not silently re-run.
 
-The three system tasks (created automatically, shown as read-only "monitor" rows in Scheduling, never user-made):
+System tasks (created automatically, shown as read-only/system rows in Scheduling, never user-made):
 - Markets monitor — Watchlist price monitoring. Fixed 5-minute cadence; arms only when a market-data key AND at least one monitor-enabled item exist.
 - Smart monitor — the consolidated monitoring agent. Fixed 5-minute cheap poll; arms only when at least one watch is enabled; wakes the AI adaptively (min/max wake gap).
 - Microscripts heartbeat — runs due microscripts.
+- Memory reflection — nightly memory housekeeping at 03:00 in config.json's timezone; reconciles when the app timezone changes.
 - Cost fact worth stating: the markets and smart-monitor polls run as PURE CODE with zero model calls; the AI is woken only when there is a real signal, and then once for everything together. Monitoring is cheap by default.
 
 Memory that works without anyone touching it:
-- The durable files plus the last ~3 UTC days of daily memory are placed in your context every turn. The ENTIRE memory history is also indexed for semantic search in a derived SQLite index that self-heals: any edit (by you, the Settings UI, or by hand) is picked up on the next sync via content-hash diffing — there are no write hooks to forget.
+- The durable files plus the last ~3 app-configured local days of daily memory are placed in your context every turn. The ENTIRE memory history is also indexed for semantic search in a derived SQLite index that self-heals: any edit (by you, the Settings UI, or by hand) is picked up on the next sync via content-hash diffing — there are no write hooks to forget.
 - Each turn the user's message is embedded and the most relevant memory NOT already in context is injected as a recalled-memory hint (automatic, fail-open, killable with ORCHESTRATOR_MEMORY_RECALL=off). The memory_search tool casts a wider net on demand. Embeddings reuse the Gemini key (no separate billing).
 
 What is injected into your context automatically (invisible in the chat):

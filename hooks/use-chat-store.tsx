@@ -2138,6 +2138,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       data.thinkingDuration ||
                       finalThinkingDuration ||
                       undefined,
+                    durationMs:
+                      typeof data.durationMs === "number"
+                        ? data.durationMs
+                        : undefined,
                     attachments:
                       accAttachments.length > 0 ? accAttachments : undefined,
                     timestamp: Date.now(),
@@ -2168,6 +2172,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     reasoning: accReasoning,
                     thinking: accThinking || undefined,
                     thinkingDuration: finalThinkingDuration || 0,
+                    durationMs:
+                      typeof data.durationMs === "number"
+                        ? data.durationMs
+                        : undefined,
                     attachments:
                       accAttachments.length > 0 ? accAttachments : undefined,
                     timestamp: Date.now(),
@@ -2205,6 +2213,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     reasoning: accReasoning,
                     thinking: accThinking || undefined,
                     thinkingDuration: finalThinkingDuration || 0,
+                    durationMs:
+                      typeof data.durationMs === "number"
+                        ? data.durationMs
+                        : undefined,
                     attachments:
                       accAttachments.length > 0 ? accAttachments : undefined,
                     timestamp: Date.now(),

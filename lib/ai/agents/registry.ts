@@ -1,7 +1,7 @@
 import type { AgentConfig } from './types'
 import { orchestrator } from './orchestrator'
 import { researcher } from './researcher'
-import { multipurpose } from './multipurpose'
+import { worker } from './worker'
 import { coder } from './coder'
 import { conciergeAgent } from './concierge-agent'
 import { phoneAgent } from './phone-agent'
@@ -37,7 +37,7 @@ register(inboxAgent)
 register(smartMonitorAgent)
 register(audioContextAgent)
 register(conversationNamer)
-register(multipurpose)
+register(worker)
 register(coder)
 register(conciergeAgent)
 register(browserAgent)

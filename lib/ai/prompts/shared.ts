@@ -4,7 +4,7 @@ import { isOrchestratorClassAgent } from '@/lib/ai/agents/orchestrator-class'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { AGENT_WORKSPACE_DIR, getEnvValue, WORKSPACE_DIR } from '@/lib/config'
+import { AGENT_WORKSPACE_DIR, getConfig, getEnvValue, WORKSPACE_DIR } from '@/lib/config'
 import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates, readScaffoldHashes, isUntouchedScaffold } from '@/lib/settings/workspace-files'
 import { buildIntegrationRunbooksContext } from '@/lib/integrations/runbooks'
 import {
@@ -15,6 +15,7 @@ import {
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
+import { dateStampInTimezone, systemTimezone } from '@/lib/timezone'
 
 /** First sentence of a tool description, normalized and length-capped — used
  *  for the compact gated-capability tool menus in <integrations>/<subsystems>. */
@@ -30,7 +31,7 @@ function firstSentence(text: string, max = 100): string {
 //
 // Provider-neutral: instructs the model to emit artifact blocks for
 // substantial standalone content. Kept as a shared helper so any text agent
-// (orchestrator, multipurpose, future writer) can opt in identically.
+// (orchestrator, researcher, future writer) can opt in identically.
 // ---------------------------------------------------------------------------
 
 const ARTIFACT_AUTHORING = `
@@ -128,7 +129,7 @@ export function buildArtifactAuthoring(): string {
 // The non-negotiable rules every text agent must carry — not just the
 // orchestrator. Extracted so the consent boundary, credential handling, honesty
 // rule, and workspace-file persistence model are stated once and shared by
-// orchestrator, researcher, multipurpose, and concierge alike. Per-agent
+// orchestrator, researcher, and concierge alike. Per-agent
 // prompts reference `<safety_core>` instead of restating these.
 // ---------------------------------------------------------------------------
 
@@ -330,11 +331,15 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         lines.push(`user_name: ${ctx.userName.trim()}`)
     }
     const nowDate = new Date()
-    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone || 'UTC'
-    lines.push(`today: ${nowDate.toISOString().slice(0, 10)} (UTC date — MEMORY_DAY files are named by this)`)
+    const config = getConfig()
+    const tz = config.timezone
+    const todayStamp = dateStampInTimezone(nowDate, tz)
+    lines.push(`today: ${todayStamp} (${tz} date — MEMORY_DAY files are named by this)`)
     lines.push(`datetime_utc: ${nowDate.toISOString()}`)
     lines.push(`timezone: ${tz}`)
     lines.push(`local_time: ${nowDate.toLocaleString('en-CA', { timeZone: tz, hour12: false })} (resolve the user's relative dates/times against this)`)
+    const hostTz = systemTimezone()
+    if (hostTz !== tz) lines.push(`host_timezone: ${hostTz}`)
     const appOrigin = cleanOrigin(
         ctx.extra?.appOrigin
         ?? getEnvValue('ORCHESTRATOR_PUBLIC_URL')
@@ -375,7 +380,6 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push('library_outputs: save files meant for the user (documents, exports, generated media, downloaded sources) under the `files/` directory in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in the user-facing Library — files written elsewhere in workspace_cwd (scratch, intermediate, or working files) stay out of it. Use the workspace root and other paths for transient/working files; promote anything the user should keep or see into `files/`.')
     lines.push('discovery_scope: file discovery tools may omit provider-private CLI metadata; shell command output is returned as produced by the command.')
     lines.push('workspace_files: these workspace files are intentionally accessible to every agent by exact path, relative to workspace_cwd (some are edited from dedicated Settings surfaces rather than the file editor):')
-    const todayStamp = new Date().toISOString().slice(0, 10)
     for (const file of WORKSPACE_FILE_DEFINITIONS) {
         const access = file.readOnly ? 'read-only' : 'read/write'
         // memory-day is a directory; tell the agent the exact file for today.
@@ -551,7 +555,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
 
     // BOOT.md and ONBOARDING.md are the user-facing onboarding script —
     // only the orchestrator class runs onboarding. Other sub-agents
-    // (researcher, multipurpose, concierge, etc.) get the durable context
+    // (researcher, concierge, etc.) get the durable context
     // files (USER/MEMORY/MEMORY_DAY) but skip the onboarding script so it
     // doesn't bloat their prompts every turn while BOOT.md exists. The
     // Inbox/Smart Monitor aliases ARE the orchestrator, so they keep it.
@@ -584,11 +588,11 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         if (remaining <= 0) break
 
         if (file.id === 'memory-day') {
-            // Rolling daily memory: today + the previous 2 UTC days, oldest
+            // Rolling daily memory: today + the previous 2 configured-local days, oldest
             // first so the agent reads the progression up to now.
             for (let back = 2; back >= 0; back--) {
                 if (remaining <= 0) break
-                const stamp = new Date(Date.now() - back * 86_400_000).toISOString().slice(0, 10)
+                const stamp = dateStampInTimezone(Date.now() - back * 86_400_000, getConfig().timezone)
                 const relPath = `MEMORY_DAY/${stamp}.md`
                 const content = readWorkspaceFile(relPath)
                 if (content === null) continue
@@ -616,7 +620,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         '<workspace_context_files>',
         'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading one just to confirm what is already shown here; only read from disk when a block is marked [truncated] or you have specific reason to think it changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
         'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
-        "Daily working memory lives at MEMORY_DAY/<UTC-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
+        "Daily working memory lives at MEMORY_DAY/<configured-local-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
         '',
         ...blocks,
         '</workspace_context_files>',

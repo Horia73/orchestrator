@@ -9,7 +9,7 @@
  *   - After ActivateIntegrationTools, the corresponding <doctrine for="…">
  *     block appears under <active_capability_doctrines>, doctrines from
  *     non-activated capabilities stay absent.
- *   - Sub-agents (researcher, multipurpose, concierge) never see BOOT.md
+ *   - Sub-agents (researcher, worker, concierge) never see BOOT.md
  *     or ONBOARDING.md in their workspace_context_files even when those
  *     files exist on disk, and never see the <subsystems> block.
  *   - The activation store distinguishes integration vs subsystem ids
@@ -24,15 +24,15 @@ import { randomUUID } from 'crypto'
 
 import { orchestrator } from '@/lib/ai/agents/orchestrator'
 import { researcher } from '@/lib/ai/agents/researcher'
-import { multipurpose } from '@/lib/ai/agents/multipurpose'
+import { worker } from '@/lib/ai/agents/worker'
 import { conciergeAgent } from '@/lib/ai/agents/concierge-agent'
 import { MAX_AGENT_DEPTH, type ToolDef } from '@/lib/ai/agents/types'
 import { AGENT_WORKSPACE_DIR } from '@/lib/config'
 import { activateIntegrations } from '@/lib/integrations/activation-store'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { activateIntegrationToolsTool, runActivatedIntegrationTool } from '@/lib/ai/tools/integrations'
-import { resolveProviderToolSurface } from '@/lib/ai/tools/registry'
-import { ALL_CAPABILITY_IDS, ALL_INTEGRATION_IDS, isSubsystemId } from '@/lib/integrations/exposure'
+import { getToolsForAgent, resolveProviderToolSurface } from '@/lib/ai/tools/registry'
+import { ALL_CAPABILITY_IDS, ALL_INTEGRATION_IDS, isSubsystemId, filterIntegrationToolExposure } from '@/lib/integrations/exposure'
 import { ALL_SUBSYSTEM_IDS } from '@/lib/integrations/subsystem-manifest'
 import { GOOGLE_CAPABILITIES } from '@/lib/ai/providers/google'
 
@@ -197,7 +197,7 @@ try {
         orchestratorPromptWithBoot.includes('SMOKE-BOOT-MARKER')
     )
 
-    for (const subAgent of [researcher, multipurpose, conciergeAgent]) {
+    for (const subAgent of [researcher, worker, conciergeAgent]) {
         const subPrompt = buildPromptFor({ agent: subAgent, conversationId: subAgentConvId })
         check(
             `${subAgent.id} prompt does NOT contain BOOT.md content`,
@@ -367,6 +367,45 @@ console.log(`  delta from activation: +${activatedTokensApprox - baselineTokensA
     `Baseline orchestrator prompt stays under 35.5k tokens (got ~${baselineTokensApprox})`,
     baselineTokensApprox < 35_500
   )
+
+// --- round-2 gating: whatsapp / inbox / observability / setup -------------
+// Main chat gates these out; aliases (default activation) and background runs
+// (preactivatedCapabilities) get them back.
+const declaredOrch = getToolsForAgent(orchestrator.tools)
+const exposeFor = (agentId: string, preact?: string[]) => {
+    const cid = `smoke-r2-${randomUUID()}`
+    const set = new Set(
+        filterIntegrationToolExposure(declaredOrch, {
+            conversationId: cid,
+            origin: undefined,
+            agentId,
+            preactivatedCapabilities: preact,
+        }).map(t => t.id)
+    )
+    return set
+}
+
+const mainChat = exposeFor('orchestrator')
+check('main chat gates notify_inbox out', !mainChat.has('notify_inbox'))
+check('main chat gates set_task_state out', !mainChat.has('set_task_state'))
+check('main chat gates WhatsApp ops out', !mainChat.has('WhatsAppSendMessage') && !mainChat.has('WhatsAppListChats'))
+check('main chat gates observability out', !mainChat.has('search_past_runs'))
+check('main chat gates setup tools out', !mainChat.has('GoogleCalendarStartOAuth') && !mainChat.has('WhatsAppConnect'))
+
+const inboxAgentTools = exposeFor('inbox-agent')
+check('inbox-agent default-activates inbox (notify_inbox present)', inboxAgentTools.has('notify_inbox'))
+
+const smTools = exposeFor('smart-monitor-agent')
+check('smart-monitor-agent has notify_inbox + monitor_wake_feedback', smTools.has('notify_inbox') && smTools.has('monitor_wake_feedback'))
+
+const scheduledRun = exposeFor('orchestrator', ['inbox'])
+check('background run (preactivate inbox) exposes notify_inbox + set_task_state', scheduledRun.has('notify_inbox') && scheduledRun.has('set_task_state'))
+
+const obsRun = exposeFor('orchestrator', ['observability'])
+check('activating observability exposes search_past_runs', obsRun.has('search_past_runs'))
+
+const setupRun = exposeFor('orchestrator', ['setup'])
+check('activating setup exposes GoogleCalendarStartOAuth + WhatsAppConnect', setupRun.has('GoogleCalendarStartOAuth') && setupRun.has('WhatsAppConnect'))
 
 // --- summary ---------------------------------------------------------------
 

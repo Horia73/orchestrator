@@ -4,17 +4,10 @@ import * as React from "react"
 import { Check, Loader2, Moon, X } from "lucide-react"
 
 import { Switch } from "@/components/ui/switch"
+import { useRuntimeConfig } from "@/hooks/use-runtime-config"
 
 import { asError } from "./helpers"
 import type { MonitorSettings } from "./types"
-
-const SYSTEM_TZ = (() => {
-  try {
-    return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"
-  } catch {
-    return "UTC"
-  }
-})()
 
 export function GlobalSettingsPanel({
   open,
@@ -25,6 +18,7 @@ export function GlobalSettingsPanel({
   onClose: () => void
   onChanged: () => void
 }) {
+  const { timezone: configuredTimezone } = useRuntimeConfig()
   const [settings, setSettings] = React.useState<MonitorSettings | null>(null)
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
@@ -32,7 +26,7 @@ export function GlobalSettingsPanel({
   const [enabled, setEnabled] = React.useState(false)
   const [from, setFrom] = React.useState("23:00")
   const [to, setTo] = React.useState("07:00")
-  const [timezone, setTimezone] = React.useState(SYSTEM_TZ)
+  const [timezone, setTimezone] = React.useState(configuredTimezone)
 
   React.useEffect(() => {
     if (!open) return
@@ -54,6 +48,7 @@ export function GlobalSettingsPanel({
           setTimezone(data.settings.quietHours.timezone)
         } else {
           setEnabled(false)
+          setTimezone(configuredTimezone)
         }
       })
       .catch((err) => {
@@ -65,7 +60,7 @@ export function GlobalSettingsPanel({
     return () => {
       cancelled = true
     }
-  }, [open])
+  }, [open, configuredTimezone])
 
   const save = async () => {
     setBusy(true)

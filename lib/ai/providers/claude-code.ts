@@ -42,7 +42,7 @@ const ORCH_TOOLS_TOOL_NAME_PREFIX = `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}__`
  *      headless (`-p`) runs need no human tool-permission approval.
  *
  *   2. Orchestrated mode (with tools and/or system prompt) — when claude-code
- *      backs a non-coder agent (orchestrator, multipurpose, …) we:
+ *      backs a non-coder agent (orchestrator, researcher, …) we:
  *        • inject our tools via a stdio MCP server (lib/cli/mcp-server.mjs)
  *          which proxies tool calls back to /api/cli/mcp-exec;
  *        • append our system prompt via `--append-system-prompt-file`;

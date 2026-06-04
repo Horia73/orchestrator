@@ -5,6 +5,8 @@ import type { AgentKind, ToolDef, ToolExecutionContext, ToolResult } from '@/lib
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
 import { getAgent } from '@/lib/ai/agents/registry'
 import { createAgentThread, getAgentThread, type AgentThread } from '@/lib/db'
+import type { Attachment } from '@/lib/types'
+import { classifyUploadMime, MAX_UPLOAD_FILES, resolveExistingUploadPath, uploadContentType } from '@/lib/uploads'
 
 // Lazy import for runner: it pulls in tools/registry, and we sit inside that
 // graph too. Eager top-level import causes a circular evaluation deadlock —
@@ -17,6 +19,7 @@ export const delegateToTool: ToolDef = {
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
         'Returns the sub-agent\'s complete response and agent_thread_id. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
+        'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. For browser_agent, pass bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison. The prompt must be self-contained: exact URL(s) or clearly scoped site flow, goal, allowed data, forbidden data, account/session assumptions, exact stop boundary, confirmation status, screenshot/video needs, and expected evidence. Reuse thread_id to continue the same browser state.',
         'browser_agent runs in bounded segments (~50 actions). If it returns Session status awaiting_user with Final action "checkpoint", the action budget was reached — this is NOT a failure or a user question. Read the action log, then FINALIZE (synthesize from evidence), CONTINUE (same thread_id + a corrected focused instruction: what is done, the next sub-goal, any loop fix), or ABORT. Do not re-send the same goal if the log shows no progress; cap continuations at ~3 segments per task.',
         'For browser_agent loading/API diagnostics, ask for inspectDiagnostics and same-origin fetchUrl results instead of only visual inspection or API-tab switching.',
@@ -44,6 +47,11 @@ export const delegateToTool: ToolDef = {
                 type: 'string',
                 description: 'Optional absolute working directory for CLI-backed agents such as coder. Use for isolated project worktrees prepared by the orchestrator.',
             },
+            attachment_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional upload ids (from the current user message or find_past_uploads) to forward into the sub-agent\'s turn so it can see the files directly — images, PDFs, documents. Capped at the upload limit; forwarded only to providers that accept them.',
+            },
         },
         required: ['agent_id', 'prompt'],
     },
@@ -58,6 +66,7 @@ export const delegateParallelTool: ToolDef = {
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
+        'Each job may carry attachment_ids — upload ids forwarded into that job\'s sub-agent turn so it can see the files directly.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -87,6 +96,11 @@ export const delegateParallelTool: ToolDef = {
                         cwd: {
                             type: 'string',
                             description: 'Optional absolute working directory for this job when invoking CLI-backed agents.',
+                        },
+                        attachment_ids: {
+                            type: 'array',
+                            items: { type: 'string' },
+                            description: 'Optional upload ids to forward into this job\'s sub-agent turn (images/PDFs/documents from the current message or find_past_uploads).',
                         },
                     },
                     required: ['agent_id', 'prompt'],
@@ -215,6 +229,7 @@ type PreparedDelegation =
         prompt: string
         thread: AgentThread
         cwd?: string
+        attachments?: Attachment[]
     }
 
 type DelegationPlan =
@@ -223,6 +238,7 @@ type DelegationPlan =
         target: NonNullable<ReturnType<typeof getAgent>>
         prompt: string
         cwd?: string
+        attachments: Attachment[]
         thread?: AgentThread
         newThread: {
             conversationId: string
@@ -254,6 +270,8 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
     const threadTitle = args.thread_title
     const cwdPlan = normalizeDelegationCwd(args.cwd)
     if (!cwdPlan.ok) return { ok: false, error: cwdPlan.error }
+    const attachmentsPlan = resolveDelegationAttachments(args.attachment_ids)
+    if (!attachmentsPlan.ok) return { ok: false, error: attachmentsPlan.error }
     if (typeof agentId !== 'string' || typeof prompt !== 'string' || !prompt.trim()) {
         return { ok: false, error: 'delegate_to expects { agent_id: string, prompt: non-empty string }' }
     }
@@ -307,7 +325,7 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
         thread = existing
     }
 
-    return { ok: true, target, prompt: prompt.trim(), cwd: cwdPlan.cwd, thread, newThread }
+    return { ok: true, target, prompt: prompt.trim(), cwd: cwdPlan.cwd, attachments: attachmentsPlan.attachments, thread, newThread }
 }
 
 function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): PreparedDelegation {
@@ -315,6 +333,7 @@ function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): Pre
         target: plan.target,
         prompt: plan.prompt,
         cwd: plan.cwd,
+        attachments: plan.attachments,
         thread: plan.thread ?? createAgentThread(plan.newThread),
     }
 }
@@ -331,6 +350,7 @@ async function runPreparedDelegation(
             parentCtx: ctx,
             agentThreadId: prepared.thread.id,
             cwd: prepared.cwd,
+            attachments: prepared.attachments,
         })
         : runner.runMediaSubAgent({
             target: prepared.target,
@@ -342,6 +362,34 @@ async function runPreparedDelegation(
 
 function isTextRuntimeKind(kind: AgentKind): boolean {
     return kind === 'text' || kind === 'concierge'
+}
+
+function resolveDelegationAttachments(
+    value: unknown
+): { ok: true; attachments: Attachment[] } | { ok: false; error: string } {
+    if (value === undefined || value === null) return { ok: true, attachments: [] }
+    if (!Array.isArray(value)) return { ok: false, error: 'attachment_ids must be an array of upload ids.' }
+    if (value.length > MAX_UPLOAD_FILES) {
+        return { ok: false, error: `Too many attachments: ${value.length} (max ${MAX_UPLOAD_FILES}).` }
+    }
+    const attachments: Attachment[] = []
+    for (const raw of value) {
+        if (typeof raw !== 'string' || !raw.trim()) {
+            return { ok: false, error: 'Each attachment id must be a non-empty string.' }
+        }
+        const id = raw.trim()
+        const filePath = resolveExistingUploadPath(id)
+        if (!filePath) return { ok: false, error: `Attachment id not found: ${id}` }
+        const mimeType = uploadContentType(id)
+        let size = 0
+        try {
+            size = fs.statSync(filePath).size
+        } catch {
+            // Path resolved above; a stat race just leaves size 0 (display-only).
+        }
+        attachments.push({ id, filename: id, mimeType, size, type: classifyUploadMime(mimeType) })
+    }
+    return { ok: true, attachments }
 }
 
 function normalizeDelegationCwd(value: unknown): { ok: true; cwd?: string } | { ok: false; error: string } {
