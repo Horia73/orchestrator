@@ -680,7 +680,7 @@ function ActiveSetEditor({
                     value={draft.notes}
                     onChange={(event) => setDraft((d) => ({ ...d, notes: event.target.value }))}
                     placeholder="ex: formă bună, prea greu, umăr ok"
-                    className="h-9 w-full rounded-md border border-border bg-background px-2.5 text-[12.5px] text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring"
+                    className="h-10 w-full rounded-md border border-border bg-background px-2.5 text-base text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring sm:h-9 sm:text-[12.5px]"
                 />
             </label>
 
@@ -744,7 +744,7 @@ function NumberField({
                     if (next === undefined) return
                     onChange(clampNumber(next, min, max))
                 }}
-                className="h-9 w-full rounded-md border border-border bg-background px-2 text-right text-[13px] font-semibold tabular-nums text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring"
+                className="h-10 w-full rounded-md border border-border bg-background px-2 text-right text-base font-semibold tabular-nums text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring sm:h-9 sm:text-[13px]"
             />
         </label>
     )
