@@ -9,7 +9,7 @@ import { cn } from "@/lib/utils"
  * Dropdown menu attached to a set's MoreVertical button. Phase 2 actions:
  *   - Skip          → undoSet + mark logged.completed=false (visually: ○)
  *   - Mark as failed → logSet with failed=true + optional partialReps
- *   - Add note      → opens a small prompt for inline notes
+ *   - Add note      → opens a custom inline-notes dialog
  *
  * Drop set after / convert to AMRAP are Phase 3 candidates that require
  * mutating the artifact's planned[] which we don't do yet.

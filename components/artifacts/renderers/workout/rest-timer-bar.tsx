@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Pause, Plus, SkipForward, Timer } from "lucide-react"
+import { Play, Plus, SkipForward, Timer } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { playChime, primeAudio } from "@/lib/recipe/chime"
@@ -31,12 +31,16 @@ export function RestTimerBar({
     rest,
     onAdjust,
     onSkip,
+    onStartNext,
+    nextLabel,
     alertBeforeSec = 5,
     className,
 }: {
     rest: RestState
     onAdjust: (deltaSec: number) => void
     onSkip: () => void
+    onStartNext?: () => void
+    nextLabel?: string
     /** Seconds before end to fire a softer pre-warning chime. 0 = disabled. */
     alertBeforeSec?: number
     className?: string
@@ -168,16 +172,27 @@ export function RestTimerBar({
                         />
                         <button
                             type="button"
-                            onClick={onSkip}
-                            aria-label={isDone ? "Închide" : "Skip rest"}
-                            title={isDone ? "Închide" : "Skip rest"}
+                            onClick={onStartNext ?? onSkip}
+                            aria-label={onStartNext ? "Pornește următorul set" : isDone ? "Închide" : "Skip rest"}
+                            title={onStartNext ? `Pornește ${nextLabel ?? 'următorul set'}` : isDone ? "Închide" : "Skip rest"}
                             className={cn(
-                                "flex size-8 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors",
-                                "hover:bg-muted hover:text-foreground",
+                                "flex h-8 items-center justify-center rounded-md border transition-colors",
+                                onStartNext
+                                    ? "border-primary bg-primary px-2.5 text-[11px] font-semibold text-primary-foreground hover:opacity-90"
+                                    : "size-8 border-border bg-background text-muted-foreground hover:bg-muted hover:text-foreground",
                                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
                             )}
                         >
-                            {isDone ? <Plus className="size-3.5 rotate-45" /> : <SkipForward className="size-3.5" />}
+                            {onStartNext ? (
+                                <>
+                                    <Play className="size-3.5 fill-current" strokeWidth={2} />
+                                    <span className="ml-1 hidden sm:inline">Next</span>
+                                </>
+                            ) : isDone ? (
+                                <Plus className="size-3.5 rotate-45" />
+                            ) : (
+                                <SkipForward className="size-3.5" />
+                            )}
                         </button>
                     </div>
                 </div>
@@ -216,6 +231,3 @@ function CtrlBtn({
         </button>
     )
 }
-
-// Avoid unused-import warning from the lucide imports list.
-void Pause

@@ -3,7 +3,7 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
-import type { WorkoutArtifact } from "@/lib/workout/schema"
+import type { Exercise, WorkoutArtifact } from "@/lib/workout/schema"
 import { parseWorkoutArtifact } from "@/lib/workout/parser"
 import { useWorkoutSession } from "@/lib/workout/use-workout-session"
 
@@ -16,6 +16,7 @@ import { GroupCard } from "./workout/group-card"
 import { RestTimerBar } from "./workout/rest-timer-bar"
 import { SetTimerBar } from "./workout/set-timer-bar"
 import { SessionSummary } from "./workout/session-summary"
+import { AddExerciseButton } from "./workout/add-exercise-button"
 
 /**
  * Top-level renderer for `application/vnd.ant.workout` artifacts.
@@ -69,7 +70,19 @@ function WorkoutView({
     className?: string
 }) {
     const sessionApi = useWorkoutSession(workout.sessionId, workout)
+    const renderedWorkout = sessionApi.workout
     const interactive = sessionApi.isActive || sessionApi.isFinished
+    const nextExercise = React.useMemo(
+        () => sessionApi.nextSet ? findExercise(renderedWorkout, sessionApi.nextSet.exerciseId) : null,
+        [renderedWorkout, sessionApi.nextSet],
+    )
+    const startNextSet = React.useCallback(() => {
+        if (!sessionApi.nextSet || !nextExercise || sessionApi.session.activeSet) return
+        sessionApi.startSet(nextExercise, sessionApi.nextSet.setIndex)
+    }, [sessionApi, nextExercise])
+    const nextSetLabel = sessionApi.nextSet
+        ? `${sessionApi.nextSet.exerciseName} · set ${sessionApi.nextSet.setIndex + 1}`
+        : undefined
 
     return (
         <>
@@ -82,45 +95,51 @@ function WorkoutView({
                 )}
                 aria-label={title || workout.title}
             >
-                <WorkoutHeader workout={workout} />
-                <WorkoutProgressStats workout={workout} sessionApi={sessionApi} />
+                <WorkoutHeader workout={renderedWorkout} />
+                <WorkoutProgressStats workout={renderedWorkout} sessionApi={sessionApi} />
 
                 <WorkoutActionBar sessionApi={sessionApi} placement="top" />
 
-                {workout.warmup ? (
+                {renderedWorkout.warmup ? (
                     <WorkoutChecklist
                         title="Încălzire"
-                        checklist={workout.warmup}
+                        checklist={renderedWorkout.warmup}
                         variant="warmup"
                     />
                 ) : null}
 
                 <div className="flex flex-col gap-3">
-                    {workout.groups.map((group, i) => (
+                    {renderedWorkout.groups.map((group, i) => (
                         <GroupCard
                             key={i}
                             group={group}
                             index={i + 1}
-                            units={workout.units}
+                            units={renderedWorkout.units}
                             sessionApi={sessionApi}
                             interactive={interactive}
-                            barKg={workout.barWeightKg}
-                            plates={workout.plateIncrements}
+                            barKg={renderedWorkout.barWeightKg}
+                            plates={renderedWorkout.plateIncrements}
                         />
                     ))}
+                    {sessionApi.isActive ? (
+                        <AddExerciseButton
+                            units={renderedWorkout.units}
+                            sessionApi={sessionApi}
+                        />
+                    ) : null}
                 </div>
 
-                {workout.cooldown ? (
+                {renderedWorkout.cooldown ? (
                     <WorkoutChecklist
                         title="Cooldown"
-                        checklist={workout.cooldown}
+                        checklist={renderedWorkout.cooldown}
                         variant="cooldown"
                     />
                 ) : null}
 
-                {workout.notes ? (
+                {renderedWorkout.notes ? (
                     <div className="rounded-lg border border-border/45 bg-muted/25 px-3.5 py-2.5 text-[12.5px] leading-relaxed text-muted-foreground">
-                        {workout.notes}
+                        {renderedWorkout.notes}
                     </div>
                 ) : null}
 
@@ -128,15 +147,15 @@ function WorkoutView({
 
                 {sessionApi.isFinished ? (
                     <SessionSummary
-                        workout={workout}
+                        workout={renderedWorkout}
                         sessionApi={sessionApi}
                         artifactId={artifactId}
                     />
                 ) : null}
 
-                {workout.attribution ? (
+                {renderedWorkout.attribution ? (
                     <footer className="text-xs text-muted-foreground">
-                        Sursă: {workout.attribution}
+                        Sursă: {renderedWorkout.attribution}
                     </footer>
                 ) : null}
             </article>
@@ -152,9 +171,19 @@ function WorkoutView({
                     rest={sessionApi.session.rest}
                     onAdjust={sessionApi.adjustRest}
                     onSkip={sessionApi.skipRest}
-                    alertBeforeSec={workout.restAlertSec ?? 5}
+                    onStartNext={nextExercise && sessionApi.nextSet && !sessionApi.session.activeSet ? startNextSet : undefined}
+                    nextLabel={nextSetLabel}
+                    alertBeforeSec={renderedWorkout.restAlertSec ?? 5}
                 />
             ) : null}
         </>
     )
+}
+
+function findExercise(workout: WorkoutArtifact, exerciseId: string): Exercise | null {
+    for (const group of workout.groups) {
+        const exercise = group.exercises.find((candidate) => candidate.id === exerciseId)
+        if (exercise) return exercise
+    }
+    return null
 }

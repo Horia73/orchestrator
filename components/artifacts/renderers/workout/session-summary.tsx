@@ -59,6 +59,7 @@ export function SessionSummary({
             startedAt: sessionApi.session.startedAt ?? '',
             completedAt: sessionApi.session.completedAt ?? '',
             logsByExerciseId: sessionApi.session.logsByExerciseId,
+            addedGroups: sessionApi.session.addedGroups,
         })
         if (savedKeyRef.current === key) return
         savedKeyRef.current = key

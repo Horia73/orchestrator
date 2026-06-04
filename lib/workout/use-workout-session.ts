@@ -4,11 +4,13 @@ import * as React from "react"
 
 import type {
     Exercise,
+    ExerciseGroup,
     LoggedSet,
     PlannedSet,
     WorkoutArtifact,
 } from "./schema"
 import { estimated1RM } from "./one-rep-max"
+import { buildEffectiveWorkout, normalizeAddedGroups } from "./session-plan"
 
 // ---------------------------------------------------------------------------
 // Workout session state.
@@ -67,6 +69,17 @@ export interface RestState {
     key: number
 }
 
+export interface RestEvent {
+    exerciseId: string
+    exerciseName: string
+    setIndex: number
+    plannedSec: number
+    startedAt: string
+    endedAt: string
+    elapsedSec: number
+    status: 'completed' | 'skipped' | 'replaced' | 'stopped'
+}
+
 export interface ActiveSetState {
     /** Date.now() value when the working set started. */
     startedAt: number
@@ -92,6 +105,10 @@ export interface WorkoutSessionState {
     completedAt?: string
     /** Per-exercise logs, keyed by exercise.id. */
     logsByExerciseId: Record<string, ExerciseSessionLog>
+    /** Exercise groups the user added during this session. */
+    addedGroups?: ExerciseGroup[]
+    /** Completed/cleared rest periods, used by history and coaching tools. */
+    restEvents?: RestEvent[]
     /** Optional current rest timer state. */
     rest?: RestState
     /** Optional current working-set timer. A set is logged only after
@@ -124,10 +141,12 @@ function readPersistedState(sessionId: string): WorkoutSessionState {
         if (!parsed || parsed.sessionId !== sessionId || parsed._v !== STORAGE_VERSION) {
             return EMPTY_STATE(sessionId)
         }
+        const restEvents = normalizeRestEvents((parsed as { restEvents?: unknown }).restEvents)
         // Clear stale rest timer — if the page was closed mid-rest, when
         // we come back the rest is meaningless; better to drop it than
         // resume an alert from 6 hours ago.
         if (parsed.rest && parsed.rest.endsAt && parsed.rest.endsAt < Date.now() - 10 * 60 * 1000) {
+            restEvents.push(restToEvent(parsed.rest, 'completed', parsed.rest.endsAt))
             parsed.rest = undefined
         }
         if (parsed.activeSet?.startedAt && parsed.activeSet.startedAt < Date.now() - 12 * 60 * 60 * 1000) {
@@ -138,6 +157,8 @@ function readPersistedState(sessionId: string): WorkoutSessionState {
             startedAt: parsed.startedAt,
             completedAt: parsed.completedAt,
             logsByExerciseId: parsed.logsByExerciseId ?? {},
+            addedGroups: normalizeAddedGroups((parsed as { addedGroups?: unknown }).addedGroups),
+            restEvents,
             rest: parsed.rest,
             activeSet: parsed.activeSet,
             _v: STORAGE_VERSION,
@@ -193,9 +214,73 @@ function resolveRestSec(set: PlannedSet, exercise: Exercise, fallbackGroupRest?:
     return 90
 }
 
+function normalizeRestEvents(value: unknown): RestEvent[] {
+    if (!Array.isArray(value)) return []
+    return value.slice(0, 500).flatMap((event): RestEvent[] => {
+        if (!event || typeof event !== 'object') return []
+        const candidate = event as Partial<RestEvent>
+        const status = candidate.status
+        if (
+            typeof candidate.exerciseId !== 'string'
+            || typeof candidate.exerciseName !== 'string'
+            || typeof candidate.setIndex !== 'number'
+            || typeof candidate.plannedSec !== 'number'
+            || typeof candidate.startedAt !== 'string'
+            || typeof candidate.endedAt !== 'string'
+            || typeof candidate.elapsedSec !== 'number'
+            || !['completed', 'skipped', 'replaced', 'stopped'].includes(String(status))
+        ) {
+            return []
+        }
+        return [{
+            exerciseId: candidate.exerciseId,
+            exerciseName: candidate.exerciseName,
+            setIndex: Math.max(0, Math.floor(candidate.setIndex)),
+            plannedSec: Math.max(0, Math.round(candidate.plannedSec)),
+            startedAt: candidate.startedAt,
+            endedAt: candidate.endedAt,
+            elapsedSec: Math.max(0, Math.round(candidate.elapsedSec)),
+            status: status as RestEvent['status'],
+        }]
+    })
+}
+
+function restToEvent(rest: RestState, status: RestEvent['status'], endedAtMs = Date.now()): RestEvent {
+    const plannedSec = Math.max(0, Math.round((rest.endsAt - rest.startedAt) / 1000))
+    const elapsedSec = Math.max(0, Math.round((endedAtMs - rest.startedAt) / 1000))
+    return {
+        exerciseId: rest.exerciseId,
+        exerciseName: rest.exerciseName,
+        setIndex: rest.setIndex,
+        plannedSec,
+        startedAt: new Date(rest.startedAt).toISOString(),
+        endedAt: new Date(endedAtMs).toISOString(),
+        elapsedSec,
+        status,
+    }
+}
+
+function finishRest(
+    state: WorkoutSessionState,
+    status: RestEvent['status'],
+    endedAtMs = Date.now(),
+): WorkoutSessionState {
+    if (!state.rest) return state
+    return {
+        ...state,
+        rest: undefined,
+        restEvents: [
+            ...(state.restEvents ?? []),
+            restToEvent(state.rest, status, endedAtMs),
+        ],
+    }
+}
+
 export interface WorkoutSessionApi {
     /** Current snapshot of the session. Re-renders on every change. */
     session: WorkoutSessionState
+    /** Original artifact plan plus session-local exercise additions. */
+    workout: WorkoutArtifact
     /** Whether the user has tapped Start. */
     isActive: boolean
     /** True after Finish; renderer should show the summary. */
@@ -230,8 +315,12 @@ export interface WorkoutSessionApi {
     skipSets: (sets: readonly WorkoutSetRef[], reason?: string) => void
     /** Mark an exercise skipped (or unskip). */
     setSkipped: (exerciseId: string, skipped: boolean) => void
+    /** Add/update a note without changing set completion state. */
+    setNote: (exerciseId: string, setIndex: number, note?: string) => void
     /** Append a freestyle set after the planned ones. */
     addSet: (exercise: Exercise, plannedSet: PlannedSet) => void
+    /** Append a session-local straight exercise after the planned workout. */
+    addExercise: (exercise: Exercise) => void
     /** Rest timer controls. */
     startRest: (durationSec: number, label: { exerciseId: string; exerciseName: string; setIndex: number }) => void
     adjustRest: (deltaSec: number) => void
@@ -260,12 +349,38 @@ function findNextSet(order: readonly WorkoutSetRef[], state: WorkoutSessionState
     return order.find((set) => !isSetAdvanced(state.logsByExerciseId[set.exerciseId]?.sets[set.setIndex]))
 }
 
+function collectExerciseIds(workout: WorkoutArtifact, addedGroups: readonly ExerciseGroup[] | undefined): Set<string> {
+    const ids = new Set<string>()
+    for (const group of workout.groups) {
+        for (const exercise of group.exercises) ids.add(exercise.id)
+    }
+    for (const group of addedGroups ?? []) {
+        for (const exercise of group.exercises) ids.add(exercise.id)
+    }
+    return ids
+}
+
+function uniqueExerciseId(id: string, used: Set<string>): string {
+    const base = id.slice(0, 72) || 'custom-exercise'
+    if (!used.has(base)) return base
+    for (let i = 2; i < 1000; i++) {
+        const suffix = `-${i}`
+        const candidate = `${base.slice(0, 80 - suffix.length)}${suffix}`
+        if (!used.has(candidate)) return candidate
+    }
+    return `${base.slice(0, 62)}-${Date.now().toString(36)}`
+}
+
 export function useWorkoutSession(
     sessionId: string,
     workout: WorkoutArtifact,
 ): WorkoutSessionApi {
     const [session, setSession] = React.useState<WorkoutSessionState>(() => readPersistedState(sessionId))
-    const setOrder = React.useMemo(() => buildSetOrder(workout), [workout])
+    const effectiveWorkout = React.useMemo(
+        () => buildEffectiveWorkout(workout, { addedGroups: session.addedGroups }),
+        [workout, session.addedGroups],
+    )
+    const setOrder = React.useMemo(() => buildSetOrder(effectiveWorkout), [effectiveWorkout])
 
     // Persist on change with debouncing. We coalesce rapid mutations so a
     // burst of "check, check, check" only writes once.
@@ -294,7 +409,12 @@ export function useWorkoutSession(
     }, [])
 
     const finish = React.useCallback(() => {
-        setSession((s) => ({ ...s, completedAt: new Date().toISOString(), rest: undefined, activeSet: undefined }))
+        const nowMs = Date.now()
+        setSession((s) => {
+            const status = s.rest && nowMs >= s.rest.endsAt ? 'completed' : 'stopped'
+            const withRestClosed = finishRest(s, status, nowMs)
+            return { ...withRestClosed, completedAt: new Date(nowMs).toISOString(), activeSet: undefined }
+        })
     }, [])
 
     const reset = React.useCallback(() => {
@@ -313,6 +433,7 @@ export function useWorkoutSession(
             const wantsRest = opts?.startRest ?? true
 
             setSession((s) => {
+                const nowMs = Date.now()
                 // Auto-start the session if user checks a set without explicit start.
                 const startedAt = s.startedAt ?? new Date().toISOString()
 
@@ -341,20 +462,23 @@ export function useWorkoutSession(
                 const rest: RestState | undefined = wantsRest
                     ? {
                         durationSec: restSec,
-                        startedAt: Date.now(),
-                        endsAt: Date.now() + restSec * 1000,
+                        startedAt: nowMs,
+                        endsAt: nowMs + restSec * 1000,
                         exerciseId: exercise.id,
                         exerciseName: exercise.name,
                         setIndex,
                         key: (s.rest?.key ?? 0) + 1,
                     }
                     : s.rest
+                const restEvents = wantsRest && s.rest
+                    ? [...(s.restEvents ?? []), restToEvent(s.rest, nowMs >= s.rest.endsAt ? 'completed' : 'replaced', nowMs)]
+                    : s.restEvents
 
                 const activeSet = s.activeSet?.exerciseId === exercise.id && s.activeSet.setIndex === setIndex
                     ? undefined
                     : s.activeSet
 
-                return { ...s, startedAt, logsByExerciseId, rest, activeSet }
+                return { ...s, startedAt, logsByExerciseId, rest, restEvents, activeSet }
             })
         },
         [],
@@ -383,19 +507,23 @@ export function useWorkoutSession(
     const startSet = React.useCallback<WorkoutSessionApi['startSet']>((exercise, setIndex) => {
         const nowMs = Date.now()
         const nowIso = new Date(nowMs).toISOString()
-        setSession((s) => ({
-            ...s,
-            startedAt: s.startedAt ?? nowIso,
-            completedAt: undefined,
-            rest: undefined,
-            activeSet: {
-                startedAt: nowMs,
-                exerciseId: exercise.id,
-                exerciseName: exercise.name,
-                setIndex,
-                key: (s.activeSet?.key ?? 0) + 1,
-            },
-        }))
+        setSession((s) => {
+            const withRestClosed = s.rest
+                ? finishRest(s, nowMs >= s.rest.endsAt ? 'completed' : 'replaced', nowMs)
+                : s
+            return {
+                ...withRestClosed,
+                startedAt: s.startedAt ?? nowIso,
+                completedAt: undefined,
+                activeSet: {
+                    startedAt: nowMs,
+                    exerciseId: exercise.id,
+                    exerciseName: exercise.name,
+                    setIndex,
+                    key: (s.activeSet?.key ?? 0) + 1,
+                },
+            }
+        })
     }, [])
 
     const finishActiveSet = React.useCallback(() => {
@@ -483,6 +611,26 @@ export function useWorkoutSession(
         })
     }, [])
 
+    const setNote = React.useCallback<WorkoutSessionApi['setNote']>((exerciseId, setIndex, note) => {
+        const cleanNote = note?.trim() || undefined
+        setSession((s) => {
+            const prevLog = ensureLog(s, exerciseId)
+            const sets = prevLog.sets.slice()
+            const existing = sets[setIndex]
+            sets[setIndex] = {
+                ...(existing ?? { completed: false }),
+                notes: cleanNote,
+            }
+            return {
+                ...s,
+                logsByExerciseId: {
+                    ...s.logsByExerciseId,
+                    [exerciseId]: { ...prevLog, sets },
+                },
+            }
+        })
+    }, [])
+
     const addSet = React.useCallback<WorkoutSessionApi['addSet']>(
         (exercise, plannedSet) => {
             const now = new Date().toISOString()
@@ -507,19 +655,47 @@ export function useWorkoutSession(
         [],
     )
 
+    const addExercise = React.useCallback<WorkoutSessionApi['addExercise']>(
+        (exercise) => {
+            const now = new Date().toISOString()
+            setSession((s) => {
+                const used = collectExerciseIds(workout, s.addedGroups)
+                const nextExercise: Exercise = {
+                    ...exercise,
+                    id: uniqueExerciseId(exercise.id, used),
+                }
+                return {
+                    ...s,
+                    startedAt: s.startedAt ?? now,
+                    addedGroups: [
+                        ...(s.addedGroups ?? []),
+                        { kind: 'straight' as const, exercises: [nextExercise] },
+                    ],
+                }
+            })
+        },
+        [workout],
+    )
+
     const startRest = React.useCallback<WorkoutSessionApi['startRest']>((durationSec, label) => {
-        setSession((s) => ({
-            ...s,
-            rest: {
-                durationSec,
-                startedAt: Date.now(),
-                endsAt: Date.now() + durationSec * 1000,
-                exerciseId: label.exerciseId,
-                exerciseName: label.exerciseName,
-                setIndex: label.setIndex,
-                key: (s.rest?.key ?? 0) + 1,
-            },
-        }))
+        const nowMs = Date.now()
+        setSession((s) => {
+            const withRestClosed = s.rest
+                ? finishRest(s, nowMs >= s.rest.endsAt ? 'completed' : 'replaced', nowMs)
+                : s
+            return {
+                ...withRestClosed,
+                rest: {
+                    durationSec,
+                    startedAt: nowMs,
+                    endsAt: nowMs + durationSec * 1000,
+                    exerciseId: label.exerciseId,
+                    exerciseName: label.exerciseName,
+                    setIndex: label.setIndex,
+                    key: (s.rest?.key ?? 0) + 1,
+                },
+            }
+        })
     }, [])
 
     const adjustRest = React.useCallback((deltaSec: number) => {
@@ -528,7 +704,7 @@ export function useWorkoutSession(
             const newEnds = s.rest.endsAt + deltaSec * 1000
             // Don't let adjustments push into the past or comically far future.
             if (newEnds <= Date.now()) {
-                return { ...s, rest: undefined }
+                return finishRest(s, 'skipped')
             }
             return {
                 ...s,
@@ -542,7 +718,7 @@ export function useWorkoutSession(
     }, [])
 
     const skipRest = React.useCallback(() => {
-        setSession((s) => ({ ...s, rest: undefined }))
+        setSession((s) => finishRest(s, 'skipped'))
     }, [])
 
     const getLogged = React.useCallback(
@@ -562,7 +738,7 @@ export function useWorkoutSession(
                 // sees "Rest done!" even if they were focused elsewhere), then
                 // clear automatically.
                 if (s.rest.endsAt < Date.now() - 30_000) {
-                    return { ...s, rest: undefined }
+                    return finishRest(s, 'completed', s.rest.endsAt)
                 }
                 return s
             })
@@ -574,6 +750,7 @@ export function useWorkoutSession(
 
     return {
         session,
+        workout: effectiveWorkout,
         isActive,
         isFinished,
         start,
@@ -590,7 +767,9 @@ export function useWorkoutSession(
         skipSet,
         skipSets,
         setSkipped,
+        setNote,
         addSet,
+        addExercise,
         startRest,
         adjustRest,
         skipRest,

@@ -85,6 +85,7 @@ export function SetRow({
     const [menuOpen, setMenuOpen] = React.useState(false)
     const [manualEditorOpen, setManualEditorOpen] = React.useState(false)
     const [skipAhead, setSkipAhead] = React.useState<SkipAheadState | null>(null)
+    const [noteEditorOpen, setNoteEditorOpen] = React.useState(false)
     const [prPulse, setPrPulse] = React.useState(false)
     const activeEditorOpen = isThisActiveSet && !!activeSet?.finishedAt
     const editorActiveSet = activeEditorOpen ? activeSet : undefined
@@ -102,6 +103,10 @@ export function SetRow({
 
     React.useEffect(() => {
         if (!isInteractive) setManualEditorOpen(false)
+    }, [isInteractive])
+
+    React.useEffect(() => {
+        if (!isInteractive) setNoteEditorOpen(false)
     }, [isInteractive])
 
     // PR celebration: when status flips from pending → done AND the logged
@@ -186,16 +191,15 @@ export function SetRow({
 
     const handleAddNote = React.useCallback(() => {
         if (!sessionApi) return
-        const existing = sessionApi.getLogged(exercise.id, index - 1)?.notes ?? ''
-        const note = window.prompt('Notă pentru acest set:', existing)
-        if (note === null) return
-        sessionApi.logSet(
-            exercise,
-            index - 1,
-            { notes: note.trim() || undefined, completed: status === 'done' || status === 'failed' },
-            { plannedSet, startRest: false },
-        )
-    }, [sessionApi, exercise, index, plannedSet, status])
+        setMenuOpen(false)
+        setNoteEditorOpen(true)
+    }, [sessionApi])
+
+    const handleSaveNote = React.useCallback((note: string) => {
+        if (!sessionApi) return
+        sessionApi.setNote(exercise.id, index - 1, note)
+        setNoteEditorOpen(false)
+    }, [sessionApi, exercise.id, index])
 
     const handleEditSet = React.useCallback(() => {
         if (!metricEditable) return
@@ -345,6 +349,16 @@ export function SetRow({
                     setsToSkip={skipAhead.setsToSkip}
                     onConfirm={handleConfirmSkipAhead}
                     onCancel={() => setSkipAhead(null)}
+                />
+            ) : null}
+
+            {noteEditorOpen ? (
+                <SetNoteDialog
+                    exerciseName={exercise.name}
+                    setIndex={index}
+                    initialNote={logged?.notes ?? ''}
+                    onSave={handleSaveNote}
+                    onCancel={() => setNoteEditorOpen(false)}
                 />
             ) : null}
 
@@ -829,6 +843,86 @@ function SkipAheadDialog({
                     >
                         <SkipForward className="size-3.5" strokeWidth={2} />
                         Sari și pornește
+                    </button>
+                </div>
+            </div>
+        </div>
+    )
+}
+
+function SetNoteDialog({
+    exerciseName,
+    setIndex,
+    initialNote,
+    onSave,
+    onCancel,
+}: {
+    exerciseName: string
+    setIndex: number
+    initialNote: string
+    onSave: (note: string) => void
+    onCancel: () => void
+}) {
+    const [note, setNote] = React.useState(initialNote)
+    const textAreaRef = React.useRef<HTMLTextAreaElement>(null)
+
+    React.useEffect(() => {
+        textAreaRef.current?.focus()
+        textAreaRef.current?.select()
+    }, [])
+
+    return (
+        <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Notă set"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+            onKeyDown={(event) => {
+                if (event.key === 'Escape') {
+                    event.stopPropagation()
+                    onCancel()
+                }
+            }}
+        >
+            <div className="w-full max-w-sm rounded-xl border border-border/70 bg-popover p-4 shadow-xl">
+                <div className="text-sm font-semibold text-foreground">
+                    Notă pentru set
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                    {exerciseName} · set {setIndex}
+                </p>
+                <label className="mt-3 block">
+                    <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Notă
+                    </span>
+                    <textarea
+                        ref={textAreaRef}
+                        value={note}
+                        onChange={(event) => setNote(event.target.value)}
+                        maxLength={400}
+                        rows={4}
+                        placeholder="ex: formă bună, prea greu, umăr ok"
+                        className="min-h-28 w-full resize-none rounded-md border border-border bg-background px-2.5 py-2 text-base leading-relaxed text-foreground outline-none transition-shadow placeholder:text-muted-foreground/70 focus:ring-2 focus:ring-ring sm:text-[13px]"
+                    />
+                </label>
+                <div className="mt-1 text-right text-[10.5px] tabular-nums text-muted-foreground">
+                    {note.length}/400
+                </div>
+                <div className="mt-3 flex justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                        Anulează
+                    </button>
+                    <button
+                        type="button"
+                        onClick={() => onSave(note)}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
+                    >
+                        <Save className="size-3.5" strokeWidth={2} />
+                        Salvează
                     </button>
                 </div>
             </div>

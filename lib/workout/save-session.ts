@@ -1,5 +1,5 @@
 import type { Exercise, WorkoutArtifact, PersonalBest, PreviousSessionSnapshot, LoggedSet } from './schema'
-import type { WorkoutSessionState } from './use-workout-session'
+import type { RestEvent, WorkoutSessionState } from './use-workout-session'
 import { estimated1RM } from './one-rep-max'
 import { formatDuration, formatSetSequence } from './format'
 
@@ -54,6 +54,14 @@ export interface SessionLog {
     completedAt: string
     /** Total elapsed seconds. Convenience — derived from start/end. */
     totalDurationSec: number
+    /** Rest periods captured during the session. */
+    restEvents: RestEvent[]
+    restSummary: {
+        totalRestSec: number
+        avgRestSec?: number
+        plannedAvgRestSec?: number
+        skippedCount: number
+    }
     /** Per-exercise logs in the order they appear in the workout. */
     exercises: Array<{
         id: string
@@ -110,6 +118,9 @@ export interface ExerciseHistory {
         allSets: LoggedSet[]
         totalVolumeKg: number
         rpeAvg?: number
+        avgSetDurationSec?: number
+        avgRestSec?: number
+        restEvents?: RestEvent[]
     }>
     /** ISO timestamp this file was last touched. */
     updatedAt: string
@@ -149,6 +160,8 @@ export function buildSessionLog(
     )
 
     const exercises: SessionLog['exercises'] = []
+    const restEvents = state.restEvents ?? []
+    const restSummary = summarizeRestEvents(restEvents)
     let totalSetsPlanned = 0
     let totalSetsCompleted = 0
     let totalSetsFailed = 0
@@ -204,6 +217,8 @@ export function buildSessionLog(
         startedAt,
         completedAt,
         totalDurationSec,
+        restEvents,
+        restSummary,
         exercises,
         totalSetsPlanned,
         totalSetsCompleted,
@@ -454,6 +469,9 @@ export function mergeExerciseHistory(
         allSets: exerciseLog.loggedSets,
         totalVolumeKg: exerciseLog.totalVolumeKg,
         rpeAvg: averageRpe(exerciseLog.loggedSets),
+        avgSetDurationSec: averageSetDuration(exerciseLog.loggedSets),
+        restEvents: sessionLog.restEvents.filter((event) => event.exerciseId === exerciseLog.id),
+        avgRestSec: averageRest(sessionLog.restEvents.filter((event) => event.exerciseId === exerciseLog.id)),
     }
 
     const sessions = [newEntry, ...(existing?.sessions ?? []).filter((s) => s.sessionId !== sessionLog.sessionId)]
@@ -483,6 +501,45 @@ function averageRpe(sets: LoggedSet[]): number | undefined {
     const rpes = sets.map((s) => s.actualRpe).filter((r): r is number => typeof r === 'number')
     if (rpes.length === 0) return undefined
     return Math.round((rpes.reduce((a, b) => a + b, 0) / rpes.length) * 10) / 10
+}
+
+export function loggedSetDurationSec(set: LoggedSet): number | undefined {
+    const startedAt = dateMs(set.startedAt)
+    const completedAt = dateMs(set.completedAt)
+    if (startedAt !== undefined && completedAt !== undefined && completedAt >= startedAt) {
+        return Math.round((completedAt - startedAt) / 1000)
+    }
+    return set.actualDurationSec
+}
+
+function averageSetDuration(sets: LoggedSet[]): number | undefined {
+    return averageNumber(sets.map(loggedSetDurationSec))
+}
+
+function averageRest(events: readonly RestEvent[]): number | undefined {
+    return averageNumber(events.map((event) => event.elapsedSec))
+}
+
+function summarizeRestEvents(events: readonly RestEvent[]): SessionLog['restSummary'] {
+    const totalRestSec = events.reduce((sum, event) => sum + event.elapsedSec, 0)
+    return {
+        totalRestSec,
+        avgRestSec: averageRest(events),
+        plannedAvgRestSec: averageNumber(events.map((event) => event.plannedSec)),
+        skippedCount: events.filter((event) => event.status === 'skipped' || event.status === 'replaced').length,
+    }
+}
+
+function averageNumber(values: Array<number | undefined>): number | undefined {
+    const nums = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    if (nums.length === 0) return undefined
+    return Math.round((nums.reduce((sum, value) => sum + value, 0) / nums.length) * 10) / 10
+}
+
+function dateMs(value: string | undefined): number | undefined {
+    if (!value) return undefined
+    const ms = new Date(value).getTime()
+    return Number.isFinite(ms) ? ms : undefined
 }
 
 function computePersonalBest(
@@ -560,6 +617,8 @@ export function formatHistoryEntryLine(log: SessionLog): string {
  */
 export function formatSessionMarkdown(log: SessionLog): string {
     const lines: string[] = []
+    const restEvents = log.restEvents ?? []
+    const restSummary = log.restSummary ?? summarizeRestEvents(restEvents)
     lines.push(`# ${log.title}`)
     if (log.subtitle) lines.push(`> ${log.subtitle}`)
     lines.push('')
@@ -567,6 +626,16 @@ export function formatSessionMarkdown(log: SessionLog): string {
     const date = log.startedAt.slice(0, 10)
     lines.push(`- **Data**: ${date}`)
     lines.push(`- **Durată**: ${formatDuration(log.totalDurationSec)}`)
+    const avgSetSec = averageNumber(log.exercises.flatMap((ex) => ex.loggedSets.map(loggedSetDurationSec)))
+    if (avgSetSec !== undefined) {
+        lines.push(`- **Set time avg**: ${formatDuration(Math.round(avgSetSec))}`)
+    }
+    if (restSummary.avgRestSec !== undefined) {
+        const planned = restSummary.plannedAvgRestSec !== undefined
+            ? ` planned avg ${formatDuration(Math.round(restSummary.plannedAvgRestSec))}`
+            : ''
+        lines.push(`- **Rest avg**: ${formatDuration(Math.round(restSummary.avgRestSec))}${planned}${restSummary.skippedCount ? `, ${restSummary.skippedCount} shortened/skipped` : ''}`)
+    }
     const skippedSets = countSkippedSets(log)
     lines.push(`- **Sets**: ${log.totalSetsCompleted}/${log.totalSetsPlanned} completed${log.totalSetsFailed ? `, ${log.totalSetsFailed} failed` : ''}${skippedSets ? `, ${skippedSets} skipped` : ''}`)
     if (log.totalVolumeKg > 0) {
@@ -596,6 +665,11 @@ export function formatSessionMarkdown(log: SessionLog): string {
         const skipped = ex.skipped ? ' _(skipped)_' : ''
         lines.push(`### ${ex.name}${skipped}`)
         if (setStats) lines.push(`- ${setStats}`)
+        const avgExerciseSetSec = averageNumber(ex.loggedSets.map(loggedSetDurationSec))
+        if (avgExerciseSetSec !== undefined) lines.push(`- Set time avg: ${formatDuration(Math.round(avgExerciseSetSec))}`)
+        const exerciseRestEvents = restEvents.filter((event) => event.exerciseId === ex.id)
+        const avgExerciseRestSec = averageRest(exerciseRestEvents)
+        if (avgExerciseRestSec !== undefined) lines.push(`- Rest avg: ${formatDuration(Math.round(avgExerciseRestSec))}`)
         if (ex.totalVolumeKg > 0) lines.push(`- ${Math.round(ex.totalVolumeKg).toLocaleString()} ${log.units} volume`)
         const notes = ex.loggedSets.map((s) => s.notes).filter(Boolean)
         if (notes.length > 0) lines.push(`- Notes: ${notes.join(' · ')}`)

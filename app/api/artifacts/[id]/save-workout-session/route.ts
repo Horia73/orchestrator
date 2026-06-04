@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 
 import { getArtifactById } from '@/lib/artifacts/store'
 import { parseWorkoutArtifact } from '@/lib/workout/parser'
+import { buildEffectiveWorkout } from '@/lib/workout/session-plan'
 import type { WorkoutSessionState } from '@/lib/workout/use-workout-session'
 import {
     buildSessionLog,
@@ -60,7 +61,7 @@ export async function POST(
             { status: 500 },
         )
     }
-    const workout = parsed.value
+    const storedWorkout = parsed.value
 
     let body: { session?: unknown }
     try {
@@ -69,7 +70,7 @@ export async function POST(
         return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
     }
     const state = body?.session as WorkoutSessionState | undefined
-    if (!state || typeof state !== 'object' || state.sessionId !== workout.sessionId) {
+    if (!state || typeof state !== 'object' || state.sessionId !== storedWorkout.sessionId) {
         return NextResponse.json(
             { error: 'POST body must include session matching the artifact sessionId' },
             { status: 400 },
@@ -88,6 +89,7 @@ export async function POST(
         )
     }
 
+    const workout = buildEffectiveWorkout(storedWorkout, state)
     const sessionLog = buildSessionLog(workout, state)
     const slug = buildSessionSlug(workout, state)
     const markdown = formatSessionMarkdown(sessionLog)

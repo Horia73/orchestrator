@@ -13,6 +13,7 @@
  * Run: npx tsx scripts/smoke-workout-save.ts
  */
 import { parseWorkoutArtifact } from '@/lib/workout/parser'
+import { buildEffectiveWorkout } from '@/lib/workout/session-plan'
 import type { WorkoutSessionState } from '@/lib/workout/use-workout-session'
 import {
     buildSessionLog,
@@ -276,6 +277,96 @@ function stateWithLogs(opts: {
     check('skip: history line mentions skipped', line.includes('1 skipped'), line)
     check('skip: markdown mentions skipped', md.includes('1 skipped'), md)
     check('skip: markdown keeps reason', md.includes('set 2: aparat ocupat'), md)
+}
+
+{
+    const startedAt = new Date(Date.now() - 1800_000).toISOString()
+    const state: WorkoutSessionState = {
+        sessionId: workout.sessionId,
+        startedAt,
+        completedAt: new Date().toISOString(),
+        logsByExerciseId: {
+            'bench-press': {
+                sets: [{ completed: true, actualWeightKg: 60, actualReps: 8 }],
+            },
+            'leg-extension': {
+                sets: [{ completed: true, actualWeightKg: 35, actualReps: 12 }],
+            },
+        },
+        addedGroups: [
+            {
+                kind: 'straight',
+                exercises: [
+                    {
+                        id: 'leg-extension',
+                        name: 'Leg Extension',
+                        kind: 'weighted',
+                        equipment: ['machine'],
+                        muscleGroups: ['quads'],
+                        planned: [{ kind: 'working', weightKg: 35, reps: 12 }],
+                    },
+                ],
+            },
+        ],
+        _v: 1,
+    }
+    const effective = buildEffectiveWorkout(workout, state)
+    const log = buildSessionLog(effective, state)
+    const md = formatSessionMarkdown(log)
+    check('added exercise: counts new planned set', log.totalSetsPlanned === 4, log.totalSetsPlanned)
+    check('added exercise: counts new completed set', log.totalSetsCompleted === 2, log.totalSetsCompleted)
+    check('added exercise: markdown includes exercise', md.includes('### Leg Extension'), md)
+}
+
+{
+    const t0 = Date.now() - 1800_000
+    const state: WorkoutSessionState = {
+        sessionId: workout.sessionId,
+        startedAt: new Date(t0).toISOString(),
+        completedAt: new Date(t0 + 900_000).toISOString(),
+        logsByExerciseId: {
+            'bench-press': {
+                sets: [
+                    {
+                        completed: true,
+                        actualWeightKg: 60,
+                        actualReps: 8,
+                        startedAt: new Date(t0 + 10_000).toISOString(),
+                        completedAt: new Date(t0 + 40_000).toISOString(),
+                    },
+                    {
+                        completed: true,
+                        actualWeightKg: 60,
+                        actualReps: 8,
+                        startedAt: new Date(t0 + 130_000).toISOString(),
+                        completedAt: new Date(t0 + 170_000).toISOString(),
+                    },
+                ],
+            },
+        },
+        restEvents: [
+            {
+                exerciseId: 'bench-press',
+                exerciseName: 'Bench Press',
+                setIndex: 0,
+                plannedSec: 90,
+                elapsedSec: 85,
+                startedAt: new Date(t0 + 40_000).toISOString(),
+                endedAt: new Date(t0 + 125_000).toISOString(),
+                status: 'replaced',
+            },
+        ],
+        _v: 1,
+    }
+    const log = buildSessionLog(workout, state)
+    const md = formatSessionMarkdown(log)
+    const history = mergeExerciseHistory(null, workout, log, log.exercises[0])
+    check('timing: rest event saved', log.restEvents.length === 1, log.restEvents)
+    check('timing: avg rest summarized', log.restSummary.avgRestSec === 85, log.restSummary)
+    check('timing: avg set duration summarized in history', history.sessions[0].avgSetDurationSec === 35, history.sessions[0])
+    check('timing: exercise history keeps rest event', history.sessions[0].restEvents?.[0]?.elapsedSec === 85, history.sessions[0])
+    check('timing: markdown includes set time', md.includes('Set time avg'), md)
+    check('timing: markdown includes rest avg', md.includes('Rest avg'), md)
 }
 
 {

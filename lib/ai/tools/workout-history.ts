@@ -6,6 +6,7 @@ import {
     readSessionLog,
 } from '@/lib/workout/storage'
 import { estimated1RM } from '@/lib/workout/one-rep-max'
+import { loggedSetDurationSec } from '@/lib/workout/save-session'
 
 // ---------------------------------------------------------------------------
 // Workout history tools.
@@ -33,7 +34,7 @@ export const getExerciseHistoryTool: ToolDef = {
     description: [
         'Look up the user\'s history for a specific exercise (e.g. "bench-press", "front-squat") to populate `previous` and `personalBest` on the next workout artifact.',
         'Call this for EVERY exercise you intend to include in a workout BEFORE emitting the artifact, so the user sees "Last 60×8 @ RPE 8" context and the renderer can highlight new PRs.',
-        'Returns the personal best, the last few sessions with all sets, average RPE, notes/comments, failures, partial reps, and an estimated 1RM. Read notes and failed sets before progressing weight; pain/form-breakdown notes should trigger substitutions or deloads.',
+        'Returns the personal best, the last few sessions with all sets, set durations, rest periods after sets, average RPE, notes/comments, failures, partial reps, and an estimated 1RM. Read timing, notes, and failed sets before progressing weight; rushed/overlong rests, pain/form-breakdown notes, and repeated high-RPE failures should affect advice.',
         'Returns `found: false` if the exercise has no recorded history — that\'s a "first time doing this" signal; pick a conservative starting weight (RPE 7).',
         'Exercise IDs are kebab-case slugs ("bench-press", "rdl", "ohp"). Use the same slug here that you put in the artifact\'s `exercises[].id` field.',
     ].join(' '),
@@ -73,7 +74,7 @@ export const getRecentWorkoutsTool: ToolDef = {
     id: GET_RECENT_WORKOUTS_TOOL_ID,
     name: GET_RECENT_WORKOUTS_TOOL_ID,
     description: [
-        'Return summaries of the user\'s most recent N completed workout sessions (title, date, duration, sets, tonnage, PR count).',
+        'Return summaries of the user\'s most recent N completed workout sessions (title, date, duration, sets, tonnage, PR count, set/rest timing).',
         'Useful for "what did I do this week", deload-detection ("3 sessions in a row with RPE > 8.5"), or to avoid scheduling the same muscle group two days in a row.',
         'Includes aggregate muscle groups and compact per-exercise summaries so you can rotate push/pull/legs/upper/lower from what the user actually trained recently.',
         'Does NOT return the full session log — call this for a quick overview, then optionally call GetExerciseHistory for deep dives per movement.',
@@ -135,12 +136,25 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
                 distanceM: set.actualDistanceM,
                 rpe: set.actualRpe,
                 rir: set.actualRir,
+                startedAt: set.startedAt,
+                completedAt: set.completedAt,
+                setDurationSec: loggedSetDurationSec(set),
                 failed: set.failed,
                 partialReps: set.partialReps,
                 notes: set.notes,
             })),
             totalVolumeKg: s.totalVolumeKg,
             rpeAvg: s.rpeAvg,
+            avgSetDurationSec: s.avgSetDurationSec,
+            avgRestSec: s.avgRestSec,
+            restEvents: s.restEvents?.map((event) => ({
+                setIndex: event.setIndex,
+                plannedSec: event.plannedSec,
+                elapsedSec: event.elapsedSec,
+                status: event.status,
+                startedAt: event.startedAt,
+                endedAt: event.endedAt,
+            })) ?? [],
         }
     })
 
@@ -194,6 +208,12 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
         const log = readSessionLog(slug)
         if (!log) return null
         const muscleGroups = [...new Set(log.exercises.flatMap((e) => e.muscleGroups))]
+        const restEvents = log.restEvents ?? []
+        const restSummary = log.restSummary ?? {
+            avgRestSec: undefined,
+            plannedAvgRestSec: undefined,
+            skippedCount: 0,
+        }
         return {
             slug,
             sessionId: log.sessionId,
@@ -206,6 +226,9 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
             setsPlanned: log.totalSetsPlanned,
             setsFailed: log.totalSetsFailed,
             volumeKg: log.totalVolumeKg,
+            avgRestSec: restSummary.avgRestSec,
+            plannedAvgRestSec: restSummary.plannedAvgRestSec,
+            shortenedRestCount: restSummary.skippedCount,
             prCount: log.prs.length,
             program: log.program,
             difficulty: log.difficulty,
@@ -223,7 +246,12 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
                     durationSec: exercise.bestSet.actualDurationSec,
                     distanceM: exercise.bestSet.actualDistanceM,
                     rpe: exercise.bestSet.actualRpe,
+                    setDurationSec: loggedSetDurationSec(exercise.bestSet),
                 } : null,
+                avgSetDurationSec: averageDuration(exercise.loggedSets.map(loggedSetDurationSec)),
+                avgRestSec: averageDuration(restEvents
+                    .filter((event) => event.exerciseId === exercise.id)
+                    .map((event) => event.elapsedSec)),
                 notes: exercise.loggedSets
                     .map((set) => set.notes)
                     .filter((note): note is string => typeof note === 'string' && note.trim().length > 0)
@@ -238,4 +266,10 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
             count: sessions.length,
         },
     }
+}
+
+function averageDuration(values: Array<number | undefined>): number | undefined {
+    const nums = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
+    if (nums.length === 0) return undefined
+    return Math.round((nums.reduce((sum, value) => sum + value, 0) / nums.length) * 10) / 10
 }

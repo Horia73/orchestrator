@@ -210,7 +210,7 @@ function FormCuesPopover({
                 {cues.length > 0 ? (
                     <>
                         <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55">
-                            Form cues
+                            Indicații de execuție
                         </div>
                         <ul className="flex flex-col gap-1.5 text-foreground/85">
                             {cues.map((c, i) => (
@@ -253,7 +253,7 @@ function FormCuesPopover({
                             cues.length > 0 && "mt-3",
                         )}>
                             <Replace className="size-3" strokeWidth={2} aria-hidden />
-                            Alternatives
+                            Alternative
                         </div>
                         <ul className="flex flex-col gap-1 text-foreground/85">
                             {alternatives!.map((a, i) => (
@@ -277,7 +277,7 @@ function FormCuesPopover({
                             cues.length === 0 && !hasAlternatives && "mt-0",
                         )}
                     >
-                        Watch demo →
+                        Demo video →
                     </a>
                 ) : null}
             </div>
