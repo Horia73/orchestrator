@@ -4,7 +4,9 @@ import path from 'path'
 
 import db from '@/lib/db'
 import { ARTIFACTS_DIR } from '@/lib/config'
+import { emitAppEvent } from '@/lib/events'
 import { type ArtifactRow, type ArtifactDisplay } from './schema'
+import { validateArtifactContent } from './validation'
 
 // ---------------------------------------------------------------------------
 // Artifact persistence layer.
@@ -126,6 +128,11 @@ function artifactFilePath(args: InsertArgs, version: number): string {
  * collide on the same version number.
  */
 export function insertArtifact(args: InsertArgs): ArtifactRow {
+    const validation = validateArtifactContent(args.type, args.content)
+    if (!validation.ok) {
+        throw new Error(`Invalid artifact "${args.identifier}": ${validation.error}`)
+    }
+
     const id = randomUUID()
     const createdAt = Date.now()
 
@@ -175,6 +182,14 @@ export function insertArtifact(args: InsertArgs): ArtifactRow {
             createdAt,
         }
     })()
+
+    emitAppEvent({
+        type: 'artifacts.changed',
+        conversationId: inserted.conversationId,
+        messageId: inserted.messageId,
+        artifactId: inserted.id,
+        action: 'created',
+    })
 
     return inserted
 }
@@ -304,6 +319,11 @@ export function copyArtifactsForMessageMap(args: {
             )
             .all(args.fromConversationId, fromMessageId) as RawArtifactRow[]
         for (const row of rows.map(parseRow)) {
+            const validation = validateArtifactContent(row.type, row.content)
+            if (!validation.ok) {
+                console.warn(`Skipping invalid artifact "${row.identifier}" during copy: ${validation.error}`)
+                continue
+            }
             copied.push(insertArtifact({
                 conversationId: args.toConversationId,
                 messageId: toMessageId,

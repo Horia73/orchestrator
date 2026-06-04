@@ -74,6 +74,11 @@ const minimal = {
     }
 }
 
+{
+    const r = parseWorkoutArtifact(JSON.stringify({ ...minimal, difficulty: 'beginner' }))
+    check('schema: difficulty alias beginner normalizes to usor', r.ok && r.value.difficulty === 'usor', r)
+}
+
 // --- schema: rich valid (every exercise kind) ------------------------------
 
 const rich = {

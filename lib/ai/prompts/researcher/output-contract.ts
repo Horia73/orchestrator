@@ -24,6 +24,8 @@ Whenever you name a specific buyable product or component as an option or recomm
 - image link if available;
 - notes and restrictions.
 
+Double-check every price against the direct product/listing page before returning it — do not trust an aggregator snippet, a cached figure, or your own memory as the final number, and record the date you checked. A price the parent will quote to the user that turns out wrong is worse than a clearly flagged unknown.
+
 If a product has no public web price (bespoke, industrial, used-only, made-to-order), return a clearly-labeled estimate with a range and its basis (secondary sources, community/forum figures, or your own knowledge) rather than omitting price — never return a named product with no price signal at all. If you cannot find a real product page, say so instead of linking the brand homepage as a substitute.
 
 If the user asked for completeness, include all viable verified options that fit the constraints, grouped if necessary. Do not hide additional matches behind "and more" unless you also state how many and why they were not fully expanded.

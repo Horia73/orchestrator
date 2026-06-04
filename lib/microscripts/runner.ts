@@ -1028,6 +1028,7 @@ function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyIn
         'You were woken by a Microscript after a deterministic runtime condition matched.',
         'Use only the context supplied in this prompt plus read-only/context tools exposed to this wake. Do not assume you can perform source-side actions.',
         'If the payload asks for planning or judgement that depends on user history, durable memory, local subsystems such as workouts, or connected source reads, activate exactly the relevant capability first and use its read-only tools before deciding. Do not activate broad unrelated capabilities.',
+        'If you intend to notify with a workout/gym/antrenament card, call ActivateIntegrationTools("workout") first, read the loaded workout doctrine, and use GetExerciseHistory/ListExerciseHistory/GetRecentWorkouts as relevant before emitting application/vnd.ant.workout. If the workout doctrine is not loaded, notify with markdown instead of a workout artifact.',
         'Do not perform source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions from this wake; notify or return an internal summary instead.',
         allowNotifyInbox
             ? 'If the user should be interrupted, call notify_inbox with a specific title and concise body. If the item is not worth interrupting the user about, do not call notify_inbox; return a short internal summary.'

@@ -324,6 +324,35 @@ export interface LibraryHit {
   score: number
 }
 
+export interface VectorSearchOptions {
+  /** Minimum cosine to keep a hit (default 0 — keep everything ranked). */
+  threshold?: number
+  /** Absolute paths to drop from the results (e.g. the query asset itself). */
+  excludePaths?: Set<string>
+}
+
+function scoreLibraryRows(
+  vec: Float32Array,
+  rows: VectorRow[],
+  limit: number,
+  opts: VectorSearchOptions = {}
+): LibraryHit[] {
+  const threshold = opts.threshold ?? 0
+  const exclude = opts.excludePaths
+  const scored: LibraryHit[] = []
+  for (const r of rows) {
+    if (r.vector.length !== vec.length) continue
+    if (exclude && exclude.has(r.path)) continue
+    let dot = 0
+    for (let i = 0; i < vec.length; i++) dot += vec[i] * r.vector[i]
+    if (dot >= threshold) {
+      scored.push({ displayPath: r.displayPath, path: r.path, kind: r.kind, mimeType: r.mimeType, score: dot })
+    }
+  }
+  scored.sort((a, b) => b.score - a.score)
+  return scored.slice(0, Math.max(1, limit))
+}
+
 export async function searchLibrary(
   query: string,
   limit: number
@@ -338,15 +367,25 @@ export async function searchLibrary(
   const qVec = await embedQuery(query)
   if (!qVec) return []
   const rows = loadVectors(getEmbeddingModel(), getEmbeddingDim())
-  const scored: LibraryHit[] = []
-  for (const r of rows) {
-    if (r.vector.length !== qVec.length) continue
-    let dot = 0
-    for (let i = 0; i < qVec.length; i++) dot += qVec[i] * r.vector[i]
-    scored.push({ displayPath: r.displayPath, path: r.path, kind: r.kind, mimeType: r.mimeType, score: dot })
-  }
-  scored.sort((a, b) => b.score - a.score)
-  return scored.slice(0, Math.max(1, limit))
+  return scoreLibraryRows(qVec, rows, limit)
+}
+
+/**
+ * Search the Library with a PRE-COMPUTED query vector (e.g. the embedding of an
+ * attached image), so a freshly-uploaded image can surface similar files the
+ * user already has. Unlike searchLibrary, this does NOT block on a full index
+ * sync — it self-heals in the background and searches whatever is indexed, so it
+ * stays cheap on the per-turn hot path. Multimodal-only; [] otherwise.
+ */
+export async function searchLibraryByVector(
+  vec: Float32Array,
+  limit: number,
+  opts: VectorSearchOptions = {}
+): Promise<LibraryHit[]> {
+  if (!isActiveModelMultimodal()) return []
+  kickLibrarySync() // background self-heal; never block the hot path on embedding
+  const rows = loadVectors(getEmbeddingModel(), getEmbeddingDim())
+  return scoreLibraryRows(vec, rows, limit, opts)
 }
 
 export interface LibraryStatus {

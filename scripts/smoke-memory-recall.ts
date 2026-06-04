@@ -180,6 +180,32 @@ async function main(): Promise<void> {
   check("per-turn recall empty with no key (fail-open)", (await recall.buildRecalledMemoryContext("a reasonably long query about grapes")) === "")
   check("per-turn recall empty for trivial query", (await recall.buildRecalledMemoryContext("hi")) === "")
   check("per-turn recall empty for null query", (await recall.buildRecalledMemoryContext(null)) === "")
+  check(
+    "per-turn recall empty with an attachment but no key (fail-open)",
+    (
+      await recall.getRecalledMemory("a reasonably long query about grapes", [
+        { path: "/nonexistent.png", mimeType: "image/png" },
+      ])
+    ).block === ""
+  )
+
+  // --- formatFilesBlock: similar-files block from an attachment -------------
+  const fblock = recall.formatFilesBlock([
+    {
+      id: "file:/x/diagram.png",
+      source: "files/diagram.png",
+      title: "files/diagram.png",
+      text: "similar image you already have",
+      score: 0.82,
+      kind: "file",
+    },
+  ])
+  check("formatFilesBlock wraps in <similar_files>", fblock.startsWith("<similar_files>"))
+  check(
+    "formatFilesBlock includes the file path + relevance",
+    fblock.includes("files/diagram.png") && fblock.includes("relevance 0.82")
+  )
+  check("formatFilesBlock empty for no hits", recall.formatFilesBlock([]) === "")
 
   // --- selectDiverse: near-duplicate suppression --------------------------
   // Three candidates: A and B are near-identical (dot ~0.999), C is orthogonal.
@@ -240,6 +266,10 @@ async function main(): Promise<void> {
   // with no key nothing is embedded, so indexedActive stays 0.
   check("library: multimodal-capable model, nothing indexed without key", libStatus.multimodal === true && libStatus.indexedActive === 0)
   check("library: searchLibrary empty without multimodal", (await library.searchLibrary("a red car", 5)).length === 0)
+  check(
+    "library: searchLibraryByVector empty on empty index",
+    (await library.searchLibraryByVector(unit([1, 0, 0, 0]), 3)).length === 0
+  )
   const libSync = await library.syncLibraryIndex()
   check("library: sync is a no-op without multimodal", libSync.indexed === 0 && libSync.failed === 0)
 

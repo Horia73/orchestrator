@@ -14,7 +14,7 @@ For \`application/vnd.ant.workout\`, the artifact body is a JSON object with thi
   subtitle?: string;                       // ≤280 chars
   program?: { name: string; week?: number; day?: number; sessionN?: number };
   estimatedDurationMin?: number;           // total session time including warmup + rest + cooldown
-  difficulty?: 'usor' | 'mediu' | 'greu' | 'brutal';
+  difficulty?: 'usor' | 'mediu' | 'greu' | 'brutal';  // use ONLY these canonical labels; never emit beginner/intermediate/advanced/easy/hard
   units: 'kg' | 'lb';                      // default 'kg' — ALL weights/distances in this artifact use these units
   barWeightKg?: number;                    // bar weight (default 20)
   plateIncrements?: number[];              // plates the user owns, descending — used by plate calculator
@@ -91,7 +91,7 @@ Rules:
 - For \`weighted\` sets, EVERY planned set MUST have weightKg or weightPct — the parser rejects sets with neither.
 - Use \`bodyweight\` (not \`weighted\` with weightKg: 0) for moves where load is just your body — the renderer hides the weight column.
 - For HIIT / Tabata / EMOM emit one \`interval\` exercise with one planned set whose \`rounds\` × \`workSec\` × \`intraRestSec\` describes the protocol. Tabata: \`{ rounds: 8, workSec: 20, intraRestSec: 10 }\`.
-- Use Romanian-friendly difficulty labels (\`usor\`/\`mediu\`/\`greu\`/\`brutal\`); the rest of the UI labels are localized by the renderer.
+- Use Romanian-friendly difficulty labels (\`usor\`/\`mediu\`/\`greu\`/\`brutal\`) exactly. Never emit English values like \`beginner\`, \`intermediate\`, \`advanced\`, \`easy\`, or \`hard\`; the rest of the UI labels are localized by the renderer.
 - Always include \`identifier\` and \`title\` on the \`<artifact>\` tag. **Default to \`display="fullscreen"\`** — workouts are 30-90 minute sessions the user wants to live inside without the chat scrolling around them. The chat shows a compact launch card; clicking opens the dedicated workout surface with rest timer, set check-ins, weight pickers, and live progress stats. Use \`display="panel"\` only if the user explicitly asks for inline/sidebar view.
 - The renderer surfaces a glossary popover (?) next to every jargon term it shows (RPE, RIR, AMRAP, top set, superset, etc.) so you can use the precise terminology without worrying about the user being lost — short explanations show on hover/tap.
 - Set \`defaultRestSec\` on each exercise (or per-set \`restSec\` for top sets / drops) so the rest timer activates automatically after each check-in. 90s for hypertrophy accessory work, 150-180s for heavy compound top sets, 60s for circuits, 0s for drops.

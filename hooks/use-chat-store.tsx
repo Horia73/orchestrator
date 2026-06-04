@@ -2119,6 +2119,22 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   }
                 } else if (data.type === "artifact_error") {
                   console.warn("Artifact parse error:", data.message)
+                  if (
+                    typeof window !== "undefined" &&
+                    typeof data.clientToken === "string"
+                  ) {
+                    window.dispatchEvent(
+                      new CustomEvent("orch:artifact-error", {
+                        detail: {
+                          clientToken: data.clientToken,
+                          message:
+                            typeof data.message === "string"
+                              ? data.message
+                              : undefined,
+                        },
+                      })
+                    )
+                  }
                 } else if (data.type === "done") {
                   // Stream complete — build the final message from accumulated data
                   // (server already saved to DB, so this is just for local state)

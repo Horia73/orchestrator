@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import type { ArtifactOpenAttrs, ArtifactRow } from "@/lib/artifacts/schema"
+import { useAppEvent } from "@/hooks/use-app-events"
 
 /**
  * Draft artifact — chunks accumulated client-side while the server is still
@@ -139,6 +140,13 @@ export function ConversationArtifactsProvider({
 
     React.useEffect(() => { void refresh() }, [refresh])
 
+    useAppEvent(["artifacts.changed"], (event) => {
+        if (event.type !== "artifacts.changed") return
+        if (!conversationId || event.conversationId !== conversationId) return
+        if (document.visibilityState !== "visible") return
+        void refresh()
+    })
+
     React.useEffect(() => {
         return () => refreshAbortRef.current?.abort()
     }, [])
@@ -150,6 +158,9 @@ export function ConversationArtifactsProvider({
     //     can render the partial content (e.g. half of a Mermaid diagram).
     //   - `orch:artifact` (kept name for backcompat) finalises: the server-
     //     persisted row replaces the draft and lives in `all`.
+    //   - `orch:artifact-error` drops the draft when the server rejects the
+    //     artifact body, so the message renderer can show a stable failure
+    //     state instead of an infinite "Building…" placeholder.
     React.useEffect(() => {
         if (typeof window === "undefined") return
 
@@ -210,13 +221,26 @@ export function ConversationArtifactsProvider({
             })
         }
 
+        function onError(e: Event) {
+            const detail = (e as CustomEvent<{ clientToken?: string; message?: string }>).detail
+            if (!detail?.clientToken) return
+            setDrafts(prev => {
+                if (!prev.has(detail.clientToken!)) return prev
+                const next = new Map(prev)
+                next.delete(detail.clientToken!)
+                return next
+            })
+        }
+
         window.addEventListener("orch:artifact", onFinal)
         window.addEventListener("orch:artifact-start", onStart)
         window.addEventListener("orch:artifact-chunk", onChunk)
+        window.addEventListener("orch:artifact-error", onError)
         return () => {
             window.removeEventListener("orch:artifact", onFinal)
             window.removeEventListener("orch:artifact-start", onStart)
             window.removeEventListener("orch:artifact-chunk", onChunk)
+            window.removeEventListener("orch:artifact-error", onError)
         }
     }, [conversationId])
 

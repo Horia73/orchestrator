@@ -63,7 +63,24 @@ export type WorkoutUnits = z.infer<typeof WorkoutUnitsSchema>
  * Difficulty hint surfaced in the header. Subjective — set by the model
  * based on intensity / volume relative to the user's logged baseline.
  */
-export const WorkoutDifficultySchema = z.enum(['usor', 'mediu', 'greu', 'brutal'])
+const WORKOUT_DIFFICULTY_ALIASES: Record<string, 'usor' | 'mediu' | 'greu' | 'brutal'> = {
+    beginner: 'usor',
+    easy: 'usor',
+    light: 'usor',
+    moderate: 'mediu',
+    medium: 'mediu',
+    intermediate: 'mediu',
+    hard: 'greu',
+    advanced: 'greu',
+    intense: 'greu',
+    brutal: 'brutal',
+}
+
+export const WorkoutDifficultySchema = z.preprocess((value) => {
+    if (typeof value !== 'string') return value
+    const normalized = value.trim().toLowerCase()
+    return WORKOUT_DIFFICULTY_ALIASES[normalized] ?? normalized
+}, z.enum(['usor', 'mediu', 'greu', 'brutal']))
 export type WorkoutDifficulty = z.infer<typeof WorkoutDifficultySchema>
 
 /**

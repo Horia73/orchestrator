@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Clock3, Dumbbell, ExternalLink, ListChecks, Maximize2 } from "lucide-react"
+import { AlertTriangle, Clock3, Dumbbell, ExternalLink, ListChecks, Maximize2 } from "lucide-react"
 
 import type { ArtifactOpenAttrs, ArtifactRow } from "@/lib/artifacts/schema"
 import { ArtifactParser } from "@/lib/artifacts/parser"
@@ -43,8 +43,12 @@ interface RenderArgs {
  * something happening.
  */
 export function RenderMessageContent({ content, messageId, onExpand, suppressArtifactTypes }: RenderArgs) {
-    const { byMessage } = useConversationArtifacts()
+    const { byMessage, draftsByMessage, loading: artifactsLoading } = useConversationArtifacts()
     const rowsForMessage = React.useMemo(() => byMessage.get(messageId) ?? [], [byMessage, messageId])
+    const draftsForMessage = React.useMemo(
+        () => draftsByMessage.get(messageId) ?? [],
+        [draftsByMessage, messageId]
+    )
     const suppressedTypes = React.useMemo(
         () => new Set(suppressArtifactTypes ?? []),
         [suppressArtifactTypes]
@@ -97,6 +101,9 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                 // "building map / weather" placeholder is much better UX while
                 // the model fills in the body.
                 const streaming = !seg.closed && !realRow
+                const hasDraft = !realRow && draftsForMessage.some(
+                    draft => draft.attrs.identifier === seg.attrs.identifier
+                )
                 const isPlaceholderTarget = streaming && PLACEHOLDER_TYPES.has(seg.attrs.type)
                 if (isPlaceholderTarget) {
                     return (
@@ -127,10 +134,19 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                     createdAt: 0,
                 }
                 const renderTarget = decideRowRenderTarget(artifact)
-                if (renderTarget !== "inline" && !realRow) {
+                if (seg.closed && !realRow && (hasDraft || artifactsLoading)) {
                     return (
                         <StreamingPlaceholder
-                            key={`p-${i}-${seg.attrs.identifier}`}
+                            key={`w-${i}-${seg.attrs.identifier}`}
+                            type={seg.attrs.type}
+                            title={seg.attrs.title}
+                        />
+                    )
+                }
+                if (renderTarget !== "inline" && !realRow) {
+                    return (
+                        <UnavailableArtifactNotice
+                            key={`u-${i}-${seg.attrs.identifier}`}
                             type={seg.attrs.type}
                             title={seg.attrs.title}
                         />
@@ -158,6 +174,20 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                 return <ArtifactInline key={`a-${i}-${artifact.id}`} artifact={artifact} onExpand={onExpand} />
             })}
         </>
+    )
+}
+
+function UnavailableArtifactNotice({ title, type }: { title: string; type: string }) {
+    return (
+        <div className="my-2 flex items-start gap-3 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-950 dark:text-amber-100">
+            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+            <div className="min-w-0 flex-1">
+                <div className="truncate font-medium">{title || "Artifact"}</div>
+                <div className="mt-1 text-[12px] leading-5 opacity-85">
+                    Artifactul nu a putut fi afișat. Conținutul generat nu a trecut validarea pentru {prettyArtifactType(type)}.
+                </div>
+            </div>
+        </div>
     )
 }
 
@@ -314,6 +344,16 @@ const STREAMING_KIND_LABEL: Record<string, string> = {
     'application/vnd.ant.weather': 'weather',
     'application/vnd.ant.recipe': 'recipe',
     'application/vnd.ant.workout': 'workout',
+}
+
+function prettyArtifactType(type: string): string {
+    switch (type) {
+        case 'application/vnd.ant.map': return 'hartă'
+        case 'application/vnd.ant.weather': return 'meteo'
+        case 'application/vnd.ant.recipe': return 'rețetă'
+        case 'application/vnd.ant.workout': return 'workout'
+        default: return type
+    }
 }
 
 function streamingLanguageFor(attrs: ArtifactOpenAttrs): string | null {

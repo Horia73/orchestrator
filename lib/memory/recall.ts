@@ -18,6 +18,11 @@
 //    coverage gate (shouldSuppressByCoverage) drops the whole block when a broad,
 //    multi-intent message is matched only by a small tangential slice of memory.
 //    Both are silent-pass concerns; the explicit memory_search tool stays wide.
+//  - When the model is multimodal (Gemini) and the turn carries an image/PDF, the
+//    attachment ALSO drives recall (recallByAsset): it embeds into the shared
+//    text+image space to surface (a) older text notes it resembles cross-modally
+//    and (b) similar files already in the Library. Asset hits bypass the coverage
+//    gate (an attachment is explicit intent) and are unaffected on text models.
 //  - Everything is fail-open: disabled, no key, timeout, or error => "".
 
 import fs from "fs"
@@ -28,13 +33,16 @@ import type { MemoryRecallHit } from "@/lib/types"
 import { AGENT_WORKSPACE_DIR, getConfiguredTimezone, getMemoryEmbeddingSettings } from "@/lib/config"
 import { dateStampInTimezone } from "@/lib/timezone"
 import {
+  embedAsset,
   embedDocuments,
   embedQueries,
   embedQuery,
   embeddingsAvailable,
   getEmbeddingDim,
   getEmbeddingModel,
+  isActiveModelMultimodal,
 } from "./embeddings"
+import { searchLibraryByVector } from "./library"
 import {
   ftsSearch,
   generationFresh,
@@ -139,6 +147,40 @@ const COVERAGE_FLOOR = clampNumber(
 )
 const SEGMENT_MIN_CHARS = 12
 const MAX_SEGMENTS = 12
+
+// Multimodal recall (Gemini-only): when the user attaches an image/PDF, embed it
+// into the shared text+image vector space and surface (a) older text memories it
+// resembles and (b) similar files the user already has in their Library.
+//   - The cross-modal bar (image -> TEXT note) is necessarily LOWER than the
+//     text<->text threshold: image/text cosine sits lower even for true matches,
+//     so reusing the text threshold would silence the feature. Calibrate via env.
+//   - The file bar (image -> IMAGE/PDF) is same-modality, so it can be stricter.
+const IMG_MEMORY_THRESHOLD = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_IMG_THRESHOLD,
+  0.5,
+  0,
+  1
+)
+const FILE_THRESHOLD = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_FILE_THRESHOLD,
+  0.6,
+  0,
+  1
+)
+const IMG_MEMORY_TOPK = clampInt(process.env.ORCHESTRATOR_MEMORY_RECALL_IMG_TOPK, 3, 1, 10)
+const FILE_TOPK = clampInt(process.env.ORCHESTRATOR_MEMORY_RECALL_FILE_TOPK, 3, 1, 10)
+// Bigger budget when an asset is in play: embedding an image is one extra,
+// heavier API call than a text query, so the text-only 1.5s would too often
+// time the whole thing out (fail-open => the asset recall silently never fires).
+const RECALL_ASSET_TIMEOUT_MS = clampInt(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_ASSET_TIMEOUT_MS,
+  4000,
+  1500, // never below the text-only RECALL_TIMEOUT_MS
+  15_000
+)
+const MAX_RECALL_ASSET_BYTES = 20 * 1024 * 1024 // matches Gemini's per-item cap
+// What we can embed cross-modally (matches the Library's supported set).
+const RECALL_ASSET_MIMES = new Set(["image/png", "image/jpeg", "application/pdf"])
 
 const RECALL_TIMEOUT_MS = 1500
 const MIN_QUERY_CHARS = 8
@@ -430,6 +472,9 @@ export interface MemoryHit {
   title: string
   text: string
   score: number
+  /** "note" = a text memory chunk (default); "file" = a similar Library asset
+   *  surfaced via an attached image/PDF. */
+  kind?: "note" | "file"
 }
 
 function dot(a: Float32Array, b: Float32Array): number {
@@ -621,19 +666,20 @@ function clip(text: string, max: number): string {
   return `${single.slice(0, max - 1).trimEnd()}…`
 }
 
-function withTimeout<T>(p: Promise<T>, ms: number): Promise<T> {
-  return new Promise<T>((resolve, reject) => {
-    const timer = setTimeout(() => reject(new Error("recall timeout")), ms)
-    p.then(
-      (v) => {
-        clearTimeout(timer)
-        resolve(v)
-      },
-      (e) => {
-        clearTimeout(timer)
-        reject(e)
-      }
-    )
+// Resolve to `fallback` on timeout OR rejection (never throws), so one slow/failed
+// recall branch (e.g. a heavy image embed) cannot take down a sibling branch that
+// already succeeded. Each branch gets its own budget.
+function withSoftTimeout<T>(p: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return new Promise<T>((resolve) => {
+    let settled = false
+    const done = (v: T): void => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      resolve(v)
+    }
+    const timer = setTimeout(() => done(fallback), ms)
+    p.then(done, () => done(fallback))
   })
 }
 
@@ -651,6 +697,20 @@ export function formatRecallBlock(hits: MemoryHit[]): string {
   ].join("\n")
 }
 
+/** Prompt block for files the user already has that resemble an attached asset. */
+export function formatFilesBlock(hits: MemoryHit[]): string {
+  if (hits.length === 0) return ""
+  const lines = hits.map(
+    (h) => `- [${h.title}] ${clip(h.text, MAX_HIT_CHARS)} (relevance ${h.score.toFixed(2)})`
+  )
+  return [
+    "<similar_files>",
+    "Files you ALREADY have that look similar to what was just attached, matched by visual/document similarity to the attachment. Use them to reuse or reference existing material instead of treating the attachment as brand new. Best-effort hints — verify before relying, and mention only if useful.",
+    ...lines,
+    "</similar_files>",
+  ].join("\n")
+}
+
 export interface RecalledMemory {
   /** Prompt block to inject into the user message (empty when nothing recalled). */
   block: string
@@ -658,35 +718,164 @@ export interface RecalledMemory {
   hits: MemoryHit[]
 }
 
+/** An attachment on the current user turn, resolved to bytes on disk. */
+export interface RecallAttachmentInput {
+  /** Absolute path to the file bytes. */
+  path: string
+  /** MIME type (used to gate to embeddable kinds). */
+  mimeType: string
+}
+
+/** First attachment we can embed cross-modally, or null. */
+function pickRecallAsset(
+  attachments: RecallAttachmentInput[] | undefined
+): RecallAttachmentInput | null {
+  if (!attachments) return null
+  for (const att of attachments) {
+    if (att && typeof att.path === "string" && RECALL_ASSET_MIMES.has(att.mimeType)) {
+      return att
+    }
+  }
+  return null
+}
+
+function readAssetBytes(absPath: string): Buffer | null {
+  try {
+    const stat = fs.statSync(absPath)
+    if (!stat.isFile() || stat.size <= 0 || stat.size > MAX_RECALL_ASSET_BYTES) return null
+    return fs.readFileSync(absPath)
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Recall driven by an attached image/PDF (Gemini-only). Embeds the asset ONCE
+ * into the shared vector space, then surfaces (a) older TEXT memories it
+ * resembles cross-modally and (b) similar files already in the Library. Returns
+ * empty on any problem (fail-open).
+ */
+async function recallByAsset(
+  asset: RecallAttachmentInput,
+  exclude: Set<string>
+): Promise<{ notes: MemoryHit[]; files: MemoryHit[] }> {
+  const empty = { notes: [] as MemoryHit[], files: [] as MemoryHit[] }
+  try {
+    if (!isActiveModelMultimodal()) return empty
+    const data = readAssetBytes(asset.path)
+    if (!data) return empty
+    const vec = await embedAsset(data, asset.mimeType)
+    if (!vec) return empty
+
+    // (a) image -> older text memories (cross-modal, lower bar than text<->text).
+    const rows = loadVectorRows(getEmbeddingModel(), getEmbeddingDim())
+    const scored: MemoryHit[] = []
+    const vectorById = new Map<string, Float32Array>()
+    for (const r of rows) {
+      if (exclude.has(r.source)) continue
+      if (r.vector.length !== vec.length) continue
+      const score = dot(vec, r.vector)
+      if (score >= IMG_MEMORY_THRESHOLD) {
+        scored.push({ id: r.id, source: r.source, title: r.title, text: r.text, score, kind: "note" })
+        vectorById.set(r.id, r.vector)
+      }
+    }
+    const notes = selectDiverse(scored, vectorById, IMG_MEMORY_TOPK).map((h) => ({
+      ...h,
+      title: displayMemoryTitle(h.source, h.title),
+    }))
+
+    // (b) image -> similar files the user already has (same-modality, stricter).
+    const libHits = await searchLibraryByVector(vec, FILE_TOPK, {
+      threshold: FILE_THRESHOLD,
+      excludePaths: new Set([asset.path]),
+    })
+    const files: MemoryHit[] = libHits.map((f) => ({
+      id: `file:${f.path}`,
+      source: f.displayPath,
+      title: f.displayPath,
+      text: `similar ${f.kind === "doc" ? "document" : "image"} you already have`,
+      score: f.score,
+      kind: "file",
+    }))
+
+    return { notes, files }
+  } catch {
+    return empty // fail-open
+  }
+}
+
+/** Text hits first, then asset-driven notes filling the remaining slots (id-deduped). */
+function mergeNoteHits(primary: MemoryHit[], secondary: MemoryHit[], topK: number): MemoryHit[] {
+  const out = [...primary]
+  const seen = new Set(primary.map((h) => h.id))
+  for (const h of secondary) {
+    if (out.length >= topK) break
+    if (seen.has(h.id)) continue
+    seen.add(h.id)
+    out.push(h)
+  }
+  return out.slice(0, topK)
+}
+
 /**
  * Compute the automatic per-turn recall for the latest user message. Returns an
  * empty block + no hits on disabled / no key / trivial query / timeout / no
  * match / error (fail-open — the turn proceeds as if recall did not exist).
+ *
+ * When the active embedding model is multimodal and the turn carries an
+ * embeddable attachment (image/PDF), the asset also drives recall: similar older
+ * text notes (folded into the recalled_memory block) and similar existing files
+ * (a separate similar_files block). The text-query coverage gate never suppresses
+ * asset-driven hits — an attachment is explicit, strong intent.
  */
 export async function getRecalledMemory(
-  query: string | null | undefined
+  query: string | null | undefined,
+  attachments?: RecallAttachmentInput[]
 ): Promise<RecalledMemory> {
   const empty: RecalledMemory = { block: "", hits: [] }
   try {
     if (!isRecallEnabled()) return empty
-    const q = (query ?? "").trim()
-    if (q.length < MIN_QUERY_CHARS) return empty
     if (!embeddingsAvailable()) return empty
+    const q = (query ?? "").trim()
+    const asset = pickRecallAsset(attachments)
+    // Nothing to go on: trivial text AND no embeddable attachment.
+    if (q.length < MIN_QUERY_CHARS && !asset) return empty
 
     // Self-heal the index in the background; never block the turn on indexing.
     kickMemoryIndexSync()
 
-    const hits = await withTimeout(
-      searchMemory(q, {
-        topK: RECALL_TOP_K,
-        threshold: getRecallThreshold(),
-        excludeSources: inContextSources(),
-        mode: "semantic",
-        coverageGate: true,
+    const exclude = inContextSources()
+    const textPromise: Promise<MemoryHit[]> =
+      q.length >= MIN_QUERY_CHARS
+        ? searchMemory(q, {
+            topK: RECALL_TOP_K,
+            threshold: getRecallThreshold(),
+            excludeSources: exclude,
+            mode: "semantic",
+            coverageGate: true,
+          })
+        : Promise.resolve([])
+    const assetPromise = asset
+      ? recallByAsset(asset, exclude)
+      : Promise.resolve({ notes: [] as MemoryHit[], files: [] as MemoryHit[] })
+
+    // Independent budgets: a slow/failed image embed must not lose text hits
+    // that already landed, and vice versa.
+    const [textHits, assetHits] = await Promise.all([
+      withSoftTimeout(textPromise, RECALL_TIMEOUT_MS, [] as MemoryHit[]),
+      withSoftTimeout(assetPromise, RECALL_ASSET_TIMEOUT_MS, {
+        notes: [] as MemoryHit[],
+        files: [] as MemoryHit[],
       }),
-      RECALL_TIMEOUT_MS
-    )
-    return { block: formatRecallBlock(hits), hits }
+    ])
+
+    const noteHits = mergeNoteHits(textHits, assetHits.notes, RECALL_TOP_K)
+    const fileHits = assetHits.files
+    const block = [formatRecallBlock(noteHits), formatFilesBlock(fileHits)]
+      .filter(Boolean)
+      .join("\n")
+    return { block, hits: [...noteHits, ...fileHits] }
   } catch {
     return empty // fail-open
   }

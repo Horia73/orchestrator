@@ -40,6 +40,7 @@ export type AppEvent =
     | { type: 'config.updated'; at: number }
     | { type: 'settings.changed'; at: number; reason?: string }
     | { type: 'inbox.changed'; at: number; conversationId?: string; action?: 'created' | 'read' | 'deleted' | 'changed' }
+    | { type: 'artifacts.changed'; at: number; conversationId?: string; messageId?: string; artifactId?: string; action?: 'created' | 'deleted' | 'changed' }
     | { type: 'scheduled_tasks.changed'; at: number; taskId?: string; reason?: string }
     | { type: 'task_runs.changed'; at: number; taskId?: string; runId?: string }
     // Smart Monitor — fired when a watch is created/updated/deleted/state-changed.

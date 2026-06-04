@@ -106,14 +106,15 @@ export const notifyInboxTool: ToolDef = {
         'Use `direct_action` for non-destructive housekeeping on the source item: gmail.mark_read/mark_unread/archive against a gmail messageId, or whatsapp.mark_chat_read/mark_chat_unread against a whatsapp chat_id. The source ids are available in the candidate context when the trigger came from a monitor watcher. Do not invent ids.',
         'Use direct_action only when the user has indicated (in memory, history, or this conversation) a preference for one-click housekeeping; otherwise leave it out and rely on the plain value reply, which routes back through the model. Direct actions skip all model-level reasoning, so they must be safe to perform without further confirmation.',
         'If the message contains obvious next decisions such as archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review first, include `actions` so the user does not have to type the same decision manually.',
-        'If the surfaced result is a rich compact artifact, you may include an <artifact> block in `body`. For large or mobile-first artifacts such as workouts, use display="fullscreen" and keep the prose body short; Inbox will show a launch card.',
+        'If the surfaced result is a rich compact artifact, you may include an <artifact> block in `body`. Strict JSON artifacts such as application/vnd.ant.workout and application/vnd.ant.recipe require their exact active doctrine first: call ActivateIntegrationTools("workout" or "recipe") and follow <active_capability_doctrines>. Do not invent simplified workout/recipe JSON. If the doctrine is not loaded, use ordinary markdown in the body instead of a strict artifact MIME type.',
+        'For large or mobile-first artifacts such as workouts, use display="fullscreen" and keep the prose body short; Inbox will show a launch card.',
         'Errors are surfaced automatically; you do not need to call this for failures.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
             title: { type: 'string', description: 'Short email-style subject for the Inbox item. Be specific, e.g. "WhatsApp: today\'s schedule changed" or "Garage door left open".' },
-            body: { type: 'string', description: 'The user-facing message shown in the Inbox (markdown ok), written to the user like an email — lead with the point, then as much useful detail as the content warrants (no length limit). Not a run log: no process narration, step-by-step reasoning, or internal bookkeeping. May include one artifact tag when the Inbox item needs a rich card or fullscreen launch surface.' },
+            body: { type: 'string', description: 'The user-facing message shown in the Inbox (markdown ok), written to the user like an email — lead with the point, then as much useful detail as the content warrants (no length limit). Not a run log: no process narration, step-by-step reasoning, or internal bookkeeping. May include one artifact tag when the Inbox item needs a rich card or fullscreen launch surface. For strict JSON artifact MIME types, emit the artifact only after the matching capability doctrine is loaded; otherwise write markdown.' },
             actions: {
                 type: 'array',
                 description: 'Optional quick-reply buttons shown under the Inbox message. Use for choices like archive/keep, summarize now/later, approve/skip. Max 8.',

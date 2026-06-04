@@ -89,6 +89,7 @@ import {
 import {
   buildRecallUiHits,
   getRecalledMemory,
+  type RecallAttachmentInput,
   type RecalledMemory,
 } from "@/lib/memory/recall"
 import {
@@ -445,10 +446,27 @@ export async function POST(request: Request) {
   // proceeds exactly as it did before this feature existed. See lib/memory.
   let recalledMemoryPromise: Promise<RecalledMemory> | null = null
   let recallNoteEmitted = false
+  // Resolve the turn's image/PDF attachments to on-disk paths so a multimodal
+  // embedding model can also drive recall from them (similar notes + files).
+  // Fail-open: an unresolvable/unsupported attachment is simply skipped.
+  const resolveRecallAttachments = (): RecallAttachmentInput[] => {
+    const atts = Array.isArray(latestUserMessage?.attachments)
+      ? latestUserMessage.attachments
+      : []
+    const out: RecallAttachmentInput[] = []
+    for (const att of atts) {
+      if (!att || (att.type !== "image" && att.type !== "pdf")) continue
+      const abs = resolveExistingUploadPath(att.id)
+      if (!abs) continue
+      out.push({ path: abs, mimeType: att.mimeType })
+    }
+    return out
+  }
   const getRecall = (): Promise<RecalledMemory> => {
     if (!recalledMemoryPromise) {
       recalledMemoryPromise = getRecalledMemory(
-        latestUserMessage?.content
+        latestUserMessage?.content,
+        resolveRecallAttachments()
       ).catch(() => ({ block: "", hits: [] }))
     }
     return recalledMemoryPromise
