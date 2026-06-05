@@ -36,7 +36,7 @@ export function AgentWorkspacePanel({
   run: AgentCallReasoningEntry
   childRun?: AgentCallReasoningEntry
   onClose: () => void
-  onAttachmentClick?: (attachment: Attachment) => void
+  onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
   const [selectedTool, setSelectedTool] =
     React.useState<SelectedAgentTool | null>(null)
@@ -275,7 +275,7 @@ function AgentRunPane({
   selectedArtifact?: ArtifactPayload | null
   onArtifactClick?: (artifact: ArtifactPayload) => void
   onSelectedArtifactClose?: () => void
-  onAttachmentClick?: (attachment: Attachment) => void
+  onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
   const isBrowserAgent = run.agentId === "browser_agent"
 
@@ -300,7 +300,7 @@ function AgentRunPane({
             <AttachmentCard
               key={att.id}
               attachment={att}
-              onClick={() => onAttachmentClick?.(att)}
+              onClick={() => onAttachmentClick?.(att, run.attachments)}
             />
           ))}
         </div>

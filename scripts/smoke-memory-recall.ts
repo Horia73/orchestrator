@@ -239,6 +239,29 @@ async function main(): Promise<void> {
     recall.selectDiverse(cand, new Map(), 4).length === 3
   )
 
+  // --- repeat suppression: hide repeated marginal hits, keep strong ones ------
+  const repeated = recall.suppressRepeatedRecallHits(
+    [
+      { id: "old", source: src, title: "t", text: "same marginal note", score: 0.7 },
+      { id: "strong", source: src, title: "t", text: "same but very relevant", score: 0.82 },
+      { id: "fresh", source: src, title: "t", text: "new note", score: 0.69 },
+    ],
+    new Map<string, number>([
+      ["old", 0.72],
+      ["strong", 0.8],
+    ])
+  )
+  check(
+    "repeat suppression drops repeated marginal hits",
+    repeated.every((h) => h.id !== "old"),
+    repeated.map((h) => h.id)
+  )
+  check(
+    "repeat suppression keeps strong or fresh hits",
+    repeated.some((h) => h.id === "strong") && repeated.some((h) => h.id === "fresh"),
+    repeated.map((h) => h.id)
+  )
+
   // --- splitQuerySegments: broad multi-intent message ---------------------
   const broad =
     "vreau o singura boxa pe noptiera, wifi, wake word instant si quality > apple. HA doar ca e misto, dar streaming AI as face local? nu e limita de buget. on/off rapid nu stam dupa un RPI"

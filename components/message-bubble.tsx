@@ -222,7 +222,7 @@ function ThoughtBlock({
     isStreaming?: boolean
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     messageId?: string
     thinkingSeconds?: number
     thinkingDone?: boolean
@@ -627,7 +627,7 @@ function WorkedForBlock({
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     suppressArtifactTypes?: string[]
 }) {
     const openStorageKey = `worked:${messageId}:open`
@@ -755,7 +755,7 @@ function ReasoningEntryList({
     reasoning: ReasoningEntry[]
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     searchToolDisplay: SearchToolDisplay
 }) {
     const nodes: React.ReactNode[] = []
@@ -984,7 +984,7 @@ function AgentCallBlock({
 }: {
     entry: AgentCallReasoningEntry
     onOpen?: (entry: AgentCallReasoningEntry) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
     if (entry.agentId === "browser_agent") {
         return <BrowserAgentCallBlock entry={entry} onOpen={onOpen} onAttachmentClick={onAttachmentClick} />
@@ -1033,7 +1033,7 @@ function BrowserAgentCallBlock({
 }: {
     entry: AgentCallReasoningEntry
     onOpen?: (entry: AgentCallReasoningEntry) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
     const awaitingUser = isBrowserAgentAwaitingUser(entry)
     const browserSessionId = browserSessionIdFromContent(entry.content)
@@ -1057,7 +1057,7 @@ function BrowserAgentCallBlock({
                             <AttachmentCard
                                 key={att.id}
                                 attachment={att}
-                                onClick={() => onAttachmentClick?.(att)}
+                                onClick={() => onAttachmentClick?.(att, entry.attachments)}
                             />
                         ))}
                     </div>
@@ -1215,7 +1215,7 @@ interface MessageBubbleProps {
      * `onArtifactClick` (which is the legacy code-block / tool-result router).
      */
     onArtifactExpand?: (artifact: ArtifactRow) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onLoadMessageDetails?: (messageId: string) => Promise<void>
     autoLoadDeferredDetails?: boolean
@@ -1352,7 +1352,7 @@ function MessageBubbleComponent({
                 {!!message.attachments?.length && (
                     <div className="flex gap-2 flex-wrap justify-end max-w-[85%]">
                         {message.attachments!.map((att) => (
-                            <AttachmentCard key={att.id} attachment={att} onClick={() => onAttachmentClick?.(att)} />
+                            <AttachmentCard key={att.id} attachment={att} onClick={() => onAttachmentClick?.(att, message.attachments)} />
                         ))}
                     </div>
                 )}
@@ -1466,7 +1466,7 @@ function MessageBubbleComponent({
             {!!message.attachments?.length && (
                 <div className="mt-1 flex max-w-[85%] flex-wrap gap-2">
                     {message.attachments.map((att) => (
-                        <AttachmentCard key={att.id} attachment={att} onClick={() => onAttachmentClick?.(att)} />
+                        <AttachmentCard key={att.id} attachment={att} onClick={() => onAttachmentClick?.(att, message.attachments)} />
                     ))}
                 </div>
             )}
@@ -1546,7 +1546,7 @@ interface StreamingBubbleProps {
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
-    onAttachmentClick?: (attachment: Attachment) => void
+    onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
     thinkingSeconds?: number
     thinkingDone?: boolean
     searchToolDisplay?: SearchToolDisplay

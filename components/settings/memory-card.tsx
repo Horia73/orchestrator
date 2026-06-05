@@ -83,6 +83,13 @@ interface SearchHit {
   score: number
 }
 
+interface SearchResponse {
+  rawHits: SearchHit[]
+  automaticHits: SearchHit[]
+  threshold: number
+  topK: number
+}
+
 interface Form {
   enabled: boolean
   provider: ProviderId
@@ -96,6 +103,10 @@ const PROVIDER_LABELS: Record<ProviderId, string> = {
   openai: "OpenAI",
 }
 
+function searchHitKey(hit: SearchHit): string {
+  return `${hit.source}\n${hit.title}\n${hit.text}`
+}
+
 export function MemoryCard() {
   const [data, setData] = React.useState<StatusResponse | null>(null)
   const [form, setForm] = React.useState<Form | null>(null)
@@ -107,7 +118,7 @@ export function MemoryCard() {
 
   const [query, setQuery] = React.useState("")
   const [searching, setSearching] = React.useState(false)
-  const [hits, setHits] = React.useState<SearchHit[] | null>(null)
+  const [searchResult, setSearchResult] = React.useState<SearchResponse | null>(null)
 
   const load = React.useCallback(async () => {
     try {
@@ -258,19 +269,29 @@ export function MemoryCard() {
       })
       const j = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(j.error || `Search failed (${res.status})`)
-      setHits((j.hits as SearchHit[]) ?? [])
+      const rawHits = ((j.rawHits ?? j.hits ?? []) as SearchHit[])
+      setSearchResult({
+        rawHits,
+        automaticHits: ((j.automaticHits ?? []) as SearchHit[]),
+        threshold: typeof j.threshold === "number" ? j.threshold : form?.threshold ?? 0,
+        topK: typeof j.topK === "number" ? j.topK : 4,
+      })
     } catch (e) {
       setError(e instanceof Error ? e.message : "Search failed")
     } finally {
       setSearching(false)
     }
-  }, [query])
+  }, [form?.threshold, query])
 
   const status = data?.status
   const cachedGenerations = (status?.generations ?? []).filter(
     (g) => !(g.model === status?.activeModel && g.dim === status?.activeDim)
   )
   const providerHasKey = form ? data?.providers[form.provider] : false
+  const automaticHitKeys = React.useMemo(
+    () => new Set((searchResult?.automaticHits ?? []).map(searchHitKey)),
+    [searchResult]
+  )
 
   return (
     <Card>
@@ -474,7 +495,7 @@ export function MemoryCard() {
             {/* Dry-run calibration search */}
             <div className="flex flex-col gap-2">
               <label className="text-[12.5px] font-medium text-foreground/70">
-                Test search (calibrate the threshold)
+                Test search (raw scores + automatic recall)
               </label>
               <div className="flex gap-2">
                 <Input
@@ -500,44 +521,93 @@ export function MemoryCard() {
                   Search
                 </Button>
               </div>
-              {hits && (
-                <div className="flex flex-col gap-1.5">
-                  {hits.length === 0 ? (
-                    <p className="text-[12.5px] text-foreground/45">No matches.</p>
-                  ) : (
-                    hits.map((h, i) => {
-                      const passes = h.score >= form.threshold
-                      return (
-                        <div
-                          key={`${h.source}-${i}`}
-                          className="rounded-md border border-border/50 bg-background px-2.5 py-1.5 text-[12.5px]"
-                        >
-                          <div className="flex items-center justify-between gap-2">
-                            <span className="truncate text-foreground/60">
-                              {h.title || h.source}
-                            </span>
-                            <span
-                              className={
-                                passes
-                                  ? "shrink-0 font-medium text-emerald-700 tabular-nums dark:text-emerald-500"
-                                  : "shrink-0 text-foreground/40 tabular-nums"
-                              }
-                            >
-                              {h.score.toFixed(3)}
-                              {passes ? " ✓" : ""}
-                            </span>
+              {searchResult && (
+                <div className="flex flex-col gap-2">
+                  <div className="rounded-lg border border-border/60 bg-muted/20 px-3 py-2">
+                    <div className="flex items-center justify-between gap-2 text-[12.5px] font-medium text-foreground/75">
+                      <span>Automatic recall preview</span>
+                      <span className="shrink-0 text-foreground/45">
+                        threshold {searchResult.threshold.toFixed(2)} · top {searchResult.topK}
+                      </span>
+                    </div>
+                    {searchResult.automaticHits.length === 0 ? (
+                      <p className="mt-1 text-[12.5px] text-foreground/45">
+                        Nothing would be injected for this message.
+                      </p>
+                    ) : (
+                      <div className="mt-2 flex flex-col gap-1.5">
+                        {searchResult.automaticHits.map((h, i) => (
+                          <div
+                            key={`${h.source}-${i}`}
+                            className="rounded-md border border-emerald-500/25 bg-emerald-500/5 px-2.5 py-1.5 text-[12.5px]"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-foreground/65">
+                                {h.title || h.source}
+                              </span>
+                              <span className="shrink-0 font-medium text-emerald-700 tabular-nums dark:text-emerald-500">
+                                {h.score.toFixed(3)}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 line-clamp-2 text-foreground/75">
+                              {h.text}
+                            </p>
                           </div>
-                          <p className="mt-0.5 line-clamp-2 text-foreground/75">
-                            {h.text}
-                          </p>
-                        </div>
-                      )
-                    })
-                  )}
-                  <p className="text-[12px] text-foreground/40">
-                    ✓ = above the current threshold ({form.threshold.toFixed(2)})
-                    and would be recalled.
-                  </p>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="flex flex-col gap-1.5">
+                    <div className="text-[12.5px] font-medium text-foreground/60">
+                      Raw score distribution
+                    </div>
+                    {searchResult.rawHits.length === 0 ? (
+                      <p className="text-[12.5px] text-foreground/45">No matches.</p>
+                    ) : (
+                      searchResult.rawHits.map((h, i) => {
+                        const auto = automaticHitKeys.has(searchHitKey(h))
+                        const above = h.score >= searchResult.threshold
+                        return (
+                          <div
+                            key={`${h.source}-${i}`}
+                            className="rounded-md border border-border/50 bg-background px-2.5 py-1.5 text-[12.5px]"
+                          >
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="truncate text-foreground/60">
+                                {h.title || h.source}
+                              </span>
+                              <span
+                                className={
+                                  auto
+                                    ? "shrink-0 font-medium text-emerald-700 tabular-nums dark:text-emerald-500"
+                                    : above
+                                      ? "shrink-0 text-amber-700 tabular-nums dark:text-amber-400"
+                                      : "shrink-0 text-foreground/40 tabular-nums"
+                                }
+                              >
+                                {h.score.toFixed(3)}
+                                {auto ? " auto" : above ? " gated" : ""}
+                              </span>
+                            </div>
+                            <p className="mt-0.5 line-clamp-2 text-foreground/75">
+                              {h.text}
+                            </p>
+                          </div>
+                        )
+                      })
+                    )}
+                    <p className="text-[12px] text-foreground/40">
+                      <span className="font-medium text-emerald-700 dark:text-emerald-500">
+                        auto
+                      </span>{" "}
+                      = would be injected.{" "}
+                      <span className="text-amber-700 dark:text-amber-400">
+                        gated
+                      </span>{" "}
+                      = above threshold but excluded by context, dedup, or coverage.
+                    </p>
+                  </div>
                 </div>
               )}
             </div>

@@ -466,7 +466,7 @@ export async function POST(request: Request) {
     if (!recalledMemoryPromise) {
       recalledMemoryPromise = getRecalledMemory(
         latestUserMessage?.content,
-        resolveRecallAttachments()
+        { attachments: resolveRecallAttachments(), conversationId }
       ).catch(() => ({ block: "", hits: [] }))
     }
     return recalledMemoryPromise

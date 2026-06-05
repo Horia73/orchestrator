@@ -829,7 +829,7 @@ const MEMORY_EMBEDDING_DEFAULTS: MemoryEmbeddingSettings = {
   provider: "google",
   model: "gemini-embedding-2",
   dim: 768,
-  threshold: 0.62,
+  threshold: 0.68,
 }
 
 function coerceProvider(value: unknown): EmbeddingProviderId {

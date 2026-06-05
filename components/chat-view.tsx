@@ -105,6 +105,17 @@ export function ChatView() {
 
   const [previewAttachment, setPreviewAttachment] =
     React.useState<Attachment | null>(null)
+  const [previewGallery, setPreviewGallery] =
+    React.useState<Attachment[] | undefined>(undefined)
+  // Open the lightbox on a clicked attachment, carrying its sibling group so
+  // the modal can offer left/right gallery navigation across images/videos.
+  const openPreview = React.useCallback(
+    (attachment: Attachment, gallery?: Attachment[]) => {
+      setPreviewAttachment(attachment)
+      setPreviewGallery(gallery)
+    },
+    []
+  )
 
   React.useEffect(() => {
     minHeightActiveRef.current = minHeight > 0
@@ -2082,7 +2093,7 @@ export function ChatView() {
 
   return (
     <ConversationArtifactsProvider conversationId={conversationId ?? ""}>
-      <MarkdownImagePreviewProvider onPreview={setPreviewAttachment}>
+      <MarkdownImagePreviewProvider onPreview={openPreview}>
       <div
         ref={layoutContainerRef}
         className={cn(
@@ -2195,7 +2206,7 @@ export function ChatView() {
                               }
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
-                              onAttachmentClick={setPreviewAttachment}
+                              onAttachmentClick={openPreview}
                               onAgentOpen={handleAgentOpen}
                               onLoadMessageDetails={handleLoadMessageDetails}
                             />
@@ -2224,7 +2235,7 @@ export function ChatView() {
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
                               onAgentOpen={handleAgentOpen}
-                              onAttachmentClick={setPreviewAttachment}
+                              onAttachmentClick={openPreview}
                               messageId={state.streamingMessageId ?? undefined}
                               thinkingSeconds={state.thinkingSeconds}
                               thinkingDone={state.thinkingDone}
@@ -2327,7 +2338,7 @@ export function ChatView() {
                 run={activePanelAgentRun}
                 childRun={activeChildAgentRun}
                 onClose={handleAgentClose}
-                onAttachmentClick={setPreviewAttachment}
+                onAttachmentClick={openPreview}
               />
             ) : genArtifact ? (
               // Generated artifact panel takes priority — same right column,
@@ -2358,7 +2369,7 @@ export function ChatView() {
                 run={activePanelAgentRun}
                 childRun={activeChildAgentRun}
                 onClose={handleAgentClose}
-                onAttachmentClick={setPreviewAttachment}
+                onAttachmentClick={openPreview}
               />
             ) : genArtifact ? (
               <AntArtifactPanel
@@ -2377,6 +2388,7 @@ export function ChatView() {
 
         <FilePreviewModal
           attachment={previewAttachment}
+          gallery={previewGallery}
           onClose={() => setPreviewAttachment(null)}
         />
       </div>

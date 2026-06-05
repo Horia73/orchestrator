@@ -13,6 +13,9 @@ import type { Attachment } from "@/lib/types"
 
 interface FilePreviewModalProps {
     attachment: Attachment | null
+    /** Sibling attachments in the same group. When more than one is an
+     *  image/video, the lightbox shows left/right gallery navigation. */
+    gallery?: Attachment[]
     onClose: () => void
 }
 
@@ -356,18 +359,48 @@ function PdfViewer({ url, filename, onClose }: { url: string; filename: string; 
 // Modal
 // ---------------------------------------------------------------------------
 
-export function FilePreviewModal({ attachment, onClose }: FilePreviewModalProps) {
+export function FilePreviewModal({ attachment, gallery, onClose }: FilePreviewModalProps) {
     const isOpen = !!attachment
     const [mounted, setMounted] = React.useState(false)
+
+    // Navigable siblings: images/videos render in the lightbox, so the
+    // left/right arrows only cycle through those (PDFs/files are skipped).
+    const navItems = React.useMemo(() => {
+        const source = gallery && gallery.length ? gallery : attachment ? [attachment] : []
+        return source.filter(a => a.type === "image" || a.type === "video")
+    }, [gallery, attachment])
+
+    // Which sibling is showing. Seeded from the opened attachment and reset
+    // whenever a different attachment is opened; arrow navigation mutates it
+    // without touching the parent's selection state.
+    const [currentId, setCurrentId] = React.useState<string | null>(attachment?.id ?? null)
+    React.useEffect(() => { setCurrentId(attachment?.id ?? null) }, [attachment?.id])
+
+    const showPrev = React.useCallback(() => {
+        setCurrentId(id => {
+            const i = navItems.findIndex(a => a.id === id)
+            return i > 0 ? navItems[i - 1].id : id
+        })
+    }, [navItems])
+    const showNext = React.useCallback(() => {
+        setCurrentId(id => {
+            const i = navItems.findIndex(a => a.id === id)
+            return i >= 0 && i < navItems.length - 1 ? navItems[i + 1].id : id
+        })
+    }, [navItems])
 
     React.useEffect(() => { setMounted(true) }, [])
 
     React.useEffect(() => {
         if (!isOpen) return
-        const handler = (e: KeyboardEvent) => { if (e.key === "Escape") onClose() }
+        const handler = (e: KeyboardEvent) => {
+            if (e.key === "Escape") { onClose(); return }
+            if (e.key === "ArrowLeft") showPrev()
+            else if (e.key === "ArrowRight") showNext()
+        }
         window.addEventListener("keydown", handler)
         return () => window.removeEventListener("keydown", handler)
-    }, [isOpen, onClose])
+    }, [isOpen, onClose, showPrev, showNext])
 
     React.useEffect(() => {
         if (!isOpen) return
@@ -383,16 +416,21 @@ export function FilePreviewModal({ attachment, onClose }: FilePreviewModalProps)
 
     if (!mounted || !attachment) return null
 
-    const url = appPath(`/api/uploads/${encodeURIComponent(attachment.id)}`)
+    // The sibling currently on screen. Falls back to the opened attachment
+    // (e.g. a PDF, which is filtered out of navItems) so direct opens still work.
+    const active = navItems.find(a => a.id === currentId) ?? attachment
+    const activeIndex = navItems.findIndex(a => a.id === active.id)
+    const hasGallery = navItems.length > 1 && activeIndex >= 0
+    const url = appPath(`/api/uploads/${encodeURIComponent(active.id)}`)
 
-    if (attachment.type === "pdf") {
+    if (active.type === "pdf") {
         return createPortal(
             <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/55 p-2 md:p-3" onClick={onClose} role="dialog" aria-modal="true">
                 <div
                     className="h-[96vh] w-full max-w-[98vw] overflow-hidden rounded-lg bg-pdf-canvas shadow-2xl ring-1 ring-black/35"
                     onClick={(e) => e.stopPropagation()}
                 >
-                    <PdfViewer url={url} filename={attachment.filename} onClose={onClose} />
+                    <PdfViewer url={url} filename={active.filename} onClose={onClose} />
                 </div>
             </div>,
             document.body
@@ -403,7 +441,12 @@ export function FilePreviewModal({ attachment, onClose }: FilePreviewModalProps)
         <div className="fixed inset-0 z-[100] flex flex-col" onClick={onClose}>
             <div className="absolute inset-0 bg-black/80" />
             <div className="relative z-10 flex items-center justify-between px-5 py-3 shrink-0" onClick={(e) => e.stopPropagation()}>
-                <span className="text-sm font-medium text-white/90 truncate max-w-[70vw]">{attachment.filename}</span>
+                <span className="flex min-w-0 items-center gap-2 text-sm font-medium text-white/90">
+                    <span className="truncate max-w-[60vw]">{active.filename}</span>
+                    {hasGallery && (
+                        <span className="shrink-0 tabular-nums text-white/55">{activeIndex + 1} / {navItems.length}</span>
+                    )}
+                </span>
                 <button
                     type="button"
                     onClick={onClose}
@@ -414,11 +457,23 @@ export function FilePreviewModal({ attachment, onClose }: FilePreviewModalProps)
                 </button>
             </div>
             <div className="relative z-[1] flex-1 w-full flex items-center justify-center px-3 pb-3 min-h-0 overflow-hidden" onClick={(e) => e.stopPropagation()}>
-                {attachment.type === "image" ? (
+                {hasGallery && (
+                    <button
+                        type="button"
+                        onClick={showPrev}
+                        disabled={activeIndex <= 0}
+                        className="absolute left-2 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/60 hover:text-white disabled:pointer-events-none disabled:opacity-25"
+                        aria-label="Previous image"
+                    >
+                        <ChevronLeft className="size-6" />
+                    </button>
+                )}
+                {active.type === "image" ? (
                     // eslint-disable-next-line @next/next/no-img-element
-                    <img src={url} alt={attachment.filename} className="max-w-full max-h-full rounded-lg object-contain" />
-                ) : attachment.type === "video" ? (
+                    <img src={url} alt={active.filename} className="max-w-full max-h-full rounded-lg object-contain" />
+                ) : active.type === "video" ? (
                     <video
+                        key={active.id}
                         src={url}
                         controls
                         autoPlay
@@ -426,12 +481,23 @@ export function FilePreviewModal({ attachment, onClose }: FilePreviewModalProps)
                     />
                 ) : (
                     <div className="flex flex-col items-center gap-4 text-white/80 bg-white/10 backdrop-blur-md rounded-2xl px-10 py-8">
-                        <span className="text-lg font-medium text-white">{attachment.filename}</span>
-                        <span className="text-sm">{(attachment.size / 1024).toFixed(1)} KB</span>
-                        <a href={url} download={attachment.filename} className="text-sm text-white underline underline-offset-2 hover:text-white/80">
+                        <span className="text-lg font-medium text-white">{active.filename}</span>
+                        <span className="text-sm">{(active.size / 1024).toFixed(1)} KB</span>
+                        <a href={url} download={active.filename} className="text-sm text-white underline underline-offset-2 hover:text-white/80">
                             Download file
                         </a>
                     </div>
+                )}
+                {hasGallery && (
+                    <button
+                        type="button"
+                        onClick={showNext}
+                        disabled={activeIndex >= navItems.length - 1}
+                        className="absolute right-2 top-1/2 z-10 flex size-11 -translate-y-1/2 items-center justify-center rounded-full bg-black/40 text-white/80 backdrop-blur-sm transition-colors hover:bg-black/60 hover:text-white disabled:pointer-events-none disabled:opacity-25"
+                        aria-label="Next image"
+                    >
+                        <ChevronRight className="size-6" />
+                    </button>
                 )}
             </div>
         </div>,

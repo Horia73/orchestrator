@@ -113,6 +113,24 @@ export const RECALL_TOP_K = clampInt(
   20
 )
 
+// Conversation-local repeat suppression for the automatic pass. Consecutive user
+// turns often have near-identical phrasing, which can surface the same marginal
+// notes over and over. Keep a short in-process ledger per conversation and hide
+// repeated hits unless the new score is strong enough to be worth showing again.
+const RECALL_REPEAT_WINDOW_TURNS = clampInt(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_REPEAT_WINDOW,
+  3,
+  0,
+  10
+)
+const RECALL_REPEAT_KEEP_SCORE = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_REPEAT_KEEP_SCORE,
+  0.78,
+  0,
+  1
+)
+const MAX_RECENT_RECALL_CONVERSATIONS = 200
+
 // The explicit memory_search tool casts a wider net than the silent pass.
 const TOOL_THRESHOLD = clampNumber(
   process.env.ORCHESTRATOR_MEMORY_SEARCH_THRESHOLD,
@@ -718,12 +736,96 @@ export interface RecalledMemory {
   hits: MemoryHit[]
 }
 
+export interface RecalledMemoryOptions {
+  attachments?: RecallAttachmentInput[]
+  /**
+   * Optional chat scope for repeat suppression. When omitted, recall is stateless
+   * (used by tests, smoke scripts, and Settings preview).
+   */
+  conversationId?: string | null
+}
+
 /** An attachment on the current user turn, resolved to bytes on disk. */
 export interface RecallAttachmentInput {
   /** Absolute path to the file bytes. */
   path: string
   /** MIME type (used to gate to embeddable kinds). */
   mimeType: string
+}
+
+interface RecentRecallHit {
+  id: string
+  score: number
+  turn: number
+}
+
+const recallTurnByConversation = new Map<string, number>()
+const recentRecallByConversation = new Map<string, RecentRecallHit[]>()
+
+function normalizeConversationId(value: string | null | undefined): string | null {
+  const trimmed = typeof value === "string" ? value.trim() : ""
+  return trimmed ? trimmed.slice(0, 160) : null
+}
+
+function pruneRecentRecallTrackers(): void {
+  while (recallTurnByConversation.size > MAX_RECENT_RECALL_CONVERSATIONS) {
+    const oldest = recallTurnByConversation.keys().next().value as string | undefined
+    if (!oldest) break
+    recallTurnByConversation.delete(oldest)
+    recentRecallByConversation.delete(oldest)
+  }
+}
+
+function nextConversationRecallTurn(conversationId: string): number {
+  const turn = (recallTurnByConversation.get(conversationId) ?? 0) + 1
+  // Refresh insertion order so idle conversations are pruned first.
+  recallTurnByConversation.delete(conversationId)
+  recallTurnByConversation.set(conversationId, turn)
+  pruneRecentRecallTrackers()
+  return turn
+}
+
+export function suppressRepeatedRecallHits(
+  hits: MemoryHit[],
+  recentScores: Map<string, number>
+): MemoryHit[] {
+  if (recentScores.size === 0) return hits
+  return hits.filter((hit) => {
+    if (!recentScores.has(hit.id)) return true
+    return hit.score >= RECALL_REPEAT_KEEP_SCORE
+  })
+}
+
+function filterAndRecordConversationRecall(
+  conversationId: string | null | undefined,
+  hits: MemoryHit[]
+): MemoryHit[] {
+  const id = normalizeConversationId(conversationId)
+  if (!id || RECALL_REPEAT_WINDOW_TURNS <= 0) return hits
+
+  const turn = nextConversationRecallTurn(id)
+  const recent = (recentRecallByConversation.get(id) ?? []).filter(
+    (entry) => turn - entry.turn <= RECALL_REPEAT_WINDOW_TURNS
+  )
+  const recentScores = new Map<string, number>()
+  for (const entry of recent) {
+    recentScores.set(entry.id, Math.max(entry.score, recentScores.get(entry.id) ?? -Infinity))
+  }
+
+  const filtered = suppressRepeatedRecallHits(hits, recentScores)
+  recentRecallByConversation.set(id, [
+    ...recent,
+    ...filtered.map((hit) => ({ id: hit.id, score: hit.score, turn })),
+  ])
+  return filtered
+}
+
+function normalizeRecallOptions(
+  value: RecallAttachmentInput[] | RecalledMemoryOptions | undefined
+): RecalledMemoryOptions {
+  if (Array.isArray(value)) return { attachments: value }
+  if (!value || typeof value !== "object") return {}
+  return value
 }
 
 /** First attachment we can embed cross-modally, or null. */
@@ -831,14 +933,15 @@ function mergeNoteHits(primary: MemoryHit[], secondary: MemoryHit[], topK: numbe
  */
 export async function getRecalledMemory(
   query: string | null | undefined,
-  attachments?: RecallAttachmentInput[]
+  options?: RecallAttachmentInput[] | RecalledMemoryOptions
 ): Promise<RecalledMemory> {
   const empty: RecalledMemory = { block: "", hits: [] }
   try {
+    const recallOptions = normalizeRecallOptions(options)
     if (!isRecallEnabled()) return empty
     if (!embeddingsAvailable()) return empty
     const q = (query ?? "").trim()
-    const asset = pickRecallAsset(attachments)
+    const asset = pickRecallAsset(recallOptions.attachments)
     // Nothing to go on: trivial text AND no embeddable attachment.
     if (q.length < MIN_QUERY_CHARS && !asset) return empty
 
@@ -870,8 +973,14 @@ export async function getRecalledMemory(
       }),
     ])
 
-    const noteHits = mergeNoteHits(textHits, assetHits.notes, RECALL_TOP_K)
-    const fileHits = assetHits.files
+    let noteHits = mergeNoteHits(textHits, assetHits.notes, RECALL_TOP_K)
+    let fileHits = assetHits.files
+    const filteredHits = filterAndRecordConversationRecall(recallOptions.conversationId, [
+      ...noteHits,
+      ...fileHits,
+    ])
+    noteHits = filteredHits.filter((hit) => hit.kind !== "file")
+    fileHits = filteredHits.filter((hit) => hit.kind === "file")
     const block = [formatRecallBlock(noteHits), formatFilesBlock(fileHits)]
       .filter(Boolean)
       .join("\n")
@@ -999,6 +1108,46 @@ export async function dryRunSearch(
   }
   // Calibration view: show the true score distribution, so keep near-duplicates.
   return searchMemory(query, { topK: limit, threshold: 0, mode: "hybrid", dedup: false })
+}
+
+export interface RecallSearchPreview {
+  rawHits: MemoryHit[]
+  automaticHits: MemoryHit[]
+  threshold: number
+  topK: number
+}
+
+/**
+ * Settings calibration view: show both the raw score distribution and the exact
+ * automatic text-recall result. The latter applies the production threshold,
+ * excludes sources already in prompt context, dedups, and runs the coverage gate.
+ */
+export async function previewRecallSearch(
+  query: string,
+  rawLimit: number
+): Promise<RecallSearchPreview> {
+  try {
+    await syncMemoryIndex()
+  } catch {
+    /* search whatever is already indexed */
+  }
+  const threshold = getRecallThreshold()
+  const [rawHits, automaticHits] = await Promise.all([
+    searchMemory(query, {
+      topK: rawLimit,
+      threshold: 0,
+      mode: "hybrid",
+      dedup: false,
+    }),
+    searchMemory(query, {
+      topK: RECALL_TOP_K,
+      threshold,
+      excludeSources: inContextSources(),
+      mode: "semantic",
+      coverageGate: true,
+    }),
+  ])
+  return { rawHits, automaticHits, threshold, topK: RECALL_TOP_K }
 }
 
 export async function searchMemoryForTool(

@@ -92,7 +92,7 @@ Per-agent model configuration plus the model registry and semantic-memory setup.
 - Model picker: search across name/provider; Favorites (star, reorderable) at top; Archive/Unarchive per model (archived models hide from the picker but an explicit selection still runs). A Refresh button re-pulls each provider's model list.
 - Top bar: "Research model details (N)" runs the researcher agent to fill pricing/context/thinking for models with incomplete metadata (streamed progress, stoppable); "Refresh models" auto-discovers new models from each configured provider. New models still need research to be "complete".
 - Browser agent is special: choose its backend (Auto / Patchright / Chromium) and a light model plus an optional pro model (escalates on hard blockers); both restricted to Google models.
-- Memory recall card (bottom): enable semantic memory, choose the embedding model + dimensions (Google/Gemini, reuses the existing Gemini key — no separate billing) and a recall threshold; Rebuild index after switching models. Powers the automatic per-turn recall and the memory_search tool.
+- Memory recall card (bottom): enable semantic memory, choose the embedding model + dimensions (Google/Gemini, reuses the existing Gemini key — no separate billing) and a recall threshold; Rebuild index after switching models. Powers the automatic per-turn recall and the memory_search tool. The test search shows both raw score distribution and an "automatic recall preview" that applies the real threshold, context exclusions, deduping, and coverage gate.
 </settings_models>
 
 <settings_auth>
@@ -220,7 +220,7 @@ System tasks (created automatically, shown as read-only/system rows in Schedulin
 
 Memory that works without anyone touching it:
 - The durable files plus the last ~3 app-configured local days of daily memory are placed in your context every turn. The ENTIRE memory history is also indexed for semantic search in a derived SQLite index that self-heals: any edit (by you, the Settings UI, or by hand) is picked up on the next sync via content-hash diffing — there are no write hooks to forget.
-- Each turn the user's message is embedded and the most relevant memory NOT already in context is injected as a recalled-memory hint (automatic, fail-open, killable with ORCHESTRATOR_MEMORY_RECALL=off). The memory_search tool casts a wider net on demand. Embeddings reuse the Gemini key (no separate billing).
+- Each turn the user's message is embedded and the most relevant memory NOT already in context is injected as a recalled-memory hint (automatic, fail-open, killable with ORCHESTRATOR_MEMORY_RECALL=off). The automatic pass applies a strict threshold, near-duplicate/coverage gates, and short in-conversation repeat suppression so marginal notes do not keep resurfacing on consecutive similar messages. The memory_search tool casts a wider net on demand. Embeddings reuse the Gemini key (no separate billing).
 
 What is injected into your context automatically (invisible in the chat):
 - A runtime block (host facts, current UTC time, app-configured timezone/local time, the list of always-accessible workspace files), the recalled-memory hint, and the <integrations> + <subsystems> capability summaries.

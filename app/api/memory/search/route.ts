@@ -1,10 +1,9 @@
 import { NextResponse } from "next/server"
 import { guardSensitiveRequest } from "@/lib/api/request-guard"
-import { dryRunSearch } from "@/lib/memory/recall"
+import { previewRecallSearch } from "@/lib/memory/recall"
 
-// Dry-run calibration search: returns top hits with RAW cosine scores (no
-// threshold) so the Settings card can show the score distribution and help the
-// user pick a threshold for the active model.
+// Calibration search for Settings: returns both RAW scores and a production
+// automatic-recall preview (threshold + exclusions + dedup + coverage gate).
 export async function POST(request: Request) {
   const guard = guardSensitiveRequest(request)
   if (guard) return guard
@@ -22,14 +21,19 @@ export async function POST(request: Request) {
       25,
       Math.max(1, Math.floor(Number(body.limit)) || 10)
     )
-    const hits = await dryRunSearch(query, limit)
+    const preview = await previewRecallSearch(query, limit)
+    const serializeHit = (h: (typeof preview.rawHits)[number]) => ({
+      source: h.source,
+      title: h.title,
+      text: h.text,
+      score: Number(h.score.toFixed(3)),
+    })
     return NextResponse.json({
-      hits: hits.map((h) => ({
-        source: h.source,
-        title: h.title,
-        text: h.text,
-        score: Number(h.score.toFixed(3)),
-      })),
+      hits: preview.rawHits.map(serializeHit),
+      rawHits: preview.rawHits.map(serializeHit),
+      automaticHits: preview.automaticHits.map(serializeHit),
+      threshold: preview.threshold,
+      topK: preview.topK,
     })
   } catch (error) {
     console.error("Memory dry-run search failed", error)
