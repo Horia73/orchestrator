@@ -16,6 +16,7 @@ import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import { AUDIO_CONTEXT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
 import { useMessageSelectionGutter } from "@/components/message-bubble/use-message-selection-gutter"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
+import { appPath } from "@/lib/app-path"
 
 type SearchToolDisplay = "expanded" | "compact"
 
@@ -851,6 +852,7 @@ function MemoryRecallBlock({ entry }: { entry: MemoryRecallReasoningEntry }) {
     const loadingFullSnippetsRef = React.useRef<Set<number>>(new Set())
 
     const loadFullSnippet = React.useCallback(async (i: number, hit: MemoryRecallReasoningEntry["hits"][number]) => {
+        if (hit.kind === "file") return
         if (fullSnippets[i] || loadingFullSnippetsRef.current.has(i)) return
         loadingFullSnippetsRef.current.add(i)
         try {
@@ -896,13 +898,15 @@ function MemoryRecallBlock({ entry }: { entry: MemoryRecallReasoningEntry }) {
                     Recalled {n} {n === 1 ? "note" : "notes"} from memory
                 </span>
                 <span className="mb-1 block text-[11px] text-muted-foreground/75">
-                    Surfaced by similarity to your message · click a note to see what was injected
+                    Surfaced by similarity to your message · click to inspect what was injected
                 </span>
                 <ul className="flex max-h-[360px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
                     {entry.hits.map((hit, i) => {
                         const isOpen = expanded.has(i)
                         const displayTitle = displayMemoryHitTitle(hit.source, hit.title)
                         const displaySnippet = fullSnippets[i] ?? hit.snippet
+                        const previewUrl = hit.kind === "file" && hit.url ? appPath(hit.url) : ""
+                        const isImagePreview = Boolean(previewUrl && hit.mimeType?.startsWith("image/"))
                         return (
                             <li key={`${hit.source}-${i}`} className="min-w-0">
                                 <button
@@ -925,9 +929,30 @@ function MemoryRecallBlock({ entry }: { entry: MemoryRecallReasoningEntry }) {
                                     </span>
                                 </button>
                                 {isOpen && (
-                                    <p className="mb-1 ml-7 mr-2 mt-0.5 whitespace-pre-wrap break-words rounded-md border-l-2 border-border bg-muted/40 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground/90">
-                                        {displaySnippet}
-                                    </p>
+                                    isImagePreview ? (
+                                        <div className="mb-1 ml-7 mr-2 mt-0.5 overflow-hidden rounded-md border border-border bg-background">
+                                            {/* eslint-disable-next-line @next/next/no-img-element */}
+                                            <img
+                                                src={previewUrl}
+                                                alt={displayTitle}
+                                                className="max-h-[320px] w-full object-contain"
+                                            />
+                                        </div>
+                                    ) : hit.kind === "file" && previewUrl ? (
+                                        <a
+                                            href={previewUrl}
+                                            target="_blank"
+                                            rel="noreferrer"
+                                            className="mb-1 ml-7 mr-2 mt-0.5 flex items-center gap-1.5 rounded-md border-l-2 border-border bg-muted/40 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground/90 hover:bg-muted"
+                                        >
+                                            <ExternalLink className="size-3.5 shrink-0" />
+                                            <span className="min-w-0 truncate">Open similar file</span>
+                                        </a>
+                                    ) : (
+                                        <p className="mb-1 ml-7 mr-2 mt-0.5 whitespace-pre-wrap break-words rounded-md border-l-2 border-border bg-muted/40 px-2.5 py-1.5 text-[12px] leading-relaxed text-muted-foreground/90">
+                                            {displaySnippet}
+                                        </p>
+                                    )
                                 )}
                             </li>
                         )

@@ -195,15 +195,17 @@ async function main(): Promise<void> {
       id: "file:/x/diagram.png",
       source: "files/diagram.png",
       title: "files/diagram.png",
-      text: "similar image you already have",
+      text: "",
       score: 0.82,
       kind: "file",
     },
   ])
   check("formatFilesBlock wraps in <similar_files>", fblock.startsWith("<similar_files>"))
   check(
-    "formatFilesBlock includes the file path + relevance",
-    fblock.includes("files/diagram.png") && fblock.includes("relevance 0.82")
+    "formatFilesBlock includes the file path + relevance without filler text",
+    fblock.includes("files/diagram.png") &&
+      fblock.includes("relevance 0.82") &&
+      !fblock.includes("similar image")
   )
   check("formatFilesBlock empty for no hits", recall.formatFilesBlock([]) === "")
 

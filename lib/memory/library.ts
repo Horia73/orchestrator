@@ -83,7 +83,7 @@ function bufferToVector(buf: Buffer): Float32Array {
 // Asset enumeration (workspace Library dirs + chat uploads)
 // ---------------------------------------------------------------------------
 
-interface Asset {
+export interface LibraryAsset {
   assetKey: string
   kind: "image" | "doc"
   path: string
@@ -92,7 +92,7 @@ interface Asset {
   sig: string
 }
 
-function walkDir(absDir: string, relBase: string, out: Asset[]): void {
+function walkDir(absDir: string, relBase: string, out: LibraryAsset[]): void {
   let entries: fs.Dirent[]
   try {
     entries = fs.readdirSync(absDir, { withFileTypes: true })
@@ -127,8 +127,8 @@ function walkDir(absDir: string, relBase: string, out: Asset[]): void {
   }
 }
 
-export function listLibraryAssets(): Asset[] {
-  const out: Asset[] = []
+export function listLibraryAssets(): LibraryAsset[] {
+  const out: LibraryAsset[] = []
 
   // 1. Workspace Library dirs (immutable-ish files written by tools/integrations).
   for (const dir of LIBRARY_SOURCE_DIRS) {
@@ -166,6 +166,12 @@ export function listLibraryAssets(): Asset[] {
   }
 
   return out
+}
+
+export function findLibraryAsset(assetKey: string): LibraryAsset | null {
+  const key = assetKey.trim()
+  if (!key) return null
+  return listLibraryAssets().find((asset) => asset.assetKey === key) ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -269,6 +275,7 @@ export function syncLibraryIndex(): Promise<{
 // ---------------------------------------------------------------------------
 
 interface VectorRow {
+  assetKey: string
   displayPath: string
   path: string
   kind: string
@@ -296,10 +303,11 @@ function loadVectors(model: string, dim: number): VectorRow[] {
   if (cache && cache.key === key && cache.dataVersion === dataVersion) return cache.rows
   const rows = db
     .prepare(
-      `SELECT displayPath, path, kind, mimeType, embedding
+      `SELECT assetKey, displayPath, path, kind, mimeType, embedding
        FROM library_assets WHERE model = ? AND dim = ?`
     )
     .all(model, dim) as Array<{
+    assetKey: string
     displayPath: string
     path: string
     kind: string
@@ -310,13 +318,21 @@ function loadVectors(model: string, dim: number): VectorRow[] {
   for (const r of rows) {
     const vector = bufferToVector(r.embedding)
     if (vector.length === 0) continue
-    out.push({ displayPath: r.displayPath, path: r.path, kind: r.kind, mimeType: r.mimeType, vector })
+    out.push({
+      assetKey: r.assetKey,
+      displayPath: r.displayPath,
+      path: r.path,
+      kind: r.kind,
+      mimeType: r.mimeType,
+      vector,
+    })
   }
   cache = { key, dataVersion, rows: out }
   return out
 }
 
 export interface LibraryHit {
+  assetKey: string
   displayPath: string
   path: string
   kind: string
@@ -346,7 +362,14 @@ function scoreLibraryRows(
     let dot = 0
     for (let i = 0; i < vec.length; i++) dot += vec[i] * r.vector[i]
     if (dot >= threshold) {
-      scored.push({ displayPath: r.displayPath, path: r.path, kind: r.kind, mimeType: r.mimeType, score: dot })
+      scored.push({
+        assetKey: r.assetKey,
+        displayPath: r.displayPath,
+        path: r.path,
+        kind: r.kind,
+        mimeType: r.mimeType,
+        score: dot,
+      })
     }
   }
   scored.sort((a, b) => b.score - a.score)

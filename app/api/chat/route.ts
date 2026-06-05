@@ -462,11 +462,27 @@ export async function POST(request: Request) {
     }
     return out
   }
+  const resolveConversationRecallExcludePaths = (): string[] => {
+    const paths = new Set<string>()
+    for (const message of messagesForProvider) {
+      const atts = Array.isArray(message.attachments) ? message.attachments : []
+      for (const att of atts) {
+        if (!att || (att.type !== "image" && att.type !== "pdf")) continue
+        const abs = resolveExistingUploadPath(att.id)
+        if (abs) paths.add(abs)
+      }
+    }
+    return [...paths]
+  }
   const getRecall = (): Promise<RecalledMemory> => {
     if (!recalledMemoryPromise) {
       recalledMemoryPromise = getRecalledMemory(
         latestUserMessage?.content,
-        { attachments: resolveRecallAttachments(), conversationId }
+        {
+          attachments: resolveRecallAttachments(),
+          conversationId,
+          excludeFilePaths: resolveConversationRecallExcludePaths(),
+        }
       ).catch(() => ({ block: "", hits: [] }))
     }
     return recalledMemoryPromise

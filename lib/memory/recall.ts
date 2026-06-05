@@ -169,16 +169,19 @@ const MAX_SEGMENTS = 12
 // Multimodal recall (Gemini-only): when the user attaches an image/PDF, embed it
 // into the shared text+image vector space and surface (a) older text memories it
 // resembles and (b) similar files the user already has in their Library.
-//   - The cross-modal bar (image -> TEXT note) is necessarily LOWER than the
-//     text<->text threshold: image/text cosine sits lower even for true matches,
-//     so reusing the text threshold would silence the feature. Calibrate via env.
-//   - The file bar (image -> IMAGE/PDF) is same-modality, so it can be stricter.
-const IMG_MEMORY_THRESHOLD = clampNumber(
-  process.env.ORCHESTRATOR_MEMORY_RECALL_IMG_THRESHOLD,
-  0.5,
-  0,
-  1
-)
+// Image -> TEXT memory used to default lower than text recall, but that proved
+// too noisy in practice. Default it to the active recall threshold; env can still
+// calibrate it explicitly when needed.
+function getImageMemoryThreshold(): number {
+  return clampNumber(
+    process.env.ORCHESTRATOR_MEMORY_RECALL_IMG_THRESHOLD,
+    getRecallThreshold(),
+    0,
+    1
+  )
+}
+
+// The file bar (image -> IMAGE/PDF) is same-modality and can stay separate.
 const FILE_THRESHOLD = clampNumber(
   process.env.ORCHESTRATOR_MEMORY_RECALL_FILE_THRESHOLD,
   0.6,
@@ -493,6 +496,9 @@ export interface MemoryHit {
   /** "note" = a text memory chunk (default); "file" = a similar Library asset
    *  surfaced via an attached image/PDF. */
   kind?: "note" | "file"
+  assetKey?: string
+  mimeType?: string
+  url?: string
 }
 
 function dot(a: Float32Array, b: Float32Array): number {
@@ -718,9 +724,10 @@ export function formatRecallBlock(hits: MemoryHit[]): string {
 /** Prompt block for files the user already has that resemble an attached asset. */
 export function formatFilesBlock(hits: MemoryHit[]): string {
   if (hits.length === 0) return ""
-  const lines = hits.map(
-    (h) => `- [${h.title}] ${clip(h.text, MAX_HIT_CHARS)} (relevance ${h.score.toFixed(2)})`
-  )
+  const lines = hits.map((h) => {
+    const text = clip(h.text, MAX_HIT_CHARS)
+    return `- [${h.title}]${text ? ` ${text}` : ""} (relevance ${h.score.toFixed(2)})`
+  })
   return [
     "<similar_files>",
     "Files you ALREADY have that look similar to what was just attached, matched by visual/document similarity to the attachment. Use them to reuse or reference existing material instead of treating the attachment as brand new. Best-effort hints — verify before relying, and mention only if useful.",
@@ -738,6 +745,7 @@ export interface RecalledMemory {
 
 export interface RecalledMemoryOptions {
   attachments?: RecallAttachmentInput[]
+  excludeFilePaths?: string[]
   /**
    * Optional chat scope for repeat suppression. When omitted, recall is stateless
    * (used by tests, smoke scripts, and Settings preview).
@@ -859,7 +867,8 @@ function readAssetBytes(absPath: string): Buffer | null {
  */
 async function recallByAsset(
   asset: RecallAttachmentInput,
-  exclude: Set<string>
+  exclude: Set<string>,
+  excludeFilePaths?: Set<string>
 ): Promise<{ notes: MemoryHit[]; files: MemoryHit[] }> {
   const empty = { notes: [] as MemoryHit[], files: [] as MemoryHit[] }
   try {
@@ -877,7 +886,7 @@ async function recallByAsset(
       if (exclude.has(r.source)) continue
       if (r.vector.length !== vec.length) continue
       const score = dot(vec, r.vector)
-      if (score >= IMG_MEMORY_THRESHOLD) {
+      if (score >= getImageMemoryThreshold()) {
         scored.push({ id: r.id, source: r.source, title: r.title, text: r.text, score, kind: "note" })
         vectorById.set(r.id, r.vector)
       }
@@ -890,15 +899,18 @@ async function recallByAsset(
     // (b) image -> similar files the user already has (same-modality, stricter).
     const libHits = await searchLibraryByVector(vec, FILE_TOPK, {
       threshold: FILE_THRESHOLD,
-      excludePaths: new Set([asset.path]),
+      excludePaths: new Set([asset.path, ...(excludeFilePaths ?? [])]),
     })
     const files: MemoryHit[] = libHits.map((f) => ({
-      id: `file:${f.path}`,
+      id: `file:${f.assetKey}`,
       source: f.displayPath,
       title: f.displayPath,
-      text: `similar ${f.kind === "doc" ? "document" : "image"} you already have`,
+      text: "",
       score: f.score,
       kind: "file",
+      assetKey: f.assetKey,
+      mimeType: f.mimeType,
+      url: `/api/memory/file?assetKey=${encodeURIComponent(f.assetKey)}`,
     }))
 
     return { notes, files }
@@ -949,6 +961,9 @@ export async function getRecalledMemory(
     kickMemoryIndexSync()
 
     const exclude = inContextSources()
+    const excludeFilePaths = new Set(
+      (recallOptions.excludeFilePaths ?? []).filter((p) => typeof p === "string" && p.trim())
+    )
     const textPromise: Promise<MemoryHit[]> =
       q.length >= MIN_QUERY_CHARS
         ? searchMemory(q, {
@@ -960,7 +975,7 @@ export async function getRecalledMemory(
           })
         : Promise.resolve([])
     const assetPromise = asset
-      ? recallByAsset(asset, exclude)
+      ? recallByAsset(asset, exclude, excludeFilePaths)
       : Promise.resolve({ notes: [] as MemoryHit[], files: [] as MemoryHit[] })
 
     // Independent budgets: a slow/failed image embed must not lose text hits
@@ -1019,10 +1034,13 @@ export function formatRecallNote(hits: MemoryHit[]): string {
 export function buildRecallUiHits(hits: MemoryHit[]): MemoryRecallHit[] {
   return hits.map((h) => ({
     id: h.id,
+    kind: h.kind ?? "note",
     title: displayMemoryTitle(h.source, h.title || h.source),
     source: h.source,
     score: h.score,
     snippet: h.text.replace(/\s+/g, " ").trim(),
+    mimeType: h.mimeType,
+    url: h.url,
   }))
 }
 

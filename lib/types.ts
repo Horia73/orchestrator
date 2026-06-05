@@ -67,6 +67,8 @@ export interface ContextCompactionReasoningEntry {
 export interface MemoryRecallHit {
   /** Stable memory-index chunk id when available; old saved entries may omit it. */
   id?: string
+  /** "note" for memory chunks, "file" for similar Library assets. */
+  kind?: "note" | "file"
   /** "file › heading" label for the recalled chunk. */
   title: string
   /** Source memory file the chunk came from. */
@@ -75,6 +77,10 @@ export interface MemoryRecallHit {
   score: number
   /** Recalled chunk text shown in the UI. Old saved entries may still be clipped. */
   snippet: string
+  /** Preview MIME type for similar file hits. */
+  mimeType?: string
+  /** Preview URL for similar file hits. */
+  url?: string
 }
 
 export interface MemoryRecallReasoningEntry {
