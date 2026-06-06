@@ -106,6 +106,17 @@ export interface MicroscriptEvent {
     payload: Record<string, unknown> | null
 }
 
+export interface MicroscriptUpdatePlan {
+    current: Microscript
+    next: Microscript
+    changed: boolean
+    changedFields: string[]
+    codeChanged: boolean
+    manifestChanged: boolean
+    enabledChanged: boolean
+    stateChanged: boolean
+}
+
 function emitMicroscriptsChanged(scriptId: string | undefined, reason: string): void {
     emitAppEvent({ type: 'microscripts.changed', scriptId, reason })
 }
@@ -116,6 +127,16 @@ function emitMicroscriptRunsChanged(scriptId: string, runId?: string): void {
 
 function codeHash(code: string): string {
     return createHash('sha256').update(code).digest('hex')
+}
+
+function stableJson(value: unknown): string {
+    if (value === undefined) return 'undefined'
+    if (value === null || typeof value !== 'object') return JSON.stringify(value)
+    if (Array.isArray(value)) return `[${value.map(stableJson).join(',')}]`
+    const entries = Object.entries(value as Record<string, unknown>)
+        .filter(([, item]) => item !== undefined)
+        .sort(([a], [b]) => a.localeCompare(b))
+    return `{${entries.map(([key, item]) => `${JSON.stringify(key)}:${stableJson(item)}`).join(',')}}`
 }
 
 function safeJsonObject(raw: string): Record<string, unknown> {
@@ -290,11 +311,14 @@ export function createMicroscript(input: CreateMicroscriptInput): Microscript {
     return created
 }
 
-export function updateMicroscript(id: string, patch: UpdateMicroscriptInput): Microscript | null {
+export function planMicroscriptUpdate(
+    id: string,
+    patch: UpdateMicroscriptInput,
+    now = Date.now(),
+): MicroscriptUpdatePlan | null {
     const current = getMicroscript(id)
     if (!current) return null
     const parsed = UpdateMicroscriptInputSchema.parse(patch)
-    const now = Date.now()
 
     const title = parsed.title ?? current.title
     const code = parsed.code ?? current.code
@@ -303,18 +327,66 @@ export function updateMicroscript(id: string, patch: UpdateMicroscriptInput): Mi
         : current.manifest
     const enabled = parsed.enabled ?? current.enabled
     const state = parsed.state ?? current.state
-    const scheduleChanged = parsed.manifest !== undefined
+    const titleChanged = title !== current.title
+    const codeChanged = parsed.code !== undefined && code !== current.code
+    const manifestChanged = parsed.manifest !== undefined && stableJson(manifest) !== stableJson(current.manifest)
     const enabledChanged = parsed.enabled !== undefined && parsed.enabled !== current.enabled
+    const stateChanged = parsed.state !== undefined && stableJson(state) !== stableJson(current.state)
+    const effectivePatch = titleChanged || codeChanged || manifestChanged || enabledChanged || stateChanged
 
     let status: MicroscriptStatus = current.status
     let nextRunAt = current.nextRunAt
-    if (!enabled) {
-        status = 'paused'
-        nextRunAt = null
-    } else if (enabledChanged || scheduleChanged || current.status === 'paused' || current.status === 'completed' || current.status === 'expired') {
-        status = 'active'
-        nextRunAt = nextRunForSchedule(manifest.schedule, now)
+    if (effectivePatch) {
+        if (!enabled) {
+            status = 'paused'
+            nextRunAt = null
+        } else if (enabledChanged || manifestChanged || current.status === 'paused' || current.status === 'completed' || current.status === 'expired') {
+            status = 'active'
+            nextRunAt = nextRunForSchedule(manifest.schedule, now)
+        }
     }
+
+    const nextCodeHash = codeChanged ? codeHash(code) : current.codeHash
+    const changedFields: string[] = []
+    if (titleChanged) changedFields.push('title')
+    if (codeChanged) changedFields.push('code', 'codeHash')
+    if (manifestChanged) changedFields.push('manifest')
+    if (enabledChanged) changedFields.push('enabled')
+    if (stateChanged) changedFields.push('state')
+    if (status !== current.status) changedFields.push('status')
+    if (nextRunAt !== current.nextRunAt) changedFields.push('nextRunAt')
+
+    const changed = changedFields.length > 0
+    const next: Microscript = {
+        ...current,
+        title,
+        enabled,
+        status,
+        code,
+        codeHash: nextCodeHash,
+        manifest,
+        state,
+        nextRunAt,
+        updatedAt: changed ? now : current.updatedAt,
+    }
+
+    return {
+        current,
+        next,
+        changed,
+        changedFields,
+        codeChanged,
+        manifestChanged,
+        enabledChanged,
+        stateChanged,
+    }
+}
+
+export function updateMicroscript(id: string, patch: UpdateMicroscriptInput): Microscript | null {
+    const plan = planMicroscriptUpdate(id, patch)
+    if (!plan) return null
+    if (!plan.changed) return plan.current
+    const { next } = plan
 
     db.prepare(
         `
@@ -326,21 +398,23 @@ export function updateMicroscript(id: string, patch: UpdateMicroscriptInput): Mi
         `,
     ).run({
         id,
-        title,
-        enabled: enabled ? 1 : 0,
-        status,
-        code,
-        codeHash: codeHash(code),
-        manifest: serializeManifest(manifest),
-        state: serializeState(state),
-        nextRunAt,
-        updatedAt: now,
+        title: next.title,
+        enabled: next.enabled ? 1 : 0,
+        status: next.status,
+        code: next.code,
+        codeHash: next.codeHash,
+        manifest: serializeManifest(next.manifest),
+        state: serializeState(next.state),
+        nextRunAt: next.nextRunAt,
+        updatedAt: next.updatedAt,
     })
 
     recordMicroscriptEvent(id, 'updated', {
-        codeChanged: parsed.code !== undefined,
-        manifestChanged: parsed.manifest !== undefined,
-        enabledChanged,
+        changedFields: plan.changedFields,
+        codeChanged: plan.codeChanged,
+        manifestChanged: plan.manifestChanged,
+        enabledChanged: plan.enabledChanged,
+        stateChanged: plan.stateChanged,
     })
     emitMicroscriptsChanged(id, 'updated')
     return getMicroscript(id)

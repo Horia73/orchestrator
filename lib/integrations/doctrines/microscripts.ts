@@ -18,6 +18,19 @@ Prefer other subsystems when:
 Activation:
 - Call ActivateIntegrationTools("microscripts") before creating, updating, or explaining microscripts.
 - Call microscript_describe_capabilities before drafting a new script if you need the exact contract.
+- Microscript lifecycle tools reject unknown top-level arguments. Use the exact field names below; aliases such as id, dryRun, includeCode, runId, or scriptId are not accepted.
+
+Tool argument schemas:
+- microscript_describe_capabilities: {}.
+- microscript_create: {title:string, code:string, manifest:object, enabled?:boolean, initial_state?:object}.
+- microscript_list: {enabled?:boolean, status?:"active"|"running"|"paused"|"completed"|"expired"|"error"}.
+- microscript_get: {script_id:string, include_code?:boolean, event_limit?:number, run_limit?:number}.
+- microscript_update: {script_id:string, title?:string, code?:string, manifest?:object, enabled?:boolean, state?:object, dry_run?:boolean}.
+- microscript_pause: {script_id:string, reason?:string}.
+- microscript_resume: {script_id:string}.
+- microscript_delete: {script_id:string}.
+- microscript_run_now: {script_id:string, dry_run?:boolean, test_context?:{trigger?:"manual"|"webhook"|"schedule", now?:number|string, state?:object, webhook?:object, operation_results?:object}}. test_context is allowed only with dry_run=true.
+- microscript_get_run: {run_id:string}.
 
 Runtime contract:
 - Python code must define run(ctx) and return a JSON-serializable dict.
@@ -48,6 +61,14 @@ Safety and lifecycle:
 - Do not create always-on scripts casually. State what will run, how often, which permissions it has, and when it stops.
 - Service calls, writes, sends, agent wakes, app tool calls, account changes, or other side effects require explicit user approval of the permission boundary before creation.
 - For trusted scripts, prefer broad but explicit profiles when the user asked for flexibility: allow direct Python network, workspace files, and tool_call patterns. Still state what will run, how often, and when it stops.
+
+Update and test behavior:
+- Use microscript_get with include_code=true before patching an existing production script. The returned code_hash is the stored SHA-256 of the code.
+- Use microscript_update with dry_run=true to validate code/manifest/state and preview changed_fields. Dry-run update never writes updatedAt, code_hash, state, heartbeat, or events.
+- Effective no-op microscript_update calls return changed=false/write_performed=false and do not mutate updatedAt, code_hash, state, nextRunAt, or events. Re-sending the same code should not produce an updated event.
+- Code hashes change only when the stored code changes. There is no hidden heartbeat/sync normalizer that should rewrite code_hash or emit updated events after a validated update.
+- For webhook/state-machine scripts such as location/gym gates, use microscript_run_now with dry_run=true and test_context.state/webhook/operation_results to evaluate deterministic transitions before a real run. Dry-run run does not persist state, status, runs, events, Inbox notifications, agent wakes, app-tool calls, integration calls, HTTP fetches, or production script files. Direct Python networking is disabled and direct file access uses a temporary workspace.
+- Recommended production sequence: microscript_get(include_code=true) -> edit locally in the tool call payload -> microscript_update(dry_run=true) -> microscript_run_now(dry_run=true, test_context=...) for key state/webhook cases -> microscript_update without dry_run only if changed_fields are intended -> microscript_get to verify code_hash/events -> optionally microscript_run_now without dry_run only when the user accepts live side effects.
 
 Supported operation request kinds:
 - notify.inbox: requires notify_inbox permission.

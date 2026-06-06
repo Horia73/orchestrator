@@ -62,6 +62,63 @@ Microscripts have two canonical schedule shapes:
 
 If a webhook event needs a later follow-up check, the script can return `nextCheckAfterMs` or `nextRunAt` from that webhook run. Otherwise it should process the event and exit.
 
+## Agent Tool Contract
+
+Microscript lifecycle tools reject unknown top-level arguments. Use the exact field names below; aliases such as `id`, `scriptId`, `dryRun`, `includeCode`, and `runId` are not accepted.
+
+- `microscript_describe_capabilities`: `{}`
+- `microscript_create`: `{ "title": string, "code": string, "manifest": object, "enabled"?: boolean, "initial_state"?: object }`
+- `microscript_list`: `{ "enabled"?: boolean, "status"?: "active" | "running" | "paused" | "completed" | "expired" | "error" }`
+- `microscript_get`: `{ "script_id": string, "include_code"?: boolean, "event_limit"?: number, "run_limit"?: number }`
+- `microscript_update`: `{ "script_id": string, "title"?: string, "code"?: string, "manifest"?: object, "enabled"?: boolean, "state"?: object, "dry_run"?: boolean }`
+- `microscript_pause`: `{ "script_id": string, "reason"?: string }`
+- `microscript_resume`: `{ "script_id": string }`
+- `microscript_delete`: `{ "script_id": string }`
+- `microscript_run_now`: `{ "script_id": string, "dry_run"?: boolean, "test_context"?: object }`
+- `microscript_get_run`: `{ "run_id": string }`
+
+`microscript_run_now.test_context` is only valid with `dry_run=true` and may include:
+
+```json
+{
+  "trigger": "manual",
+  "now": "2026-06-06T12:00:00Z",
+  "state": {},
+  "webhook": {
+    "eventId": "whe_test",
+    "endpointId": "wh_test",
+    "slug": "home-assistant",
+    "source": "home_assistant",
+    "eventType": "location.changed",
+    "dedupeKey": "sample-1",
+    "payload": {},
+    "normalized": {}
+  },
+  "operation_results": {
+    "request_id": { "ok": true, "data": {} }
+  }
+}
+```
+
+## Update And Dry-Run Semantics
+
+Use `microscript_update` with `dry_run=true` before patching production scripts. It validates code and manifest, returns `changed`, `changed_fields`, and before/after hashes, and does not write `updatedAt`, `code_hash`, state, heartbeat, or events.
+
+Effective no-op updates return `changed=false` and `write_performed=false`. They do not mutate `updatedAt`, `code_hash`, state, `nextRunAt`, or events.
+
+`code_hash` changes only when stored code changes. The heartbeat/sync path should not rewrite `code_hash` or emit `updated` events after a validated update.
+
+Use `microscript_run_now` with `dry_run=true` to evaluate deterministic state transitions with supplied `state`, `webhook`, and optional `operation_results`. Dry-run runs do not persist state/status/runs/events, post Inbox notifications, wake agents, call app tools/integrations, perform parent-mediated HTTP fetches, or write production script files. Direct Python networking is disabled, and direct Python file access uses a temporary workspace.
+
+Recommended production update sequence for state-machine scripts such as location or gym gates:
+
+1. `microscript_get` with `include_code=true`.
+2. `microscript_update` with `dry_run=true`.
+3. `microscript_run_now` with `dry_run=true` and representative `test_context` cases.
+4. `microscript_update` without `dry_run` only when `changed_fields` are intended.
+5. `microscript_get` to verify `code_hash` and recent events.
+6. `microscript_run_now` without `dry_run` only when live side effects are intended and approved.
+
 ## Blocked Actions
 
 When the runtime blocks an action, the error must include:
