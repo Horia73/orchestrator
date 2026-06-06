@@ -1,7 +1,10 @@
 import { randomBytes } from 'crypto'
+import { decodeHTML, decodeHTMLAttribute } from 'entities'
 
 const GMAIL_MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024
 const GMAIL_MAX_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
+const LINK_ONLY_TEXT_MAX_CHARS = 500
+const MIN_USEFUL_HTML_CHARS = 60
 
 export interface GmailHeader {
     name: string
@@ -49,17 +52,102 @@ export interface GmailThreadMessageForLimit {
     body: string
 }
 
+export type GmailMessageBodySource = 'text/plain' | 'text/html' | 'none'
+
+export interface GmailMessageBodyExtraction {
+    body: string
+    bodySource: GmailMessageBodySource
+    hasPlain: boolean
+    hasHtml: boolean
+    bodyPlainCharCount: number
+    bodyHtmlCharCount: number
+    extractionWarnings: string[]
+    needsVisualInspection: boolean
+}
+
 export function getHeader(headers: GmailHeader[], name: string): string {
     const lower = name.toLowerCase()
     return headers.find(header => header.name.toLowerCase() === lower)?.value ?? ''
 }
 
+export function extractMessageBody(payload: GmailPayloadPart | undefined): GmailMessageBodyExtraction {
+    const empty: GmailMessageBodyExtraction = {
+        body: '',
+        bodySource: 'none',
+        hasPlain: false,
+        hasHtml: false,
+        bodyPlainCharCount: 0,
+        bodyHtmlCharCount: 0,
+        extractionWarnings: [],
+        needsVisualInspection: false,
+    }
+    if (!payload) return empty
+
+    const plain = joinBodyParts(collectPayloadText(payload, 'text/plain').map(normalizeExtractedText))
+    const htmlParts = collectPayloadText(payload, 'text/html').map(part => part.trim()).filter(Boolean)
+    const rawHtml = htmlParts.join('\n\n')
+    const html = joinBodyParts(htmlParts.map(htmlToText))
+    const hasPlain = plain.length > 0
+    const hasHtml = rawHtml.length > 0
+    const plainLooksLinkOnly = hasPlain && looksLikeLinkOnlyText(plain)
+    const htmlAnalysis = analyzeHtmlExtraction(rawHtml, html)
+    const extractionWarnings: string[] = []
+
+    if (plainLooksLinkOnly) extractionWarnings.push('Plain text appears short or link-only.')
+    if (hasHtml && htmlAnalysis.containsTable && html.length === 0) {
+        extractionWarnings.push('HTML body contained table markup but no readable text could be extracted.')
+    }
+
+    const shouldUseHtml = html.length > 0 && (
+        !hasPlain
+        || (plainLooksLinkOnly && isUsefulHtmlText(html))
+        || (plain.length < 1000 && htmlAnalysis.containsTable && html.length > plain.length * 1.4)
+    )
+
+    if (shouldUseHtml && hasPlain) {
+        extractionWarnings.push('Used HTML-derived body because it appears more complete than the plain-text part.')
+    }
+
+    const needsVisualInspection = hasHtml
+        && htmlAnalysis.imageHeavy
+        && (!hasPlain || plainLooksLinkOnly || html.length === 0)
+
+    if (needsVisualInspection) {
+        extractionWarnings.push('HTML body appears image/CID-heavy; visual inspection may be needed.')
+    }
+
+    if (hasHtml && html.length === 0) {
+        extractionWarnings.push('HTML body produced no readable text.')
+    }
+
+    const bodySource: GmailMessageBodySource = shouldUseHtml
+        ? 'text/html'
+        : hasPlain
+            ? 'text/plain'
+            : html.length > 0
+                ? 'text/html'
+                : 'none'
+
+    const body = bodySource === 'text/html'
+        ? html
+        : bodySource === 'text/plain'
+            ? plain
+            : ''
+
+    return {
+        body,
+        bodySource,
+        hasPlain,
+        hasHtml,
+        bodyPlainCharCount: plain.length,
+        bodyHtmlCharCount: html.length,
+        extractionWarnings,
+        needsVisualInspection,
+    }
+}
+
 export function extractMessageText(payload: GmailPayloadPart | undefined): string {
-    if (!payload) return ''
-    const plain = collectPayloadText(payload, 'text/plain')
-    if (plain.length > 0) return plain.join('\n\n').trim()
-    const html = collectPayloadText(payload, 'text/html')
-    return html.map(htmlToText).join('\n\n').trim()
+    return extractMessageBody(payload).body
 }
 
 export function collectAttachments(part: GmailPayloadPart | undefined, messageId: string): GmailAttachmentInfo[] {
@@ -209,28 +297,154 @@ export function base64UrlDecodeBuffer(value: string): Buffer {
 
 function collectPayloadText(part: GmailPayloadPart, mimeType: string): string[] {
     const out: string[] = []
-    if (part.mimeType === mimeType && part.body?.data) out.push(base64UrlDecode(part.body.data))
+    if (normalizeMimeType(part.mimeType) === mimeType && part.body?.data) out.push(base64UrlDecode(part.body.data))
     for (const child of part.parts ?? []) out.push(...collectPayloadText(child, mimeType))
     return out
 }
 
 function htmlToText(html: string): string {
-    return html
+    const normalized = stripInvisibleHtml(html)
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
-        .replace(/<\/(p|div|section|article|header|footer|main|li|h[1-6]|tr)>/gi, '\n')
+        .replace(/<noscript[\s\S]*?<\/noscript>/gi, ' ')
+        .replace(/<head[\s\S]*?<\/head>/gi, ' ')
+        .replace(/<!--[\s\S]*?-->/g, ' ')
+        .replace(/<a\b([^>]*)>([\s\S]*?)<\/a>/gi, (_match, attrs: string, inner: string) => formatAnchorText(attrs, inner))
+        .replace(/<img\b([^>]*)>/gi, (_match, attrs: string) => formatImageText(attrs))
         .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<li\b[^>]*>/gi, '\n- ')
+        .replace(/<\/(td|th)>/gi, ' | ')
+        .replace(/<\/tr>/gi, '\n')
+        .replace(/<\/(thead|tbody|tfoot|table)>/gi, '\n')
+        .replace(/<tr\b[^>]*>/gi, '\n')
+        .replace(/<t[dh]\b[^>]*>/gi, '')
+        .replace(/<\/(p|div|section|article|header|footer|main|li|h[1-6]|blockquote|pre)>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
-        .replace(/[ \t]+/g, ' ')
-        .replace(/\n\s+/g, '\n')
+
+    return normalizeExtractedText(decodeHTML(normalized))
+        .split('\n')
+        .map(normalizeTableLine)
+        .join('\n')
         .replace(/\n{3,}/g, '\n\n')
         .trim()
+}
+
+function joinBodyParts(parts: string[]): string {
+    return parts.map(part => part.trim()).filter(Boolean).join('\n\n').trim()
+}
+
+function normalizeExtractedText(value: string): string {
+    return value
+        .replace(/\r\n?/g, '\n')
+        .replace(/\u00a0/g, ' ')
+        .replace(/[ \t]+/g, ' ')
+        .replace(/[ \t]*\n[ \t]*/g, '\n')
+        .replace(/\n{3,}/g, '\n\n')
+        .trim()
+}
+
+function normalizeTableLine(value: string): string {
+    const trimmed = value
+        .replace(/[ \t]*\|[ \t]*/g, ' | ')
+        .replace(/(?:^\|[ \t]*|[ \t]*\|$)/g, '')
+        .replace(/[ \t]{2,}/g, ' ')
+        .trim()
+    if (!trimmed.includes('|')) return trimmed
+    return trimmed
+        .split('|')
+        .map(cell => cell.trim())
+        .filter(Boolean)
+        .join(' | ')
+}
+
+function normalizeMimeType(value: string | undefined): string {
+    return (value ?? '').split(';')[0].trim().toLowerCase()
+}
+
+function looksLikeLinkOnlyText(value: string): boolean {
+    const text = value.trim()
+    if (!text || text.length > LINK_ONLY_TEXT_MAX_CHARS) return false
+
+    const urls = text.match(/https?:\/\/\S+/gi) ?? []
+    if (urls.length === 0) return false
+
+    const withoutUrls = text.replace(/https?:\/\/\S+/gi, ' ')
+    const words = withoutUrls.match(/[A-Za-z0-9][A-Za-z0-9'_-]{2,}/g) ?? []
+    const hasLinkOnlyCue = /\b(view|open|see|click|browser|online|web|receipt|invoice|link)\b/i.test(withoutUrls)
+    return words.length <= 16 || (text.length <= 260 && hasLinkOnlyCue)
+}
+
+function isUsefulHtmlText(value: string): boolean {
+    const words = value.match(/[A-Za-z0-9][A-Za-z0-9'_-]{1,}/g) ?? []
+    return value.length >= MIN_USEFUL_HTML_CHARS && words.length >= 8
+}
+
+function analyzeHtmlExtraction(rawHtml: string, extractedText: string): {
+    containsTable: boolean
+    imageHeavy: boolean
+} {
+    if (!rawHtml) return { containsTable: false, imageHeavy: false }
+
+    const imgCount = countMatches(rawHtml, /<img\b/gi)
+    const cidCount = countMatches(rawHtml, /\bcid:/gi)
+    const containsTable = /<table\b/i.test(rawHtml) || /<t[dh]\b/i.test(rawHtml)
+    const extractedChars = extractedText.trim().length
+    const imageHeavy = imgCount > 0 && (
+        extractedChars < 80
+        || (cidCount >= 3 && extractedChars < 250)
+        || (imgCount >= 5 && extractedChars < 400)
+    )
+
+    return { containsTable, imageHeavy }
+}
+
+function countMatches(value: string, pattern: RegExp): number {
+    return value.match(pattern)?.length ?? 0
+}
+
+function stripInvisibleHtml(value: string): string {
+    let current = value
+    for (let i = 0; i < 5; i += 1) {
+        const next = current.replace(
+            /<([a-z][\w:-]*)\b(?=[^>]*(?:display\s*:\s*none|visibility\s*:\s*hidden|mso-hide\s*:\s*all|font-size\s*:\s*0|max-height\s*:\s*0|opacity\s*:\s*0))[^>]*>[\s\S]*?<\/\1>/gi,
+            ' ',
+        )
+        if (next === current) break
+        current = next
+    }
+    return current
+}
+
+function formatAnchorText(attrs: string, inner: string): string {
+    const label = inlineHtmlToText(inner)
+    const href = htmlAttribute(attrs, 'href')
+    if (!href) return ` ${label} `
+
+    const cleanHref = decodeHTMLAttribute(href).trim()
+    if (!cleanHref || !/^(https?:|mailto:)/i.test(cleanHref)) return ` ${label} `
+    if (!label) return ` ${cleanHref} `
+    if (label.includes(cleanHref)) return ` ${label} `
+    return ` ${label} (${cleanHref}) `
+}
+
+function formatImageText(attrs: string): string {
+    const alt = htmlAttribute(attrs, 'alt')
+    const text = alt ? decodeHTMLAttribute(alt).trim() : ''
+    return text ? ` ${text} ` : ' '
+}
+
+function inlineHtmlToText(html: string): string {
+    return normalizeExtractedText(decodeHTML(
+        html
+            .replace(/<br\s*\/?>/gi, ' ')
+            .replace(/<[^>]+>/g, ' '),
+    ))
+}
+
+function htmlAttribute(attrs: string, name: string): string | null {
+    const pattern = new RegExp(`\\b${name}\\s*=\\s*(?:"([^"]*)"|'([^']*)'|([^\\s"'<>]+))`, 'i')
+    const match = pattern.exec(attrs)
+    return match?.[1] ?? match?.[2] ?? match?.[3] ?? null
 }
 
 function attachmentMimePart(boundary: string, attachment: GmailOutgoingAttachment): string[] {

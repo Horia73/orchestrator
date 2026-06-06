@@ -12,13 +12,14 @@ import {
     cleanHeaderValue,
     cleanLabelIds,
     collectAttachments,
-    extractMessageText,
+    extractMessageBody,
     getHeader,
     limitThreadMessages,
     normalizeOutgoingAttachments,
     summarizeOutgoingAttachments,
     type GmailAttachmentInfo,
     type GmailAttachmentSummary,
+    type GmailMessageBodySource,
     type GmailOutgoingAttachment,
     type GmailPayloadPart,
 } from '@/lib/integrations/gmail-message-formatting'
@@ -104,7 +105,7 @@ interface GmailProfile {
     threadsTotal?: number
 }
 
-interface GmailMessage {
+export interface GmailMessage {
     id: string
     threadId: string
     labelIds?: string[]
@@ -173,6 +174,13 @@ export interface GmailThreadMessage {
     subject: string
     snippet: string
     body: string
+    bodySource: GmailMessageBodySource
+    hasPlain: boolean
+    hasHtml: boolean
+    bodyPlainCharCount: number
+    bodyHtmlCharCount: number
+    extractionWarnings: string[]
+    needsVisualInspection: boolean
     attachments: GmailAttachmentInfo[]
     listUnsubscribe: string
     listUnsubscribePost: string
@@ -440,27 +448,37 @@ export async function gmailReadThread(threadId: string, maxChars: number): Promi
     truncated: boolean
 }> {
     const thread = await gmailApi<GmailThread>(`/users/me/threads/${encodeURIComponent(threadId)}?format=full`)
-    const messages = (thread.messages ?? []).map(message => {
-        const headers = message.payload?.headers ?? []
-        return {
-            id: message.id,
-            threadId: message.threadId,
-            labelIds: message.labelIds ?? [],
-            from: getHeader(headers, 'From'),
-            to: getHeader(headers, 'To'),
-            cc: getHeader(headers, 'Cc'),
-            date: getHeader(headers, 'Date'),
-            subject: getHeader(headers, 'Subject'),
-            snippet: message.snippet ?? '',
-            body: extractMessageText(message.payload),
-            attachments: collectAttachments(message.payload, message.id),
-            listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
-            listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
-        }
-    })
+    const messages = (thread.messages ?? []).map(formatGmailThreadMessage)
 
     const limited = limitThreadMessages(messages, maxChars)
     return { threadId: thread.id, messages: limited.messages, truncated: limited.truncated }
+}
+
+export function formatGmailThreadMessage(message: GmailMessage): GmailThreadMessage {
+    const headers = message.payload?.headers ?? []
+    const body = extractMessageBody(message.payload)
+    return {
+        id: message.id,
+        threadId: message.threadId,
+        labelIds: message.labelIds ?? [],
+        from: getHeader(headers, 'From'),
+        to: getHeader(headers, 'To'),
+        cc: getHeader(headers, 'Cc'),
+        date: getHeader(headers, 'Date'),
+        subject: getHeader(headers, 'Subject'),
+        snippet: message.snippet ?? '',
+        body: body.body,
+        bodySource: body.bodySource,
+        hasPlain: body.hasPlain,
+        hasHtml: body.hasHtml,
+        bodyPlainCharCount: body.bodyPlainCharCount,
+        bodyHtmlCharCount: body.bodyHtmlCharCount,
+        extractionWarnings: body.extractionWarnings,
+        needsVisualInspection: body.needsVisualInspection,
+        attachments: collectAttachments(message.payload, message.id),
+        listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
+        listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
+    }
 }
 
 export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<GmailDraftResult> {

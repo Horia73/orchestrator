@@ -47,7 +47,7 @@ export const gmailSearchTool: ToolDef = {
 export const gmailReadThreadTool: ToolDef = {
     id: 'GmailReadThread',
     name: 'GmailReadThread',
-    description: 'Reads a connected Gmail thread, including message headers, labels, plain-text body content, and attachment metadata. Use only for threads relevant to the user request.',
+    description: 'Reads a connected Gmail thread, including message headers, labels, body content extracted from text/plain or text/html parts, body extraction metadata, and attachment metadata. Use only for threads relevant to the user request.',
     input_schema: {
         type: 'object',
         properties: {
