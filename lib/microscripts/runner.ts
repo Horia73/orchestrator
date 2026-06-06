@@ -1683,10 +1683,6 @@ function filePermission(script: Microscript): Extract<MicroscriptPermission, { k
     return requirePermission(script, 'files') as Extract<MicroscriptPermission, { kind: 'files' }>
 }
 
-function resolveScriptFile(scriptId: string, relPath: string): string {
-    return resolveScriptFileAtRoot(scriptWorkDir(scriptId), relPath)
-}
-
 function resolveScriptFileAtRoot(scriptRoot: string, relPath: string): string {
     if (path.isAbsolute(relPath)) throw new Error('Microscript file paths must be relative.')
     const root = path.join(scriptRoot, 'files')
