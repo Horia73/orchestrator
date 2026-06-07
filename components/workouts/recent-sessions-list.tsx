@@ -47,7 +47,7 @@ export function RecentSessionsList({
                 "rounded-xl border border-dashed border-border bg-muted/25 p-6 text-center text-sm text-muted-foreground",
                 className,
             )}>
-                Niciun workout salvat încă. Începe o sesiune din chat și apasă <span className="font-medium text-foreground">Finish workout</span> ca să apară aici.
+                No saved workouts yet. Start a session from chat and tap <span className="font-medium text-foreground">Finish workout</span> to see it here.
             </div>
         )
     }

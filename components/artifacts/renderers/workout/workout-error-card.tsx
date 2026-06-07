@@ -29,7 +29,7 @@ export function WorkoutErrorCard({
         >
             <AlertTriangle className="mt-0.5 size-4 shrink-0 text-destructive" aria-hidden />
             <div className="flex min-w-0 flex-1 flex-col gap-0.5">
-                <span className="font-medium">Workout-ul nu a putut fi afișat</span>
+                <span className="font-medium">This workout couldn&apos;t be displayed</span>
                 <span className="text-muted-foreground">{message}</span>
             </div>
         </div>

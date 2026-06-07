@@ -206,7 +206,7 @@ function FormCuesPopover({
                 {cues.length > 0 ? (
                     <>
                         <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55">
-                            Indicații de execuție
+                            Form cues
                         </div>
                         <ul className="flex flex-col gap-1.5 text-foreground/85">
                             {cues.map((c, i) => (
@@ -223,7 +223,7 @@ function FormCuesPopover({
                             "mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55",
                             (description || cues.length > 0) && "mt-3",
                         )}>
-                            Termeni
+                            Terms
                         </div>
                         <dl className="flex flex-col gap-2 text-foreground/85">
                             {glossaryEntries.map(([term, entry]) => (
@@ -249,7 +249,7 @@ function FormCuesPopover({
                             cues.length > 0 && "mt-3",
                         )}>
                             <Replace className="size-3" strokeWidth={2} aria-hidden />
-                            Alternative
+                            Alternatives
                         </div>
                         <ul className="flex flex-col gap-1 text-foreground/85">
                             {alternatives!.map((a, i) => (

@@ -44,7 +44,7 @@ export function RepsPicker({
     return (
         <div
             role="dialog"
-            aria-label="Selectează reps"
+            aria-label="Select reps"
             className={cn(
                 "z-30 flex w-60 flex-col gap-3 rounded-xl border border-border/70 bg-popover p-3 shadow-xl",
                 className,
@@ -104,7 +104,7 @@ export function RepsPicker({
                     className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-[11.5px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                     <X className="size-3" />
-                    Anulează
+                    Cancel
                 </button>
                 <button
                     type="button"
@@ -112,7 +112,7 @@ export function RepsPicker({
                     className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11.5px] font-semibold text-primary-foreground hover:opacity-90"
                 >
                     <Check className="size-3" />
-                    Salvează
+                    Save
                 </button>
             </div>
         </div>

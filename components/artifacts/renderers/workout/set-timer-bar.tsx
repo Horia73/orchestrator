@@ -94,14 +94,14 @@ export function SetTimerBar({
                             </button>
                         ) : (
                             <div className="hidden text-right text-[11px] leading-tight text-muted-foreground sm:block">
-                                Editează și salvează setul
+                                Edit and save the set
                             </div>
                         )}
                         <button
                             type="button"
                             onClick={onCancel}
-                            aria-label="Anulează timerul setului"
-                            title="Anulează timerul setului"
+                            aria-label="Cancel set timer"
+                            title="Cancel set timer"
                             className={cn(
                                 "flex size-9 items-center justify-center rounded-md border border-border bg-background text-muted-foreground transition-colors",
                                 "hover:bg-muted hover:text-foreground",

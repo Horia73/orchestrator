@@ -105,7 +105,7 @@ export function AddSetButton({
                 )}
             >
                 <Plus className="size-3" strokeWidth={2} />
-                Adaugă set
+                Add set
             </button>
 
             {phase === 'weight' && (

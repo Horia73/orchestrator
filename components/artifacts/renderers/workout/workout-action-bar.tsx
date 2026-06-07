@@ -84,7 +84,7 @@ export function WorkoutActionBar({
                         type="button"
                         onClick={handleFinish}
                         disabled={!!activeSet}
-                        title={activeSet ? "Salvează sau anulează setul curent înainte de Finish workout" : undefined}
+                        title={activeSet ? "Save or cancel the current set before finishing the workout" : undefined}
                         className={cn(
                             "flex h-10 min-w-0 flex-1 items-center justify-center gap-2 rounded-md bg-emerald-600 px-4 text-sm font-semibold text-white transition-transform",
                             "hover:bg-emerald-700 active:scale-[0.99]",
@@ -93,7 +93,7 @@ export function WorkoutActionBar({
                         )}
                     >
                         <CheckCircle className="size-4" strokeWidth={2} />
-                        {activeSet ? "Salvează setul curent" : "Finish workout"}
+                        {activeSet ? "Save current set" : "Finish workout"}
                     </button>
                 </div>
             </div>
@@ -138,7 +138,7 @@ function FinishEarlyDialog({
                     Finish workout early?
                 </div>
                 <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-                    Seturile rămase vor fi marcate skipped, separat de seturile completate.
+                    Remaining sets will be marked skipped, separate from your completed sets.
                 </p>
                 <ul className="mt-3 flex flex-col gap-1 text-[12px] text-foreground/80">
                     {preview.map((set) => (
@@ -148,18 +148,18 @@ function FinishEarlyDialog({
                     ))}
                     {remaining > 0 ? (
                         <li className="px-2 py-0.5 text-muted-foreground">
-                            +{remaining} în plus
+                            +{remaining} more
                         </li>
                     ) : null}
                 </ul>
                 <label className="mt-3 block">
                     <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
-                        Motiv opțional
+                        Optional reason
                     </span>
                     <input
                         value={reason}
                         onChange={(event) => setReason(event.target.value)}
-                        placeholder="ex: terminat mai devreme, prea obosit"
+                        placeholder="e.g. finished early, too tired"
                         className="h-10 w-full rounded-md border border-border bg-background px-2.5 text-base text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring sm:h-9 sm:text-[12.5px]"
                     />
                 </label>
@@ -169,7 +169,7 @@ function FinishEarlyDialog({
                         onClick={onCancel}
                         className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
-                        Anulează
+                        Cancel
                     </button>
                     <button
                         type="button"
@@ -177,7 +177,7 @@ function FinishEarlyDialog({
                         className="inline-flex h-9 items-center gap-1.5 rounded-md bg-emerald-600 px-3 text-[12px] font-semibold text-white transition-colors hover:bg-emerald-700"
                     >
                         <SkipForward className="size-3.5" strokeWidth={2} />
-                        Finish și skip
+                        Finish &amp; skip
                     </button>
                 </div>
             </div>

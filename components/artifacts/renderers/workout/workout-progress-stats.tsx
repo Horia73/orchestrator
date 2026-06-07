@@ -85,7 +85,7 @@ export function WorkoutProgressStats({
                             <>
                                 <span className="font-semibold text-foreground">{plannedStats.totalSets}</span> sets
                                 <span className="ml-0.5"> · </span>
-                                <span className="font-semibold text-foreground">{plannedStats.exerciseCount}</span> exerciții
+                                <span className="font-semibold text-foreground">{plannedStats.exerciseCount}</span> exercises
                             </>
                         )}
                     </span>

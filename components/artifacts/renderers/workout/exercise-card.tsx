@@ -108,7 +108,7 @@ export function ExerciseCard({
             {exercise.defaultRestSec ? (
                 <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground">
                     <Timer className="size-3" strokeWidth={1.75} aria-hidden />
-                    Rest <span className="tabular-nums text-foreground/65">{formatDuration(exercise.defaultRestSec)}</span> între seturi
+                    Rest <span className="tabular-nums text-foreground/65">{formatDuration(exercise.defaultRestSec)}</span> between sets
                 </div>
             ) : null}
         </article>

@@ -76,27 +76,27 @@ export function SetActionsMenu({
                     onClick={() => { onEdit(); onClose() }}
                     disabled={!canEdit}
                     icon={<Pencil className="size-3.5" strokeWidth={1.85} />}
-                    label="Editează setul"
-                    hint="Actuale, RPE, RIR, notă"
+                    label="Edit set"
+                    hint="Actuals, RPE, RIR, note"
                 />
             ) : null}
             <MenuItem
                 onClick={() => { onMarkFailed(); onClose() }}
                 disabled={!canMarkFailed}
                 icon={<XCircle className="size-3.5" strokeWidth={1.85} />}
-                label="Marchează failed"
-                hint="Setul s-a oprit înainte de target"
+                label="Mark failed"
+                hint="The set stopped before target"
             />
             <MenuItem
                 onClick={() => { onSkip(); onClose() }}
                 disabled={!canSkip}
                 icon={<SkipForward className="size-3.5" strokeWidth={1.85} />}
-                label="Sari peste set"
+                label="Skip set"
             />
             <MenuItem
                 onClick={() => { onAddNote(); onClose() }}
                 icon={<MessageSquare className="size-3.5" strokeWidth={1.85} />}
-                label="Adaugă notă"
+                label="Add note"
             />
         </div>
     )

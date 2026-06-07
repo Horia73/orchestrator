@@ -41,7 +41,7 @@ export function ExerciseLeaderboard({
                 "rounded-xl border border-dashed border-border bg-muted/25 p-6 text-center text-sm text-muted-foreground",
                 className,
             )}>
-                Nu ai exerciții cu istoric încă. Bifează seturi într-un workout pentru a începe să se acumuleze.
+                No exercise history yet. Check off sets in a workout to start building it.
             </div>
         )
     }
@@ -118,7 +118,7 @@ function ExerciseRow({ exercise }: { exercise: ExerciseSummary }) {
                         </span>
                     </div>
                     <div className="mt-0.5 flex flex-wrap items-center gap-x-2 text-[11.5px] tabular-nums text-muted-foreground">
-                        <span>{exercise.sessionCount} sesiun{exercise.sessionCount === 1 ? 'e' : 'i'}</span>
+                        <span>{exercise.sessionCount} session{exercise.sessionCount === 1 ? '' : 's'}</span>
                         {exercise.lastSessionDate ? (
                             <>
                                 <span>·</span>

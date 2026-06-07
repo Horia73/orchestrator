@@ -86,11 +86,10 @@ export function formatDistance(meters: number, units: WorkoutUnits): string {
 
 /**
  * Pretty label for a SetKind, used in tooltips and the set-row badge.
- * Romanian-leaning for the UI; English equivalents in parens.
  */
 export function formatSetKind(kind: string): string {
     switch (kind) {
-        case 'warmup': return 'Încălzire'
+        case 'warmup': return 'Warm-up'
         case 'working': return 'Working'
         case 'top_set': return 'Top set'
         case 'back_off': return 'Back-off'
@@ -116,13 +115,13 @@ export function formatGroupKind(kind: string): string {
 }
 
 /**
- * Difficulty label (Romanian).
+ * Difficulty label.
  */
 export function formatDifficulty(kind: string): string {
     switch (kind) {
-        case 'usor': return 'Ușor'
-        case 'mediu': return 'Mediu'
-        case 'greu': return 'Greu'
+        case 'usor': return 'Easy'
+        case 'mediu': return 'Medium'
+        case 'greu': return 'Hard'
         case 'brutal': return 'Brutal'
         default: return kind
     }

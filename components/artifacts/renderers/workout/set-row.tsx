@@ -135,7 +135,7 @@ export function SetRow({
         } else {
             if (!sessionApi.isActive) return
             if (sessionApi.session.activeSet) {
-                window.alert('Salvează sau anulează setul pornit înainte să începi altul.')
+                window.alert('Save or cancel the set in progress before starting another.')
                 return
             }
             sessionApi.startSet(exercise, index - 1)
@@ -157,14 +157,14 @@ export function SetRow({
     const handleSkip = React.useCallback(() => {
         if (!sessionApi) return
         const existing = sessionApi.getLogged(exercise.id, index - 1)?.skipReason ?? ''
-        const reason = window.prompt('Motiv opțional pentru skip:', existing)
+        const reason = window.prompt('Optional reason for skipping:', existing)
         if (reason === null) return
         sessionApi.skipSet(exercise.id, index - 1, reason)
     }, [sessionApi, exercise.id, index])
 
     const handleMarkFailed = React.useCallback(() => {
         if (!sessionApi) return
-        const partial = window.prompt('Câte reps ai apucat? (lasă gol dacă nu știi)')
+        const partial = window.prompt('How many reps did you get? (leave blank if unsure)')
         const partialReps = partial && /^\d+$/.test(partial) ? parseInt(partial, 10) : undefined
         sessionApi.logSet(
             exercise,
@@ -212,7 +212,7 @@ export function SetRow({
     }, [editorActiveSet, sessionApi])
 
     const detailText = logged?.skipped
-        ? `Sărit${logged.skipReason ? `: ${logged.skipReason}` : ''}`
+        ? `Skipped${logged.skipReason ? `: ${logged.skipReason}` : ''}`
         : logged?.notes ?? plannedSet.notes
 
     return (
@@ -408,14 +408,14 @@ function StatusButton({
 }) {
     const ariaLabel =
         status === 'done' || status === 'failed'
-            ? 'Anulează setul'
+            ? 'Undo set'
             : status === 'skipped'
-                ? 'Anulează skip'
+                ? 'Undo skip'
             : status === 'running'
-                ? 'Finalizează setul'
+                ? 'Finish set'
                 : status === 'editing'
-                    ? 'Editează și salvează setul'
-                    : 'Pornește timerul setului'
+                    ? 'Edit and save set'
+                    : 'Start set timer'
     const inner = (() => {
         switch (status) {
             case 'running':
@@ -653,13 +653,13 @@ function ActiveSetEditor({
                     <Timer className="size-3.5" strokeWidth={1.85} />
                     Set time <span className="tabular-nums">{formatDuration(elapsedSec)}</span>
                 </div>
-                <div className="text-[11px] text-muted-foreground">Confirmă valorile actuale</div>
+                <div className="text-[11px] text-muted-foreground">Confirm your actuals</div>
             </div>
 
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 {(exerciseKind === 'weighted' || exerciseKind === 'weighted_bw') ? (
                     <NumberField
-                        label={`Greutate (${units})`}
+                        label={`Weight (${units})`}
                         value={draft.weightKg}
                         step={0.5}
                         onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))}
@@ -677,7 +677,7 @@ function ActiveSetEditor({
 
                 {(exerciseKind === 'hold' || exerciseKind === 'cardio_dur' || exerciseKind === 'interval') ? (
                     <NumberField
-                        label="Durată (sec)"
+                        label="Duration (sec)"
                         value={draft.durationSec}
                         step={5}
                         inputKind="duration"
@@ -687,7 +687,7 @@ function ActiveSetEditor({
 
                 {exerciseKind === 'cardio_dist' ? (
                     <NumberField
-                        label="Distanță (m)"
+                        label="Distance (m)"
                         value={draft.distanceM}
                         step={10}
                         inputKind="distance"
@@ -717,12 +717,12 @@ function ActiveSetEditor({
 
             <label className="mt-2 block">
                 <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
-                    Notă
+                    Note
                 </span>
                 <input
                     value={draft.notes}
                     onChange={(event) => setDraft((d) => ({ ...d, notes: event.target.value }))}
-                    placeholder="ex: formă bună, prea greu, umăr ok"
+                    placeholder="e.g. good form, too heavy, shoulder ok"
                     className="h-10 w-full rounded-md border border-border bg-background px-2.5 text-base text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring sm:h-9 sm:text-[12.5px]"
                 />
             </label>
@@ -733,7 +733,7 @@ function ActiveSetEditor({
                     onClick={onCancel}
                     className="inline-flex h-8 items-center rounded-md border border-border bg-background px-2.5 text-[11.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
-                    Anulează
+                    Cancel
                 </button>
                 <button
                     type="button"
@@ -773,7 +773,7 @@ function SetNoteDialog({
         <div
             role="dialog"
             aria-modal="true"
-            aria-label="Notă set"
+            aria-label="Set note"
             className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
             onKeyDown={(event) => {
                 if (event.key === 'Escape') {
@@ -784,14 +784,14 @@ function SetNoteDialog({
         >
             <div className="w-full max-w-sm rounded-xl border border-border/70 bg-popover p-4 shadow-xl">
                 <div className="text-sm font-semibold text-foreground">
-                    Notă pentru set
+                    Note for set
                 </div>
                 <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
                     {exerciseName} · set {setIndex}
                 </p>
                 <label className="mt-3 block">
                     <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
-                        Notă
+                        Note
                     </span>
                     <textarea
                         ref={textAreaRef}
@@ -799,7 +799,7 @@ function SetNoteDialog({
                         onChange={(event) => setNote(event.target.value)}
                         maxLength={400}
                         rows={4}
-                        placeholder="ex: formă bună, prea greu, umăr ok"
+                        placeholder="e.g. good form, too heavy, shoulder ok"
                         className="min-h-28 w-full resize-none rounded-md border border-border bg-background px-2.5 py-2 text-base leading-relaxed text-foreground outline-none transition-shadow placeholder:text-muted-foreground/70 focus:ring-2 focus:ring-ring sm:text-[13px]"
                     />
                 </label>
@@ -812,7 +812,7 @@ function SetNoteDialog({
                         onClick={onCancel}
                         className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
-                        Anulează
+                        Cancel
                     </button>
                     <button
                         type="button"
@@ -820,7 +820,7 @@ function SetNoteDialog({
                         className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-semibold text-primary-foreground transition-colors hover:opacity-90"
                     >
                         <Save className="size-3.5" strokeWidth={2} />
-                        Salvează
+                        Save
                     </button>
                 </div>
             </div>

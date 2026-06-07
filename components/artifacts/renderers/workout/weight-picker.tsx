@@ -72,7 +72,7 @@ export function WeightPicker({
     return (
         <div
             role="dialog"
-            aria-label="Selectează greutate"
+            aria-label="Select weight"
             className={cn(
                 "z-30 flex w-72 flex-col gap-3 rounded-xl border border-border/70 bg-popover p-3 shadow-xl",
                 className,
@@ -149,14 +149,14 @@ export function WeightPicker({
                     {platePlan.remainderKg !== 0 ? (
                         <div className="mt-0.5 text-amber-600 dark:text-amber-400">
                             {platePlan.remainderKg > 0
-                                ? `Lipsesc ${platePlan.remainderKg} kg — încarcă cu ${formatWeightNumber(platePlan.actualKg)} kg sau adaugă plăci mai mici.`
-                                : `Over cu ${Math.abs(platePlan.remainderKg)} kg.`}
+                                ? `${platePlan.remainderKg} kg short — load ${formatWeightNumber(platePlan.actualKg)} kg or add smaller plates.`
+                                : `${Math.abs(platePlan.remainderKg)} kg over.`}
                         </div>
                     ) : null}
                 </div>
             ) : (
                 <div className="rounded-md bg-rose-500/[0.08] px-2.5 py-1.5 text-[11.5px] text-rose-600 dark:text-rose-400">
-                    Sub greutatea barei ({effectiveBar} kg).
+                    Below bar weight ({effectiveBar} kg).
                 </div>
             )}
 
@@ -167,7 +167,7 @@ export function WeightPicker({
                     className="flex items-center gap-1 rounded-md border border-border bg-background px-2.5 py-1 text-[11.5px] font-medium text-muted-foreground hover:bg-muted hover:text-foreground"
                 >
                     <X className="size-3" />
-                    Anulează
+                    Cancel
                 </button>
                 <button
                     type="button"
@@ -175,7 +175,7 @@ export function WeightPicker({
                     className="flex items-center gap-1 rounded-md bg-primary px-2.5 py-1 text-[11.5px] font-semibold text-primary-foreground hover:opacity-90"
                 >
                     <Check className="size-3" />
-                    Salvează
+                    Save
                 </button>
             </div>
         </div>

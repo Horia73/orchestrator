@@ -65,7 +65,7 @@ export function WorkoutsHistory({
         <div className={cn("flex flex-col gap-6", className)}>
             <div className="flex items-end justify-between gap-3">
                 <p className="text-sm text-muted-foreground">
-                    Istoricul sesiunilor și PR-urile tale. Sesiunile noi apar automat după ce apeși <span className="font-medium text-foreground">Finish workout</span>.
+                    Your session history and PRs. New sessions appear automatically after you tap <span className="font-medium text-foreground">Finish workout</span>.
                 </p>
                 <button
                     type="button"
@@ -102,7 +102,7 @@ export function WorkoutsHistory({
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
                 <section className="flex min-w-0 flex-col gap-3">
                     <h2 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/65">
-                        Sesiuni recente
+                        Recent sessions
                     </h2>
                     {sessions === null ? (
                         <SkeletonRows count={4} />
@@ -114,7 +114,7 @@ export function WorkoutsHistory({
                 <section className="flex min-w-0 flex-col gap-3">
                     <h2 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/65">
                         <Trophy className="size-3 text-amber-500" strokeWidth={2} />
-                        PR-uri pe exerciții
+                        Per-exercise PRs
                     </h2>
                     {exercises === null ? (
                         <SkeletonRows count={6} />
@@ -160,22 +160,22 @@ function ProgressOverview({
         <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Workout progress overview">
             <ProgressCard
                 icon={<Dumbbell className="size-4" strokeWidth={1.85} />}
-                label="Ultimele 7 zile"
-                value={`${stats.weekSessions} sesiuni`}
+                label="Last 7 days"
+                value={`${stats.weekSessions} sessions`}
                 sub={`${stats.weekSets} sets · ${Math.round(stats.weekVolume).toLocaleString()} kg`}
             />
             <ProgressCard
                 icon={<TrendingUp className="size-4" strokeWidth={1.85} />}
-                label="Volum recent"
+                label="Recent volume"
                 value={`${Math.round(stats.recentAvgVolume).toLocaleString()} kg`}
                 sub={stats.volumeDeltaLabel}
                 accent={stats.volumeDelta > 0}
             />
             <ProgressCard
                 icon={<Trophy className="size-4" strokeWidth={1.85} />}
-                label="PR-uri"
+                label="PRs"
                 value={`${stats.prCount} PR${stats.prCount === 1 ? '' : 's'}`}
-                sub={`${stats.exerciseCount} exerciții cu istoric`}
+                sub={`${stats.exerciseCount} exercises with history`}
                 accent={stats.prCount > 0}
             />
             <BodyMetricsCard payload={bodyMetrics} onSaved={onMetricsSaved} />
@@ -285,7 +285,7 @@ function BodyMetricsCard({
             </div>
 
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground">
-                <MetricLine icon={<Scale className="size-3" />} label="Greutate" value={latest?.weightKg ? `${latest.weightKg} kg` : '—'} />
+                <MetricLine icon={<Scale className="size-3" />} label="Weight" value={latest?.weightKg ? `${latest.weightKg} kg` : '—'} />
                 <MetricLine icon={<Ruler className="size-3" />} label="IMC" value={payload.bmi ? payload.bmi.toString() : '—'} />
                 <MetricLine icon={<Weight className="size-3" />} label="Body fat" value={latest?.bodyFatPct ? `${latest.bodyFatPct}%` : '—'} />
                 <MetricLine icon={<Activity className="size-3" />} label="Muscle" value={latest?.musclePct ? `${latest.musclePct}%` : '—'} />
@@ -294,8 +294,8 @@ function BodyMetricsCard({
             {open ? (
                 <div className="mt-2 border-t border-border/45 pt-2">
                     <div className="grid grid-cols-2 gap-2">
-                        <SmallInput label="Înălțime cm" value={draft.heightCm} onChange={(heightCm) => setDraft((d) => ({ ...d, heightCm }))} />
-                        <SmallInput label="Greutate kg" value={draft.weightKg} onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))} />
+                        <SmallInput label="Height cm" value={draft.heightCm} onChange={(heightCm) => setDraft((d) => ({ ...d, heightCm }))} />
+                        <SmallInput label="Weight kg" value={draft.weightKg} onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))} />
                         <SmallInput label="Body fat %" value={draft.bodyFatPct} onChange={(bodyFatPct) => setDraft((d) => ({ ...d, bodyFatPct }))} />
                         <SmallInput label="Muscle %" value={draft.musclePct} onChange={(musclePct) => setDraft((d) => ({ ...d, musclePct }))} />
                     </div>
@@ -388,7 +388,7 @@ function computeProgressStats(sessions: SessionSummaryRow[], exercises: Exercise
         volumeDelta,
         volumeDeltaLabel: previousAvgVolume > 0
             ? `${volumeDelta >= 0 ? '+' : ''}${Math.round(volumeDelta).toLocaleString()} kg vs prior 5`
-            : 'medie pe ultimele 5 sesiuni',
+            : 'avg over last 5 sessions',
         prCount: sessions.reduce((sum, session) => sum + session.prCount, 0),
         exerciseCount: exercises.length,
     }

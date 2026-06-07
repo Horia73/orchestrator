@@ -30,7 +30,7 @@ export function GlossaryInfo({
 }) {
     const entry = getGlossary(term)
     if (!entry) return null
-    const a11yLabel = label ?? `Ce înseamnă ${entry.title}?`
+    const a11yLabel = label ?? `What is ${entry.title}?`
 
     return (
         <details

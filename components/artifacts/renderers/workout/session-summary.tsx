@@ -18,7 +18,7 @@ import { formatDuration } from "@/lib/workout/format"
  *   - PRs detected (auriu, highlighted)
  *   - Per-exercise actuals vs planned
  *   - Save status (Saving… / Saved ✓ / Failed)
- *   - "Pornește din nou" reset
+ *   - "Start again" reset
  *
  * Save status falls back gracefully if the API isn't reachable (preview
  * pages, offline). The session is still in localStorage; the user can hit
@@ -104,9 +104,9 @@ export function SessionSummary({
                     <CheckCircle2 className="size-5" strokeWidth={1.85} />
                 </span>
                 <div className="min-w-0 flex-1">
-                    <h2 className="text-base font-semibold text-foreground">Sesiune terminată</h2>
+                    <h2 className="text-base font-semibold text-foreground">Session complete</h2>
                     <p className="text-[12.5px] text-muted-foreground">
-                        Bravo! Iată ce ai făcut.
+                        Nice work — here&apos;s the recap.
                     </p>
                 </div>
                 <SaveStatusBadge status={saveStatus} error={saveError} onRetry={() => { savedKeyRef.current = null; void triggerSave() }} />
@@ -115,7 +115,7 @@ export function SessionSummary({
             <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
                 <StatTile
                     icon={<Timer className="size-3.5" strokeWidth={1.85} />}
-                    label="Durată"
+                    label="Duration"
                     value={formatDuration(log.totalDurationSec)}
                 />
                 <StatTile
@@ -151,7 +151,7 @@ export function SessionSummary({
                     className="inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                 >
                     <RotateCcw className="size-3" />
-                    Pornește din nou
+                    Start again
                 </button>
             </footer>
         </section>
@@ -200,7 +200,7 @@ function PrList({ prs }: { prs: readonly PrEvent[] }) {
         <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
             <div className="mb-2 inline-flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wider text-amber-700 dark:text-amber-300">
                 <Trophy className="size-3.5" strokeWidth={2} />
-                {prs.length} {prs.length === 1 ? 'PR' : 'PRs'} astăzi
+                {prs.length} {prs.length === 1 ? 'PR' : 'PRs'} today
             </div>
             <ul className="flex flex-col gap-1.5">
                 {prs.map((pr, i) => (

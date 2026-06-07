@@ -162,19 +162,19 @@ export function RestTimerBar({
                             onClick={() => onAdjust(-15)}
                             disabled={isDone}
                             label="-15s"
-                            title="Scade 15 secunde"
+                            title="Subtract 15 seconds"
                         />
                         <CtrlBtn
                             onClick={() => onAdjust(15)}
                             disabled={isDone}
                             label="+15s"
-                            title="Adaugă 15 secunde"
+                            title="Add 15 seconds"
                         />
                         <button
                             type="button"
                             onClick={onStartNext ?? onSkip}
-                            aria-label={onStartNext ? "Pornește următorul set" : isDone ? "Închide" : "Skip rest"}
-                            title={onStartNext ? `Pornește ${nextLabel ?? 'următorul set'}` : isDone ? "Închide" : "Skip rest"}
+                            aria-label={onStartNext ? "Start next set" : isDone ? "Close" : "Skip rest"}
+                            title={onStartNext ? `Start ${nextLabel ?? 'next set'}` : isDone ? "Close" : "Skip rest"}
                             className={cn(
                                 "flex h-8 items-center justify-center rounded-md border transition-colors",
                                 onStartNext

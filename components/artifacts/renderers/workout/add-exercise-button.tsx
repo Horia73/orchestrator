@@ -54,7 +54,7 @@ export function AddExerciseButton({
                 )}
             >
                 <Dumbbell className="size-3.5" strokeWidth={2} />
-                Adaugă exercițiu
+                Add exercise
             </button>
 
             {open ? (
@@ -123,7 +123,7 @@ function AddExerciseDialog({
         <div
             role="dialog"
             aria-modal="true"
-            aria-label="Adaugă exercițiu"
+            aria-label="Add exercise"
             className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
             onKeyDown={(event) => {
                 if (event.key === 'Escape') {
@@ -138,22 +138,22 @@ function AddExerciseDialog({
                         <Plus className="size-4" strokeWidth={2.25} />
                     </span>
                     <div className="min-w-0 flex-1">
-                        <div className="text-sm font-semibold text-foreground">Adaugă exercițiu</div>
+                        <div className="text-sm font-semibold text-foreground">Add exercise</div>
                         <p className="mt-0.5 text-[12.5px] leading-relaxed text-muted-foreground">
-                            Intră la finalul workout-ului și apare în progress, next set și summary.
+                            Joins the end of the workout and shows up in progress, next set, and the summary.
                         </p>
                     </div>
                 </div>
 
                 <label className="mt-4 block">
                     <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
-                        Nume
+                        Name
                     </span>
                     <input
                         ref={nameRef}
                         value={name}
                         onChange={(event) => setName(event.target.value)}
-                        placeholder="ex: Leg extension"
+                        placeholder="e.g. Leg extension"
                         className="h-10 w-full rounded-md border border-border bg-background px-2.5 text-base text-foreground outline-none transition-shadow placeholder:text-muted-foreground/70 focus:ring-2 focus:ring-ring"
                     />
                 </label>
@@ -162,7 +162,7 @@ function AddExerciseDialog({
                     <KindButton
                         active={kind === 'weighted'}
                         icon={<Dumbbell className="size-3.5" strokeWidth={2} />}
-                        label="Greutate"
+                        label="Weighted"
                         onClick={() => setKind('weighted')}
                     />
                     <KindButton
@@ -174,7 +174,7 @@ function AddExerciseDialog({
                 </div>
 
                 <div className="mt-3 grid grid-cols-3 gap-2">
-                    <NumberInput label="Seturi" value={sets} step={1} min={1} max={20} onChange={setSets} />
+                    <NumberInput label="Sets" value={sets} step={1} min={1} max={20} onChange={setSets} />
                     <NumberInput label="Reps" value={reps} step={1} min={0} max={100} onChange={setReps} />
                     {kind === 'weighted' ? (
                         <NumberInput label={units} value={weightKg} step={0.5} min={0} max={500} onChange={setWeightKg} />
@@ -189,7 +189,7 @@ function AddExerciseDialog({
                     </div>
                 ) : null}
 
-                <ChoiceSection label="Mușchi">
+                <ChoiceSection label="Muscles">
                     {MUSCLE_PRESETS.map((item) => (
                         <ToggleChip
                             key={item.value}
@@ -201,7 +201,7 @@ function AddExerciseDialog({
                     ))}
                 </ChoiceSection>
 
-                <ChoiceSection label="Echipament">
+                <ChoiceSection label="Equipment">
                     {EQUIPMENT_PRESETS.map((item) => (
                         <ToggleChip
                             key={item.value}
@@ -220,7 +220,7 @@ function AddExerciseDialog({
                         className="inline-flex h-9 items-center gap-1.5 rounded-md border border-border bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
                     >
                         <X className="size-3.5" strokeWidth={2} />
-                        Anulează
+                        Cancel
                     </button>
                     <button
                         type="button"
@@ -229,7 +229,7 @@ function AddExerciseDialog({
                         className="inline-flex h-9 items-center gap-1.5 rounded-md bg-primary px-3 text-[12px] font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-not-allowed disabled:bg-muted disabled:text-muted-foreground disabled:hover:opacity-100"
                     >
                         <Check className="size-3.5" strokeWidth={2} />
-                        Adaugă
+                        Add
                     </button>
                 </div>
             </div>

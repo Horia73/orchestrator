@@ -131,7 +131,7 @@ function WorkoutView({
 
                 {renderedWorkout.warmup ? (
                     <WorkoutChecklist
-                        title="Încălzire"
+                        title="Warm-up"
                         checklist={renderedWorkout.warmup}
                         variant="warmup"
                     />
@@ -185,7 +185,7 @@ function WorkoutView({
 
                 {renderedWorkout.attribution ? (
                     <footer className="text-xs text-muted-foreground">
-                        Sursă: {renderedWorkout.attribution}
+                        Source: {renderedWorkout.attribution}
                     </footer>
                 ) : null}
             </article>
