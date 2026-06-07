@@ -295,11 +295,13 @@ export function AppSidebar() {
   const [mobileArchiveMenuId, setMobileArchiveMenuId] = React.useState<
     string | null
   >(null)
+  const [profileMenuOpen, setProfileMenuOpen] = React.useState(false)
   const [currentTime, setCurrentTime] = React.useState<number | null>(null)
   const [isConversationScrollbarVisible, setIsConversationScrollbarVisible] =
     React.useState(false)
   const deferredSearchQuery = React.useDeferredValue(searchQuery)
   const searchInputRef = React.useRef<HTMLInputElement>(null)
+  const profileTriggerRef = React.useRef<HTMLButtonElement>(null)
   const conversationScrollbarVisibleRef = React.useRef(false)
   const conversationScrollbarFadeTimeoutRef = React.useRef<number | null>(null)
   const mobileArchiveLongPressTimerRef = React.useRef<number | null>(null)
@@ -757,6 +759,8 @@ export function AppSidebar() {
   )
 
   const closeMobileSidebar = React.useCallback(() => {
+    setProfileMenuOpen(false)
+    profileTriggerRef.current?.blur()
     if (isMobile) setOpenMobile(false)
   }, [isMobile, setOpenMobile])
 
@@ -766,6 +770,8 @@ export function AppSidebar() {
   }, [closeMobileSidebar, pathname, router])
 
   const handleLogoutProfile = React.useCallback(() => {
+    setProfileMenuOpen(false)
+    profileTriggerRef.current?.blur()
     void fetch("/api/profiles/logout", { method: "POST" }).finally(() => {
       router.replace("/profiles")
       router.refresh()
@@ -1234,9 +1240,13 @@ export function AppSidebar() {
           )}
           {currentProfile && (
             <SidebarMenuItem>
-              <DropdownMenu>
+              <DropdownMenu
+                open={profileMenuOpen}
+                onOpenChange={setProfileMenuOpen}
+              >
                 <DropdownMenuTrigger asChild>
                   <SidebarMenuButton
+                    ref={profileTriggerRef}
                     tooltip={currentProfile.name}
                     className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[state=open]:bg-[#f0ede6] data-[state=open]:text-foreground dark:hover:bg-muted dark:data-[state=open]:bg-muted"
                   >
@@ -1249,7 +1259,19 @@ export function AppSidebar() {
                     <span className="truncate">{currentProfile.name}</span>
                   </SidebarMenuButton>
                 </DropdownMenuTrigger>
-                <DropdownMenuContent side="right" align="end" className="w-52">
+                <DropdownMenuContent
+                  side={isMobile ? "top" : "right"}
+                  align={isMobile ? "start" : "end"}
+                  sideOffset={isMobile ? 8 : 4}
+                  collisionPadding={12}
+                  onCloseAutoFocus={(event) => {
+                    event.preventDefault()
+                    window.requestAnimationFrame(() => {
+                      profileTriggerRef.current?.blur()
+                    })
+                  }}
+                  className={`w-52 ${isMobile ? "z-[70] rounded-xl shadow-xl" : ""}`}
+                >
                   <DropdownMenuItem onClick={handleSwitchProfile}>
                     <UserRound className="mr-2 size-4" />
                     Switch profile

@@ -2,6 +2,7 @@
 
 import Image from "next/image"
 import * as React from "react"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   AlertCircle,
   ArrowLeft,
@@ -22,7 +23,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
-import { SidebarTrigger } from "@/components/ui/sidebar"
+import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 import type {
   WatchlistDataStatus,
@@ -838,6 +839,10 @@ function Stat({
 }
 
 export function WatchlistView() {
+  const router = useRouter()
+  const pathname = usePathname()
+  const searchParams = useSearchParams()
+  const { isMobile } = useSidebar()
   const [items, setItems] = React.useState<WatchlistItemWithQuote[]>([])
   const [status, setStatus] = React.useState<WatchlistDataStatus | null>(null)
   const [errors, setErrors] = React.useState<string[]>([])
@@ -845,6 +850,7 @@ export function WatchlistView() {
   const [refreshing, setRefreshing] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [mobileDetailOpen, setMobileDetailOpen] = React.useState(false)
+  const routeItemId = searchParams.get("item")
 
   const selected = React.useMemo(() => {
     return items.find((item) => item.id === selectedId) ?? items[0] ?? null
@@ -921,6 +927,57 @@ export function WatchlistView() {
     if (!selected) setMobileDetailOpen(false)
   }, [selected])
 
+  React.useEffect(() => {
+    if (!isMobile) {
+      setMobileDetailOpen(false)
+      return
+    }
+
+    if (!routeItemId) {
+      setMobileDetailOpen(false)
+      return
+    }
+
+    if (items.some((item) => item.id === routeItemId)) {
+      setSelectedId(routeItemId)
+      setMobileDetailOpen(true)
+      return
+    }
+
+    if (items.length > 0) setMobileDetailOpen(false)
+  }, [isMobile, items, routeItemId])
+
+  const watchlistUrlForItem = React.useCallback(
+    (itemId: string | null) => {
+      const params = new URLSearchParams(searchParams.toString())
+      if (itemId) params.set("item", itemId)
+      else params.delete("item")
+
+      const query = params.toString()
+      return query ? `${pathname}?${query}` : pathname
+    },
+    [pathname, searchParams]
+  )
+
+  const openItem = React.useCallback(
+    (id: string) => {
+      setSelectedId(id)
+      if (!isMobile) return
+
+      setMobileDetailOpen(true)
+      const nextUrl = watchlistUrlForItem(id)
+      router.push(nextUrl, { scroll: false })
+    },
+    [isMobile, router, watchlistUrlForItem]
+  )
+
+  const closeMobileDetail = React.useCallback(() => {
+    setMobileDetailOpen(false)
+    if (!isMobile || !routeItemId) return
+
+    router.replace(watchlistUrlForItem(null), { scroll: false })
+  }, [isMobile, routeItemId, router, watchlistUrlForItem])
+
   const addItem = React.useCallback(
     async (instrument: AddWatchlistInput) => {
       let body: AddWatchlistInput
@@ -939,9 +996,9 @@ export function WatchlistView() {
       if (!res.ok) throw new Error(await responseError(res))
       const result = (await res.json()) as { item?: { id: string } }
       await load(true)
-      if (result.item?.id) setSelectedId(result.item.id)
+      if (result.item?.id) openItem(result.item.id)
     },
-    [load]
+    [load, openItem]
   )
 
   const removeInstrument = React.useCallback(
@@ -952,8 +1009,9 @@ export function WatchlistView() {
       )
       if (!res.ok) throw new Error(await responseError(res))
       await load(false)
+      if (id === selectedId) closeMobileDetail()
     },
-    [load]
+    [closeMobileDetail, load, selectedId]
   )
 
   const q = selected?.quote
@@ -1054,10 +1112,7 @@ export function WatchlistView() {
                         key={item.id}
                         item={item}
                         selected={selected?.id === item.id}
-                        onSelect={() => {
-                          setSelectedId(item.id)
-                          setMobileDetailOpen(true)
-                        }}
+                        onSelect={() => openItem(item.id)}
                         onRemove={() => void removeInstrument(item.id)}
                       />
                     ))}
@@ -1074,10 +1129,7 @@ export function WatchlistView() {
                         key={item.id}
                         item={item}
                         selected={selected?.id === item.id}
-                        onSelect={() => {
-                          setSelectedId(item.id)
-                          setMobileDetailOpen(true)
-                        }}
+                        onSelect={() => openItem(item.id)}
                         onRemove={() => void removeInstrument(item.id)}
                       />
                     ))}
@@ -1099,8 +1151,9 @@ export function WatchlistView() {
               <section className="border-b border-border/60 px-4 py-3">
                 <button
                   type="button"
-                  onClick={() => setMobileDetailOpen(false)}
-                  className="mb-3 flex items-center gap-1.5 rounded-md py-1 text-[13px] text-foreground/55 hover:text-foreground md:hidden"
+                  onClick={closeMobileDetail}
+                  aria-label="Back to watchlist"
+                  className="mb-3 -ml-1 flex min-h-10 items-center gap-1.5 rounded-md px-1 py-1 text-[13px] text-foreground/55 touch-manipulation hover:text-foreground md:hidden"
                 >
                   <ArrowLeft className="size-4" />
                   Watchlist
