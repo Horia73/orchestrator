@@ -1,4 +1,5 @@
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { spawn } from 'child_process'
 import type { ChildProcessWithoutNullStreams } from 'child_process'
@@ -484,13 +485,13 @@ interface PythonPhaseResult {
     logs: string[]
 }
 
-interface OperationResult {
+export interface OperationResult {
     ok: boolean
     data?: unknown
     error?: string
 }
 
-interface PendingNotification {
+export interface PendingNotification {
     title?: string
     body: string
     actions?: InboxReplyAction[]
@@ -518,6 +519,16 @@ export interface RunMicroscriptOptions {
     preserveEnabled?: boolean
     /** Present when a generic inbound webhook triggered this run. */
     webhook?: MicroscriptWebhookContext
+    /**
+     * Execute in a side-effect-free simulation mode. Dry runs do not record
+     * events/runs, update script state/status, post Inbox items, wake agents,
+     * call integrations/app tools, or write production script files.
+     */
+    dryRun?: boolean
+    /** Optional initial state for dry-run simulation. Production runs ignore it. */
+    state?: Record<string, unknown>
+    /** Optional pre-seeded operation results for dry-run simulation by request id. */
+    operationResults?: Record<string, OperationResult>
 }
 
 export interface MicroscriptWebhookContext {
@@ -539,6 +550,16 @@ export interface RunMicroscriptResult {
     error?: string
     surfaced: boolean
     conversationId: string | null
+    dryRun?: boolean
+    phases?: number
+    operations?: number
+    state?: Record<string, unknown>
+    status?: string
+    nextRunAt?: number | null
+    wouldSurface?: boolean
+    notifications?: PendingNotification[]
+    operationResults?: Record<string, OperationResult>
+    skippedSideEffects?: string[]
 }
 
 export async function validateMicroscriptCode(code: string): Promise<{ ok: true } | { ok: false; error: string }> {
@@ -566,6 +587,8 @@ export async function runMicroscript(
     script: Microscript,
     options: RunMicroscriptOptions,
 ): Promise<RunMicroscriptResult> {
+    if (options.dryRun) return runMicroscriptDryRun(script, options)
+
     const startedAt = options.now ?? Date.now()
     const operationResults: Record<string, OperationResult> = {}
     const pendingNotifications: PendingNotification[] = []
@@ -685,14 +708,123 @@ export async function runMicroscript(
     }
 }
 
+async function runMicroscriptDryRun(
+    script: Microscript,
+    options: RunMicroscriptOptions,
+): Promise<RunMicroscriptResult> {
+    const operationResults: Record<string, OperationResult> = { ...(options.operationResults ?? {}) }
+    const pendingNotifications: PendingNotification[] = []
+    const skippedSideEffects: string[] = [
+        'Dry run: no microscript row, state, status, updatedAt, run history, lifecycle events, Inbox items, push notifications, agent wakes, app tools, integrations, HTTP fetches, or production script files are mutated.',
+        'Dry run: direct Python networking is disabled and direct Python file access uses a temporary workspace.',
+    ]
+    const dryRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'microscript-dry-run-'))
+    const dryScriptRoot = path.join(dryRoot, script.id)
+    const dryTrustedPython = {
+        ...script.manifest.trustedPython,
+        allowNetwork: false,
+        allowPrivateNetwork: false,
+    }
+    let state: Record<string, unknown> = { ...(options.state ?? script.state) }
+    let lastResponse: MicroscriptRunResponse = {}
+    let phases = 0
+    let operations = 0
+    let summary = 'Microscript dry run completed.'
+    const counters: RunPolicyCounters = { toolCalls: 0 }
+
+    try {
+        for (let phase = 1; phase <= script.manifest.limits.maxPhases; phase++) {
+            phases = phase
+            const phaseResult = await runPythonPhase(script, {
+                now: Date.now(),
+                trigger: options.trigger,
+                webhook: options.webhook ?? null,
+                phase,
+                state,
+                results: operationResults,
+            }, {
+                cwd: dryScriptRoot,
+                trustedPython: dryTrustedPython,
+            })
+            lastResponse = phaseResult.response
+            if (lastResponse.state) state = lastResponse.state
+            if (lastResponse.summary) summary = lastResponse.summary
+
+            const requests = lastResponse.requests ?? []
+            if (requests.length === 0) break
+            if (phase === script.manifest.limits.maxPhases) {
+                throw new Error(`Microscript returned requests in final phase (maxPhases=${script.manifest.limits.maxPhases}).`)
+            }
+            let newRequests = 0
+            for (const [index, request] of requests.entries()) {
+                const key = operationKey(request, index)
+                if (operationResults[key]) continue
+                newRequests += 1
+                operations += 1
+                operationResults[key] = await executeDryRunOperation(
+                    script,
+                    request,
+                    pendingNotifications,
+                    counters,
+                    dryScriptRoot,
+                )
+            }
+            if (newRequests === 0) break
+        }
+
+        const now = Date.now()
+        let status = chooseFinalStatus(script, lastResponse.status, pendingNotifications.length > 0, now)
+        if (options.preserveEnabled && !script.enabled && status === 'active') status = 'paused'
+        const nextRunAt = status === 'active'
+            ? chooseNextRunAt(script, lastResponse, now)
+            : null
+
+        return {
+            ok: true,
+            dryRun: true,
+            summary,
+            surfaced: false,
+            conversationId: null,
+            phases,
+            operations,
+            state,
+            status,
+            nextRunAt,
+            wouldSurface: pendingNotifications.length > 0,
+            notifications: pendingNotifications,
+            operationResults,
+            skippedSideEffects,
+        }
+    } catch (err) {
+        const error = err instanceof Error ? err.message : String(err)
+        return {
+            ok: false,
+            dryRun: true,
+            summary: `Microscript dry run failed: ${error}`,
+            error,
+            surfaced: false,
+            conversationId: null,
+            phases,
+            operations,
+            state,
+            operationResults,
+            skippedSideEffects,
+        }
+    } finally {
+        fs.rmSync(dryRoot, { recursive: true, force: true })
+    }
+}
+
 async function runPythonPhase(
     script: Microscript,
     ctx: Record<string, unknown>,
+    options: { cwd?: string; trustedPython?: Microscript['manifest']['trustedPython'] } = {},
 ): Promise<PythonPhaseResult> {
-    const cwd = scriptWorkDir(script.id)
+    const cwd = options.cwd ?? scriptWorkDir(script.id)
     fs.mkdirSync(cwd, { recursive: true })
     const now = typeof ctx.now === 'number' ? ctx.now : Date.now()
     const timezone = getConfiguredTimezone()
+    const trustedPython = options.trustedPython ?? script.manifest.trustedPython
     const payload = JSON.stringify({
         code: script.code,
         ctx: {
@@ -708,7 +840,7 @@ async function runPythonPhase(
                 runtime: script.manifest.runtime,
                 schedule: script.manifest.schedule,
                 stop: script.manifest.stop,
-                trustedPython: script.manifest.trustedPython,
+                trustedPython,
             },
             ...ctx,
         },
@@ -880,6 +1012,71 @@ async function executeOperation(
         }
     } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+}
+
+async function executeDryRunOperation(
+    script: Microscript,
+    request: MicroscriptOperation,
+    notifications: PendingNotification[],
+    counters: RunPolicyCounters,
+    dryScriptRoot: string,
+): Promise<OperationResult> {
+    try {
+        const parsed = MicroscriptOperationSchema.parse(request)
+        switch (parsed.kind) {
+            case 'notify.inbox':
+                requirePermission(script, 'notify_inbox')
+                notifications.push({
+                    title: parsed.title,
+                    body: parsed.body,
+                    actions: normalizeInboxReplyActions(parsed.actions),
+                })
+                return { ok: true, data: { dryRun: true, queued: true, wouldNotifyInbox: true } }
+            case 'agent.wake': {
+                const permission = assertAgentWake(script, parsed)
+                return {
+                    ok: true,
+                    data: {
+                        dryRun: true,
+                        wouldWakeAgent: true,
+                        agent_id: parsed.agent_id,
+                        allowNotifyInbox: permission.allowNotifyInbox,
+                    },
+                }
+            }
+            case 'home_assistant.get_state':
+                assertHomeAssistantRead(script, [parsed.entity_id], false, false)
+                return dryRunSkippedOperation(parsed.kind, parsed.id)
+            case 'home_assistant.list_states':
+                assertHomeAssistantRead(script, [], true, false, parsed.domain)
+                return dryRunSkippedOperation(parsed.kind, parsed.id)
+            case 'home_assistant.history':
+                assertHomeAssistantRead(script, parsed.entity_ids, false, true)
+                return dryRunSkippedOperation(parsed.kind, parsed.id)
+            case 'home_assistant.call_service':
+                assertHomeAssistantWrite(script, parsed)
+                return dryRunSkippedOperation(parsed.kind, parsed.id)
+            case 'http.fetch':
+                assertHttpFetchAllowed(script, parsed)
+                return dryRunSkippedOperation(parsed.kind, parsed.id)
+            case 'tool.call':
+                assertToolCall(script, parsed, counters)
+                return dryRunSkippedOperation(parsed.kind, parsed.id)
+            case 'file.read':
+                return { ok: true, data: executeFileReadAtRoot(script, dryScriptRoot, parsed.path) }
+            case 'file.write':
+                return { ok: true, data: executeFileWriteAtRoot(script, dryScriptRoot, parsed.path, parsed.content, parsed.append === true) }
+        }
+    } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : String(err) }
+    }
+}
+
+function dryRunSkippedOperation(kind: MicroscriptOperation['kind'], id: string): OperationResult {
+    return {
+        ok: false,
+        error: `Dry run skipped ${kind}: no external app, integration, HTTP, or host-side effect was executed. Provide test_context.operation_results.${id} to simulate this operation result.`,
     }
 }
 
@@ -1348,6 +1545,33 @@ async function executeHttpFetch(
     script: Microscript,
     request: Extract<MicroscriptOperation, { kind: 'http.fetch' }>,
 ): Promise<Record<string, unknown>> {
+    const permission = assertHttpFetchAllowed(script, request)
+    const url = new URL(request.url)
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), 8_000)
+    try {
+        const resp = await fetch(url, {
+            method: request.method,
+            headers: request.headers,
+            body: request.method === 'HEAD' ? undefined : request.body,
+            signal: controller.signal,
+        })
+        const text = await readResponseText(resp, permission.maxBytes)
+        return {
+            status: resp.status,
+            ok: resp.ok,
+            headers: Object.fromEntries([...resp.headers.entries()].slice(0, 50)),
+            text,
+        }
+    } finally {
+        clearTimeout(timer)
+    }
+}
+
+function assertHttpFetchAllowed(
+    script: Microscript,
+    request: Extract<MicroscriptOperation, { kind: 'http.fetch' }>,
+): Extract<MicroscriptPermission, { kind: 'http_fetch' }> {
     const permission = httpFetchPermission(script)
     const url = new URL(request.url)
     if (!hostAllowed(url.hostname, permission.allowedHosts)) {
@@ -1374,26 +1598,7 @@ async function executeHttpFetch(
             'Approve allowPrivateNetwork=true for this script.',
         ))
     }
-
-    const controller = new AbortController()
-    const timer = setTimeout(() => controller.abort(), 8_000)
-    try {
-        const resp = await fetch(url, {
-            method: request.method,
-            headers: request.headers,
-            body: request.method === 'HEAD' ? undefined : request.body,
-            signal: controller.signal,
-        })
-        const text = await readResponseText(resp, permission.maxBytes)
-        return {
-            status: resp.status,
-            ok: resp.ok,
-            headers: Object.fromEntries([...resp.headers.entries()].slice(0, 50)),
-            text,
-        }
-    } finally {
-        clearTimeout(timer)
-    }
+    return permission
 }
 
 function httpFetchPermission(script: Microscript): Extract<MicroscriptPermission, { kind: 'http_fetch' }> {
@@ -1433,22 +1638,30 @@ async function readResponseText(resp: Response, maxBytes: number): Promise<strin
 }
 
 function executeFileRead(script: Microscript, relPath: string): { path: string; content: string } {
+    return executeFileReadAtRoot(script, scriptWorkDir(script.id), relPath)
+}
+
+function executeFileWrite(script: Microscript, relPath: string, content: string, append: boolean): { path: string; bytes: number } {
+    return executeFileWriteAtRoot(script, scriptWorkDir(script.id), relPath, content, append)
+}
+
+function executeFileReadAtRoot(script: Microscript, scriptRoot: string, relPath: string): { path: string; content: string } {
     const permission = filePermission(script)
     if (!permission.read) throw new Error('Microscript file read permission is disabled.')
-    const resolved = resolveScriptFile(script.id, relPath)
+    const resolved = resolveScriptFileAtRoot(scriptRoot, relPath)
     const stat = fs.statSync(resolved)
     if (!stat.isFile()) throw new Error('Requested path is not a file.')
     if (stat.size > permission.maxBytes) throw new Error(`File exceeds ${permission.maxBytes} bytes.`)
     return { path: relPath, content: fs.readFileSync(resolved, 'utf-8') }
 }
 
-function executeFileWrite(script: Microscript, relPath: string, content: string, append: boolean): { path: string; bytes: number } {
+function executeFileWriteAtRoot(script: Microscript, scriptRoot: string, relPath: string, content: string, append: boolean): { path: string; bytes: number } {
     const permission = filePermission(script)
     if (!permission.write) throw new Error('Microscript file write permission is disabled.')
     if (Buffer.byteLength(content, 'utf-8') > permission.maxBytes) {
         throw new Error(`File write exceeds ${permission.maxBytes} bytes.`)
     }
-    const resolved = resolveScriptFile(script.id, relPath)
+    const resolved = resolveScriptFileAtRoot(scriptRoot, relPath)
     fs.mkdirSync(path.dirname(resolved), { recursive: true })
     if (append) fs.appendFileSync(resolved, content, 'utf-8')
     else fs.writeFileSync(resolved, content, 'utf-8')
@@ -1471,9 +1684,9 @@ function filePermission(script: Microscript): Extract<MicroscriptPermission, { k
     return requirePermission(script, 'files') as Extract<MicroscriptPermission, { kind: 'files' }>
 }
 
-function resolveScriptFile(scriptId: string, relPath: string): string {
+function resolveScriptFileAtRoot(scriptRoot: string, relPath: string): string {
     if (path.isAbsolute(relPath)) throw new Error('Microscript file paths must be relative.')
-    const root = path.join(scriptWorkDir(scriptId), 'files')
+    const root = path.join(scriptRoot, 'files')
     const resolved = path.resolve(root, relPath)
     const normalizedRoot = path.resolve(root)
     if (resolved !== normalizedRoot && !resolved.startsWith(`${normalizedRoot}${path.sep}`)) {

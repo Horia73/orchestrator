@@ -18,6 +18,7 @@ export interface ToolParameter {
   anyOf?: ToolParameter[]
   required?: string[]
   enum?: string[]
+  additionalProperties?: boolean | ToolParameter
 }
 
 export interface ToolDef {

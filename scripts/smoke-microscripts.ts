@@ -29,7 +29,12 @@ async function main(): Promise<void> {
     } = await import('@/lib/microscripts/store')
     const { runMicroscript, validateMicroscriptCode } = await import('@/lib/microscripts/runner')
     const { listInboxConversations } = await import('@/lib/scheduling/store')
-    const { executeMicroscriptCreate } = await import('@/lib/ai/tools/microscripts')
+    const {
+        executeMicroscriptCreate,
+        executeMicroscriptGet,
+        executeMicroscriptRunNow,
+        executeMicroscriptUpdate,
+    } = await import('@/lib/ai/tools/microscripts')
 
     updateConfig({ timezone: 'Europe/Bucharest' })
 
@@ -63,6 +68,234 @@ async function main(): Promise<void> {
         },
     })
     check('microscript_create tool accepts minimal valid script', toolCreated.success === true, toolCreated)
+
+    const toolSurfaceScript = createMicroscript({
+        title: 'Smoke tool update surface',
+        code: validCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke tool strict args and update dry-run test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const strictGet = await executeMicroscriptGet({ id: toolSurfaceScript.id })
+    check(
+        'microscript_get rejects id alias with exact script_id guidance',
+        strictGet.success === false && /unknown argument.*id/i.test(strictGet.error ?? '') && /script_id/.test(strictGet.error ?? ''),
+        strictGet,
+    )
+    const strictUpdate = await executeMicroscriptUpdate({ script_id: toolSurfaceScript.id, dryRun: true })
+    check(
+        'microscript_update rejects unsupported camel dryRun field',
+        strictUpdate.success === false && /unknown argument.*dryRun/i.test(strictUpdate.error ?? '') && /dry_run/.test(strictUpdate.error ?? ''),
+        strictUpdate,
+    )
+
+    const beforeNoop = getMicroscript(toolSurfaceScript.id)
+    const beforeNoopEvents = listMicroscriptEvents(toolSurfaceScript.id).length
+    const dryNoop = await executeMicroscriptUpdate({
+        script_id: toolSurfaceScript.id,
+        dry_run: true,
+        code: validCode,
+    })
+    const afterDryNoop = getMicroscript(toolSurfaceScript.id)
+    check(
+        'microscript_update dry_run previews same-code no-op without writing',
+        dryNoop.success === true
+            && (dryNoop.data as { changed?: boolean; write_performed?: boolean }).changed === false
+            && (dryNoop.data as { write_performed?: boolean }).write_performed === false
+            && afterDryNoop?.updatedAt === beforeNoop?.updatedAt
+            && afterDryNoop?.codeHash === beforeNoop?.codeHash
+            && listMicroscriptEvents(toolSurfaceScript.id).length === beforeNoopEvents,
+        { dryNoop, beforeNoop, afterDryNoop },
+    )
+    const realNoop = await executeMicroscriptUpdate({
+        script_id: toolSurfaceScript.id,
+        code: validCode,
+    })
+    const afterRealNoop = getMicroscript(toolSurfaceScript.id)
+    check(
+        'microscript_update real no-op does not touch updatedAt/hash/events',
+        realNoop.success === true
+            && (realNoop.data as { changed?: boolean; write_performed?: boolean }).changed === false
+            && (realNoop.data as { write_performed?: boolean }).write_performed === false
+            && afterRealNoop?.updatedAt === beforeNoop?.updatedAt
+            && afterRealNoop?.codeHash === beforeNoop?.codeHash
+            && listMicroscriptEvents(toolSurfaceScript.id).length === beforeNoopEvents,
+        { realNoop, beforeNoop, afterRealNoop },
+    )
+    const changedCode = `${validCode}\n# updated by smoke`
+    const dryChanged = await executeMicroscriptUpdate({
+        script_id: toolSurfaceScript.id,
+        dry_run: true,
+        code: changedCode,
+    })
+    const afterDryChanged = getMicroscript(toolSurfaceScript.id)
+    check(
+        'microscript_update dry_run validates changed code without changing stored hash',
+        dryChanged.success === true
+            && (dryChanged.data as { changed?: boolean; changed_fields?: string[] }).changed === true
+            && ((dryChanged.data as { changed_fields?: string[] }).changed_fields ?? []).includes('codeHash')
+            && afterDryChanged?.codeHash === beforeNoop?.codeHash
+            && listMicroscriptEvents(toolSurfaceScript.id).length === beforeNoopEvents,
+        { dryChanged, beforeNoop, afterDryChanged },
+    )
+    const realChanged = await executeMicroscriptUpdate({
+        script_id: toolSurfaceScript.id,
+        code: changedCode,
+    })
+    const afterRealChanged = getMicroscript(toolSurfaceScript.id)
+    const changedEvents = listMicroscriptEvents(toolSurfaceScript.id)
+    check(
+        'microscript_update changed code writes exactly one updated event and stable readback hash',
+        realChanged.success === true
+            && afterRealChanged?.code === changedCode
+            && afterRealChanged?.codeHash !== beforeNoop?.codeHash
+            && changedEvents.filter((e) => e.kind === 'updated').length === 1,
+        { realChanged, beforeNoop, afterRealChanged, changedEvents },
+    )
+    const readbackChanged = await executeMicroscriptGet({ script_id: toolSurfaceScript.id, include_code: true })
+    check(
+        'microscript_get readback code_hash matches stored hash after update',
+        readbackChanged.success === true
+            && (readbackChanged.data as { code_hash?: string; code?: string }).code_hash === afterRealChanged?.codeHash
+            && (readbackChanged.data as { code?: string }).code === changedCode,
+        readbackChanged,
+    )
+    const repeatedNoop = await executeMicroscriptUpdate({
+        script_id: toolSurfaceScript.id,
+        code: changedCode,
+    })
+    check(
+        'repeating same update does not emit another updated event',
+        repeatedNoop.success === true
+            && (repeatedNoop.data as { changed?: boolean }).changed === false
+            && listMicroscriptEvents(toolSurfaceScript.id).filter((e) => e.kind === 'updated').length === 1,
+        repeatedNoop,
+    )
+
+    const dryNotifyCode = `
+def run(ctx):
+    state = dict(ctx.get("state", {}))
+    if ctx.get("trigger") == "webhook":
+        state["zone"] = ctx.get("webhook", {}).get("payload", {}).get("zone")
+    results = ctx.get("results", {})
+    if "notify" not in results:
+        return {
+            "summary": "queue dry notify",
+            "state": state,
+            "requests": [
+                {"id": "notify", "kind": "notify.inbox", "title": "Dry run", "body": "Dry run notification."}
+            ],
+        }
+    state["notified"] = results["notify"]["ok"]
+    return {"summary": "dry notify done", "state": state, "status": "complete"}
+`.trim()
+    const dryNotifyScript = createMicroscript({
+        title: 'Smoke run dry notify',
+        code: dryNotifyCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke run_now dry-run notification simulation',
+            schedule: { kind: 'manual' },
+            permissions: [{ kind: 'notify_inbox' }],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const beforeDryRun = getMicroscript(dryNotifyScript.id)
+    const beforeDryRunEvents = listMicroscriptEvents(dryNotifyScript.id).length
+    const beforeDryRunInbox = listInboxConversations().length
+    const dryRunWithWebhook = await executeMicroscriptRunNow({
+        script_id: dryNotifyScript.id,
+        dry_run: true,
+        test_context: {
+            trigger: 'webhook',
+            state: { seen: 1 },
+            webhook: {
+                eventId: 'whe_smoke',
+                endpointId: 'wh_smoke',
+                slug: 'gym-events',
+                source: 'home_assistant',
+                eventType: 'location.changed',
+                dedupeKey: 'sample-1',
+                payload: { zone: 'home' },
+                normalized: { zone: 'home' },
+            },
+        },
+    })
+    const afterDryRun = getMicroscript(dryNotifyScript.id)
+    check(
+        'microscript_run_now dry_run simulates webhook/state/notify without production writes',
+        dryRunWithWebhook.success === true
+            && (dryRunWithWebhook.data as { dryRun?: boolean; wouldSurface?: boolean }).dryRun === true
+            && (dryRunWithWebhook.data as { wouldSurface?: boolean }).wouldSurface === true
+            && (dryRunWithWebhook.data as { state?: { zone?: string; notified?: boolean } }).state?.zone === 'home'
+            && (dryRunWithWebhook.data as { state?: { notified?: boolean } }).state?.notified === true
+            && afterDryRun?.updatedAt === beforeDryRun?.updatedAt
+            && afterDryRun?.runCount === beforeDryRun?.runCount
+            && Object.keys(afterDryRun?.state ?? {}).length === 0
+            && listMicroscriptEvents(dryNotifyScript.id).length === beforeDryRunEvents
+            && listInboxConversations().length === beforeDryRunInbox,
+        { dryRunWithWebhook, beforeDryRun, afterDryRun },
+    )
+    const liveRunWithTestContext = await executeMicroscriptRunNow({
+        script_id: dryNotifyScript.id,
+        test_context: { state: {} },
+    })
+    check(
+        'microscript_run_now rejects test_context without dry_run',
+        liveRunWithTestContext.success === false && /dry_run=true/.test(liveRunWithTestContext.error ?? ''),
+        liveRunWithTestContext,
+    )
+
+    const dryAgentCode = `
+def run(ctx):
+    results = ctx.get("results", {})
+    if "agent" not in results:
+        return {
+            "requests": [
+                {"id": "agent", "kind": "agent.wake", "agent_id": "orchestrator", "prompt": "Dry-run judgement only."}
+            ]
+        }
+    return {
+        "summary": "dry agent done",
+        "state": {"would_wake": results["agent"]["data"]["wouldWakeAgent"]},
+        "status": "complete",
+    }
+`.trim()
+    const dryAgentScript = createMicroscript({
+        title: 'Smoke run dry agent',
+        code: dryAgentCode,
+        enabled: false,
+        manifest: {
+            description: 'Smoke run_now dry-run agent wake simulation',
+            schedule: { kind: 'manual' },
+            permissions: [{ kind: 'agent_wake', agentIds: ['orchestrator'], maxPromptChars: 1_000, allowNotifyInbox: true }],
+            stop: { persistent: false, expiresAt: Date.now() + 60_000 },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const beforeDryAgentEvents = listMicroscriptEvents(dryAgentScript.id).length
+    const beforeDryAgentInbox = listInboxConversations().length
+    const dryAgentRun = await executeMicroscriptRunNow({
+        script_id: dryAgentScript.id,
+        dry_run: true,
+    })
+    const afterDryAgent = getMicroscript(dryAgentScript.id)
+    check(
+        'microscript_run_now dry_run simulates agent wake without waking agent or Inbox',
+        dryAgentRun.success === true
+            && (dryAgentRun.data as { state?: { would_wake?: boolean } }).state?.would_wake === true
+            && afterDryAgent?.runCount === 0
+            && Object.keys(afterDryAgent?.state ?? {}).length === 0
+            && listMicroscriptEvents(dryAgentScript.id).length === beforeDryAgentEvents
+            && listInboxConversations().length === beforeDryAgentInbox,
+        { dryAgentRun, afterDryAgent },
+    )
 
     const directFileCode = `
 def run(ctx):
