@@ -5,6 +5,7 @@ import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { CLI_IDS, type CliId } from '@/lib/cli/specs'
 import { closeSessionsForCli } from '@/lib/cli/sessions'
 import { invalidateRegistryCache } from '@/lib/models/registry'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 const RestartBodySchema = z.object({
     cli: z.enum(CLI_IDS as [CliId, ...CliId[]]),
@@ -18,22 +19,24 @@ const RestartBodySchema = z.object({
  * the static seed, not the CLI's live catalog.
  */
 export async function POST(request: Request) {
-    const guard = guardSensitiveRequest(request)
-    if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
 
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
-    const parsed = RestartBodySchema.safeParse(body)
-    if (!parsed.success) {
-        return NextResponse.json({ error: 'Invalid restart args', issues: parsed.error.issues }, { status: 400 })
-    }
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+        }
+        const parsed = RestartBodySchema.safeParse(body)
+        if (!parsed.success) {
+            return NextResponse.json({ error: 'Invalid restart args', issues: parsed.error.issues }, { status: 400 })
+        }
 
-    const closedSessions = closeSessionsForCli(parsed.data.cli)
-    invalidateRegistryCache()
+        const closedSessions = closeSessionsForCli(parsed.data.cli)
+        invalidateRegistryCache()
 
-    return NextResponse.json({ ok: true, cli: parsed.data.cli, closedSessions })
+        return NextResponse.json({ ok: true, cli: parsed.data.cli, closedSessions })
+  })
 }

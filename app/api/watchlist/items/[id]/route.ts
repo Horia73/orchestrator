@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server"
 
 import { guardSensitiveRequest } from "@/lib/api/request-guard"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 import {
   getWatchlistItem,
   removeWatchlistItem,
@@ -13,84 +14,90 @@ export async function GET(
   _request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const { id } = await params
-  const item = getWatchlistItem(decodeURIComponent(id))
-  if (!item) {
-    return NextResponse.json(
-      { error: "Watchlist item not found" },
-      { status: 404, headers: NO_STORE }
-    )
-  }
-  return NextResponse.json({ item }, { headers: NO_STORE })
+  return runWithRequestProfile(_request, async () => {
+      const { id } = await params
+      const item = getWatchlistItem(decodeURIComponent(id))
+      if (!item) {
+        return NextResponse.json(
+          { error: "Watchlist item not found" },
+          { status: 404, headers: NO_STORE }
+        )
+      }
+      return NextResponse.json({ item }, { headers: NO_STORE })
+  })
 }
 
 export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  const { id } = await params
-  try {
-    const body = await request.json()
-    const item = updateWatchlistItem(decodeURIComponent(id), {
-      name: typeof body.name === "string" ? body.name : undefined,
-      tradingViewSymbol:
-        typeof body.tradingViewSymbol === "string"
-          ? body.tradingViewSymbol
-          : undefined,
-      notes: typeof body.notes === "string" ? body.notes : undefined,
-      sortOrder:
-        typeof body.sortOrder === "number" ? body.sortOrder : undefined,
-      movePercent:
-        typeof body.movePercent === "number" || body.movePercent === null
-          ? body.movePercent
-          : undefined,
-      monitorEnabled:
-        typeof body.monitorEnabled === "boolean"
-          ? body.monitorEnabled
-          : undefined,
-    })
-    if (!item) {
-      return NextResponse.json(
-        { error: "Watchlist item not found" },
-        { status: 404, headers: NO_STORE }
-      )
-    }
-    void import("@/lib/monitoring/watchlist-adapter")
-      .then(({ syncMarketsMonitorActivation }) =>
-        syncMarketsMonitorActivation()
-      )
-      .catch(() => {})
-    return NextResponse.json({ item }, { headers: NO_STORE })
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to update watchlist item"
-    return NextResponse.json(
-      { error: message },
-      { status: 400, headers: NO_STORE }
-    )
-  }
+      const { id } = await params
+      try {
+        const body = await request.json()
+        const item = updateWatchlistItem(decodeURIComponent(id), {
+          name: typeof body.name === "string" ? body.name : undefined,
+          tradingViewSymbol:
+            typeof body.tradingViewSymbol === "string"
+              ? body.tradingViewSymbol
+              : undefined,
+          notes: typeof body.notes === "string" ? body.notes : undefined,
+          sortOrder:
+            typeof body.sortOrder === "number" ? body.sortOrder : undefined,
+          movePercent:
+            typeof body.movePercent === "number" || body.movePercent === null
+              ? body.movePercent
+              : undefined,
+          monitorEnabled:
+            typeof body.monitorEnabled === "boolean"
+              ? body.monitorEnabled
+              : undefined,
+        })
+        if (!item) {
+          return NextResponse.json(
+            { error: "Watchlist item not found" },
+            { status: 404, headers: NO_STORE }
+          )
+        }
+        void import("@/lib/monitoring/watchlist-adapter")
+          .then(({ syncMarketsMonitorActivation }) =>
+            syncMarketsMonitorActivation()
+          )
+          .catch(() => {})
+        return NextResponse.json({ item }, { headers: NO_STORE })
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to update watchlist item"
+        return NextResponse.json(
+          { error: message },
+          { status: 400, headers: NO_STORE }
+        )
+      }
+  })
 }
 
 export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  const { id } = await params
-  const deleted = removeWatchlistItem(decodeURIComponent(id))
-  if (!deleted) {
-    return NextResponse.json(
-      { error: "Watchlist item not found" },
-      { status: 404, headers: NO_STORE }
-    )
-  }
-  void import("@/lib/monitoring/watchlist-adapter")
-    .then(({ syncMarketsMonitorActivation }) => syncMarketsMonitorActivation())
-    .catch(() => {})
-  return NextResponse.json({ deleted: true }, { headers: NO_STORE })
+      const { id } = await params
+      const deleted = removeWatchlistItem(decodeURIComponent(id))
+      if (!deleted) {
+        return NextResponse.json(
+          { error: "Watchlist item not found" },
+          { status: 404, headers: NO_STORE }
+        )
+      }
+      void import("@/lib/monitoring/watchlist-adapter")
+        .then(({ syncMarketsMonitorActivation }) => syncMarketsMonitorActivation())
+        .catch(() => {})
+      return NextResponse.json({ deleted: true }, { headers: NO_STORE })
+  })
 }

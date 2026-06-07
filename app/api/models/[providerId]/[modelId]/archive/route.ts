@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { patchCuratedModel, effectiveModelExists, getEffectiveRegistry } from '@/lib/models/registry'
 import { setFavorites, getConfig } from '@/lib/config'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /**
  * Toggle a model's archived flag in the curated layer.
@@ -42,27 +43,31 @@ export async function PUT(
     request: Request,
     { params }: { params: Promise<{ providerId: string; modelId: string }> }
 ) {
-    const { providerId, modelId } = await params
+  return runWithRequestProfile(request, async () => {
+        const { providerId, modelId } = await params
 
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+        }
 
-    const archived = (body as Record<string, unknown>)?.archived
-    if (typeof archived !== 'boolean') {
-        return NextResponse.json({ error: 'Body must be { archived: boolean }' }, { status: 400 })
-    }
+        const archived = (body as Record<string, unknown>)?.archived
+        if (typeof archived !== 'boolean') {
+            return NextResponse.json({ error: 'Body must be { archived: boolean }' }, { status: 400 })
+        }
 
-    return setArchived(providerId, modelId, archived)
+        return setArchived(providerId, modelId, archived)
+  })
 }
 
 export async function DELETE(
     _request: Request,
     { params }: { params: Promise<{ providerId: string; modelId: string }> }
 ) {
-    const { providerId, modelId } = await params
-    return setArchived(providerId, modelId, false)
+  return runWithRequestProfile(_request, async () => {
+        const { providerId, modelId } = await params
+        return setArchived(providerId, modelId, false)
+  })
 }

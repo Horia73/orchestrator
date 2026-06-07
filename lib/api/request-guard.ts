@@ -1,7 +1,5 @@
 import { NextResponse } from 'next/server'
 
-import { getEnvValue } from '@/lib/config'
-
 const JSON_HEADERS = {
     'Cache-Control': 'no-store',
 }
@@ -154,7 +152,7 @@ function isTrustedLoopbackForwarder(hostname: string): boolean {
     const host = normalizeIpAddress(hostname)
     if (!host) return false
 
-    const configured = getEnvValue(TRUSTED_LOOPBACK_FORWARDERS_ENV_KEY) || ''
+    const configured = process.env[TRUSTED_LOOPBACK_FORWARDERS_ENV_KEY] || ''
     return configured
         .split(/[\s,]+/)
         .map(entry => entry.trim())
@@ -182,7 +180,7 @@ function trustedForwarderEntryMatches(host: string, entry: string): boolean {
 
 function configuredApiTokens(): string[] {
     return API_TOKEN_ENV_KEYS
-        .map(key => getEnvValue(key)?.trim())
+        .map(key => process.env[key]?.trim())
         .filter((token): token is string => Boolean(token))
 }
 

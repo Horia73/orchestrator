@@ -1,7 +1,7 @@
 import fs from "fs"
 import path from "path"
 
-import { AGENT_WORKSPACE_DIR } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import { appApiPath } from "@/lib/app-path"
 import {
   isInsideHiddenDiscoveryPath,
@@ -109,7 +109,7 @@ function shouldSkipPath(absolutePath: string, relativePath: string): boolean {
 }
 
 export function listExtraWorkspaceFiles(): ExtraWorkspaceLibraryEntry[] {
-  const root = path.resolve(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR)
+  const root = path.resolve(/* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir)
   const rootReal = fs.existsSync(root) ? fs.realpathSync.native(root) : root
   const out: ExtraWorkspaceLibraryEntry[] = []
 
@@ -186,7 +186,7 @@ export function deleteExtraWorkspaceFile(relativePath: string): boolean {
   if (!resolved.ok) return false
   if (shouldSkipPath(resolved.resolved, normalized)) return false
 
-  const root = path.resolve(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR)
+  const root = path.resolve(/* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir)
   let rootReal: string
   let fileReal: string
   let stat: fs.Stats

@@ -8,6 +8,7 @@ import {
   writeStaticMapCache,
 } from "@/lib/maps/static-map-cache"
 import { buildGoogleStaticMapUrl } from "@/lib/maps/static-map"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -15,50 +16,54 @@ export const dynamic = "force-dynamic"
 const NO_STORE = { "Cache-Control": "no-store" }
 
 export async function GET(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  const url = new URL(request.url)
-  const artifactId = url.searchParams.get("artifactId")?.trim()
-  if (!artifactId) {
-    return NextResponse.json(
-      { error: "artifactId is required." },
-      { status: 400, headers: NO_STORE }
-    )
-  }
+      const url = new URL(request.url)
+      const artifactId = url.searchParams.get("artifactId")?.trim()
+      if (!artifactId) {
+        return NextResponse.json(
+          { error: "artifactId is required." },
+          { status: 400, headers: NO_STORE }
+        )
+      }
 
-  const artifact = getArtifactById(artifactId)
-  if (!artifact || artifact.type !== "application/vnd.ant.map") {
-    return NextResponse.json(
-      { error: "Map artifact not found." },
-      { status: 404, headers: NO_STORE }
-    )
-  }
+      const artifact = getArtifactById(artifactId)
+      if (!artifact || artifact.type !== "application/vnd.ant.map") {
+        return NextResponse.json(
+          { error: "Map artifact not found." },
+          { status: 404, headers: NO_STORE }
+        )
+      }
 
-  return staticMapResponse({
-    source: artifact.content,
-    width: parseInteger(url.searchParams.get("width")),
-    height: parseInteger(url.searchParams.get("height")),
-    scale: parseScale(url.searchParams.get("scale")),
-    dayId: url.searchParams.get("dayId") ?? undefined,
-    dayIndex: parseInteger(url.searchParams.get("dayIndex")),
-    basemap: url.searchParams.get("basemap") ?? undefined,
+      return staticMapResponse({
+        source: artifact.content,
+        width: parseInteger(url.searchParams.get("width")),
+        height: parseInteger(url.searchParams.get("height")),
+        scale: parseScale(url.searchParams.get("scale")),
+        dayId: url.searchParams.get("dayId") ?? undefined,
+        dayIndex: parseInteger(url.searchParams.get("dayIndex")),
+        basemap: url.searchParams.get("basemap") ?? undefined,
+      })
   })
 }
 
 export async function POST(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  const body = await request.json().catch(() => null)
-  if (!body || typeof body !== "object" || Array.isArray(body)) {
-    return NextResponse.json(
-      { error: "Body must be a JSON object." },
-      { status: 400, headers: NO_STORE }
-    )
-  }
+      const body = await request.json().catch(() => null)
+      if (!body || typeof body !== "object" || Array.isArray(body)) {
+        return NextResponse.json(
+          { error: "Body must be a JSON object." },
+          { status: 400, headers: NO_STORE }
+        )
+      }
 
-  return staticMapResponse(body)
+      return staticMapResponse(body)
+  })
 }
 
 async function staticMapResponse(input: unknown): Promise<Response> {

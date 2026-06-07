@@ -14,7 +14,7 @@
 import { spawn } from 'child_process'
 
 import { resolveBin, augmentedEnv } from './resolve-bin'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 export type ClaudeAlias = 'opus' | 'sonnet' | 'haiku'
 const CLAUDE_ALIASES: ClaudeAlias[] = ['opus', 'sonnet', 'haiku']
@@ -46,7 +46,7 @@ function resolveClaudeAlias(alias: string): Promise<string | null> {
                 {
                     stdio: ['ignore', 'pipe', 'ignore'],
                     env: augmentedEnv(),
-                    cwd: AGENT_WORKSPACE_DIR,
+                    cwd: activeRuntimePaths().agentWorkspaceDir,
                 }
             )
         } catch {

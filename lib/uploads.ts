@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 import { randomUUID } from 'crypto'
 import type { Attachment } from '@/lib/types'
-import { UPLOADS_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
 
 export { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
@@ -12,7 +12,6 @@ export const MAX_UPLOAD_FILE_BYTES = 50 * 1024 * 1024
 export const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024
 
 const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[a-z0-9][a-z0-9-]{0,15}$/i
-const UPLOADS_ROOT = path.resolve(UPLOADS_DIR)
 
 // Any file type is allowed. The stored upload id is {uuid}{ext}, and the ext
 // must fit the extension portion of UPLOAD_ID_RE so the file can be persisted
@@ -43,6 +42,10 @@ function formatBytes(bytes: number): string {
 function isPathInside(parent: string, child: string): boolean {
     const relative = path.relative(parent, child)
     return relative === '' || (!relative.startsWith('..') && !path.isAbsolute(relative))
+}
+
+function uploadsRoot(): string {
+    return path.resolve(activeRuntimePaths().uploadsDir)
 }
 
 export function classifyUploadMime(mime: string): Attachment['type'] {
@@ -123,8 +126,9 @@ export function isSafeUploadId(id: string): boolean {
 export function resolveUploadPath(id: string): string | null {
     if (!isSafeUploadId(id)) return null
 
-    const filePath = path.resolve(UPLOADS_ROOT, id)
-    if (!isPathInside(UPLOADS_ROOT, filePath)) return null
+    const root = uploadsRoot()
+    const filePath = path.resolve(root, id)
+    if (!isPathInside(root, filePath)) return null
     return filePath
 }
 
@@ -136,7 +140,7 @@ export function resolveExistingUploadPath(id: string): string | null {
         const linkStat = fs.lstatSync(filePath)
         if (!linkStat.isFile()) return null
 
-        const rootReal = fs.realpathSync.native(UPLOADS_ROOT)
+        const rootReal = fs.realpathSync.native(uploadsRoot())
         const fileReal = fs.realpathSync.native(filePath)
         if (!isPathInside(rootReal, fileReal)) return null
         return fileReal
@@ -184,7 +188,7 @@ export function persistUploadBytes(
     originalName?: string,
     fallbackBaseName = 'attachment',
 ): PersistedUpload {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+    fs.mkdirSync(activeRuntimePaths().uploadsDir, { recursive: true })
     const extension = uploadExtensionForMime(mimeType, originalName)
 
     for (let attempt = 0; attempt < 3; attempt++) {

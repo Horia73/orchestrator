@@ -36,6 +36,8 @@ export interface BillingUsageEntry {
 }
 
 export interface RequestLogRow {
+    profileId?: string | null
+    profileName?: string | null
     id: string
     conversationId: string
     agentId: string

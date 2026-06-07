@@ -9,6 +9,8 @@ import {
     recordManualRun,
     recoverStuckRunning,
 } from './store'
+import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
+import { listProfiles } from '@/lib/profiles/store'
 
 // ---------------------------------------------------------------------------
 // The scheduler tick. This is the ONLY long-lived background loop in the app.
@@ -43,29 +45,38 @@ function log(msg: string): void {
     console.log(`[scheduler] ${msg}`)
 }
 
-async function executeAndFinish(task: ScheduledTask, isOnce: boolean, firedAt: number): Promise<void> {
-    state.inFlight.add(task.id)
+function taskRunKey(profileId: string, taskId: string): string {
+    return `${profileId}:${taskId}`
+}
+
+async function executeAndFinish(profileId: string, task: ScheduledTask, isOnce: boolean, firedAt: number): Promise<void> {
+    const key = taskRunKey(profileId, task.id)
+    state.inFlight.add(key)
     try {
-        const { runScheduledTask } = await import('./run')
-        const result = await runScheduledTask(task, firedAt)
-        finishRun(task.id, {
-            ok: result.ok,
-            isOnce,
-            conversationId: result.conversationId,
-            error: result.error,
-            nowMs: Date.now(),
+        await runWithProfileContext({ profileId }, async () => {
+            const { runScheduledTask } = await import('./run')
+            const result = await runScheduledTask(task, firedAt)
+            finishRun(task.id, {
+                ok: result.ok,
+                isOnce,
+                conversationId: result.conversationId,
+                error: result.error,
+                nowMs: Date.now(),
+            })
+            log(`ran "${task.title}" (${task.id}, ${profileId}) → ${result.ok ? 'ok' : 'error'}`)
         })
-        log(`ran "${task.title}" (${task.id}) → ${result.ok ? 'ok' : 'error'}`)
     } catch (err) {
-        finishRun(task.id, {
-            ok: false,
-            isOnce,
-            conversationId: null,
-            error: err instanceof Error ? err.message : 'Unknown error',
-            nowMs: Date.now(),
+        runWithProfileContext({ profileId }, () => {
+            finishRun(task.id, {
+                ok: false,
+                isOnce,
+                conversationId: null,
+                error: err instanceof Error ? err.message : 'Unknown error',
+                nowMs: Date.now(),
+            })
         })
     } finally {
-        state.inFlight.delete(task.id)
+        state.inFlight.delete(key)
     }
 }
 
@@ -73,10 +84,24 @@ async function tick(): Promise<void> {
     if (state.ticking) return
     state.ticking = true
     try {
-        const now = Date.now()
-        const due = getDueCandidates(now)
-        for (const task of due) {
-            if (state.inFlight.has(task.id)) continue
+        for (const profile of listProfiles()) {
+            await runWithProfileContext(
+                { profileId: profile.id, role: profile.role },
+                () => tickProfile(profile.id)
+            )
+        }
+    } catch (err) {
+        log(`tick error: ${err instanceof Error ? err.message : String(err)}`)
+    } finally {
+        state.ticking = false
+    }
+}
+
+async function tickProfile(profileId: string): Promise<void> {
+    const now = Date.now()
+    const due = getDueCandidates(now)
+    for (const task of due) {
+            if (state.inFlight.has(taskRunKey(profileId, task.id))) continue
 
             // One-shot that came due while we were offline → missed, not run.
             if (
@@ -95,7 +120,7 @@ async function tick(): Promise<void> {
                             ).toISOString()} but the app was not running. It was not executed.`,
                         )
                     } catch { /* notice best-effort */ }
-                    log(`missed "${missed.title}" (${missed.id})`)
+                    log(`missed "${missed.title}" (${missed.id}, ${profileId})`)
                 }
                 continue
             }
@@ -108,13 +133,8 @@ async function tick(): Promise<void> {
                 continue
             }
             if (!claimed) continue
-            void executeAndFinish(claimed.task, claimed.isOnce, now)
+            void executeAndFinish(profileId, claimed.task, claimed.isOnce, now)
         }
-    } catch (err) {
-        log(`tick error: ${err instanceof Error ? err.message : String(err)}`)
-    } finally {
-        state.ticking = false
-    }
 }
 
 /** Idempotent. Safe to call repeatedly (HMR, multiple imports). */
@@ -122,25 +142,33 @@ export function startScheduler(): void {
     if (state.started) return
     state.started = true
 
+    for (const profile of listProfiles()) {
     try {
-        const recovered = recoverStuckRunning(Date.now())
+        const recovered = runWithProfileContext(
+            { profileId: profile.id, role: profile.role },
+            () => recoverStuckRunning(Date.now())
+        )
         if (recovered.length > 0) {
             void import('./run')
                 .then(({ postInboxNotice }) => {
                     for (const task of recovered) {
                         try {
-                            postInboxNotice(
-                                task,
-                                `⚠️ Scheduled task **${task.title}** was interrupted by a restart and did not complete. It was not re-run.`,
+                            runWithProfileContext(
+                                { profileId: profile.id, role: profile.role },
+                                () => postInboxNotice(
+                                    task,
+                                    `⚠️ Scheduled task **${task.title}** was interrupted by a restart and did not complete. It was not re-run.`,
+                                )
                             )
                         } catch { /* best-effort */ }
                     }
                 })
                 .catch(() => { /* best-effort */ })
         }
-        if (recovered.length > 0) log(`recovered ${recovered.length} interrupted one-shot task(s)`)
+        if (recovered.length > 0) log(`recovered ${recovered.length} interrupted one-shot task(s) for ${profile.id}`)
     } catch (err) {
-        log(`boot recovery failed: ${err instanceof Error ? err.message : String(err)}`)
+        log(`boot recovery failed for ${profile.id}: ${err instanceof Error ? err.message : String(err)}`)
+    }
     }
 
     state.timer = setInterval(() => { void tick() }, TICK_MS)
@@ -154,7 +182,9 @@ export function startScheduler(): void {
  * consume/disarm the schedule (a test run shouldn't mark a one-shot done).
  */
 export async function runTaskNow(id: string): Promise<{ ok: boolean; conversationId: string | null; error?: string }> {
-    if (state.inFlight.has(id)) {
+    const profileId = getActiveProfileId()
+    const key = taskRunKey(profileId, id)
+    if (state.inFlight.has(key)) {
         return { ok: false, conversationId: null, error: 'Task is already running.' }
     }
     const task = getScheduledTask(id)
@@ -167,7 +197,7 @@ export async function runTaskNow(id: string): Promise<{ ok: boolean; conversatio
         }
     }
 
-    state.inFlight.add(id)
+    state.inFlight.add(key)
     try {
         const now = Date.now()
         const { runScheduledTask } = await import('./run')
@@ -180,6 +210,6 @@ export async function runTaskNow(id: string): Promise<{ ok: boolean; conversatio
         })
         return { ok: result.ok, conversationId: result.conversationId, error: result.error }
     } finally {
-        state.inFlight.delete(id)
+        state.inFlight.delete(key)
     }
 }

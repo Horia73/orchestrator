@@ -3,7 +3,8 @@ import path from "path"
 import { createHash, randomUUID } from "crypto"
 import { z } from "zod"
 
-import { AGENT_WORKSPACE_DIR, getConfig } from "@/lib/config"
+import { getConfig } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import {
   AGENT_NEEDS_DEFAULT_CONTENT,
   AGENT_NEEDS_RELATIVE_PATH,
@@ -508,12 +509,16 @@ function isMaterializable(def: WorkspaceFileDefinition): boolean {
  */
 const SCAFFOLD_HASHES_FILE = ".workspace-templates.json"
 
+function agentWorkspaceDir(): string {
+  return activeRuntimePaths().agentWorkspaceDir
+}
+
 function scaffoldHash(text: string): string {
   return createHash("sha256").update(text.trim()).digest("hex")
 }
 
 export function readScaffoldHashes(
-  root: string = AGENT_WORKSPACE_DIR
+  root: string = agentWorkspaceDir()
 ): Record<string, string> {
   try {
     const raw = fs.readFileSync(
@@ -602,7 +607,7 @@ function recordScaffoldHashes(
  * onboarding does not loop when the agent deletes it.
  */
 export function ensureWorkspaceTemplates(): void {
-  const root = AGENT_WORKSPACE_DIR
+  const root = agentWorkspaceDir()
   try {
     fs.mkdirSync(/* turbopackIgnore: true */ root, { recursive: true })
   } catch {
@@ -690,11 +695,13 @@ export function resetWorkspaceFilesToInitialState(opts?: {
     }
   }
 
-  fs.rmSync(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR, {
+  const root = agentWorkspaceDir()
+
+  fs.rmSync(/* turbopackIgnore: true */ root, {
     recursive: true,
     force: true,
   })
-  fs.mkdirSync(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR, {
+  fs.mkdirSync(/* turbopackIgnore: true */ root, {
     recursive: true,
   })
 
@@ -719,7 +726,7 @@ export function resetWorkspaceFilesToInitialState(opts?: {
 
   try {
     writeTextAtomic(
-      path.join(AGENT_WORKSPACE_DIR, WORKSPACE_INIT_MARKER),
+      path.join(root, WORKSPACE_INIT_MARKER),
       `initialized ${new Date().toISOString()}\n`
     )
   } catch {
@@ -1158,7 +1165,7 @@ function resolveDefinitionPath(
   def: WorkspaceFileDefinition,
   dailyStamp?: string
 ): string {
-  const root = AGENT_WORKSPACE_DIR
+  const root = agentWorkspaceDir()
   const resolved = path.resolve(
     /* turbopackIgnore: true */ root,
     effectiveRelativePath(def, dailyStamp)
@@ -1172,7 +1179,7 @@ function resolveDefinitionPath(
 function resolveDailyMemoryDir(def: WorkspaceFileDefinition): string {
   if (def.dynamic !== "daily")
     throw new Error(`${def.id} is not a daily memory definition.`)
-  const root = AGENT_WORKSPACE_DIR
+  const root = agentWorkspaceDir()
   const resolved = path.resolve(
     /* turbopackIgnore: true */ root,
     def.relativePath
@@ -1377,11 +1384,12 @@ function buildModelViewContent(archived: boolean): string {
 }
 
 function getModelRegistryUpdatedAt(): number | null {
+  const root = agentWorkspaceDir()
   const candidates = [
-    path.resolve(AGENT_WORKSPACE_DIR, "api-models.json"),
-    path.resolve(AGENT_WORKSPACE_DIR, "model-overrides.json"),
-    path.resolve(AGENT_WORKSPACE_DIR, "models-live.json"),
-    path.resolve(AGENT_WORKSPACE_DIR, "models-curated.json"),
+    path.resolve(root, "api-models.json"),
+    path.resolve(root, "model-overrides.json"),
+    path.resolve(root, "models-live.json"),
+    path.resolve(root, "models-curated.json"),
   ]
 
   let updatedAt: number | null = null
@@ -1398,8 +1406,9 @@ function getModelRegistryUpdatedAt(): number | null {
 }
 
 function migrateLegacyApiModelsFile(): void {
-  const targetPath = path.resolve(AGENT_WORKSPACE_DIR, "api-models.json")
-  const legacyPath = path.resolve(AGENT_WORKSPACE_DIR, "models-live.json")
+  const root = agentWorkspaceDir()
+  const targetPath = path.resolve(root, "api-models.json")
+  const legacyPath = path.resolve(root, "models-live.json")
   if (
     fs.existsSync(/* turbopackIgnore: true */ targetPath) ||
     !fs.existsSync(/* turbopackIgnore: true */ legacyPath)

@@ -11,30 +11,118 @@ import type {
 } from "@/lib/types"
 import { sanitizeMessageForPersistence } from "@/lib/ai/reasoning-limits"
 import { emitChatEvent } from "./events"
-import { ARTIFACTS_DIR, ORCHESTRATOR_STATE_DIR, UPLOADS_DIR } from "./config"
 import { initializeDatabaseSchema } from "./db-schema"
+import { getActiveProfileId, runWithProfileContext } from "@/lib/profiles/context"
+import { activeRuntimePaths, runtimePathsForProfile } from "@/lib/runtime-paths"
 
-const DB_DIR = ORCHESTRATOR_STATE_DIR
 const isProductionBuild =
   process.env.ORCHESTRATOR_BUILD === "1" ||
   process.env.NEXT_PHASE === "phase-production-build" ||
   process.env.npm_lifecycle_event === "build"
-const DB_PATH = isProductionBuild
-  ? path.join(os.tmpdir(), `orchestrator-build-${process.pid}.db`)
-  : path.join(DB_DIR, "data.db")
 
-// Ensure the directory exists
-if (!fs.existsSync(DB_DIR)) {
-  fs.mkdirSync(DB_DIR, { recursive: true })
+const dbConnections = new Map<string, Database.Database>()
+const capturedSchemaExecSql: string[] = []
+
+function databasePathForProfile(profileId: string): string {
+  if (isProductionBuild) {
+    return path.join(os.tmpdir(), `orchestrator-build-${process.pid}.db`)
+  }
+  return path.join(runtimePathsForProfile(profileId).stateDir, "data.db")
 }
 
-// Initialize the database
-const db = new Database(DB_PATH, { timeout: 10_000 })
-db.pragma("foreign_keys = ON") // Enforce FK cascades on this connection.
-db.pragma("busy_timeout = 10000")
-db.pragma("journal_mode = WAL") // Enable Write-Ahead Logging for better concurrent performance
+export function getDatabaseForProfile(
+  profileId = getActiveProfileId()
+): Database.Database {
+  const key = isProductionBuild ? "__build__" : profileId
+  const existing = dbConnections.get(key)
+  if (existing) return existing
 
-initializeDatabaseSchema(db)
+  const dbPath = databasePathForProfile(profileId)
+  fs.mkdirSync(path.dirname(dbPath), { recursive: true })
+  const database = new Database(dbPath, { timeout: 10_000 })
+  database.pragma("foreign_keys = ON") // Enforce FK cascades on this connection.
+  database.pragma("busy_timeout = 10000")
+  database.pragma("journal_mode = WAL") // Enable Write-Ahead Logging for better concurrent performance
+  initializeDatabaseSchema(database)
+  for (const sql of capturedSchemaExecSql) {
+    try {
+      database.exec(sql)
+    } catch (error) {
+      console.error("[db] failed to replay captured feature schema", error)
+    }
+  }
+  dbConnections.set(key, database)
+  return database
+}
+
+type StatementProxy = {
+  run: (...args: unknown[]) => Database.RunResult
+  get: (...args: unknown[]) => unknown
+  all: (...args: unknown[]) => unknown[]
+  iterate: (...args: unknown[]) => IterableIterator<unknown>
+}
+
+function prepareForActiveProfile(sql: string): StatementProxy {
+  return {
+    run: (...args: unknown[]) => getDatabaseForProfile().prepare(sql).run(...args),
+    get: (...args: unknown[]) => getDatabaseForProfile().prepare(sql).get(...args),
+    all: (...args: unknown[]) => getDatabaseForProfile().prepare(sql).all(...args),
+    iterate: (...args: unknown[]) =>
+      getDatabaseForProfile().prepare(sql).iterate(...args),
+  }
+}
+
+function maybeCaptureFeatureSchema(sql: string): void {
+  const normalized = sql.trim().toUpperCase()
+  if (
+    !normalized.startsWith("CREATE TABLE") &&
+    !normalized.startsWith("CREATE INDEX") &&
+    !normalized.startsWith("CREATE VIRTUAL TABLE")
+  ) {
+    return
+  }
+  if (!capturedSchemaExecSql.includes(sql)) capturedSchemaExecSql.push(sql)
+}
+
+function createDatabaseProxy(): Database.Database {
+  return new Proxy({} as Database.Database, {
+    get(_target, prop) {
+      if (prop === "prepare") {
+        return (sql: string) =>
+          prepareForActiveProfile(sql) as unknown as Database.Statement
+      }
+      if (prop === "transaction") {
+        return (fn: (...args: unknown[]) => unknown) => {
+          return (...args: unknown[]) => {
+            const profileId = getActiveProfileId()
+            const tx = getDatabaseForProfile(profileId).transaction(
+              (...innerArgs: unknown[]) =>
+                runWithProfileContext({ profileId }, () => fn(...innerArgs))
+            )
+            return tx(...args)
+          }
+        }
+      }
+      if (prop === "exec") {
+        return (sql: string) => {
+          maybeCaptureFeatureSchema(sql)
+          return getDatabaseForProfile().exec(sql)
+        }
+      }
+      if (prop === "pragma") {
+        return (...args: unknown[]) =>
+          (getDatabaseForProfile().pragma as (...pragmaArgs: unknown[]) => unknown)(
+            ...args
+          )
+      }
+      const database = getDatabaseForProfile()
+      const value = (database as unknown as Record<PropertyKey, unknown>)[prop]
+      return typeof value === "function" ? value.bind(database) : value
+    },
+  })
+}
+
+const db = createDatabaseProxy()
 
 // Types matching the database rows
 interface ConversationRow {
@@ -1608,8 +1696,9 @@ function unlinkUploadIfExists(attachmentId: string) {
   // attachment.id already includes the extension (e.g. "abc.pdf"), matching
   // the filename written by /api/upload. Resolving + sandbox-check guards
   // against path traversal in case a malformed id ever lands in storage.
-  const target = path.resolve(UPLOADS_DIR, attachmentId)
-  if (!target.startsWith(path.resolve(UPLOADS_DIR) + path.sep)) return
+  const uploadsDir = activeRuntimePaths().uploadsDir
+  const target = path.resolve(uploadsDir, attachmentId)
+  if (!target.startsWith(path.resolve(uploadsDir) + path.sep)) return
   try {
     if (fs.existsSync(target)) fs.unlinkSync(target)
   } catch (err) {
@@ -1675,11 +1764,12 @@ function collectConversationArtifactFilePaths(
 }
 
 function unlinkArtifactIfExists(filePath: string) {
-  const target = resolveExistingPathInside(ARTIFACTS_DIR, filePath)
+  const artifactsDir = activeRuntimePaths().artifactsDir
+  const target = resolveExistingPathInside(artifactsDir, filePath)
   if (!target) return
   try {
     fs.unlinkSync(target)
-    pruneEmptyDirsInside(ARTIFACTS_DIR, path.dirname(target))
+    pruneEmptyDirsInside(artifactsDir, path.dirname(target))
   } catch (err) {
     console.warn("Failed to remove artifact backing file", filePath, err)
   }
@@ -1720,7 +1810,8 @@ function cleanupOrphanUploads(): { scanned: number; removed: number } {
     // Production builds use an isolated temporary DB, so the real uploads
     // directory cannot be reconciled safely from this process.
     if (isProductionBuild) return { scanned: 0, removed: 0 }
-    if (!fs.existsSync(UPLOADS_DIR)) return { scanned: 0, removed: 0 }
+    const uploadsDir = activeRuntimePaths().uploadsDir
+    if (!fs.existsSync(uploadsDir)) return { scanned: 0, removed: 0 }
 
     const rows = db
       .prepare("SELECT attachments FROM messages WHERE attachments IS NOT NULL")
@@ -1739,12 +1830,12 @@ function cleanupOrphanUploads(): { scanned: number; removed: number } {
       }
     }
 
-    const onDisk = fs.readdirSync(UPLOADS_DIR)
+    const onDisk = fs.readdirSync(uploadsDir)
     for (const name of onDisk) {
       scanned++
       if (referenced.has(name)) continue
       try {
-        fs.unlinkSync(path.join(UPLOADS_DIR, name))
+        fs.unlinkSync(path.join(uploadsDir, name))
         removed++
       } catch (err) {
         console.warn("Orphan-upload GC: failed to remove", name, err)

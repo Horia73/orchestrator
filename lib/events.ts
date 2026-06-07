@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import type { ContextUsageSnapshot, Message } from '@/lib/types';
+import { getActiveProfileId } from '@/lib/profiles/context';
 
 // In Next.js development, the global object gets recreated on fast refresh,
 // so we need a persistent way to maintain the EventEmitter across reloads.
@@ -21,7 +22,7 @@ if (process.env.NODE_ENV !== 'production') {
 }
 
 // Event Types
-export type ChatEvent =
+type ChatEventBase =
     | { type: 'create_conversation'; payload: { id: string; title: string; createdAt: number; updatedAt?: number; messages?: Message[]; messageCount?: number; lastMessagePreview?: string; lastMessageAt?: number; readAt?: number | null; archivedAt?: number | null } }
     | { type: 'add_message'; payload: { conversationId: string; message: Message } }
     | { type: 'context_usage'; payload: { conversationId: string; contextUsage: ContextUsageSnapshot } }
@@ -32,11 +33,13 @@ export type ChatEvent =
     | { type: 'chat_stream_started'; payload: { conversationId: string; messageId: string; startedAt: number } }
     | { type: 'chat_stream_ended'; payload: { conversationId: string; messageId?: string } };
 
+export type ChatEvent = ChatEventBase & { profileId?: string };
+
 export function emitChatEvent(event: ChatEvent) {
-    chatEventEmitter.emit('chat:update', event);
+    chatEventEmitter.emit('chat:update', { ...event, profileId: event.profileId ?? getActiveProfileId() });
 }
 
-export type AppEvent =
+type AppEventBase =
     | { type: 'config.updated'; at: number }
     | { type: 'settings.changed'; at: number; reason?: string }
     | { type: 'inbox.changed'; at: number; conversationId?: string; action?: 'created' | 'read' | 'deleted' | 'changed' }
@@ -54,6 +57,8 @@ export type AppEvent =
     | { type: 'webhooks.changed'; at: number; endpointId?: string; reason?: string }
     | { type: 'webhook_events.changed'; at: number; endpointId?: string; eventId?: string }
 
+export type AppEvent = AppEventBase & { profileId?: string }
+
 export type AppEventType = AppEvent['type'];
 type WithOptionalAt<T extends { at: number }> = Omit<T, 'at'> & { at?: number };
 export type AppEventInput = AppEvent extends infer E
@@ -63,7 +68,7 @@ export type AppEventInput = AppEvent extends infer E
     : never;
 
 export function emitAppEvent(event: AppEventInput): AppEvent {
-    const next = { ...event, at: event.at ?? Date.now() } as AppEvent;
+    const next = { ...event, at: event.at ?? Date.now(), profileId: event.profileId ?? getActiveProfileId() } as AppEvent;
     appEventEmitter.emit('app:update', next);
     return next;
 }

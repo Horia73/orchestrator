@@ -10,6 +10,7 @@ import {
 import { readLiveRegistry, writeLiveRegistry } from '@/lib/models/store'
 import { fetchGoogleModels } from '@/lib/models/fetcher'
 import { probeClaudeAliasVersions, type ClaudeAlias } from '@/lib/cli/model-probe'
+import { runWithAdminCookieProfile } from "@/lib/profiles/server"
 
 /**
  * POST /api/models/refresh
@@ -73,63 +74,65 @@ function syncClaudeCodeModelLabels(versions: Record<ClaudeAlias, string | null>)
 }
 
 export async function POST() {
-    const live = readLiveRegistry()
-    const results: Record<string, ProviderRefreshResult> = {}
+  return runWithAdminCookieProfile(async () => {
+        const live = readLiveRegistry()
+        const results: Record<string, ProviderRefreshResult> = {}
 
-    // ---------- Google ----------
-    const googleKey = getApiKey('google')
-    if (!googleKey) {
-        results.google = { fetched: 0, skipped: 'no_api_key' }
-    } else {
-        try {
-            const entry = await fetchGoogleModels(googleKey)
-            live.providers.google = entry
-            results.google = { fetched: Object.keys(entry.models).length }
-        } catch (err) {
-            results.google = {
-                fetched: 0,
-                error: err instanceof Error ? err.message : 'Unknown error',
+        // ---------- Google ----------
+        const googleKey = getApiKey('google')
+        if (!googleKey) {
+            results.google = { fetched: 0, skipped: 'no_api_key' }
+        } else {
+            try {
+                const entry = await fetchGoogleModels(googleKey)
+                live.providers.google = entry
+                results.google = { fetched: Object.keys(entry.models).length }
+            } catch (err) {
+                results.google = {
+                    fetched: 0,
+                    error: err instanceof Error ? err.message : 'Unknown error',
+                }
             }
         }
-    }
 
-    // ---------- Claude Code (CLI) ----------
-    // No model-list API — probe the opus/sonnet/haiku aliases for the version
-    // each resolves to, then relabel the existing seed entries and unarchive
-    // any whose version changed. We never invent new models; the set mirrors
-    // `claude /models`. Also purge any stale live entries a former alias-probe
-    // experiment wrote.
-    for (const cliProvider of ['claude-code', 'codex']) {
-        if (live.providers[cliProvider]) delete live.providers[cliProvider]
-    }
-    try {
-        const versions = await probeClaudeAliasVersions()
-        if (Object.values(versions).some(Boolean)) {
-            const synced = syncClaudeCodeModelLabels(versions)
-            results['claude-code'] = { fetched: synced }
-        } else {
-            results['claude-code'] = { fetched: 0, skipped: 'not_implemented' }
+        // ---------- Claude Code (CLI) ----------
+        // No model-list API — probe the opus/sonnet/haiku aliases for the version
+        // each resolves to, then relabel the existing seed entries and unarchive
+        // any whose version changed. We never invent new models; the set mirrors
+        // `claude /models`. Also purge any stale live entries a former alias-probe
+        // experiment wrote.
+        for (const cliProvider of ['claude-code', 'codex']) {
+            if (live.providers[cliProvider]) delete live.providers[cliProvider]
         }
-    } catch (err) {
-        results['claude-code'] = {
-            fetched: 0,
-            error: err instanceof Error ? err.message : 'Claude Code probe failed.',
+        try {
+            const versions = await probeClaudeAliasVersions()
+            if (Object.values(versions).some(Boolean)) {
+                const synced = syncClaudeCodeModelLabels(versions)
+                results['claude-code'] = { fetched: synced }
+            } else {
+                results['claude-code'] = { fetched: 0, skipped: 'not_implemented' }
+            }
+        } catch (err) {
+            results['claude-code'] = {
+                fetched: 0,
+                error: err instanceof Error ? err.message : 'Claude Code probe failed.',
+            }
         }
-    }
 
-    // ---------- Codex, Anthropic & OpenAI ----------
-    // Codex uses explicit model ids (no "latest" alias, no list command), and
-    // the Anthropic/OpenAI API fetchers aren't implemented yet.
-    results.codex = { fetched: 0, skipped: 'not_implemented' }
-    results.anthropic = { fetched: 0, skipped: 'not_implemented' }
-    results.openai = { fetched: 0, skipped: 'not_implemented' }
+        // ---------- Codex, Anthropic & OpenAI ----------
+        // Codex uses explicit model ids (no "latest" alias, no list command), and
+        // the Anthropic/OpenAI API fetchers aren't implemented yet.
+        results.codex = { fetched: 0, skipped: 'not_implemented' }
+        results.anthropic = { fetched: 0, skipped: 'not_implemented' }
+        results.openai = { fetched: 0, skipped: 'not_implemented' }
 
-    writeLiveRegistry(live)
-    invalidateRegistryCache()
+        writeLiveRegistry(live)
+        invalidateRegistryCache()
 
-    return NextResponse.json({
-        success: true,
-        results,
-        registry: getEffectiveRegistry(),
-    })
+        return NextResponse.json({
+            success: true,
+            results,
+            registry: getEffectiveRegistry(),
+        })
+  })
 }

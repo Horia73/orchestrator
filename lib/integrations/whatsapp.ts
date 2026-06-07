@@ -4,7 +4,8 @@ import path from 'path'
 import { execFileSync } from 'child_process'
 import { createRequire } from 'module'
 
-import { PRIVATE_STATE_DIR, getEnvValue } from '@/lib/config'
+import { getEnvValue } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 import {
     attachmentSummary,
@@ -19,7 +20,6 @@ import {
 
 import type { Chat, Client, Message, MessageSendOptions } from 'whatsapp-web.js'
 
-const AUTH_BASE_DIR = path.join(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, 'whatsapp-web')
 const AUTH_CLIENT_ID = 'orchestrator'
 const QR_TTL_MS = 60_000
 const DEFAULT_OPERATION_TIMEOUT_MS = 30_000
@@ -31,6 +31,10 @@ const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 60_000
 const AUTO_RESUME_COOLDOWN_MS = 30_000
 const DEFAULT_WHATSAPP_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
+
+function authBaseDir(): string {
+    return path.join(/* turbopackIgnore: true */ activeRuntimePaths().privateStateDir, 'whatsapp-web')
+}
 
 export type WhatsAppPhase =
     | 'idle'
@@ -274,7 +278,7 @@ class WhatsAppManager {
             }
         }
 
-        fs.rmSync(/* turbopackIgnore: true */ AUTH_BASE_DIR, { recursive: true, force: true })
+        fs.rmSync(/* turbopackIgnore: true */ authBaseDir(), { recursive: true, force: true })
         this.state.accountName = null
         this.state.phoneNumber = null
         this.state.lastSyncAt = Date.now()
@@ -668,7 +672,7 @@ class WhatsAppManager {
     }
 
     private async initialize(): Promise<void> {
-        ensurePrivateDir(AUTH_BASE_DIR)
+        ensurePrivateDir(authBaseDir())
         const sessionPath = authSessionPath()
         cleanupStaleBrowserProfileLocks(sessionPath)
 
@@ -691,7 +695,7 @@ class WhatsAppManager {
             const client = new ClientCtor({
                 authStrategy: new LocalAuthCtor({
                     clientId: AUTH_CLIENT_ID,
-                    dataPath: AUTH_BASE_DIR,
+                    dataPath: authBaseDir(),
                 }),
                 authTimeoutMs: 120_000,
                 takeoverOnConflict: false,
@@ -1320,7 +1324,7 @@ function browserProcessesUsingPath(profilePath: string): Array<{ pid: number; co
 }
 
 function authSessionPath(): string {
-    return path.join(/* turbopackIgnore: true */ AUTH_BASE_DIR, `session-${AUTH_CLIENT_ID}`)
+    return path.join(/* turbopackIgnore: true */ authBaseDir(), `session-${AUTH_CLIENT_ID}`)
 }
 
 function formatClientError(err: unknown): string {
@@ -1339,8 +1343,8 @@ function ensurePrivateDir(dir: string) {
 
 function hasStoredSession(): boolean {
     try {
-        if (!fs.existsSync(/* turbopackIgnore: true */ AUTH_BASE_DIR)) return false
-        const entries = fs.readdirSync(/* turbopackIgnore: true */ AUTH_BASE_DIR)
+        if (!fs.existsSync(/* turbopackIgnore: true */ authBaseDir())) return false
+        const entries = fs.readdirSync(/* turbopackIgnore: true */ authBaseDir())
         return entries.some(entry => entry.includes(AUTH_CLIENT_ID) || entry.includes('session'))
     } catch {
         return false

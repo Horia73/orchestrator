@@ -16,7 +16,7 @@ import { getAgent } from '@/lib/ai/agents/registry'
 import { getToolsForAgent } from '@/lib/ai/tools/registry'
 import { operationalIntegrationFor } from '@/lib/integrations/manifest'
 import { subsystemForGatedTool } from '@/lib/integrations/subsystem-manifest'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { latestUserPromptWithPortableHistory } from './history'
 import {
     codexContextUsageSnapshot,
@@ -151,7 +151,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
             proc = spawn(resolved, procArgs, {
                 stdio: ['pipe', 'pipe', 'pipe'],
                 env: codexCliEnv(),
-                cwd: cwd ?? AGENT_WORKSPACE_DIR,
+                cwd: cwd ?? activeRuntimePaths().agentWorkspaceDir,
             })
         } catch (err) {
             callbacks.onError(`Failed to spawn ${bin}: ${err instanceof Error ? err.message : 'unknown error'}`)
@@ -778,7 +778,7 @@ function buildThreadParams(args: {
     cwd?: string
 }): AnyObj {
     const params: AnyObj = {
-        cwd: args.cwd ?? AGENT_WORKSPACE_DIR,
+        cwd: args.cwd ?? activeRuntimePaths().agentWorkspaceDir,
         serviceName: 'orchestrator',
         experimentalRawEvents: false,
         persistExtendedHistory: true,

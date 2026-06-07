@@ -19,7 +19,7 @@ async function main(): Promise<void> {
   console.log(`Recall enabled:      ${isRecallEnabled() ? "yes" : "no (disabled in Settings or ORCHESTRATOR_MEMORY_RECALL=off)"}`)
   console.log(`Embeddings reachable: ${embeddingsAvailable() ? "yes" : "no (no API key / cooldown)"}`)
   console.log(`Active generation:   ${status.activeModel}@${status.activeDim}`)
-  console.log(`Sources on disk:     ${status.sources}`)
+  console.log(`Memory sources:      ${status.sources}`)
   console.log(`Embedded (active):   ${status.activeSources}/${status.sources} source(s), ${status.activeChunks} chunk(s)`)
 
   if (status.needsIndexing > 0) {

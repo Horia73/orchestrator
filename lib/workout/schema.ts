@@ -424,12 +424,13 @@ const ExerciseBaseSchema = z.object({
      *  machine setup, seat/pad adjustment, range-of-motion notes, and
      *  "what this is supposed to feel like" guidance. */
     description: z.string().min(1).max(1000).optional(),
-    /** Optional direct demo image. Prefer stable, attribution-friendly URLs
-     *  (Wikimedia Commons, uploaded assets, vendor docs) over hotlinked
-     *  third-party thumbnails. */
+    /** Optional direct demo image. Include only when it is a stable, verified
+     *  URL for this exact exercise/setup; the renderer does not guess an
+     *  image from a broad search query. */
     imageUrl: z.string().url().max(2048).optional(),
-    /** Optional query for the lazy exercise-image endpoint. When absent, the
-     *  renderer searches by exercise name only after the user opens info. */
+    /** Legacy/image metadata fallback. The renderer no longer auto-fetches
+     *  by query because generic Commons results are often wrong for gym
+     *  movements; prefer `description`, `videoUrl`, or a verified `imageUrl`. */
     imageQuery: z.string().min(1).max(180).optional(),
     /** Optional alternative movements the user can swap in when the prescribed
      *  exercise isn't available (no machine, injury, etc.). Renderer surfaces

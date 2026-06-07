@@ -2,44 +2,47 @@ import { NextResponse } from 'next/server'
 
 import { resolveRequestOrigin } from '@/lib/app-origin'
 import { completeGmailOAuth } from '@/lib/integrations/gmail'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
-    const url = new URL(request.url)
-    const origin = resolveRequestOrigin(request)
-    const code = url.searchParams.get('code')
-    const state = url.searchParams.get('state')
-    const oauthError = url.searchParams.get('error')
+  return runWithRequestProfile(request, async () => {
+        const url = new URL(request.url)
+        const origin = resolveRequestOrigin(request)
+        const code = url.searchParams.get('code')
+        const state = url.searchParams.get('state')
+        const oauthError = url.searchParams.get('error')
 
-    if (oauthError) {
-        return htmlResponse(renderCallbackPage({
-            ok: false,
-            title: 'Gmail authorization was cancelled',
-            message: url.searchParams.get('error_description') || oauthError,
-        }))
-    }
+        if (oauthError) {
+            return htmlResponse(renderCallbackPage({
+                ok: false,
+                title: 'Gmail authorization was cancelled',
+                message: url.searchParams.get('error_description') || oauthError,
+            }))
+        }
 
-    if (!code || !state) {
-        return htmlResponse(renderCallbackPage({
-            ok: false,
-            title: 'Gmail authorization failed',
-            message: 'Google did not return the expected authorization code and state.',
-        }))
-    }
+        if (!code || !state) {
+            return htmlResponse(renderCallbackPage({
+                ok: false,
+                title: 'Gmail authorization failed',
+                message: 'Google did not return the expected authorization code and state.',
+            }))
+        }
 
-    try {
-        const result = await completeGmailOAuth({ origin, code, state })
-        return htmlResponse(renderCallbackPage({
-            ok: true,
-            title: 'Gmail connected',
-            message: result.accountEmail ? `Connected ${result.accountEmail}.` : 'Gmail is connected.',
-        }))
-    } catch (err) {
-        return htmlResponse(renderCallbackPage({
-            ok: false,
-            title: 'Gmail authorization failed',
-            message: err instanceof Error ? err.message : 'Could not complete Gmail OAuth.',
-        }))
-    }
+        try {
+            const result = await completeGmailOAuth({ origin, code, state })
+            return htmlResponse(renderCallbackPage({
+                ok: true,
+                title: 'Gmail connected',
+                message: result.accountEmail ? `Connected ${result.accountEmail}.` : 'Gmail is connected.',
+            }))
+        } catch (err) {
+            return htmlResponse(renderCallbackPage({
+                ok: false,
+                title: 'Gmail authorization failed',
+                message: err instanceof Error ? err.message : 'Could not complete Gmail OAuth.',
+            }))
+        }
+  })
 }
 
 function htmlResponse(html: string): NextResponse {

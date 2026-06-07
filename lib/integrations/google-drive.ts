@@ -1,6 +1,6 @@
 import path from 'path'
 
-import { PRIVATE_STATE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS,
     type GoogleOAuthConfigInput,
@@ -52,7 +52,9 @@ export type {
 
 const GOOGLE_DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3'
 const GOOGLE_DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3'
-const GOOGLE_DRIVE_TOKEN_PATH = path.join(PRIVATE_STATE_DIR, 'auth', 'google-drive.json')
+function googleDriveTokenPath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'auth', 'google-drive.json')
+}
 const DEFAULT_ORIGIN = 'http://localhost:3000'
 const MAX_FILE_MAX_RESULTS = 1000
 const DEFAULT_FILE_MAX_RESULTS = 50
@@ -97,7 +99,7 @@ export const GOOGLE_DRIVE_PROVIDER: GoogleOAuthProviderConfig = {
     provider: 'googleDrive',
     label: 'Google Workspace',
     redirectPath: '/api/integrations/google/oauth/callback',
-    tokenPath: GOOGLE_DRIVE_TOKEN_PATH,
+    tokenPath: googleDriveTokenPath(),
     clientIdEnvKeys: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_DRIVE_OAUTH_CLIENT_ID', 'DRIVE_OAUTH_CLIENT_ID'],
     clientSecretEnvKeys: ['GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_DRIVE_OAUTH_CLIENT_SECRET', 'DRIVE_OAUTH_CLIENT_SECRET'],
     redirectUriEnvKeys: [
@@ -261,7 +263,7 @@ export async function getGoogleDriveIntegrationStatus(origin: string, refresh = 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
-            token = await refreshGoogleOAuthToken(token, config, GOOGLE_DRIVE_TOKEN_PATH)
+            token = await refreshGoogleOAuthToken(token, config, googleDriveTokenPath())
         } catch (err) {
             refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Google Workspace token'
@@ -372,7 +374,7 @@ export async function completeGoogleDriveOAuth(args: {
 
     const profile = await fetchDriveProfile(token.access_token)
     const now = Date.now()
-    writeGoogleOAuthToken(GOOGLE_DRIVE_TOKEN_PATH, {
+    writeGoogleOAuthToken(googleDriveTokenPath(), {
         version: 1,
         provider: GOOGLE_DRIVE_PROVIDER.provider,
         clientId: config.clientId,
@@ -393,7 +395,7 @@ export async function completeGoogleDriveOAuth(args: {
 export async function disconnectGoogleDrive(): Promise<GoogleDriveIntegrationStatus> {
     const token = readDriveToken()
     await revokeGoogleOAuthToken(token)
-    clearGoogleOAuthToken(GOOGLE_DRIVE_TOKEN_PATH)
+    clearGoogleOAuthToken(googleDriveTokenPath())
     return getGoogleDriveIntegrationStatus(DEFAULT_ORIGIN, false)
 }
 
@@ -764,7 +766,7 @@ async function driveApi<T>(pathAndQuery: string, init: RequestInit = {}, retry =
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), GOOGLE_DRIVE_TOKEN_PATH)
+        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
         return driveApi<T>(pathAndQuery, init, false)
     }
 
@@ -796,7 +798,7 @@ export async function googleWorkspaceJson<T>(
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), GOOGLE_DRIVE_TOKEN_PATH)
+        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
         return googleWorkspaceJson<T>(baseUrl, pathAndQuery, init, false)
     }
 
@@ -820,7 +822,7 @@ async function driveBytes(pathAndQuery: string, maxBytes: number, retry = true):
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), GOOGLE_DRIVE_TOKEN_PATH)
+        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
         return driveBytes(pathAndQuery, maxBytes, false)
     }
 
@@ -863,7 +865,7 @@ async function driveMultipart<T>(
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), GOOGLE_DRIVE_TOKEN_PATH)
+        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
         return driveMultipart<T>(pathAndQuery, method, metadata, bytes, mimeType, false)
     }
 
@@ -880,11 +882,11 @@ async function getValidDriveToken(): Promise<GoogleOAuthTokenRecord> {
     if (!token) throw new Error('Google Workspace is not connected. Connect it from Settings > Auth.')
     if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) return token
     if (!token.refreshToken) throw new Error('Google Workspace session expired. Reconnect Google Workspace from Settings > Auth.')
-    return refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), GOOGLE_DRIVE_TOKEN_PATH)
+    return refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
 }
 
 function readDriveToken(): GoogleOAuthTokenRecord | null {
-    return readGoogleOAuthToken(GOOGLE_DRIVE_TOKEN_PATH, GOOGLE_DRIVE_PROVIDER.provider)
+    return readGoogleOAuthToken(googleDriveTokenPath(), GOOGLE_DRIVE_PROVIDER.provider)
 }
 
 function fileQueryParams(): URLSearchParams {

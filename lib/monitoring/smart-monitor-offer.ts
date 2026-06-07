@@ -23,13 +23,15 @@ import fs from "fs"
 import path from "path"
 import { randomUUID } from "crypto"
 
-import { PRIVATE_STATE_DIR } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import type { GmailIntegrationStatus } from "@/lib/integrations/gmail"
 import type { GoogleCalendarIntegrationStatus } from "@/lib/integrations/google-calendar"
 import type { HomeAssistantIntegrationStatus } from "@/lib/integrations/home-assistant"
 import type { WhatsAppIntegrationStatus } from "@/lib/integrations/whatsapp"
 
-const OFFER_STATE_PATH = path.join(PRIVATE_STATE_DIR, "smart-monitor-offers.json")
+function offerStatePath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, "smart-monitor-offers.json")
+}
 
 interface OfferState {
     /** Last fingerprint we offered for this integration, or undefined if
@@ -40,8 +42,9 @@ interface OfferState {
 
 function readOfferState(): OfferState {
     try {
-        if (!fs.existsSync(OFFER_STATE_PATH)) return {}
-        const raw = fs.readFileSync(OFFER_STATE_PATH, "utf8")
+        const statePath = offerStatePath()
+        if (!fs.existsSync(statePath)) return {}
+        const raw = fs.readFileSync(statePath, "utf8")
         const parsed = JSON.parse(raw)
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {}
         return parsed as OfferState
@@ -52,8 +55,9 @@ function readOfferState(): OfferState {
 
 function writeOfferState(state: OfferState): void {
     try {
-        fs.mkdirSync(PRIVATE_STATE_DIR, { recursive: true })
-        fs.writeFileSync(OFFER_STATE_PATH, JSON.stringify(state, null, 2), "utf8")
+        const statePath = offerStatePath()
+        fs.mkdirSync(path.dirname(statePath), { recursive: true })
+        fs.writeFileSync(statePath, JSON.stringify(state, null, 2), "utf8")
     } catch (err) {
         console.warn("[smart-monitor-offer] failed to persist state", err)
     }
@@ -390,7 +394,8 @@ export async function maybeOfferSmartMonitor(
  *  for every currently-connected integration. Not exposed via a route. */
 export function _resetOfferStateForTesting(): void {
     try {
-        if (fs.existsSync(OFFER_STATE_PATH)) fs.unlinkSync(OFFER_STATE_PATH)
+        const statePath = offerStatePath()
+        if (fs.existsSync(statePath)) fs.unlinkSync(statePath)
     } catch {
         /* ignore */
     }

@@ -7,7 +7,7 @@ import type { BrowserLiveViewState } from '@/lib/browser-agent-runtime/display'
 import type { AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { createAgentRuntime, type AgentRuntime, type AgentRuntimeStatus } from '@/lib/browser-agent-runtime/runtime'
 import { DEFAULT_VIEWPORT } from '@/lib/browser-agent-runtime/viewport'
-import { WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 const AWAITING_USER_TTL_MS = 60 * 60 * 1000
 const COMPLETED_TTL_MS = 60 * 60 * 1000
@@ -445,7 +445,7 @@ class BrowserSessionManager {
         this.browserManager = await createBrowserManager({
             backend: config.browser.backend,
             userDataDir: config.browser.userDataDir,
-            downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads'),
+            downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
             profileMode: config.browser.profileMode,
             baseProfileDir: config.browser.baseProfileDir,
             chromeExecutablePath: config.browser.chromeExecutablePath,
@@ -477,7 +477,7 @@ class BrowserSessionManager {
         const manager = await createBrowserManager({
             backend: config.browser.backend,
             userDataDir: getOfficialDisplayUserDataDir(config, sessionId),
-            downloadsDir: path.join(WORKSPACE_DIR, 'browser-downloads'),
+            downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
             profileMode: config.browser.profileMode,
             baseProfileDir: config.browser.baseProfileDir,
             chromeExecutablePath: config.browser.chromeExecutablePath,

@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 
 import type { GeneratedMediaAsset } from '@/lib/ai/agents/types'
-import { UPLOADS_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import type { Attachment } from '@/lib/types'
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
 
@@ -30,10 +30,11 @@ export function attachmentType(mimeType: string): Attachment['type'] {
 }
 
 export function saveGeneratedAsset(data: Buffer, mimeType: string, baseName: string): GeneratedMediaAsset {
-    fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+    const uploadsDir = activeRuntimePaths().uploadsDir
+    fs.mkdirSync(uploadsDir, { recursive: true })
     const ext = mimeExtension(mimeType)
     const id = `${randomUUID()}${ext}`
-    const filePath = path.join(UPLOADS_DIR, id)
+    const filePath = path.join(uploadsDir, id)
     fs.writeFileSync(filePath, data)
     const filename = `${baseName}${ext}`
     const attachment: Attachment = {
@@ -103,7 +104,7 @@ export function extractUploadAttachmentsFromContent(content: string): Attachment
         seen.add(id)
         let size: number
         try {
-            const stat = fs.statSync(path.join(UPLOADS_DIR, id))
+            const stat = fs.statSync(path.join(activeRuntimePaths().uploadsDir, id))
             if (!stat.isFile()) continue
             size = stat.size
         } catch {

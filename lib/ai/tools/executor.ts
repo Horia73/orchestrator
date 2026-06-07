@@ -4,6 +4,7 @@ import type {
   ToolResult,
 } from "@/lib/ai/agents/types"
 import { isOrchestratorClassAgent } from "@/lib/ai/agents/orchestrator-class"
+import { deniedToolReason } from "@/lib/profiles/permissions"
 import { getToolExecutor } from "./executors/registry"
 import { ORCHESTRATOR_ONLY_TOOL_IDS } from "./executors/orchestrator-only"
 
@@ -52,6 +53,14 @@ export async function executeTool(
   args: Record<string, unknown>,
   ctx?: ToolExecutionContext
 ): Promise<ToolResult> {
+  const denied = deniedToolReason(tool)
+  if (denied) {
+    return {
+      success: false,
+      error: denied,
+    }
+  }
+
   if (
     !isOrchestratorClassAgent(ctx?.callerAgentId) &&
     ORCHESTRATOR_ONLY_TOOL_IDS.has(tool.id)

@@ -5,7 +5,7 @@ import { randomUUID } from 'crypto'
 import { CLI_SPECS, getCliLoginArgs, type CliId } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
 import { codexCliEnv } from './codex-env'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 // ---------------------------------------------------------------------------
 // In-memory PTY session manager.
@@ -120,7 +120,7 @@ export function startSession(args: StartArgs): string {
         name: 'xterm-256color',
         cols,
         rows,
-        cwd: args.cwd ?? AGENT_WORKSPACE_DIR,
+        cwd: args.cwd ?? activeRuntimePaths().agentWorkspaceDir,
         env: env as { [key: string]: string },
     })
 

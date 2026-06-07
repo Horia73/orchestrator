@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 import {
     modelExists,
     setBrowserAgentModel,
@@ -26,40 +27,42 @@ function isModelOptions(value: unknown): value is Record<string, ModelFeatureVal
 }
 
 export async function PUT(request: Request) {
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
+  return runWithRequestProfile(request, async () => {
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+        }
 
-    if (!body || typeof body !== 'object') {
-        return NextResponse.json({ error: 'Body must be an object' }, { status: 400 })
-    }
+        if (!body || typeof body !== 'object') {
+            return NextResponse.json({ error: 'Body must be an object' }, { status: 400 })
+        }
 
-    const { slot, provider, model, thinkingLevel, modelOptions } = body as Record<string, unknown>
-    if (!isSlot(slot)) {
-        return NextResponse.json({ error: 'slot must be "light" or "pro"' }, { status: 400 })
-    }
-    if (provider !== 'google') {
-        return NextResponse.json({ error: 'Browser agent currently supports Google/Gemini models only' }, { status: 400 })
-    }
-    if (typeof model !== 'string') {
-        return NextResponse.json({ error: 'model is required' }, { status: 400 })
-    }
-    if (!modelExists(provider, model)) {
-        return NextResponse.json({ error: `Unknown model: ${provider}:${model}` }, { status: 400 })
-    }
-    if (!isThinkingLevel(thinkingLevel)) {
-        return NextResponse.json({ error: 'Invalid thinkingLevel' }, { status: 400 })
-    }
-    if (!isModelOptions(modelOptions)) {
-        return NextResponse.json({ error: 'Invalid modelOptions' }, { status: 400 })
-    }
+        const { slot, provider, model, thinkingLevel, modelOptions } = body as Record<string, unknown>
+        if (!isSlot(slot)) {
+            return NextResponse.json({ error: 'slot must be "light" or "pro"' }, { status: 400 })
+        }
+        if (provider !== 'google') {
+            return NextResponse.json({ error: 'Browser agent currently supports Google/Gemini models only' }, { status: 400 })
+        }
+        if (typeof model !== 'string') {
+            return NextResponse.json({ error: 'model is required' }, { status: 400 })
+        }
+        if (!modelExists(provider, model)) {
+            return NextResponse.json({ error: `Unknown model: ${provider}:${model}` }, { status: 400 })
+        }
+        if (!isThinkingLevel(thinkingLevel)) {
+            return NextResponse.json({ error: 'Invalid thinkingLevel' }, { status: 400 })
+        }
+        if (!isModelOptions(modelOptions)) {
+            return NextResponse.json({ error: 'Invalid modelOptions' }, { status: 400 })
+        }
 
-    const override: BrowserAgentModelSettings = { provider, model, thinkingLevel }
-    if (modelOptions !== undefined) override.modelOptions = modelOptions
+        const override: BrowserAgentModelSettings = { provider, model, thinkingLevel }
+        if (modelOptions !== undefined) override.modelOptions = modelOptions
 
-    const updated = setBrowserAgentModel(slot, override)
-    return NextResponse.json({ success: true, config: updated })
+        const updated = setBrowserAgentModel(slot, override)
+        return NextResponse.json({ success: true, config: updated })
+  })
 }

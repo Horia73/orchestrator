@@ -30,7 +30,10 @@ import path from "path"
 import { createHash } from "crypto"
 
 import type { MemoryRecallHit } from "@/lib/types"
-import { AGENT_WORKSPACE_DIR, getConfiguredTimezone, getMemoryEmbeddingSettings } from "@/lib/config"
+import db from "@/lib/db"
+import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
+import { getConfiguredTimezone, getMemoryEmbeddingSettings } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import { dateStampInTimezone } from "@/lib/timezone"
 import {
   embedAsset,
@@ -218,6 +221,8 @@ const SYNC_DEBOUNCE_MS = 15_000
 // shared.ts). The silent pass excludes them so it only surfaces *new* signal.
 const DURABLE_SOURCES = ["USER.md", "MEMORY.md", "MONITORS.md", "PLAYBOOKS.md"]
 const MEMORY_DAY_DIR = "MEMORY_DAY"
+const CONVERSATION_SOURCE_PREFIX = "conversation:"
+const MAX_CONVERSATION_ATTACHMENT_NAMES = 12
 
 // Template boilerplate that should never become a memory chunk (it repeats in
 // every freshly-scaffolded file and carries no signal).
@@ -241,8 +246,9 @@ const TEMPLATE_NOISE = [
 // ---------------------------------------------------------------------------
 
 function workspacePath(relPath: string): string | null {
-  const abs = path.resolve(AGENT_WORKSPACE_DIR, relPath)
-  if (abs !== AGENT_WORKSPACE_DIR && !abs.startsWith(AGENT_WORKSPACE_DIR + path.sep)) {
+  const workspaceDir = activeRuntimePaths().agentWorkspaceDir
+  const abs = path.resolve(workspaceDir, relPath)
+  if (abs !== workspaceDir && !abs.startsWith(workspaceDir + path.sep)) {
     return null
   }
   return abs
@@ -260,7 +266,7 @@ function readSource(relPath: string): string | null {
   }
 }
 
-/** All memory source files currently on disk (durable + every daily note). */
+/** All markdown memory source files currently on disk (durable + every daily note). */
 export function listMemorySourceFiles(): string[] {
   const out: string[] = []
   for (const rel of DURABLE_SOURCES) {
@@ -279,6 +285,122 @@ export function listMemorySourceFiles(): string[] {
     }
   }
   return out
+}
+
+interface MemorySourceSnapshot {
+  source: string
+  content: string
+}
+
+interface ConversationMemoryRow {
+  messageId: string
+  conversationId: string
+  conversationTitle: string
+  role: "user" | "assistant"
+  content: string
+  attachments: string | null
+  timestamp: number
+}
+
+function conversationSourceId(conversationId: string, messageId: string): string {
+  return `${CONVERSATION_SOURCE_PREFIX}${conversationId}:${messageId}`
+}
+
+function conversationSourcePrefix(conversationId: string): string {
+  return `${CONVERSATION_SOURCE_PREFIX}${conversationId}:`
+}
+
+function parseAttachmentNames(raw: string | null): string[] {
+  if (!raw) return []
+  try {
+    const parsed = JSON.parse(raw) as unknown
+    if (!Array.isArray(parsed)) return []
+    const out: string[] = []
+    for (const item of parsed) {
+      if (!item || typeof item !== "object") continue
+      const rec = item as Record<string, unknown>
+      const name =
+        typeof rec.filename === "string" && rec.filename.trim()
+          ? rec.filename.trim()
+          : typeof rec.id === "string" && rec.id.trim()
+            ? rec.id.trim()
+            : ""
+      if (name) out.push(name)
+      if (out.length >= MAX_CONVERSATION_ATTACHMENT_NAMES) break
+    }
+    return out
+  } catch {
+    return []
+  }
+}
+
+function listConversationMemoryRows(): ConversationMemoryRow[] {
+  try {
+    return db
+      .prepare(
+        `
+          SELECT
+            m.id AS messageId,
+            m.conversationId,
+            c.title AS conversationTitle,
+            m.role,
+            m.content,
+            m.attachments,
+            m.timestamp
+          FROM messages m
+          JOIN conversations c ON c.id = m.conversationId
+          WHERE (c.origin IS NULL OR c.origin = 'user')
+            AND (m.status IS NULL OR m.status = 'ok')
+            AND (
+              length(trim(COALESCE(m.content, ''))) > 0
+              OR (m.attachments IS NOT NULL AND m.attachments != '')
+            )
+          ORDER BY m.timestamp ASC, m.id ASC
+        `
+      )
+      .all() as ConversationMemoryRow[]
+  } catch {
+    return []
+  }
+}
+
+function formatConversationSource(row: ConversationMemoryRow): string {
+  const role = row.role === "assistant" ? "Assistant" : "User"
+  const title = row.conversationTitle?.trim() || "Untitled conversation"
+  const date = new Date(row.timestamp).toISOString()
+  const attachments = parseAttachmentNames(row.attachments)
+  const body = stripArtifactBlocksForPreview(row.content ?? "")
+  const metaLines = [
+    `Conversation: ${title}`,
+    `Conversation ID: ${row.conversationId}`,
+    `Message ID: ${row.messageId}`,
+    `Date: ${date}`,
+    `Role: ${role}`,
+    attachments.length ? `Attachments: ${attachments.join(", ")}` : "",
+  ].filter(Boolean)
+  return [...metaLines, "", body].join("\n").trim()
+}
+
+function listConversationMemorySources(): MemorySourceSnapshot[] {
+  return listConversationMemoryRows().map((row) => ({
+    source: conversationSourceId(row.conversationId, row.messageId),
+    content: formatConversationSource(row),
+  }))
+}
+
+function listMemorySourceSnapshots(): MemorySourceSnapshot[] {
+  const out: MemorySourceSnapshot[] = []
+  for (const source of listMemorySourceFiles()) {
+    const content = readSource(source)
+    if (content !== null) out.push({ source, content })
+  }
+  out.push(...listConversationMemorySources())
+  return out
+}
+
+/** All semantic memory sources: durable/daily markdown plus conversation messages. */
+export function listMemorySources(): string[] {
+  return listMemorySourceSnapshots().map((entry) => entry.source)
 }
 
 /** Sources already in the prompt this turn: durable files + last 3 configured-local days. */
@@ -378,6 +500,68 @@ export function chunkMarkdown(source: string, content: string): Chunk[] {
   return raw.map((c, i) => ({ chunkIndex: i, title: c.title, text: c.text }))
 }
 
+function conversationMeta(content: string, label: string): string {
+  const prefix = `${label}:`
+  const line = content
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .find((value) => value.startsWith(prefix))
+  return line ? line.slice(prefix.length).trim() : ""
+}
+
+function splitPlainTextForChunks(text: string): string[] {
+  const normalized = text.replace(/\r\n/g, "\n").trim()
+  if (!normalized) return []
+
+  const parts: string[] = []
+  const blocks = normalized
+    .split(/\n{2,}/)
+    .map((block) => block.replace(/\s+/g, " ").trim())
+    .filter(Boolean)
+
+  for (const block of blocks.length ? blocks : [normalized.replace(/\s+/g, " ").trim()]) {
+    if (block.length <= MAX_CHUNK_CHARS) {
+      parts.push(block)
+      continue
+    }
+    for (let offset = 0; offset < block.length; offset += MAX_CHUNK_CHARS) {
+      const part = block.slice(offset, offset + MAX_CHUNK_CHARS).trim()
+      if (part) parts.push(part)
+    }
+  }
+  return parts
+}
+
+export function chunkConversationContent(source: string, content: string): Chunk[] {
+  const title = conversationMeta(content, "Conversation") || source
+  const date = conversationMeta(content, "Date")
+  const role = conversationMeta(content, "Role") || "Message"
+  const attachments = conversationMeta(content, "Attachments")
+  const body = content.split(/\n\n/).slice(1).join("\n\n").trim()
+  const textParts = splitPlainTextForChunks(body || attachments)
+  const chunkTitle = `Conversation › ${title}${date ? ` › ${role} · ${date.slice(0, 10)}` : ` › ${role}`}`
+  const prefix = [
+    `${role}${date ? ` on ${date}` : ""}`,
+    attachments ? `attachments: ${attachments}` : "",
+  ]
+    .filter(Boolean)
+    .join("; ")
+
+  return textParts
+    .filter((text) => text.length >= MIN_CHUNK_CHARS && !isTemplateNoise(text))
+    .map((text, index) => ({
+      chunkIndex: index,
+      title: chunkTitle,
+      text: capChunk(prefix ? `${prefix}: ${text}` : text),
+    }))
+}
+
+function chunkMemorySource(source: string, content: string): Chunk[] {
+  return source.startsWith(CONVERSATION_SOURCE_PREFIX)
+    ? chunkConversationContent(source, content)
+    : chunkMarkdown(source, content)
+}
+
 function sha256(text: string): string {
   return createHash("sha256").update(text).digest("hex")
 }
@@ -401,27 +585,26 @@ async function doSync(): Promise<{
 
   if (!embeddingsAvailable()) return { indexed, removed, failed }
 
-  const files = listMemorySourceFiles()
-  const fileSet = new Set(files)
+  const sources = listMemorySourceSnapshots()
+  const sourceSet = new Set(sources.map((entry) => entry.source))
 
-  // Drop sources whose files disappeared (every generation + content + FTS).
+  // Drop sources whose backing file/message disappeared (every generation +
+  // content + FTS).
   for (const source of listContentSources()) {
-    if (!fileSet.has(source)) {
+    if (!sourceSet.has(source)) {
       pruneSource(source)
       removed += 1
     }
   }
 
-  for (const source of files) {
-    const content = readSource(source)
-    if (content === null) continue
+  for (const { source, content } of sources) {
     const hash = sha256(content)
 
     // 1. Content change: rebuild the model-independent content marker + FTS and
     //    wipe every stale embedding generation for this source.
     let chunks: Chunk[] | null = null
     if (getContentHash(source) !== hash) {
-      chunks = chunkMarkdown(source, content)
+      chunks = chunkMemorySource(source, content)
       markContentChanged(source, hash, chunks)
     }
 
@@ -430,7 +613,7 @@ async function doSync(): Promise<{
     //    before, content unchanged), this is a no-op — free, no API call.
     if (generationFresh(source, getEmbeddingModel(), getEmbeddingDim(), hash)) continue
 
-    if (!chunks) chunks = chunkMarkdown(source, content)
+    if (!chunks) chunks = chunkMemorySource(source, content)
     if (chunks.length === 0) {
       // Record an empty generation so we don't retry an empty file every sync.
       writeGeneration(source, getEmbeddingModel(), getEmbeddingDim(), hash, [])
@@ -499,6 +682,10 @@ export interface MemoryHit {
   assetKey?: string
   mimeType?: string
   url?: string
+  conversationId?: string
+  conversationTitle?: string
+  messageId?: string
+  messageTimestamp?: number
 }
 
 function dot(a: Float32Array, b: Float32Array): number {
@@ -520,6 +707,7 @@ export interface SearchOptions {
   topK?: number
   threshold?: number
   excludeSources?: Set<string>
+  excludeSourcePrefixes?: string[]
   /** "hybrid" blends keyword (FTS) hits in when semantic is thin/unavailable. */
   mode?: "semantic" | "hybrid"
   /** Collapse near-duplicate hits (default true). Off for calibration dry-runs. */
@@ -527,6 +715,15 @@ export interface SearchOptions {
   /** Silent per-turn pass only: suppress entirely when a broad, multi-intent
    *  message is matched only by a small tangential slice of memory (default false). */
   coverageGate?: boolean
+}
+
+function isSourceExcluded(
+  source: string,
+  exact: Set<string>,
+  prefixes: readonly string[]
+): boolean {
+  if (exact.has(source)) return true
+  return prefixes.some((prefix) => source.startsWith(prefix))
 }
 
 /**
@@ -629,6 +826,7 @@ export async function searchMemory(
   const topK = opts.topK ?? RECALL_TOP_K
   const threshold = opts.threshold ?? getRecallThreshold()
   const exclude = opts.excludeSources ?? new Set<string>()
+  const excludePrefixes = opts.excludeSourcePrefixes ?? []
   const mode = opts.mode ?? "semantic"
   const dedup = opts.dedup ?? true
 
@@ -640,7 +838,7 @@ export async function searchMemory(
   if (qVec) {
     const rows = loadVectorRows(getEmbeddingModel(), getEmbeddingDim())
     for (const r of rows) {
-      if (exclude.has(r.source)) continue
+      if (isSourceExcluded(r.source, exclude, excludePrefixes)) continue
       if (r.vector.length !== qVec.length) continue
       const score = dot(qVec, r.vector)
       if (score >= threshold) {
@@ -655,7 +853,7 @@ export async function searchMemory(
     const match = buildFtsMatch(query)
     if (match) {
       for (const hit of ftsSearch(match, topK * 2)) {
-        if (exclude.has(hit.source)) continue
+        if (isSourceExcluded(hit.source, exclude, excludePrefixes)) continue
         if (seenIds.has(hit.id)) continue
         candidates.push(hit)
         seenIds.add(hit.id)
@@ -868,6 +1066,7 @@ function readAssetBytes(absPath: string): Buffer | null {
 async function recallByAsset(
   asset: RecallAttachmentInput,
   exclude: Set<string>,
+  excludeSourcePrefixes: string[],
   excludeFilePaths?: Set<string>
 ): Promise<{ notes: MemoryHit[]; files: MemoryHit[] }> {
   const empty = { notes: [] as MemoryHit[], files: [] as MemoryHit[] }
@@ -883,7 +1082,7 @@ async function recallByAsset(
     const scored: MemoryHit[] = []
     const vectorById = new Map<string, Float32Array>()
     for (const r of rows) {
-      if (exclude.has(r.source)) continue
+      if (isSourceExcluded(r.source, exclude, excludeSourcePrefixes)) continue
       if (r.vector.length !== vec.length) continue
       const score = dot(vec, r.vector)
       if (score >= getImageMemoryThreshold()) {
@@ -905,12 +1104,22 @@ async function recallByAsset(
       id: `file:${f.assetKey}`,
       source: f.displayPath,
       title: f.displayPath,
-      text: "",
+      text: f.conversationTitle
+        ? `from conversation "${f.conversationTitle}"${
+            typeof f.messageTimestamp === "number"
+              ? ` on ${new Date(f.messageTimestamp).toISOString()}`
+              : ""
+          }`
+        : "",
       score: f.score,
       kind: "file",
       assetKey: f.assetKey,
       mimeType: f.mimeType,
       url: `/api/memory/file?assetKey=${encodeURIComponent(f.assetKey)}`,
+      conversationId: f.conversationId,
+      conversationTitle: f.conversationTitle,
+      messageId: f.messageId,
+      messageTimestamp: f.messageTimestamp,
     }))
 
     return { notes, files }
@@ -961,6 +1170,9 @@ export async function getRecalledMemory(
     kickMemoryIndexSync()
 
     const exclude = inContextSources()
+    const excludeSourcePrefixes = recallOptions.conversationId
+      ? [conversationSourcePrefix(recallOptions.conversationId)]
+      : []
     const excludeFilePaths = new Set(
       (recallOptions.excludeFilePaths ?? []).filter((p) => typeof p === "string" && p.trim())
     )
@@ -970,12 +1182,13 @@ export async function getRecalledMemory(
             topK: RECALL_TOP_K,
             threshold: getRecallThreshold(),
             excludeSources: exclude,
+            excludeSourcePrefixes,
             mode: "semantic",
             coverageGate: true,
           })
         : Promise.resolve([])
     const assetPromise = asset
-      ? recallByAsset(asset, exclude, excludeFilePaths)
+      ? recallByAsset(asset, exclude, excludeSourcePrefixes, excludeFilePaths)
       : Promise.resolve({ notes: [] as MemoryHit[], files: [] as MemoryHit[] })
 
     // Independent budgets: a slow/failed image embed must not lose text hits
@@ -1041,6 +1254,10 @@ export function buildRecallUiHits(hits: MemoryHit[]): MemoryRecallHit[] {
     snippet: h.text.replace(/\s+/g, " ").trim(),
     mimeType: h.mimeType,
     url: h.url,
+    conversationId: h.conversationId,
+    conversationTitle: h.conversationTitle,
+    messageId: h.messageId,
+    messageTimestamp: h.messageTimestamp,
   }))
 }
 

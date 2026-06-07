@@ -7,6 +7,7 @@ import {
   type MapsTravelMode,
 } from "@/lib/maps/google-routes"
 import type { MapCoordinate } from "@/lib/maps/schema"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -25,70 +26,72 @@ interface DirectionsRequestBody {
 const MAX_DIRECTIONS_WAYPOINTS = 25
 
 export async function POST(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  let body: DirectionsRequestBody
-  try {
-    body = (await request.json()) as DirectionsRequestBody
-  } catch {
-    return NextResponse.json(
-      { error: "Invalid JSON body." },
-      { status: 400, headers: NO_STORE }
-    )
-  }
-
-  const waypointsResult = parseDirectionsWaypoints(body)
-  if ("error" in waypointsResult) {
-    return NextResponse.json(
-      { error: waypointsResult.error },
-      { status: 400, headers: NO_STORE }
-    )
-  }
-
-  const travelMode = parseTravelMode(body.travelMode)
-  if (body.travelMode !== undefined && !travelMode) {
-    return NextResponse.json(
-      {
-        error:
-          "travelMode must be one of driving, walking, bicycling, transit, two_wheeler.",
-      },
-      { status: 400, headers: NO_STORE }
-    )
-  }
-
-  try {
-    const result = await computeDirections(waypointsResult.waypoints, {
-      travelMode: travelMode ?? "driving",
-      languageCode: stringOption(body.languageCode),
-      regionCode: stringOption(body.regionCode),
-    })
-    const best = result.routes[0]
-    if (!best) {
-      return NextResponse.json(
-        { error: "Routes API returned no route." },
-        { status: 502, headers: NO_STORE }
-      )
-    }
-    return NextResponse.json(
-      {
-        route: best.mapRoute,
-        fitBounds: best.fitBounds,
-        distanceMeters: best.distanceMeters,
-        durationSeconds: best.durationSeconds,
-        durationText: best.durationText,
-        waypointCount: waypointsResult.waypoints.length,
-      },
-      {
-        headers: NO_STORE,
+      let body: DirectionsRequestBody
+      try {
+        body = (await request.json()) as DirectionsRequestBody
+      } catch {
+        return NextResponse.json(
+          { error: "Invalid JSON body." },
+          { status: 400, headers: NO_STORE }
+        )
       }
-    )
-  } catch (error) {
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : "Directions failed." },
-      { status: 502, headers: NO_STORE }
-    )
-  }
+
+      const waypointsResult = parseDirectionsWaypoints(body)
+      if ("error" in waypointsResult) {
+        return NextResponse.json(
+          { error: waypointsResult.error },
+          { status: 400, headers: NO_STORE }
+        )
+      }
+
+      const travelMode = parseTravelMode(body.travelMode)
+      if (body.travelMode !== undefined && !travelMode) {
+        return NextResponse.json(
+          {
+            error:
+              "travelMode must be one of driving, walking, bicycling, transit, two_wheeler.",
+          },
+          { status: 400, headers: NO_STORE }
+        )
+      }
+
+      try {
+        const result = await computeDirections(waypointsResult.waypoints, {
+          travelMode: travelMode ?? "driving",
+          languageCode: stringOption(body.languageCode),
+          regionCode: stringOption(body.regionCode),
+        })
+        const best = result.routes[0]
+        if (!best) {
+          return NextResponse.json(
+            { error: "Routes API returned no route." },
+            { status: 502, headers: NO_STORE }
+          )
+        }
+        return NextResponse.json(
+          {
+            route: best.mapRoute,
+            fitBounds: best.fitBounds,
+            distanceMeters: best.distanceMeters,
+            durationSeconds: best.durationSeconds,
+            durationText: best.durationText,
+            waypointCount: waypointsResult.waypoints.length,
+          },
+          {
+            headers: NO_STORE,
+          }
+        )
+      } catch (error) {
+        return NextResponse.json(
+          { error: error instanceof Error ? error.message : "Directions failed." },
+          { status: 502, headers: NO_STORE }
+        )
+      }
+  })
 }
 
 function parseDirectionsWaypoints(

@@ -12,13 +12,8 @@
 
 import fs from 'fs';
 import path from 'path';
-import { PRIVATE_STATE_DIR } from '@/lib/config';
+import { activeRuntimePaths } from '@/lib/runtime-paths';
 
-const MEMORY_DIR = path.join(PRIVATE_STATE_DIR, 'browser-agent');
-fs.mkdirSync(MEMORY_DIR, { recursive: true });
-
-const MEMORY_JSON_FILE = path.join(MEMORY_DIR, 'memory.json');
-const MEMORY_MD_FILE = path.join(MEMORY_DIR, 'MEMORY.local.md');
 const MEMORY_VERSION = 3;
 
 // ─── Limits ───────────────────────────────────────────────────────────────────
@@ -33,6 +28,20 @@ const DECAY_LAMBDA = 0.03;          // ~23 day half-life
 const WEIGHT_ACCESS_COUNT = 1.0;
 const WEIGHT_REINFORCEMENT = 2.0;
 const BASE_IMPORTANCE = 0.1;
+
+function memoryDir(): string {
+    const dir = path.join(activeRuntimePaths().privateStateDir, 'browser-agent');
+    fs.mkdirSync(dir, { recursive: true });
+    return dir;
+}
+
+function memoryJsonFile(): string {
+    return path.join(memoryDir(), 'memory.json');
+}
+
+function memoryMarkdownFile(): string {
+    return path.join(memoryDir(), 'MEMORY.local.md');
+}
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -264,9 +273,10 @@ function normalizeEntries(rawEntries: unknown): MemoryEntry[] {
 }
 
 function loadStore(): MemoryStore {
-    if (fs.existsSync(MEMORY_JSON_FILE)) {
+    const filePath = memoryJsonFile();
+    if (fs.existsSync(filePath)) {
         try {
-            const raw = JSON.parse(fs.readFileSync(MEMORY_JSON_FILE, 'utf8'));
+            const raw = JSON.parse(fs.readFileSync(filePath, 'utf8'));
             if ((raw.version === 2 || raw.version === MEMORY_VERSION) && Array.isArray(raw.entries)) {
                 return {
                     version: MEMORY_VERSION,
@@ -283,7 +293,7 @@ function loadStore(): MemoryStore {
 
 function saveStore(store: MemoryStore): void {
     try {
-        fs.writeFileSync(MEMORY_JSON_FILE, JSON.stringify(store, null, 2), 'utf8');
+        fs.writeFileSync(memoryJsonFile(), JSON.stringify(store, null, 2), 'utf8');
         exportToMarkdown(store);
     } catch {
         console.log('⚠️ Could not save memory');
@@ -334,7 +344,7 @@ function exportToMarkdown(store: MemoryStore): void {
     }
 
     try {
-        fs.writeFileSync(MEMORY_MD_FILE, md, 'utf8');
+        fs.writeFileSync(memoryMarkdownFile(), md, 'utf8');
     } catch {
         // Non-critical
     }
@@ -522,7 +532,7 @@ export function clearLearnings(): void {
  * Initialize memory file if it doesn't exist.
  */
 export function initializeDefaultLearnings(): void {
-    if (!fs.existsSync(MEMORY_JSON_FILE)) {
+    if (!fs.existsSync(memoryJsonFile())) {
         saveStore(createEmptyStore());
         return;
     }

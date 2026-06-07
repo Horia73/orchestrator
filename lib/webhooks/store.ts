@@ -2,6 +2,13 @@ import { randomBytes, randomUUID } from 'crypto'
 
 import db from '@/lib/db'
 import { emitAppEvent } from '@/lib/events'
+import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
+import {
+    assertProfileWebhookSlugAvailable,
+    listProfiles,
+    registerProfileWebhookSlugOwner,
+    unregisterProfileWebhookSlugOwner,
+} from '@/lib/profiles/store'
 
 import {
     WebhookEndpointCreateInputSchema,
@@ -303,6 +310,10 @@ export function createWebhookEndpoint(input: WebhookEndpointCreateInput, created
         updatedAt: now,
     }
 
+    const profileId = getActiveProfileId()
+    assertProfileWebhookSlugAvailable(endpoint.slug, profileId, endpoint.id)
+    assertWebhookSlugNotUsedByAnotherProfile(endpoint.slug, profileId)
+
     db.prepare(
         `
         INSERT INTO webhook_endpoints (
@@ -320,10 +331,36 @@ export function createWebhookEndpoint(input: WebhookEndpointCreateInput, created
         enabled: endpoint.enabled ? 1 : 0,
     })
 
+    try {
+        registerProfileWebhookSlugOwner({
+            slug: endpoint.slug,
+            profileId,
+            endpointId: endpoint.id,
+        })
+    } catch (err) {
+        db.prepare('DELETE FROM webhook_endpoints WHERE id = ?').run(endpoint.id)
+        throw err
+    }
+
     emitWebhooksChanged(endpoint.id, 'created')
     return {
         endpoint,
         generatedSecret: parsed.secret ? null : secret,
+    }
+}
+
+function assertWebhookSlugNotUsedByAnotherProfile(slug: string, profileId: string): void {
+    for (const profile of listProfiles({ includeDisabled: true })) {
+        if (profile.id === profileId) continue
+        const existing = runWithProfileContext(
+            { profileId: profile.id, role: profile.role },
+            () => db
+                .prepare('SELECT id FROM webhook_endpoints WHERE lower(slug) = lower(?)')
+                .get(slug) as { id: string } | undefined,
+        )
+        if (existing) {
+            throw new Error(`Webhook slug "${slug}" is already owned by another profile.`)
+        }
     }
 }
 
@@ -416,6 +453,7 @@ export function deleteWebhookEndpoint(idOrSlug: string): boolean {
     if (!endpoint) return false
     const result = db.prepare('DELETE FROM webhook_endpoints WHERE id = ?').run(endpoint.id)
     if (result.changes > 0) {
+        unregisterProfileWebhookSlugOwner(endpoint.slug, endpoint.id)
         emitWebhooksChanged(endpoint.id, 'deleted')
         return true
     }

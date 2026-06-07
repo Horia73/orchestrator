@@ -17,7 +17,7 @@ import fs from "fs"
 import path from "path"
 
 import db from "@/lib/db"
-import { AGENT_WORKSPACE_DIR } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import { listAllAttachments } from "@/lib/db"
 import { resolveExistingUploadPath } from "@/lib/uploads"
 import {
@@ -90,6 +90,41 @@ export interface LibraryAsset {
   displayPath: string
   mimeType: string
   sig: string
+  conversationId?: string
+  conversationTitle?: string
+  messageId?: string
+  messageTimestamp?: number
+}
+
+export interface LibraryAssetProvenance {
+  conversationId: string
+  conversationTitle: string
+  messageId: string
+  messageTimestamp: number
+}
+
+function provenanceForAttachment(
+  att: ReturnType<typeof listAllAttachments>[number]
+): LibraryAssetProvenance {
+  return {
+    conversationId: att.conversationId,
+    conversationTitle: att.conversationTitle,
+    messageId: att.messageId,
+    messageTimestamp: att.messageTimestamp,
+  }
+}
+
+function attachmentProvenanceMap(): Map<string, LibraryAssetProvenance> {
+  const map = new Map<string, LibraryAssetProvenance>()
+  try {
+    for (const att of listAllAttachments()) {
+      const key = `upload:${att.id}`
+      if (!map.has(key)) map.set(key, provenanceForAttachment(att))
+    }
+  } catch {
+    /* db unavailable — provenance is best-effort */
+  }
+  return map
 }
 
 function walkDir(absDir: string, relBase: string, out: LibraryAsset[]): void {
@@ -129,11 +164,12 @@ function walkDir(absDir: string, relBase: string, out: LibraryAsset[]): void {
 
 export function listLibraryAssets(): LibraryAsset[] {
   const out: LibraryAsset[] = []
+  const workspaceDir = activeRuntimePaths().agentWorkspaceDir
 
   // 1. Workspace Library dirs (immutable-ish files written by tools/integrations).
   for (const dir of LIBRARY_SOURCE_DIRS) {
-    const abs = path.resolve(AGENT_WORKSPACE_DIR, dir)
-    if (abs !== AGENT_WORKSPACE_DIR && !abs.startsWith(AGENT_WORKSPACE_DIR + path.sep)) continue
+    const abs = path.resolve(workspaceDir, dir)
+    if (abs !== workspaceDir && !abs.startsWith(workspaceDir + path.sep)) continue
     walkDir(abs, dir, out)
   }
 
@@ -159,6 +195,7 @@ export function listLibraryAssets(): LibraryAsset[] {
         displayPath: att.filename || att.id,
         mimeType: att.mimeType || m.mime,
         sig: att.id, // uploads are immutable, id never changes
+        ...provenanceForAttachment(att),
       })
     }
   } catch {
@@ -280,6 +317,10 @@ interface VectorRow {
   path: string
   kind: string
   mimeType: string
+  conversationId?: string
+  conversationTitle?: string
+  messageId?: string
+  messageTimestamp?: number
   vector: Float32Array
 }
 
@@ -315,15 +356,18 @@ function loadVectors(model: string, dim: number): VectorRow[] {
     embedding: Buffer
   }>
   const out: VectorRow[] = []
+  const provenanceByAssetKey = attachmentProvenanceMap()
   for (const r of rows) {
     const vector = bufferToVector(r.embedding)
     if (vector.length === 0) continue
+    const provenance = provenanceByAssetKey.get(r.assetKey)
     out.push({
       assetKey: r.assetKey,
       displayPath: r.displayPath,
       path: r.path,
       kind: r.kind,
       mimeType: r.mimeType,
+      ...provenance,
       vector,
     })
   }
@@ -337,6 +381,10 @@ export interface LibraryHit {
   path: string
   kind: string
   mimeType: string
+  conversationId?: string
+  conversationTitle?: string
+  messageId?: string
+  messageTimestamp?: number
   score: number
 }
 
@@ -368,6 +416,10 @@ function scoreLibraryRows(
         path: r.path,
         kind: r.kind,
         mimeType: r.mimeType,
+        conversationId: r.conversationId,
+        conversationTitle: r.conversationTitle,
+        messageId: r.messageId,
+        messageTimestamp: r.messageTimestamp,
         score: dot,
       })
     }

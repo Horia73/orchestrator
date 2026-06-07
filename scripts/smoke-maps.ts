@@ -20,6 +20,11 @@
  */
 import { randomUUID } from "crypto"
 
+import {
+  ADMIN_PROFILE_ID,
+  PROFILE_SESSION_COOKIE,
+} from "@/lib/profiles/constants"
+import { createProfileSession } from "@/lib/profiles/store"
 import { GET as mapsConfigApiGet } from "@/app/api/maps/config/route"
 import { GET as mapsIntegrationConfigApiGet } from "@/app/api/integrations/maps/config/route"
 import { POST as mapsStaticApiPost } from "@/app/api/maps/static/route"
@@ -80,6 +85,21 @@ function check(label: string, cond: unknown, detail?: unknown) {
     `${ok ? "✓" : "✗"} ${label}${ok ? "" : "  (" + JSON.stringify(detail) + ")"}`
   )
   if (!ok) failures++
+}
+
+const { token: profileSessionToken } = createProfileSession({
+  profileId: ADMIN_PROFILE_ID,
+  deviceLabel: "smoke-maps",
+})
+
+function profileRequest(url: string, init: RequestInit = {}): Request {
+  const headers = new Headers(init.headers)
+  headers.set("host", headers.get("host") ?? "127.0.0.1")
+  headers.set(
+    "cookie",
+    `${PROFILE_SESSION_COOKIE}=${encodeURIComponent(profileSessionToken)}`
+  )
+  return new Request(url, { ...init, headers })
 }
 
 // --- schema: minimal valid -------------------------------------------------
@@ -607,7 +627,7 @@ for (const [label, raw, pathRe] of badCases) {
 
 {
   const configResponse = await mapsConfigApiGet(
-    new Request("http://127.0.0.1/api/maps/config", {
+    profileRequest("http://127.0.0.1/api/maps/config", {
       headers: { host: "127.0.0.1" },
     })
   )
@@ -618,7 +638,7 @@ for (const [label, raw, pathRe] of badCases) {
   )
 
   const integrationConfigResponse = mapsIntegrationConfigApiGet(
-    new Request("http://127.0.0.1/api/integrations/maps/config", {
+    profileRequest("http://127.0.0.1/api/integrations/maps/config", {
       headers: { host: "127.0.0.1" },
     })
   )
@@ -642,7 +662,7 @@ for (const [label, raw, pathRe] of badCases) {
   )
 
   const listResponse = await mapsArtifactsApiGet(
-    new Request("http://127.0.0.1/api/maps/artifacts?limit=999999", {
+    profileRequest("http://127.0.0.1/api/maps/artifacts?limit=999999", {
       headers: { host: "127.0.0.1" },
     })
   )
@@ -661,7 +681,7 @@ for (const [label, raw, pathRe] of badCases) {
   )
 
   const staticMapInvalidBodyResponse = await mapsStaticApiPost(
-    new Request("http://127.0.0.1/api/maps/static", {
+    profileRequest("http://127.0.0.1/api/maps/static", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -684,7 +704,7 @@ for (const [label, raw, pathRe] of badCases) {
   )
 
   const response = await mapsArtifactsApiPost(
-    new Request("http://127.0.0.1/api/maps/artifacts", {
+    profileRequest("http://127.0.0.1/api/maps/artifacts", {
       method: "POST",
       headers: {
         "content-type": "application/json",
@@ -725,7 +745,7 @@ for (const [label, raw, pathRe] of badCases) {
   }
 
   const savedPlacesListResponse = await savedPlacesApiGet(
-    new Request("http://127.0.0.1/api/maps/saved-places?limit=999999", {
+    profileRequest("http://127.0.0.1/api/maps/saved-places?limit=999999", {
       headers: { host: "127.0.0.1" },
     })
   )
@@ -741,7 +761,7 @@ for (const [label, raw, pathRe] of badCases) {
   )
 
   const savedAreasListResponse = await savedAreasApiGet(
-    new Request("http://127.0.0.1/api/maps/saved-areas?limit=999999", {
+    profileRequest("http://127.0.0.1/api/maps/saved-areas?limit=999999", {
       headers: { host: "127.0.0.1" },
     })
   )
@@ -1298,7 +1318,7 @@ for (const [label, raw, pathRe] of badCases) {
 {
   const postDirections = (body: unknown) =>
     directionsApiPost(
-      new Request("http://127.0.0.1/api/maps/directions", {
+      profileRequest("http://127.0.0.1/api/maps/directions", {
         method: "POST",
         headers: {
           "content-type": "application/json",

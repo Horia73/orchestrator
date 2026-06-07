@@ -24,6 +24,7 @@ import {
 } from "@/lib/scheduling/store"
 import { clearAgentRun, registerAgentRun } from "@/lib/agent-runs"
 import { resolveRequestOrigin } from "@/lib/app-origin"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
   "image",
@@ -285,61 +286,63 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  try {
-    const { id } = await params
-    const body = await parseBody(request)
-    if (body) {
-      const inbox = getInboxConversation(id)
-      if (!inbox)
+      try {
+        const { id } = await params
+        const body = await parseBody(request)
+        if (body) {
+          const inbox = getInboxConversation(id)
+          if (!inbox)
+            return NextResponse.json(
+              { error: "Inbox item not found" },
+              { status: 404 }
+            )
+
+          const userMsg: Message = {
+            id: `msg_${randomUUID()}`,
+            role: "user",
+            content: body.content,
+            timestamp: Date.now(),
+            attachments: body.attachments.length > 0 ? body.attachments : undefined,
+          }
+          if (!appendInboxMessage(id, userMsg)) {
+            return NextResponse.json(
+              { error: "Inbox item not found" },
+              { status: 404 }
+            )
+          }
+
+          void continueInboxReply({
+            id,
+            inboxTitle: inbox.title,
+            messages: [...inbox.messages, userMsg],
+            userReply: body.content,
+            attachments: body.attachments.length > 0 ? body.attachments : undefined,
+            appOrigin: resolveRequestOrigin(request),
+          })
+
+          return NextResponse.json({
+            item: getInboxConversation(id),
+            pending: true,
+          })
+        }
+
+        const conversationId = forkInboxToConversation(id)
+        if (!conversationId)
+          return NextResponse.json(
+            { error: "Inbox item not found" },
+            { status: 404 }
+          )
+        return NextResponse.json({ conversationId })
+      } catch (error) {
+        console.error("Failed to reply to inbox item", error)
         return NextResponse.json(
-          { error: "Inbox item not found" },
-          { status: 404 }
-        )
-
-      const userMsg: Message = {
-        id: `msg_${randomUUID()}`,
-        role: "user",
-        content: body.content,
-        timestamp: Date.now(),
-        attachments: body.attachments.length > 0 ? body.attachments : undefined,
-      }
-      if (!appendInboxMessage(id, userMsg)) {
-        return NextResponse.json(
-          { error: "Inbox item not found" },
-          { status: 404 }
+          { error: "Failed to reply to inbox item" },
+          { status: 500 }
         )
       }
-
-      void continueInboxReply({
-        id,
-        inboxTitle: inbox.title,
-        messages: [...inbox.messages, userMsg],
-        userReply: body.content,
-        attachments: body.attachments.length > 0 ? body.attachments : undefined,
-        appOrigin: resolveRequestOrigin(request),
-      })
-
-      return NextResponse.json({
-        item: getInboxConversation(id),
-        pending: true,
-      })
-    }
-
-    const conversationId = forkInboxToConversation(id)
-    if (!conversationId)
-      return NextResponse.json(
-        { error: "Inbox item not found" },
-        { status: 404 }
-      )
-    return NextResponse.json({ conversationId })
-  } catch (error) {
-    console.error("Failed to reply to inbox item", error)
-    return NextResponse.json(
-      { error: "Failed to reply to inbox item" },
-      { status: 500 }
-    )
-  }
+  })
 }

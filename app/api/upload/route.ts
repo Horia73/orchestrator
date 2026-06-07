@@ -1,7 +1,7 @@
 import fs from 'fs'
 import crypto from 'crypto'
 import type { Attachment } from '@/lib/types'
-import { UPLOADS_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { transcodeAudioBufferToWav } from '@/lib/audio-transcode'
 import {
     MAX_UPLOAD_FILE_BYTES,
@@ -12,6 +12,7 @@ import {
     validateUploadFileName,
 } from '@/lib/uploads'
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 function jsonResponse(body: unknown, status = 200) {
     return new Response(JSON.stringify(body), {
@@ -94,62 +95,64 @@ async function normalizeUploadBytes(args: {
 }
 
 export async function POST(request: Request) {
-    try {
-        fs.mkdirSync(UPLOADS_DIR, { recursive: true })
+  return runWithRequestProfile(request, async () => {
+        try {
+            fs.mkdirSync(activeRuntimePaths().uploadsDir, { recursive: true })
 
-        const formData = await request.formData()
-        const entries = formData.getAll('files')
-        const files = entries.filter(isFileEntry)
-        if (files.length !== entries.length) {
-            return jsonResponse({ error: 'Invalid files provided' }, 400)
-        }
-
-        const batchCheck = validateUploadBatch(files)
-        if (!batchCheck.ok) return jsonResponse({ error: batchCheck.error }, batchCheck.status)
-
-        const attachments: Attachment[] = []
-        let storedTotalBytes = 0
-
-        for (const file of files) {
-            const nameCheck = validateUploadFileName(file.name)
-            if (!nameCheck.ok) return jsonResponse({ error: nameCheck.error }, 400)
-
-            const buffer = Buffer.from(await file.arrayBuffer())
-            const normalized = await normalizeUploadBytes({
-                buffer,
-                filename: nameCheck.filename,
-                extension: nameCheck.extension,
-                mimeType: file.type || 'application/octet-stream',
-            })
-
-            if (normalized.buffer.length > MAX_UPLOAD_FILE_BYTES) {
-                return jsonResponse(
-                    { error: `${normalized.filename} exceeds the per-file limit after audio conversion.` },
-                    413
-                )
-            }
-            storedTotalBytes += normalized.buffer.length
-            if (storedTotalBytes > MAX_UPLOAD_TOTAL_BYTES) {
-                return jsonResponse(
-                    { error: 'Uploads exceed the total limit after audio conversion.' },
-                    413
-                )
+            const formData = await request.formData()
+            const entries = formData.getAll('files')
+            const files = entries.filter(isFileEntry)
+            if (files.length !== entries.length) {
+                return jsonResponse({ error: 'Invalid files provided' }, 400)
             }
 
-            const id = writeUpload(normalized.buffer, normalized.extension)
+            const batchCheck = validateUploadBatch(files)
+            if (!batchCheck.ok) return jsonResponse({ error: batchCheck.error }, batchCheck.status)
 
-            attachments.push({
-                id,
-                filename: normalized.filename,
-                mimeType: normalized.mimeType,
-                size: normalized.buffer.length,
-                type: classifyUploadMime(normalized.mimeType),
-            })
+            const attachments: Attachment[] = []
+            let storedTotalBytes = 0
+
+            for (const file of files) {
+                const nameCheck = validateUploadFileName(file.name)
+                if (!nameCheck.ok) return jsonResponse({ error: nameCheck.error }, 400)
+
+                const buffer = Buffer.from(await file.arrayBuffer())
+                const normalized = await normalizeUploadBytes({
+                    buffer,
+                    filename: nameCheck.filename,
+                    extension: nameCheck.extension,
+                    mimeType: file.type || 'application/octet-stream',
+                })
+
+                if (normalized.buffer.length > MAX_UPLOAD_FILE_BYTES) {
+                    return jsonResponse(
+                        { error: `${normalized.filename} exceeds the per-file limit after audio conversion.` },
+                        413
+                    )
+                }
+                storedTotalBytes += normalized.buffer.length
+                if (storedTotalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+                    return jsonResponse(
+                        { error: 'Uploads exceed the total limit after audio conversion.' },
+                        413
+                    )
+                }
+
+                const id = writeUpload(normalized.buffer, normalized.extension)
+
+                attachments.push({
+                    id,
+                    filename: normalized.filename,
+                    mimeType: normalized.mimeType,
+                    size: normalized.buffer.length,
+                    type: classifyUploadMime(normalized.mimeType),
+                })
+            }
+
+            return jsonResponse({ attachments })
+        } catch (error) {
+            console.error('Upload error:', error)
+            return jsonResponse({ error: 'Upload failed' }, 500)
         }
-
-        return jsonResponse({ attachments })
-    } catch (error) {
-        console.error('Upload error:', error)
-        return jsonResponse({ error: 'Upload failed' }, 500)
-    }
+  })
 }

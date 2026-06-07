@@ -19,6 +19,7 @@ import {
 } from '@/lib/models/schema'
 import { getEffectiveRegistry, patchCuratedModel } from '@/lib/models/registry'
 import { getProviderReadiness, getProviderReadinessMap } from '@/lib/provider-readiness'
+import { runWithAdminCookieProfile, runWithRequestProfile } from "@/lib/profiles/server"
 import {
     ProviderResearchResultSchema,
     ResearchResultSchema,
@@ -187,29 +188,31 @@ function latestResearchJob(): ActiveResearchJob | undefined {
 }
 
 export async function POST(request: Request) {
-    const registry = getEffectiveRegistry()
-    const readiness = await getResearchRuntimeReadiness(registry)
-    if (!readiness.available) {
-        clearPersistedJobSnapshot()
-        return Response.json({
-            error: readiness.chatMessage ?? readiness.unavailableReason ?? 'Model research requires a usable provider.',
-        }, { status: 409 })
-    }
+  return runWithRequestProfile(request, async () => {
+        const registry = getEffectiveRegistry()
+        const readiness = await getResearchRuntimeReadiness(registry)
+        if (!readiness.available) {
+            clearPersistedJobSnapshot()
+            return Response.json({
+                error: readiness.chatMessage ?? readiness.unavailableReason ?? 'Model research requires a usable provider.',
+            }, { status: 409 })
+        }
 
-    const parsed = await parseResearchTarget(request, registry)
-    if (parsed && 'error' in parsed) {
-        return Response.json({ error: parsed.error }, { status: parsed.status })
-    }
-    // A single-model re-research can't piggyback on an in-flight run — its
-    // stream would surface the unrelated active job. Require a clean slate.
-    if (parsed && activeResearchJob()) {
-        return Response.json({
-            error: 'A research run is already active. Stop it before re-researching a single model.',
-        }, { status: 409 })
-    }
+        const parsed = await parseResearchTarget(request, registry)
+        if (parsed && 'error' in parsed) {
+            return Response.json({ error: parsed.error }, { status: parsed.status })
+        }
+        // A single-model re-research can't piggyback on an in-flight run — its
+        // stream would surface the unrelated active job. Require a clean slate.
+        if (parsed && activeResearchJob()) {
+            return Response.json({
+                error: 'A research run is already active. Stop it before re-researching a single model.',
+            }, { status: 409 })
+        }
 
-    const job = getOrStartResearchJob(parsed ?? undefined)
-    return researchStreamResponse(job, request)
+        const job = getOrStartResearchJob(parsed ?? undefined)
+        return researchStreamResponse(job, request)
+  })
 }
 
 // Parse an optional `{ providerId, modelId }` body that narrows the run to one
@@ -242,60 +245,64 @@ async function parseResearchTarget(
 }
 
 export async function GET() {
-    const registry = getEffectiveRegistry()
-    const availableProviders = await availableModelProviderIds(registry)
-    if (availableProviders.size === 0) {
-        const running = activeResearchJob()
-        if (running) running.controller.abort(new Error('No usable model provider is configured.'))
-        researchGlobals().__orchestratorModelResearchLastJob = undefined
-        clearPersistedJobSnapshot()
+  return runWithAdminCookieProfile(async () => {
+        const registry = getEffectiveRegistry()
+        const availableProviders = await availableModelProviderIds(registry)
+        if (availableProviders.size === 0) {
+            const running = activeResearchJob()
+            if (running) running.controller.abort(new Error('No usable model provider is configured.'))
+            researchGlobals().__orchestratorModelResearchLastJob = undefined
+            clearPersistedJobSnapshot()
+            return idleResearchResponse()
+        }
+
+        const job = latestResearchJob()
+        if (job) {
+            return Response.json({
+                running: job.status === 'running',
+                runId: job.id,
+                status: job.status,
+                startedAt: job.startedAt,
+                endedAt: job.endedAt ?? null,
+                concurrency: job.concurrency,
+                events: job.events,
+            }, { headers: { 'Cache-Control': 'no-store' } })
+        }
+
+        // No in-memory job (fresh process / after restart). Fall back to the last
+        // persisted run so a refresh shows the real outcome, not stale state.
+        const persisted = readPersistedJobSnapshot()
+        if (persisted) {
+            const crashedMidRun = persisted.status === 'running'
+            const events = crashedMidRun
+                ? [...persisted.events, { type: 'stopped' as const, runId: persisted.runId, message: 'Research interrupted by a server restart', at: persisted.endedAt ?? Date.now() }]
+                : persisted.events
+            return Response.json({
+                running: false,
+                runId: persisted.runId,
+                status: crashedMidRun ? 'stopped' : persisted.status,
+                startedAt: persisted.startedAt,
+                endedAt: persisted.endedAt,
+                concurrency: persisted.concurrency,
+                events,
+            }, { headers: { 'Cache-Control': 'no-store' } })
+        }
+
         return idleResearchResponse()
-    }
-
-    const job = latestResearchJob()
-    if (job) {
-        return Response.json({
-            running: job.status === 'running',
-            runId: job.id,
-            status: job.status,
-            startedAt: job.startedAt,
-            endedAt: job.endedAt ?? null,
-            concurrency: job.concurrency,
-            events: job.events,
-        }, { headers: { 'Cache-Control': 'no-store' } })
-    }
-
-    // No in-memory job (fresh process / after restart). Fall back to the last
-    // persisted run so a refresh shows the real outcome, not stale state.
-    const persisted = readPersistedJobSnapshot()
-    if (persisted) {
-        const crashedMidRun = persisted.status === 'running'
-        const events = crashedMidRun
-            ? [...persisted.events, { type: 'stopped' as const, runId: persisted.runId, message: 'Research interrupted by a server restart', at: persisted.endedAt ?? Date.now() }]
-            : persisted.events
-        return Response.json({
-            running: false,
-            runId: persisted.runId,
-            status: crashedMidRun ? 'stopped' : persisted.status,
-            startedAt: persisted.startedAt,
-            endedAt: persisted.endedAt,
-            concurrency: persisted.concurrency,
-            events,
-        }, { headers: { 'Cache-Control': 'no-store' } })
-    }
-
-    return idleResearchResponse()
+  })
 }
 
 export async function DELETE() {
-    const job = activeResearchJob()
-    if (!job) {
-        researchGlobals().__orchestratorModelResearchLastJob = undefined
-        clearPersistedJobSnapshot()
-        return Response.json({ stopped: false, cleared: true, message: 'No model research run is active.' })
-    }
-    job.controller.abort(new Error('Research stopped'))
-    return Response.json({ stopped: true, message: 'Research stop requested.' })
+  return runWithAdminCookieProfile(async () => {
+        const job = activeResearchJob()
+        if (!job) {
+            researchGlobals().__orchestratorModelResearchLastJob = undefined
+            clearPersistedJobSnapshot()
+            return Response.json({ stopped: false, cleared: true, message: 'No model research run is active.' })
+        }
+        job.controller.abort(new Error('Research stopped'))
+        return Response.json({ stopped: true, message: 'Research stop requested.' })
+  })
 }
 
 function getOrStartResearchJob(target?: SingleModelTarget): ActiveResearchJob {

@@ -1,19 +1,26 @@
 import { NextResponse } from 'next/server'
-import { getRequestLog, getToolLogsForRequest, getRequestLogReasoning } from '@/lib/observability/store'
+import { getRequestLogReasoning } from '@/lib/observability/store'
+import { getRequestLogDetailAcrossProfiles } from '@/lib/observability/profile-store'
 import { getConversation } from '@/lib/db'
 import { getInboxConversation, searchTaskRuns } from '@/lib/scheduling/store'
 import type { RequestLogRow } from '@/lib/observability/schema'
 import type { AgentCallReasoningEntry, Message, ReasoningEntry } from '@/lib/types'
+import { runWithProfileContext } from '@/lib/profiles/context'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-    const { id } = await params
-    const log = getRequestLog(id)
-    if (!log) {
-        return NextResponse.json({ error: 'Not found' }, { status: 404 })
-    }
-    const toolLogs = getToolLogsForRequest(id)
-    const transcript = getRequestTranscript(log)
-    return NextResponse.json({ log, toolLogs, transcript })
+  return runWithRequestProfile(_request, async () => {
+        const { id } = await params
+        const detail = getRequestLogDetailAcrossProfiles(id)
+        if (!detail) {
+            return NextResponse.json({ error: 'Not found' }, { status: 404 })
+        }
+        const transcript = runWithProfileContext(
+            { profileId: detail.profile.id, role: detail.profile.role },
+            () => getRequestTranscript(detail.row)
+        )
+        return NextResponse.json({ log: detail.row, toolLogs: detail.toolLogs, transcript })
+  })
 }
 
 type RequestLogTranscript = {

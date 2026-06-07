@@ -2,13 +2,24 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { PRIVATE_STATE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { augmentedEnv } from './resolve-bin'
 
-export const CODEX_RUNTIME_HOME = path.join(PRIVATE_STATE_DIR, 'codex-runtime-home')
-export const CODEX_RUNTIME_CODEX_HOME = path.join(CODEX_RUNTIME_HOME, '.codex')
-export const CODEX_RUNTIME_AUTH_PATH = path.join(CODEX_RUNTIME_CODEX_HOME, 'auth.json')
-const RUNTIME_CONFIG_PATH = path.join(CODEX_RUNTIME_CODEX_HOME, 'config.toml')
+export function codexRuntimeHome(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'codex-runtime-home')
+}
+
+export function codexRuntimeCodexHome(): string {
+    return path.join(codexRuntimeHome(), '.codex')
+}
+
+export function codexRuntimeAuthPath(): string {
+    return path.join(codexRuntimeCodexHome(), 'auth.json')
+}
+
+function runtimeConfigPath(): string {
+    return path.join(codexRuntimeCodexHome(), 'config.toml')
+}
 
 const SANITIZED_CONFIG = [
     '# Managed by Orchestrator.',
@@ -32,10 +43,10 @@ export function codexCliEnv(extra?: Record<string, string | undefined>): NodeJS.
 }
 
 export function prepareCodexRuntimeHome(): string {
-    fs.mkdirSync(CODEX_RUNTIME_CODEX_HOME, { recursive: true })
+    fs.mkdirSync(codexRuntimeCodexHome(), { recursive: true })
     writeSanitizedConfig()
     syncAuthFile()
-    return CODEX_RUNTIME_HOME
+    return codexRuntimeHome()
 }
 
 /**
@@ -51,7 +62,7 @@ export function prepareCodexRuntimeHome(): string {
  * positive signal to override an inconclusive probe.
  */
 export function codexAuthFileExists(): boolean {
-    const candidates = [CODEX_RUNTIME_AUTH_PATH, path.join(os.homedir(), '.codex', 'auth.json')]
+    const candidates = [codexRuntimeAuthPath(), path.join(os.homedir(), '.codex', 'auth.json')]
     return candidates.some(candidate => {
         try {
             return fs.statSync(candidate).size > 0
@@ -63,11 +74,12 @@ export function codexAuthFileExists(): boolean {
 
 function writeSanitizedConfig(): void {
     try {
-        const existing = fs.existsSync(RUNTIME_CONFIG_PATH)
-            ? fs.readFileSync(RUNTIME_CONFIG_PATH, 'utf-8')
+        const configPath = runtimeConfigPath()
+        const existing = fs.existsSync(configPath)
+            ? fs.readFileSync(configPath, 'utf-8')
             : null
         if (existing !== SANITIZED_CONFIG) {
-            fs.writeFileSync(RUNTIME_CONFIG_PATH, SANITIZED_CONFIG, { encoding: 'utf-8', mode: 0o600 })
+            fs.writeFileSync(configPath, SANITIZED_CONFIG, { encoding: 'utf-8', mode: 0o600 })
         }
     } catch {
         // Let Codex surface a concrete auth/config error if the runtime home is not writable.
@@ -76,7 +88,7 @@ function writeSanitizedConfig(): void {
 
 function syncAuthFile(): void {
     const source = path.join(os.homedir(), '.codex', 'auth.json')
-    const target = CODEX_RUNTIME_AUTH_PATH
+    const target = codexRuntimeAuthPath()
     if (source === target || !fs.existsSync(source)) return
 
     try {

@@ -8,6 +8,7 @@ import {
 import { syncSmartMonitorActivation } from '@/lib/monitoring/smart-monitor-adapter'
 import { describeAction, describeRule } from '@/lib/monitor/describe'
 import { WatchSourceSchema } from '@/lib/monitor/schema'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 // Compact row shared between list + create response. The /monitor page never
 // needs the entire MonitorWatch shape in the table view — full detail lives
@@ -45,50 +46,54 @@ function isBadInput(err: unknown): boolean {
 }
 
 export async function GET(request: Request) {
-    try {
-        const url = new URL(request.url)
-        const sourceParam = url.searchParams.get('source')
-        const enabledParam = url.searchParams.get('enabled')
+  return runWithRequestProfile(request, async () => {
+        try {
+            const url = new URL(request.url)
+            const sourceParam = url.searchParams.get('source')
+            const enabledParam = url.searchParams.get('enabled')
 
-        const filter: { source?: ReturnType<typeof WatchSourceSchema.parse>; enabled?: boolean } = {}
-        if (sourceParam) {
-            const parsed = WatchSourceSchema.safeParse(sourceParam)
-            if (!parsed.success) {
-                return NextResponse.json(
-                    { error: `Unknown source "${sourceParam}".` },
-                    { status: 400 },
-                )
+            const filter: { source?: ReturnType<typeof WatchSourceSchema.parse>; enabled?: boolean } = {}
+            if (sourceParam) {
+                const parsed = WatchSourceSchema.safeParse(sourceParam)
+                if (!parsed.success) {
+                    return NextResponse.json(
+                        { error: `Unknown source "${sourceParam}".` },
+                        { status: 400 },
+                    )
+                }
+                filter.source = parsed.data
             }
-            filter.source = parsed.data
-        }
-        if (enabledParam === 'true') filter.enabled = true
-        else if (enabledParam === 'false') filter.enabled = false
+            if (enabledParam === 'true') filter.enabled = true
+            else if (enabledParam === 'false') filter.enabled = false
 
-        const watches = listMonitorWatches(filter).map(compactRow)
-        return NextResponse.json({ watches })
-    } catch (error) {
-        console.error('Failed to list monitor watches', error)
-        return NextResponse.json({ error: 'Failed to list watches' }, { status: 500 })
-    }
+            const watches = listMonitorWatches(filter).map(compactRow)
+            return NextResponse.json({ watches })
+        } catch (error) {
+            console.error('Failed to list monitor watches', error)
+            return NextResponse.json({ error: 'Failed to list watches' }, { status: 500 })
+        }
+  })
 }
 
 export async function POST(request: Request) {
-    const guard = guardSensitiveRequest(request)
-    if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
 
-    try {
-        const body = await request.json()
-        const watch = createMonitorWatch(body)
-        await syncSmartMonitorActivation()
-        return NextResponse.json({ watch: compactRow(watch) })
-    } catch (error) {
-        if (isBadInput(error)) {
-            return NextResponse.json(
-                { error: error instanceof Error ? error.message : 'Invalid watch' },
-                { status: 400 },
-            )
+        try {
+            const body = await request.json()
+            const watch = createMonitorWatch(body)
+            await syncSmartMonitorActivation()
+            return NextResponse.json({ watch: compactRow(watch) })
+        } catch (error) {
+            if (isBadInput(error)) {
+                return NextResponse.json(
+                    { error: error instanceof Error ? error.message : 'Invalid watch' },
+                    { status: 400 },
+                )
+            }
+            console.error('Failed to create monitor watch', error)
+            return NextResponse.json({ error: 'Failed to create watch' }, { status: 500 })
         }
-        console.error('Failed to create monitor watch', error)
-        return NextResponse.json({ error: 'Failed to create watch' }, { status: 500 })
-    }
+  })
 }

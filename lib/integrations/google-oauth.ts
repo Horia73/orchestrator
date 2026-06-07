@@ -3,7 +3,8 @@ import path from 'path'
 import { randomBytes } from 'crypto'
 
 import { resolveOAuthRedirectUri } from '@/lib/app-origin'
-import { getEnvValue, PRIVATE_STATE_DIR, WORKSPACE_ENV_PATH } from '@/lib/config'
+import { getEnvValue } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 const GOOGLE_AUTH_URL = 'https://accounts.google.com/o/oauth2/v2/auth'
 const GOOGLE_TOKEN_URL = 'https://oauth2.googleapis.com/token'
@@ -12,8 +13,9 @@ const STATE_TTL_MS = 10 * 60 * 1000
 
 export const GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS = 60_000
 
-const AUTH_DIR = path.join(PRIVATE_STATE_DIR, 'auth')
-const GOOGLE_STATE_PATH = path.join(AUTH_DIR, 'google-oauth-states.json')
+function googleStatePath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'auth', 'google-oauth-states.json')
+}
 
 export interface GoogleOAuthConfigInput {
     clientId?: string
@@ -396,8 +398,9 @@ export function getGoogleOAuthStateProvider(state: string): string | null {
 
 function readOAuthStates(): OAuthStateRecord[] {
     try {
-        if (!fs.existsSync(GOOGLE_STATE_PATH)) return []
-        const parsed = JSON.parse(fs.readFileSync(GOOGLE_STATE_PATH, 'utf-8')) as unknown
+        const statePath = googleStatePath()
+        if (!fs.existsSync(statePath)) return []
+        const parsed = JSON.parse(fs.readFileSync(statePath, 'utf-8')) as unknown
         if (!Array.isArray(parsed)) return []
         const now = Date.now()
         return parsed
@@ -418,7 +421,7 @@ function readOAuthStates(): OAuthStateRecord[] {
 }
 
 function writeOAuthStates(records: OAuthStateRecord[]): void {
-    writePrivateJson(GOOGLE_STATE_PATH, records)
+    writePrivateJson(googleStatePath(), records)
 }
 
 function consumeOAuthState(state: string): OAuthStateRecord | null {
@@ -480,9 +483,10 @@ function parseEnvAssignments(raw: string, acceptedKeys: string[]): Record<string
 function patchWorkspaceEnv(args: {
     [key: string]: string
 }, options: { keysToReplace: string[] }): void {
-    fs.mkdirSync(path.dirname(WORKSPACE_ENV_PATH), { recursive: true })
-    const existing = fs.existsSync(WORKSPACE_ENV_PATH)
-        ? fs.readFileSync(WORKSPACE_ENV_PATH, 'utf-8')
+    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
+    const existing = fs.existsSync(workspaceEnvPath)
+        ? fs.readFileSync(workspaceEnvPath, 'utf-8')
         : ''
     const keysToReplace = new Set([...options.keysToReplace, ...Object.keys(args)])
     const kept = existing
@@ -500,9 +504,9 @@ function patchWorkspaceEnv(args: {
     if (kept.length > 0) kept.push('')
     for (const [key, value] of Object.entries(args)) kept.push(`${key}=${formatEnvValue(value)}`)
 
-    fs.writeFileSync(WORKSPACE_ENV_PATH, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
+    fs.writeFileSync(workspaceEnvPath, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
     try {
-        fs.chmodSync(WORKSPACE_ENV_PATH, 0o600)
+        fs.chmodSync(workspaceEnvPath, 0o600)
     } catch {
         // Best effort; some filesystems ignore chmod.
     }

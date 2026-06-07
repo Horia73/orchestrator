@@ -1,6 +1,6 @@
 import fs from 'fs'
 import path from 'path'
-import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 /**
  * Resolve a caller-supplied path against the agent sandbox.
@@ -48,7 +48,7 @@ const PROTECTED_AGENT_FILE_PATTERNS = [
  * need to change if we add explicit user-managed mounts later.
  */
 export function getSandboxRoots(): SandboxRoot[] {
-    return [{ absolute: path.resolve(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR), prefix: '' }]
+    return [{ absolute: path.resolve(/* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir), prefix: '' }]
 }
 
 export function isHiddenFromDiscovery(name: string): boolean {

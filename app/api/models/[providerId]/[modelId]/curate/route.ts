@@ -11,6 +11,7 @@ import {
     IntelligenceTierSchema,
     ModelCustomMetadataSchema,
 } from '@/lib/models/schema'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 import {
     patchCuratedModel,
     clearCuratedModel,
@@ -57,49 +58,53 @@ export async function PUT(
     request: Request,
     { params }: { params: Promise<{ providerId: string; modelId: string }> }
 ) {
-    const { providerId, modelId } = await params
+  return runWithRequestProfile(request, async () => {
+        const { providerId, modelId } = await params
 
-    if (!effectiveModelExists(providerId, modelId)) {
-        return NextResponse.json({ error: `Unknown model: ${providerId}:${modelId}` }, { status: 404 })
-    }
+        if (!effectiveModelExists(providerId, modelId)) {
+            return NextResponse.json({ error: `Unknown model: ${providerId}:${modelId}` }, { status: 404 })
+        }
 
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+        }
 
-    const parsed = CurateBodySchema.safeParse(body)
-    if (!parsed.success) {
-        return NextResponse.json(
-            { error: 'Invalid curate body', issues: parsed.error.issues },
-            { status: 400 }
-        )
-    }
+        const parsed = CurateBodySchema.safeParse(body)
+        if (!parsed.success) {
+            return NextResponse.json(
+                { error: 'Invalid curate body', issues: parsed.error.issues },
+                { status: 400 }
+            )
+        }
 
-    patchCuratedModel(providerId, modelId, parsed.data)
+        patchCuratedModel(providerId, modelId, parsed.data)
 
-    return NextResponse.json({
-        success: true,
-        registry: getEffectiveRegistry(),
-    })
+        return NextResponse.json({
+            success: true,
+            registry: getEffectiveRegistry(),
+        })
+  })
 }
 
 export async function DELETE(
     _request: Request,
     { params }: { params: Promise<{ providerId: string; modelId: string }> }
 ) {
-    const { providerId, modelId } = await params
+  return runWithRequestProfile(_request, async () => {
+        const { providerId, modelId } = await params
 
-    if (!effectiveModelExists(providerId, modelId)) {
-        return NextResponse.json({ error: `Unknown model: ${providerId}:${modelId}` }, { status: 404 })
-    }
+        if (!effectiveModelExists(providerId, modelId)) {
+            return NextResponse.json({ error: `Unknown model: ${providerId}:${modelId}` }, { status: 404 })
+        }
 
-    clearCuratedModel(providerId, modelId)
+        clearCuratedModel(providerId, modelId)
 
-    return NextResponse.json({
-        success: true,
-        registry: getEffectiveRegistry(),
-    })
+        return NextResponse.json({
+            success: true,
+            registry: getEffectiveRegistry(),
+        })
+  })
 }

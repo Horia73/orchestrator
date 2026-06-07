@@ -5,6 +5,7 @@ import {
     listMicroscriptRuns,
 } from '@/lib/microscripts/store'
 import type { Microscript } from '@/lib/microscripts/schema'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 function fullView(script: Microscript) {
     return {
@@ -35,13 +36,15 @@ function fullView(script: Microscript) {
 }
 
 export async function GET(_request: Request, { params }: { params: Promise<{ id: string }> }) {
-    try {
-        const { id } = await params
-        const script = getMicroscript(id)
-        if (!script) return NextResponse.json({ error: 'Microscript not found' }, { status: 404 })
-        return NextResponse.json({ script: fullView(script) })
-    } catch (error) {
-        console.error('Failed to get microscript', error)
-        return NextResponse.json({ error: 'Failed to get microscript' }, { status: 500 })
-    }
+  return runWithRequestProfile(_request, async () => {
+        try {
+            const { id } = await params
+            const script = getMicroscript(id)
+            if (!script) return NextResponse.json({ error: 'Microscript not found' }, { status: 404 })
+            return NextResponse.json({ script: fullView(script) })
+        } catch (error) {
+            console.error('Failed to get microscript', error)
+            return NextResponse.json({ error: 'Failed to get microscript' }, { status: 500 })
+        }
+  })
 }

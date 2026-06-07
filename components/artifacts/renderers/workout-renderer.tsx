@@ -3,7 +3,7 @@
 import * as React from "react"
 
 import { cn } from "@/lib/utils"
-import type { Exercise, WorkoutArtifact } from "@/lib/workout/schema"
+import type { Exercise, ExerciseGroup, WorkoutArtifact } from "@/lib/workout/schema"
 import { parseWorkoutArtifact } from "@/lib/workout/parser"
 import { useWorkoutSession } from "@/lib/workout/use-workout-session"
 
@@ -72,6 +72,12 @@ function WorkoutView({
     const sessionApi = useWorkoutSession(workout.sessionId, workout)
     const renderedWorkout = sessionApi.workout
     const interactive = sessionApi.isActive || sessionApi.isFinished
+    const addedExerciseCount = React.useMemo(
+        () => (sessionApi.session.addedGroups ?? []).reduce((sum, group) => sum + group.exercises.length, 0),
+        [sessionApi.session.addedGroups],
+    )
+    const previousAddedExerciseCount = React.useRef<number | null>(null)
+    const [recentlyAddedExerciseId, setRecentlyAddedExerciseId] = React.useState<string | null>(null)
     const nextExercise = React.useMemo(
         () => sessionApi.nextSet ? findExercise(renderedWorkout, sessionApi.nextSet.exerciseId) : null,
         [renderedWorkout, sessionApi.nextSet],
@@ -84,21 +90,44 @@ function WorkoutView({
         ? `${sessionApi.nextSet.exerciseName} · set ${sessionApi.nextSet.setIndex + 1}`
         : undefined
 
+    React.useEffect(() => {
+        if (!sessionApi.isRestored) return
+        if (previousAddedExerciseCount.current === null) {
+            previousAddedExerciseCount.current = addedExerciseCount
+            return
+        }
+        const previousCount = previousAddedExerciseCount.current
+        previousAddedExerciseCount.current = addedExerciseCount
+        if (addedExerciseCount <= previousCount) return
+
+        const addedId = lastAddedExerciseId(sessionApi.session.addedGroups)
+        if (!addedId) return
+
+        setRecentlyAddedExerciseId(addedId)
+        const frame = window.requestAnimationFrame(() => {
+            const element = document.querySelector<HTMLElement>(`[data-exercise-id="${addedId}"]`)
+            element?.scrollIntoView({ behavior: 'smooth', block: 'center' })
+        })
+        const timeout = window.setTimeout(() => setRecentlyAddedExerciseId(null), 2600)
+        return () => {
+            window.cancelAnimationFrame(frame)
+            window.clearTimeout(timeout)
+        }
+    }, [addedExerciseCount, sessionApi.isRestored, sessionApi.session.addedGroups])
+
     return (
         <>
             <article
                 data-workout
                 data-session-id={workout.sessionId}
                 className={cn(
-                    "flex w-full min-w-0 max-w-full flex-col gap-4 overflow-hidden text-foreground",
+                    "flex w-full min-w-0 max-w-full flex-col gap-4 overflow-hidden pb-28 text-foreground",
                     className,
                 )}
                 aria-label={title || workout.title}
             >
                 <WorkoutHeader workout={renderedWorkout} />
                 <WorkoutProgressStats workout={renderedWorkout} sessionApi={sessionApi} />
-
-                <WorkoutActionBar sessionApi={sessionApi} placement="top" />
 
                 {renderedWorkout.warmup ? (
                     <WorkoutChecklist
@@ -119,6 +148,7 @@ function WorkoutView({
                             interactive={interactive}
                             barKg={renderedWorkout.barWeightKg}
                             plates={renderedWorkout.plateIncrements}
+                            highlightExerciseId={recentlyAddedExerciseId}
                         />
                     ))}
                     {sessionApi.isActive ? (
@@ -184,6 +214,16 @@ function findExercise(workout: WorkoutArtifact, exerciseId: string): Exercise | 
     for (const group of workout.groups) {
         const exercise = group.exercises.find((candidate) => candidate.id === exerciseId)
         if (exercise) return exercise
+    }
+    return null
+}
+
+function lastAddedExerciseId(groups: readonly ExerciseGroup[] | undefined): string | null {
+    if (!groups?.length) return null
+    for (let groupIndex = groups.length - 1; groupIndex >= 0; groupIndex--) {
+        const exercises = groups[groupIndex].exercises
+        const exercise = exercises[exercises.length - 1]
+        if (exercise?.id) return exercise.id
     }
     return null
 }

@@ -89,6 +89,58 @@ async function main(): Promise<void> {
     hugeChunks[0]?.text.length
   )
 
+  // --- conversation sources ------------------------------------------------
+  const { createConversation } = await import("@/lib/db")
+  createConversation({
+    id: "conv_memory_smoke",
+    title: "Kitchen moodboard",
+    createdAt: 1_735_689_600_000,
+    updatedAt: 1_735_689_600_000,
+    messages: [
+      {
+        id: "msg_memory_smoke_user",
+        role: "user",
+        content: "Remember the green tile photo for the kitchen moodboard.",
+        attachments: [
+          {
+            id: "00000000-0000-4000-8000-000000000000.png",
+            filename: "tile.png",
+            mimeType: "image/png",
+            size: 123,
+            type: "image",
+          },
+        ],
+        timestamp: 1_735_689_600_000,
+      },
+    ],
+  })
+  const conversationSource = "conversation:conv_memory_smoke:msg_memory_smoke_user"
+  check(
+    "listMemorySources includes user conversation messages",
+    recall.listMemorySources().includes(conversationSource),
+    recall.listMemorySources()
+  )
+  const conversationChunks = recall.chunkConversationContent(
+    conversationSource,
+    [
+      "Conversation: Kitchen moodboard",
+      "Conversation ID: conv_memory_smoke",
+      "Message ID: msg_memory_smoke_user",
+      "Date: 2025-01-01T00:00:00.000Z",
+      "Role: User",
+      "Attachments: tile.png",
+      "",
+      "Remember the green tile photo for the kitchen moodboard.",
+    ].join("\n")
+  )
+  check(
+    "chunkConversationContent keeps conversation title + attachment context",
+    conversationChunks.length === 1 &&
+      conversationChunks[0].title.includes("Kitchen moodboard") &&
+      conversationChunks[0].text.includes("tile.png"),
+    conversationChunks
+  )
+
   // --- store: content marker + generations --------------------------------
   store.clearMemoryIndex()
   const dim = 4
@@ -285,7 +337,18 @@ async function main(): Promise<void> {
 
   // --- library (multimodal) fail-open without a key -----------------------
   const library = await import("@/lib/memory/library")
-  check("library: no assets in empty workspace", library.listLibraryAssets().length === 0)
+  const { activeRuntimePaths } = await import("@/lib/runtime-paths")
+  fs.mkdirSync(activeRuntimePaths().uploadsDir, { recursive: true })
+  fs.writeFileSync(
+    path.join(activeRuntimePaths().uploadsDir, "00000000-0000-4000-8000-000000000000.png"),
+    Buffer.from("png")
+  )
+  check("library: chat upload assets retain source conversation", (() => {
+    const assets = library.listLibraryAssets()
+    const asset = assets.find((a) => a.assetKey === "upload:00000000-0000-4000-8000-000000000000.png")
+    return asset?.conversationId === "conv_memory_smoke" &&
+      asset?.messageId === "msg_memory_smoke_user"
+  })())
   const libStatus = library.getLibraryStatus()
   // multimodal reflects the MODEL capability (default gemini-embedding-2 = yes);
   // with no key nothing is embedded, so indexedActive stays 0.

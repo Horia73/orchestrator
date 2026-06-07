@@ -1,4 +1,5 @@
 import { emitChatEvent } from '@/lib/events'
+import { getActiveProfileId } from '@/lib/profiles/context'
 
 interface ActiveChatStream {
     messageId: string
@@ -16,8 +17,13 @@ if (!globalForChatStreams.__orchestratorChatStreams) {
     globalForChatStreams.__orchestratorChatStreams = streams
 }
 
+function streamKey(conversationId: string): string {
+    return `${getActiveProfileId()}:${conversationId}`
+}
+
 export function registerChatStream(conversationId: string, messageId: string, controller: AbortController) {
-    const current = streams.get(conversationId)
+    const key = streamKey(conversationId)
+    const current = streams.get(key)
     if (current && !current.controller.signal.aborted) {
         current.controller.abort()
         emitChatEvent({
@@ -30,7 +36,7 @@ export function registerChatStream(conversationId: string, messageId: string, co
         startedAt: Date.now(),
         controller,
     }
-    streams.set(conversationId, stream)
+    streams.set(key, stream)
     emitChatEvent({
         type: 'chat_stream_started',
         payload: { conversationId, messageId, startedAt: stream.startedAt },
@@ -38,10 +44,11 @@ export function registerChatStream(conversationId: string, messageId: string, co
 }
 
 export function clearChatStream(conversationId: string, messageId?: string) {
-    const active = streams.get(conversationId)
+    const key = streamKey(conversationId)
+    const active = streams.get(key)
     if (!active) return
     if (messageId && active.messageId !== messageId) return
-    streams.delete(conversationId)
+    streams.delete(key)
     emitChatEvent({
         type: 'chat_stream_ended',
         payload: { conversationId, messageId: active.messageId },
@@ -49,10 +56,11 @@ export function clearChatStream(conversationId: string, messageId?: string) {
 }
 
 export function stopChatStream(conversationId: string): boolean {
-    const active = streams.get(conversationId)
+    const key = streamKey(conversationId)
+    const active = streams.get(key)
     if (!active) return false
     active.controller.abort()
-    streams.delete(conversationId)
+    streams.delete(key)
     emitChatEvent({
         type: 'chat_stream_ended',
         payload: { conversationId, messageId: active.messageId },
@@ -61,10 +69,11 @@ export function stopChatStream(conversationId: string): boolean {
 }
 
 export function getActiveChatStream(conversationId: string): { messageId: string; startedAt: number } | null {
-    const active = streams.get(conversationId)
+    const key = streamKey(conversationId)
+    const active = streams.get(key)
     if (!active) return null
     if (active.controller.signal.aborted) {
-        streams.delete(conversationId)
+        streams.delete(key)
         return null
     }
     return {
@@ -75,9 +84,12 @@ export function getActiveChatStream(conversationId: string): { messageId: string
 
 export function listActiveChatStreams(): Array<{ conversationId: string; messageId: string; startedAt: number }> {
     const active: Array<{ conversationId: string; messageId: string; startedAt: number }> = []
-    for (const [conversationId, stream] of streams.entries()) {
+    const prefix = `${getActiveProfileId()}:`
+    for (const [key, stream] of streams.entries()) {
+        if (!key.startsWith(prefix)) continue
+        const conversationId = key.slice(prefix.length)
         if (stream.controller.signal.aborted) {
-            streams.delete(conversationId)
+            streams.delete(key)
             continue
         }
         active.push({

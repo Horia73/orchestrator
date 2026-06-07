@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { saveHomeAssistantConfig } from '@/lib/integrations/home-assistant'
 import { recordIntegrationStatuses } from '@/lib/integrations/status-snapshot'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -15,33 +16,35 @@ const ConfigBodySchema = z.object({
 })
 
 export async function PUT(request: Request) {
-    const guard = guardSensitiveRequest(request)
-    if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
 
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+        }
 
-    const parsed = ConfigBodySchema.safeParse(body)
-    if (!parsed.success) {
-        return NextResponse.json({ error: 'Invalid Home Assistant config', issues: parsed.error.issues }, { status: 400 })
-    }
+        const parsed = ConfigBodySchema.safeParse(body)
+        if (!parsed.success) {
+            return NextResponse.json({ error: 'Invalid Home Assistant config', issues: parsed.error.issues }, { status: 400 })
+        }
 
-    try {
-        const homeAssistant = await saveHomeAssistantConfig(parsed.data)
-        recordIntegrationStatuses({ homeAssistant })
-        return NextResponse.json({
-            success: true,
-            verified: homeAssistant.connected,
-            homeAssistant,
-        })
-    } catch (err) {
-        return NextResponse.json(
-            { error: err instanceof Error ? err.message : 'Could not save Home Assistant config' },
-            { status: 400 }
-        )
-    }
+        try {
+            const homeAssistant = await saveHomeAssistantConfig(parsed.data)
+            recordIntegrationStatuses({ homeAssistant })
+            return NextResponse.json({
+                success: true,
+                verified: homeAssistant.connected,
+                homeAssistant,
+            })
+        } catch (err) {
+            return NextResponse.json(
+                { error: err instanceof Error ? err.message : 'Could not save Home Assistant config' },
+                { status: 400 }
+            )
+        }
+  })
 }

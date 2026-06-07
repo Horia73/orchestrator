@@ -13,6 +13,7 @@ import {
   Sun,
   KeyRound,
   ArrowLeft,
+  UsersRound,
 } from "lucide-react"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -23,8 +24,9 @@ import { FilesTab } from "@/components/settings/files-tab"
 import { UpdateTab } from "@/components/settings/update-tab"
 import { AuthTab } from "@/components/settings/auth-tab"
 import { ModelsTab } from "@/components/settings/models-tab"
+import { ProfilesTab } from "@/components/settings/profiles-tab"
 
-const TAB_IDS = ["models", "auth", "files", "logs", "usage", "updates"] as const
+const TAB_IDS = ["models", "profiles", "auth", "files", "logs", "usage", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TABS: Array<{
@@ -33,6 +35,7 @@ const TABS: Array<{
   icon: React.ComponentType<{ className?: string }>
 }> = [
   { id: "models", label: "Models", icon: Cpu },
+  { id: "profiles", label: "Profiles", icon: UsersRound },
   { id: "auth", label: "Auth", icon: KeyRound },
   { id: "files", label: "Files", icon: FileText },
   { id: "logs", label: "Logs", icon: Activity },
@@ -76,6 +79,8 @@ export function SettingsView() {
 function SettingsViewInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const tabsScrollRef = React.useRef<HTMLDivElement | null>(null)
+  const tabButtonRefs = React.useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({})
 
   React.useEffect(() => {
     const root = document.documentElement
@@ -120,6 +125,16 @@ function SettingsViewInner() {
     [router, searchParams]
   )
 
+  React.useEffect(() => {
+    const scroller = tabsScrollRef.current
+    const activeButton = tabButtonRefs.current[activeTab]
+    if (!scroller || !activeButton) return
+    const scrollerRect = scroller.getBoundingClientRect()
+    const buttonRect = activeButton.getBoundingClientRect()
+    if (buttonRect.left >= scrollerRect.left && buttonRect.right <= scrollerRect.right) return
+    activeButton.scrollIntoView({ block: "nearest", inline: "center" })
+  }, [activeTab])
+
   return (
     <div
       data-orch-settings-content="true"
@@ -154,12 +169,18 @@ function SettingsViewInner() {
             onValueChange={handleTabChange}
             className="gap-0"
           >
-            <div className="-mx-3 overflow-x-auto px-3 [scrollbar-width:none] sm:mx-0 sm:px-0 md:overflow-visible [&::-webkit-scrollbar]:hidden">
+            <div
+              ref={tabsScrollRef}
+              className="-mx-3 overflow-x-auto scroll-px-3 px-3 [scrollbar-width:none] sm:mx-0 sm:px-0 md:overflow-visible [&::-webkit-scrollbar]:hidden"
+            >
               <TabsList className="-mb-px h-auto w-max min-w-full gap-0 border-none md:w-auto md:min-w-0">
                 {TABS.map((tab) => (
                   <TabsTrigger
                     key={tab.id}
                     value={tab.id}
+                    ref={(node) => {
+                      tabButtonRefs.current[tab.id] = node
+                    }}
                     className="h-8 shrink-0 gap-1.5 px-2.5 text-[12.5px]"
                   >
                     <tab.icon className="size-[13px] opacity-80" />
@@ -190,6 +211,9 @@ function SettingsViewInner() {
             <Tabs value={activeTab} onValueChange={handleTabChange}>
               <TabsContent value="models">
                 <ModelsTab />
+              </TabsContent>
+              <TabsContent value="profiles">
+                <ProfilesTab />
               </TabsContent>
               <TabsContent value="auth">
                 <AuthTab />

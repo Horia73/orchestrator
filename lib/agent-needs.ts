@@ -2,7 +2,7 @@ import crypto from 'crypto'
 import fs from 'fs'
 import path from 'path'
 
-import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 export const AGENT_NEEDS_RELATIVE_PATH = 'AGENT_NEEDS.md'
 
@@ -87,7 +87,7 @@ export function recordAgentNeed(input: AgentNeedInput): AgentNeedRecordResult {
 }
 
 export function ensureAgentNeedsFile(): string {
-    const filePath = path.join(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR, AGENT_NEEDS_RELATIVE_PATH)
+    const filePath = path.join(/* turbopackIgnore: true */ activeRuntimePaths().agentWorkspaceDir, AGENT_NEEDS_RELATIVE_PATH)
     fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(filePath), { recursive: true })
     if (!fs.existsSync(/* turbopackIgnore: true */ filePath)) {
         fs.writeFileSync(/* turbopackIgnore: true */ filePath, AGENT_NEEDS_DEFAULT_CONTENT, 'utf-8')

@@ -4,6 +4,7 @@ import { AUDIO_CONTEXT_AGENT_ID, isAudioContextAgentModel } from '@/lib/ai/audio
 import { getEffectiveModel } from '@/lib/models/registry'
 import { setAgentOverride, modelExists, type AgentFallback, type AgentOverride, type ThinkingLevel, type ModelFeatureValue } from '@/lib/config'
 import type { AgentConfig } from '@/lib/ai/agents/types'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 function isThinkingLevel(value: unknown): value is ThinkingLevel {
     return typeof value === 'string' && /^[a-zA-Z][a-zA-Z0-9_-]*$/.test(value)
@@ -84,72 +85,76 @@ export async function PUT(
     request: Request,
     { params }: { params: Promise<{ agentId: string }> }
 ) {
-    const { agentId } = await params
+  return runWithRequestProfile(request, async () => {
+        const { agentId } = await params
 
-    const agent = getAgent(agentId)
-    if (!agent) {
-        return NextResponse.json({ error: `Unknown agent: ${agentId}` }, { status: 404 })
-    }
-
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
-
-    if (!body || typeof body !== 'object') {
-        return NextResponse.json({ error: 'Body must be an object' }, { status: 400 })
-    }
-
-    const { provider, model, thinkingLevel, modelOptions, fallbacks } = body as Record<string, unknown>
-
-    if (typeof provider !== 'string' || typeof model !== 'string') {
-        return NextResponse.json({ error: 'provider and model are required strings' }, { status: 400 })
-    }
-
-    if (!modelExists(provider, model)) {
-        return NextResponse.json({ error: `Unknown model: ${provider}:${model}` }, { status: 400 })
-    }
-
-    if (agent.id === AUDIO_CONTEXT_AGENT_ID && !isAudioContextAgentModel(provider, model)) {
-        return NextResponse.json(
-            { error: 'Audio Context Agent must use a Google/Gemini text model that can receive audio.' },
-            { status: 400 }
-        )
-    }
-
-    const override: AgentOverride = { provider, model }
-    if (thinkingLevel !== undefined) {
-        if (!isThinkingLevel(thinkingLevel)) {
-            return NextResponse.json({ error: 'Invalid thinkingLevel' }, { status: 400 })
+        const agent = getAgent(agentId)
+        if (!agent) {
+            return NextResponse.json({ error: `Unknown agent: ${agentId}` }, { status: 404 })
         }
-        override.thinkingLevel = thinkingLevel
-    }
-    if (!isModelOptions(modelOptions)) {
-        return NextResponse.json({ error: 'Invalid modelOptions' }, { status: 400 })
-    }
-    if (modelOptions !== undefined) override.modelOptions = modelOptions
-    const parsedFallbacks = parseFallbacks(fallbacks, agent)
-    if (!parsedFallbacks.ok) {
-        return NextResponse.json({ error: parsedFallbacks.error }, { status: 400 })
-    }
-    if (parsedFallbacks.fallbacks) override.fallbacks = parsedFallbacks.fallbacks
 
-    const updated = setAgentOverride(agentId, override)
-    return NextResponse.json({ success: true, config: updated })
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
+        }
+
+        if (!body || typeof body !== 'object') {
+            return NextResponse.json({ error: 'Body must be an object' }, { status: 400 })
+        }
+
+        const { provider, model, thinkingLevel, modelOptions, fallbacks } = body as Record<string, unknown>
+
+        if (typeof provider !== 'string' || typeof model !== 'string') {
+            return NextResponse.json({ error: 'provider and model are required strings' }, { status: 400 })
+        }
+
+        if (!modelExists(provider, model)) {
+            return NextResponse.json({ error: `Unknown model: ${provider}:${model}` }, { status: 400 })
+        }
+
+        if (agent.id === AUDIO_CONTEXT_AGENT_ID && !isAudioContextAgentModel(provider, model)) {
+            return NextResponse.json(
+                { error: 'Audio Context Agent must use a Google/Gemini text model that can receive audio.' },
+                { status: 400 }
+            )
+        }
+
+        const override: AgentOverride = { provider, model }
+        if (thinkingLevel !== undefined) {
+            if (!isThinkingLevel(thinkingLevel)) {
+                return NextResponse.json({ error: 'Invalid thinkingLevel' }, { status: 400 })
+            }
+            override.thinkingLevel = thinkingLevel
+        }
+        if (!isModelOptions(modelOptions)) {
+            return NextResponse.json({ error: 'Invalid modelOptions' }, { status: 400 })
+        }
+        if (modelOptions !== undefined) override.modelOptions = modelOptions
+        const parsedFallbacks = parseFallbacks(fallbacks, agent)
+        if (!parsedFallbacks.ok) {
+            return NextResponse.json({ error: parsedFallbacks.error }, { status: 400 })
+        }
+        if (parsedFallbacks.fallbacks) override.fallbacks = parsedFallbacks.fallbacks
+
+        const updated = setAgentOverride(agentId, override)
+        return NextResponse.json({ success: true, config: updated })
+  })
 }
 
 export async function DELETE(
     _request: Request,
     { params }: { params: Promise<{ agentId: string }> }
 ) {
-    const { agentId } = await params
+  return runWithRequestProfile(_request, async () => {
+        const { agentId } = await params
 
-    if (!getAgent(agentId)) {
-        return NextResponse.json({ error: `Unknown agent: ${agentId}` }, { status: 404 })
-    }
+        if (!getAgent(agentId)) {
+            return NextResponse.json({ error: `Unknown agent: ${agentId}` }, { status: 404 })
+        }
 
-    const updated = setAgentOverride(agentId, null)
-    return NextResponse.json({ success: true, config: updated })
+        const updated = setAgentOverride(agentId, null)
+        return NextResponse.json({ success: true, config: updated })
+  })
 }

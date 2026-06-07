@@ -14,7 +14,7 @@ export const librarySearchTool: ToolDef = {
     "Find images (PNG/JPEG) and PDFs in the user's Library by MEANING — semantic, cross-modal search, not filename matching.",
     "Use it when the user refers to a visual/document by content: \"the whiteboard photo\", \"the diagram of the architecture\", \"that invoice PDF\", \"a picture with a red car\".",
     "For finding a file by NAME or recency, prefer find_past_uploads. For meaning/content, use this.",
-    "Returns matches ranked by relevance, each with a local `path` you can open with Read and a relevance score. Requires a multimodal embedding model; returns a note if one is not configured.",
+    "Returns matches ranked by relevance, each with a local `path` you can open with Read, a relevance score, and the source conversation/message when the file came from a chat upload. Requires a multimodal embedding model; returns a note if one is not configured.",
   ].join(" "),
   input_schema: {
     type: "object",
@@ -69,6 +69,13 @@ export async function executeLibrarySearch(
           name: h.displayPath,
           kind: h.kind,
           relevance: Number(h.score.toFixed(3)),
+          conversation: h.conversationTitle,
+          conversation_id: h.conversationId,
+          message_id: h.messageId,
+          uploaded_at:
+            typeof h.messageTimestamp === "number"
+              ? new Date(h.messageTimestamp).toISOString()
+              : undefined,
         })),
       },
     }

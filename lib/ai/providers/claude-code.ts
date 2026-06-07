@@ -16,7 +16,7 @@ import type { ContextUsageSnapshot } from '@/lib/types'
 import { CLI_SPECS } from '@/lib/cli/specs'
 import { resolveBin, augmentedEnv } from '@/lib/cli/resolve-bin'
 import { createBinding, clearBinding } from '@/lib/cli/mcp-bindings'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { latestUserPromptWithPortableHistory } from './history'
 
@@ -300,7 +300,7 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
             proc = spawn(resolved, args, {
                 stdio: ['ignore', 'pipe', 'pipe'],
                 env: augmentedEnv(),
-                cwd: cwd ?? AGENT_WORKSPACE_DIR,
+                cwd: cwd ?? activeRuntimePaths().agentWorkspaceDir,
             })
         } catch (err) {
             callbacks.onError(`Failed to spawn ${bin}: ${err instanceof Error ? err.message : 'unknown error'}`)

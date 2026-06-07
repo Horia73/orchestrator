@@ -4,7 +4,7 @@ import { spawn } from 'child_process'
 import type { ChildProcessWithoutNullStreams } from 'child_process'
 import { createHash, randomUUID } from 'crypto'
 
-import { WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { getConfiguredTimezone } from '@/lib/config'
 import { resolveAppOrigin } from '@/lib/app-origin'
 import { createInboxConversation } from '@/lib/scheduling/store'
@@ -543,13 +543,14 @@ export interface RunMicroscriptResult {
 
 export async function validateMicroscriptCode(code: string): Promise<{ ok: true } | { ok: false; error: string }> {
     try {
-        fs.mkdirSync(WORKSPACE_DIR, { recursive: true })
+        const workspaceDir = activeRuntimePaths().workspaceDir
+        fs.mkdirSync(workspaceDir, { recursive: true })
         const raw = await spawnPython(JSON.stringify({
             code,
             ctx: { manifest: { trustedPython: defaultTrustedPythonPolicy() } },
             validateOnly: true,
         }), {
-            cwd: WORKSPACE_DIR,
+            cwd: workspaceDir,
             timeoutMs: 3_000,
             maxOutputBytes: 32_000,
         })
@@ -1482,7 +1483,7 @@ function resolveScriptFile(scriptId: string, relPath: string): string {
 }
 
 function scriptWorkDir(scriptId: string): string {
-    return path.join(WORKSPACE_DIR, 'microscripts', scriptId)
+    return path.join(activeRuntimePaths().workspaceDir, 'microscripts', scriptId)
 }
 
 function hostAllowed(host: string, allowedHosts: string[]): boolean {

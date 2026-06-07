@@ -550,6 +550,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // file save would surface a "Failed to fetch" error in the dev console
   // even though the conversations would load fine on the next attempt.
   React.useEffect(() => {
+    if (pathname?.startsWith("/profiles")) {
+      dispatch({ type: "INIT_CONVERSATIONS", conversations: [] })
+      return
+    }
     let cancelled = false
     let attempt = 0
     const MAX_ATTEMPTS = 5
@@ -581,7 +585,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [refreshConversationSummaries])
+  }, [pathname, refreshConversationSummaries])
 
   React.useEffect(() => {
     let sequence = 0
@@ -708,16 +712,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   )
 
   React.useEffect(() => {
+    if (pathname?.startsWith("/profiles")) return
     const conversationId = state.activeConversationId
     if (!conversationId) return
     void loadInitialMessages(conversationId)
-  }, [loadInitialMessages, state.activeConversationId])
+  }, [loadInitialMessages, pathname, state.activeConversationId])
 
   const checkServerStreaming = React.useCallback(
     async (conversationId: string): Promise<ActiveChatStream | null> => {
+      if (pathname?.startsWith("/profiles")) return null
       return fetchActiveChatStream(conversationId)
     },
-    []
+    [pathname]
   )
 
   const hydrateStreamMessage = React.useCallback(
@@ -870,18 +876,27 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const refreshActiveChatStreams = React.useCallback(async (): Promise<
     ActiveChatStream[]
   > => {
+    if (pathname?.startsWith("/profiles")) {
+      dispatch({ type: "SET_ACTIVE_CHAT_STREAMS", streams: [] })
+      return []
+    }
     const streams = await fetchActiveChatStreams()
     dispatch({ type: "SET_ACTIVE_CHAT_STREAMS", streams })
     return streams
-  }, [])
+  }, [pathname])
 
   React.useEffect(() => {
+    if (pathname?.startsWith("/profiles")) {
+      dispatch({ type: "SET_ACTIVE_CHAT_STREAMS", streams: [] })
+      return
+    }
     void refreshActiveChatStreams()
     const interval = window.setInterval(refreshActiveChatStreams, 5000)
     return () => window.clearInterval(interval)
-  }, [refreshActiveChatStreams])
+  }, [pathname, refreshActiveChatStreams])
 
   React.useEffect(() => {
+    if (pathname?.startsWith("/profiles")) return
     let sequence = 0
 
     const reconcileAfterResume = () => {
@@ -913,7 +928,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       window.removeEventListener("pageshow", reconcileAfterResume)
       window.removeEventListener("focus", reconcileAfterResume)
     }
-  }, [recoverInterruptedStream, refreshActiveChatStreams])
+  }, [pathname, recoverInterruptedStream, refreshActiveChatStreams])
 
   React.useEffect(() => {
     const conversationId = state.activeConversationId
@@ -1031,6 +1046,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   // --- SSE LIVE SYNC ---
   React.useEffect(() => {
+    if (pathname?.startsWith("/profiles")) return
     const eventSource = new EventSource("/api/sync")
 
     eventSource.onopen = () => {
@@ -1185,6 +1201,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
     return () => eventSource.close()
   }, [
+    pathname,
     applyConversationReadState,
     applyConversationArchiveState,
     applyConversationTitle,

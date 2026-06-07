@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { usePathname } from "next/navigation"
 import { BellRing, Loader2, RefreshCw, X } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -198,6 +199,7 @@ function promptCopy(args: {
 }
 
 export function NotificationPermissionPrompt() {
+  const pathname = usePathname()
   const {
     status,
     permission,
@@ -246,6 +248,7 @@ export function NotificationPermissionPrompt() {
   }, [dismissals, kind])
 
   const isDismissed = kind ? Boolean(dismissals[kind]) : false
+  if (pathname?.startsWith("/profiles")) return null
   if (!mounted || !kind || isDismissed) return null
 
   const copy = promptCopy({

@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
-import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 export const DEFAULT_MAX_OUTPUT_CHARS = 100_000
 
@@ -57,11 +57,12 @@ export function ensureParentDir(filePath: string): void {
 }
 
 export function workspaceCwd(inputPath?: string): string {
+    const workspaceDir = activeRuntimePaths().agentWorkspaceDir
     const raw = inputPath?.trim()
-    if (!raw) return AGENT_WORKSPACE_DIR
+    if (!raw) return workspaceDir
     return path.isAbsolute(raw)
         ? raw
-        : path.resolve(/* turbopackIgnore: true */ AGENT_WORKSPACE_DIR, raw)
+        : path.resolve(/* turbopackIgnore: true */ workspaceDir, raw)
 }
 
 export function isProbablyBinary(buffer: Buffer): boolean {

@@ -1,61 +1,66 @@
 import { chatEventEmitter, ChatEvent } from '@/lib/events'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const dynamic = 'force-dynamic'
 
 export async function GET(req: Request) {
-    const encoder = new TextEncoder()
-    let listener: ((event: ChatEvent) => void) | null = null
-    let pingInterval: ReturnType<typeof setInterval> | null = null
-    let closed = false
+  return runWithRequestProfile(req, async (current) => {
+        const profileId = current.profile.id
+        const encoder = new TextEncoder()
+        let listener: ((event: ChatEvent) => void) | null = null
+        let pingInterval: ReturnType<typeof setInterval> | null = null
+        let closed = false
 
-    const cleanup = () => {
-        if (closed) return
-        closed = true
-        if (listener) chatEventEmitter.off('chat:update', listener)
-        if (pingInterval) clearInterval(pingInterval)
-        req.signal.removeEventListener('abort', cleanup)
-    }
-
-    const stream = new ReadableStream({
-        start(controller) {
-            const send = (chunk: string) => {
-                if (closed) return
-                try {
-                    controller.enqueue(encoder.encode(chunk))
-                } catch {
-                    cleanup()
-                }
-            }
-
-            // Send initial connection successful ping
-            send(': connected\n\n')
+        const cleanup = () => {
             if (closed) return
+            closed = true
+            if (listener) chatEventEmitter.off('chat:update', listener)
+            if (pingInterval) clearInterval(pingInterval)
+            req.signal.removeEventListener('abort', cleanup)
+        }
 
-            // Define the listener
-            listener = (event: ChatEvent) => {
-                send(`data: ${JSON.stringify(event)}\n\n`)
-            }
+        const stream = new ReadableStream({
+            start(controller) {
+                const send = (chunk: string) => {
+                    if (closed) return
+                    try {
+                        controller.enqueue(encoder.encode(chunk))
+                    } catch {
+                        cleanup()
+                    }
+                }
 
-            // Attach listener to global emitter
-            chatEventEmitter.on('chat:update', listener)
+                // Send initial connection successful ping
+                send(': connected\n\n')
+                if (closed) return
 
-            // Send a ping every 30 seconds to keep the connection alive
-            pingInterval = setInterval(() => send(': ping\n\n'), 30000)
+                // Define the listener
+                listener = (event: ChatEvent) => {
+                    if (event.profileId && event.profileId !== profileId) return
+                    send(`data: ${JSON.stringify(event)}\n\n`)
+                }
 
-            // Handle client disconnect gracefully by checking req.signal
-            req.signal.addEventListener('abort', cleanup, { once: true })
-        },
-        cancel() {
-            cleanup()
-        },
-    })
+                // Attach listener to global emitter
+                chatEventEmitter.on('chat:update', listener)
 
-    return new Response(stream, {
-        headers: {
-            'Content-Type': 'text/event-stream',
-            'Cache-Control': 'no-cache, no-transform',
-            'Connection': 'keep-alive',
-            'X-Accel-Buffering': 'no',
-        },
-    })
+                // Send a ping every 30 seconds to keep the connection alive
+                pingInterval = setInterval(() => send(': ping\n\n'), 30000)
+
+                // Handle client disconnect gracefully by checking req.signal
+                req.signal.addEventListener('abort', cleanup, { once: true })
+            },
+            cancel() {
+                cleanup()
+            },
+        })
+
+        return new Response(stream, {
+            headers: {
+                'Content-Type': 'text/event-stream',
+                'Cache-Control': 'no-cache, no-transform',
+                'Connection': 'keep-alive',
+                'X-Accel-Buffering': 'no',
+            },
+        })
+  })
 }

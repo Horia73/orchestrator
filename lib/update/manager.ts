@@ -75,6 +75,7 @@ export interface UpdateStatus {
     latestError: string | null
     activeRuns: ActiveRunInfo[]
     job: UpdateJob | null
+    rollback: RollbackInfo | null
     config: {
         repo: string
         idleGraceMs: number
@@ -82,6 +83,18 @@ export interface UpdateStatus {
         managedInstall: boolean
         dockerHostUpdater: boolean
     }
+}
+
+export interface RollbackInfo {
+    available: boolean
+    image: string
+    imageId: string | null
+    version: string | null
+    commit: string | null
+    ref: string | null
+    savedAt: number | null
+    savedBeforeTarget: string | null
+    unavailableReason?: string
 }
 
 export interface HostUpdateResult {
@@ -293,6 +306,9 @@ function reconcilePersistedJob(current: CurrentInstallInfo): UpdateJob | null {
     const job = memory.job ?? persisted
     if (!job) return null
 
+    const restartResult = reconcileRestartingJobWithCurrentInstall(job, current)
+    if (restartResult) return restartResult
+
     if (
         (job.phase === 'updating' || job.phase === 'restarting') &&
         normalizeVersion(job.targetVersion) &&
@@ -310,6 +326,47 @@ function reconcilePersistedJob(current: CurrentInstallInfo): UpdateJob | null {
     }
 
     return job
+}
+
+function reconcileRestartingJobWithCurrentInstall(
+    job: UpdateJob,
+    current: CurrentInstallInfo,
+): UpdateJob | null {
+    if (job.phase !== 'restarting') return null
+    if (!job.targetCommit || !commitsMatch(current.commit, job.targetCommit)) return null
+
+    const now = Date.now()
+    const targetVersion = normalizeVersion(job.targetVersion)
+    const currentVersion = normalizeVersion(current.version)
+
+    if (targetVersion && currentVersion && compareVersions(currentVersion, targetVersion) < 0) {
+        const failed: UpdateJob = {
+            ...job,
+            phase: 'failed',
+            failedAt: now,
+            updatedAt: now,
+            waitReason: 'Host updater finished, but the requested release is not running.',
+            error: `Running version v${current.version} is still below target v${job.targetVersion}. Check that the release tag points at the code the updater installed.`,
+            postRestartCheckedAt: now,
+            postRestartCurrentCommit: normalizeCommit(current.commit),
+            postRestartConfirmationError: `Running version v${current.version} is still below target v${job.targetVersion}.`,
+        }
+        setJob(failed)
+        return failed
+    }
+
+    const completed: UpdateJob = {
+        ...job,
+        phase: 'completed',
+        completedAt: job.completedAt ?? now,
+        updatedAt: now,
+        waitReason: 'Update installed, service restarted, and running commit confirmed.',
+        postRestartCheckedAt: now,
+        postRestartConfirmedAt: job.postRestartConfirmedAt ?? now,
+        postRestartCurrentCommit: normalizeCommit(current.commit),
+    }
+    setJob(completed)
+    return completed
 }
 
 async function postUpdateConfirmationInbox(args: {
@@ -719,6 +776,41 @@ function dockerBridgeEndpoint(segment: string): { url: string; token: string } |
     }
 }
 
+function bridgeRollbackFromPayload(payload: unknown): RollbackInfo | null {
+    if (!payload || typeof payload !== 'object') return null
+    const item = (payload as { rollback?: unknown }).rollback
+    if (!item || typeof item !== 'object') return null
+    const raw = item as Record<string, unknown>
+    const image = typeof raw.image === 'string' && raw.image ? raw.image : 'orchestrator:rollback'
+    return {
+        available: raw.available === true,
+        image,
+        imageId: typeof raw.imageId === 'string' && raw.imageId ? raw.imageId : null,
+        version: typeof raw.version === 'string' && raw.version ? raw.version : null,
+        commit: typeof raw.commit === 'string' && raw.commit ? raw.commit : null,
+        ref: typeof raw.ref === 'string' && raw.ref ? raw.ref : null,
+        savedAt: typeof raw.savedAt === 'number' && Number.isFinite(raw.savedAt) ? raw.savedAt : null,
+        savedBeforeTarget: typeof raw.savedBeforeTarget === 'string' && raw.savedBeforeTarget ? raw.savedBeforeTarget : null,
+        unavailableReason: typeof raw.unavailableReason === 'string' ? raw.unavailableReason : undefined,
+    }
+}
+
+async function getDockerRollbackStatus(): Promise<RollbackInfo | null> {
+    const cfg = dockerBridgeEndpoint('status')
+    if (!cfg) return null
+    try {
+        const res = await fetch(cfg.url, {
+            headers: { Authorization: `Bearer ${cfg.token}` },
+            cache: 'no-store',
+        })
+        if (!res.ok) return null
+        const json = await res.json().catch(() => null)
+        return bridgeRollbackFromPayload(json)
+    } catch {
+        return null
+    }
+}
+
 /**
  * Ask the host bridge to update the CLIs (claude-code, codex) inside the
  * container's bind-mounted npm-global volume, then restart the container.
@@ -767,6 +859,29 @@ export async function triggerContainerRestart(): Promise<{ ok: boolean; error?: 
         return { ok: true }
     } catch (err) {
         return { ok: false, error: err instanceof Error ? err.message : 'Restart request failed.' }
+    }
+}
+
+/** Ask the host bridge to switch back to the cached previous Docker image. */
+export async function triggerRollback(): Promise<{ ok: boolean; rollback?: RollbackInfo | null; error?: string }> {
+    const cfg = dockerBridgeEndpoint('rollback')
+    if (!cfg) {
+        return { ok: false, error: 'Rollback needs a Docker install with the host bridge configured.' }
+    }
+    try {
+        const res = await fetch(cfg.url, {
+            method: 'POST',
+            headers: { Authorization: `Bearer ${cfg.token}`, 'Content-Type': 'application/json' },
+            body: '{}',
+            cache: 'no-store',
+        })
+        const json = await res.json().catch(() => null) as { ok?: boolean; error?: string; rollback?: unknown } | null
+        if (!res.ok || !json?.ok) {
+            return { ok: false, error: json?.error || `Host bridge returned ${res.status}.` }
+        }
+        return { ok: true, rollback: bridgeRollbackFromPayload(json) }
+    } catch (err) {
+        return { ok: false, error: err instanceof Error ? err.message : 'Rollback request failed.' }
     }
 }
 
@@ -967,6 +1082,7 @@ export async function getUpdateStatus(opts?: { refresh?: boolean }): Promise<Upd
     const activeRuns = listAllActiveRuns()
     const manager = serviceManager()
     const dockerHostUpdater = manager === 'docker' && hasDockerHostUpdater()
+    const rollback = dockerHostUpdater ? await getDockerRollbackStatus() : null
 
     return {
         current,
@@ -976,6 +1092,7 @@ export async function getUpdateStatus(opts?: { refresh?: boolean }): Promise<Upd
         latestError: memory.latestError,
         activeRuns,
         job: reconciled,
+        rollback,
         config: {
             repo: REPO,
             idleGraceMs: IDLE_GRACE_MS,
@@ -1095,6 +1212,12 @@ export function isUpdateMaintenanceActive(): boolean {
     const job = memory.job ?? readPersistedJob()
     if (!job) return false
     if (job.phase !== 'updating' && job.phase !== 'restarting') return false
+    if (job.phase === 'restarting' && job.targetCommit) {
+        const reconciled = reconcileRestartingJobWithCurrentInstall(job, getCurrentInstall())
+        if (reconciled && (reconciled.phase === 'completed' || reconciled.phase === 'failed')) {
+            return false
+        }
+    }
     return Date.now() - job.updatedAt < MAINTENANCE_STALE_MS
 }
 

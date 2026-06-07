@@ -2,9 +2,8 @@ import crypto from "crypto"
 import fs from "fs"
 import path from "path"
 
-import { PRIVATE_STATE_DIR } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 
-const STATIC_MAP_CACHE_DIR = path.join(PRIVATE_STATE_DIR, "maps-static-cache")
 const STATIC_MAP_CACHE_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
 const STATIC_MAP_CACHE_MAX_ENTRIES = 200
 const STATIC_MAP_CACHE_MAX_BYTES = 50 * 1024 * 1024
@@ -22,6 +21,10 @@ export interface StaticMapCacheEntry {
 
 export function getStaticMapCacheKey(upstreamUrl: string): string {
   return crypto.createHash("sha256").update(upstreamUrl).digest("hex")
+}
+
+function staticMapCacheDir(): string {
+  return path.join(activeRuntimePaths().privateStateDir, "maps-static-cache")
 }
 
 export function readStaticMapCache(upstreamUrl: string): StaticMapCacheEntry | null {
@@ -56,7 +59,7 @@ export function writeStaticMapCache(
     size: bytes.length,
   }
   try {
-    fs.mkdirSync(/* turbopackIgnore: true */ STATIC_MAP_CACHE_DIR, {
+    fs.mkdirSync(/* turbopackIgnore: true */ staticMapCacheDir(), {
       recursive: true,
     })
     fs.writeFileSync(/* turbopackIgnore: true */ paths.imagePath, bytes)
@@ -88,8 +91,8 @@ function staticMapCachePaths(upstreamUrl: string): {
 } {
   const key = getStaticMapCacheKey(upstreamUrl)
   return {
-    imagePath: path.join(STATIC_MAP_CACHE_DIR, `${key}.bin`),
-    metaPath: path.join(STATIC_MAP_CACHE_DIR, `${key}.json`),
+    imagePath: path.join(staticMapCacheDir(), `${key}.bin`),
+    metaPath: path.join(staticMapCacheDir(), `${key}.json`),
   }
 }
 
@@ -121,12 +124,12 @@ function pruneStaticMapCache(): void {
   let entries: Array<{ key: string; createdAt: number; size: number }> = []
   try {
     entries = fs
-      .readdirSync(/* turbopackIgnore: true */ STATIC_MAP_CACHE_DIR)
+      .readdirSync(/* turbopackIgnore: true */ staticMapCacheDir())
       .filter((file) => file.endsWith(".json"))
       .map((file) => {
         const key = file.slice(0, -".json".length)
         const meta = readStaticMapCacheMetadata(
-          path.join(STATIC_MAP_CACHE_DIR, file)
+          path.join(staticMapCacheDir(), file)
         )
         return {
           key,
@@ -166,7 +169,7 @@ function deleteStaticMapCacheFiles(key: string): void {
     try {
       fs.unlinkSync(
         /* turbopackIgnore: true */ path.join(
-          STATIC_MAP_CACHE_DIR,
+          staticMapCacheDir(),
           `${key}${suffix}`
         )
       )

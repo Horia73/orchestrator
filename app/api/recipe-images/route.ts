@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 
 import { searchRecipeImages } from '@/lib/recipe/image-search'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,34 +19,36 @@ const RATE_MAX_REQUESTS = 30
 const rateBucket = new Map<string, number[]>()
 
 export async function GET(request: Request) {
-    const url = new URL(request.url)
-    const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200)
-    const limit = clampInt(url.searchParams.get('limit'), 4, 1, 8)
+  return runWithRequestProfile(request, async () => {
+        const url = new URL(request.url)
+        const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200)
+        const limit = clampInt(url.searchParams.get('limit'), 4, 1, 8)
 
-    if (!query) {
-        return NextResponse.json(
-            { error: 'Missing query parameter `q`.' },
-            { status: 400, headers: ERROR_HEADERS },
-        )
-    }
+        if (!query) {
+            return NextResponse.json(
+                { error: 'Missing query parameter `q`.' },
+                { status: 400, headers: ERROR_HEADERS },
+            )
+        }
 
-    if (!withinRateLimit(extractClientKey(request))) {
-        return NextResponse.json(
-            { error: 'Rate limit exceeded. Try again in a minute.' },
-            { status: 429, headers: ERROR_HEADERS },
-        )
-    }
+        if (!withinRateLimit(extractClientKey(request))) {
+            return NextResponse.json(
+                { error: 'Rate limit exceeded. Try again in a minute.' },
+                { status: 429, headers: ERROR_HEADERS },
+            )
+        }
 
-    try {
-        const images = await searchRecipeImages(query, { limit })
-        return NextResponse.json({ images }, { headers: SUCCESS_HEADERS })
-    } catch (err) {
-        const message = err instanceof Error ? err.message : 'Unknown upstream error'
-        return NextResponse.json(
-            { error: `Image search failed: ${message}` },
-            { status: 502, headers: ERROR_HEADERS },
-        )
-    }
+        try {
+            const images = await searchRecipeImages(query, { limit })
+            return NextResponse.json({ images }, { headers: SUCCESS_HEADERS })
+        } catch (err) {
+            const message = err instanceof Error ? err.message : 'Unknown upstream error'
+            return NextResponse.json(
+                { error: `Image search failed: ${message}` },
+                { status: 502, headers: ERROR_HEADERS },
+            )
+        }
+  })
 }
 
 function clampInt(raw: string | null, fallback: number, min: number, max: number): number {

@@ -15,6 +15,7 @@ import {
   readOnlyWakeToolError,
 } from "@/lib/ai/tools/read-only-policy"
 import type { ToolExecutor } from "./types"
+import { deniedToolReason } from "@/lib/profiles/permissions"
 
 export function createRunActivatedIntegrationToolExecutor(
   resolveExecutor: (toolId: string) => ToolExecutor | undefined,
@@ -66,6 +67,10 @@ export function createRunActivatedIntegrationToolExecutor(
     }
     const capabilityId = (integrationId ?? subsystemId)!
     const toolDef = resolveTool?.(toolId)
+    if (toolDef) {
+      const denied = deniedToolReason(toolDef)
+      if (denied) return { success: false, error: denied }
+    }
     if (ctx?.toolSurfaceMode === "read-only") {
       if (!toolDef) {
         return {

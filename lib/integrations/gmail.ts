@@ -3,7 +3,8 @@ import path from 'path'
 import { randomBytes } from 'crypto'
 
 import { resolveOAuthRedirectUri } from '@/lib/app-origin'
-import { getEnvValue, PRIVATE_STATE_DIR, WORKSPACE_ENV_PATH } from '@/lib/config'
+import { getEnvValue } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     base64UrlDecodeBuffer,
     base64UrlEncode,
@@ -43,9 +44,13 @@ export const GMAIL_SCOPES = [
     GMAIL_FULL_ACCESS_SCOPE,
 ] as const
 
-const AUTH_DIR = path.join(PRIVATE_STATE_DIR, 'auth')
-const GMAIL_TOKEN_PATH = path.join(AUTH_DIR, 'gmail.json')
-const GMAIL_STATE_PATH = path.join(AUTH_DIR, 'gmail-oauth-states.json')
+function gmailTokenPath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'auth', 'gmail.json')
+}
+
+function gmailStatePath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'auth', 'gmail-oauth-states.json')
+}
 
 interface EnvLookup {
     value: string | null
@@ -1029,8 +1034,8 @@ async function responseErrorText(response: Response): Promise<string> {
 
 function readTokenRecord(): GmailTokenRecord | null {
     try {
-        if (!fs.existsSync(GMAIL_TOKEN_PATH)) return null
-        const parsed = JSON.parse(fs.readFileSync(GMAIL_TOKEN_PATH, 'utf-8')) as Partial<GmailTokenRecord>
+        if (!fs.existsSync(gmailTokenPath())) return null
+        const parsed = JSON.parse(fs.readFileSync(gmailTokenPath(), 'utf-8')) as Partial<GmailTokenRecord>
         if (parsed.provider !== 'gmail' || typeof parsed.accessToken !== 'string') return null
         return {
             version: 1,
@@ -1052,12 +1057,12 @@ function readTokenRecord(): GmailTokenRecord | null {
 }
 
 function writeTokenRecord(record: GmailTokenRecord): void {
-    writePrivateJson(GMAIL_TOKEN_PATH, record)
+    writePrivateJson(gmailTokenPath(), record)
 }
 
 function clearTokenRecord(): void {
     try {
-        fs.unlinkSync(GMAIL_TOKEN_PATH)
+        fs.unlinkSync(gmailTokenPath())
     } catch {
         // Already disconnected.
     }
@@ -1065,8 +1070,8 @@ function clearTokenRecord(): void {
 
 function readOAuthStates(): OAuthStateRecord[] {
     try {
-        if (!fs.existsSync(GMAIL_STATE_PATH)) return []
-        const parsed = JSON.parse(fs.readFileSync(GMAIL_STATE_PATH, 'utf-8')) as unknown
+        if (!fs.existsSync(gmailStatePath())) return []
+        const parsed = JSON.parse(fs.readFileSync(gmailStatePath(), 'utf-8')) as unknown
         if (!Array.isArray(parsed)) return []
         const now = Date.now()
         return parsed
@@ -1087,7 +1092,7 @@ function readOAuthStates(): OAuthStateRecord[] {
 }
 
 function writeOAuthStates(records: OAuthStateRecord[]): void {
-    writePrivateJson(GMAIL_STATE_PATH, records)
+    writePrivateJson(gmailStatePath(), records)
 }
 
 function consumeOAuthState(state: string): OAuthStateRecord | null {
@@ -1181,9 +1186,10 @@ function firstStringArrayItem(record: Record<string, unknown>, key: string): str
 }
 
 function patchWorkspaceEnv(values: Record<string, string>): void {
-    fs.mkdirSync(path.dirname(WORKSPACE_ENV_PATH), { recursive: true })
-    const existing = fs.existsSync(WORKSPACE_ENV_PATH)
-        ? fs.readFileSync(WORKSPACE_ENV_PATH, 'utf-8')
+    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
+    const existing = fs.existsSync(workspaceEnvPath)
+        ? fs.readFileSync(workspaceEnvPath, 'utf-8')
         : ''
     const keysToReplace = new Set([
         ...CLIENT_ID_ENV_KEYS,
@@ -1208,9 +1214,9 @@ function patchWorkspaceEnv(values: Record<string, string>): void {
         if (value) kept.push(`${key}=${formatEnvValue(value)}`)
     }
 
-    fs.writeFileSync(WORKSPACE_ENV_PATH, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
+    fs.writeFileSync(workspaceEnvPath, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
     try {
-        fs.chmodSync(WORKSPACE_ENV_PATH, 0o600)
+        fs.chmodSync(workspaceEnvPath, 0o600)
     } catch {
         // Best effort; some filesystems ignore chmod.
     }

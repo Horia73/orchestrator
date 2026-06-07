@@ -4,7 +4,8 @@ import { isOrchestratorClassAgent } from '@/lib/ai/agents/orchestrator-class'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
-import { AGENT_WORKSPACE_DIR, getConfig, getEnvValue, WORKSPACE_DIR } from '@/lib/config'
+import { getConfig, getEnvValue } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { WORKSPACE_FILE_DEFINITIONS, ensureWorkspaceTemplates, readScaffoldHashes, isUntouchedScaffold } from '@/lib/settings/workspace-files'
 import { buildIntegrationRunbooksContext } from '@/lib/integrations/runbooks'
 import {
@@ -374,9 +375,10 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         }
     }
     if (ctx.agentThreadId) lines.push(`current_agent_thread_id: ${ctx.agentThreadId}`)
-    lines.push(`workspace_cwd: ${AGENT_WORKSPACE_DIR}`)
-    lines.push(`file_tools_root: ${AGENT_WORKSPACE_DIR}`)
-    lines.push(`runtime_state_dir: ${WORKSPACE_DIR}`)
+    const runtimePaths = activeRuntimePaths()
+    lines.push(`workspace_cwd: ${runtimePaths.agentWorkspaceDir}`)
+    lines.push(`file_tools_root: ${runtimePaths.agentWorkspaceDir}`)
+    lines.push(`runtime_state_dir: ${runtimePaths.workspaceDir}`)
     lines.push('filesystem_scope: relative file paths start in workspace_cwd. File tools reject paths outside that workspace unless a native CLI provider grants broader access; shell commands also start in workspace_cwd but may use host commands and absolute paths permitted by the runtime user.')
     lines.push('library_outputs: save files meant for the user (documents, exports, generated media, downloaded sources) under the `files/` directory in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in the user-facing Library — files written elsewhere in workspace_cwd (scratch, intermediate, or working files) stay out of it. Use the workspace root and other paths for transient/working files; promote anything the user should keep or see into `files/`.')
     lines.push('discovery_scope: file discovery tools may omit provider-private CLI metadata; shell command output is returned as produced by the command.')
@@ -536,8 +538,9 @@ const MAX_CONTEXT_FILE_CHARS = 16_000
 const MAX_CONTEXT_TOTAL_CHARS = 64_000
 
 function readWorkspaceFile(relPath: string): string | null {
-    const absolutePath = path.resolve(AGENT_WORKSPACE_DIR, relPath)
-    if (absolutePath !== AGENT_WORKSPACE_DIR && !absolutePath.startsWith(AGENT_WORKSPACE_DIR + path.sep)) {
+    const workspaceDir = activeRuntimePaths().agentWorkspaceDir
+    const absolutePath = path.resolve(workspaceDir, relPath)
+    if (absolutePath !== workspaceDir && !absolutePath.startsWith(workspaceDir + path.sep)) {
         return null
     }
     if (!fs.existsSync(absolutePath)) return null

@@ -18,6 +18,7 @@ import {
   logInboxDirectAction,
 } from "@/lib/scheduling/store"
 import type { InboxDirectAction, Message } from "@/lib/types"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 interface ActionRequest {
   messageId: string
@@ -101,77 +102,79 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  try {
-    const { id } = await params
-    const raw = await request.text()
-    const parsed = raw.trim() ? parseBody(JSON.parse(raw)) : null
-    if (!parsed) {
-      return NextResponse.json(
-        { error: "messageId and actionId are required" },
-        { status: 400 }
-      )
-    }
+      try {
+        const { id } = await params
+        const raw = await request.text()
+        const parsed = raw.trim() ? parseBody(JSON.parse(raw)) : null
+        if (!parsed) {
+          return NextResponse.json(
+            { error: "messageId and actionId are required" },
+            { status: 400 }
+          )
+        }
 
-    const inbox = getInboxConversation(id)
-    if (!inbox) {
-      return NextResponse.json(
-        { error: "Inbox item not found" },
-        { status: 404 }
-      )
-    }
+        const inbox = getInboxConversation(id)
+        if (!inbox) {
+          return NextResponse.json(
+            { error: "Inbox item not found" },
+            { status: 404 }
+          )
+        }
 
-    const action = claimInboxDirectAction(id, parsed.messageId, parsed.actionId)
-    if (!action || !action.directAction) {
-      return NextResponse.json(
-        { error: "Action is not available or already used" },
-        { status: 409 }
-      )
-    }
+        const action = claimInboxDirectAction(id, parsed.messageId, parsed.actionId)
+        if (!action || !action.directAction) {
+          return NextResponse.json(
+            { error: "Action is not available or already used" },
+            { status: 409 }
+          )
+        }
 
-    const direct = action.directAction
-    const result = await dispatch(direct)
-    const target = describeTarget(direct)
+        const direct = action.directAction
+        const result = await dispatch(direct)
+        const target = describeTarget(direct)
 
-    const note: Message = {
-      id: `msg_${randomUUID()}`,
-      role: "assistant",
-      content: result.success
-        ? `${result.label}.`
-        : `Could not ${result.label.toLowerCase()}: ${result.error ?? "unknown error"}`,
-      status: result.success ? "ok" : "error",
-      timestamp: Date.now(),
-    }
-    appendInboxMessage(id, note)
+        const note: Message = {
+          id: `msg_${randomUUID()}`,
+          role: "assistant",
+          content: result.success
+            ? `${result.label}.`
+            : `Could not ${result.label.toLowerCase()}: ${result.error ?? "unknown error"}`,
+          status: result.success ? "ok" : "error",
+          timestamp: Date.now(),
+        }
+        appendInboxMessage(id, note)
 
-    logInboxDirectAction({
-      conversationId: id,
-      messageId: parsed.messageId,
-      actionId: parsed.actionId,
-      tool: direct.tool,
-      params: { [target.sourceKind === "gmail" ? "messageId" : "chatId"]: target.sourceTarget },
-      result: result.success ? "ok" : "error",
-      sourceKind: target.sourceKind,
-      sourceTarget: target.sourceTarget,
-      errorMessage: result.success ? null : result.error ?? null,
-    })
+        logInboxDirectAction({
+          conversationId: id,
+          messageId: parsed.messageId,
+          actionId: parsed.actionId,
+          tool: direct.tool,
+          params: { [target.sourceKind === "gmail" ? "messageId" : "chatId"]: target.sourceTarget },
+          result: result.success ? "ok" : "error",
+          sourceKind: target.sourceKind,
+          sourceTarget: target.sourceTarget,
+          errorMessage: result.success ? null : result.error ?? null,
+        })
 
-    return NextResponse.json({
-      item: getInboxConversation(id),
-      action: {
-        id: parsed.actionId,
-        label: result.label,
-        success: result.success,
-        error: result.success ? null : result.error ?? null,
-      },
-    })
-  } catch (error) {
-    console.error("Failed to execute inbox direct action", error)
-    return NextResponse.json(
-      { error: "Failed to execute inbox action" },
-      { status: 500 }
-    )
-  }
+        return NextResponse.json({
+          item: getInboxConversation(id),
+          action: {
+            id: parsed.actionId,
+            label: result.label,
+            success: result.success,
+            error: result.success ? null : result.error ?? null,
+          },
+        })
+      } catch (error) {
+        console.error("Failed to execute inbox direct action", error)
+        return NextResponse.json(
+          { error: "Failed to execute inbox action" },
+          { status: 500 }
+        )
+      }
+  })
 }

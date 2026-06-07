@@ -1,9 +1,10 @@
 /**
  * One-time (and repeatable) backfill of the semantic memory index.
  *
- * Embeds every memory source file (USER/MEMORY/MONITORS/PLAYBOOKS + the full
- * MEMORY_DAY history) that is new or whose content changed since the last run,
- * using the configured embedding model (Gemini Embedding 2 @ 768 by default).
+ * Embeds every memory source (USER/MEMORY/MONITORS/PLAYBOOKS + the full
+ * MEMORY_DAY history + prior conversation messages) that is new or whose
+ * content changed since the last run, using the configured embedding model
+ * (Gemini Embedding 2 @ 768 by default).
  * Safe to re-run: unchanged files are skipped via content-hash diffing.
  *
  * Requires a Google/Gemini API key in the environment or workspace .env.local.
@@ -18,7 +19,7 @@ async function main(): Promise<void> {
     await import("@/lib/memory/embeddings")
   const {
     syncMemoryIndex,
-    listMemorySourceFiles,
+    listMemorySources,
     getMemoryStatus,
     isRecallEnabled,
   } = await import("@/lib/memory/recall")
@@ -37,11 +38,11 @@ async function main(): Promise<void> {
     return
   }
 
-  const sources = listMemorySourceFiles()
+  const sources = listMemorySources()
   console.log(
-    `Model: ${getEmbeddingModel()} @ ${getEmbeddingDim()}d — ${sources.length} source file(s) on disk.`
+    `Model: ${getEmbeddingModel()} @ ${getEmbeddingDim()}d — ${sources.length} memory source(s).`
   )
-  console.log("Indexing (only new/changed files are embedded)…")
+  console.log("Indexing (only new/changed sources are embedded)…")
 
   const started = Date.now()
   const { indexed, removed, failed } = await syncMemoryIndex()

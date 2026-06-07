@@ -4,65 +4,68 @@ import { resolveRequestOrigin } from '@/lib/app-origin'
 import { completeGoogleCalendarOAuth } from '@/lib/integrations/google-calendar'
 import { completeGoogleDriveOAuth } from '@/lib/integrations/google-drive'
 import { getGoogleOAuthStateProvider } from '@/lib/integrations/google-oauth'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
-    const url = new URL(request.url)
-    const origin = resolveRequestOrigin(request)
-    const code = url.searchParams.get('code')
-    const state = url.searchParams.get('state')
-    const oauthError = url.searchParams.get('error')
-    const stateProvider = state ? getGoogleOAuthStateProvider(state) : null
-    const fallbackProvider = stateProvider === 'googleDrive' ? 'googleDrive' : 'googleCalendar'
-    const fallbackLabel = fallbackProvider === 'googleDrive' ? 'Google Drive' : 'Google Calendar'
+  return runWithRequestProfile(request, async () => {
+        const url = new URL(request.url)
+        const origin = resolveRequestOrigin(request)
+        const code = url.searchParams.get('code')
+        const state = url.searchParams.get('state')
+        const oauthError = url.searchParams.get('error')
+        const stateProvider = state ? getGoogleOAuthStateProvider(state) : null
+        const fallbackProvider = stateProvider === 'googleDrive' ? 'googleDrive' : 'googleCalendar'
+        const fallbackLabel = fallbackProvider === 'googleDrive' ? 'Google Drive' : 'Google Calendar'
 
-    if (oauthError) {
-        return htmlResponse(renderCallbackPage({
-            provider: fallbackProvider,
-            ok: false,
-            title: `${fallbackLabel} authorization was cancelled`,
-            message: url.searchParams.get('error_description') || oauthError,
-        }))
-    }
+        if (oauthError) {
+            return htmlResponse(renderCallbackPage({
+                provider: fallbackProvider,
+                ok: false,
+                title: `${fallbackLabel} authorization was cancelled`,
+                message: url.searchParams.get('error_description') || oauthError,
+            }))
+        }
 
-    if (!code || !state) {
-        return htmlResponse(renderCallbackPage({
-            provider: fallbackProvider,
-            ok: false,
-            title: `${fallbackLabel} authorization failed`,
-            message: 'Google did not return the expected authorization code and state.',
-        }))
-    }
+        if (!code || !state) {
+            return htmlResponse(renderCallbackPage({
+                provider: fallbackProvider,
+                ok: false,
+                title: `${fallbackLabel} authorization failed`,
+                message: 'Google did not return the expected authorization code and state.',
+            }))
+        }
 
-    const provider = stateProvider
-    if (provider !== 'googleCalendar' && provider !== 'googleDrive') {
-        return htmlResponse(renderCallbackPage({
-            provider: provider ?? 'google',
-            ok: false,
-            title: 'Google authorization failed',
-            message: 'OAuth state is missing or expired. Start Google login again.',
-        }))
-    }
+        const provider = stateProvider
+        if (provider !== 'googleCalendar' && provider !== 'googleDrive') {
+            return htmlResponse(renderCallbackPage({
+                provider: provider ?? 'google',
+                ok: false,
+                title: 'Google authorization failed',
+                message: 'OAuth state is missing or expired. Start Google login again.',
+            }))
+        }
 
-    try {
-        const result = provider === 'googleDrive'
-            ? await completeGoogleDriveOAuth({ origin, code, state })
-            : await completeGoogleCalendarOAuth({ origin, code, state })
-        const label = provider === 'googleDrive' ? 'Google Drive' : 'Google Calendar'
-        return htmlResponse(renderCallbackPage({
-            provider,
-            ok: true,
-            title: `${label} connected`,
-            message: result.accountEmail ? `Connected ${result.accountEmail}.` : `${label} is connected.`,
-        }))
-    } catch (err) {
-        const label = provider === 'googleDrive' ? 'Google Drive' : 'Google Calendar'
-        return htmlResponse(renderCallbackPage({
-            provider,
-            ok: false,
-            title: `${label} authorization failed`,
-            message: err instanceof Error ? err.message : `Could not complete ${label} OAuth.`,
-        }))
-    }
+        try {
+            const result = provider === 'googleDrive'
+                ? await completeGoogleDriveOAuth({ origin, code, state })
+                : await completeGoogleCalendarOAuth({ origin, code, state })
+            const label = provider === 'googleDrive' ? 'Google Drive' : 'Google Calendar'
+            return htmlResponse(renderCallbackPage({
+                provider,
+                ok: true,
+                title: `${label} connected`,
+                message: result.accountEmail ? `Connected ${result.accountEmail}.` : `${label} is connected.`,
+            }))
+        } catch (err) {
+            const label = provider === 'googleDrive' ? 'Google Drive' : 'Google Calendar'
+            return htmlResponse(renderCallbackPage({
+                provider,
+                ok: false,
+                title: `${label} authorization failed`,
+                message: err instanceof Error ? err.message : `Could not complete ${label} OAuth.`,
+            }))
+        }
+  })
 }
 
 function htmlResponse(html: string): NextResponse {

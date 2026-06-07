@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { listVersionsForIdentifier } from '@/lib/artifacts/store'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /**
  * GET /api/artifacts/identifier/:conversationId/:identifier
@@ -12,7 +13,9 @@ export async function GET(
     _request: Request,
     { params }: { params: Promise<{ conversationId: string; identifier: string }> }
 ) {
-    const { conversationId, identifier } = await params
-    const versions = listVersionsForIdentifier(conversationId, identifier)
-    return NextResponse.json({ versions })
+  return runWithRequestProfile(_request, async () => {
+        const { conversationId, identifier } = await params
+        const versions = listVersionsForIdentifier(conversationId, identifier)
+        return NextResponse.json({ versions })
+  })
 }

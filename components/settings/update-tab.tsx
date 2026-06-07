@@ -10,6 +10,7 @@ import {
   GitBranch,
   Loader2,
   RefreshCcw,
+  RotateCcw,
   RotateCw,
   Terminal as TerminalIcon,
   Trash2,
@@ -64,6 +65,18 @@ interface UpdateJob {
   logPath?: string
 }
 
+interface RollbackInfo {
+  available: boolean
+  image: string
+  imageId: string | null
+  version: string | null
+  commit: string | null
+  ref: string | null
+  savedAt: number | null
+  savedBeforeTarget: string | null
+  unavailableReason?: string
+}
+
 interface UpdateStatus {
   current: CurrentInstallInfo
   latest: LatestReleaseInfo | null
@@ -72,6 +85,7 @@ interface UpdateStatus {
   latestError: string | null
   activeRuns: ActiveRunInfo[]
   job: UpdateJob | null
+  rollback: RollbackInfo | null
   config: {
     repo: string
     idleGraceMs: number
@@ -141,6 +155,14 @@ function phaseLabel(phase: UpdatePhase | null | undefined) {
   if (phase === "completed") return "Completed"
   if (phase === "failed") return "Failed"
   return "Idle"
+}
+
+function rollbackLabel(rollback: RollbackInfo | null | undefined) {
+  if (!rollback) return "No cached build"
+  const version = rollback.version ? `v${rollback.version}` : null
+  const commit = rollback.commit ? rollback.commit.slice(0, 12) : null
+  if (version && commit) return `${version} (${commit})`
+  return version ?? commit ?? rollback.ref ?? rollback.image
 }
 
 function statusTone(status: UpdateStatus | null) {
@@ -264,6 +286,8 @@ export function UpdateTab() {
   const [resetMessage, setResetMessage] = React.useState<string | null>(null)
   const [backupBusy, setBackupBusy] = React.useState<"export" | "restore" | null>(null)
   const [backupMessage, setBackupMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
+  const [rollbackBusy, setRollbackBusy] = React.useState(false)
+  const [rollbackMessage, setRollbackMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
   const [cliBusy, setCliBusy] = React.useState<"update" | "restart" | null>(null)
   const [cliMessage, setCliMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
   const backupRestoreInputRef = React.useRef<HTMLInputElement | null>(null)
@@ -363,6 +387,28 @@ export function UpdateTab() {
       setCliMessage({ tone: "error", text: err instanceof Error ? err.message : "Restart failed." })
     } finally {
       setCliBusy(null)
+    }
+  }
+
+  const handleRollback = async () => {
+    if (!status?.rollback?.available) return
+    const target = rollbackLabel(status.rollback)
+    const ok = window.confirm(
+      `Rollback to the cached previous build (${target})? The container will be recreated without rebuilding.`
+    )
+    if (!ok) return
+
+    setRollbackBusy(true)
+    setRollbackMessage(null)
+    try {
+      const res = await fetch("/api/update/rollback", { method: "POST", cache: "no-store" })
+      const json = await res.json().catch(() => null) as { ok?: boolean; error?: string } | null
+      if (!res.ok || !json?.ok) throw new Error(json?.error || `Rollback failed (${res.status})`)
+      setRollbackMessage({ tone: "success", text: "Rollback started. The container is switching to the cached previous build." })
+    } catch (err) {
+      setRollbackMessage({ tone: "error", text: err instanceof Error ? err.message : "Rollback failed." })
+    } finally {
+      setRollbackBusy(false)
     }
   }
 
@@ -480,12 +526,13 @@ export function UpdateTab() {
   const tone = statusTone(status)
   const activeJob = status?.job && ACTIVE_PHASES.has(status.job.phase) ? status.job : null
   const updateDisabled = updating || Boolean(activeJob) || !status?.updateAvailable || status.current.dirty || !status.config.managedInstall
+  const rollbackDisabled = rollbackBusy || Boolean(activeJob) || !status?.rollback?.available
   const serviceLabel = status?.config.serviceManager === "docker" && status.config.dockerHostUpdater
     ? "Docker + host updater"
     : status?.config.serviceManager ?? "Manual"
 
   return (
-    <div className="flex flex-col gap-4">
+    <div className="flex min-w-0 flex-col gap-4">
       <FactoryResetModal
         open={resetModalOpen}
         value={resetConfirmText}
@@ -498,19 +545,19 @@ export function UpdateTab() {
         }}
         onConfirm={handleFactoryReset}
       />
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
+      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
+        <div className="min-w-0">
           <h2 className="text-[15px] font-semibold text-foreground/85">Updates</h2>
           <p className="mt-0.5 text-[12.5px] text-foreground/50">
             {status?.config.repo ?? "GitHub"} releases power managed app updates.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" onClick={handleCheck} disabled={checking || updating}>
+        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+          <Button className="flex-1 sm:flex-none" variant="outline" size="sm" onClick={handleCheck} disabled={checking || updating}>
             {checking ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
             Check
           </Button>
-          <Button size="sm" onClick={handleUpdate} disabled={updateDisabled}>
+          <Button className="flex-1 sm:flex-none" size="sm" onClick={handleUpdate} disabled={updateDisabled}>
             {updating ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
             Update
           </Button>
@@ -520,13 +567,13 @@ export function UpdateTab() {
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-[13px] text-destructive">
           <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-          <span>{error}</span>
+          <span className="min-w-0 break-words">{error}</span>
         </div>
       )}
 
       <Card className="rounded-xl">
-        <CardHeader className="flex-row items-start justify-between gap-3">
-          <div>
+        <CardHeader className="flex-col items-start gap-3 sm:flex-row sm:justify-between">
+          <div className="min-w-0">
             <CardTitle className="text-[15px]">Status</CardTitle>
             <p className="mt-1 text-[12.5px] text-foreground/55">
               Last checked {formatDate(status?.latestCheckedAt)}
@@ -553,14 +600,14 @@ export function UpdateTab() {
           {status?.current.dirty && (
             <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-300">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span>Local file changes block managed updates.</span>
+              <span className="min-w-0 break-words">Local file changes block managed updates.</span>
             </div>
           )}
 
           {status && !status.config.managedInstall && (
             <div className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-foreground/55">
               <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span>
+              <span className="min-w-0 break-words">
                 {status.config.serviceManager === "docker"
                   ? "Docker one-click updates need the installer host update bridge. Re-run the installer on the server or run `orchestrator update` there."
                   : "Managed installer service is required for one-click restart."}
@@ -569,15 +616,15 @@ export function UpdateTab() {
           )}
 
           {status?.latestError && (
-            <div className="rounded-xl border border-border/60 bg-muted/35 px-3 py-2.5 text-[12.5px] text-foreground/60">
+            <div className="min-w-0 break-words rounded-xl border border-border/60 bg-muted/35 px-3 py-2.5 text-[12.5px] text-foreground/60">
               {status.latestError}
             </div>
           )}
 
           {status?.job && (
-            <div className="rounded-xl border border-border/60 bg-muted/30 px-3 py-3">
+            <div className="min-w-0 rounded-xl border border-border/60 bg-muted/30 px-3 py-3">
               <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
+                <div className="flex min-w-0 items-center gap-2">
                   {ACTIVE_PHASES.has(status.job.phase) ? (
                     <Loader2 className="size-3.5 animate-spin text-primary" />
                   ) : status.job.phase === "failed" ? (
@@ -585,17 +632,17 @@ export function UpdateTab() {
                   ) : (
                     <CheckCircle2 className="size-3.5 text-emerald-600" />
                   )}
-                  <span className="text-[13px] font-medium text-foreground/80">
+                  <span className="min-w-0 break-words text-[13px] font-medium text-foreground/80">
                     {phaseLabel(status.job.phase)} {status.job.targetTag}
                   </span>
                 </div>
-                <span className="font-mono text-[11.5px] text-foreground/45">{status.job.id.slice(0, 8)}</span>
+                <span className="shrink-0 font-mono text-[11.5px] text-foreground/45">{status.job.id.slice(0, 8)}</span>
               </div>
               {status.job.waitReason && (
-                <p className="mt-2 text-[12.5px] text-foreground/55">{status.job.waitReason}</p>
+                <p className="mt-2 break-words text-[12.5px] text-foreground/55">{status.job.waitReason}</p>
               )}
               {status.job.error && (
-                <p className="mt-2 text-[12.5px] text-destructive">{status.job.error}</p>
+                <p className="mt-2 break-words text-[12.5px] text-destructive">{status.job.error}</p>
               )}
               {ACTIVE_PHASES.has(status.job.phase) &&
                 status.config.serviceManager === "docker" && (
@@ -607,51 +654,106 @@ export function UpdateTab() {
       </Card>
 
       {status?.config.serviceManager === "docker" && status.config.dockerHostUpdater && (
-        <Card className="rounded-xl">
-          <CardHeader className="flex-row items-start justify-between gap-3">
-            <div>
-              <CardTitle className="text-[15px]">CLI tools</CardTitle>
-              <p className="mt-1 text-[12.5px] text-foreground/55">
-                Claude Code and Codex live in a mounted volume, so app updates never refresh them.
-                Update them in place (this restarts the container), or restart the container on its own.
-              </p>
-            </div>
-            <TerminalIcon className="size-4 shrink-0 text-foreground/45" />
-          </CardHeader>
-          <CardContent className="gap-3">
-            <div className="flex flex-wrap items-center gap-2">
+        <div className="grid gap-4 lg:grid-cols-2">
+          <Card className="rounded-xl">
+            <CardHeader className="flex-col items-start gap-3 sm:flex-row sm:justify-between">
+              <div className="min-w-0">
+                <CardTitle className="text-[15px]">Rollback</CardTitle>
+                <p className="mt-1 text-[12.5px] text-foreground/55">
+                  One previous Docker image is kept ready so rollback can recreate the container without rebuilding.
+                </p>
+              </div>
+              <RotateCcw className="size-4 shrink-0 text-foreground/45" />
+            </CardHeader>
+            <CardContent className="gap-3">
+              <div className="rounded-xl border border-border/60 bg-background px-3 py-2.5">
+                <DetailRow label="Cached" value={rollbackLabel(status.rollback)} mono />
+                <DetailRow label="Saved" value={formatDate(status.rollback?.savedAt)} />
+                <DetailRow label="Before" value={status.rollback?.savedBeforeTarget ?? "Next update"} mono />
+              </div>
+              {status.rollback && !status.rollback.available && status.rollback.unavailableReason && (
+                <div className="min-w-0 break-words rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-300">
+                  {status.rollback.unavailableReason}
+                </div>
+              )}
+              {!status.rollback && (
+                <div className="min-w-0 break-words rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-foreground/55">
+                  No cached rollback build yet. The slot is created before the next Docker update.
+                </div>
+              )}
               <Button
-                size="sm"
-                onClick={handleCliUpdate}
-                disabled={cliBusy !== null || Boolean(activeJob)}
-              >
-                {cliBusy === "update" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-                Update CLIs
-              </Button>
-              <Button
+                className="w-full sm:w-auto"
                 variant="outline"
                 size="sm"
-                onClick={handleContainerRestart}
-                disabled={cliBusy !== null || Boolean(activeJob)}
+                onClick={handleRollback}
+                disabled={rollbackDisabled}
               >
-                {cliBusy === "restart" ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-                Restart container
+                {rollbackBusy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+                Rollback to cached build
               </Button>
-            </div>
-            {cliMessage && (
-              <div
-                className={cn(
-                  "rounded-xl border px-3 py-2.5 text-[12.5px]",
-                  cliMessage.tone === "success"
-                    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
-                    : "border-destructive/30 bg-destructive/5 text-destructive"
-                )}
-              >
-                {cliMessage.text}
+              {rollbackMessage && (
+                <div
+                  className={cn(
+                    "min-w-0 break-words rounded-xl border px-3 py-2.5 text-[12.5px]",
+                    rollbackMessage.tone === "success"
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+                      : "border-destructive/30 bg-destructive/5 text-destructive"
+                  )}
+                >
+                  {rollbackMessage.text}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          <Card className="rounded-xl">
+            <CardHeader className="flex-col items-start gap-3 sm:flex-row sm:justify-between">
+              <div className="min-w-0">
+                <CardTitle className="text-[15px]">CLI tools</CardTitle>
+                <p className="mt-1 text-[12.5px] text-foreground/55">
+                  Claude Code and Codex live in a mounted volume, so app updates never refresh them.
+                  Update them in place (this restarts the container), or restart the container on its own.
+                </p>
               </div>
-            )}
-          </CardContent>
-        </Card>
+              <TerminalIcon className="size-4 shrink-0 text-foreground/45" />
+            </CardHeader>
+            <CardContent className="gap-3">
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  className="flex-1 sm:flex-none"
+                  size="sm"
+                  onClick={handleCliUpdate}
+                  disabled={cliBusy !== null || Boolean(activeJob)}
+                >
+                  {cliBusy === "update" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                  Update CLIs
+                </Button>
+                <Button
+                  className="flex-1 sm:flex-none"
+                  variant="outline"
+                  size="sm"
+                  onClick={handleContainerRestart}
+                  disabled={cliBusy !== null || Boolean(activeJob)}
+                >
+                  {cliBusy === "restart" ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
+                  Restart container
+                </Button>
+              </div>
+              {cliMessage && (
+                <div
+                  className={cn(
+                    "min-w-0 break-words rounded-xl border px-3 py-2.5 text-[12.5px]",
+                    cliMessage.tone === "success"
+                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+                      : "border-destructive/30 bg-destructive/5 text-destructive"
+                  )}
+                >
+                  {cliMessage.text}
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        </div>
       )}
 
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
@@ -713,7 +815,7 @@ export function UpdateTab() {
       ) : null}
 
       {resetMessage && (
-        <div className="rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-700 dark:text-emerald-400">
+        <div className="min-w-0 break-words rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-700 dark:text-emerald-400">
           {resetMessage}
         </div>
       )}
@@ -729,7 +831,7 @@ export function UpdateTab() {
         </div>
 
         <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <div className="rounded-xl border border-border/70 bg-card px-3 py-3">
+          <div className="min-w-0 rounded-xl border border-border/70 bg-card px-3 py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <h4 className="text-[13px] font-medium text-foreground/75">Backup &amp; restore</h4>
@@ -737,8 +839,9 @@ export function UpdateTab() {
                   Download a full backup (database, workspace, uploads, connected-account tokens) as a .tar.gz, or restore one. WhatsApp and browser sessions are excluded — re-link them after a restore. Restoring the database takes effect after the next restart.
                 </p>
               </div>
-              <div className="flex shrink-0 items-center gap-2">
+              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
                 <Button
+                  className="flex-1 sm:flex-none"
                   variant="outline"
                   size="sm"
                   onClick={handleBackupExport}
@@ -749,6 +852,7 @@ export function UpdateTab() {
                   Backup
                 </Button>
                 <Button
+                  className="flex-1 sm:flex-none"
                   variant="outline"
                   size="sm"
                   onClick={() => backupRestoreInputRef.current?.click()}
@@ -770,7 +874,7 @@ export function UpdateTab() {
             {backupMessage && (
               <p
                 className={cn(
-                  "mt-2 text-[12px]",
+                  "mt-2 min-w-0 break-words text-[12px]",
                   backupMessage.tone === "success" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
                 )}
               >
@@ -779,7 +883,7 @@ export function UpdateTab() {
             )}
           </div>
 
-          <div className="rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-3">
+          <div className="min-w-0 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-3">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div className="min-w-0">
                 <h4 className="text-[13px] font-medium text-destructive">Factory reset</h4>
@@ -792,7 +896,7 @@ export function UpdateTab() {
                 size="sm"
                 onClick={openFactoryReset}
                 disabled={resetting}
-                className="border-destructive/25 bg-background/70 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                className="w-full border-destructive/25 bg-background/70 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
               >
                 {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
                 Open reset
@@ -834,7 +938,7 @@ function filenameFromContentDisposition(value: string | null): string | null {
 
 function ReleaseNotesMarkdown({ content }: { content: string }) {
   return (
-    <div className="max-h-56 overflow-auto rounded-xl border border-border/60 bg-muted/20 px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground/70">
+    <div className="max-h-56 min-w-0 overflow-auto rounded-xl border border-border/60 bg-muted/20 px-3.5 py-3 text-[12.5px] leading-relaxed text-foreground/70">
       <ReactMarkdown
         remarkPlugins={[remarkGfm]}
         components={{
@@ -846,17 +950,17 @@ function ReleaseNotesMarkdown({ content }: { content: string }) {
           ol: ({ children }) => <ol className="my-2 list-decimal space-y-1 pl-5">{children}</ol>,
           li: ({ children }) => <li className="pl-0.5">{children}</li>,
           a: ({ href, children }) => (
-            <a href={href} target="_blank" rel="noreferrer" className="text-primary underline underline-offset-2">
+            <a href={href} target="_blank" rel="noreferrer" className="break-words text-primary underline underline-offset-2">
               {children}
             </a>
           ),
           code: ({ children }) => (
-            <code className="rounded bg-background px-1.5 py-0.5 font-mono text-[11.5px] text-foreground/80">
+            <code className="break-all rounded bg-background px-1.5 py-0.5 font-mono text-[11.5px] text-foreground/80">
               {children}
             </code>
           ),
           pre: ({ children }) => (
-            <pre className="my-2 overflow-auto rounded-lg border border-border/60 bg-background p-2.5 text-[11.5px]">
+            <pre className="my-2 max-w-full overflow-auto rounded-lg border border-border/60 bg-background p-2.5 text-[11.5px]">
               {children}
             </pre>
           ),
@@ -1018,7 +1122,7 @@ function StatusBadge({ tone, status }: { tone: string; status: UpdateStatus | nu
   return (
     <span
       className={cn(
-        "inline-flex h-7 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium",
+        "inline-flex h-7 max-w-full shrink-0 items-center gap-1.5 rounded-lg border px-2.5 text-[12px] font-medium",
         tone === "ok" && "border-emerald-500/25 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400",
         tone === "available" && "border-primary/25 bg-primary/10 text-primary",
         tone === "busy" && "border-blue-500/25 bg-blue-500/10 text-blue-700 dark:text-blue-300",
@@ -1046,10 +1150,10 @@ function InfoTile({
   spin?: boolean
 }) {
   return (
-    <div className="rounded-xl border border-border/60 bg-background px-3 py-3">
-      <div className="flex items-center gap-2 text-[12px] text-foreground/45">
-        <Icon className={cn("size-3.5", spin && "animate-spin")} />
-        {label}
+    <div className="min-w-0 rounded-xl border border-border/60 bg-background px-3 py-3">
+      <div className="flex min-w-0 items-center gap-2 text-[12px] text-foreground/45">
+        <Icon className={cn("size-3.5 shrink-0", spin && "animate-spin")} />
+        <span className="min-w-0 truncate">{label}</span>
       </div>
       <div className="mt-2 truncate font-mono text-[17px] font-semibold text-foreground/85">{value}</div>
     </div>
@@ -1058,9 +1162,9 @@ function InfoTile({
 
 function DetailRow({ label, value, mono = false }: { label: string; value: string; mono?: boolean }) {
   return (
-    <div className="flex items-center justify-between gap-3 border-b border-border/50 py-2 last:border-b-0">
-      <span className="text-[12.5px] text-foreground/45">{label}</span>
-      <span className={cn("truncate text-right text-[12.5px] text-foreground/75", mono && "font-mono")}>{value}</span>
+    <div className="flex min-w-0 items-center justify-between gap-3 border-b border-border/50 py-2 last:border-b-0">
+      <span className="shrink-0 text-[12.5px] text-foreground/45">{label}</span>
+      <span className={cn("min-w-0 truncate text-right text-[12.5px] text-foreground/75", mono && "font-mono")}>{value}</span>
     </div>
   )
 }

@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server'
 
 import { readSessionLog } from '@/lib/workout/storage'
 import { formatSessionMarkdown } from '@/lib/workout/save-session'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /**
  * GET /api/workouts/sessions/:slug
@@ -14,16 +15,18 @@ export async function GET(
     _request: Request,
     { params }: { params: Promise<{ slug: string }> },
 ) {
-    const { slug } = await params
-    if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug)) {
-        return NextResponse.json({ error: 'Invalid slug' }, { status: 400 })
-    }
-    const log = readSessionLog(slug)
-    if (!log) {
-        return NextResponse.json({ error: 'Session not found' }, { status: 404 })
-    }
-    return NextResponse.json({
-        log,
-        markdown: formatSessionMarkdown(log),
-    })
+  return runWithRequestProfile(_request, async () => {
+        const { slug } = await params
+        if (!/^[a-z0-9][a-z0-9_-]*$/.test(slug)) {
+            return NextResponse.json({ error: 'Invalid slug' }, { status: 400 })
+        }
+        const log = readSessionLog(slug)
+        if (!log) {
+            return NextResponse.json({ error: 'Session not found' }, { status: 404 })
+        }
+        return NextResponse.json({
+            log,
+            markdown: formatSessionMarkdown(log),
+        })
+  })
 }

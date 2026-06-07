@@ -2,7 +2,8 @@ import fs from "fs"
 import path from "path"
 import readline from "readline"
 
-import { getConfig, WORKSPACE_DIR } from "@/lib/config"
+import { getConfig } from "@/lib/config"
+import { activeRuntimePaths } from "@/lib/runtime-paths"
 import { getMicroscript } from "@/lib/microscripts/store"
 import { getScheduledTask } from "@/lib/scheduling/store"
 import type { LocationIntelligenceSettings } from "@/lib/config"
@@ -1145,8 +1146,8 @@ function readDailyTaskStatus(id: string): LocationDailyTaskStatus {
 }
 
 function safeWorkspaceJoin(relativePath: string): string | null {
-  const resolved = path.resolve(WORKSPACE_DIR, relativePath)
-  const workspace = path.resolve(WORKSPACE_DIR)
+  const workspace = path.resolve(activeRuntimePaths().workspaceDir)
+  const resolved = path.resolve(workspace, relativePath)
   if (
     resolved !== workspace &&
     !resolved.startsWith(`${workspace}${path.sep}`)

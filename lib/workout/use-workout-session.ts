@@ -279,6 +279,8 @@ function finishRest(
 export interface WorkoutSessionApi {
     /** Current snapshot of the session. Re-renders on every change. */
     session: WorkoutSessionState
+    /** True after browser storage has been checked for this session. */
+    isRestored: boolean
     /** Original artifact plan plus session-local exercise additions. */
     workout: WorkoutArtifact
     /** Whether the user has tapped Start. */
@@ -306,10 +308,10 @@ export interface WorkoutSessionApi {
     cancelActiveSet: () => void
     /** First not-done/not-skipped planned set in workout order. */
     nextSet?: WorkoutSetRef
+    /** All not-done/not-skipped planned sets in workout order. */
+    remainingSets: WorkoutSetRef[]
     /** True when the given set is the next set in the workout order. */
     isNextSet: (exerciseId: string, setIndex: number) => boolean
-    /** Sets that would be skipped if the user jumps from nextSet to target. */
-    getSkippedSetsBefore: (exerciseId: string, setIndex: number) => WorkoutSetRef[]
     /** Mark one or more sets skipped, with an optional shared reason. */
     skipSet: (exerciseId: string, setIndex: number, reason?: string) => void
     skipSets: (sets: readonly WorkoutSetRef[], reason?: string) => void
@@ -349,6 +351,19 @@ function findNextSet(order: readonly WorkoutSetRef[], state: WorkoutSessionState
     return order.find((set) => !isSetAdvanced(state.logsByExerciseId[set.exerciseId]?.sets[set.setIndex]))
 }
 
+function findRemainingSets(order: readonly WorkoutSetRef[], state: WorkoutSessionState): WorkoutSetRef[] {
+    return order.filter((set) => !isSetAdvanced(state.logsByExerciseId[set.exerciseId]?.sets[set.setIndex]))
+}
+
+function persistSessionState(sessionId: string, session: WorkoutSessionState): void {
+    if (typeof window === 'undefined') return
+    try {
+        window.localStorage.setItem(storageKey(sessionId), JSON.stringify(session))
+    } catch {
+        /* quota / privacy mode — fail silently */
+    }
+}
+
 function collectExerciseIds(workout: WorkoutArtifact, addedGroups: readonly ExerciseGroup[] | undefined): Set<string> {
     const ids = new Set<string>()
     for (const group of workout.groups) {
@@ -375,34 +390,61 @@ export function useWorkoutSession(
     sessionId: string,
     workout: WorkoutArtifact,
 ): WorkoutSessionApi {
-    const [session, setSession] = React.useState<WorkoutSessionState>(() => readPersistedState(sessionId))
+    const [session, setSession] = React.useState<WorkoutSessionState>(() => EMPTY_STATE(sessionId))
+    const [restoredSessionId, setRestoredSessionId] = React.useState<string | null>(null)
+    const isRestored = restoredSessionId === sessionId
+    const latestSessionRef = React.useRef(session)
     const effectiveWorkout = React.useMemo(
         () => buildEffectiveWorkout(workout, { addedGroups: session.addedGroups }),
         [workout, session.addedGroups],
     )
     const setOrder = React.useMemo(() => buildSetOrder(effectiveWorkout), [effectiveWorkout])
 
+    React.useEffect(() => {
+        latestSessionRef.current = session
+    }, [session])
+
+    React.useEffect(() => {
+        setRestoredSessionId(null)
+        const restored = readPersistedState(sessionId)
+        latestSessionRef.current = restored
+        setSession(restored)
+        setRestoredSessionId(sessionId)
+    }, [sessionId])
+
     // Persist on change with debouncing. We coalesce rapid mutations so a
     // burst of "check, check, check" only writes once.
     const saveTimer = React.useRef<number | null>(null)
     React.useEffect(() => {
         if (typeof window === 'undefined') return
+        if (!isRestored) return
         if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
         saveTimer.current = window.setTimeout(() => {
-            try {
-                window.localStorage.setItem(storageKey(sessionId), JSON.stringify(session))
-            } catch {
-                /* quota / privacy mode — fail silently */
-            }
+            persistSessionState(sessionId, latestSessionRef.current)
         }, 250)
         return () => {
             if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
         }
-    }, [session, sessionId])
+    }, [session, sessionId, isRestored])
+
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return
+        if (!isRestored) return
+        const flush = () => persistSessionState(sessionId, latestSessionRef.current)
+        window.addEventListener('pagehide', flush)
+        window.addEventListener('beforeunload', flush)
+        return () => {
+            if (saveTimer.current !== null) window.clearTimeout(saveTimer.current)
+            flush()
+            window.removeEventListener('pagehide', flush)
+            window.removeEventListener('beforeunload', flush)
+        }
+    }, [sessionId, isRestored])
 
     const isActive = !!session.startedAt && !session.completedAt
     const isFinished = !!session.completedAt
-    const nextSet = React.useMemo(() => findNextSet(setOrder, session), [setOrder, session])
+    const remainingSets = React.useMemo(() => findRemainingSets(setOrder, session), [setOrder, session])
+    const nextSet = React.useMemo(() => remainingSets[0] ?? findNextSet(setOrder, session), [remainingSets, setOrder, session])
 
     const start = React.useCallback(() => {
         setSession((s) => (s.startedAt ? s : { ...s, startedAt: new Date().toISOString() }))
@@ -546,19 +588,6 @@ export function useWorkoutSession(
     const isNextSet = React.useCallback<WorkoutSessionApi['isNextSet']>(
         (exerciseId, setIndex) => nextSet?.exerciseId === exerciseId && nextSet.setIndex === setIndex,
         [nextSet],
-    )
-
-    const getSkippedSetsBefore = React.useCallback<WorkoutSessionApi['getSkippedSetsBefore']>(
-        (exerciseId, setIndex) => {
-            if (!nextSet) return []
-            const nextIndex = setOrder.findIndex((set) => set.exerciseId === nextSet.exerciseId && set.setIndex === nextSet.setIndex)
-            const targetIndex = setOrder.findIndex((set) => set.exerciseId === exerciseId && set.setIndex === setIndex)
-            if (nextIndex < 0 || targetIndex < 0 || targetIndex <= nextIndex) return []
-            return setOrder
-                .slice(nextIndex, targetIndex)
-                .filter((set) => !isSetAdvanced(session.logsByExerciseId[set.exerciseId]?.sets[set.setIndex]))
-        },
-        [nextSet, setOrder, session.logsByExerciseId],
     )
 
     const skipSets = React.useCallback<WorkoutSessionApi['skipSets']>((setsToSkip, reason) => {
@@ -750,6 +779,7 @@ export function useWorkoutSession(
 
     return {
         session,
+        isRestored,
         workout: effectiveWorkout,
         isActive,
         isFinished,
@@ -762,8 +792,8 @@ export function useWorkoutSession(
         finishActiveSet,
         cancelActiveSet,
         nextSet,
+        remainingSets,
         isNextSet,
-        getSkippedSetsBefore,
         skipSet,
         skipSets,
         setSkipped,

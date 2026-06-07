@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 import { listArtifactsForConversation, listLatestArtifactsForConversation } from '@/lib/artifacts/store'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /**
  * GET /api/artifacts/conversation/:conversationId
@@ -14,13 +15,15 @@ export async function GET(
     request: Request,
     { params }: { params: Promise<{ conversationId: string }> }
 ) {
-    const { conversationId } = await params
-    const url = new URL(request.url)
-    const onlyLatest = url.searchParams.get('latest') === '1'
+  return runWithRequestProfile(request, async () => {
+        const { conversationId } = await params
+        const url = new URL(request.url)
+        const onlyLatest = url.searchParams.get('latest') === '1'
 
-    const rows = onlyLatest
-        ? listLatestArtifactsForConversation(conversationId)
-        : listArtifactsForConversation(conversationId)
+        const rows = onlyLatest
+            ? listLatestArtifactsForConversation(conversationId)
+            : listArtifactsForConversation(conversationId)
 
-    return NextResponse.json({ artifacts: rows })
+        return NextResponse.json({ artifacts: rows })
+  })
 }

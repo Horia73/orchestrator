@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
-import { WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import type { MapCoordinate } from '@/lib/maps/schema'
 
 export interface UserMapLocation {
@@ -10,7 +10,9 @@ export interface UserMapLocation {
     fallbackReason?: string
 }
 
-const USER_FILE_PATH = path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, 'USER.md')
+function userFilePath(): string {
+    return path.join(/* turbopackIgnore: true */ activeRuntimePaths().workspaceDir, 'USER.md')
+}
 
 const KNOWN_LOCATION_COORDS: Array<{ match: RegExp; label: string; position: MapCoordinate }> = [
     { match: /\bcluj(?:-|\s)?napoca\b|\bcluj\b/i, label: 'Cluj-Napoca', position: [23.5894, 46.7712] },
@@ -37,7 +39,7 @@ export function getUserMapLocation(): UserMapLocation {
 
 function readUserLocation(): string | null {
     try {
-        const raw = fs.readFileSync(/* turbopackIgnore: true */ USER_FILE_PATH, 'utf8')
+        const raw = fs.readFileSync(/* turbopackIgnore: true */ userFilePath(), 'utf8')
         const match = raw.match(/^\s*-\s*Location:\s*(.+?)\s*$/im)
         return match?.[1]?.trim() || null
     } catch {

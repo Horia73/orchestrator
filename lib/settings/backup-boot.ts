@@ -17,7 +17,6 @@ export const PENDING_RESTORE_DIR = path.join(/* turbopackIgnore: true */ ORCHEST
 
 const PENDING_DB = path.join(/* turbopackIgnore: true */ PENDING_RESTORE_DIR, 'data.db')
 const APPLY_MARKER = path.join(/* turbopackIgnore: true */ PENDING_RESTORE_DIR, 'APPLY')
-const LIVE_DB = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, 'data.db')
 
 /**
  * If a restore staged a new database, swap it in atomically. Returns true if a
@@ -27,44 +26,101 @@ const LIVE_DB = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, 'd
 export function applyPendingDbRestore(): boolean {
     try {
         if (!fs.existsSync(/* turbopackIgnore: true */ APPLY_MARKER)) return false
-        if (!fs.existsSync(/* turbopackIgnore: true */ PENDING_DB)) {
+        const pendingDbs = listPendingDatabaseFiles()
+        if (pendingDbs.length === 0) {
             // Marker without a payload: clear it so we don't loop on every boot.
             fs.rmSync(/* turbopackIgnore: true */ PENDING_RESTORE_DIR, { recursive: true, force: true })
             return false
         }
 
-        // Write the restored copy to a temp sibling first, then rename — an
-        // atomic swap on the same filesystem so a crash mid-apply never leaves a
-        // half-written data.db in place.
-        const tmp = LIVE_DB + '.restoring'
-        fs.copyFileSync(/* turbopackIgnore: true */ PENDING_DB, tmp)
-
-        // Keep a one-shot copy of the database being replaced, for manual
-        // recovery if the restored file turns out to be unwanted.
-        if (fs.existsSync(/* turbopackIgnore: true */ LIVE_DB)) {
-            try {
-                fs.copyFileSync(/* turbopackIgnore: true */ LIVE_DB, LIVE_DB + '.pre-restore')
-            } catch {
-                // Best-effort safety copy only.
-            }
+        for (const pending of pendingDbs) {
+            applyPendingDatabaseFile(pending)
         }
-
-        // Drop stale WAL/SHM so SQLite does not replay the old log over the
-        // freshly restored database.
-        for (const suffix of ['-wal', '-shm']) {
-            try {
-                fs.rmSync(/* turbopackIgnore: true */ LIVE_DB + suffix, { force: true })
-            } catch {
-                // Ignore — absent sidecar files are fine.
-            }
-        }
-
-        fs.renameSync(/* turbopackIgnore: true */ tmp, LIVE_DB)
         fs.rmSync(/* turbopackIgnore: true */ PENDING_RESTORE_DIR, { recursive: true, force: true })
-        console.log('[backup] applied pending database restore')
+        console.log(`[backup] applied pending database restore (${pendingDbs.length} database file(s))`)
         return true
     } catch (err) {
         console.error('[backup] failed to apply pending database restore', err)
         return false
     }
+}
+
+function listPendingDatabaseFiles(): Array<{ pendingPath: string; relativePath: string }> {
+    const out: Array<{ pendingPath: string; relativePath: string }> = []
+    if (fs.existsSync(/* turbopackIgnore: true */ PENDING_DB)) {
+        out.push({ pendingPath: PENDING_DB, relativePath: 'data.db' })
+    }
+    const stack: string[] = [PENDING_RESTORE_DIR]
+    while (stack.length > 0) {
+        const dir = stack.pop() as string
+        let names: string[]
+        try {
+            names = fs.readdirSync(/* turbopackIgnore: true */ dir)
+        } catch {
+            continue
+        }
+        for (const name of names) {
+            if (name === 'APPLY') continue
+            const abs = path.join(/* turbopackIgnore: true */ dir, name)
+            let stat: fs.Stats
+            try {
+                stat = fs.lstatSync(/* turbopackIgnore: true */ abs)
+            } catch {
+                continue
+            }
+            if (stat.isDirectory()) {
+                stack.push(abs)
+                continue
+            }
+            if (!stat.isFile()) continue
+            const relativePath = path.relative(PENDING_RESTORE_DIR, abs).split(path.sep).join('/')
+            if (!isDatabaseRelativePath(relativePath)) continue
+            if (relativePath === 'data.db' && abs === PENDING_DB) continue
+            out.push({ pendingPath: abs, relativePath })
+        }
+    }
+    return out
+}
+
+function applyPendingDatabaseFile(input: { pendingPath: string; relativePath: string }): void {
+    const livePath = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, input.relativePath)
+    if (!withinStateDir(livePath)) {
+        throw new Error(`Pending restore database escapes state dir: ${input.relativePath}`)
+    }
+    fs.mkdirSync(/* turbopackIgnore: true */ path.dirname(livePath), { recursive: true })
+
+    const tmp = livePath + '.restoring'
+    fs.copyFileSync(/* turbopackIgnore: true */ input.pendingPath, tmp)
+
+    if (fs.existsSync(/* turbopackIgnore: true */ livePath)) {
+        try {
+            fs.copyFileSync(/* turbopackIgnore: true */ livePath, livePath + '.pre-restore')
+        } catch {
+            // Best-effort safety copy only.
+        }
+    }
+
+    for (const suffix of ['-wal', '-shm']) {
+        try {
+            fs.rmSync(/* turbopackIgnore: true */ livePath + suffix, { force: true })
+        } catch {
+            // Ignore — absent sidecar files are fine.
+        }
+    }
+
+    fs.renameSync(/* turbopackIgnore: true */ tmp, livePath)
+}
+
+function isDatabaseRelativePath(relativePath: string): boolean {
+    return (
+        relativePath === 'data.db' ||
+        relativePath === 'control.db' ||
+        /^profiles\/[^/]+\/data\.db$/.test(relativePath)
+    )
+}
+
+function withinStateDir(target: string): boolean {
+    const resolvedRoot = path.resolve(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR)
+    const resolvedTarget = path.resolve(/* turbopackIgnore: true */ target)
+    return resolvedTarget === resolvedRoot || resolvedTarget.startsWith(resolvedRoot + path.sep)
 }

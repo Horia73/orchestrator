@@ -3,6 +3,7 @@ import { NextResponse } from 'next/server'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { getEnvValue } from '@/lib/config'
 import { readGoogleMapsApiKey } from '@/lib/maps/google-session'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 const NO_STORE = { 'Cache-Control': 'no-store' }
 
@@ -21,33 +22,35 @@ const NO_STORE = { 'Cache-Control': 'no-store' }
 // ---------------------------------------------------------------------------
 
 export async function GET(request: Request) {
-    const guard = guardSensitiveRequest(request)
-    if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
 
-    const key = readGoogleMapsApiKey()
-    if (!key) {
-        return NextResponse.json(
-            {
-                configured: false,
-                error: 'GOOGLE_MAPS_API_KEY is not set. See INTEGRATIONS/maps.md for the GCP setup steps.',
+        const key = readGoogleMapsApiKey()
+        if (!key) {
+            return NextResponse.json(
+                {
+                    configured: false,
+                    error: 'GOOGLE_MAPS_API_KEY is not set. See INTEGRATIONS/maps.md for the GCP setup steps.',
+                },
+                { status: 503, headers: NO_STORE },
+            )
+        }
+        const customMapId = getEnvValue('GOOGLE_MAPS_MAP_ID')
+        return NextResponse.json({
+            configured: true,
+            key,
+            // Google's universal demo mapId — works without per-user Cloud
+            // Console setup and is enough for Advanced Markers + styles.
+            // The user can override later by setting GOOGLE_MAPS_MAP_ID in
+            // their env to a custom mapId from their GCP project with
+            // bespoke styling.
+            mapId: customMapId || 'DEMO_MAP_ID',
+            mapIdSource: customMapId ? 'env' : 'demo',
+            earth3d: {
+                readyToTry: true,
+                channel: 'beta',
             },
-            { status: 503, headers: NO_STORE },
-        )
-    }
-    const customMapId = getEnvValue('GOOGLE_MAPS_MAP_ID')
-    return NextResponse.json({
-        configured: true,
-        key,
-        // Google's universal demo mapId — works without per-user Cloud
-        // Console setup and is enough for Advanced Markers + styles.
-        // The user can override later by setting GOOGLE_MAPS_MAP_ID in
-        // their env to a custom mapId from their GCP project with
-        // bespoke styling.
-        mapId: customMapId || 'DEMO_MAP_ID',
-        mapIdSource: customMapId ? 'env' : 'demo',
-        earth3d: {
-            readyToTry: true,
-            channel: 'beta',
-        },
-    }, { headers: NO_STORE })
+        }, { headers: NO_STORE })
+  })
 }

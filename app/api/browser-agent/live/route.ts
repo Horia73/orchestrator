@@ -4,66 +4,71 @@ import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import type { BrowserLiveViewClientState } from '@/lib/ai/providers/browser-session-manager'
 import { getEnvValue } from '@/lib/config'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
-    const guard = guardSensitiveRequest(request)
-    if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
 
-    const sessionId = sessionIdFromRequest(request)
-    const state = await getBrowserSessionManager().getLiveViewState(sessionId)
-    return NextResponse.json(toClientState(request, state), {
-        headers: { 'Cache-Control': 'no-store' },
-    })
+        const sessionId = sessionIdFromRequest(request)
+        const state = await getBrowserSessionManager().getLiveViewState(sessionId)
+        return NextResponse.json(toClientState(request, state), {
+            headers: { 'Cache-Control': 'no-store' },
+        })
+  })
 }
 
 export async function POST(request: Request) {
-    const guard = guardSensitiveRequest(request)
-    if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
 
-    let body: unknown
-    try {
-        body = await request.json()
-    } catch {
-        return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
-    }
-
-    const action = (body as Record<string, unknown>)?.action
-    const sessionId = sessionIdFromBody(body)
-    const manager = getBrowserSessionManager()
-
-    if (action === 'take_control' || action === 'release_control') {
-        const state = await manager.setHumanControl(action === 'take_control', sessionId)
-        return NextResponse.json(toClientState(request, state), {
-            headers: { 'Cache-Control': 'no-store' },
-        })
-    }
-
-    if (action === 'paste_text') {
-        const text = (body as Record<string, unknown>)?.text
-        if (typeof text !== 'string') {
-            return NextResponse.json({ error: 'text must be a string' }, { status: 400 })
+        let body: unknown
+        try {
+            body = await request.json()
+        } catch {
+            return NextResponse.json({ error: 'Invalid JSON body' }, { status: 400 })
         }
-        if (text.length > 200_000) {
-            return NextResponse.json({ error: 'text is too large' }, { status: 413 })
-        }
-        const state = await manager.pasteText(text, sessionId)
-        return NextResponse.json(toClientState(request, state), {
-            headers: { 'Cache-Control': 'no-store' },
-        })
-    }
 
-    if (action === 'press_key') {
-        const key = (body as Record<string, unknown>)?.key
-        if (!isSafeBrowserKey(key)) {
-            return NextResponse.json({ error: 'key is invalid' }, { status: 400 })
-        }
-        const state = await manager.pressKey(key, sessionId)
-        return NextResponse.json(toClientState(request, state), {
-            headers: { 'Cache-Control': 'no-store' },
-        })
-    }
+        const action = (body as Record<string, unknown>)?.action
+        const sessionId = sessionIdFromBody(body)
+        const manager = getBrowserSessionManager()
 
-    return NextResponse.json({ error: 'unsupported browser live action' }, { status: 400 })
+        if (action === 'take_control' || action === 'release_control') {
+            const state = await manager.setHumanControl(action === 'take_control', sessionId)
+            return NextResponse.json(toClientState(request, state), {
+                headers: { 'Cache-Control': 'no-store' },
+            })
+        }
+
+        if (action === 'paste_text') {
+            const text = (body as Record<string, unknown>)?.text
+            if (typeof text !== 'string') {
+                return NextResponse.json({ error: 'text must be a string' }, { status: 400 })
+            }
+            if (text.length > 200_000) {
+                return NextResponse.json({ error: 'text is too large' }, { status: 413 })
+            }
+            const state = await manager.pasteText(text, sessionId)
+            return NextResponse.json(toClientState(request, state), {
+                headers: { 'Cache-Control': 'no-store' },
+            })
+        }
+
+        if (action === 'press_key') {
+            const key = (body as Record<string, unknown>)?.key
+            if (!isSafeBrowserKey(key)) {
+                return NextResponse.json({ error: 'key is invalid' }, { status: 400 })
+            }
+            const state = await manager.pressKey(key, sessionId)
+            return NextResponse.json(toClientState(request, state), {
+                headers: { 'Cache-Control': 'no-store' },
+            })
+        }
+
+        return NextResponse.json({ error: 'unsupported browser live action' }, { status: 400 })
+  })
 }
 
 function isSafeBrowserKey(value: unknown): value is string {

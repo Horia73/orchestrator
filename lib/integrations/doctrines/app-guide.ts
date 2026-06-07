@@ -21,10 +21,17 @@ Authoritative reference for answering the user's questions ABOUT Orchestrator it
 
 <product_model>
 - Orchestrator is a personal, local-first AI operating layer: one chat-driven agent (you) that does work directly and delegates the rest to specialist sub-agents, with persistent memory, integrations, schedules, and monitors.
-- Local-first: OAuth tokens, WhatsApp/browser sessions, .env secrets, the SQLite database, and all memory live on disk on the machine the app runs on. Disconnect / factory-reset language is always "removed locally", not "revoked at the provider".
+- Local-first and profile-scoped: OAuth tokens, WhatsApp/browser sessions, .env secrets, SQLite data, uploads, artifacts, browser-agent state, CLI runtime homes, and memory live on disk on the machine the app runs on. Each profile has its own isolated workspace/private state; the built-in admin profile is Horia. Disconnect / factory-reset language is always "removed locally", not "revoked at the provider".
 - Surfacing is silent by default across schedules and monitors: routine runs are logged but only reach the Inbox (and push) when the agent decides something is worth the user's attention, or on error.
 - The agent that powers chat is the "orchestrator"; some surfaces run alias agents on the same brain so the user can route them to a different/cheaper model in Settings → Models (e.g. the Inbox agent, the Smart Monitor wake agent, the Conversation Namer).
 </product_model>
+
+<profiles>
+- Profile picker: a device with no selected profile opens "/profiles" before the app. It shows Netflix-style profile tiles plus an Add profile tile. Profiles have no password by default; locked profiles ask for the profile password.
+- Sidebar profile menu: the sidebar footer shows the active profile. Clicking it opens Switch profile and Sign out. Switching returns to the profile picker; signing out clears only that device's profile session.
+- Admin vs member: Horia/admin sees Settings, Logs, Usage, Updates, model/config controls, profile management, and app-wide data management. Member profiles do not see Settings and direct Settings/admin API calls return 403.
+- Isolation: each profile gets its own conversations, inbox, schedules, monitors, watchlist, maps/places, uploads, artifacts, memory files, .env.local, integration tokens, WhatsApp session, browser-agent Chromium profile, Codex/Claude runtime home, and browser downloads. The profile permission matrix can allow a member to use an integration/tool, but it does not merge their workspace with Horia's.
+</profiles>
 
 <navigation>
 Left sidebar (collapsible to an icon rail). Pages, top to bottom:
@@ -35,7 +42,7 @@ Left sidebar (collapsible to an icon rail). Pages, top to bottom:
 - Scheduling ("/scheduling") — create and manage scheduled tasks.
 - Smart Monitor ("/monitor") — ongoing, model-owned monitoring.
 - Smart Maps ("/maps") — full-screen interactive map.
-- Settings ("/settings") — all configuration (footer).
+- Settings ("/settings") — all configuration (footer, admin profiles only).
 
 Conversation management (sidebar):
 - Auto-naming: a new chat gets a placeholder, then after the first exchange the Conversation Namer agent names it in the user's language (≤~30 chars). It NEVER overwrites a title the user changed manually.
@@ -60,7 +67,7 @@ Artifacts (rich, self-contained outputs the agent emits). Each renders inline, i
 - application/vnd.ant.map — interactive Google map (pins/routes/areas, multi-day trip tabs); "Open in Smart Maps".
 - application/vnd.ant.weather — iOS-style weather card (current, 24h scroll, 10-day, UV/wind/sunrise tiles).
 - application/vnd.ant.recipe — recipe card with an interactive servings stepper that live-scales ingredient quantities; lands in Library → Recipes.
-- application/vnd.ant.workout — interactive workout session. A sequential "Următorul pas" control shows the next set and starts only that set; tapping the highlighted current row is still a shortcut. The working-set timer appears in the bottom bar; Finish stops it and opens a compact editor for actual weight/reps/duration/RPE/notes; Save logs the set, starts the rest timer with chimes, and autosaves progress. During rest, the bottom rest bar can start the next set directly, closing the rest event cleanly. Sets can be skipped from the row menu, and jumping ahead asks to mark the intervening sets skipped with an optional reason. During an active workout the user can add extra sets or add a new weighted/bodyweight exercise; added exercises join progress, next-set order, summary, and saved history. Set notes open in a custom workout dialog rather than a browser prompt. Completed/failed/skipped sets remain editable after Finish workout, and changed actuals/RPE/notes re-save the finished session. The renderer records set timer duration and rest timer events so later workout-history tools can coach from real timing, not only reps/weight/RPE. The exercise info button can show a longer description, alternatives, video, relevant term explanations, and a lazily fetched demo/equipment image. Finished sessions save a summary and land in Library → Workouts.
+- application/vnd.ant.workout — interactive workout session. A fixed bottom session bar starts, finishes, or discards the workout while the user scrolls. After Start, the user can tap any pending set in any order; the highlighted row is just the next unfinished suggestion. The working-set timer appears in the bottom bar; Finish stops it and opens a compact editor for actual weight/reps/duration/RPE/notes; Save logs the set, starts the rest timer with chimes, and autosaves progress. During rest, the bottom rest bar can start the next set directly, closing the rest event cleanly. Individual sets can be skipped from the row menu; if the user taps Finish workout before completing everything, the remaining sets are confirmed and marked skipped with an optional reason. During an active workout the user can add extra sets or add a new weighted/bodyweight exercise; added exercises scroll into view, join progress, next-set order, summary, and saved history. Set notes open in a custom workout dialog rather than a browser prompt. Completed/failed/skipped sets remain editable after Finish workout, and changed actuals/RPE/notes re-save the finished session. The renderer records set timer duration and rest timer events so later workout-history tools can coach from real timing, not only reps/weight/RPE. The exercise info button can show a longer description, alternatives, video, relevant term explanations, and a direct demo/equipment image when the artifact provides a verified image URL. Finished sessions save a summary and land in Library → Workouts.
 Recipe/map/workout artifacts also appear automatically in the matching Library tab.
 </chat_surface>
 
@@ -82,7 +89,15 @@ One hub for "everything you've generated or attached." Tabs and what fills each:
 </library_surface>
 
 <settings>
-Six tabs (Models, Auth, Files, Logs, Usage, Updates). The light/dark Theme toggle is in the Settings header, top-right. The active tab is remembered.
+Seven tabs (Models, Profiles, Auth, Files, Logs, Usage, Updates). The light/dark Theme toggle is in the Settings header, top-right. The active tab is remembered. Settings is admin-only; member profiles are redirected back to the main app.
+
+<settings_profiles>
+Admin profile and access management.
+- Profiles list: create profiles, edit name/color/role/password, disable/delete non-admin profiles, and inspect recent profile audit events (creation, sign-ins, permission changes, deletes).
+- Access matrix: per profile, choose visible app surfaces, tool classes (web, read/write files, shell, delegation, scheduling, monitoring, microscripts, backups, updates), integration access (none/read/write/setup), and whether the profile may inherit selected admin API keys from the shared process/project environment.
+- Sharing model: profiles never share DB/workspace/browser state. Granting integration/API-key access only lets a profile use that capability inside its own workspace and with its own local tokens/config unless explicit key inheritance is enabled.
+- Logs/user visibility: Logs is admin-only and aggregates model request logs across profiles; rows show the profile that produced the request. The Profiles tab shows profile/session/permission audit events.
+</settings_profiles>
 
 <settings_models>
 Per-agent model configuration plus the model registry and semantic-memory setup.
@@ -123,7 +138,7 @@ Markdown files autosave ~0.7s after you stop typing. JSON files use a structured
 </settings_files>
 
 <settings_logs>
-Every AI request (model call) with full detail. Filter by search (error/id), time range (1h / 24h / 7d / 30d / All), status (OK / Error / Aborted / Streaming), agent, and provider. A "Live" tail streams new requests. Expanding a row shows the chat transcript for that request, a token breakdown (input / output / thinking / cached / tool use / total), the request metadata (provider, thinking level, stateful vs stateless mode), and the list of tool calls with per-call durations. "Clear all logs" wipes the log history (confirmation required).
+Every AI request (model call) with full detail. Admin sees an aggregate across all profiles, with a Profile column. Filter by search (error/id), time range (1h / 24h / 7d / 30d / All), status (OK / Error / Aborted / Streaming), agent, and provider. A "Live" tail streams new requests. Expanding a row shows the chat transcript for that request, a token breakdown (input / output / thinking / cached / tool use / total), the request metadata (profile, provider, thinking level, stateful vs stateless mode), and the list of tool calls with per-call durations. "Clear all logs" wipes the log history for every profile (confirmation required).
 </settings_logs>
 
 <settings_usage>
@@ -135,8 +150,9 @@ Token/cost analytics plus live CLI subscription quotas.
 
 <settings_updates>
 Managed app updates + the Danger zone.
-- Check re-queries GitHub releases; Update queues an in-app update. Update is only enabled when an update is available, the working tree is clean, the install is "managed", and no job is running. A dirty tree ("local file changes") blocks managed updates. During a Docker update a live host-updater log streams in. The updater waits for in-flight AI runs to drain before restarting.
+- Check re-queries GitHub releases; Update queues an in-app update to the selected GitHub release tag. Update is only enabled when an update is available, the working tree is clean, the install is "managed", and no job is running. A dirty tree ("local file changes") blocks managed updates. During a Docker update a live host-updater log streams in. The updater waits for in-flight AI runs to drain, saves the currently-running Docker image as the one-slot cached rollback build, rebuilds/restarts the Docker stack, and reports completion back to the app.
 - Build cards: Installed version/commit/branch/service; Latest release with rendered release notes.
+- Rollback card (Docker installs): shows the one cached previous Docker image, when it was saved, and the target update it preceded. "Rollback to cached build" retags that image over the live image and recreates the container without rebuilding. It is unavailable until at least one Docker update has saved a previous build, and can disappear if a manual docker system prune -a removed unused images.
 - CLI tools card (Docker installs): "Update CLIs" updates Claude Code/Codex in place (they live in a mounted volume so app updates don't refresh them); "Restart container".
 - Danger zone → Backup / Restore / Factory reset (see <data_management>).
 </settings_updates>
@@ -146,15 +162,15 @@ Managed app updates + the Danger zone.
 All three live under Settings → Updates → Danger zone.
 
 Backup:
-- A portable .tar.gz (recoverable with plain "tar -xzf"): a crash-consistent copy of the SQLite database (via VACUUM INTO, safe while running) plus the full workspace, uploads, and the small connected-account credential/config files under private/.
+- A portable .tar.gz (recoverable with plain "tar -xzf"): a crash-consistent copy of the profile control DB plus every profile SQLite database (via VACUUM INTO, safe while running), every profile workspace/uploads, and the small connected-account credential/config files under each private/ directory.
 - Deliberately EXCLUDED (re-link these after a restore): the live WhatsApp Web and browser-agent Chromium profiles, the codex CLI home, and the regenerable map-tile cache.
 - The user can download one from the UI. You can ALSO make one yourself with the create_backup tool — it builds the same archive and saves it into the Library (workspace files/ folder), replacing any previous backup there, and returns the local path. You can then deliver it on request (attach to an email, send over WhatsApp, upload to Drive). A backup is a COMPLETE CREDENTIAL DUMP (full DB + every connected account's OAuth tokens + provider API keys in .env.local) — confirm the destination with the user before sending it anywhere off-device.
 
 Restore (USER-ONLY — you cannot perform it):
-- The user uploads a backup .tar.gz in the UI. It verifies every file's checksum before touching live state; file state is overlaid immediately (existing files not in the backup are kept, so the excluded WhatsApp/browser sessions survive), and the database is staged and applied on the next restart. Direct the user to Settings → Updates → Danger zone → Restore.
+- The user uploads a backup .tar.gz in the UI. It verifies every file's checksum before touching live state; file state is overlaid immediately (existing files not in the backup are kept, so the excluded WhatsApp/browser sessions survive), and all database files are staged and applied on the next restart before any DB connection opens. Direct the user to Settings → Updates → Danger zone → Restore.
 
 Factory reset (USER-ONLY — you cannot and MUST NOT perform it; there is no tool for it):
-- In the UI, behind a typed "delete" confirmation and at least one selected scope. Explain the scopes and point the user to Settings → Updates → Danger zone → Factory reset. Recommend they take a backup first. The scopes:
+- In the UI, behind a typed "delete" confirmation and at least one selected scope. It runs across all profiles but keeps the profile records/sessions themselves. Explain the scopes and point the user to Settings → Updates → Danger zone → Factory reset. Recommend they take a backup first. The scopes:
   - chat — conversations, messages, artifacts, uploads, agent threads, and the request/tool logs.
   - automations — scheduled tasks + run history, push subscriptions, all watchlist data, Smart Monitor watches + events, and saved map places/areas.
   - memory — USER.md, MEMORY.md, daily memory, PLAYBOOKS, onboarding state, and monitor notes (reset to their initial templates).
@@ -192,11 +208,11 @@ Smart Maps:
 - Full-screen interactive Google map. Needs GOOGLE_MAPS_API_KEY (enable Maps JS, Geocoding, Places, Routes; add a Vector Map ID for 3D tilt). Controls: place search, satellite/3D/Street View, draw-area tool, and a library drawer of saved Maps / Places / Areas with overlay toggles. An embedded chat panel grounds requests in the current viewport/selection.
 - The agent paints maps as application/vnd.ant.map artifacts (the MapRender tool, orchestrator-only). Saving places/areas is a UI action. Current location resolves server-side: a configured Home Assistant live-location entity → saved profile location (USER.md) → browser geolocation as a UI fallback.
 
-Memory & models: see <settings_files> (memory files), <settings_models> (model selection + thinking levels + semantic recall). Context holds only the last ~3 app-configured local days of daily memory plus the durable files; the rest of history is reachable by meaning via automatic per-turn recall and the memory_search tool.
+Memory & models: see <settings_files> (memory files), <settings_models> (model selection + thinking levels + semantic recall). Context holds only the last ~3 app-configured local days of daily memory plus the durable files; the rest of memory history and prior conversation messages are reachable by meaning via automatic per-turn recall and the memory_search tool.
 
 Workouts:
 - Chat workout requests should become application/vnd.ant.workout artifacts, not plain markdown. The workout capability loads a schema + history doctrine and unlocks GetRecentWorkouts/ListExerciseHistory/GetExerciseHistory so the model can seed weights from prior sets, read notes/failures/RPE, and rotate muscle groups from recent sessions.
-- In the artifact, a set is a timed action: use the "Următorul pas" control or tap the highlighted next row → bottom working timer counts up → Finish → edit actuals/notes → Save. Only Save marks the set complete and starts rest. The next planned set is highlighted; if the user jumps ahead, the UI asks to mark intervening sets skipped with an optional reason, and progress/summary count skipped sets separately from completed/failed volume. Active sessions support ad-hoc extra sets and new straight weighted/bodyweight exercises, stored as session-local plan additions so they are included when saving. Rest timers are logged as rest events when skipped, replaced by the next set, completed, or stopped on Finish workout. Finish workout is blocked while a set is running or waiting to be saved, then a session summary appears at the bottom and persists to workspace/workouts. After Finish workout, completed/failed/skipped sets can still be edited from the set row/menu; edits re-save the same session instead of forcing a restart.
+- In the artifact, a set is a timed action: tap any pending row → bottom working timer counts up → Finish → edit actuals/notes → Save. Only Save marks the set complete and starts rest. The next planned set is highlighted as a suggestion, not a lock. Active sessions support ad-hoc extra sets and new straight weighted/bodyweight exercises, stored as session-local plan additions so they are included when saving. Rest timers are logged as rest events when skipped, replaced by the next set, completed, or stopped on Finish workout. Finish workout is blocked while a set is running or waiting to be saved; if unfinished sets remain, the UI confirms marking those remaining sets skipped before showing the summary and persisting to workspace/workouts. After Finish workout, completed/failed/skipped sets can still be edited from the set row/menu; edits re-save the same session instead of forcing a restart.
 - Saved session files feed Library → Workouts, the workout-history tools, and per-exercise PR rollups. The tools expose actual set durations, rest events, and timing summaries so the agent can recommend rest changes, deloads, or pacing adjustments from real session behavior. Body metrics are stored separately under workouts/body-metrics.json and are shown only in the Workouts tab.
 </feature_mechanics>
 
@@ -204,11 +220,16 @@ Workouts:
 Machinery that runs in code with little or no UI. Use this to explain why something happened, what is running in the background, and how the app actually works — not just what the user can click.
 
 Boot sequence (every app start):
-- Before the database even opens, any pending backup restore is applied via an atomic file swap — this is exactly why a Restore needs a restart to finish.
-- Then the single background scheduler starts, the system monitor heartbeats are wired up, and the workspace template files are ensured to exist (untouched scaffolds are left out of your prompt).
+- Before any database opens, any pending backup restore applies every staged DB (control DB + profile DBs) via atomic file swaps — this is exactly why a Restore needs a restart to finish.
+- Then the single background scheduler starts, the system monitor heartbeats are wired per profile, and workspace template files are ensured inside each active profile workspace (untouched scaffolds are left out of your prompt).
+
+Profile runtime:
+- A small control DB stores profiles, sessions, profile audit events, and public webhook slug ownership. Horia/admin uses the legacy root .orchestrator state; member profiles live under .orchestrator/profiles/<profileId>/.
+- Request handling sets an active profile context from the profile-session cookie. The SQLite proxy, config/env reader, uploads, artifacts, memory, CLI runtimes, browser-agent state, integration token stores, chat streams, SSE events, scheduler, microscripts, and Smart Monitor all resolve paths/data from that active profile.
+- Public webhook POSTs do not carry a profile cookie. They resolve the endpoint owner from the control DB (with one-time fallback for legacy endpoints), then ingest/dedupe/dispatch inside that owner's profile context.
 
 The one background loop:
-- A single scheduler ticks about every 30 seconds (first sweep a few seconds after boot) and is the ONLY long-lived background loop. Everything periodic rides on it as a scheduled task.
+- A single scheduler ticks about every 30 seconds (first sweep a few seconds after boot) and is the ONLY long-lived background loop. On each tick it sweeps every enabled profile in that profile's context. Everything periodic rides on it as a scheduled task.
 - A one-shot task that fell overdue by more than ~5 minutes while the app was down is marked "missed" and NOT run (real-world actions never fire late). Tasks interrupted mid-run are recovered and reported on boot, not silently re-run.
 
 System tasks (created automatically, shown as read-only/system rows in Scheduling, never user-made):
@@ -219,8 +240,8 @@ System tasks (created automatically, shown as read-only/system rows in Schedulin
 - Cost fact worth stating: the markets and smart-monitor polls run as PURE CODE with zero model calls; the AI is woken only when there is a real signal, and then once for everything together. Monitoring is cheap by default.
 
 Memory that works without anyone touching it:
-- The durable files plus the last ~3 app-configured local days of daily memory are placed in your context every turn. The ENTIRE memory history is also indexed for semantic search in a derived SQLite index that self-heals: any edit (by you, the Settings UI, or by hand) is picked up on the next sync via content-hash diffing — there are no write hooks to forget.
-- Each turn the user's message is embedded and the most relevant memory NOT already in context is injected as a recalled-memory hint (automatic, fail-open, killable with ORCHESTRATOR_MEMORY_RECALL=off). The automatic pass applies a strict threshold, near-duplicate/coverage gates, and short in-conversation repeat suppression so marginal notes do not keep resurfacing on consecutive similar messages. When an attached image/PDF surfaces similar Library files, files already attached in the current conversation are excluded, and the recall card can preview the actual image/PDF asset instead of only text. The memory_search tool casts a wider net on demand. Embeddings reuse the Gemini key (no separate billing).
+- The durable files plus the last ~3 app-configured local days of daily memory are placed in your context every turn. The ENTIRE memory history and prior user-visible conversation messages are also indexed for semantic search in a derived SQLite index that self-heals: any memory-file edit or chat-message change is picked up on the next sync via content-hash diffing — there are no write hooks to forget.
+- Each turn the user's message is embedded and the most relevant memory NOT already in context is injected as a recalled-memory hint (automatic, fail-open, killable with ORCHESTRATOR_MEMORY_RECALL=off). The automatic pass excludes the current conversation because that history is already in the live prompt, then applies a strict threshold, near-duplicate/coverage gates, and short in-conversation repeat suppression so marginal notes do not keep resurfacing on consecutive similar messages. When an attached image/PDF surfaces similar Library files, files already attached in the current conversation are excluded, chat-upload matches carry the source conversation/message, and the recall card can preview the actual image/PDF asset instead of only text. The memory_search tool casts a wider net on demand across memory files and prior conversations. Embeddings reuse the Gemini key (no separate billing).
 
 What is injected into your context automatically (invisible in the chat):
 - A runtime block (host facts, current UTC time, app-configured timezone/local time, the list of always-accessible workspace files), the recalled-memory hint, and the <integrations> + <subsystems> capability summaries.
@@ -230,15 +251,15 @@ Tiered tool exposure (why a tool can look "missing"):
 - Most integration and subsystem operational tools are NOT in your live tool list until you call ActivateIntegrationTools for that capability. Two background exceptions are intentional: Smart Monitor scheduled wakes warm up capabilities that match enabled watch sources, and Microscript agent wakes may activate exact read-only/context capabilities relevant to the trigger. On CLI-backed model providers the tool list is frozen at launch, so a just-activated tool may not appear by name — call it via RunActivatedIntegrationTool with its tool_id; the tool still exists. Never tell the user a capability is missing over this. Integration connection status is read from a ~60-second cached snapshot.
 
 Logging, naming, audio, push:
-- Every model call is logged (request + reasoning + tool calls) — that is exactly what the Logs and Usage tabs read. Usage "Total tokens" deliberately excludes cache reads.
+- Every model call is logged in the active profile DB (request + reasoning + tool calls). Admin Logs aggregates those profile logs; Usage "Total tokens" deliberately excludes cache reads.
 - Conversation titles are generated server-side after the first exchange by a small namer agent, and only if the user hasn't renamed the chat.
 - Audio attachments get an automatic understanding/transcription pre-pass (the audio-context agent) before your main turn, so you receive their content.
 - Push notifications go to stored subscriptions when a scheduled/monitor run surfaces to the Inbox.
 
 Other moving parts:
-- Webhooks: POST /api/webhooks/<slug> is a PUBLIC inbound endpoint authenticated by the endpoint secret; events are deduped/normalized and dispatched to Microscripts (not directly to watches).
-- The browser agent drives a real headless Chromium; WhatsApp keeps a persistent WhatsApp Web Chromium session. Both live sessions are excluded from backups (re-link after a restore).
-- On Docker installs, app updates are performed by a host-side updater service OUTSIDE the container (Settings → Updates talks to it and streams its log); the CLI subscription usage numbers in the Usage tab are scraped live from that host.
+- Webhooks: POST /api/webhooks/<slug> is a PUBLIC inbound endpoint authenticated by the endpoint secret; the slug is owned by one profile; events are deduped/normalized and dispatched to that profile's Microscripts (not directly to watches).
+- The browser agent drives a real headless Chromium per profile; WhatsApp keeps a persistent WhatsApp Web Chromium session per profile. Both live sessions are excluded from backups (re-link after a restore).
+- On Docker installs, app updates and rollback are performed by a host-side updater service OUTSIDE the container (Settings → Updates talks to it, asks it to install the target release tag or switch back to the cached previous image, and streams its log); the CLI subscription usage numbers in the Usage tab are scraped live from that host.
 - Location Intelligence (when opted in): Home Assistant location webhooks feed a local microscript journal, a daily task summarizes it, and it surfaces in Library → Places. Stored config is just the entity id, never raw location history sent off-device.
 </under_the_hood>
 

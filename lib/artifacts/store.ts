@@ -3,7 +3,7 @@ import fs from 'fs'
 import path from 'path'
 
 import db from '@/lib/db'
-import { ARTIFACTS_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { emitAppEvent } from '@/lib/events'
 import { type ArtifactRow, type ArtifactDisplay } from './schema'
 import { validateArtifactContent } from './validation'
@@ -41,7 +41,7 @@ export interface ArtifactListItem extends ArtifactRow {
 
 function resolveArtifactReadPath(filePath: string): string | null {
     try {
-        const root = fs.realpathSync(/* turbopackIgnore: true */ ARTIFACTS_DIR)
+        const root = fs.realpathSync(/* turbopackIgnore: true */ activeRuntimePaths().artifactsDir)
         const target = fs.realpathSync(/* turbopackIgnore: true */ filePath)
         const rel = path.relative(root, target)
         if (rel === '' || rel.startsWith('..') || path.isAbsolute(rel)) return null
@@ -119,7 +119,7 @@ function artifactFilePath(args: InsertArgs, version: number): string {
     const conversationDir = safePathPart(args.conversationId)
     const identifierDir = safePathPart(args.identifier)
     const ext = extensionFor(args.type, args.language)
-    return path.join(ARTIFACTS_DIR, conversationDir, identifierDir, `v${version}.${ext}`)
+    return path.join(activeRuntimePaths().artifactsDir, conversationDir, identifierDir, `v${version}.${ext}`)
 }
 
 /**

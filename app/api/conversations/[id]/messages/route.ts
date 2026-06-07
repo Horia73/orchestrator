@@ -5,6 +5,7 @@ import {
   type MessagePageCursor,
 } from "@/lib/db"
 import type { Message } from "@/lib/types"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 80
 const MAX_MESSAGE_PAGE_SIZE = 200
@@ -33,61 +34,65 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const { id } = await params
-    const { searchParams } = new URL(request.url)
-    const limit = parsePositiveInt(
-      searchParams.get("limit"),
-      DEFAULT_MESSAGE_PAGE_SIZE
-    )
-    const before = parseCursor(searchParams.get("before"))
-    const detail = searchParams.get("detail")
-    const page = getConversationMessagesPage(id, {
-      limit,
-      before,
-      hydration: detail === "full" ? "full" : "slim",
-    })
+  return runWithRequestProfile(request, async () => {
+      try {
+        const { id } = await params
+        const { searchParams } = new URL(request.url)
+        const limit = parsePositiveInt(
+          searchParams.get("limit"),
+          DEFAULT_MESSAGE_PAGE_SIZE
+        )
+        const before = parseCursor(searchParams.get("before"))
+        const detail = searchParams.get("detail")
+        const page = getConversationMessagesPage(id, {
+          limit,
+          before,
+          hydration: detail === "full" ? "full" : "slim",
+        })
 
-    return NextResponse.json({
-      messages: page.messages,
-      total: page.total,
-      hasMore: page.hasMore,
-      nextCursor: serializeCursor(page.nextCursor),
-    })
-  } catch (error) {
-    console.error("Failed to fetch messages", error)
-    return NextResponse.json(
-      { error: "Failed to fetch messages" },
-      { status: 500 }
-    )
-  }
+        return NextResponse.json({
+          messages: page.messages,
+          total: page.total,
+          hasMore: page.hasMore,
+          nextCursor: serializeCursor(page.nextCursor),
+        })
+      } catch (error) {
+        console.error("Failed to fetch messages", error)
+        return NextResponse.json(
+          { error: "Failed to fetch messages" },
+          { status: 500 }
+        )
+      }
+  })
 }
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> }
 ) {
-  try {
-    const { id } = await params
-    const message: Message = await request.json()
-    const hasText =
-      typeof message.content === "string" && message.content.length > 0
-    const hasAttachments =
-      Array.isArray(message.attachments) && message.attachments.length > 0
-    if (!message.id || !message.role || (!hasText && !hasAttachments)) {
-      return NextResponse.json(
-        { error: "Invalid message data" },
-        { status: 400 }
-      )
-    }
+  return runWithRequestProfile(request, async () => {
+      try {
+        const { id } = await params
+        const message: Message = await request.json()
+        const hasText =
+          typeof message.content === "string" && message.content.length > 0
+        const hasAttachments =
+          Array.isArray(message.attachments) && message.attachments.length > 0
+        if (!message.id || !message.role || (!hasText && !hasAttachments)) {
+          return NextResponse.json(
+            { error: "Invalid message data" },
+            { status: 400 }
+          )
+        }
 
-    addMessage(id, message)
-    return NextResponse.json({ success: true, message })
-  } catch (error) {
-    console.error("Failed to add message", error)
-    return NextResponse.json(
-      { error: "Failed to add message" },
-      { status: 500 }
-    )
-  }
+        addMessage(id, message)
+        return NextResponse.json({ success: true, message })
+      } catch (error) {
+        console.error("Failed to add message", error)
+        return NextResponse.json(
+          { error: "Failed to add message" },
+          { status: 500 }
+        )
+      }
+  })
 }

@@ -81,6 +81,11 @@ export interface MemoryRecallHit {
   mimeType?: string
   /** Preview URL for similar file hits. */
   url?: string
+  /** Source chat context when a similar file came from an uploaded attachment. */
+  conversationId?: string
+  conversationTitle?: string
+  messageId?: string
+  messageTimestamp?: number
 }
 
 export interface MemoryRecallReasoningEntry {

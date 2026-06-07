@@ -1,7 +1,7 @@
 import fs from 'fs'
 import path from 'path'
 
-import { WORKSPACE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import type { SessionLog, ExerciseHistory } from './save-session'
 
 // ---------------------------------------------------------------------------
@@ -19,7 +19,7 @@ import type { SessionLog, ExerciseHistory } from './save-session'
 // ---------------------------------------------------------------------------
 
 export function workoutsDir(): string {
-    return path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, 'workouts')
+    return path.join(/* turbopackIgnore: true */ activeRuntimePaths().workspaceDir, 'workouts')
 }
 
 export function sessionsDir(): string {

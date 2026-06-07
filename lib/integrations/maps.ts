@@ -1,7 +1,8 @@
 import fs from 'fs'
 import path from 'path'
 
-import { getEnvValue, WORKSPACE_ENV_PATH } from '@/lib/config'
+import { getEnvValue } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { readGoogleMapsApiKey } from '@/lib/maps/google-session'
 import { invalidateWeatherConnectionProbe } from '@/lib/integrations/weather'
 import { invalidateWeatherProviderState } from '@/lib/weather/providers'
@@ -232,9 +233,10 @@ function parseEnvAssignments(raw: string): Record<string, string> {
 }
 
 function patchWorkspaceEnv(values: Record<string, string>): void {
-    fs.mkdirSync(path.dirname(WORKSPACE_ENV_PATH), { recursive: true })
-    const existing = fs.existsSync(WORKSPACE_ENV_PATH)
-        ? fs.readFileSync(WORKSPACE_ENV_PATH, 'utf-8')
+    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
+    const existing = fs.existsSync(workspaceEnvPath)
+        ? fs.readFileSync(workspaceEnvPath, 'utf-8')
         : ''
     const keysToReplace = new Set(Object.keys(values))
     const written = new Set<string>()
@@ -260,9 +262,9 @@ function patchWorkspaceEnv(values: Record<string, string>): void {
     if (missing.length > 0 && kept.length > 0) kept.push('')
     for (const [key, value] of missing) kept.push(`${key}=${formatEnvValue(value)}`)
 
-    fs.writeFileSync(WORKSPACE_ENV_PATH, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
+    fs.writeFileSync(workspaceEnvPath, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
     try {
-        fs.chmodSync(WORKSPACE_ENV_PATH, 0o600)
+        fs.chmodSync(workspaceEnvPath, 0o600)
     } catch {
         // Best effort; some filesystems ignore chmod.
     }

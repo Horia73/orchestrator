@@ -2,7 +2,7 @@ import fs from 'fs'
 import os from 'os'
 
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
-import { ORCHESTRATOR_STATE_DIR, WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { ORCHESTRATOR_STATE_DIR, activeRuntimePaths } from '@/lib/runtime-paths'
 
 // ---------------------------------------------------------------------------
 // host_status — a live snapshot of the machine the runtime is sitting on.
@@ -126,7 +126,7 @@ export async function executeHostStatus(): Promise<ToolResult> {
         // workspace are often the same mount, /tmp frequently a different one.
         const targets: Array<{ label: string; path: string }> = [
             { label: 'state dir', path: ORCHESTRATOR_STATE_DIR },
-            { label: 'workspace', path: WORKSPACE_DIR },
+            { label: 'workspace', path: activeRuntimePaths().workspaceDir },
             { label: 'tmp', path: os.tmpdir() },
         ]
         const seen = new Set<string>()

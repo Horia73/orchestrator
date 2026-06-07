@@ -7,6 +7,7 @@ import {
   type SavedMapAreaInput,
 } from "@/lib/maps/saved-areas"
 import type { MapCoordinate } from "@/lib/maps/schema"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -16,59 +17,63 @@ const DEFAULT_LIMIT = 200
 const MAX_LIMIT = 500
 
 export async function GET(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  const url = new URL(request.url)
-  const limit = clampLimit(url.searchParams.get("limit"))
-  return NextResponse.json(
-    { areas: listSavedMapAreas(limit) },
-    { headers: NO_STORE }
-  )
+      const url = new URL(request.url)
+      const limit = clampLimit(url.searchParams.get("limit"))
+      return NextResponse.json(
+        { areas: listSavedMapAreas(limit) },
+        { headers: NO_STORE }
+      )
+  })
 }
 
 export async function POST(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  try {
-    const body = (await request.json().catch(() => null)) as Record<
-      string,
-      unknown
-    > | null
-    if (!body || typeof body !== "object") {
-      return NextResponse.json(
-        { error: "Body must be a JSON object." },
-        { status: 400, headers: NO_STORE }
-      )
-    }
+      try {
+        const body = (await request.json().catch(() => null)) as Record<
+          string,
+          unknown
+        > | null
+        if (!body || typeof body !== "object") {
+          return NextResponse.json(
+            { error: "Body must be a JSON object." },
+            { status: 400, headers: NO_STORE }
+          )
+        }
 
-    const ring = parseRing(body.ring)
-    if (!ring) {
-      return NextResponse.json(
-        { error: "ring must be an array of [lng, lat] coordinates." },
-        { status: 400, headers: NO_STORE }
-      )
-    }
+        const ring = parseRing(body.ring)
+        if (!ring) {
+          return NextResponse.json(
+            { error: "ring must be an array of [lng, lat] coordinates." },
+            { status: 400, headers: NO_STORE }
+          )
+        }
 
-    const input: SavedMapAreaInput = {
-      title: optionalString(body.title),
-      description: optionalString(body.description),
-      ring,
-      color: optionalString(body.color),
-      notes: optionalString(body.notes),
-    }
+        const input: SavedMapAreaInput = {
+          title: optionalString(body.title),
+          description: optionalString(body.description),
+          ring,
+          color: optionalString(body.color),
+          notes: optionalString(body.notes),
+        }
 
-    const area = addSavedMapArea(input)
-    return NextResponse.json({ area }, { headers: NO_STORE })
-  } catch (error) {
-    const message =
-      error instanceof Error ? error.message : "Failed to save area."
-    return NextResponse.json(
-      { error: message },
-      { status: 400, headers: NO_STORE }
-    )
-  }
+        const area = addSavedMapArea(input)
+        return NextResponse.json({ area }, { headers: NO_STORE })
+      } catch (error) {
+        const message =
+          error instanceof Error ? error.message : "Failed to save area."
+        return NextResponse.json(
+          { error: message },
+          { status: 400, headers: NO_STORE }
+        )
+      }
+  })
 }
 
 function optionalString(value: unknown): string | null {

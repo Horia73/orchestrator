@@ -1,17 +1,36 @@
 import { getActiveChatStream, listActiveChatStreams } from '@/lib/chat-streams'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
-    const { searchParams } = new URL(request.url)
-    const conversationId = searchParams.get('conversationId')
+  return runWithRequestProfile(request, async () => {
+        const { searchParams } = new URL(request.url)
+        const conversationId = searchParams.get('conversationId')
 
-    if (!conversationId) {
-        const streams = listActiveChatStreams()
+        if (!conversationId) {
+            const streams = listActiveChatStreams()
+
+            return new Response(
+                JSON.stringify({
+                    active: streams.length > 0,
+                    streams,
+                    conversationIds: streams.map(stream => stream.conversationId),
+                }),
+                {
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Cache-Control': 'no-store',
+                    },
+                }
+            )
+        }
+
+        const active = getActiveChatStream(conversationId)
 
         return new Response(
             JSON.stringify({
-                active: streams.length > 0,
-                streams,
-                conversationIds: streams.map(stream => stream.conversationId),
+                active: !!active,
+                messageId: active?.messageId,
+                startedAt: active?.startedAt,
             }),
             {
                 headers: {
@@ -20,21 +39,5 @@ export async function GET(request: Request) {
                 },
             }
         )
-    }
-
-    const active = getActiveChatStream(conversationId)
-
-    return new Response(
-        JSON.stringify({
-            active: !!active,
-            messageId: active?.messageId,
-            startedAt: active?.startedAt,
-        }),
-        {
-            headers: {
-                'Content-Type': 'application/json',
-                'Cache-Control': 'no-store',
-            },
-        }
-    )
+  })
 }

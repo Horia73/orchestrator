@@ -223,9 +223,9 @@ export const OBSERVABILITY_TOOL_IDS: string[] = [
     'read_runtime_index',
 ]
 
-// Deliberate semantic lookup over the user's long-term memory (durable files +
-// full daily-memory history). Complements the automatic per-turn
-// <recalled_memory> hint injected by the chat route.
+// Deliberate semantic lookup over the user's long-term memory (durable files,
+// full daily-memory history, and prior conversation messages). Complements the
+// automatic per-turn <recalled_memory> hint injected by the chat route.
 export const MEMORY_TOOL_IDS: string[] = [
     'memory_search',
     'library_search',

@@ -10,6 +10,7 @@ import {
   listExtraWorkspaceFiles,
 } from "@/lib/library/workspace-extra-files"
 import { appPath } from "@/lib/app-path"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /**
  * GET /api/library/attachments?type=image|video|audio|pdf|document|other|media|audio|files
@@ -79,81 +80,85 @@ function filterByType(
 }
 
 export async function GET(request: Request) {
-  const url = new URL(request.url)
-  const typeParam = url.searchParams.get("type")
+  return runWithRequestProfile(request, async () => {
+      const url = new URL(request.url)
+      const typeParam = url.searchParams.get("type")
 
-  const all: LibraryAttachmentResponse[] = [
-    ...listAllAttachments().map(normalizeAttachment),
-    ...listExtraWorkspaceFiles(),
-  ].sort((a, b) => b.messageTimestamp - a.messageTimestamp)
-  const filtered = filterByType(all, typeParam)
+      const all: LibraryAttachmentResponse[] = [
+        ...listAllAttachments().map(normalizeAttachment),
+        ...listExtraWorkspaceFiles(),
+      ].sort((a, b) => b.messageTimestamp - a.messageTimestamp)
+      const filtered = filterByType(all, typeParam)
 
-  return NextResponse.json({
-    attachments: filtered,
-    total: filtered.length,
+      return NextResponse.json({
+        attachments: filtered,
+        total: filtered.length,
+      })
   })
 }
 
 export async function DELETE(request: Request) {
-  let body: unknown
-  try {
-    body = await request.json()
-  } catch {
-    return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
-  }
+  return runWithRequestProfile(request, async () => {
+      let body: unknown
+      try {
+        body = await request.json()
+      } catch {
+        return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 })
+      }
 
-  const items =
-    body &&
-    typeof body === "object" &&
-    Array.isArray((body as { items?: unknown }).items)
-      ? (body as { items: unknown[] }).items
-      : null
-  if (!items)
-    return NextResponse.json({ error: "Missing items array" }, { status: 400 })
+      const items =
+        body &&
+        typeof body === "object" &&
+        Array.isArray((body as { items?: unknown }).items)
+          ? (body as { items: unknown[] }).items
+          : null
+      if (!items)
+        return NextResponse.json({ error: "Missing items array" }, { status: 400 })
 
-  const attachmentIds: string[] = []
-  const workspacePaths: string[] = []
+      const attachmentIds: string[] = []
+      const workspacePaths: string[] = []
 
-  for (const item of items) {
-    if (!item || typeof item !== "object") continue
-    const record = item as {
-      source?: unknown
-      id?: unknown
-      workspacePath?: unknown
-      path?: unknown
-    }
-    if (record.source === "workspace") {
-      const workspacePath =
-        typeof record.workspacePath === "string"
-          ? record.workspacePath
-          : typeof record.path === "string"
-            ? record.path
-            : null
-      if (workspacePath) workspacePaths.push(workspacePath)
-      continue
-    }
-    if (typeof record.id === "string") attachmentIds.push(record.id)
-  }
+      for (const item of items) {
+        if (!item || typeof item !== "object") continue
+        const record = item as {
+          source?: unknown
+          id?: unknown
+          workspacePath?: unknown
+          path?: unknown
+        }
+        if (record.source === "workspace") {
+          const workspacePath =
+            typeof record.workspacePath === "string"
+              ? record.workspacePath
+              : typeof record.path === "string"
+                ? record.path
+                : null
+          if (workspacePath) workspacePaths.push(workspacePath)
+          continue
+        }
+        if (typeof record.id === "string") attachmentIds.push(record.id)
+      }
 
-  const attachmentResult = deleteLibraryAttachments(attachmentIds)
-  let deletedWorkspaceFiles = 0
-  const missingWorkspaceFiles: string[] = []
-  for (const workspacePath of Array.from(new Set(workspacePaths))) {
-    try {
-      if (deleteExtraWorkspaceFile(workspacePath)) deletedWorkspaceFiles++
-      else missingWorkspaceFiles.push(workspacePath)
-    } catch {
-      missingWorkspaceFiles.push(workspacePath)
-    }
-  }
+      const attachmentResult = deleteLibraryAttachments(attachmentIds)
+      let deletedWorkspaceFiles = 0
+      const missingWorkspaceFiles: string[] = []
+      for (const workspacePath of Array.from(new Set(workspacePaths))) {
+        try {
+          if (deleteExtraWorkspaceFile(workspacePath)) deletedWorkspaceFiles++
+          else missingWorkspaceFiles.push(workspacePath)
+        } catch {
+          missingWorkspaceFiles.push(workspacePath)
+        }
+      }
 
-  return NextResponse.json({
-    deleted: attachmentResult.deleted + deletedWorkspaceFiles,
-    attachments: attachmentResult,
-    workspace: {
-      requested: new Set(workspacePaths).size,
-      deleted: deletedWorkspaceFiles,
-      missing: missingWorkspaceFiles,
-    },
+      return NextResponse.json({
+        deleted: attachmentResult.deleted + deletedWorkspaceFiles,
+        attachments: attachmentResult,
+        workspace: {
+          requested: new Set(workspacePaths).size,
+          deleted: deletedWorkspaceFiles,
+          missing: missingWorkspaceFiles,
+        },
+      })
   })
 }

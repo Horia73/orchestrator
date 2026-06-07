@@ -8,13 +8,12 @@ import zlib from 'zlib'
 import archiver from 'archiver'
 import { extract as tarExtract } from 'tar-stream'
 
-import db from '@/lib/db'
+import { getDatabaseForProfile } from '@/lib/db'
+import { getControlDb, listProfiles } from '@/lib/profiles/store'
 import {
     ORCHESTRATOR_STATE_DIR,
-    PRIVATE_STATE_DIR,
     PROJECT_DIR,
-    UPLOADS_DIR,
-    WORKSPACE_DIR,
+    runtimePathsForProfile,
 } from '@/lib/runtime-paths'
 import { PENDING_RESTORE_DIR } from '@/lib/settings/backup-boot'
 
@@ -41,6 +40,10 @@ const EXCLUDED_FOR_MANIFEST = [
     'private/browser-agent',
     'private/codex-runtime-home',
     'private/maps-static-cache',
+    'profiles/*/private/whatsapp-web',
+    'profiles/*/private/browser-agent',
+    'profiles/*/private/codex-runtime-home',
+    'profiles/*/private/maps-static-cache',
     'index',
     'cache',
 ]
@@ -50,6 +53,12 @@ interface FileEntry {
     /** POSIX-style path relative to ORCHESTRATOR_STATE_DIR. */
     rel: string
     mode: number
+    bytes: number
+}
+
+interface DbCopy {
+    abs: string
+    rel: string
     bytes: number
 }
 
@@ -93,25 +102,23 @@ export interface RestoreResult {
  */
 export async function createBackupArchive(): Promise<BackupArchive> {
     const workDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-backup-'))
-    const dbCopy = path.join(workDir, 'data.db')
+    const dbCopyDir = path.join(workDir, 'db')
     const archivePath = path.join(workDir, 'archive.tar.gz')
 
     try {
-        // 1. Crash-consistent database copy. VACUUM INTO checkpoints the WAL into
-        //    a single standalone file, safe to take while the app is running.
-        db.exec(`VACUUM INTO '${dbCopy.replace(/'/g, "''")}'`)
+        // 1. Crash-consistent database copies. VACUUM INTO checkpoints each WAL
+        //    into a standalone file, safe to take while the app is running.
+        fs.mkdirSync(dbCopyDir, { recursive: true })
+        const dbCopies = copyDatabasesForBackup(dbCopyDir)
 
         // 2. Collect the file entries from the safe state set.
-        const fileEntries: FileEntry[] = [
-            ...walkDir(WORKSPACE_DIR),
-            ...walkDir(UPLOADS_DIR),
-            ...walkDir(PRIVATE_STATE_DIR, PRIVATE_EXCLUDES),
-        ]
+        const fileEntries = collectProfileFileEntries()
 
         // 3. Manifest with per-file checksums (database included first).
-        const entries: ManifestEntry[] = [
-            { path: 'state/data.db', bytes: fs.statSync(dbCopy).size, sha256: sha256File(dbCopy) },
-        ]
+        const entries: ManifestEntry[] = []
+        for (const copy of dbCopies) {
+            entries.push({ path: `state/${copy.rel}`, bytes: copy.bytes, sha256: sha256File(copy.abs) })
+        }
         for (const entry of fileEntries) {
             entries.push({ path: `state/${entry.rel}`, bytes: entry.bytes, sha256: sha256File(entry.abs) })
         }
@@ -150,7 +157,9 @@ export async function createBackupArchive(): Promise<BackupArchive> {
             })
             archive.pipe(output)
             archive.append(`${JSON.stringify(manifest, null, 2)}\n`, { name: 'manifest.json' })
-            archive.file(dbCopy, { name: 'state/data.db' })
+            for (const copy of dbCopies) {
+                archive.file(copy.abs, { name: `state/${copy.rel}` })
+            }
             for (const entry of fileEntries) {
                 archive.file(entry.abs, { name: `state/${entry.rel}`, mode: entry.mode })
             }
@@ -227,13 +236,18 @@ export async function applyBackupRestore(input: Buffer | Uint8Array): Promise<Re
             }
         }
 
-        // Stage the database for the next boot.
+        // Stage databases for the next boot.
         let dbStaged = false
-        const stagedDb = path.join(STAGING_DIR, 'state', 'data.db')
-        if (fs.existsSync(stagedDb)) {
+        const stagedDbEntries = entries.filter((entry) => isDatabaseEntryPath(entry.path))
+        if (stagedDbEntries.length > 0) {
             fs.rmSync(PENDING_RESTORE_DIR, { recursive: true, force: true })
             fs.mkdirSync(PENDING_RESTORE_DIR, { recursive: true })
-            fs.copyFileSync(stagedDb, path.join(PENDING_RESTORE_DIR, 'data.db'))
+            for (const entry of stagedDbEntries) {
+                const rel = entry.path.slice('state/'.length)
+                const target = path.join(PENDING_RESTORE_DIR, rel)
+                fs.mkdirSync(path.dirname(target), { recursive: true })
+                fs.copyFileSync(path.join(STAGING_DIR, entry.path), target)
+            }
             fs.writeFileSync(path.join(PENDING_RESTORE_DIR, 'APPLY'), new Date().toISOString())
             dbStaged = true
         }
@@ -241,7 +255,7 @@ export async function applyBackupRestore(input: Buffer | Uint8Array): Promise<Re
         // Overlay the remaining files onto the live tree.
         let restoredFiles = 0
         for (const entry of entries) {
-            if (entry.path === 'state/data.db') continue
+            if (isDatabaseEntryPath(entry.path)) continue
             if (!entry.path.startsWith('state/')) continue
             const rel = entry.path.slice('state/'.length)
             if (rel.length === 0) continue
@@ -259,10 +273,12 @@ export async function applyBackupRestore(input: Buffer | Uint8Array): Promise<Re
             restoredFiles++
         }
         // Keep the credentials directory locked down.
-        try {
-            fs.chmodSync(PRIVATE_STATE_DIR, 0o700)
-        } catch {
-            // Best-effort.
+        for (const profile of listProfiles({ includeDisabled: true })) {
+            try {
+                fs.chmodSync(runtimePathsForProfile(profile.id).privateStateDir, 0o700)
+            } catch {
+                // Best-effort.
+            }
         }
 
         return {
@@ -275,6 +291,54 @@ export async function applyBackupRestore(input: Buffer | Uint8Array): Promise<Re
     } finally {
         fs.rmSync(STAGING_DIR, { recursive: true, force: true })
     }
+}
+
+function copyDatabasesForBackup(dbCopyDir: string): DbCopy[] {
+    const copies: DbCopy[] = []
+
+    vacuumDatabaseTo(getControlDb(), path.join(dbCopyDir, 'control.db'))
+    copies.push({
+        abs: path.join(dbCopyDir, 'control.db'),
+        rel: 'control.db',
+        bytes: fs.statSync(path.join(dbCopyDir, 'control.db')).size,
+    })
+
+    for (const profile of listProfiles({ includeDisabled: true })) {
+        const profilePaths = runtimePathsForProfile(profile.id)
+        const rel = stateRelative(path.join(profilePaths.stateDir, 'data.db'))
+        const target = path.join(dbCopyDir, rel)
+        vacuumDatabaseTo(getDatabaseForProfile(profile.id), target)
+        copies.push({
+            abs: target,
+            rel,
+            bytes: fs.statSync(target).size,
+        })
+    }
+
+    return copies
+}
+
+function vacuumDatabaseTo(database: { exec: (sql: string) => unknown }, target: string): void {
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    database.exec(`VACUUM INTO '${target.replace(/'/g, "''")}'`)
+}
+
+function collectProfileFileEntries(): FileEntry[] {
+    const entries: FileEntry[] = []
+    const seen = new Set<string>()
+    for (const profile of listProfiles({ includeDisabled: true })) {
+        const paths = runtimePathsForProfile(profile.id)
+        for (const entry of [
+            ...walkDir(paths.workspaceDir),
+            ...walkDir(paths.uploadsDir),
+            ...walkDir(paths.privateStateDir, PRIVATE_EXCLUDES),
+        ]) {
+            if (seen.has(entry.abs)) continue
+            seen.add(entry.abs)
+            entries.push(entry)
+        }
+    }
+    return entries
 }
 
 function walkDir(root: string, excludeTop?: Set<string>): FileEntry[] {
@@ -309,13 +373,23 @@ function walkDir(root: string, excludeTop?: Set<string>): FileEntry[] {
             if (!stat.isFile()) continue
             out.push({
                 abs,
-                rel: path.relative(ORCHESTRATOR_STATE_DIR, abs).split(path.sep).join('/'),
+                rel: stateRelative(abs),
                 mode: stat.mode & 0o777,
                 bytes: stat.size,
             })
         }
     }
     return out
+}
+
+function stateRelative(abs: string): string {
+    return path.relative(ORCHESTRATOR_STATE_DIR, abs).split(path.sep).join('/')
+}
+
+function isDatabaseEntryPath(entryPath: string): boolean {
+    if (!entryPath.startsWith('state/')) return false
+    const rel = entryPath.slice('state/'.length)
+    return rel === 'data.db' || rel === 'control.db' || /^profiles\/[^/]+\/data\.db$/.test(rel)
 }
 
 function extractTarGz(buffer: Buffer, destDir: string): Promise<void> {

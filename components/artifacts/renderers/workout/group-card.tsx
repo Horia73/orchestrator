@@ -24,6 +24,7 @@ export function GroupCard({
     interactive = false,
     barKg,
     plates,
+    highlightExerciseId,
     className,
 }: {
     group: ExerciseGroup
@@ -34,10 +35,12 @@ export function GroupCard({
     interactive?: boolean
     barKg?: number
     plates?: readonly number[]
+    highlightExerciseId?: string | null
     className?: string
 }) {
     const isCompound = group.kind !== 'straight' || group.exercises.length > 1
     if (!isCompound) {
+        const highlighted = group.exercises[0].id === highlightExerciseId
         return (
             <ExerciseCard
                 exercise={group.exercises[0]}
@@ -47,7 +50,10 @@ export function GroupCard({
                 groupRestSec={group.restBetweenSec}
                 barKg={barKg}
                 plates={plates}
-                className={className}
+                className={cn(
+                    className,
+                    highlighted && "scroll-mt-24 ring-2 ring-primary/50 ring-offset-2 ring-offset-background",
+                )}
             />
         )
     }
@@ -94,7 +100,10 @@ export function GroupCard({
                         groupRestSec={group.restBetweenSec}
                         barKg={barKg}
                         plates={plates}
-                        className="border-border/40 bg-background/65"
+                        className={cn(
+                            "border-border/40 bg-background/65",
+                            ex.id === highlightExerciseId && "scroll-mt-24 ring-2 ring-primary/50 ring-offset-2 ring-offset-background",
+                        )}
                     />
                 ))}
             </div>

@@ -8,6 +8,7 @@ import {
   BUILTIN_TOOL_IDS,
   NATIVE_BUILTIN_DUPLICATE_TOOL_IDS,
 } from "./tool-catalog"
+import { isToolAllowedForActiveProfile } from "@/lib/profiles/permissions"
 
 // ---------------------------------------------------------------------------
 // Tool Registry
@@ -26,6 +27,7 @@ export function getToolsForAgent(toolIds: string[]): ToolDef[] {
   return toolIds
     .map((id) => tools.get(id))
     .filter((t): t is ToolDef => t !== undefined)
+    .filter(isToolAllowedForActiveProfile)
 }
 
 export function getToolsForBuiltins(
@@ -37,6 +39,7 @@ export function getToolsForBuiltins(
       .flatMap((builtin) => BUILTIN_TOOL_IDS[builtin] ?? [])
       .map((id) => tools.get(id))
       .filter((t): t is ToolDef => t !== undefined)
+      .filter(isToolAllowedForActiveProfile)
   )
 }
 

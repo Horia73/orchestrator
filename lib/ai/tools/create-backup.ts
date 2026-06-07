@@ -2,7 +2,7 @@ import fs from 'fs'
 import path from 'path'
 
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { createBackupArchive } from '@/lib/settings/backup'
 
 // ---------------------------------------------------------------------------
@@ -23,7 +23,9 @@ import { createBackupArchive } from '@/lib/settings/backup'
 // the same care as the secrets themselves.
 // ---------------------------------------------------------------------------
 
-const LIBRARY_FILES_DIR = path.join(AGENT_WORKSPACE_DIR, 'files')
+function libraryFilesDir(): string {
+    return path.join(activeRuntimePaths().agentWorkspaceDir, 'files')
+}
 // Only ever keep the newest backup in the Library: these archives are large
 // credential dumps, and an un-pruned copy under files/ also gets swept into the
 // NEXT backup (files/ is part of the backed-up workspace), so leaving them
@@ -66,20 +68,21 @@ export async function executeCreateBackup(): Promise<ToolResult> {
         // means a failure never destroys the user's existing Library backup.
         archive = await createBackupArchive()
 
-        fs.mkdirSync(LIBRARY_FILES_DIR, { recursive: true })
+        const targetDir = libraryFilesDir()
+        fs.mkdirSync(targetDir, { recursive: true })
 
         // Drop any earlier backup copy from the Library before placing the new one.
-        for (const name of safeReaddir(LIBRARY_FILES_DIR)) {
+        for (const name of safeReaddir(targetDir)) {
             if (BACKUP_FILE_PATTERN.test(name)) {
                 try {
-                    fs.rmSync(path.join(LIBRARY_FILES_DIR, name), { force: true })
+                    fs.rmSync(path.join(targetDir, name), { force: true })
                 } catch {
                     // Best-effort cleanup; a leftover old backup is not fatal.
                 }
             }
         }
 
-        const destPath = path.join(LIBRARY_FILES_DIR, archive.fileName)
+        const destPath = path.join(targetDir, archive.fileName)
         fs.copyFileSync(archive.archivePath, destPath)
         const bytes = fs.statSync(destPath).size
 

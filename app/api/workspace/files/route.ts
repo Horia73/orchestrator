@@ -4,6 +4,7 @@ import { Readable } from 'stream'
 import { NextRequest } from 'next/server'
 
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 import {
     getSandboxRoots,
     isInsideProtectedAgentPath,
@@ -91,31 +92,33 @@ function resolveDownloadPath(rawPath: string): string | null {
 }
 
 export async function GET(request: NextRequest) {
-    const rawPath = request.nextUrl.searchParams.get('path')
-    if (!rawPath) {
-        return new Response('Missing path', { status: 400 })
-    }
+  return runWithRequestProfile(request, async () => {
+        const rawPath = request.nextUrl.searchParams.get('path')
+        if (!rawPath) {
+            return new Response('Missing path', { status: 400 })
+        }
 
-    const filePath = resolveDownloadPath(rawPath)
-    if (!filePath) {
-        return new Response('Not found', { status: 404 })
-    }
+        const filePath = resolveDownloadPath(rawPath)
+        if (!filePath) {
+            return new Response('Not found', { status: 404 })
+        }
 
-    let stat: fs.Stats
-    try {
-        stat = fs.statSync(/* turbopackIgnore: true */ filePath)
-    } catch {
-        return new Response('Not found', { status: 404 })
-    }
+        let stat: fs.Stats
+        try {
+            stat = fs.statSync(/* turbopackIgnore: true */ filePath)
+        } catch {
+            return new Response('Not found', { status: 404 })
+        }
 
-    const stream = Readable.toWeb(fs.createReadStream(/* turbopackIgnore: true */ filePath)) as ReadableStream<Uint8Array>
+        const stream = Readable.toWeb(fs.createReadStream(/* turbopackIgnore: true */ filePath)) as ReadableStream<Uint8Array>
 
-    return new Response(stream, {
-        headers: {
-            'Content-Type': contentTypeFor(filePath),
-            'Content-Length': String(stat.size),
-            'Content-Disposition': contentDisposition(path.basename(filePath)),
-            'Cache-Control': 'private, no-store',
-        },
-    })
+        return new Response(stream, {
+            headers: {
+                'Content-Type': contentTypeFor(filePath),
+                'Content-Length': String(stat.size),
+                'Content-Disposition': contentDisposition(path.basename(filePath)),
+                'Cache-Control': 'private, no-store',
+            },
+        })
+  })
 }

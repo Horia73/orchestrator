@@ -4,14 +4,13 @@ import { spawn as spawnProcess } from 'child_process'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
-import { AGENT_WORKSPACE_DIR, WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { displayPath } from './sandbox'
 export { bashTool } from './bash-def'
 
 const DEFAULT_TIMEOUT_MS = 120_000
 const MAX_TIMEOUT_MS = 600_000
 const MAX_STREAM_CHARS = 120_000
-const BACKGROUND_DIR = `${WORKSPACE_DIR}/.background-jobs`
 
 export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const command = stringArg(args, ['command'])
@@ -27,15 +26,16 @@ export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecu
 }
 
 function resolveCwd(cwdArg: string): { ok: true; cwd: string } | { ok: false; error: string } {
+    const workspaceDir = activeRuntimePaths().agentWorkspaceDir
     const clean = cwdArg.trim()
-    if (!clean) return { ok: true, cwd: AGENT_WORKSPACE_DIR }
-    const resolved = path.normalize(path.isAbsolute(clean) ? clean : `${AGENT_WORKSPACE_DIR}/${clean}`)
+    if (!clean) return { ok: true, cwd: workspaceDir }
+    const resolved = path.normalize(path.isAbsolute(clean) ? clean : `${workspaceDir}/${clean}`)
     return { ok: true, cwd: resolved }
 }
 
 function startBackgroundCommand(command: string, cwd: string, timeoutMs: number): ToolResult {
     const id = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
-    const logPath = `${BACKGROUND_DIR}/${id}.log`
+    const logPath = `${activeRuntimePaths().workspaceDir}/.background-jobs/${id}.log`
     ensureParentDir(logPath)
     const logStream = fs.createWriteStream(/* turbopackIgnore: true */ logPath, { flags: 'a' })
     logStream.write(`$ ${command}\n\n`)

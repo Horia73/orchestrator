@@ -3,7 +3,8 @@ import path from 'path'
 import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 
-import { PRIVATE_STATE_DIR, WORKSPACE_ENV_PATH, getEnvValue } from '@/lib/config'
+import { getEnvValue } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     cleanDomainFilter,
     cleanEntity,
@@ -25,8 +26,13 @@ const DEFAULT_STATUS_TIMEOUT_MS = 8_000
 const DEFAULT_MAX_RESULTS = 500
 const MAX_RESULTS_CAP = 5_000
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
-const ACTION_POLICY_PATH = path.join(PRIVATE_STATE_DIR, 'home-assistant-action-policy.json')
-const ACTION_AUDIT_PATH = path.join(PRIVATE_STATE_DIR, 'home-assistant-action-audit.jsonl')
+function actionPolicyPath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'home-assistant-action-policy.json')
+}
+
+function actionAuditPath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'home-assistant-action-audit.jsonl')
+}
 const DIRECT_ACTION_DOMAINS = ['light', 'cover', 'climate', 'notify'] as const
 
 const READ_ONLY_CAPABILITIES = [
@@ -355,8 +361,8 @@ export function getHomeAssistantActionPolicy(): HomeAssistantActionPolicy {
     }
 
     try {
-        if (!fs.existsSync(ACTION_POLICY_PATH)) return defaultPolicy
-        const parsed = JSON.parse(fs.readFileSync(ACTION_POLICY_PATH, 'utf-8')) as Partial<HomeAssistantActionPolicy>
+        if (!fs.existsSync(actionPolicyPath())) return defaultPolicy
+        const parsed = JSON.parse(fs.readFileSync(actionPolicyPath(), 'utf-8')) as Partial<HomeAssistantActionPolicy>
         return normalizeActionPolicy(parsed, defaultPolicy)
     } catch {
         return defaultPolicy
@@ -371,10 +377,10 @@ export function saveHomeAssistantActionPolicy(input: HomeAssistantActionPolicyIn
         updatedAt: Date.now(),
     }, current)
 
-    fs.mkdirSync(path.dirname(ACTION_POLICY_PATH), { recursive: true })
-    fs.writeFileSync(ACTION_POLICY_PATH, `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 })
+    fs.mkdirSync(path.dirname(actionPolicyPath()), { recursive: true })
+    fs.writeFileSync(actionPolicyPath(), `${JSON.stringify(next, null, 2)}\n`, { encoding: 'utf-8', mode: 0o600 })
     try {
-        fs.chmodSync(ACTION_POLICY_PATH, 0o600)
+        fs.chmodSync(actionPolicyPath(), 0o600)
     } catch {
         // Best effort.
     }
@@ -783,8 +789,8 @@ export async function homeAssistantListAutomationConfigs(options: HomeAssistantA
 
 export async function homeAssistantReadActionAudit(maxResults = 50) {
     const max = clampInt(maxResults, 1, 200)
-    if (!fs.existsSync(ACTION_AUDIT_PATH)) return { entries: [] }
-    const lines = fs.readFileSync(ACTION_AUDIT_PATH, 'utf-8').split(/\r?\n/).filter(Boolean)
+    if (!fs.existsSync(actionAuditPath())) return { entries: [] }
+    const lines = fs.readFileSync(actionAuditPath(), 'utf-8').split(/\r?\n/).filter(Boolean)
     return {
         entries: lines.slice(-max).map(line => {
             try {
@@ -1148,10 +1154,10 @@ async function appendActionAudit(input: Record<string, unknown>): Promise<string
         timestamp: new Date().toISOString(),
         ...safeJsonForAudit(input),
     }
-    fs.mkdirSync(path.dirname(ACTION_AUDIT_PATH), { recursive: true })
-    fs.appendFileSync(ACTION_AUDIT_PATH, `${JSON.stringify(record)}\n`, { encoding: 'utf-8', mode: 0o600 })
+    fs.mkdirSync(path.dirname(actionAuditPath()), { recursive: true })
+    fs.appendFileSync(actionAuditPath(), `${JSON.stringify(record)}\n`, { encoding: 'utf-8', mode: 0o600 })
     try {
-        fs.chmodSync(ACTION_AUDIT_PATH, 0o600)
+        fs.chmodSync(actionAuditPath(), 0o600)
     } catch {
         // Best effort.
     }
@@ -1293,9 +1299,10 @@ function parseEnvAssignments(raw: string): Record<string, string> {
 }
 
 function patchWorkspaceEnv(values: Record<string, string>): void {
-    fs.mkdirSync(path.dirname(WORKSPACE_ENV_PATH), { recursive: true })
-    const existing = fs.existsSync(WORKSPACE_ENV_PATH)
-        ? fs.readFileSync(WORKSPACE_ENV_PATH, 'utf-8')
+    const workspaceEnvPath = activeRuntimePaths().workspaceEnvPath
+    fs.mkdirSync(path.dirname(workspaceEnvPath), { recursive: true })
+    const existing = fs.existsSync(workspaceEnvPath)
+        ? fs.readFileSync(workspaceEnvPath, 'utf-8')
         : ''
     const keysToReplace = new Set([...URL_ENV_KEYS, ...TOKEN_ENV_KEYS])
     const kept = existing
@@ -1316,9 +1323,9 @@ function patchWorkspaceEnv(values: Record<string, string>): void {
         for (const [key, value] of entries) kept.push(`${key}=${formatEnvValue(value)}`)
     }
 
-    fs.writeFileSync(WORKSPACE_ENV_PATH, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
+    fs.writeFileSync(workspaceEnvPath, `${kept.join('\n')}\n`, { encoding: 'utf-8', mode: 0o600 })
     try {
-        fs.chmodSync(WORKSPACE_ENV_PATH, 0o600)
+        fs.chmodSync(workspaceEnvPath, 0o600)
     } catch {
         // Best effort; some filesystems ignore chmod.
     }

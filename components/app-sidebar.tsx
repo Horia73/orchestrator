@@ -13,11 +13,13 @@ import {
   MapPinned,
   Telescope,
   LoaderCircle,
+  LogOut,
   Plus,
   Search,
   MoreHorizontal,
   Settings,
   Trash,
+  UserRound,
   X,
 } from "lucide-react"
 import {
@@ -40,12 +42,17 @@ import {
   DropdownMenu,
   DropdownMenuContent,
   DropdownMenuItem,
+  DropdownMenuSeparator,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { AnimatedTitle } from "@/components/animated-title"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useRuntimeConfig } from "@/hooks/use-runtime-config"
 import { useInboxUnread } from "@/hooks/use-inbox-unread"
+import {
+  profileInitials,
+  useCurrentProfile,
+} from "@/components/profiles/use-profiles"
 import type { Conversation } from "@/lib/types"
 
 const TABLET_NAV_MEDIA =
@@ -272,6 +279,7 @@ export function AppSidebar() {
     isOnLibrary
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
   const inboxUnread = useInboxUnread()
+  const { profile: currentProfile, isAdmin } = useCurrentProfile()
   const [searchActive, setSearchActive] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
   const [searchResults, setSearchResults] = React.useState<
@@ -752,6 +760,18 @@ export function AppSidebar() {
     if (isMobile) setOpenMobile(false)
   }, [isMobile, setOpenMobile])
 
+  const handleSwitchProfile = React.useCallback(() => {
+    closeMobileSidebar()
+    router.push(`/profiles?next=${encodeURIComponent(pathname || "/")}`)
+  }, [closeMobileSidebar, pathname, router])
+
+  const handleLogoutProfile = React.useCallback(() => {
+    void fetch("/api/profiles/logout", { method: "POST" }).finally(() => {
+      router.replace("/profiles")
+      router.refresh()
+    })
+  }, [router])
+
   return (
     <Sidebar collapsible="icon" className="border-r-0">
       <SidebarHeader className="shrink-0 pb-2">
@@ -1193,23 +1213,56 @@ export function AppSidebar() {
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          <SidebarMenuItem>
-            <SidebarMenuButton
-              asChild
-              tooltip="Settings"
-              isActive={isOnSettings}
-              className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
-            >
-              <Link
-                href="/settings"
-                replace={isMobile}
-                onClick={closeMobileSidebar}
+          {currentProfile && (
+            <SidebarMenuItem>
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <SidebarMenuButton
+                    tooltip={currentProfile.name}
+                    className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground dark:hover:bg-muted"
+                  >
+                    <span
+                      className="grid size-4 shrink-0 place-items-center rounded-[4px] text-[9px] font-semibold leading-none text-white"
+                      style={{ backgroundColor: currentProfile.color }}
+                    >
+                      {profileInitials(currentProfile.name)}
+                    </span>
+                    <span className="truncate">{currentProfile.name}</span>
+                  </SidebarMenuButton>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent side="right" align="end" className="w-52">
+                  <DropdownMenuItem onClick={handleSwitchProfile}>
+                    <UserRound className="mr-2 size-4" />
+                    Switch profile
+                  </DropdownMenuItem>
+                  <DropdownMenuSeparator />
+                  <DropdownMenuItem onClick={handleLogoutProfile}>
+                    <LogOut className="mr-2 size-4" />
+                    Sign out
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            </SidebarMenuItem>
+          )}
+          {isAdmin && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                tooltip="Settings"
+                isActive={isOnSettings}
+                className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
               >
-                <Settings className="size-4" />
-                <span>Settings</span>
-              </Link>
-            </SidebarMenuButton>
-          </SidebarMenuItem>
+                <Link
+                  href="/settings"
+                  replace={isMobile}
+                  onClick={closeMobileSidebar}
+                >
+                  <Settings className="size-4" />
+                  <span>Settings</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
         </SidebarMenu>
       </SidebarFooter>
     </Sidebar>

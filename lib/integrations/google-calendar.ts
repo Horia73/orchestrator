@@ -1,7 +1,8 @@
 import path from 'path'
 import { randomBytes } from 'crypto'
 
-import { getConfiguredTimezone, PRIVATE_STATE_DIR } from '@/lib/config'
+import { getConfiguredTimezone } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS,
     type GoogleOAuthConfigInput,
@@ -22,14 +23,16 @@ import {
 } from './google-oauth'
 
 const GOOGLE_CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3'
-const GOOGLE_CALENDAR_TOKEN_PATH = path.join(PRIVATE_STATE_DIR, 'auth', 'google-calendar.json')
+function googleCalendarTokenPath(): string {
+    return path.join(activeRuntimePaths().privateStateDir, 'auth', 'google-calendar.json')
+}
 const DEFAULT_ORIGIN = 'http://localhost:3000'
 
 export const GOOGLE_CALENDAR_PROVIDER: GoogleOAuthProviderConfig = {
     provider: 'googleCalendar',
     label: 'Google Calendar',
     redirectPath: '/api/integrations/google/oauth/callback',
-    tokenPath: GOOGLE_CALENDAR_TOKEN_PATH,
+    tokenPath: googleCalendarTokenPath(),
     clientIdEnvKeys: ['GOOGLE_OAUTH_CLIENT_ID', 'GOOGLE_CALENDAR_OAUTH_CLIENT_ID', 'CALENDAR_OAUTH_CLIENT_ID'],
     clientSecretEnvKeys: ['GOOGLE_OAUTH_CLIENT_SECRET', 'GOOGLE_CALENDAR_OAUTH_CLIENT_SECRET', 'CALENDAR_OAUTH_CLIENT_SECRET'],
     redirectUriEnvKeys: [
@@ -302,7 +305,7 @@ export async function getGoogleCalendarIntegrationStatus(origin: string, refresh
     const shouldRefresh = token ? token.expiresAt <= Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
-            token = await refreshGoogleOAuthToken(token, config, GOOGLE_CALENDAR_TOKEN_PATH)
+            token = await refreshGoogleOAuthToken(token, config, googleCalendarTokenPath())
         } catch (err) {
             refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Google Calendar token'
@@ -401,7 +404,7 @@ export async function completeGoogleCalendarOAuth(args: {
 
     const profile = await fetchCalendarProfile(token.access_token)
     const now = Date.now()
-    writeGoogleOAuthToken(GOOGLE_CALENDAR_TOKEN_PATH, {
+    writeGoogleOAuthToken(googleCalendarTokenPath(), {
         version: 1,
         provider: GOOGLE_CALENDAR_PROVIDER.provider,
         clientId: config.clientId,
@@ -422,7 +425,7 @@ export async function completeGoogleCalendarOAuth(args: {
 export async function disconnectGoogleCalendar(): Promise<GoogleCalendarIntegrationStatus> {
     const token = readCalendarToken()
     await revokeGoogleOAuthToken(token)
-    clearGoogleOAuthToken(GOOGLE_CALENDAR_TOKEN_PATH)
+    clearGoogleOAuthToken(googleCalendarTokenPath())
     return getGoogleCalendarIntegrationStatus(DEFAULT_ORIGIN, false)
 }
 
@@ -728,7 +731,7 @@ async function calendarApi<T>(pathAndQuery: string, init: RequestInit = {}, retr
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER), GOOGLE_CALENDAR_TOKEN_PATH)
+        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER), googleCalendarTokenPath())
         return calendarApi<T>(pathAndQuery, init, false)
     }
 
@@ -747,11 +750,11 @@ async function getValidCalendarToken(): Promise<GoogleOAuthTokenRecord> {
     if (!token) throw new Error('Google Calendar is not connected. Connect it from Settings > Auth.')
     if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) return token
     if (!token.refreshToken) throw new Error('Google Calendar session expired. Reconnect Google Calendar from Settings > Auth.')
-    return refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER), GOOGLE_CALENDAR_TOKEN_PATH)
+    return refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER), googleCalendarTokenPath())
 }
 
 function readCalendarToken(): GoogleOAuthTokenRecord | null {
-    return readGoogleOAuthToken(GOOGLE_CALENDAR_TOKEN_PATH, GOOGLE_CALENDAR_PROVIDER.provider)
+    return readGoogleOAuthToken(googleCalendarTokenPath(), GOOGLE_CALENDAR_PROVIDER.provider)
 }
 
 function summarizeCalendar(item: CalendarListEntry): GoogleCalendarInfo {

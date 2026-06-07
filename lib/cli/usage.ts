@@ -22,9 +22,9 @@ import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import { resolveBin, augmentedEnv } from './resolve-bin'
-import { CODEX_RUNTIME_AUTH_PATH, prepareCodexRuntimeHome } from './codex-env'
+import { codexRuntimeAuthPath, prepareCodexRuntimeHome } from './codex-env'
 import { getAllCliStatuses } from './status'
-import { AGENT_WORKSPACE_DIR } from '@/lib/runtime-paths'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 
 export interface CliQuotaWindow {
     /** Percent of the window used, 0–100. */
@@ -173,7 +173,7 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
     // Run from the agent workspace — the same directory the chat path drives
     // claude in. Prime ~/.claude.json so the interactive TUI opens straight to a
     // usable session (no onboarding/trust prompts) where /usage can render.
-    const cwd = AGENT_WORKSPACE_DIR
+    const cwd = activeRuntimePaths().agentWorkspaceDir
     ensureClaudeInteractiveReady(cwd)
 
     return new Promise(resolve => {
@@ -768,9 +768,10 @@ interface CodexUsageResponse {
 
 function readCodexAuth(): { token: string; accountId: string } | null {
     prepareCodexRuntimeHome()
-    const paths = CODEX_RUNTIME_AUTH_PATH === USER_CODEX_AUTH_PATH
-        ? [CODEX_RUNTIME_AUTH_PATH]
-        : [CODEX_RUNTIME_AUTH_PATH, USER_CODEX_AUTH_PATH]
+    const runtimeAuthPath = codexRuntimeAuthPath()
+    const paths = runtimeAuthPath === USER_CODEX_AUTH_PATH
+        ? [runtimeAuthPath]
+        : [runtimeAuthPath, USER_CODEX_AUTH_PATH]
 
     for (const authPath of paths) {
         if (!existsSync(authPath)) continue

@@ -1,7 +1,9 @@
 import fs from 'fs'
 
 import db from '@/lib/db'
-import { ARTIFACTS_DIR, PRIVATE_STATE_DIR, UPLOADS_DIR } from '@/lib/config'
+import { runWithProfileContext } from '@/lib/profiles/context'
+import { listProfiles } from '@/lib/profiles/store'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     resetWorkspaceEnvToInitialState,
     resetWorkspaceFilesToInitialState,
@@ -47,9 +49,42 @@ export interface FactoryResetResult {
     preservedEnvLocal: boolean
     resetMemoryFiles: string[]
     resetEnvLocal: boolean
+    profilesReset: string[]
 }
 
 export function factoryResetAppData(opts?: {
+    preserveEnvLocal?: boolean
+    scopes?: FactoryResetScope[]
+}): FactoryResetResult {
+    const combined: FactoryResetResult = {
+        scopes: normalizeScopes(opts),
+        clearedTables: {},
+        resetDirectories: [],
+        preservedEnvLocal: true,
+        resetMemoryFiles: [],
+        resetEnvLocal: false,
+        profilesReset: [],
+    }
+
+    for (const profile of listProfiles({ includeDisabled: true })) {
+        const result = runWithProfileContext(
+            { profileId: profile.id, role: profile.role },
+            () => factoryResetProfileData(opts)
+        )
+        combined.profilesReset.push(profile.id)
+        combined.preservedEnvLocal = combined.preservedEnvLocal && result.preservedEnvLocal
+        combined.resetEnvLocal = combined.resetEnvLocal || result.resetEnvLocal
+        combined.resetMemoryFiles.push(...result.resetMemoryFiles.map((file) => `${profile.id}:${file}`))
+        combined.resetDirectories.push(...result.resetDirectories)
+        for (const [table, count] of Object.entries(result.clearedTables)) {
+            combined.clearedTables[table] = (combined.clearedTables[table] ?? 0) + count
+        }
+    }
+
+    return combined
+}
+
+function factoryResetProfileData(opts?: {
     preserveEnvLocal?: boolean
     scopes?: FactoryResetScope[]
 }): FactoryResetResult {
@@ -66,15 +101,17 @@ export function factoryResetAppData(opts?: {
     })()
 
     if (scopes.includes('chat')) {
-        resetDirectory(UPLOADS_DIR, 0o755)
-        resetDirectories.push(UPLOADS_DIR)
-        resetDirectory(ARTIFACTS_DIR, 0o755)
-        resetDirectories.push(ARTIFACTS_DIR)
+        const paths = activeRuntimePaths()
+        resetDirectory(paths.uploadsDir, 0o755)
+        resetDirectories.push(paths.uploadsDir)
+        resetDirectory(paths.artifactsDir, 0o755)
+        resetDirectories.push(paths.artifactsDir)
     }
 
     if (scopes.includes('integrations')) {
-        resetDirectory(PRIVATE_STATE_DIR, 0o700)
-        resetDirectories.push(PRIVATE_STATE_DIR)
+        const privateStateDir = activeRuntimePaths().privateStateDir
+        resetDirectory(privateStateDir, 0o700)
+        resetDirectories.push(privateStateDir)
     }
 
     const legacyFullWorkspaceReset = opts?.scopes === undefined && scopes.includes('memory')
@@ -104,6 +141,7 @@ export function factoryResetAppData(opts?: {
         preservedEnvLocal,
         resetMemoryFiles,
         resetEnvLocal,
+        profilesReset: [activeRuntimePaths().profileId],
     }
 }
 

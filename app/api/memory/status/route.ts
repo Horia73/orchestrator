@@ -5,30 +5,33 @@ import { getActiveThreshold, getMemoryStatus } from "@/lib/memory/recall"
 import { embeddingsAvailable, providerHasKey } from "@/lib/memory/embeddings"
 import { getThresholds } from "@/lib/memory/store"
 import { getLibraryStatus } from "@/lib/memory/library"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  try {
-    return NextResponse.json({
-      settings: getMemoryEmbeddingSettings(),
-      status: getMemoryStatus(),
-      libraryStatus: getLibraryStatus(),
-      embeddingsAvailable: embeddingsAvailable(),
-      activeThreshold: getActiveThreshold(),
-      thresholds: getThresholds(),
-      providers: {
-        google: providerHasKey("google"),
-        openai: providerHasKey("openai"),
-      },
-      options: EMBEDDING_MODEL_OPTIONS,
-    })
-  } catch (error) {
-    console.error("Failed to read memory status", error)
-    return NextResponse.json(
-      { error: "Failed to read memory status" },
-      { status: 500 }
-    )
-  }
+      try {
+        return NextResponse.json({
+          settings: getMemoryEmbeddingSettings(),
+          status: getMemoryStatus(),
+          libraryStatus: getLibraryStatus(),
+          embeddingsAvailable: embeddingsAvailable(),
+          activeThreshold: getActiveThreshold(),
+          thresholds: getThresholds(),
+          providers: {
+            google: providerHasKey("google"),
+            openai: providerHasKey("openai"),
+          },
+          options: EMBEDDING_MODEL_OPTIONS,
+        })
+      } catch (error) {
+        console.error("Failed to read memory status", error)
+        return NextResponse.json(
+          { error: "Failed to read memory status" },
+          { status: 500 }
+        )
+      }
+  })
 }

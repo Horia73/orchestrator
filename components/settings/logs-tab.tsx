@@ -403,9 +403,10 @@ function LogsTable({
 
     return (
         <div className="overflow-hidden rounded-2xl border border-border/70 bg-card">
-            <div className="hidden grid-cols-[24px_140px_120px_minmax(0,1fr)_90px_90px_120px_24px] gap-3 border-b border-border/70 bg-muted/40 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-foreground/55 md:grid">
+            <div className="hidden grid-cols-[24px_140px_110px_110px_minmax(0,1fr)_90px_90px_120px_24px] gap-3 border-b border-border/70 bg-muted/40 px-3 py-2 text-[11px] font-medium uppercase tracking-wider text-foreground/55 md:grid">
                 <span />
                 <span>When</span>
+                <span>Profile</span>
                 <span>Agent</span>
                 <span>Model</span>
                 <span className="text-right">Tokens</span>
@@ -478,7 +479,9 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
                             <ProviderDot providerId={row.provider} />
                             <span className="truncate font-medium text-foreground">{row.model}</span>
                         </div>
-                        <div className="mt-0.5 truncate text-[11.5px] text-foreground/45">{row.agentId}</div>
+                        <div className="mt-0.5 truncate text-[11.5px] text-foreground/45">
+                            {(row.profileName ?? row.profileId ?? "Horia")} · {row.agentId}
+                        </div>
                     </div>
                     <StatusPill status={row.status} />
                 </div>
@@ -492,7 +495,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
             <button
                 onClick={onToggle}
                 className={cn(
-                    "hidden h-[56px] w-full grid-cols-[24px_140px_120px_minmax(0,1fr)_90px_90px_120px_24px] items-center gap-3 px-3 py-2 text-left text-[13px] transition-colors md:grid",
+                    "hidden h-[56px] w-full grid-cols-[24px_140px_110px_110px_minmax(0,1fr)_90px_90px_120px_24px] items-center gap-3 px-3 py-2 text-left text-[13px] transition-colors md:grid",
                     "hover:bg-muted/50"
                 )}
             >
@@ -501,6 +504,7 @@ function LogRow({ row, expanded, onToggle, onMeasure }: {
                     <div className="truncate text-foreground tabular-nums">{formatTime(row.startedAt)}</div>
                     <div className="truncate text-[11.5px] text-foreground/45 tabular-nums">{relativeTime(row.startedAt)}</div>
                 </div>
+                <div className="truncate text-foreground/80">{row.profileName ?? row.profileId ?? "Horia"}</div>
                 <div className="truncate text-foreground/80">{row.agentId}</div>
                 <div className="flex min-w-0 items-center gap-1.5">
                     <ProviderDot providerId={row.provider} />
@@ -602,6 +606,7 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
                     <h4 className="text-[11px] font-medium uppercase tracking-wider text-foreground/50">Request</h4>
                     <dl className="grid grid-cols-1 gap-x-3 gap-y-1.5 text-[12.5px] sm:grid-cols-[120px_minmax(0,1fr)]">
                         <Row label="ID" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.id}</code>} />
+                        <Row label="Profile" value={row.profileName ?? row.profileId ?? "Horia"} />
                         <Row label="Conversation" value={<code className="rounded bg-muted px-1.5 py-0.5 text-[11px] tabular-nums">{row.conversationId}</code>} />
                         <Row label="Provider" value={`${row.provider}`} />
                         <Row label="Thinking" value={row.thinkingLevel} />

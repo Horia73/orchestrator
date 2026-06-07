@@ -22,7 +22,7 @@
 //  - memory_chunks: the embeddings, one row per (source, model, dim, chunkIndex).
 //  - memory_fts: keyword index over current content (model-independent).
 //  - memory_meta: schema version (the index is a derived cache; a version bump
-//    drops + rebuilds it from the source files).
+//    drops + rebuilds it from the upstream memory/chat sources).
 
 import db from "@/lib/db"
 

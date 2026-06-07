@@ -10,6 +10,7 @@ import { filterIntegrationToolExposure } from '@/lib/integrations/exposure'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 import { getProviderReadiness } from '@/lib/provider-readiness'
 import { resolveRequestOrigin } from '@/lib/app-origin'
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 type ProviderCaps = NonNullable<ReturnType<typeof getProviderCapabilities>>
 
@@ -72,48 +73,50 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
 
 /** GET /api/chat/status - compact status payload for the chat input popover. */
 export async function GET(request: Request) {
-    const origin = resolveRequestOrigin(request)
-    const settings = resolveChatAgentSettings()
-    const config = getConfig()
-    const registry = getEffectiveRegistry()
-    const providerDef = registry[settings.provider]
-    const modelDef = providerDef?.models[settings.model] ?? null
-    const providerCaps = getProviderCapabilities(settings.provider)
-    const readiness = await getProviderReadiness(settings.provider, providerDef)
-    const availableModel = readiness.available ? modelDef : null
+  return runWithRequestProfile(request, async () => {
+        const origin = resolveRequestOrigin(request)
+        const settings = resolveChatAgentSettings()
+        const config = getConfig()
+        const registry = getEffectiveRegistry()
+        const providerDef = registry[settings.provider]
+        const modelDef = providerDef?.models[settings.model] ?? null
+        const providerCaps = getProviderCapabilities(settings.provider)
+        const readiness = await getProviderReadiness(settings.provider, providerDef)
+        const availableModel = readiness.available ? modelDef : null
 
-    const systemPromptTokens = providerCaps && availableModel
-        ? estimateSystemPromptTokens(origin, providerCaps)
-        : null
+        const systemPromptTokens = providerCaps && availableModel
+            ? estimateSystemPromptTokens(origin, providerCaps)
+            : null
 
-    return NextResponse.json({
-        chat: {
-            agent: {
-                id: orchestrator.id,
-                name: config.assistantName || orchestrator.name,
+        return NextResponse.json({
+            chat: {
+                agent: {
+                    id: orchestrator.id,
+                    name: config.assistantName || orchestrator.name,
+                },
+                provider: {
+                    id: settings.provider,
+                    name: providerDef?.name ?? settings.provider,
+                    requiresApiKey: providerCaps?.requiresApiKey !== false,
+                },
+                model: availableModel ? {
+                    id: settings.model,
+                    name: availableModel.name,
+                    contextWindow: availableModel.contextWindow,
+                    maxOutputTokens: availableModel.maxOutputTokens,
+                    pricingKind: availableModel.pricing?.kind ?? 'unknown',
+                    dataCompleteness: availableModel.dataCompleteness,
+                } : null,
+                thinkingLevel: settings.thinkingLevel,
+                source: settings.source,
+                available: Boolean(availableModel),
+                unavailableReason: !modelDef
+                    ? `Model ${settings.model} is not available for ${providerDef?.name ?? settings.provider}.`
+                    : readiness.unavailableReason,
             },
-            provider: {
-                id: settings.provider,
-                name: providerDef?.name ?? settings.provider,
-                requiresApiKey: providerCaps?.requiresApiKey !== false,
-            },
-            model: availableModel ? {
-                id: settings.model,
-                name: availableModel.name,
-                contextWindow: availableModel.contextWindow,
-                maxOutputTokens: availableModel.maxOutputTokens,
-                pricingKind: availableModel.pricing?.kind ?? 'unknown',
-                dataCompleteness: availableModel.dataCompleteness,
-            } : null,
-            thinkingLevel: settings.thinkingLevel,
-            source: settings.source,
-            available: Boolean(availableModel),
-            unavailableReason: !modelDef
-                ? `Model ${settings.model} is not available for ${providerDef?.name ?? settings.provider}.`
-                : readiness.unavailableReason,
-        },
-        systemPromptTokens,
-    }, {
-        headers: { 'Cache-Control': 'no-store' },
-    })
+            systemPromptTokens,
+        }, {
+            headers: { 'Cache-Control': 'no-store' },
+        })
+  })
 }

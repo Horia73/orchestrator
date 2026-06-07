@@ -14,7 +14,8 @@ import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
 import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type BrowserProfileMode, type MediaResolutionLevel } from '@/lib/browser-agent-runtime/config'
 import { resolveBrowserBackend } from '@/lib/browser-agent-backend'
 import { redactBrowserAgentText } from '@/lib/browser-agent-runtime/redaction'
-import { PRIVATE_STATE_DIR, getApiKey, getConfig, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
+import { getApiKey, getConfig, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { latestUserPromptWithPortableHistory } from './history'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
 
@@ -190,7 +191,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
         browser: {
             ...DEFAULT_AGENT_CONFIG.browser,
             backend,
-            userDataDir: path.join(PRIVATE_STATE_DIR, 'browser-agent', userDataDirName),
+            userDataDir: path.join(activeRuntimePaths().privateStateDir, 'browser-agent', userDataDirName),
             profileMode: parseBrowserProfileModeEnv(process.env.BROWSER_AGENT_PROFILE_MODE, DEFAULT_AGENT_CONFIG.browser.profileMode),
             baseProfileDir: process.env.BROWSER_AGENT_BASE_PROFILE_DIR || DEFAULT_AGENT_CONFIG.browser.baseProfileDir,
             chromeExecutablePath: process.env.BROWSER_AGENT_CHROME_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH || DEFAULT_AGENT_CONFIG.browser.chromeExecutablePath,

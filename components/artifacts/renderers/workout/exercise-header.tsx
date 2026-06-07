@@ -47,13 +47,12 @@ export function ExerciseHeader({
                 <h3 className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-foreground">
                     {exercise.name}
                 </h3>
-                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl || exercise.description || exercise.imageUrl || exercise.imageQuery || glossaryTerms.length > 0 ? (
+                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl || exercise.description || exercise.imageUrl || glossaryTerms.length > 0 ? (
                     <FormCuesPopover
                         exerciseName={exercise.name}
                         cues={cues}
                         description={exercise.description}
                         imageUrl={exercise.imageUrl}
-                        imageQuery={exercise.imageQuery}
                         videoUrl={exercise.videoUrl}
                         alternatives={alternatives}
                         glossaryTerms={glossaryTerms}
@@ -157,7 +156,6 @@ function FormCuesPopover({
     cues,
     description,
     imageUrl,
-    imageQuery,
     videoUrl,
     alternatives,
     glossaryTerms,
@@ -166,7 +164,6 @@ function FormCuesPopover({
     cues: string[]
     description?: string
     imageUrl?: string
-    imageQuery?: string
     videoUrl?: string
     alternatives?: string[]
     glossaryTerms: string[]
@@ -175,7 +172,7 @@ function FormCuesPopover({
     const glossaryEntries = glossaryTerms
         .map((term) => [term, getGlossary(term)] as const)
         .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof getGlossary>>] => !!entry[1])
-    const hasDemoContext = !!(imageUrl || imageQuery || description || cues.length > 0 || videoUrl || hasAlternatives)
+    const hasDemoContext = !!(imageUrl || description || cues.length > 0 || videoUrl || hasAlternatives)
     const [open, setOpen] = React.useState(false)
     return (
         <details
@@ -199,7 +196,6 @@ function FormCuesPopover({
                     <ExerciseDemoImage
                         exerciseName={exerciseName}
                         imageUrl={imageUrl}
-                        imageQuery={imageQuery}
                     />
                 ) : null}
                 {description ? (
@@ -293,73 +289,28 @@ interface WorkoutImage {
     height: number
 }
 
-interface WorkoutImageResponse {
-    images?: WorkoutImage[]
-}
-
 function ExerciseDemoImage({
     exerciseName,
     imageUrl,
-    imageQuery,
 }: {
     exerciseName: string
     imageUrl?: string
-    imageQuery?: string
 }) {
-    const [result, setResult] = React.useState<WorkoutImage | null>(
-        imageUrl ? {
-            url: imageUrl,
-            sourceUrl: imageUrl,
-            attribution: 'Demo image',
-            width: 16,
-            height: 9,
-        } : null,
-    )
-    const [failed, setFailed] = React.useState(false)
-    const [brokenUrls, setBrokenUrls] = React.useState<ReadonlySet<string>>(() => new Set())
-    const query = imageQuery ?? `${exerciseName} exercise machine`
-    const [fallbackReady, setFallbackReady] = React.useState(false)
+    const [broken, setBroken] = React.useState(false)
 
     React.useEffect(() => {
-        setBrokenUrls(new Set())
-        setFallbackReady(false)
-    }, [query, imageUrl])
+        setBroken(false)
+    }, [imageUrl])
 
-    React.useEffect(() => {
-        if (imageUrl || failed) return
-        const controller = new AbortController()
-        fetch(`/api/workout-images?q=${encodeURIComponent(query)}&limit=1`, { signal: controller.signal })
-            .then(async (response) => {
-                if (!response.ok) throw new Error(`HTTP ${response.status}`)
-                const data = await response.json() as WorkoutImageResponse
-                setResult(data.images?.[0] ?? null)
-            })
-            .catch((error) => {
-                if (error instanceof DOMException && error.name === 'AbortError') return
-                setFailed(true)
-            })
-        return () => controller.abort()
-    }, [query, imageUrl, failed])
+    if (!imageUrl || broken) return null
 
-    React.useEffect(() => {
-        if (imageUrl || result) return
-        const timer = window.setTimeout(() => setFallbackReady(true), 1200)
-        return () => window.clearTimeout(timer)
-    }, [imageUrl, result, query])
-
-    const fallback = fallbackReady && !imageUrl ? {
-        url: `/api/workout-images/first?q=${encodeURIComponent(query)}`,
-        sourceUrl: `https://commons.wikimedia.org/w/index.php?search=${encodeURIComponent(query)}&title=Special:MediaSearch&type=image`,
-        attribution: 'Wikimedia Commons',
+    const display: WorkoutImage = {
+        url: imageUrl,
+        sourceUrl: imageUrl,
+        attribution: 'Demo image',
         width: 16,
         height: 9,
-    } satisfies WorkoutImage : null
-
-    const display = [result, fallback].find((candidate): candidate is WorkoutImage => {
-        return !!candidate && !brokenUrls.has(candidate.url)
-    }) ?? null
-
-    if (!display) return null
+    }
 
     const ratio = display.width > 0 && display.height > 0
         ? `${display.width} / ${display.height}`
@@ -367,21 +318,14 @@ function ExerciseDemoImage({
 
     return (
         <figure className="mb-3 overflow-hidden rounded-md border border-border/50 bg-muted/35">
-            {/* eslint-disable-next-line @next/next/no-img-element -- arbitrary Commons/uploaded URLs are lazy previews, not LCP content. */}
+            {/* eslint-disable-next-line @next/next/no-img-element -- workout artifacts may carry arbitrary verified demo URLs. */}
             <img
                 src={display.url}
                 alt={`${exerciseName} demo`}
                 loading="lazy"
                 className="block w-full object-cover"
                 style={{ aspectRatio: ratio }}
-                onError={() => {
-                    setBrokenUrls((prev) => {
-                        const next = new Set(prev)
-                        next.add(display.url)
-                        return next
-                    })
-                    if (!imageUrl) setFallbackReady(true)
-                }}
+                onError={() => setBroken(true)}
             />
             <figcaption className="flex items-center justify-between gap-2 px-2 py-1 text-[10px] text-muted-foreground">
                 <span className="min-w-0 truncate">{display.attribution}</span>

@@ -27,6 +27,8 @@ PORT = int(os.environ.get("ORCHESTRATOR_UPDATE_BRIDGE_PORT", "38733"))
 TOKEN_FILE = Path(os.environ.get("ORCHESTRATOR_UPDATE_TOKEN_FILE", str(APP_DIR.parent / "update-bridge-token")))
 APP_PORT = os.environ.get("ORCHESTRATOR_PORT", "3000")
 SERVICE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_SERVICE", "orchestrator")
+IMAGE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_IMAGE", "orchestrator:local")
+ROLLBACK_IMAGE_NAME = os.environ.get("ORCHESTRATOR_ROLLBACK_IMAGE", "orchestrator:rollback")
 # CLIs live in the bind-mounted /home/node volume, so neither the image build
 # nor their own headless (`-p`) runs ever update them. These let the Updates
 # page refresh them in place inside that volume.
@@ -44,6 +46,9 @@ CLI_VERSION_PROBE = (
 )
 LOG_DIR = Path(os.environ.get("ORCHESTRATOR_UPDATE_LOG_DIR", str(APP_DIR.parent / "logs")))
 LOG_PATH = LOG_DIR / "docker-update-bridge.log"
+ROLLBACK_STATE_PATH = Path(
+    os.environ.get("ORCHESTRATOR_ROLLBACK_STATE_FILE", str(LOG_DIR.parent / "rollback-state.json"))
+)
 CLAUDE_USAGE_TIMEOUT_SECONDS = float(os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_TIMEOUT_SECONDS", "30"))
 CLAUDE_USAGE_CWD = Path(
     os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_CWD", str(Path.home() / ".orchestrator" / "claude-usage-cwd"))
@@ -67,6 +72,7 @@ state = {
     "jobId": None,
     "targetTag": None,
     "error": None,
+    "rollback": None,
 }
 
 
@@ -96,6 +102,117 @@ def capture(command: list[str]) -> str:
     write_log("$ " + " ".join(command))
     result = subprocess.run(command, cwd=APP_DIR, check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
     return result.stdout.strip()
+
+
+def capture_optional(command: list[str], cwd: Optional[Path] = None) -> str:
+    try:
+        result = subprocess.run(
+            command,
+            cwd=cwd or APP_DIR,
+            check=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=10,
+        )
+        return result.stdout.strip()
+    except Exception:
+        return ""
+
+
+def docker_command() -> str:
+    docker = shutil.which("docker")
+    if not docker:
+        raise RuntimeError("Docker is not available.")
+    return docker
+
+
+def docker_image_id(image: str) -> str:
+    try:
+        return capture_optional([docker_command(), "image", "inspect", image, "--format", "{{.Id}}"])
+    except Exception:
+        return ""
+
+
+def read_package_version() -> Optional[str]:
+    try:
+        parsed = json.loads((APP_DIR / "package.json").read_text(encoding="utf-8"))
+        version = parsed.get("version")
+        return version if isinstance(version, str) and version else None
+    except Exception:
+        return None
+
+
+def current_git_ref() -> Optional[str]:
+    branch = capture_optional(["git", "-C", str(APP_DIR), "branch", "--show-current"])
+    if branch:
+        return branch
+    tag = capture_optional(["git", "-C", str(APP_DIR), "describe", "--tags", "--exact-match"])
+    return tag or None
+
+
+def read_rollback_state() -> Optional[dict]:
+    try:
+        parsed = json.loads(ROLLBACK_STATE_PATH.read_text(encoding="utf-8"))
+        return parsed if isinstance(parsed, dict) else None
+    except Exception:
+        return None
+
+
+def write_rollback_state(payload: dict) -> None:
+    ROLLBACK_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ROLLBACK_STATE_PATH.with_suffix(ROLLBACK_STATE_PATH.suffix + ".tmp")
+    tmp.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    tmp.replace(ROLLBACK_STATE_PATH)
+
+
+def rollback_status() -> Optional[dict]:
+    saved = read_rollback_state()
+    image_id = docker_image_id(ROLLBACK_IMAGE_NAME)
+    if not saved and not image_id:
+        return None
+    payload = dict(saved or {})
+    payload["image"] = ROLLBACK_IMAGE_NAME
+    payload["available"] = bool(image_id)
+    payload["imageId"] = image_id or None
+    if not image_id:
+        payload["unavailableReason"] = f"Rollback image {ROLLBACK_IMAGE_NAME} is missing."
+    return payload
+
+
+def save_current_image_for_rollback(job_id: str, target_ref: str) -> None:
+    source_image_id = docker_image_id(IMAGE_NAME)
+    if not source_image_id:
+        write_log(f"Rollback slot not updated: current image {IMAGE_NAME} does not exist.")
+        return
+
+    commit = capture_optional(["git", "-C", str(APP_DIR), "rev-parse", "--short=12", "HEAD"]) or None
+    ref = current_git_ref()
+    version = read_package_version()
+    run([docker_command(), "tag", IMAGE_NAME, ROLLBACK_IMAGE_NAME])
+    rollback_image_id = docker_image_id(ROLLBACK_IMAGE_NAME)
+    saved_at = int(time.time() * 1000)
+    payload = {
+        "available": bool(rollback_image_id),
+        "image": ROLLBACK_IMAGE_NAME,
+        "sourceImage": IMAGE_NAME,
+        "imageId": rollback_image_id or source_image_id,
+        "sourceImageId": source_image_id,
+        "version": version,
+        "commit": commit,
+        "ref": ref,
+        "savedAt": saved_at,
+        "savedFromJobId": job_id,
+        "savedBeforeTarget": target_ref,
+    }
+    write_rollback_state(payload)
+    set_state(rollback=rollback_status())
+    write_log(
+        "Saved rollback image "
+        f"{ROLLBACK_IMAGE_NAME} from {IMAGE_NAME}"
+        f"{f' version={version}' if version else ''}"
+        f"{f' commit={commit}' if commit else ''}."
+    )
 
 
 def compose_command() -> list[str]:
@@ -411,20 +528,43 @@ def safe_branch(value: object) -> str:
     return branch
 
 
+def safe_tag(value: object) -> str:
+    tag = str(value or "").strip()
+    if not tag:
+        return ""
+    allowed = all(ch.isalnum() or ch in "._/-+" for ch in tag)
+    if (
+        tag.startswith(("/", "-"))
+        or tag.endswith("/")
+        or ".." in tag
+        or "@{" in tag
+        or not allowed
+    ):
+        raise RuntimeError(f"Invalid update tag: {tag or '(empty)'}")
+    return tag
+
+
 def update_stack(payload: dict) -> None:
     job_id = str(payload.get("jobId") or f"manual-{int(time.time())}")
-    target_tag = str(payload.get("targetTag") or "")
+    target_tag = safe_tag(payload.get("targetTag"))
     branch = safe_branch(payload.get("targetBranch"))
-    set_state(phase="updating", jobId=job_id, targetTag=target_tag, error=None)
-    write_log(f"Starting Docker update job={job_id} target={target_tag or branch}")
+    target_ref = target_tag or branch
+    set_state(phase="updating", jobId=job_id, targetTag=target_ref, error=None)
+    write_log(f"Starting Docker update job={job_id} target={target_ref}")
 
     try:
         if not (APP_DIR / ".git").exists():
             raise RuntimeError(f"{APP_DIR} is not a git checkout.")
 
-        run(["git", "-C", str(APP_DIR), "fetch", "origin", branch, "--tags"])
-        run(["git", "-C", str(APP_DIR), "checkout", branch])
-        run(["git", "-C", str(APP_DIR), "pull", "--ff-only", "origin", branch])
+        save_current_image_for_rollback(job_id, target_ref)
+
+        if target_tag:
+            run(["git", "-C", str(APP_DIR), "fetch", "origin", "tag", target_tag, "--tags"])
+            run(["git", "-C", str(APP_DIR), "checkout", "--detach", target_tag])
+        else:
+            run(["git", "-C", str(APP_DIR), "fetch", "origin", branch, "--tags"])
+            run(["git", "-C", str(APP_DIR), "checkout", branch])
+            run(["git", "-C", str(APP_DIR), "pull", "--ff-only", "origin", branch])
         target_commit = capture(["git", "-C", str(APP_DIR), "rev-parse", "--short=12", "HEAD"])
         notify_app(
             job_id,
@@ -434,7 +574,7 @@ def update_stack(payload: dict) -> None:
         )
         compose_env = os.environ.copy()
         compose_env["ORCHESTRATOR_BUILD_COMMIT"] = target_commit
-        compose_env["ORCHESTRATOR_BUILD_REF"] = branch
+        compose_env["ORCHESTRATOR_BUILD_REF"] = target_ref
         # Strip any historical BUILD_COMMIT / BUILD_REF lines from `.env`
         # before invoking compose. `env_file` is loaded into container
         # runtime AFTER the image's baked ENV, so a stale line there silently
@@ -443,6 +583,12 @@ def update_stack(payload: dict) -> None:
         # them defensively every update.
         scrub_stale_build_env(APP_DIR / ".env")
         run([*compose_command(), "up", "--build", "-d"], env=compose_env)
+        notify_app(
+            job_id,
+            "completed",
+            "Host updater finished rebuilding the Docker stack.",
+            target_commit=target_commit,
+        )
         set_state(phase="completed", error=None)
         write_log(f"Completed Docker update job={job_id}")
     except Exception as exc:
@@ -668,6 +814,35 @@ def restart_container_async(delay: float = 0.4) -> None:
     threading.Thread(target=_do, daemon=True).start()
 
 
+def rollback_container_async(delay: float = 0.4) -> None:
+    """Switch the compose service back to the one cached rollback image.
+
+    The HTTP caller is the app container that is about to be recreated, so this
+    mirrors `restart_container_async`: acknowledge first, then mutate Docker in
+    the background.
+    """
+    def _do() -> None:
+        time.sleep(delay)
+        set_state(phase="rolling_back", error=None, rollback=rollback_status())
+        try:
+            image_id = docker_image_id(ROLLBACK_IMAGE_NAME)
+            if not image_id:
+                raise RuntimeError(f"No rollback image is available at {ROLLBACK_IMAGE_NAME}.")
+
+            run([docker_command(), "tag", ROLLBACK_IMAGE_NAME, IMAGE_NAME])
+            run([*compose_command(), "up", "-d", "--no-build", "--force-recreate", SERVICE_NAME])
+            set_state(phase="completed", error=None, rollback=rollback_status())
+            write_log(f"Rolled back container service '{SERVICE_NAME}' to {ROLLBACK_IMAGE_NAME}.")
+        except Exception as exc:  # noqa: BLE001 — log and surface through /status
+            message = str(exc)
+            set_state(phase="failed", error=message, rollback=rollback_status())
+            write_log(f"Container rollback failed: {message}")
+        finally:
+            if update_lock.locked():
+                update_lock.release()
+    threading.Thread(target=_do, daemon=True).start()
+
+
 # npm stages each package into node_modules/.<name>-<hash> (and the scoped
 # variant node_modules/@scope/.<name>-<hash>) before renaming it into place. An
 # install interrupted mid-rename (container restart, OOM, `docker system prune`
@@ -771,7 +946,9 @@ class Handler(BaseHTTPRequestHandler):
             return
         if path == "/status":
             with state_lock:
-                self.send_json(200, dict(state))
+                payload = dict(state)
+            payload["rollback"] = rollback_status()
+            self.send_json(200, payload)
             return
         if path == "/update-log":
             stream_update_log(self)
@@ -788,7 +965,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in {"/update", "/update-clis", "/restart"}:
+        if path not in {"/update", "/update-clis", "/restart", "/rollback"}:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
@@ -802,6 +979,15 @@ class Handler(BaseHTTPRequestHandler):
             # Lock is released by the background restart thread.
             self.send_json(202, {"ok": True, "phase": "restarting"})
             restart_container_async()
+            return
+
+        if path == "/rollback":
+            if not docker_image_id(ROLLBACK_IMAGE_NAME):
+                update_lock.release()
+                self.send_json(409, {"ok": False, "error": "No cached rollback image is available."})
+                return
+            self.send_json(202, {"ok": True, "phase": "rolling_back", "rollback": rollback_status()})
+            rollback_container_async()
             return
 
         if path == "/update-clis":
@@ -838,6 +1024,7 @@ def main() -> None:
     if not TOKEN_FILE.exists():
         raise SystemExit(f"Missing token file: {TOKEN_FILE}")
     LOG_DIR.mkdir(parents=True, exist_ok=True)
+    set_state(rollback=rollback_status())
     write_log(f"Listening on {BIND_HOST}:{PORT} for app dir {APP_DIR}")
     server = ThreadingHTTPServer((BIND_HOST, PORT), Handler)
     server.serve_forever()

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server'
 import { listMicroscripts } from '@/lib/microscripts/store'
 import type { Microscript } from '@/lib/microscripts/schema'
+import { runWithCookieProfile } from "@/lib/profiles/server"
 
 function compactRow(script: Microscript) {
     return {
@@ -25,11 +26,13 @@ function compactRow(script: Microscript) {
 }
 
 export async function GET() {
-    try {
-        const scripts = listMicroscripts().map(compactRow)
-        return NextResponse.json({ scripts })
-    } catch (error) {
-        console.error('Failed to list microscripts', error)
-        return NextResponse.json({ error: 'Failed to list microscripts' }, { status: 500 })
-    }
+  return runWithCookieProfile(async () => {
+        try {
+            const scripts = listMicroscripts().map(compactRow)
+            return NextResponse.json({ scripts })
+        } catch (error) {
+            console.error('Failed to list microscripts', error)
+            return NextResponse.json({ error: 'Failed to list microscripts' }, { status: 500 })
+        }
+  })
 }

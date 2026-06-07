@@ -1,19 +1,28 @@
 import { NextResponse } from 'next/server'
 import { LogsQuerySchema } from '@/lib/observability/schema'
-import { queryLogs, clearAllLogs, getFilterOptions } from '@/lib/observability/store'
+import {
+    clearAllLogsAcrossProfiles,
+    getFilterOptionsAcrossProfiles,
+    queryLogsAcrossProfiles,
+} from '@/lib/observability/profile-store'
+import { runWithAdminCookieProfile, runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function GET(request: Request) {
-    const url = new URL(request.url)
-    const parsed = LogsQuerySchema.safeParse(Object.fromEntries(url.searchParams))
-    if (!parsed.success) {
-        return NextResponse.json({ error: 'Invalid query', issues: parsed.error.issues }, { status: 400 })
-    }
-    const page = queryLogs(parsed.data)
-    const filters = getFilterOptions()
-    return NextResponse.json({ ...page, filters })
+  return runWithRequestProfile(request, async () => {
+        const url = new URL(request.url)
+        const parsed = LogsQuerySchema.safeParse(Object.fromEntries(url.searchParams))
+        if (!parsed.success) {
+            return NextResponse.json({ error: 'Invalid query', issues: parsed.error.issues }, { status: 400 })
+        }
+        const page = queryLogsAcrossProfiles(parsed.data)
+        const filters = getFilterOptionsAcrossProfiles()
+        return NextResponse.json({ ...page, filters })
+  })
 }
 
 export async function DELETE() {
-    const result = clearAllLogs()
-    return NextResponse.json(result)
+  return runWithAdminCookieProfile(async () => {
+        const result = clearAllLogsAcrossProfiles()
+        return NextResponse.json(result)
+  })
 }

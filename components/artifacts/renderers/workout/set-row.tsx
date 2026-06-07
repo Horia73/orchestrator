@@ -18,7 +18,7 @@ import {
     formatWeightNumber,
 } from "@/lib/workout/format"
 import { findGlossaryTermsInText } from "@/lib/workout/glossary"
-import { isNewPersonalBest, type ActiveSetState, type WorkoutSessionApi, type WorkoutSetRef } from "@/lib/workout/use-workout-session"
+import { isNewPersonalBest, type ActiveSetState, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
 
 import { GlossaryInfo } from "./glossary-info"
 import { WeightPicker } from "./weight-picker"
@@ -84,7 +84,6 @@ export function SetRow({
     const [repsPickerOpen, setRepsPickerOpen] = React.useState(false)
     const [menuOpen, setMenuOpen] = React.useState(false)
     const [manualEditorOpen, setManualEditorOpen] = React.useState(false)
-    const [skipAhead, setSkipAhead] = React.useState<SkipAheadState | null>(null)
     const [noteEditorOpen, setNoteEditorOpen] = React.useState(false)
     const [prPulse, setPrPulse] = React.useState(false)
     const activeEditorOpen = isThisActiveSet && !!activeSet?.finishedAt
@@ -139,13 +138,6 @@ export function SetRow({
                 window.alert('Salvează sau anulează setul pornit înainte să începi altul.')
                 return
             }
-            if (!sessionApi.isNextSet(exercise.id, index - 1)) {
-                const setsToSkip = sessionApi.getSkippedSetsBefore(exercise.id, index - 1)
-                if (setsToSkip.length > 0) {
-                    setSkipAhead({ setsToSkip })
-                }
-                return
-            }
             sessionApi.startSet(exercise, index - 1)
         }
     }, [isInteractive, sessionApi, status, exercise, index])
@@ -169,13 +161,6 @@ export function SetRow({
         if (reason === null) return
         sessionApi.skipSet(exercise.id, index - 1, reason)
     }, [sessionApi, exercise.id, index])
-
-    const handleConfirmSkipAhead = React.useCallback((reason?: string) => {
-        if (!sessionApi || !skipAhead) return
-        sessionApi.skipSets(skipAhead.setsToSkip, reason)
-        sessionApi.startSet(exercise, index - 1)
-        setSkipAhead(null)
-    }, [sessionApi, skipAhead, exercise, index])
 
     const handleMarkFailed = React.useCallback(() => {
         if (!sessionApi) return
@@ -343,15 +328,6 @@ export function SetRow({
                 />
             ) : null}
 
-            {skipAhead ? (
-                <SkipAheadDialog
-                    targetLabel={`${exercise.name} · set ${index}`}
-                    setsToSkip={skipAhead.setsToSkip}
-                    onConfirm={handleConfirmSkipAhead}
-                    onCancel={() => setSkipAhead(null)}
-                />
-            ) : null}
-
             {noteEditorOpen ? (
                 <SetNoteDialog
                     exerciseName={exercise.name}
@@ -409,10 +385,6 @@ export function SetRow({
 }
 
 type SetStatus = 'pending' | 'running' | 'editing' | 'done' | 'failed' | 'skipped' | 'modified'
-
-interface SkipAheadState {
-    setsToSkip: WorkoutSetRef[]
-}
 
 function computeStatus(logged?: LoggedSet, active?: boolean, finishedAt?: number): SetStatus {
     if (active) return finishedAt ? 'editing' : 'running'
@@ -771,80 +743,6 @@ function ActiveSetEditor({
                     <Save className="size-3" strokeWidth={2} />
                     Save set
                 </button>
-            </div>
-        </div>
-    )
-}
-
-function SkipAheadDialog({
-    targetLabel,
-    setsToSkip,
-    onConfirm,
-    onCancel,
-}: {
-    targetLabel: string
-    setsToSkip: readonly WorkoutSetRef[]
-    onConfirm: (reason?: string) => void
-    onCancel: () => void
-}) {
-    const [reason, setReason] = React.useState('')
-    const preview = setsToSkip.slice(0, 3)
-    const remaining = setsToSkip.length - preview.length
-
-    return (
-        <div
-            role="dialog"
-            aria-modal="true"
-            aria-label="Confirmă skip"
-            className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
-        >
-            <div className="w-full max-w-sm rounded-xl border border-border/70 bg-popover p-4 shadow-xl">
-                <div className="text-sm font-semibold text-foreground">
-                    Sari peste {setsToSkip.length} {setsToSkip.length === 1 ? 'set' : 'seturi'}?
-                </div>
-                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
-                    Ca să pornești {targetLabel}, seturile dintre trebuie marcate ca sărite.
-                </p>
-                <ul className="mt-3 flex flex-col gap-1 text-[12px] text-foreground/80">
-                    {preview.map((set) => (
-                        <li key={`${set.exerciseId}-${set.setIndex}`} className="rounded bg-muted/45 px-2 py-1">
-                            {set.exerciseName} · set {set.setIndex + 1}
-                        </li>
-                    ))}
-                    {remaining > 0 ? (
-                        <li className="px-2 py-0.5 text-muted-foreground">
-                            +{remaining} în plus
-                        </li>
-                    ) : null}
-                </ul>
-                <label className="mt-3 block">
-                    <span className="mb-1 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
-                        Motiv opțional
-                    </span>
-                    <input
-                        value={reason}
-                        onChange={(event) => setReason(event.target.value)}
-                        placeholder="ex: ocupat aparatul, prea obosit"
-                        className="h-10 w-full rounded-md border border-border bg-background px-2.5 text-base text-foreground outline-none transition-shadow focus:ring-2 focus:ring-ring sm:h-9 sm:text-[12.5px]"
-                    />
-                </label>
-                <div className="mt-3 flex justify-end gap-2">
-                    <button
-                        type="button"
-                        onClick={onCancel}
-                        className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                    >
-                        Anulează
-                    </button>
-                    <button
-                        type="button"
-                        onClick={() => onConfirm(reason)}
-                        className="inline-flex h-9 items-center gap-1.5 rounded-md bg-amber-600 px-3 text-[12px] font-semibold text-white transition-colors hover:bg-amber-700"
-                    >
-                        <SkipForward className="size-3.5" strokeWidth={2} />
-                        Sari și pornește
-                    </button>
-                </div>
             </div>
         </div>
     )

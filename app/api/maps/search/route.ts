@@ -8,6 +8,7 @@ import {
   type PlaceResult,
 } from "@/lib/maps/google-places"
 import type { MapCoordinate } from "@/lib/maps/schema"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = "nodejs"
 export const dynamic = "force-dynamic"
@@ -26,99 +27,101 @@ interface UiMapSearchResult {
 }
 
 export async function GET(request: Request) {
-  const guard = guardSensitiveRequest(request)
-  if (guard) return guard
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
 
-  const url = new URL(request.url)
-  const query = (url.searchParams.get("q") ?? "").trim()
-  const placeId = (url.searchParams.get("placeId") ?? "").trim()
-  if (!query && !placeId) {
-    return NextResponse.json(
-      { error: "Missing search query or placeId." },
-      { status: 400, headers: NO_STORE }
-    )
-  }
+      const url = new URL(request.url)
+      const query = (url.searchParams.get("q") ?? "").trim()
+      const placeId = (url.searchParams.get("placeId") ?? "").trim()
+      if (!query && !placeId) {
+        return NextResponse.json(
+          { error: "Missing search query or placeId." },
+          { status: 400, headers: NO_STORE }
+        )
+      }
 
-  const center = parseCenter(url.searchParams.get("center"))
-  const languageCode = cleanParam(url.searchParams.get("language"))
-  const sessionToken = cleanParam(url.searchParams.get("sessionToken"))
+      const center = parseCenter(url.searchParams.get("center"))
+      const languageCode = cleanParam(url.searchParams.get("language"))
+      const sessionToken = cleanParam(url.searchParams.get("sessionToken"))
 
-  try {
-    if (placeId) {
-      const place = await getPlaceDetails(placeId, {
-        languageCode,
-        sessionToken,
-        includePhoto: false,
-      })
-      return NextResponse.json(
-        {
-          results: [placeToUiResult(place)],
-        },
-        { headers: NO_STORE }
-      )
-    }
+      try {
+        if (placeId) {
+          const place = await getPlaceDetails(placeId, {
+            languageCode,
+            sessionToken,
+            includePhoto: false,
+          })
+          return NextResponse.json(
+            {
+              results: [placeToUiResult(place)],
+            },
+            { headers: NO_STORE }
+          )
+        }
 
-    const places = await searchPlaces({
-      mode: "text",
-      query: query.slice(0, 180),
-      center,
-      radiusMeters: center ? 12_000 : undefined,
-      maxResults: 7,
-      includeRatings: true,
-      languageCode,
-    })
+        const places = await searchPlaces({
+          mode: "text",
+          query: query.slice(0, 180),
+          center,
+          radiusMeters: center ? 12_000 : undefined,
+          maxResults: 7,
+          includeRatings: true,
+          languageCode,
+        })
 
-    return NextResponse.json(
-      {
-        results: places.places.map(placeToUiResult),
-      },
-      { headers: NO_STORE }
-    )
-  } catch (placesError) {
-    if (!query) {
-      return NextResponse.json(
-        {
-          error:
-            placesError instanceof Error
-              ? placesError.message
-              : "Place lookup failed.",
-        },
-        { status: 502, headers: NO_STORE }
-      )
-    }
-    const geocoded = await geocodeAddresses([query], { concurrency: 1 })
-    const first = geocoded[0]
-    if (!first || "error" in first) {
-      return NextResponse.json(
-        {
-          error:
-            first?.error ??
-            (placesError instanceof Error
-              ? placesError.message
-              : "Search failed."),
-        },
-        { status: 502, headers: NO_STORE }
-      )
-    }
-
-    return NextResponse.json(
-      {
-        results: [
+        return NextResponse.json(
           {
-            id: first.placeId ?? stableSearchId(first.formattedAddress),
-            title: shortAddressTitle(first.formattedAddress),
-            address: first.formattedAddress,
-            position: first.position,
-            rating: null,
-            photoUrl: null,
-            googleMapsUri: null,
-            provider: "google-geocoding",
-          } satisfies UiMapSearchResult,
-        ],
-      },
-      { headers: NO_STORE }
-    )
-  }
+            results: places.places.map(placeToUiResult),
+          },
+          { headers: NO_STORE }
+        )
+      } catch (placesError) {
+        if (!query) {
+          return NextResponse.json(
+            {
+              error:
+                placesError instanceof Error
+                  ? placesError.message
+                  : "Place lookup failed.",
+            },
+            { status: 502, headers: NO_STORE }
+          )
+        }
+        const geocoded = await geocodeAddresses([query], { concurrency: 1 })
+        const first = geocoded[0]
+        if (!first || "error" in first) {
+          return NextResponse.json(
+            {
+              error:
+                first?.error ??
+                (placesError instanceof Error
+                  ? placesError.message
+                  : "Search failed."),
+            },
+            { status: 502, headers: NO_STORE }
+          )
+        }
+
+        return NextResponse.json(
+          {
+            results: [
+              {
+                id: first.placeId ?? stableSearchId(first.formattedAddress),
+                title: shortAddressTitle(first.formattedAddress),
+                address: first.formattedAddress,
+                position: first.position,
+                rating: null,
+                photoUrl: null,
+                googleMapsUri: null,
+                provider: "google-geocoding",
+              } satisfies UiMapSearchResult,
+            ],
+          },
+          { headers: NO_STORE }
+        )
+      }
+  })
 }
 
 function placeToUiResult(place: PlaceResult): UiMapSearchResult {

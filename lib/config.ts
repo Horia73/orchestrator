@@ -21,7 +21,10 @@ import {
 } from "@/lib/browser-agent-backend"
 import type { BrowserBackendPreference } from "@/lib/browser-agent-runtime/config"
 import { emitAppEvent } from "@/lib/events"
+import { getActiveProfileId, isAdminProfileId } from "@/lib/profiles/context"
+import { getProfile } from "@/lib/profiles/store"
 import {
+  activeRuntimePaths,
   ORCHESTRATOR_STATE_DIR,
   PRIVATE_STATE_DIR,
   PROJECT_DIR,
@@ -42,14 +45,19 @@ export {
   WORKSPACE_ENV_PATH,
 } from "@/lib/runtime-paths"
 
-const LEGACY_CONFIG_PATH = path.join(
-  /* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR,
-  "config.json"
-)
-const CONFIG_PATH = path.join(
-  /* turbopackIgnore: true */ WORKSPACE_DIR,
-  "config.json"
-)
+function legacyConfigPath(): string {
+  return path.join(
+    /* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR,
+    "config.json"
+  )
+}
+
+function activeConfigPath(): string {
+  return path.join(
+    /* turbopackIgnore: true */ activeRuntimePaths().workspaceDir,
+    "config.json"
+  )
+}
 const PROJECT_ENV_PATHS = [
   path.join(/* turbopackIgnore: true */ PROJECT_DIR, ".env.local"),
   path.join(/* turbopackIgnore: true */ PROJECT_DIR, ".env"),
@@ -372,7 +380,7 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
 
 const DEFAULT_CONFIG: AppConfig = {
   assistantName: "Orchestrator",
-  userName: "User",
+  userName: "Horia",
   timezone: systemTimezone(),
   activeProvider: "google",
   activeModel: "gemini-3-flash-preview",
@@ -386,52 +394,57 @@ const DEFAULT_CONFIG: AppConfig = {
   updatedAt: Date.now(),
 }
 
-if (!fs.existsSync(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR)) {
-  fs.mkdirSync(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, {
-    recursive: true,
-  })
-}
+function ensureRuntimeFiles(): void {
+  const paths = activeRuntimePaths()
 
-if (!fs.existsSync(/* turbopackIgnore: true */ UPLOADS_DIR)) {
-  fs.mkdirSync(/* turbopackIgnore: true */ UPLOADS_DIR, { recursive: true })
-}
+  if (!fs.existsSync(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, {
+      recursive: true,
+    })
+  }
 
-if (!fs.existsSync(/* turbopackIgnore: true */ WORKSPACE_DIR)) {
-  fs.mkdirSync(/* turbopackIgnore: true */ WORKSPACE_DIR, { recursive: true })
-}
+  for (const dir of [paths.uploadsDir, paths.workspaceDir]) {
+    if (!fs.existsSync(/* turbopackIgnore: true */ dir)) {
+      fs.mkdirSync(/* turbopackIgnore: true */ dir, { recursive: true })
+    }
+  }
 
-if (!fs.existsSync(/* turbopackIgnore: true */ PRIVATE_STATE_DIR)) {
-  fs.mkdirSync(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, {
-    recursive: true,
-  })
-  try {
-    fs.chmodSync(/* turbopackIgnore: true */ PRIVATE_STATE_DIR, 0o700)
-  } catch {
-    // Some filesystems ignore chmod; the directory remains inside .orchestrator.
+  if (!fs.existsSync(/* turbopackIgnore: true */ paths.privateStateDir)) {
+    fs.mkdirSync(/* turbopackIgnore: true */ paths.privateStateDir, {
+      recursive: true,
+    })
+    try {
+      fs.chmodSync(/* turbopackIgnore: true */ paths.privateStateDir, 0o700)
+    } catch {
+      // Some filesystems ignore chmod; the directory remains inside .orchestrator.
+    }
+  }
+
+  const configPath = activeConfigPath()
+  const legacy = legacyConfigPath()
+  if (
+    paths.profileId === "admin_horia" &&
+    !fs.existsSync(/* turbopackIgnore: true */ configPath) &&
+    fs.existsSync(/* turbopackIgnore: true */ legacy)
+  ) {
+    fs.copyFileSync(/* turbopackIgnore: true */ legacy, configPath)
+  }
+
+  if (!fs.existsSync(/* turbopackIgnore: true */ configPath)) {
+    fs.writeFileSync(
+      /* turbopackIgnore: true */ configPath,
+      JSON.stringify(DEFAULT_CONFIG, null, 2),
+      "utf-8"
+    )
   }
 }
 
-if (
-  !fs.existsSync(/* turbopackIgnore: true */ CONFIG_PATH) &&
-  fs.existsSync(/* turbopackIgnore: true */ LEGACY_CONFIG_PATH)
-) {
-  fs.copyFileSync(/* turbopackIgnore: true */ LEGACY_CONFIG_PATH, CONFIG_PATH)
-}
-
-if (!fs.existsSync(/* turbopackIgnore: true */ CONFIG_PATH)) {
-  fs.writeFileSync(
-    /* turbopackIgnore: true */ CONFIG_PATH,
-    JSON.stringify(DEFAULT_CONFIG, null, 2),
-    "utf-8"
-  )
-}
+ensureRuntimeFiles()
 
 export function getConfig(): AppConfig {
   try {
-    const data = fs.readFileSync(
-      /* turbopackIgnore: true */ CONFIG_PATH,
-      "utf-8"
-    )
+    ensureRuntimeFiles()
+    const data = fs.readFileSync(activeConfigPath(), "utf-8")
     const parsed = JSON.parse(data)
     // Merge with defaults so new fields get their default values
     return normalizeAppConfig(parsed)
@@ -449,6 +462,12 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
   return {
     ...DEFAULT_CONFIG,
     ...parsed,
+    userName:
+      typeof parsed.userName === "string" &&
+      parsed.userName.trim() &&
+      parsed.userName !== "User"
+        ? parsed.userName
+        : DEFAULT_CONFIG.userName,
     timezone,
     agentOverrides: normalizeAgentOverrides(parsed.agentOverrides),
     agentOrder: normalizeStringList(
@@ -767,7 +786,8 @@ export function getRuntimeConfig(): RuntimeConfig {
 export function updateConfig(newConfig: Partial<AppConfig>): AppConfig {
   const current = getConfig()
   const updated = normalizeAppConfig({ ...current, ...newConfig, updatedAt: Date.now() })
-  fs.writeFileSync(CONFIG_PATH, JSON.stringify(updated, null, 2), "utf-8")
+  ensureRuntimeFiles()
+  fs.writeFileSync(activeConfigPath(), JSON.stringify(updated, null, 2), "utf-8")
   emitAppEvent({ type: "config.updated" })
   emitAppEvent({ type: "settings.changed", reason: "config" })
   return updated
@@ -929,12 +949,17 @@ export function getEnvValue(name: string): string | null {
 function getFirstEnvValue(
   names: string[]
 ): { envName: string; value: string } | null {
-  for (const name of names) {
-    const value = process.env[name]
-    if (hasEnvValue(value)) return { envName: name, value }
+  if (canUseSharedEnvSecret(names)) {
+    for (const name of names) {
+      const value = process.env[name]
+      if (hasEnvValue(value)) return { envName: name, value }
+    }
   }
 
-  for (const filePath of [WORKSPACE_ENV_PATH, ...PROJECT_ENV_PATHS]) {
+  const filePaths = canUseSharedEnvSecret(names)
+    ? [activeRuntimePaths().workspaceEnvPath, ...PROJECT_ENV_PATHS]
+    : [activeRuntimePaths().workspaceEnvPath]
+  for (const filePath of filePaths) {
     const values = readEnvFileValues(filePath, names)
     for (const name of names) {
       const value = values[name]
@@ -943,6 +968,15 @@ function getFirstEnvValue(
   }
 
   return null
+}
+
+function canUseSharedEnvSecret(names: string[]): boolean {
+  const profileId = getActiveProfileId()
+  if (isAdminProfileId(profileId)) return true
+  const profile = getProfile(profileId)
+  if (!profile?.permissions.inheritAdminApiKeys) return false
+  const allowed = new Set(profile.permissions.allowedProviderApiKeys)
+  return allowed.has("*") || names.some((name) => allowed.has(name))
 }
 
 function readEnvFileValues(

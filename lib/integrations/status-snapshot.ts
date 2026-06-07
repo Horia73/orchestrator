@@ -8,6 +8,7 @@ import { getMapsIntegrationStatus } from '@/lib/integrations/maps'
 import { getWeatherIntegrationStatus } from '@/lib/integrations/weather'
 import { resolveAppOrigin } from '@/lib/app-origin'
 import { getLocationIntelligenceStatus } from '@/lib/location-intelligence/journal'
+import { getActiveProfileId } from '@/lib/profiles/context'
 
 // ---------------------------------------------------------------------------
 // Connection-status snapshot.
@@ -120,9 +121,13 @@ export function snapshotFromStatuses(raw: RawStatuses): IntegrationStatusSnapsho
 
 const TTL_MS = 60_000
 
-let cached: IntegrationStatusSnapshot | null = null
-let fetchedAt = 0
-let inFlight: Promise<void> | null = null
+interface SnapshotCacheEntry {
+    cached: IntegrationStatusSnapshot | null
+    fetchedAt: number
+    inFlight: Promise<void> | null
+}
+
+const cacheByProfile = new Map<string, SnapshotCacheEntry>()
 
 /** Reachable Orchestrator origin captured from the last request; status fns need it. */
 let lastKnownOrigin: string | undefined
@@ -175,8 +180,9 @@ export async function refreshIntegrationStatusSnapshot(origin?: string): Promise
     const useOrigin = resolveSnapshotOrigin(origin)
     rememberOrigin(useOrigin)
     const snapshot = await fetchSnapshot(useOrigin)
-    cached = snapshot
-    fetchedAt = Date.now()
+    const cache = activeCacheEntry()
+    cache.cached = snapshot
+    cache.fetchedAt = Date.now()
     return snapshot
 }
 
@@ -188,20 +194,22 @@ export async function refreshIntegrationStatusSnapshot(origin?: string): Promise
  */
 export function getIntegrationStatusSnapshot(origin?: string): IntegrationStatusSnapshot {
     rememberOrigin(origin)
-    const fresh = cached && Date.now() - fetchedAt < TTL_MS
-    if (!fresh && !inFlight) {
-        inFlight = refreshIntegrationStatusSnapshot(origin)
+    const cache = activeCacheEntry()
+    const fresh = cache.cached && Date.now() - cache.fetchedAt < TTL_MS
+    if (!fresh && !cache.inFlight) {
+        cache.inFlight = refreshIntegrationStatusSnapshot(origin)
             .then(() => undefined)
             .catch(() => undefined)
-            .finally(() => { inFlight = null })
+            .finally(() => { cache.inFlight = null })
     }
-    return cached ?? emptySnapshot()
+    return cache.cached ?? emptySnapshot()
 }
 
 /** Merge externally-computed statuses into the cache (called by the UI status route). */
 export function recordIntegrationStatuses(raw: RawStatuses): void {
-    const previous = cached ?? emptySnapshot()
-    cached = {
+    const cache = activeCacheEntry()
+    const previous = cache.cached ?? emptySnapshot()
+    cache.cached = {
         'gmail': hasOwn(raw, 'gmail') ? entry(raw.gmail, raw.gmail?.accountEmail) : previous.gmail,
         'google-calendar': hasOwn(raw, 'googleCalendar') ? entry(raw.googleCalendar, raw.googleCalendar?.accountEmail) : previous['google-calendar'],
         'google-drive': hasOwn(raw, 'googleDrive') ? entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName) : previous['google-drive'],
@@ -211,7 +219,20 @@ export function recordIntegrationStatuses(raw: RawStatuses): void {
         'weather': hasOwn(raw, 'weather') ? entry(raw.weather, weatherDetail(raw.weather)) : previous.weather,
         'location-intelligence': hasOwn(raw, 'locationIntelligence') ? entry(raw.locationIntelligence, locationIntelligenceDetail(raw.locationIntelligence)) : previous['location-intelligence'],
     }
-    fetchedAt = Date.now()
+    cache.fetchedAt = Date.now()
+}
+
+function activeCacheEntry(): SnapshotCacheEntry {
+    const profileId = getActiveProfileId()
+    const existing = cacheByProfile.get(profileId)
+    if (existing) return existing
+    const created: SnapshotCacheEntry = {
+        cached: null,
+        fetchedAt: 0,
+        inFlight: null,
+    }
+    cacheByProfile.set(profileId, created)
+    return created
 }
 
 function weatherDetail(weather: Weatherish | null | undefined): string | null {
