@@ -26,11 +26,7 @@ import { getProfile } from "@/lib/profiles/store"
 import {
   activeRuntimePaths,
   ORCHESTRATOR_STATE_DIR,
-  PRIVATE_STATE_DIR,
   PROJECT_DIR,
-  UPLOADS_DIR,
-  WORKSPACE_DIR,
-  WORKSPACE_ENV_PATH,
 } from "@/lib/runtime-paths"
 import { normalizeTimezone, systemTimezone } from "@/lib/timezone"
 
