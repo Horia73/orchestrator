@@ -52,12 +52,16 @@ import {
   WEATHER_STATUS_TOOL_ID,
 } from "../weather"
 import {
+  executeGetBodyMetrics,
   executeGetExerciseHistory,
   executeGetRecentWorkouts,
   executeListExerciseHistory,
+  executeSaveBodyMetrics,
+  GET_BODY_METRICS_TOOL_ID,
   GET_EXERCISE_HISTORY_TOOL_ID,
   GET_RECENT_WORKOUTS_TOOL_ID,
   LIST_EXERCISE_HISTORY_TOOL_ID,
+  SAVE_BODY_METRICS_TOOL_ID,
 } from "../workout-history"
 import { executeMonitorWakeFeedback } from "../smart-monitor-feedback"
 import {
@@ -120,6 +124,8 @@ export const automationToolExecutors: Record<string, ToolExecutor> = {
   [GET_EXERCISE_HISTORY_TOOL_ID]: executeGetExerciseHistory,
   [LIST_EXERCISE_HISTORY_TOOL_ID]: executeListExerciseHistory,
   [GET_RECENT_WORKOUTS_TOOL_ID]: executeGetRecentWorkouts,
+  [GET_BODY_METRICS_TOOL_ID]: executeGetBodyMetrics,
+  [SAVE_BODY_METRICS_TOOL_ID]: executeSaveBodyMetrics,
   apply_update: executeApplyUpdate,
   memory_search: executeMemorySearch,
   library_search: executeLibrarySearch,

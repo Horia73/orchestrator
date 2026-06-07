@@ -1213,13 +1213,32 @@ export function AppSidebar() {
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
+          {isAdmin && (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                asChild
+                tooltip="Settings"
+                isActive={isOnSettings}
+                className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
+              >
+                <Link
+                  href="/settings"
+                  replace={isMobile}
+                  onClick={closeMobileSidebar}
+                >
+                  <Settings className="size-4" />
+                  <span>Settings</span>
+                </Link>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          )}
           {currentProfile && (
             <SidebarMenuItem>
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <SidebarMenuButton
                     tooltip={currentProfile.name}
-                    className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground dark:hover:bg-muted"
+                    className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[state=open]:bg-[#f0ede6] data-[state=open]:text-foreground dark:hover:bg-muted dark:data-[state=open]:bg-muted"
                   >
                     <span
                       className="grid size-4 shrink-0 place-items-center rounded-[4px] text-[9px] font-semibold leading-none text-white"
@@ -1242,25 +1261,6 @@ export function AppSidebar() {
                   </DropdownMenuItem>
                 </DropdownMenuContent>
               </DropdownMenu>
-            </SidebarMenuItem>
-          )}
-          {isAdmin && (
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                asChild
-                tooltip="Settings"
-                isActive={isOnSettings}
-                className="text-[15px] text-foreground/75 hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:hover:bg-muted dark:data-[active=true]:bg-muted"
-              >
-                <Link
-                  href="/settings"
-                  replace={isMobile}
-                  onClick={closeMobileSidebar}
-                >
-                  <Settings className="size-4" />
-                  <span>Settings</span>
-                </Link>
-              </SidebarMenuButton>
             </SidebarMenuItem>
           )}
         </SidebarMenu>

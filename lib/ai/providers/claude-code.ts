@@ -149,6 +149,17 @@ export class ClaudeCodeProvider implements AIProvider {
             cleanups.push(() => clearBinding(token))
 
             const serverScript = join(process.cwd(), 'lib', 'cli', 'mcp-server.mjs')
+            const toolsDir = mkdtempSync(join(tmpdir(), 'orch-mcp-tools-'))
+            const toolsPath = join(toolsDir, 'tools.json')
+            writeFileSync(toolsPath, JSON.stringify({
+                tools: tools.map(tool => ({
+                    name: tool.name,
+                    description: tool.description,
+                    inputSchema: tool.input_schema,
+                })),
+            }), 'utf-8')
+            cleanups.push(() => { try { rmSync(toolsDir, { recursive: true, force: true }) } catch { /* fine */ } })
+
             const port = process.env.PORT ?? '3000'
             const mcpConfig = {
                 mcpServers: {
@@ -160,6 +171,13 @@ export class ClaudeCodeProvider implements AIProvider {
                             MCP_APP_URL: `http://127.0.0.1:${port}`,
                             MCP_AUTH_TOKEN: token,
                             MCP_SERVER_NAME: ORCH_TOOLS_MCP_SERVER_NAME,
+                            // Bundle the launch-time tool schemas directly
+                            // into the child MCP server. Tool calls still
+                            // proxy through /api/cli/mcp-exec, but tools/list
+                            // no longer depends on a localhost HTTP round-trip
+                            // during Claude Code startup; that was enough to
+                            // strand scheduled wakes in a toolless state.
+                            MCP_TOOLS_FILE: toolsPath,
                         },
                     },
                 },

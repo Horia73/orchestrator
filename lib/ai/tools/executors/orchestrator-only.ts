@@ -11,9 +11,11 @@ import {
   MAP_RENDER_TOOL_ID,
 } from "../maps"
 import {
+  GET_BODY_METRICS_TOOL_ID,
   GET_EXERCISE_HISTORY_TOOL_ID,
   GET_RECENT_WORKOUTS_TOOL_ID,
   LIST_EXERCISE_HISTORY_TOOL_ID,
+  SAVE_BODY_METRICS_TOOL_ID,
 } from "../workout-history"
 import {
   WEATHER_SET_CALENDAR_CONTEXT_TOOL_ID,
@@ -42,6 +44,8 @@ export const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
   GET_EXERCISE_HISTORY_TOOL_ID,
   LIST_EXERCISE_HISTORY_TOOL_ID,
   GET_RECENT_WORKOUTS_TOOL_ID,
+  GET_BODY_METRICS_TOOL_ID,
+  SAVE_BODY_METRICS_TOOL_ID,
   "search_past_runs",
   "get_past_run",
   "search_agent_logs",

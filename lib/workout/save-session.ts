@@ -1,7 +1,7 @@
 import type { Exercise, WorkoutArtifact, PersonalBest, PreviousSessionSnapshot, LoggedSet } from './schema'
 import type { RestEvent, WorkoutSessionState } from './use-workout-session'
 import { estimated1RM } from './one-rep-max'
-import { formatDuration, formatSetSequence } from './format'
+import { formatDuration, formatWeightNumber, formatDistance, formatDifficulty } from './format'
 
 // ---------------------------------------------------------------------------
 // Save-session helpers.
@@ -612,6 +612,69 @@ export function formatHistoryEntryLine(log: SessionLog): string {
 }
 
 /**
+ * Kind-aware metric string for a single logged set:
+ *   weighted/weighted_bw → "60 kg × 8"   bodyweight → "12 reps"
+ *   hold/cardio_dur/interval → "1:23"     cardio_dist → "400 m"
+ * Returns "" when the set carries no usable value for its kind.
+ */
+function formatSetMetric(set: LoggedSet, kind: Exercise['kind'], units: SessionLog['units']): string {
+    switch (kind) {
+        case 'weighted':
+        case 'weighted_bw': {
+            if (set.actualWeightKg !== undefined && set.actualReps !== undefined) {
+                return `${formatWeightNumber(set.actualWeightKg)} ${units} × ${set.actualReps}`
+            }
+            if (set.actualReps !== undefined) return `${set.actualReps} reps`
+            if (set.actualWeightKg !== undefined) return `${formatWeightNumber(set.actualWeightKg)} ${units}`
+            return ''
+        }
+        case 'bodyweight':
+            return set.actualReps !== undefined ? `${set.actualReps} reps` : ''
+        case 'hold':
+        case 'cardio_dur':
+        case 'interval':
+            return set.actualDurationSec !== undefined ? formatDuration(set.actualDurationSec) : ''
+        case 'cardio_dist':
+            return set.actualDistanceM !== undefined ? formatDistance(set.actualDistanceM, units) : ''
+        default:
+            return ''
+    }
+}
+
+/**
+ * One ordered-list line per logged set — the faithful per-set record the detail
+ * view renders. Carries the kind-aware metric plus RPE/RIR, failed/partial
+ * markers, skip reason, and per-set notes so nothing the user logged is dropped.
+ * Returns null for an empty placeholder set (never started, nothing to show).
+ */
+function formatLoggedSetLine(
+    set: LoggedSet,
+    index: number,
+    kind: Exercise['kind'],
+    units: SessionLog['units'],
+): string | null {
+    const n = index + 1
+    if (set.skipped) {
+        return `${n}. _skipped_${set.skipReason ? ` — ${set.skipReason}` : ''}`
+    }
+    const metric = formatSetMetric(set, kind, units)
+    // Drop sets that were never logged and carry no annotation.
+    if (!metric && !set.completed && !set.failed && !set.notes && set.actualRpe === undefined && set.actualRir === undefined) {
+        return null
+    }
+    const tags: string[] = []
+    if (set.failed) {
+        tags.push(set.partialReps !== undefined ? `failed (${set.partialReps} reps)` : 'failed')
+    }
+    if (set.actualRpe !== undefined) tags.push(`RPE ${set.actualRpe}`)
+    if (set.actualRir !== undefined) tags.push(`RIR ${set.actualRir}`)
+    let line = `${n}. ${metric || '—'}`
+    if (tags.length > 0) line += ` · ${tags.join(' · ')}`
+    if (set.notes) line += ` — ${set.notes}`
+    return line
+}
+
+/**
  * Full markdown summary written to `workouts/sessions/<slug>.md`. Human
  * readable, mirrors what the SessionSummary card shows.
  */
@@ -641,6 +704,9 @@ export function formatSessionMarkdown(log: SessionLog): string {
     if (log.totalVolumeKg > 0) {
         lines.push(`- **Tonnage**: ${Math.round(log.totalVolumeKg).toLocaleString()} ${log.units}`)
     }
+    if (log.difficulty) {
+        lines.push(`- **Dificultate**: ${formatDifficulty(log.difficulty)}`)
+    }
     if (log.program) {
         lines.push(`- **Program**: ${log.program.name}${log.program.week ? ` · Week ${log.program.week}` : ''}${log.program.day ? ` · Day ${log.program.day}` : ''}`)
     }
@@ -657,30 +723,37 @@ export function formatSessionMarkdown(log: SessionLog): string {
 
     lines.push(`## Exerciții`)
     for (const ex of log.exercises) {
-        const setStats = formatSetSequence(ex.loggedSets.map((s) => ({
-            weightKg: s.actualWeightKg,
-            reps: s.actualReps,
-            durationSec: s.actualDurationSec,
-        })))
         const skipped = ex.skipped ? ' _(skipped)_' : ''
         lines.push(`### ${ex.name}${skipped}`)
-        if (setStats) lines.push(`- ${setStats}`)
+        if (ex.muscleGroups.length > 0) {
+            lines.push(`_${ex.muscleGroups.join(', ')}_`)
+        }
+
+        // Per-set breakdown — the faithful record of every set the user logged,
+        // including RPE/RIR, failed/partial markers, skip reasons, and notes.
+        // This is what the detail view renders, so it must mirror the JSON log.
+        const setLines = ex.loggedSets
+            .map((s, i) => formatLoggedSetLine(s, i, ex.kind, log.units))
+            .filter((line): line is string => line !== null)
+        if (setLines.length > 0) {
+            lines.push(...setLines)
+            lines.push('')
+        }
+
+        const summary: string[] = []
         const avgExerciseSetSec = averageNumber(ex.loggedSets.map(loggedSetDurationSec))
-        if (avgExerciseSetSec !== undefined) lines.push(`- Set time avg: ${formatDuration(Math.round(avgExerciseSetSec))}`)
+        if (avgExerciseSetSec !== undefined) summary.push(`- Set time avg: ${formatDuration(Math.round(avgExerciseSetSec))}`)
         const exerciseRestEvents = restEvents.filter((event) => event.exerciseId === ex.id)
         const avgExerciseRestSec = averageRest(exerciseRestEvents)
-        if (avgExerciseRestSec !== undefined) lines.push(`- Rest avg: ${formatDuration(Math.round(avgExerciseRestSec))}`)
-        if (ex.totalVolumeKg > 0) lines.push(`- ${Math.round(ex.totalVolumeKg).toLocaleString()} ${log.units} volume`)
-        const notes = ex.loggedSets.map((s) => s.notes).filter(Boolean)
-        if (notes.length > 0) lines.push(`- Notes: ${notes.join(' · ')}`)
-        const skipReasons = ex.loggedSets.flatMap((s, i) =>
-            s.skipped ? [`set ${i + 1}${s.skipReason ? `: ${s.skipReason}` : ''}`] : [],
-        )
-        if (skipReasons.length > 0) lines.push(`- Skipped: ${skipReasons.join(' · ')}`)
+        if (avgExerciseRestSec !== undefined) summary.push(`- Rest avg: ${formatDuration(Math.round(avgExerciseRestSec))}`)
+        if (ex.totalVolumeKg > 0) summary.push(`- Volume: ${Math.round(ex.totalVolumeKg).toLocaleString()} ${log.units}`)
+        if (summary.length > 0) {
+            lines.push(...summary)
+        }
         lines.push('')
     }
 
-    return lines.join('\n')
+    return lines.join('\n').replace(/\n{3,}/g, '\n\n').trimEnd() + '\n'
 }
 
 function countSkippedSets(log: SessionLog): number {

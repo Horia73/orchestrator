@@ -86,24 +86,56 @@ function HighlightedCode({
     }
 
     let cancelled = false
-    import("shiki")
-      .then(({ codeToHtml }) =>
-        codeToHtml(code, {
-          lang: language,
-          theme: "github-light",
+    let idleHandle: number | null = null
+
+    // Defer Shiki (dynamic import + tokenization) to browser idle time. The
+    // plain <pre> fallback already shows the code instantly, so highlighting is
+    // a pure enhancement — running it on idle keeps it off the conversation-open
+    // critical path (first paint + scroll restore), where a burst of code blocks
+    // would otherwise jank the main thread on mobile. The `timeout` guarantees
+    // it still runs promptly when the tab never goes fully idle.
+    const highlight = () => {
+      import("shiki")
+        .then(({ codeToHtml }) =>
+          codeToHtml(code, {
+            lang: language,
+            theme: "github-light",
+          })
+        )
+        .then((result) => {
+          if (cancelled) return
+          highlightCache.set(key, result)
+          setHtml(result)
         })
-      )
-      .then((result) => {
-        if (cancelled) return
-        highlightCache.set(key, result)
-        setHtml(result)
-      })
-      .catch(() => {
-        if (!cancelled) setHtml("")
-      })
+        .catch(() => {
+          if (!cancelled) setHtml("")
+        })
+    }
+
+    const ric = (
+      window as typeof window & {
+        requestIdleCallback?: (
+          cb: () => void,
+          opts?: { timeout: number }
+        ) => number
+      }
+    ).requestIdleCallback
+    if (typeof ric === "function") {
+      idleHandle = ric(highlight, { timeout: 1200 })
+    } else {
+      idleHandle = window.setTimeout(highlight, 1)
+    }
 
     return () => {
       cancelled = true
+      if (idleHandle == null) return
+      const cic = (
+        window as typeof window & {
+          cancelIdleCallback?: (handle: number) => void
+        }
+      ).cancelIdleCallback
+      if (typeof cic === "function") cic(idleHandle)
+      else window.clearTimeout(idleHandle)
     }
   }, [code, language])
 

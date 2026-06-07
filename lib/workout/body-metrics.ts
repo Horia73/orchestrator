@@ -10,7 +10,8 @@ export interface BodyMetricEntry {
     heightCm?: number
     weightKg?: number
     bodyFatPct?: number
-    muscleMassKg?: number
+    /** Skeletal-muscle percentage of bodyweight, mirroring how smart scales report it (and `bodyFatPct`). */
+    musclePct?: number
     notes?: string
 }
 
@@ -57,7 +58,7 @@ export function appendBodyMetric(input: Omit<BodyMetricEntry, 'id'>): BodyMetric
         heightCm: input.heightCm,
         weightKg: input.weightKg,
         bodyFatPct: input.bodyFatPct,
-        muscleMassKg: input.muscleMassKg,
+        musclePct: input.musclePct,
         notes: input.notes,
     }
     const next: BodyMetricStore = {

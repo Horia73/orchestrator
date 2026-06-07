@@ -45,7 +45,7 @@ async function deletePushSubscription(subscription) {
   }).catch(() => undefined)
 }
 
-async function hasVisibleWindowClient() {
+async function hasFocusedWindowClient() {
   const windowClients = await self.clients.matchAll({
     type: "window",
     includeUncontrolled: true,
@@ -53,9 +53,13 @@ async function hasVisibleWindowClient() {
   return windowClients.some((client) => {
     try {
       const clientUrl = new URL(client.url)
+      // Only treat a client as "actively watched" when it holds OS focus.
+      // A desktop tab reports visibilityState "visible" while it is the active
+      // tab of its window even when the browser sits behind another app, so the
+      // old `visibilityState` check suppressed every chat notification on Mac.
+      // `focused` is the signal that the user is really looking at Orchestrator.
       return (
-        clientUrl.origin === self.location.origin &&
-        (client.focused || client.visibilityState === "visible")
+        clientUrl.origin === self.location.origin && client.focused === true
       )
     } catch {
       return false
@@ -109,7 +113,7 @@ self.addEventListener("push", (event) => {
 
   event.waitUntil(
     (async () => {
-      if (isChat && (await hasVisibleWindowClient())) return
+      if (isChat && (await hasFocusedWindowClient())) return
 
       const registrationWithBadge = self.registration
       if (

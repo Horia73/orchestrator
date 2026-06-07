@@ -650,6 +650,18 @@ function WorkedForBlock({
         if (openOnMount) setIsOpen(true)
     }, [openOnMount])
 
+    // Mount the (expensive) reasoning body lazily — only once the disclosure
+    // has been opened at least once. While collapsed the grid track is `0fr`,
+    // so an empty body and a fully-rendered one occupy the same (zero) height;
+    // skipping it avoids parsing every committed message's hidden reasoning
+    // markdown + tool views at conversation-open, which is the main cause of the
+    // multi-second open on mobile. Adjusting this during render (vs. an effect)
+    // keeps the body present in the same commit that opens it, so the expand
+    // animation and height stay intact. Stays mounted after the first open so
+    // the collapse animation has content and re-toggling is cheap.
+    const [bodyMounted, setBodyMounted] = React.useState(isOpen)
+    if (isOpen && !bodyMounted) setBodyMounted(true)
+
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
 
@@ -694,6 +706,7 @@ function WorkedForBlock({
             >
                 <div className="overflow-hidden min-h-0">
                     <div className="mt-2 max-h-[70vh] overflow-y-auto pr-1">
+                        {bodyMounted && (
                         <div className="relative flex flex-col pb-2">
                             <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
                             <div className="relative flex flex-col gap-2 pt-1 pb-[10px]">
@@ -735,6 +748,7 @@ function WorkedForBlock({
                                 </span>
                             </div>
                         </div>
+                        )}
                     </div>
                 </div>
             </div>

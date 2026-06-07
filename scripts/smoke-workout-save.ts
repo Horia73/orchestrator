@@ -276,7 +276,8 @@ function stateWithLogs(opts: {
     check('skip: not counted as completed', log.totalSetsCompleted === 1, log.totalSetsCompleted)
     check('skip: history line mentions skipped', line.includes('1 skipped'), line)
     check('skip: markdown mentions skipped', md.includes('1 skipped'), md)
-    check('skip: markdown keeps reason', md.includes('set 2: aparat ocupat'), md)
+    check('skip: markdown marks the skipped set', md.includes('2. _skipped_'), md)
+    check('skip: markdown keeps reason', md.includes('aparat ocupat'), md)
 }
 
 {

@@ -133,7 +133,7 @@ interface BodyMetricEntry {
     heightCm?: number
     weightKg?: number
     bodyFatPct?: number
-    muscleMassKg?: number
+    musclePct?: number
     notes?: string
 }
 
@@ -228,7 +228,7 @@ function BodyMetricsCard({
         heightCm: latest?.heightCm?.toString() ?? '',
         weightKg: latest?.weightKg?.toString() ?? '',
         bodyFatPct: latest?.bodyFatPct?.toString() ?? '',
-        muscleMassKg: latest?.muscleMassKg?.toString() ?? '',
+        musclePct: latest?.musclePct?.toString() ?? '',
     }))
 
     React.useEffect(() => {
@@ -236,7 +236,7 @@ function BodyMetricsCard({
             heightCm: latest?.heightCm?.toString() ?? '',
             weightKg: latest?.weightKg?.toString() ?? '',
             bodyFatPct: latest?.bodyFatPct?.toString() ?? '',
-            muscleMassKg: latest?.muscleMassKg?.toString() ?? '',
+            musclePct: latest?.musclePct?.toString() ?? '',
         })
     }, [latest])
 
@@ -252,7 +252,7 @@ function BodyMetricsCard({
                     heightCm: numberOrUndefined(draft.heightCm),
                     weightKg: numberOrUndefined(draft.weightKg),
                     bodyFatPct: numberOrUndefined(draft.bodyFatPct),
-                    muscleMassKg: numberOrUndefined(draft.muscleMassKg),
+                    musclePct: numberOrUndefined(draft.musclePct),
                 }),
             })
             if (!response.ok) {
@@ -288,7 +288,7 @@ function BodyMetricsCard({
                 <MetricLine icon={<Scale className="size-3" />} label="Greutate" value={latest?.weightKg ? `${latest.weightKg} kg` : '—'} />
                 <MetricLine icon={<Ruler className="size-3" />} label="IMC" value={payload.bmi ? payload.bmi.toString() : '—'} />
                 <MetricLine icon={<Weight className="size-3" />} label="Body fat" value={latest?.bodyFatPct ? `${latest.bodyFatPct}%` : '—'} />
-                <MetricLine icon={<Activity className="size-3" />} label="Muscle" value={latest?.muscleMassKg ? `${latest.muscleMassKg} kg` : '—'} />
+                <MetricLine icon={<Activity className="size-3" />} label="Muscle" value={latest?.musclePct ? `${latest.musclePct}%` : '—'} />
             </div>
 
             {open ? (
@@ -297,7 +297,7 @@ function BodyMetricsCard({
                         <SmallInput label="Înălțime cm" value={draft.heightCm} onChange={(heightCm) => setDraft((d) => ({ ...d, heightCm }))} />
                         <SmallInput label="Greutate kg" value={draft.weightKg} onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))} />
                         <SmallInput label="Body fat %" value={draft.bodyFatPct} onChange={(bodyFatPct) => setDraft((d) => ({ ...d, bodyFatPct }))} />
-                        <SmallInput label="Muscle kg" value={draft.muscleMassKg} onChange={(muscleMassKg) => setDraft((d) => ({ ...d, muscleMassKg }))} />
+                        <SmallInput label="Muscle %" value={draft.musclePct} onChange={(musclePct) => setDraft((d) => ({ ...d, musclePct }))} />
                     </div>
                     {error ? <div className="mt-1.5 text-[11px] text-rose-500">{error}</div> : null}
                     <button

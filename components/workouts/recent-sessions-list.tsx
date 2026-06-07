@@ -5,6 +5,7 @@ import { Calendar, ChevronDown, ChevronUp, Clock, ListChecks, Trophy, Weight } f
 
 import { cn } from "@/lib/utils"
 import { formatDuration } from "@/lib/workout/format"
+import { MarkdownRenderer } from "@/components/markdown-renderer"
 
 export interface SessionSummaryRow {
     slug: string
@@ -137,9 +138,9 @@ function SessionRow({ session }: { session: SessionSummaryRow }) {
                             {error} · <button onClick={() => void onToggle()} className="underline">retry</button>
                         </div>
                     ) : markdown ? (
-                        <pre className="whitespace-pre-wrap break-words font-sans text-[12.5px] leading-relaxed text-foreground/90">
-                            {markdown}
-                        </pre>
+                        <div className="text-[12.5px] text-foreground/90">
+                            <MarkdownRenderer content={markdown} compact />
+                        </div>
                     ) : null}
                 </div>
             ) : null}

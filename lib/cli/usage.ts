@@ -16,13 +16,14 @@
  *     polls every 60s; see codex-rs/backend-client/src/client.rs::
  *     get_rate_limits).
  */
+import { spawn } from 'child_process'
 import { readFileSync, writeFileSync, renameSync, existsSync } from 'fs'
 import { homedir } from 'os'
 import { join } from 'path'
 import { spawn as ptySpawn } from 'node-pty'
 
 import { resolveBin, augmentedEnv } from './resolve-bin'
-import { codexRuntimeAuthPath, prepareCodexRuntimeHome } from './codex-env'
+import { codexCliEnv, codexRuntimeAuthPath, prepareCodexRuntimeHome } from './codex-env'
 import { getAllCliStatuses } from './status'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 
@@ -744,6 +745,8 @@ function sleep(ms: number): Promise<void> {
 
 const USER_CODEX_AUTH_PATH = join(homedir(), '.codex', 'auth.json')
 const CODEX_USAGE_URL = 'https://chatgpt.com/backend-api/wham/usage'
+const CODEX_USAGE_TIMEOUT_MS = 8_000
+const CODEX_AUTH_REFRESH_TIMEOUT_MS = 15_000
 
 interface CodexAuthFile {
     tokens?: {
@@ -807,9 +810,72 @@ function codexWindow(w: CodexUsageWindow | undefined): CliQuotaWindow | undefine
     return { usedPercent: w.used_percent, resetsAt, ...(windowSeconds ? { windowSeconds } : {}) }
 }
 
+async function refreshCodexAuth(): Promise<boolean> {
+    prepareCodexRuntimeHome()
+    const codexBin = resolveBin('codex')
+    if (codexBin === 'codex') return false
+
+    return new Promise(resolve => {
+        let settled = false
+        let timer: ReturnType<typeof setTimeout> | null = null
+        const finish = (ok: boolean) => {
+            if (settled) return
+            settled = true
+            if (timer) clearTimeout(timer)
+            resolve(ok)
+        }
+
+        let proc: ReturnType<typeof spawn>
+        try {
+            // `codex login status` is cheap but still goes through the Codex
+            // auth bootstrap, which refreshes stale OAuth credentials before
+            // it reports "Logged in". The quota endpoint reads auth.json
+            // directly, so it must trigger this same refresh path before
+            // deciding the token is expired.
+            proc = spawn(codexBin, ['login', 'status'], {
+                stdio: ['ignore', 'ignore', 'ignore'],
+                env: codexCliEnv({ DISABLE_TELEMETRY: '1' }),
+                cwd: activeRuntimePaths().agentWorkspaceDir,
+            })
+        } catch {
+            finish(false)
+            return
+        }
+
+        timer = setTimeout(() => {
+            try { proc.kill('SIGKILL') } catch { /* ignore */ }
+            finish(false)
+        }, CODEX_AUTH_REFRESH_TIMEOUT_MS)
+
+        proc.on('error', () => finish(false))
+        proc.on('exit', code => finish(code === 0))
+    })
+}
+
+async function fetchCodexUsage(auth: { token: string; accountId: string }): Promise<Response> {
+    const controller = new AbortController()
+    const timer = setTimeout(() => controller.abort(), CODEX_USAGE_TIMEOUT_MS)
+    return fetch(CODEX_USAGE_URL, {
+        method: 'GET',
+        headers: {
+            Authorization: `Bearer ${auth.token}`,
+            // Both casings are used by codex CLI in different versions —
+            // the server is case-insensitive, but spelling matters.
+            'chatgpt-account-id': auth.accountId,
+            // Cloudflare gates this endpoint to the codex client UA. The
+            // `Originator` header is what the CLI sends; the version in
+            // User-Agent is loose, the server doesn't pin it.
+            Originator: 'codex_cli_rs',
+            'User-Agent': 'codex_cli_rs/0.0.0',
+            Accept: 'application/json',
+        },
+        signal: controller.signal,
+    }).finally(() => clearTimeout(timer))
+}
+
 async function getCodexQuota(): Promise<CliQuotaSnapshot> {
     const fetchedAt = Date.now()
-    const auth = readCodexAuth()
+    let auth = readCodexAuth()
     if (!auth) {
         return {
             cliId: 'codex',
@@ -821,30 +887,21 @@ async function getCodexQuota(): Promise<CliQuotaSnapshot> {
     }
 
     try {
-        const controller = new AbortController()
-        const timer = setTimeout(() => controller.abort(), 8000)
-        const res = await fetch(CODEX_USAGE_URL, {
-            method: 'GET',
-            headers: {
-                Authorization: `Bearer ${auth.token}`,
-                // Both casings are used by codex CLI in different versions —
-                // the server is case-insensitive, but spelling matters.
-                'chatgpt-account-id': auth.accountId,
-                // Cloudflare gates this endpoint to the codex client UA. The
-                // `Originator` header is what the CLI sends; the version in
-                // User-Agent is loose, the server doesn't pin it.
-                Originator: 'codex_cli_rs',
-                'User-Agent': 'codex_cli_rs/0.0.0',
-                Accept: 'application/json',
-            },
-            signal: controller.signal,
-        }).finally(() => clearTimeout(timer))
+        let res = await fetchCodexUsage(auth)
+
+        if (res.status === 401 || res.status === 403) {
+            const refreshed = await refreshCodexAuth()
+            auth = refreshed ? readCodexAuth() : auth
+            if (refreshed && auth) {
+                res = await fetchCodexUsage(auth)
+            }
+        }
 
         if (res.status === 401 || res.status === 403) {
             return {
                 cliId: 'codex',
                 available: false,
-                error: 'OAuth token expired — run `codex login` (or any codex command) to refresh.',
+                error: 'Codex quota endpoint rejected auth after an automatic refresh. Codex model access may still work; run `codex login` if this quota card keeps failing.',
                 source: 'api',
                 fetchedAt,
             }

@@ -7,6 +7,7 @@ import {
 } from '@/lib/workout/storage'
 import { estimated1RM } from '@/lib/workout/one-rep-max'
 import { loggedSetDurationSec } from '@/lib/workout/save-session'
+import { appendBodyMetric, computeBmi, readBodyMetrics } from '@/lib/workout/body-metrics'
 
 // ---------------------------------------------------------------------------
 // Workout history tools.
@@ -272,4 +273,141 @@ function averageDuration(values: Array<number | undefined>): number | undefined 
     const nums = values.filter((value): value is number => typeof value === 'number' && Number.isFinite(value))
     if (nums.length === 0) return undefined
     return Math.round((nums.reduce((sum, value) => sum + value, 0) / nums.length) * 10) / 10
+}
+
+// ---------------------------------------------------------------------------
+// Body metrics tools.
+//
+// `GetBodyMetrics` lets the orchestrator read the user's latest height /
+// weight / body-fat % / muscle % (plus computed BMI) BEFORE composing a
+// workout, so it can scale loads to bodyweight and bias volume/intensity to
+// the user's profile and goal. `SaveBodyMetrics` persists what the user
+// shares in chat so the Library card and future sessions stay in sync —
+// only call it with values the user actually gave.
+// ---------------------------------------------------------------------------
+
+export const GET_BODY_METRICS_TOOL_ID = 'GetBodyMetrics'
+export const SAVE_BODY_METRICS_TOOL_ID = 'SaveBodyMetrics'
+
+export const getBodyMetricsTool: ToolDef = {
+    id: GET_BODY_METRICS_TOOL_ID,
+    name: GET_BODY_METRICS_TOOL_ID,
+    description: [
+        "Read the user's recorded body metrics — latest height (cm), weight (kg), body-fat %, muscle %, plus the computed BMI and a short trend of recent entries.",
+        'Call this BEFORE composing a workout so you can scale loads to bodyweight (assisted/weighted-bodyweight moves especially), pick appropriate exercises, and bias volume vs intensity and hypertrophy vs conditioning to the user profile and stated goal.',
+        "Returns `found: false` when nothing is recorded yet — that's your cue to ASK the user for the relevant metrics, then persist them with SaveBodyMetrics so you don't have to ask again.",
+        'Metrics older than ~30 days are stale for a cut/bulk — re-ask if the goal depends on current composition.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            limit: {
+                type: 'number',
+                description: 'Max recent entries to return for the trend. Defaults to 8. Cap 50.',
+            },
+        },
+    },
+    tags: ['workout', 'workout-history'],
+}
+
+export const saveBodyMetricsTool: ToolDef = {
+    id: SAVE_BODY_METRICS_TOOL_ID,
+    name: SAVE_BODY_METRICS_TOOL_ID,
+    description: [
+        'Persist body metrics the user just shared in conversation so they appear on the Library body-metrics card and seed future workouts.',
+        'Pass ONLY the fields the user actually gave you — every field is optional, but include at least one. Records a new dated entry (history is preserved; it never overwrites).',
+        'Units: heightCm in centimetres, weightKg in kilograms, bodyFatPct and musclePct as percentages of bodyweight (NOT kilograms).',
+        'Do not invent or estimate values — if the user did not state a metric, leave it out.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            heightCm: { type: 'number', description: 'Height in centimetres (80–260).' },
+            weightKg: { type: 'number', description: 'Bodyweight in kilograms (20–400).' },
+            bodyFatPct: { type: 'number', description: 'Body-fat percentage of bodyweight (1–80).' },
+            musclePct: { type: 'number', description: 'Skeletal-muscle percentage of bodyweight (5–80).' },
+            notes: { type: 'string', description: 'Optional short note (e.g. "morning, fasted").' },
+        },
+    },
+    tags: ['workout', 'workout-history'],
+}
+
+export async function executeGetBodyMetrics(args: Record<string, unknown>): Promise<ToolResult> {
+    const limitRaw = typeof args.limit === 'number' ? args.limit : 8
+    const limit = Math.max(1, Math.min(50, Math.floor(limitRaw)))
+    const entries = readBodyMetrics(limit)
+    const latest = entries[0] ?? null
+    if (!latest) {
+        return {
+            success: true,
+            data: {
+                found: false,
+                message: 'No body metrics recorded yet. If composition matters for this request, ask the user for height, weight, body-fat %, and muscle %, then persist with SaveBodyMetrics.',
+            },
+        }
+    }
+    return {
+        success: true,
+        data: {
+            found: true,
+            latest: {
+                recordedAt: latest.recordedAt,
+                heightCm: latest.heightCm,
+                weightKg: latest.weightKg,
+                bodyFatPct: latest.bodyFatPct,
+                musclePct: latest.musclePct,
+                bmi: computeBmi(latest.weightKg, latest.heightCm),
+                notes: latest.notes,
+            },
+            history: entries.map((entry) => ({
+                recordedAt: entry.recordedAt,
+                weightKg: entry.weightKg,
+                bodyFatPct: entry.bodyFatPct,
+                musclePct: entry.musclePct,
+            })),
+            count: entries.length,
+            hint: 'Use weight/height/BMI to scale loads and volume; use body-fat % and muscle % with the stated goal (cut/recomp/bulk) to bias intensity and conditioning. If the latest entry is stale, confirm current values before a composition-dependent plan.',
+        },
+    }
+}
+
+export async function executeSaveBodyMetrics(args: Record<string, unknown>): Promise<ToolResult> {
+    const heightCm = clampMetric(args.heightCm, 80, 260)
+    const weightKg = clampMetric(args.weightKg, 20, 400)
+    const bodyFatPct = clampMetric(args.bodyFatPct, 1, 80)
+    const musclePct = clampMetric(args.musclePct, 5, 80)
+    const notes = typeof args.notes === 'string' ? args.notes.trim().slice(0, 300) || undefined : undefined
+
+    if (heightCm === undefined && weightKg === undefined && bodyFatPct === undefined && musclePct === undefined && !notes) {
+        return {
+            success: false,
+            error: 'Provide at least one metric the user actually gave you: heightCm, weightKg, bodyFatPct, musclePct, or notes.',
+        }
+    }
+
+    const entry = appendBodyMetric({
+        recordedAt: new Date().toISOString(),
+        heightCm,
+        weightKg,
+        bodyFatPct,
+        musclePct,
+        notes,
+    })
+
+    return {
+        success: true,
+        data: {
+            saved: true,
+            entry,
+            bmi: computeBmi(entry.weightKg, entry.heightCm),
+            message: 'Saved. It now shows on the Library body-metrics card and will inform future workouts.',
+        },
+    }
+}
+
+function clampMetric(value: unknown, min: number, max: number): number | undefined {
+    if (value === null || value === undefined || value === '') return undefined
+    const n = typeof value === 'number' ? value : Number.parseFloat(String(value))
+    if (!Number.isFinite(n)) return undefined
+    return Math.min(max, Math.max(min, Math.round(n * 10) / 10))
 }

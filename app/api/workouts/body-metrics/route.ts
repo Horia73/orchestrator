@@ -38,12 +38,12 @@ export async function POST(request: Request) {
         const heightCm = numberValue(body.heightCm, 80, 260)
         const weightKg = numberValue(body.weightKg, 20, 400)
         const bodyFatPct = numberValue(body.bodyFatPct, 1, 80)
-        const muscleMassKg = numberValue(body.muscleMassKg, 1, 250)
+        const musclePct = numberValue(body.musclePct, 5, 80)
         const notes = stringValue(body.notes)?.slice(0, 300)
 
-        if (!heightCm && !weightKg && !bodyFatPct && !muscleMassKg && !notes) {
+        if (!heightCm && !weightKg && !bodyFatPct && !musclePct && !notes) {
             return NextResponse.json(
-                { error: 'Provide at least one metric: heightCm, weightKg, bodyFatPct, muscleMassKg, or notes.' },
+                { error: 'Provide at least one metric: heightCm, weightKg, bodyFatPct, musclePct, or notes.' },
                 { status: 400 },
             )
         }
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
             heightCm,
             weightKg,
             bodyFatPct,
-            muscleMassKg,
+            musclePct,
             notes,
         })
 

@@ -19,6 +19,7 @@ import { cn } from "@/lib/utils"
 import type { RequestLogRow, RequestStatus, ToolLogRow } from "@/lib/observability/schema"
 import type { Message, ToolCallReasoningEntry } from "@/lib/types"
 import { MessageBubble } from "@/components/message-bubble"
+import { Select as UiSelect } from "@/components/ui/select"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import { useLogs, useRequestDetail, type LiveTailStatus, type LogsFilters, type RequestLogTranscript } from "./use-logs"
 
@@ -265,19 +266,15 @@ function Select({ value, onChange, options }: {
     options: Array<{ value: string; label: string }>
 }) {
     return (
-        <select
+        <UiSelect
             value={value}
-            onChange={e => onChange(e.target.value)}
+            onValueChange={onChange}
+            options={options}
             className={cn(
-                "h-8 min-w-[calc(50%-0.25rem)] flex-1 rounded-lg border border-border bg-background px-2 text-[13px] font-medium text-foreground outline-none sm:min-w-0 sm:flex-none",
-                "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
-                "hover:bg-muted/60 transition-colors"
+                "min-w-[calc(50%-0.25rem)] flex-1 sm:min-w-[8.5rem] sm:flex-none",
+                "[&>button]:h-8 [&>button]:rounded-lg [&>button]:px-2.5 [&>button]:text-[13px] [&>button]:font-medium"
             )}
-        >
-            {options.map(o => (
-                <option key={o.value} value={o.value}>{o.label}</option>
-            ))}
-        </select>
+        />
     )
 }
 

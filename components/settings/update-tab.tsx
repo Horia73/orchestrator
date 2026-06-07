@@ -2,16 +2,22 @@
 
 import * as React from "react"
 import {
+  Activity,
   AlertTriangle,
+  ArrowRight,
+  Boxes,
   CheckCircle2,
   Clock3,
   Download,
   ExternalLink,
   GitBranch,
+  History,
   Loader2,
   RefreshCcw,
   RotateCcw,
   RotateCw,
+  ShieldAlert,
+  Tag,
   Terminal as TerminalIcon,
   Trash2,
   Upload,
@@ -22,7 +28,6 @@ import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card"
 
 interface ActiveRunInfo {
   conversationId: string
@@ -171,6 +176,35 @@ function statusTone(status: UpdateStatus | null) {
   if (status.job && ACTIVE_PHASES.has(status.job.phase)) return "busy"
   if (status.updateAvailable) return "available"
   return "ok"
+}
+
+function heroMeta(tone: string, status: UpdateStatus | null): {
+  Icon: React.ComponentType<{ className?: string }>
+  headline: string
+  chip: string
+  iconClass: string
+  spin?: boolean
+} {
+  if (tone === "busy")
+    return {
+      Icon: Loader2,
+      headline: phaseLabel(status?.job?.phase),
+      chip: "bg-blue-500/10",
+      iconClass: "text-blue-600 dark:text-blue-400",
+      spin: true,
+    }
+  if (tone === "error")
+    return { Icon: AlertTriangle, headline: "Update failed", chip: "bg-destructive/10", iconClass: "text-destructive" }
+  if (tone === "available")
+    return { Icon: Download, headline: "Update available", chip: "bg-primary/10", iconClass: "text-primary" }
+  if (tone === "ok")
+    return {
+      Icon: CheckCircle2,
+      headline: "You're up to date",
+      chip: "bg-emerald-500/10",
+      iconClass: "text-emerald-600 dark:text-emerald-400",
+    }
+  return { Icon: Clock3, headline: "Updates", chip: "bg-muted", iconClass: "text-foreground/60" }
 }
 
 const UPDATE_LOG_MAX_LINES = 500
@@ -516,20 +550,30 @@ export function UpdateTab() {
 
   if (loading) {
     return (
-      <div className="grid gap-4 md:grid-cols-2">
-        <div className="h-[180px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
-        <div className="h-[180px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+      <div className="flex flex-col gap-4">
+        <div className="h-[148px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+        <div className="grid gap-4 md:grid-cols-2">
+          <div className="h-[180px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+          <div className="h-[180px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+        </div>
       </div>
     )
   }
 
   const tone = statusTone(status)
+  const hero = heroMeta(tone, status)
   const activeJob = status?.job && ACTIVE_PHASES.has(status.job.phase) ? status.job : null
   const updateDisabled = updating || Boolean(activeJob) || !status?.updateAvailable || status.current.dirty || !status.config.managedInstall
   const rollbackDisabled = rollbackBusy || Boolean(activeJob) || !status?.rollback?.available
   const serviceLabel = status?.config.serviceManager === "docker" && status.config.dockerHostUpdater
     ? "Docker + host updater"
     : status?.config.serviceManager ?? "Manual"
+  const hasStatusFooter = Boolean(
+    status?.current.dirty ||
+      (status && !status.config.managedInstall) ||
+      status?.latestError ||
+      status?.job
+  )
 
   return (
     <div className="flex min-w-0 flex-col gap-4">
@@ -545,24 +589,117 @@ export function UpdateTab() {
         }}
         onConfirm={handleFactoryReset}
       />
-      <div className="flex flex-col items-stretch gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <h2 className="text-[15px] font-semibold text-foreground/85">Updates</h2>
-          <p className="mt-0.5 text-[12.5px] text-foreground/50">
-            {status?.config.repo ?? "GitHub"} releases power managed app updates.
-          </p>
+
+      {/* Hero — version state + primary actions */}
+      <section className="overflow-hidden rounded-2xl border border-border/70 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
+        <div className="flex flex-wrap items-start justify-between gap-4 px-5 py-4">
+          <div className="flex min-w-0 items-start gap-3.5">
+            <span className={cn("grid size-11 shrink-0 place-items-center rounded-2xl", hero.chip)}>
+              <hero.Icon className={cn("size-5", hero.iconClass, hero.spin && "animate-spin")} />
+            </span>
+            <div className="min-w-0">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="text-[17px] font-semibold tracking-tight text-foreground">{hero.headline}</h2>
+                <StatusBadge tone={tone} status={status} />
+              </div>
+              <p className="mt-1 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-[12.5px] text-foreground/50">
+                <span className="font-mono text-foreground/70">v{status?.current.version ?? "0.0.0"}</span>
+                {status?.updateAvailable && status?.latest && (
+                  <>
+                    <ArrowRight className="size-3 shrink-0 text-foreground/35" />
+                    <span className="font-mono font-medium text-primary">{status.latest.tag}</span>
+                  </>
+                )}
+                <span className="text-foreground/30">·</span>
+                <span>Checked {formatDate(status?.latestCheckedAt)}</span>
+              </p>
+            </div>
+          </div>
+          <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
+            <Button className="flex-1 sm:flex-none" variant="outline" size="lg" onClick={handleCheck} disabled={checking || updating}>
+              {checking ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
+              Check
+            </Button>
+            <Button className="flex-1 sm:flex-none" size="lg" onClick={handleUpdate} disabled={updateDisabled}>
+              {updating ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+              Update
+            </Button>
+          </div>
         </div>
-        <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:justify-end">
-          <Button className="flex-1 sm:flex-none" variant="outline" size="sm" onClick={handleCheck} disabled={checking || updating}>
-            {checking ? <Loader2 className="size-3.5 animate-spin" /> : <RefreshCcw className="size-3.5" />}
-            Check
-          </Button>
-          <Button className="flex-1 sm:flex-none" size="sm" onClick={handleUpdate} disabled={updateDisabled}>
-            {updating ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-            Update
-          </Button>
+
+        <div className="grid gap-3 border-t border-border/60 px-5 py-4 md:grid-cols-3">
+          <InfoTile label="Installed" value={`v${status?.current.version ?? "0.0.0"}`} icon={GitBranch} />
+          <InfoTile
+            label="Latest"
+            value={status?.latest ? status.latest.tag : "No release"}
+            icon={status?.updateAvailable ? Download : CheckCircle2}
+          />
+          <InfoTile
+            label="Active AI"
+            value={String(status?.activeRuns.length ?? 0)}
+            icon={(status?.activeRuns.length ?? 0) > 0 ? Loader2 : Clock3}
+            spin={(status?.activeRuns.length ?? 0) > 0}
+          />
         </div>
-      </div>
+
+        {hasStatusFooter && (
+          <div className="flex flex-col gap-3 border-t border-border/60 px-5 py-4">
+            {status?.current.dirty && (
+              <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-300">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0 break-words">Local file changes block managed updates.</span>
+              </div>
+            )}
+
+            {status && !status.config.managedInstall && (
+              <div className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-foreground/55">
+                <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
+                <span className="min-w-0 break-words">
+                  {status.config.serviceManager === "docker"
+                    ? "Docker one-click updates need the installer host update bridge. Re-run the installer on the server or run `orchestrator update` there."
+                    : "Managed installer service is required for one-click restart."}
+                </span>
+              </div>
+            )}
+
+            {status?.latestError && (
+              <div className="min-w-0 break-words rounded-xl border border-border/60 bg-muted/35 px-3 py-2.5 text-[12.5px] text-foreground/60">
+                {status.latestError}
+              </div>
+            )}
+
+            {status?.job && (
+              <div className="min-w-0 rounded-xl border border-border/60 bg-muted/30 px-3 py-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex min-w-0 items-center gap-2">
+                    {ACTIVE_PHASES.has(status.job.phase) ? (
+                      <Loader2 className="size-3.5 animate-spin text-primary" />
+                    ) : status.job.phase === "failed" ? (
+                      <AlertTriangle className="size-3.5 text-destructive" />
+                    ) : (
+                      <CheckCircle2 className="size-3.5 text-emerald-600" />
+                    )}
+                    <span className="min-w-0 break-words text-[13px] font-medium text-foreground/80">
+                      {phaseLabel(status.job.phase)} {status.job.targetTag}
+                    </span>
+                  </div>
+                  <span className="shrink-0 font-mono text-[11.5px] text-foreground/45">{status.job.id.slice(0, 8)}</span>
+                </div>
+                {status.job.waitReason && (
+                  <p className="mt-2 break-words text-[12.5px] text-foreground/55">{status.job.waitReason}</p>
+                )}
+                {status.job.error && (
+                  <p className="mt-2 break-words text-[12.5px] text-destructive">{status.job.error}</p>
+                )}
+                {ACTIVE_PHASES.has(status.job.phase) &&
+                  status.config.serviceManager === "docker" && (
+                    <UpdateLogTerminal jobId={status.job.id} />
+                  )}
+              </div>
+            )}
+          </div>
+        )}
+      </section>
 
       {error && (
         <div className="flex items-start gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-2.5 text-[13px] text-destructive">
@@ -571,340 +708,208 @@ export function UpdateTab() {
         </div>
       )}
 
-      <Card className="rounded-xl">
-        <CardHeader className="flex-col items-start gap-3 sm:flex-row sm:justify-between">
-          <div className="min-w-0">
-            <CardTitle className="text-[15px]">Status</CardTitle>
-            <p className="mt-1 text-[12.5px] text-foreground/55">
-              Last checked {formatDate(status?.latestCheckedAt)}
-            </p>
-          </div>
-          <StatusBadge tone={tone} status={status} />
-        </CardHeader>
-        <CardContent className="gap-4">
-          <div className="grid gap-3 md:grid-cols-3">
-            <InfoTile label="Installed" value={`v${status?.current.version ?? "0.0.0"}`} icon={GitBranch} />
-            <InfoTile
-              label="Latest"
-              value={status?.latest ? status.latest.tag : "No release"}
-              icon={status?.updateAvailable ? Download : CheckCircle2}
-            />
-            <InfoTile
-              label="Active AI"
-              value={String(status?.activeRuns.length ?? 0)}
-              icon={(status?.activeRuns.length ?? 0) > 0 ? Loader2 : Clock3}
-              spin={(status?.activeRuns.length ?? 0) > 0}
-            />
-          </div>
-
-          {status?.current.dirty && (
-            <div className="flex items-start gap-2 rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-300">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span className="min-w-0 break-words">Local file changes block managed updates.</span>
-            </div>
-          )}
-
-          {status && !status.config.managedInstall && (
-            <div className="flex items-start gap-2 rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-foreground/55">
-              <AlertTriangle className="mt-0.5 size-3.5 shrink-0" />
-              <span className="min-w-0 break-words">
-                {status.config.serviceManager === "docker"
-                  ? "Docker one-click updates need the installer host update bridge. Re-run the installer on the server or run `orchestrator update` there."
-                  : "Managed installer service is required for one-click restart."}
-              </span>
-            </div>
-          )}
-
-          {status?.latestError && (
-            <div className="min-w-0 break-words rounded-xl border border-border/60 bg-muted/35 px-3 py-2.5 text-[12.5px] text-foreground/60">
-              {status.latestError}
-            </div>
-          )}
-
-          {status?.job && (
-            <div className="min-w-0 rounded-xl border border-border/60 bg-muted/30 px-3 py-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex min-w-0 items-center gap-2">
-                  {ACTIVE_PHASES.has(status.job.phase) ? (
-                    <Loader2 className="size-3.5 animate-spin text-primary" />
-                  ) : status.job.phase === "failed" ? (
-                    <AlertTriangle className="size-3.5 text-destructive" />
-                  ) : (
-                    <CheckCircle2 className="size-3.5 text-emerald-600" />
-                  )}
-                  <span className="min-w-0 break-words text-[13px] font-medium text-foreground/80">
-                    {phaseLabel(status.job.phase)} {status.job.targetTag}
-                  </span>
-                </div>
-                <span className="shrink-0 font-mono text-[11.5px] text-foreground/45">{status.job.id.slice(0, 8)}</span>
-              </div>
-              {status.job.waitReason && (
-                <p className="mt-2 break-words text-[12.5px] text-foreground/55">{status.job.waitReason}</p>
-              )}
-              {status.job.error && (
-                <p className="mt-2 break-words text-[12.5px] text-destructive">{status.job.error}</p>
-              )}
-              {ACTIVE_PHASES.has(status.job.phase) &&
-                status.config.serviceManager === "docker" && (
-                  <UpdateLogTerminal jobId={status.job.id} />
-                )}
-            </div>
-          )}
-        </CardContent>
-      </Card>
-
       {status?.config.serviceManager === "docker" && status.config.dockerHostUpdater && (
         <div className="grid gap-4 lg:grid-cols-2">
-          <Card className="rounded-xl">
-            <CardHeader className="flex-col items-start gap-3 sm:flex-row sm:justify-between">
-              <div className="min-w-0">
-                <CardTitle className="text-[15px]">Rollback</CardTitle>
-                <p className="mt-1 text-[12.5px] text-foreground/55">
-                  One previous Docker image is kept ready so rollback can recreate the container without rebuilding.
-                </p>
+          <Section
+            icon={History}
+            title="Rollback"
+            description="One previous Docker image is kept ready so rollback can recreate the container without rebuilding."
+          >
+            <div className="rounded-xl border border-border/60 bg-background px-3 py-1.5">
+              <DetailRow label="Cached" value={rollbackLabel(status.rollback)} mono />
+              <DetailRow label="Saved" value={formatDate(status.rollback?.savedAt)} />
+              <DetailRow label="Before" value={status.rollback?.savedBeforeTarget ?? "Next update"} mono />
+            </div>
+            {status.rollback && !status.rollback.available && status.rollback.unavailableReason && (
+              <div className="min-w-0 break-words rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-300">
+                {status.rollback.unavailableReason}
               </div>
-              <RotateCcw className="size-4 shrink-0 text-foreground/45" />
-            </CardHeader>
-            <CardContent className="gap-3">
-              <div className="rounded-xl border border-border/60 bg-background px-3 py-2.5">
-                <DetailRow label="Cached" value={rollbackLabel(status.rollback)} mono />
-                <DetailRow label="Saved" value={formatDate(status.rollback?.savedAt)} />
-                <DetailRow label="Before" value={status.rollback?.savedBeforeTarget ?? "Next update"} mono />
+            )}
+            {!status.rollback && (
+              <div className="min-w-0 break-words rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-foreground/55">
+                No cached rollback build yet. The slot is created before the next Docker update.
               </div>
-              {status.rollback && !status.rollback.available && status.rollback.unavailableReason && (
-                <div className="min-w-0 break-words rounded-xl border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 text-[12.5px] text-amber-800 dark:text-amber-300">
-                  {status.rollback.unavailableReason}
-                </div>
-              )}
-              {!status.rollback && (
-                <div className="min-w-0 break-words rounded-xl border border-border/60 bg-muted/30 px-3 py-2.5 text-[12.5px] text-foreground/55">
-                  No cached rollback build yet. The slot is created before the next Docker update.
-                </div>
-              )}
+            )}
+            <Button
+              className="w-full sm:w-auto"
+              variant="outline"
+              size="sm"
+              onClick={handleRollback}
+              disabled={rollbackDisabled}
+            >
+              {rollbackBusy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
+              Rollback to cached build
+            </Button>
+            {rollbackMessage && <StatusMessage tone={rollbackMessage.tone}>{rollbackMessage.text}</StatusMessage>}
+          </Section>
+
+          <Section
+            icon={TerminalIcon}
+            title="CLI tools"
+            description="Claude Code and Codex live in a mounted volume, so app updates never refresh them. Update them in place (this restarts the container), or restart the container on its own."
+          >
+            <div className="flex flex-wrap items-center gap-2">
               <Button
-                className="w-full sm:w-auto"
+                className="flex-1 sm:flex-none"
+                size="sm"
+                onClick={handleCliUpdate}
+                disabled={cliBusy !== null || Boolean(activeJob)}
+              >
+                {cliBusy === "update" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                Update CLIs
+              </Button>
+              <Button
+                className="flex-1 sm:flex-none"
                 variant="outline"
                 size="sm"
-                onClick={handleRollback}
-                disabled={rollbackDisabled}
+                onClick={handleContainerRestart}
+                disabled={cliBusy !== null || Boolean(activeJob)}
               >
-                {rollbackBusy ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCcw className="size-3.5" />}
-                Rollback to cached build
+                {cliBusy === "restart" ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
+                Restart container
               </Button>
-              {rollbackMessage && (
-                <div
-                  className={cn(
-                    "min-w-0 break-words rounded-xl border px-3 py-2.5 text-[12.5px]",
-                    rollbackMessage.tone === "success"
-                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
-                      : "border-destructive/30 bg-destructive/5 text-destructive"
-                  )}
-                >
-                  {rollbackMessage.text}
-                </div>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card className="rounded-xl">
-            <CardHeader className="flex-col items-start gap-3 sm:flex-row sm:justify-between">
-              <div className="min-w-0">
-                <CardTitle className="text-[15px]">CLI tools</CardTitle>
-                <p className="mt-1 text-[12.5px] text-foreground/55">
-                  Claude Code and Codex live in a mounted volume, so app updates never refresh them.
-                  Update them in place (this restarts the container), or restart the container on its own.
-                </p>
-              </div>
-              <TerminalIcon className="size-4 shrink-0 text-foreground/45" />
-            </CardHeader>
-            <CardContent className="gap-3">
-              <div className="flex flex-wrap items-center gap-2">
-                <Button
-                  className="flex-1 sm:flex-none"
-                  size="sm"
-                  onClick={handleCliUpdate}
-                  disabled={cliBusy !== null || Boolean(activeJob)}
-                >
-                  {cliBusy === "update" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-                  Update CLIs
-                </Button>
-                <Button
-                  className="flex-1 sm:flex-none"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleContainerRestart}
-                  disabled={cliBusy !== null || Boolean(activeJob)}
-                >
-                  {cliBusy === "restart" ? <Loader2 className="size-3.5 animate-spin" /> : <RotateCw className="size-3.5" />}
-                  Restart container
-                </Button>
-              </div>
-              {cliMessage && (
-                <div
-                  className={cn(
-                    "min-w-0 break-words rounded-xl border px-3 py-2.5 text-[12.5px]",
-                    cliMessage.tone === "success"
-                      ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
-                      : "border-destructive/30 bg-destructive/5 text-destructive"
-                  )}
-                >
-                  {cliMessage.text}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+            </div>
+            {cliMessage && <StatusMessage tone={cliMessage.tone}>{cliMessage.text}</StatusMessage>}
+          </Section>
         </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
-        <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle className="text-[15px]">Installed Build</CardTitle>
-          </CardHeader>
-          <CardContent>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Section icon={Boxes} title="Installed build">
+          <div className="rounded-xl border border-border/60 bg-background px-3 py-1.5">
             <DetailRow label="Version" value={`v${status?.current.version ?? "0.0.0"}`} />
             <DetailRow label="Commit" value={status?.current.commit ?? "Unknown"} mono />
             <DetailRow label="Branch" value={status?.current.branch || "Detached"} mono />
             <DetailRow label="Service" value={serviceLabel} />
-          </CardContent>
-        </Card>
+          </div>
+        </Section>
 
-        <Card className="rounded-xl">
-          <CardHeader className="flex-row items-start justify-between gap-3">
-            <CardTitle className="text-[15px]">Latest Release</CardTitle>
-            {status?.latest?.htmlUrl && (
+        <Section
+          icon={Tag}
+          title="Latest release"
+          action={
+            status?.latest?.htmlUrl ? (
               <Button variant="ghost" size="icon-sm" asChild title="Open release">
                 <a href={status.latest.htmlUrl} target="_blank" rel="noreferrer">
                   <ExternalLink className="size-3.5" />
                 </a>
               </Button>
-            )}
-          </CardHeader>
-          <CardContent>
+            ) : undefined
+          }
+        >
+          <div className="rounded-xl border border-border/60 bg-background px-3 py-1.5">
             <DetailRow label="Version" value={status?.latest?.tag ?? "No release"} />
             <DetailRow label="Published" value={formatDate(status?.latest?.publishedAt)} />
             {status?.latest?.fallback && <DetailRow label="Source" value="Installed fallback" />}
-            {status?.latest?.body ? (
-              <ReleaseNotesMarkdown content={status.latest.body} />
-            ) : (
-              <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-8 text-center text-[12.5px] text-foreground/45">
-                No release notes.
-              </div>
-            )}
-          </CardContent>
-        </Card>
+          </div>
+          {status?.latest?.body ? (
+            <ReleaseNotesMarkdown content={status.latest.body} />
+          ) : (
+            <div className="rounded-xl border border-dashed border-border/70 bg-muted/20 px-3 py-8 text-center text-[12.5px] text-foreground/45">
+              No release notes.
+            </div>
+          )}
+        </Section>
       </div>
 
       {status?.activeRuns.length ? (
-        <Card className="rounded-xl">
-          <CardHeader>
-            <CardTitle className="text-[15px]">Active Runs</CardTitle>
-          </CardHeader>
-          <CardContent className="gap-2">
+        <Section icon={Activity} title="Active AI runs">
+          <div className="flex flex-col gap-2">
             {status.activeRuns.map(run => (
               <div
                 key={`${run.conversationId}:${run.messageId}`}
-                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/60 bg-muted/25 px-3 py-2"
+                className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/60 bg-background/60 px-3 py-2"
               >
                 <span className="font-mono text-[12px] text-foreground/70">{run.conversationId.slice(0, 8)}</span>
                 <span className="text-[12px] text-foreground/45">Started {formatDate(run.startedAt)}</span>
               </div>
             ))}
-          </CardContent>
-        </Card>
+          </div>
+        </Section>
       ) : null}
 
-      {resetMessage && (
-        <div className="min-w-0 break-words rounded-xl border border-emerald-500/25 bg-emerald-500/10 px-3 py-2 text-[12.5px] text-emerald-700 dark:text-emerald-400">
-          {resetMessage}
-        </div>
-      )}
+      {resetMessage && <StatusMessage tone="success">{resetMessage}</StatusMessage>}
 
-      <div className="mt-2 border-t border-border/60 pt-4">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h3 className="text-[13px] font-medium text-foreground/70">Danger zone</h3>
-            <p className="mt-0.5 text-[12.5px] text-foreground/45">
-              Reset selected local data, or back up and restore your Orchestrator data.
-            </p>
-          </div>
-        </div>
-
-        <div className="mt-3 grid gap-3 lg:grid-cols-2">
-          <div className="min-w-0 rounded-xl border border-border/70 bg-card px-3 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h4 className="text-[13px] font-medium text-foreground/75">Backup &amp; restore</h4>
-                <p className="mt-0.5 text-[12.5px] leading-relaxed text-foreground/45">
-                  Download a full backup (database, workspace, uploads, connected-account tokens) as a .tar.gz, or restore one. WhatsApp and browser sessions are excluded — re-link them after a restore. Restoring the database takes effect after the next restart.
-                </p>
-              </div>
-              <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
-                <Button
-                  className="flex-1 sm:flex-none"
-                  variant="outline"
-                  size="sm"
-                  onClick={handleBackupExport}
-                  disabled={backupBusy !== null}
-                  aria-label="Create backup"
-                >
-                  {backupBusy === "export" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
-                  Backup
-                </Button>
-                <Button
-                  className="flex-1 sm:flex-none"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => backupRestoreInputRef.current?.click()}
-                  disabled={backupBusy !== null}
-                  aria-label="Restore backup"
-                >
-                  {backupBusy === "restore" ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
-                  Restore
-                </Button>
-                <input
-                  ref={backupRestoreInputRef}
-                  type="file"
-                  accept=".gz,.tgz,application/gzip,application/x-gzip"
-                  className="hidden"
-                  onChange={event => { void handleBackupRestoreFile(event.target.files?.[0]) }}
-                />
-              </div>
-            </div>
-            {backupMessage && (
-              <p
-                className={cn(
-                  "mt-2 min-w-0 break-words text-[12px]",
-                  backupMessage.tone === "success" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
-                )}
-              >
-                {backupMessage.text}
+      {/* Data & danger zone */}
+      <Section
+        icon={ShieldAlert}
+        title="Data & danger zone"
+        description="Back up or restore your Orchestrator data, or clear selected local data."
+        tone="danger"
+      >
+        <div className="min-w-0 rounded-xl border border-border/60 bg-background/60 px-4 py-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h4 className="text-[13.5px] font-medium text-foreground/85">Backup &amp; restore</h4>
+              <p className="mt-0.5 text-[12.5px] leading-relaxed text-foreground/50">
+                Download a full backup (database, workspace, uploads, connected-account tokens) as a .tar.gz, or restore one. WhatsApp and browser sessions are excluded — re-link them after a restore. Restoring the database takes effect after the next restart.
               </p>
-            )}
-          </div>
-
-          <div className="min-w-0 rounded-xl border border-destructive/20 bg-destructive/5 px-3 py-3">
-            <div className="flex flex-wrap items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h4 className="text-[13px] font-medium text-destructive">Factory reset</h4>
-                <p className="mt-0.5 text-[12.5px] leading-relaxed text-destructive/75">
-                  Choose exactly which local data groups to clear before confirming.
-                </p>
-              </div>
+            </div>
+            <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto sm:shrink-0">
               <Button
+                className="flex-1 sm:flex-none"
                 variant="outline"
                 size="sm"
-                onClick={openFactoryReset}
-                disabled={resetting}
-                className="w-full border-destructive/25 bg-background/70 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
+                onClick={handleBackupExport}
+                disabled={backupBusy !== null}
+                aria-label="Create backup"
               >
-                {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
-                Open reset
+                {backupBusy === "export" ? <Loader2 className="size-3.5 animate-spin" /> : <Download className="size-3.5" />}
+                Backup
               </Button>
+              <Button
+                className="flex-1 sm:flex-none"
+                variant="outline"
+                size="sm"
+                onClick={() => backupRestoreInputRef.current?.click()}
+                disabled={backupBusy !== null}
+                aria-label="Restore backup"
+              >
+                {backupBusy === "restore" ? <Loader2 className="size-3.5 animate-spin" /> : <Upload className="size-3.5" />}
+                Restore
+              </Button>
+              <input
+                ref={backupRestoreInputRef}
+                type="file"
+                accept=".gz,.tgz,application/gzip,application/x-gzip"
+                className="hidden"
+                onChange={event => { void handleBackupRestoreFile(event.target.files?.[0]) }}
+              />
             </div>
           </div>
+          {backupMessage && (
+            <p
+              className={cn(
+                "mt-2 min-w-0 break-words text-[12px]",
+                backupMessage.tone === "success" ? "text-emerald-700 dark:text-emerald-400" : "text-destructive"
+              )}
+            >
+              {backupMessage.text}
+            </p>
+          )}
         </div>
-      </div>
+
+        <div className="min-w-0 rounded-xl border border-destructive/20 bg-destructive/5 px-4 py-3.5">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0">
+              <h4 className="text-[13.5px] font-medium text-destructive">Factory reset</h4>
+              <p className="mt-0.5 text-[12.5px] leading-relaxed text-destructive/75">
+                Choose exactly which local data groups to clear before confirming. This can&apos;t be undone from the UI.
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={openFactoryReset}
+              disabled={resetting}
+              className="w-full border-destructive/25 bg-background/70 text-destructive hover:bg-destructive/10 hover:text-destructive sm:w-auto"
+            >
+              {resetting ? <Loader2 className="size-3.5 animate-spin" /> : <Trash2 className="size-3.5" />}
+              Open reset
+            </Button>
+          </div>
+        </div>
+      </Section>
     </div>
   )
 }
@@ -1106,6 +1111,80 @@ function FactoryResetModal({
           </Button>
         </div>
       </div>
+    </div>
+  )
+}
+
+function Section({
+  icon: Icon,
+  title,
+  description,
+  action,
+  tone = "default",
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>
+  title: string
+  description?: string
+  action?: React.ReactNode
+  tone?: "default" | "danger"
+  children: React.ReactNode
+}) {
+  return (
+    <section
+      className={cn(
+        "min-w-0 rounded-2xl border bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.02)]",
+        tone === "danger" ? "border-destructive/20" : "border-border/70"
+      )}
+    >
+      <header className="flex items-start justify-between gap-3 px-5 pt-4 pb-3">
+        <div className="flex min-w-0 items-start gap-2.5">
+          <span
+            className={cn(
+              "mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg",
+              tone === "danger" ? "bg-destructive/10 text-destructive" : "bg-muted/70 text-foreground/70"
+            )}
+          >
+            <Icon className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h3
+              className={cn(
+                "text-[15px] font-semibold tracking-tight",
+                tone === "danger" ? "text-destructive" : "text-foreground"
+              )}
+            >
+              {title}
+            </h3>
+            {description && (
+              <p className="text-[12.5px] leading-relaxed text-foreground/50">{description}</p>
+            )}
+          </div>
+        </div>
+        {action}
+      </header>
+      <div className="space-y-3 px-5 pb-5">{children}</div>
+    </section>
+  )
+}
+
+function StatusMessage({
+  tone,
+  children,
+}: {
+  tone: "success" | "error"
+  children: React.ReactNode
+}) {
+  return (
+    <div
+      className={cn(
+        "min-w-0 break-words rounded-xl border px-3 py-2.5 text-[12.5px]",
+        tone === "success"
+          ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-800 dark:text-emerald-300"
+          : "border-destructive/30 bg-destructive/5 text-destructive"
+      )}
+    >
+      {children}
     </div>
   )
 }

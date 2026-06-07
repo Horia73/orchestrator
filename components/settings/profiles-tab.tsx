@@ -1,8 +1,51 @@
 "use client"
 
 import * as React from "react"
-import { Plus, Save, Trash2 } from "lucide-react"
+import {
+  Activity,
+  AppWindow,
+  Archive,
+  Bot,
+  Braces,
+  Brain,
+  Calendar,
+  CalendarClock,
+  CloudSun,
+  Cpu,
+  Download,
+  Dumbbell,
+  FileCog,
+  FilePen,
+  FileText,
+  Globe,
+  HardDrive,
+  House,
+  Inbox,
+  KeyRound,
+  Library,
+  Lock,
+  Mail,
+  MapPin,
+  MessageCircle,
+  MessageSquare,
+  Plus,
+  Save,
+  Settings,
+  ShieldCheck,
+  Telescope,
+  Terminal,
+  Trash2,
+  UserPlus,
+  Users,
+  X,
+} from "lucide-react"
 
+import { cn } from "@/lib/utils"
+import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
+import { Select } from "@/components/ui/select"
+import { Switch } from "@/components/ui/switch"
+import { profileInitials } from "@/components/profiles/use-profiles"
 import type { AdminProfileView } from "@/lib/profiles/server"
 import {
   INTEGRATION_PERMISSION_IDS,
@@ -10,16 +53,95 @@ import {
   TOOL_PERMISSION_IDS,
   normalizeProfilePermissions,
   type IntegrationAccess,
+  type IntegrationPermissionId,
   type ProfileAuditEvent,
   type ProfileRole,
+  type ProfileSurface,
+  type ToolPermissionId,
 } from "@/lib/profiles/types"
 
-const ACCESS: IntegrationAccess[] = ["none", "read", "write", "setup"]
+type IconType = React.ComponentType<{ className?: string }>
+
+const SURFACE_META: Record<
+  ProfileSurface,
+  { label: string; description: string; icon: IconType }
+> = {
+  chat: { label: "Chat", description: "Main conversation workspace", icon: MessageSquare },
+  inbox: { label: "Inbox", description: "Incoming messages and triage", icon: Inbox },
+  library: { label: "Library", description: "Saved files and artifacts", icon: Library },
+  scheduling: { label: "Scheduling", description: "Scheduled tasks and routines", icon: CalendarClock },
+  watchlist: { label: "Watchlist", description: "Tracked topics and feeds", icon: Telescope },
+  monitor: { label: "Smart Monitor", description: "Background monitoring engine", icon: Activity },
+  maps: { label: "Smart Maps", description: "Maps and location surface", icon: MapPin },
+  workouts: { label: "Workouts", description: "Fitness tracking surface", icon: Dumbbell },
+  settings: { label: "Settings", description: "Admin configuration pages", icon: Settings },
+}
+
+const TOOL_META: Record<
+  ToolPermissionId,
+  { label: string; description: string; icon: IconType }
+> = {
+  read_files: { label: "Read files", description: "Read workspace files", icon: FileText },
+  write_files: { label: "Write files", description: "Create and edit files", icon: FilePen },
+  shell: { label: "Shell", description: "Run shell commands", icon: Terminal },
+  browser_agent: { label: "Browser agent", description: "Drive a headless browser", icon: AppWindow },
+  delegate_agents: { label: "Delegate agents", description: "Spawn sub-agents", icon: Bot },
+  web_access: { label: "Web access", description: "Search and fetch the web", icon: Globe },
+  memory: { label: "Memory", description: "Read and write long-term memory", icon: Brain },
+  scheduling: { label: "Scheduling", description: "Create scheduled tasks", icon: CalendarClock },
+  monitoring: { label: "Monitoring", description: "Configure Smart Monitor", icon: Activity },
+  microscripts: { label: "Microscripts", description: "Run saved microscripts", icon: Braces },
+  backups: { label: "Backups", description: "Create and restore backups", icon: Archive },
+  updates: { label: "Updates", description: "Apply app updates", icon: Download },
+  models: { label: "Models", description: "Manage model configuration", icon: Cpu },
+  settings_files: { label: "Settings files", description: "Edit raw settings files", icon: FileCog },
+}
+
+const INTEGRATION_META: Record<
+  IntegrationPermissionId,
+  { label: string; icon: IconType }
+> = {
+  gmail: { label: "Gmail", icon: Mail },
+  google_calendar: { label: "Google Calendar", icon: Calendar },
+  google_drive: { label: "Google Drive", icon: HardDrive },
+  whatsapp: { label: "WhatsApp", icon: MessageCircle },
+  home_assistant: { label: "Home Assistant", icon: House },
+  maps: { label: "Maps", icon: MapPin },
+  weather: { label: "Weather", icon: CloudSun },
+  watchlist: { label: "Watchlist", icon: Telescope },
+}
+
+const ACCESS_OPTIONS: { value: IntegrationAccess; label: string }[] = [
+  { value: "none", label: "No access" },
+  { value: "read", label: "Read" },
+  { value: "write", label: "Read & write" },
+  { value: "setup", label: "Manage" },
+]
+
+const ROLE_OPTIONS = [
+  { value: "member", label: "Member" },
+  { value: "admin", label: "Admin" },
+]
+
+const SWATCHES = ["#2f6f73", "#7c3f58", "#556b2f", "#7b5d2a", "#385f8f", "#6f4d8f"]
+
+function timeAgo(ts: number): string {
+  const diff = Math.max(0, Date.now() - ts)
+  const m = 60_000
+  const h = 60 * m
+  const d = 24 * h
+  if (diff < m) return "just now"
+  if (diff < h) return `${Math.floor(diff / m)}m ago`
+  if (diff < d) return `${Math.floor(diff / h)}h ago`
+  if (diff < 7 * d) return `${Math.floor(diff / d)}d ago`
+  return new Date(ts).toLocaleDateString([], { month: "short", day: "numeric" })
+}
 
 export function ProfilesTab() {
   const [profiles, setProfiles] = React.useState<AdminProfileView[]>([])
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [draft, setDraft] = React.useState<AdminProfileView | null>(null)
+  const [creating, setCreating] = React.useState(false)
   const [newName, setNewName] = React.useState("")
   const [newPassword, setNewPassword] = React.useState("")
   const [profilePassword, setProfilePassword] = React.useState("")
@@ -28,7 +150,14 @@ export function ProfilesTab() {
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
 
-  const selected = draft ?? profiles.find((profile) => profile.id === selectedId) ?? null
+  const original = profiles.find((profile) => profile.id === selectedId) ?? null
+  const selected = draft ?? original
+
+  const dirty = React.useMemo(() => {
+    if (!draft || !original) return false
+    if (profilePassword.trim() || clearProfilePassword) return true
+    return JSON.stringify(draft) !== JSON.stringify(original)
+  }, [draft, original, profilePassword, clearProfilePassword])
 
   const load = React.useCallback(async () => {
     const [profilesRes, auditRes] = await Promise.all([
@@ -75,6 +204,7 @@ export function ProfilesTab() {
       if (!res.ok) throw new Error(data.error ?? "Failed to create profile")
       setNewName("")
       setNewPassword("")
+      setCreating(false)
       await load()
       setSelectedId(data.profile?.id ?? null)
     } catch (err) {
@@ -143,289 +273,567 @@ export function ProfilesTab() {
     })
   }
 
-  return (
-    <div className="grid gap-4 lg:grid-cols-[260px_minmax(0,1fr)]">
-      <div className="space-y-3">
-        <form onSubmit={createProfile} className="rounded-md border border-border bg-card p-3">
-          <div className="mb-2 text-sm font-medium">Create profile</div>
-          <input
-            value={newName}
-            onChange={(event) => setNewName(event.target.value)}
-            placeholder="Name"
-            className="mb-2 h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
-          />
-          <input
-            value={newPassword}
-            onChange={(event) => setNewPassword(event.target.value)}
-            placeholder="Optional password"
-            type="password"
-            className="mb-2 h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
-          />
-          <button
-            type="submit"
-            disabled={saving || !newName.trim()}
-            className="inline-flex h-9 w-full items-center justify-center gap-2 rounded-md bg-foreground px-3 text-sm font-medium text-background disabled:opacity-50"
-          >
-            <Plus className="size-4" />
-            Add profile
-          </button>
-        </form>
+  const isAdmin = selected?.role === "admin"
+  const lockRole = selected?.id === "admin_horia"
 
-        <div className="rounded-md border border-border bg-card p-1">
+  return (
+    <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+      {/* Left column — roster */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between px-1">
+          <div className="text-[13px] font-semibold text-foreground/70">
+            Profiles{" "}
+            <span className="font-normal text-foreground/40">· {profiles.length}</span>
+          </div>
+          <Button
+            size="sm"
+            variant={creating ? "secondary" : "outline"}
+            onClick={() => setCreating((value) => !value)}
+          >
+            {creating ? <X className="size-3.5" /> : <Plus className="size-3.5" />}
+            {creating ? "Cancel" : "New"}
+          </Button>
+        </div>
+
+        {creating && (
+          <form
+            onSubmit={createProfile}
+            className="space-y-2 rounded-2xl border border-border/70 bg-card p-3 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]"
+          >
+            <Input
+              autoFocus
+              value={newName}
+              onChange={(event) => setNewName(event.target.value)}
+              placeholder="Name"
+              className="h-9"
+            />
+            <Input
+              type="password"
+              value={newPassword}
+              onChange={(event) => setNewPassword(event.target.value)}
+              placeholder="Optional password"
+              className="h-9"
+            />
+            <Button
+              type="submit"
+              size="lg"
+              disabled={saving || !newName.trim()}
+              className="w-full"
+            >
+              <UserPlus className="size-4" />
+              Create profile
+            </Button>
+          </form>
+        )}
+
+        <div className="space-y-0.5 rounded-2xl border border-border/70 bg-card p-1.5 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
           {profiles.map((profile) => (
             <button
               key={profile.id}
               type="button"
               onClick={() => setSelectedId(profile.id)}
-              className={`flex w-full items-center gap-2 rounded-md px-2 py-2 text-left text-sm ${
-                profile.id === selectedId ? "bg-muted text-foreground" : "text-foreground/70 hover:bg-muted/60"
-              }`}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
+                profile.id === selectedId
+                  ? "bg-[#f0ede6] dark:bg-muted"
+                  : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/50"
+              )}
             >
               <span
-                className="size-3 rounded-sm"
+                className="grid size-9 shrink-0 place-items-center rounded-xl text-[12px] font-semibold text-white"
                 style={{ backgroundColor: profile.color }}
-              />
-              <span className="min-w-0 flex-1 truncate">{profile.name}</span>
-              <span className="text-[11px] text-muted-foreground">{profile.role}</span>
+              >
+                {profileInitials(profile.name)}
+              </span>
+              <span className="min-w-0 flex-1">
+                <span className="flex items-center gap-1.5">
+                  <span className="truncate text-[14px] font-medium text-foreground">
+                    {profile.name}
+                  </span>
+                  {profile.locked && (
+                    <Lock className="size-3 shrink-0 text-foreground/40" />
+                  )}
+                </span>
+                <span className="block truncate text-[12px] capitalize text-foreground/45">
+                  {profile.role}
+                </span>
+              </span>
             </button>
           ))}
+          {profiles.length === 0 && (
+            <div className="px-3 py-6 text-center text-[13px] text-foreground/45">
+              No profiles yet.
+            </div>
+          )}
         </div>
       </div>
 
+      {/* Right column — editor */}
       <div className="min-w-0 space-y-4">
         {error && (
-          <div className="rounded-md border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
+          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive">
             {error}
           </div>
         )}
 
         {selected ? (
-          <div className="rounded-md border border-border bg-card p-4">
-            <div className="mb-4 flex items-start justify-between gap-3">
-              <div className="min-w-0">
-                <h2 className="text-lg font-semibold tracking-tight">{selected.name}</h2>
-                <p className="text-xs text-muted-foreground">
-                  Access applies to UI, API routes, model tool exposure, and tool execution.
-                </p>
+          <>
+            {/* Header */}
+            <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border/70 bg-card px-5 py-4 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
+              <div className="flex min-w-0 items-center gap-3.5">
+                <span
+                  className="grid size-12 shrink-0 place-items-center rounded-2xl text-[16px] font-semibold text-white"
+                  style={{ backgroundColor: selected.color }}
+                >
+                  {profileInitials(selected.name || "?")}
+                </span>
+                <div className="min-w-0">
+                  <div className="flex items-center gap-2">
+                    <h2 className="truncate text-[17px] font-semibold tracking-tight text-foreground">
+                      {selected.name || "Untitled profile"}
+                    </h2>
+                    <RoleBadge role={selected.role} />
+                    {selected.locked && (
+                      <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
+                        <Lock className="size-3" />
+                        Password
+                      </span>
+                    )}
+                  </div>
+                  <p className="mt-0.5 text-[12px] text-foreground/45">
+                    Updated {timeAgo(selected.updatedAt)}
+                  </p>
+                </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex items-center gap-2">
                 {selected.role !== "admin" && (
-                  <button
-                    type="button"
+                  <Button
+                    variant="ghost"
+                    size="lg"
                     onClick={() => void deleteProfile(selected)}
                     disabled={saving}
-                    className="inline-flex h-9 items-center gap-2 rounded-md border border-border px-3 text-sm"
+                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                   >
                     <Trash2 className="size-4" />
                     Delete
-                  </button>
+                  </Button>
                 )}
-                <button
-                  type="button"
+                <Button
+                  size="lg"
                   onClick={() => void saveProfile()}
-                  disabled={saving}
-                  className="inline-flex h-9 items-center gap-2 rounded-md bg-foreground px-3 text-sm font-medium text-background disabled:opacity-50"
+                  disabled={saving || !dirty}
                 >
                   <Save className="size-4" />
-                  Save
-                </button>
+                  {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
+                </Button>
               </div>
             </div>
 
-            <div className="grid gap-3 md:grid-cols-3">
-              <label className="space-y-1 text-xs font-medium text-muted-foreground">
-                Name
-                <input
-                  value={selected.name}
-                  onChange={(event) => updateDraft((p) => { p.name = event.target.value })}
-                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
-                />
-              </label>
-              <label className="space-y-1 text-xs font-medium text-muted-foreground">
-                Role
-                <select
-                  value={selected.role}
-                  disabled={selected.id === "admin_horia"}
-                  onChange={(event) =>
-                    updateDraft((p) => { p.role = event.target.value as ProfileRole })
-                  }
-                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+            {/* Identity */}
+            <SectionCard
+              icon={Users}
+              title="Identity"
+              description="How this profile shows up across the app."
+            >
+              <div className="grid gap-4 sm:grid-cols-2">
+                <Field label="Name">
+                  <Input
+                    value={selected.name}
+                    onChange={(event) =>
+                      updateDraft((p) => {
+                        p.name = event.target.value
+                      })
+                    }
+                    className="h-9"
+                  />
+                </Field>
+                <Field
+                  label="Role"
+                  hint={lockRole ? "Built-in owner — role can't be changed." : undefined}
                 >
-                  <option value="member">member</option>
-                  <option value="admin">admin</option>
-                </select>
-              </label>
-              <label className="space-y-1 text-xs font-medium text-muted-foreground">
-                Color
-                <input
-                  value={selected.color}
-                  onChange={(event) => updateDraft((p) => { p.color = event.target.value })}
-                  className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
-                />
-              </label>
-            </div>
-
-            <Section title="Password">
-              <div className="space-y-3 rounded-md border border-border bg-background p-3 sm:col-span-2 lg:col-span-3">
-                <div className="flex flex-wrap items-center justify-between gap-2">
-                  <div>
-                    <div className="text-sm font-medium">
-                      {selected.locked ? "Password enabled" : "No password"}
-                    </div>
-                    <div className="text-xs text-muted-foreground">
-                      Profiles can stay open by default. Set a password here only when needed.
-                    </div>
-                  </div>
-                  {selected.locked && (
-                    <label className="inline-flex items-center gap-2 text-xs text-muted-foreground">
-                      <input
-                        type="checkbox"
-                        checked={clearProfilePassword}
-                        disabled={Boolean(profilePassword)}
-                        onChange={(event) => setClearProfilePassword(event.target.checked)}
-                      />
-                      Remove password
-                    </label>
-                  )}
-                </div>
-                <input
-                  value={profilePassword}
-                  onChange={(event) => {
-                    setProfilePassword(event.target.value)
-                    if (event.target.value) setClearProfilePassword(false)
-                  }}
-                  placeholder={
-                    selected.locked
-                      ? "New password (leave blank to keep current)"
-                      : "New password"
-                  }
-                  type="password"
-                  className="h-9 w-full rounded-md border border-border bg-card px-2 text-sm text-foreground"
-                />
+                  <Select
+                    value={selected.role}
+                    disabled={lockRole}
+                    options={ROLE_OPTIONS}
+                    onValueChange={(value) =>
+                      updateDraft((p) => {
+                        p.role = value as ProfileRole
+                      })
+                    }
+                    className="[&>button]:h-9"
+                  />
+                </Field>
               </div>
-            </Section>
 
-            <Section title="Surfaces">
-              {PROFILE_SURFACES.map((surface) => (
-                <Toggle
-                  key={surface}
-                  label={surface}
-                  checked={selected.permissions.surfaces[surface]}
-                  disabled={selected.role === "admin"}
-                  onChange={(checked) =>
-                    updateDraft((p) => { p.permissions.surfaces[surface] = checked })
-                  }
-                />
-              ))}
-            </Section>
-
-            <Section title="Tools">
-              {TOOL_PERMISSION_IDS.map((tool) => (
-                <Toggle
-                  key={tool}
-                  label={tool}
-                  checked={selected.permissions.tools[tool]}
-                  disabled={selected.role === "admin"}
-                  onChange={(checked) =>
-                    updateDraft((p) => { p.permissions.tools[tool] = checked })
-                  }
-                />
-              ))}
-            </Section>
-
-            <Section title="Integrations">
-              <div className="grid gap-2 sm:grid-cols-2">
-                {INTEGRATION_PERMISSION_IDS.map((integration) => (
-                  <label
-                    key={integration}
-                    className="flex items-center justify-between gap-3 rounded-md border border-border bg-background px-3 py-2 text-sm"
-                  >
-                    <span>{integration}</span>
-                    <select
-                      value={selected.permissions.integrations[integration]}
-                      disabled={selected.role === "admin"}
-                      onChange={(event) =>
+              <Field label="Color">
+                <div className="flex flex-wrap items-center gap-2">
+                  {SWATCHES.map((color) => (
+                    <button
+                      key={color}
+                      type="button"
+                      aria-label={`Use ${color}`}
+                      onClick={() =>
                         updateDraft((p) => {
-                          p.permissions.integrations[integration] = event.target.value as IntegrationAccess
+                          p.color = color
                         })
                       }
-                      className="h-8 rounded-md border border-border bg-card px-2 text-xs"
-                    >
-                      {ACCESS.map((access) => (
-                        <option key={access} value={access}>{access}</option>
-                      ))}
-                    </select>
-                  </label>
-                ))}
-              </div>
-              <Toggle
-                label="inherit admin API keys"
-                checked={selected.permissions.inheritAdminApiKeys}
-                disabled={selected.role === "admin"}
-                onChange={(checked) =>
-                  updateDraft((p) => { p.permissions.inheritAdminApiKeys = checked })
-                }
-              />
-            </Section>
-          </div>
-        ) : null}
+                      className={cn(
+                        "size-7 rounded-full ring-offset-2 ring-offset-card transition-shadow",
+                        selected.color.toLowerCase() === color.toLowerCase()
+                          ? "ring-2 ring-foreground"
+                          : "ring-1 ring-border/60 hover:ring-foreground/40"
+                      )}
+                      style={{ backgroundColor: color }}
+                    />
+                  ))}
+                  <span className="mx-1 h-6 w-px bg-border/60" />
+                  <input
+                    type="color"
+                    aria-label="Custom color"
+                    value={selected.color}
+                    onChange={(event) =>
+                      updateDraft((p) => {
+                        p.color = event.target.value
+                      })
+                    }
+                    className="size-7 cursor-pointer rounded-md border border-border/60 bg-transparent p-0.5 [&::-webkit-color-swatch]:rounded-[3px] [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
+                  />
+                  <Input
+                    value={selected.color}
+                    onChange={(event) =>
+                      updateDraft((p) => {
+                        p.color = event.target.value
+                      })
+                    }
+                    className="h-7 w-24 font-mono text-[12px] uppercase"
+                  />
+                </div>
+              </Field>
+            </SectionCard>
 
-        <div className="rounded-md border border-border bg-card p-4">
-          <h2 className="mb-3 text-sm font-semibold">Recent profile activity</h2>
-          <div className="space-y-2">
-            {audit.map((event) => (
-              <div key={event.id} className="flex gap-3 text-xs">
-                <span className="w-36 shrink-0 text-muted-foreground">
-                  {new Date(event.createdAt).toLocaleString()}
-                </span>
-                <span className="min-w-0 flex-1">{event.summary}</span>
+            {/* Password */}
+            <SectionCard
+              icon={KeyRound}
+              title="Password"
+              description="Profiles stay open by default. Add a password only when you need one."
+            >
+              <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-3">
+                <div className="min-w-0">
+                  <div className="text-[13.5px] font-medium text-foreground">
+                    {selected.locked ? "Password protected" : "No password"}
+                  </div>
+                  <div className="text-[12px] text-foreground/50">
+                    {selected.locked
+                      ? "This profile asks for a password to sign in."
+                      : "Anyone on this device can open this profile."}
+                  </div>
+                </div>
+                {selected.locked && (
+                  <label className="flex shrink-0 items-center gap-2 text-[12px] text-foreground/55">
+                    <Switch
+                      checked={clearProfilePassword}
+                      disabled={Boolean(profilePassword)}
+                      onCheckedChange={setClearProfilePassword}
+                      aria-label="Remove password"
+                    />
+                    Remove
+                  </label>
+                )}
               </div>
-            ))}
-            {audit.length === 0 && (
-              <div className="text-sm text-muted-foreground">No profile activity yet.</div>
+              <Input
+                type="password"
+                value={profilePassword}
+                onChange={(event) => {
+                  setProfilePassword(event.target.value)
+                  if (event.target.value) setClearProfilePassword(false)
+                }}
+                placeholder={
+                  selected.locked
+                    ? "New password (leave blank to keep current)"
+                    : "Set a password"
+                }
+                className="h-9"
+              />
+            </SectionCard>
+
+            {isAdmin && (
+              <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-muted/40 px-4 py-3">
+                <ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground/60" />
+                <div className="text-[13px] leading-relaxed text-foreground/70">
+                  <span className="font-medium text-foreground">Full access.</span>{" "}
+                  Admins bypass every permission check — the controls below are
+                  locked for this profile.
+                </div>
+              </div>
             )}
+
+            {/* Surfaces */}
+            <SectionCard
+              icon={AppWindow}
+              title="Surfaces"
+              description="Pages and workspaces this profile can open."
+            >
+              <div className="grid gap-2 sm:grid-cols-2">
+                {PROFILE_SURFACES.map((surface) => {
+                  const meta = SURFACE_META[surface]
+                  return (
+                    <ToggleRow
+                      key={surface}
+                      icon={meta.icon}
+                      label={meta.label}
+                      description={meta.description}
+                      checked={selected.permissions.surfaces[surface]}
+                      disabled={isAdmin}
+                      onChange={(checked) =>
+                        updateDraft((p) => {
+                          p.permissions.surfaces[surface] = checked
+                        })
+                      }
+                    />
+                  )
+                })}
+              </div>
+            </SectionCard>
+
+            {/* Tools */}
+            <SectionCard
+              icon={Terminal}
+              title="Tools"
+              description="Capabilities the assistant may use on this profile's behalf."
+            >
+              <div className="grid gap-2 sm:grid-cols-2">
+                {TOOL_PERMISSION_IDS.map((tool) => {
+                  const meta = TOOL_META[tool]
+                  return (
+                    <ToggleRow
+                      key={tool}
+                      icon={meta.icon}
+                      label={meta.label}
+                      description={meta.description}
+                      checked={selected.permissions.tools[tool]}
+                      disabled={isAdmin}
+                      onChange={(checked) =>
+                        updateDraft((p) => {
+                          p.permissions.tools[tool] = checked
+                        })
+                      }
+                    />
+                  )
+                })}
+              </div>
+            </SectionCard>
+
+            {/* Integrations */}
+            <SectionCard
+              icon={Globe}
+              title="Integrations"
+              description="Per-connection access level for external services."
+            >
+              <div className="grid gap-2 sm:grid-cols-2">
+                {INTEGRATION_PERMISSION_IDS.map((integration) => {
+                  const meta = INTEGRATION_META[integration]
+                  const Icon = meta.icon
+                  return (
+                    <div
+                      key={integration}
+                      className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5"
+                    >
+                      <div className="flex min-w-0 items-center gap-3">
+                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+                          <Icon className="size-4" />
+                        </span>
+                        <span className="truncate text-[13.5px] font-medium text-foreground">
+                          {meta.label}
+                        </span>
+                      </div>
+                      <Select
+                        value={selected.permissions.integrations[integration]}
+                        disabled={isAdmin}
+                        options={ACCESS_OPTIONS}
+                        onValueChange={(value) =>
+                          updateDraft((p) => {
+                            p.permissions.integrations[integration] =
+                              value as IntegrationAccess
+                          })
+                        }
+                        className="w-[140px] shrink-0 [&>button]:h-8 [&>button]:text-[13px]"
+                      />
+                    </div>
+                  )
+                })}
+              </div>
+
+              <div className="mt-1 border-t border-border/50 pt-3">
+                <ToggleRow
+                  icon={KeyRound}
+                  label="Inherit admin API keys"
+                  description="Use the owner's provider keys for model calls."
+                  checked={selected.permissions.inheritAdminApiKeys}
+                  disabled={isAdmin}
+                  onChange={(checked) =>
+                    updateDraft((p) => {
+                      p.permissions.inheritAdminApiKeys = checked
+                    })
+                  }
+                />
+              </div>
+            </SectionCard>
+          </>
+        ) : (
+          <div className="grid place-items-center rounded-2xl border border-dashed border-border/70 bg-card/50 px-6 py-16 text-center">
+            <Users className="size-6 text-foreground/30" />
+            <p className="mt-3 text-[14px] font-medium text-foreground/70">
+              No profile selected
+            </p>
+            <p className="mt-1 text-[13px] text-foreground/45">
+              Pick a profile from the list, or create a new one.
+            </p>
           </div>
-        </div>
+        )}
+
+        {/* Activity */}
+        <SectionCard
+          icon={Activity}
+          title="Recent activity"
+          description="Latest profile changes across the workspace."
+        >
+          {audit.length === 0 ? (
+            <div className="py-2 text-[13px] text-foreground/45">
+              No profile activity yet.
+            </div>
+          ) : (
+            <ol className="-my-1">
+              {audit.map((event) => (
+                <li
+                  key={event.id}
+                  className="flex gap-3 border-b border-border/40 py-2.5 last:border-0"
+                >
+                  <span className="w-20 shrink-0 pt-px text-[12px] text-foreground/40">
+                    {timeAgo(event.createdAt)}
+                  </span>
+                  <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/75">
+                    {event.summary}
+                  </span>
+                </li>
+              ))}
+            </ol>
+          )}
+        </SectionCard>
       </div>
     </div>
   )
 }
 
-function Section({
+function RoleBadge({ role }: { role: ProfileRole }) {
+  if (role === "admin") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-foreground px-2 py-0.5 text-[11px] font-medium text-background">
+        <ShieldCheck className="size-3" />
+        Admin
+      </span>
+    )
+  }
+  return (
+    <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
+      Member
+    </span>
+  )
+}
+
+function SectionCard({
+  icon: Icon,
   title,
+  description,
   children,
 }: {
+  icon: IconType
   title: string
+  description?: string
   children: React.ReactNode
 }) {
   return (
-    <section className="mt-5">
-      <h3 className="mb-2 text-sm font-semibold">{title}</h3>
-      <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">{children}</div>
+    <section className="rounded-2xl border border-border/70 bg-card shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
+      <header className="flex items-start gap-2.5 px-5 pt-4 pb-3">
+        <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <h3 className="text-[15px] font-semibold tracking-tight text-foreground">
+            {title}
+          </h3>
+          {description && (
+            <p className="text-[12.5px] text-foreground/50">{description}</p>
+          )}
+        </div>
+      </header>
+      <div className="space-y-4 px-5 pb-5">{children}</div>
     </section>
   )
 }
 
-function Toggle({
+function Field({
   label,
+  hint,
+  children,
+}: {
+  label: string
+  hint?: string
+  children: React.ReactNode
+}) {
+  return (
+    <div className="space-y-1.5">
+      <label className="block text-[12px] font-medium text-foreground/60">
+        {label}
+      </label>
+      {children}
+      {hint && <p className="text-[11.5px] text-foreground/45">{hint}</p>}
+    </div>
+  )
+}
+
+function ToggleRow({
+  icon: Icon,
+  label,
+  description,
   checked,
   disabled,
   onChange,
 }: {
+  icon: IconType
   label: string
+  description?: string
   checked: boolean
   disabled?: boolean
   onChange: (checked: boolean) => void
 }) {
   return (
-    <label className="flex items-center gap-2 rounded-md border border-border bg-background px-3 py-2 text-sm">
-      <input
-        type="checkbox"
+    <div
+      className={cn(
+        "flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5 transition-colors",
+        !disabled && "hover:border-border"
+      )}
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+          <Icon className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="truncate text-[13.5px] font-medium text-foreground">
+            {label}
+          </div>
+          {description && (
+            <div className="truncate text-[12px] text-foreground/50">
+              {description}
+            </div>
+          )}
+        </div>
+      </div>
+      <Switch
         checked={checked}
         disabled={disabled}
-        onChange={(event) => onChange(event.target.checked)}
+        onCheckedChange={onChange}
+        aria-label={label}
       />
-      <span className="min-w-0 truncate">{label}</span>
-    </label>
+    </div>
   )
 }

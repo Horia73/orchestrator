@@ -164,12 +164,14 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     {
         id: 'workout',
         label: 'Workout artifact schema',
-        capability: 'The exact JSON schema + named program templates for application/vnd.ant.workout artifacts (per-exercise sets, history seeding, progression). Activate before emitting a workout artifact or answering gym/antrenament requests; use the history tools to seed weights, read notes/failures/RPE, and rotate muscle groups from recent sessions.',
+        capability: 'The exact JSON schema + named program templates for application/vnd.ant.workout artifacts (per-exercise sets, history seeding, progression). Activate before emitting a workout artifact or answering gym/antrenament requests; use the history tools to seed weights, read notes/failures/RPE, and rotate muscle groups from recent sessions; read/save body metrics to scale loads and volume to the user.',
         doctrine: WORKOUT_DOCTRINE,
         toolIds: [
             'GetExerciseHistory',
             'ListExerciseHistory',
             'GetRecentWorkouts',
+            'GetBodyMetrics',
+            'SaveBodyMetrics',
         ],
     },
     // --- Tool-only capability groups (no doctrine) --------------------------

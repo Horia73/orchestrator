@@ -54,9 +54,11 @@ import {
   weatherStatusTool,
 } from "./weather"
 import {
+  getBodyMetricsTool,
   getExerciseHistoryTool,
   getRecentWorkoutsTool,
   listExerciseHistoryTool,
+  saveBodyMetricsTool,
 } from "./workout-history"
 import { applyUpdateTool } from "./update-app"
 import { memorySearchTool } from "./memory-search"
@@ -118,6 +120,8 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   getExerciseHistoryTool,
   listExerciseHistoryTool,
   getRecentWorkoutsTool,
+  getBodyMetricsTool,
+  saveBodyMetricsTool,
   applyUpdateTool,
   memorySearchTool,
   librarySearchTool,
