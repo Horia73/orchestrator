@@ -2315,6 +2315,7 @@ export function ChatView() {
                               streamingMode={state.streamingMode}
                               streamingStatus={state.streamingStatus}
                               showCursor={showInitialStreamingCursor}
+                              showStreamingStatusLabel={isMobile}
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
                               onAgentOpen={handleAgentOpen}

@@ -209,7 +209,8 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
             if (event.key !== "Enter") return
 
             const textarea = event.currentTarget
-            if (textarea.selectionStart === textarea.selectionEnd) {
+            const isMobileEnter = isMobileKeyboardViewport()
+            if ((event.shiftKey || isMobileEnter) && textarea.selectionStart === textarea.selectionEnd) {
                 const continuation = computeMarkdownListContinuation(textarea.value, textarea.selectionStart)
                 if (continuation) {
                     event.preventDefault()
@@ -222,7 +223,7 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
             if (event.shiftKey) {
                 return
             }
-            if (isMobileKeyboardViewport()) {
+            if (isMobileEnter) {
                 return
             }
 

@@ -397,32 +397,34 @@ button:not(:disabled),
     background: color-mix(in oklch, var(--foreground) 50%, transparent);
   }
 
-  .tool-call-scroll,
-  .tool-call-scroll .xterm-viewport {
-    scrollbar-width: thin;
-    scrollbar-color: color-mix(in oklch, var(--foreground) 36%, transparent) transparent;
-    scrollbar-gutter: stable;
-  }
+  @media (max-width: 767px), (pointer: coarse) {
+    .tool-call-scroll,
+    .tool-call-scroll .xterm-viewport {
+      scrollbar-width: thin;
+      scrollbar-color: color-mix(in oklch, var(--foreground) 36%, transparent) transparent;
+      scrollbar-gutter: stable;
+    }
 
-  .tool-call-scroll::-webkit-scrollbar,
-  .tool-call-scroll .xterm-viewport::-webkit-scrollbar {
-    width: 7px;
-    height: 7px;
-  }
+    .tool-call-scroll::-webkit-scrollbar,
+    .tool-call-scroll .xterm-viewport::-webkit-scrollbar {
+      width: 7px;
+      height: 7px;
+    }
 
-  .tool-call-scroll::-webkit-scrollbar-thumb,
-  .tool-call-scroll .xterm-viewport::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--foreground) 36%, transparent);
-    border-radius: 6px;
-  }
+    .tool-call-scroll::-webkit-scrollbar-thumb,
+    .tool-call-scroll .xterm-viewport::-webkit-scrollbar-thumb {
+      background: color-mix(in oklch, var(--foreground) 36%, transparent);
+      border-radius: 6px;
+    }
 
-  .tool-call-scroll-x {
-    background:
-      linear-gradient(to right, var(--background), transparent 16px) left / 22px 100% local,
-      linear-gradient(to left, var(--background), transparent 16px) right / 22px 100% local,
-      linear-gradient(to right, color-mix(in oklch, var(--foreground) 14%, transparent), transparent 18px) left / 28px 100% scroll,
-      linear-gradient(to left, color-mix(in oklch, var(--foreground) 14%, transparent), transparent 18px) right / 28px 100% scroll;
-    background-repeat: no-repeat;
+    .tool-call-scroll-x {
+      background:
+        linear-gradient(to right, var(--background), transparent 16px) left / 22px 100% local,
+        linear-gradient(to left, var(--background), transparent 16px) right / 22px 100% local,
+        linear-gradient(to right, color-mix(in oklch, var(--foreground) 14%, transparent), transparent 18px) left / 28px 100% scroll,
+        linear-gradient(to left, color-mix(in oklch, var(--foreground) 14%, transparent), transparent 18px) right / 28px 100% scroll;
+      background-repeat: no-repeat;
+    }
   }
 
   .sidebar-conversation-scroll {

@@ -195,7 +195,9 @@ function useAvailableHeight(
                     : viewportHeight
                 const bottom = inputRect?.top ?? viewportBottom
                 const available = Math.floor(bottom - blockRect.top - COLLAPSED_BOTTOM_GAP)
-                const nextHeight = Math.max(COLLAPSED_HEIGHT_FLOOR, available)
+                const compactViewport = window.matchMedia("(max-width: 767px), (pointer: coarse)").matches
+                const minimumHeight = compactViewport ? COLLAPSED_HEIGHT_FLOOR : COLLAPSED_HEIGHT
+                const nextHeight = Math.max(minimumHeight, available)
                 setHeight((current) => current === nextHeight ? current : nextHeight)
             })
         }
@@ -1610,6 +1612,7 @@ interface StreamingBubbleProps {
     compact?: boolean
     suppressArtifactTypes?: string[]
     showCursor?: boolean
+    showStreamingStatusLabel?: boolean
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
@@ -1640,7 +1643,7 @@ function streamingStatusLabel(
     return `Connecting${suffix}`
 }
 
-export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, streamingStatus, compact = false, suppressArtifactTypes, showCursor = true, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
+export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, streamingStatus, compact = false, suppressArtifactTypes, showCursor = true, showStreamingStatusLabel = false, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
     const reasoningGroups = React.useMemo(() => groupReasoningByPhase(reasoning), [reasoning])
     const timeline = React.useMemo(() => buildInterleavedTimeline(reasoningGroups, contentSegments), [reasoningGroups, contentSegments])
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
@@ -1697,7 +1700,9 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                         <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.2s]" />
                         <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.4s]" />
                     </span>
-                    <span>{streamingStatusLabel(streamingStatus, thinkingSeconds)}</span>
+                    {showStreamingStatusLabel && (
+                        <span>{streamingStatusLabel(streamingStatus, thinkingSeconds)}</span>
+                    )}
                 </div>
             )}
         </div>
