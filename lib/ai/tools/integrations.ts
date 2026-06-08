@@ -8,6 +8,7 @@ import { getIntegrationManifest } from '@/lib/integrations/manifest'
 import { getSubsystemManifest } from '@/lib/integrations/subsystem-manifest'
 import { refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
 import { activateIntegrations } from '@/lib/integrations/activation-store'
+import { isAdminProfileId } from '@/lib/profiles/context'
 
 // ---------------------------------------------------------------------------
 // ActivateIntegrationTools
@@ -110,6 +111,11 @@ export async function executeActivateIntegrationTools(
         if (isSubsystemId(id)) {
             const subsystem = getSubsystemManifest(id)
             if (!subsystem) continue
+            if (id === 'profile_admin' && !isAdminProfileId()) {
+                skipped.push(id)
+                report.push('Profile administration was NOT activated — it requires the admin profile.')
+                continue
+            }
             activatedNow.push(id)
             report.push(describeActivatedIntegration(id))
             continue

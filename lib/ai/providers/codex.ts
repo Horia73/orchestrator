@@ -1,5 +1,4 @@
 import { spawn } from 'child_process'
-import path from 'path'
 
 import type {
     AIProvider,
@@ -35,12 +34,6 @@ import {
     todosFromCodexPlan,
     type AnyObj,
 } from './codex-helpers'
-import {
-    appendRuntimeSkillsToSystemPrompt,
-    appendRuntimeSkillsToUserPrompt,
-    selectExplicitlyRequestedSkills,
-    type RuntimeSkill,
-} from './runtime-skills'
 
 /**
  * Codex provider backed by `codex app-server`.
@@ -713,15 +706,10 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                 })
 
                 const effectiveCwd = cwd ?? activeRuntimePaths().agentWorkspaceDir
-                const runtimeSkills = await listCodexRuntimeSkills(request, effectiveCwd, rememberDiagnostic)
-                const effectiveSystemPrompt = appendRuntimeSkillsToSystemPrompt(systemPrompt, 'codex', runtimeSkills)
-                const effectivePrompt = effectiveSystemPrompt
-                    ? prompt
-                    : appendRuntimeSkillsToUserPrompt(prompt, 'codex', runtimeSkills)
 
                 const threadParams = buildThreadParams({
                     model,
-                    systemPrompt: effectiveSystemPrompt,
+                    systemPrompt,
                     tools,
                     builtins,
                     nativeCoderRun,
@@ -751,7 +739,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
                 const turnParams: AnyObj = {
                     threadId: activeThreadId,
-                    input: buildCodexTurnInput(effectivePrompt, runtimeSkills),
+                    input: [{ type: 'text', text: prompt, text_elements: [] }],
                 }
                 const effort = mapEffortForCodex(thinkingLevel)
                 if (effort) turnParams.effort = effort
@@ -777,6 +765,8 @@ function buildAppServerArgs(nativeCoderRun: boolean, builtins: ProviderBuiltin[]
         out.push('-c', `features.shell_tool=${allowShell ? 'true' : 'false'}`)
         out.push('-c', 'features.multi_agent=false')
         out.push('-c', 'features.apps=false')
+        out.push('-c', 'features.plugins=false')
+        out.push('-c', 'features.skills=false')
         out.push('-c', 'apps._default.enabled=false')
         out.push('-c', allowWebSearch ? 'web_search="live"' : 'web_search="disabled"')
     }
@@ -817,6 +807,8 @@ function buildThreadParams(args: {
                 shell_tool: allowShell,
                 multi_agent: false,
                 apps: false,
+                plugins: false,
+                skills: false,
             },
             apps: {
                 _default: { enabled: false },
@@ -834,70 +826,6 @@ function buildThreadParams(args: {
     }
 
     return params
-}
-
-async function listCodexRuntimeSkills(
-    request: (method: string, params: unknown, timeoutMs?: number) => Promise<unknown>,
-    cwd: string,
-    rememberDiagnostic: (text: string) => void,
-): Promise<RuntimeSkill[]> {
-    try {
-        const result = await request('skills/list', {
-            cwds: [cwd],
-            forceReload: false,
-        }, 15_000) as AnyObj
-        return parseCodexSkillsList(result, cwd)
-    } catch (err) {
-        rememberDiagnostic(`skills/list failed: ${err instanceof Error ? err.message : String(err)}`)
-        return []
-    }
-}
-
-function parseCodexSkillsList(result: AnyObj, cwd: string): RuntimeSkill[] {
-    const data = Array.isArray(result.data) ? result.data : []
-    // skills/list was scoped to this single cwd, but Codex may echo back a
-    // normalized/realpath form (trailing slash, resolved symlinks) that won't
-    // string-equal the path we passed — likely on the server, where the agent
-    // workspace lives under a symlinked Docker volume. Prefer entries whose cwd
-    // matches after normalization; if none match, fall back to every returned
-    // entry rather than silently dropping all skills over a path-format
-    // mismatch (that left Codex runs with an empty skill list).
-    const records = data.filter((e): e is AnyObj => Boolean(e) && typeof e === 'object')
-    const matching = records.filter(record => codexCwdMatches(record.cwd, cwd))
-    const entries = matching.length > 0 ? matching : records
-    const skills: RuntimeSkill[] = []
-    for (const record of entries) {
-        const listed = Array.isArray(record.skills) ? record.skills : []
-        for (const raw of listed) {
-            if (!raw || typeof raw !== 'object') continue
-            const skill = raw as AnyObj
-            const name = typeof skill.name === 'string' ? skill.name.trim() : ''
-            if (!name) continue
-            const description = typeof skill.description === 'string' ? skill.description : undefined
-            const skillPath = typeof skill.path === 'string' ? skill.path : undefined
-            const scope = typeof skill.scope === 'string'
-                ? skill.scope
-                : typeof skill.kind === 'string'
-                    ? skill.kind
-                    : undefined
-            skills.push({ name, description, path: skillPath, scope })
-        }
-    }
-    return skills
-}
-
-function codexCwdMatches(entryCwd: unknown, cwd: string): boolean {
-    if (typeof entryCwd !== 'string' || !entryCwd) return false
-    return path.resolve(entryCwd) === path.resolve(cwd)
-}
-
-function buildCodexTurnInput(prompt: string, skills: RuntimeSkill[]): AnyObj[] {
-    const input: AnyObj[] = [{ type: 'text', text: prompt, text_elements: [] }]
-    for (const skill of selectExplicitlyRequestedSkills(prompt, skills)) {
-        if (!skill.path) continue
-        input.push({ type: 'skill', name: skill.name, path: skill.path })
-    }
-    return input
 }
 
 function codexAllowsShell(builtins: ProviderBuiltin[]): boolean {

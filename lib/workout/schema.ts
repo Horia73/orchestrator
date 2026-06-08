@@ -418,23 +418,23 @@ const ExerciseBaseSchema = z.object({
     equipment: z.array(WorkoutEquipmentSchema).max(6).optional(),
     /** Muscle groups worked. */
     muscleGroups: z.array(MuscleGroupSchema).min(1).max(8),
-    /** Short form cues — shown in a popover behind the (i) button. */
+    /** Short form cues — shown in the expandable exercise info panel. */
     formCues: z.array(z.string().min(1).max(280)).max(8).optional(),
     /** Longer exercise description shown in the info popover. Useful for
      *  machine setup, seat/pad adjustment, range-of-motion notes, and
      *  "what this is supposed to feel like" guidance. */
     description: z.string().min(1).max(1000).optional(),
     /** Optional direct demo image. Include only when it is a stable, verified
-     *  URL for this exact exercise/setup; the renderer does not guess an
-     *  image from a broad search query. */
+     *  URL for this exact exercise/setup; the renderer may fall back to web
+     *  image search only when the user opens the exercise info panel. */
     imageUrl: z.string().url().max(2048).optional(),
-    /** Legacy/image metadata fallback. The renderer no longer auto-fetches
-     *  by query because generic Commons results are often wrong for gym
-     *  movements; prefer `description`, `videoUrl`, or a verified `imageUrl`. */
+    /** Optional web image lookup query used by the renderer as a fallback
+     *  when no direct `imageUrl` is available. Prefer `description`,
+     *  `videoUrl`, or a verified `imageUrl` for exact machine setups. */
     imageQuery: z.string().min(1).max(180).optional(),
     /** Optional alternative movements the user can swap in when the prescribed
      *  exercise isn't available (no machine, injury, etc.). Renderer surfaces
-     *  these in the (i) popover under an "Alternatives" section. Each entry is
+     *  these in the (i) info panel under an "Alternatives" section. Each entry is
      *  a short free-form label ("Dumbbell incline press · 3×10",
      *  "Smith machine bench"). The model should pick alternatives that hit
      *  the same primary muscle groups. */

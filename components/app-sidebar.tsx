@@ -67,8 +67,9 @@ const TABLET_NAV_MEDIA =
   "(min-width: 768px) and (max-width: 1180px), (pointer: coarse) and (min-width: 768px) and (max-width: 1366px)"
 const SEARCH_DEBOUNCE_MS = 180
 const MOBILE_CONVERSATION_PREFETCH_COUNT = 4
-const MOBILE_ARCHIVE_LONG_PRESS_MS = 520
-const MOBILE_ARCHIVE_LONG_PRESS_MOVE_TOLERANCE = 12
+const CONVERSATION_ACTION_LONG_PRESS_MS = 520
+const CONVERSATION_ACTION_LONG_PRESS_MOVE_TOLERANCE = 12
+const CONVERSATION_ACTION_CLICK_SUPPRESSION_MS = 750
 
 type WindowWithIdleCallback = Window & {
   requestIdleCallback?: (
@@ -89,6 +90,20 @@ function truncate(value: string, length = 120): string {
   const singleLine = value.replace(/\s+/g, " ").trim()
   if (singleLine.length <= length) return singleLine
   return `${singleLine.slice(0, length - 1).trimEnd()}...`
+}
+
+function clearNativeTextSelection() {
+  if (typeof window === "undefined") return
+  window.getSelection()?.removeAllRanges()
+}
+
+function vibrateConversationActionMenu() {
+  if (
+    typeof navigator !== "undefined" &&
+    typeof navigator.vibrate === "function"
+  ) {
+    navigator.vibrate(12)
+  }
 }
 
 function getConversationLastMessageAt(
@@ -290,7 +305,11 @@ export function AppSidebar() {
   const isCompactRouteNav =
     shouldConstrainTabletNav && isTabletNavViewport && !isMobile
   const inboxUnread = useInboxUnread()
-  const { profile: currentProfile, isAdmin } = useCurrentProfile()
+  const {
+    profile: currentProfile,
+    isAdmin,
+    loading: profileLoading,
+  } = useCurrentProfile()
   const [searchActive, setSearchActive] = React.useState(false)
   const [searchQuery, setSearchQuery] = React.useState("")
   const [searchResults, setSearchResults] = React.useState<
@@ -303,9 +322,8 @@ export function AppSidebar() {
   >([])
   const [archivedLoading, setArchivedLoading] = React.useState(false)
   const [archivedError, setArchivedError] = React.useState<string | null>(null)
-  const [mobileArchiveMenuId, setMobileArchiveMenuId] = React.useState<
-    string | null
-  >(null)
+  const [conversationActionMenuId, setConversationActionMenuId] =
+    React.useState<string | null>(null)
   const [profileMenuOpen, setProfileMenuOpen] = React.useState(false)
   const [currentTime, setCurrentTime] = React.useState<number | null>(null)
   const [isConversationScrollbarVisible, setIsConversationScrollbarVisible] =
@@ -315,18 +333,21 @@ export function AppSidebar() {
   const profileTriggerRef = React.useRef<HTMLButtonElement>(null)
   const conversationScrollbarVisibleRef = React.useRef(false)
   const conversationScrollbarFadeTimeoutRef = React.useRef<number | null>(null)
-  const mobileArchiveLongPressTimerRef = React.useRef<number | null>(null)
-  const mobileArchiveLongPressPointerRef = React.useRef<{
+  const conversationActionLongPressTimerRef = React.useRef<number | null>(null)
+  const conversationActionLongPressPointerRef = React.useRef<{
     pointerId: number
     x: number
     y: number
   } | null>(null)
-  const mobileArchiveLongPressCompletedRef = React.useRef<string | null>(null)
+  const conversationActionLongPressCompletedRef = React.useRef<string | null>(
+    null
+  )
   const { assistantName } = useRuntimeConfig()
   const normalizedSearchQuery = normalizeSearchText(deferredSearchQuery.trim())
   const isFiltering = normalizedSearchQuery.length > 0
   const showArchiveView = archiveViewActive && !isFiltering
   const showConversationSection = !isCollapsed && !isCompactRouteNav
+  const showSettingsLink = isAdmin || (profileLoading && isOnSettings)
 
   const filteredConversations = React.useMemo(
     () =>
@@ -374,61 +395,68 @@ export function AppSidebar() {
     }, 700)
   }, [])
 
-  const clearMobileArchiveLongPress = React.useCallback(() => {
-    if (mobileArchiveLongPressTimerRef.current !== null) {
-      window.clearTimeout(mobileArchiveLongPressTimerRef.current)
-      mobileArchiveLongPressTimerRef.current = null
+  const clearConversationActionLongPress = React.useCallback(() => {
+    if (conversationActionLongPressTimerRef.current !== null) {
+      window.clearTimeout(conversationActionLongPressTimerRef.current)
+      conversationActionLongPressTimerRef.current = null
     }
-    mobileArchiveLongPressPointerRef.current = null
+    conversationActionLongPressPointerRef.current = null
   }, [])
 
-  const openMobileArchiveMenu = React.useCallback((conversationId: string) => {
-    mobileArchiveLongPressCompletedRef.current = conversationId
-    setMobileArchiveMenuId(conversationId)
+  const openConversationActionMenu = React.useCallback(
+    (conversationId: string) => {
+      clearNativeTextSelection()
+      vibrateConversationActionMenu()
+      conversationActionLongPressCompletedRef.current = conversationId
+      setConversationActionMenuId(conversationId)
 
-    window.setTimeout(() => {
-      if (mobileArchiveLongPressCompletedRef.current === conversationId) {
-        mobileArchiveLongPressCompletedRef.current = null
-      }
-    }, 750)
-  }, [])
+      window.setTimeout(() => {
+        if (
+          conversationActionLongPressCompletedRef.current === conversationId
+        ) {
+          conversationActionLongPressCompletedRef.current = null
+        }
+      }, CONVERSATION_ACTION_CLICK_SUPPRESSION_MS)
+    },
+    []
+  )
 
   const handleConversationLongPressStart = React.useCallback(
     (
       event: React.PointerEvent<HTMLButtonElement>,
       conversation: Conversation
     ) => {
-      if (!isMobile || typeof conversation.archivedAt === "number") return
+      if (typeof conversation.archivedAt === "number") return
       if (event.pointerType === "mouse" && event.button !== 0) return
 
-      clearMobileArchiveLongPress()
-      mobileArchiveLongPressPointerRef.current = {
+      clearConversationActionLongPress()
+      conversationActionLongPressPointerRef.current = {
         pointerId: event.pointerId,
         x: event.clientX,
         y: event.clientY,
       }
-      mobileArchiveLongPressTimerRef.current = window.setTimeout(() => {
-        mobileArchiveLongPressTimerRef.current = null
-        mobileArchiveLongPressPointerRef.current = null
-        openMobileArchiveMenu(conversation.id)
-      }, MOBILE_ARCHIVE_LONG_PRESS_MS)
+      conversationActionLongPressTimerRef.current = window.setTimeout(() => {
+        conversationActionLongPressTimerRef.current = null
+        conversationActionLongPressPointerRef.current = null
+        openConversationActionMenu(conversation.id)
+      }, CONVERSATION_ACTION_LONG_PRESS_MS)
     },
-    [clearMobileArchiveLongPress, isMobile, openMobileArchiveMenu]
+    [clearConversationActionLongPress, openConversationActionMenu]
   )
 
   const handleConversationLongPressMove = React.useCallback(
     (event: React.PointerEvent<HTMLButtonElement>) => {
-      const pointer = mobileArchiveLongPressPointerRef.current
+      const pointer = conversationActionLongPressPointerRef.current
       if (!pointer || pointer.pointerId !== event.pointerId) return
 
       const moved =
         Math.abs(event.clientX - pointer.x) >
-          MOBILE_ARCHIVE_LONG_PRESS_MOVE_TOLERANCE ||
+          CONVERSATION_ACTION_LONG_PRESS_MOVE_TOLERANCE ||
         Math.abs(event.clientY - pointer.y) >
-          MOBILE_ARCHIVE_LONG_PRESS_MOVE_TOLERANCE
-      if (moved) clearMobileArchiveLongPress()
+          CONVERSATION_ACTION_LONG_PRESS_MOVE_TOLERANCE
+      if (moved) clearConversationActionLongPress()
     },
-    [clearMobileArchiveLongPress]
+    [clearConversationActionLongPress]
   )
 
   const handleConversationLongPressContextMenu = React.useCallback(
@@ -436,17 +464,17 @@ export function AppSidebar() {
       event: React.MouseEvent<HTMLButtonElement>,
       conversation: Conversation
     ) => {
-      if (!isMobile || typeof conversation.archivedAt === "number") return
+      if (typeof conversation.archivedAt === "number") return
       event.preventDefault()
       event.stopPropagation()
-      clearMobileArchiveLongPress()
-      openMobileArchiveMenu(conversation.id)
+      clearConversationActionLongPress()
+      openConversationActionMenu(conversation.id)
     },
-    [clearMobileArchiveLongPress, isMobile, openMobileArchiveMenu]
+    [clearConversationActionLongPress, openConversationActionMenu]
   )
 
   const handleConversationScroll = React.useCallback(() => {
-    setMobileArchiveMenuId(null)
+    setConversationActionMenuId(null)
     revealConversationScrollbar()
   }, [revealConversationScrollbar])
 
@@ -467,7 +495,7 @@ export function AppSidebar() {
 
   const handleConversationTouchMove = React.useCallback(
     (event: React.TouchEvent<HTMLDivElement>) => {
-      setMobileArchiveMenuId(null)
+      setConversationActionMenuId(null)
       const target = event.currentTarget
       if (target.scrollHeight > target.clientHeight) {
         revealConversationScrollbar()
@@ -478,37 +506,37 @@ export function AppSidebar() {
 
   React.useEffect(() => {
     return () => {
-      clearMobileArchiveLongPress()
+      clearConversationActionLongPress()
       if (conversationScrollbarFadeTimeoutRef.current !== null) {
         window.clearTimeout(conversationScrollbarFadeTimeoutRef.current)
       }
     }
-  }, [clearMobileArchiveLongPress])
+  }, [clearConversationActionLongPress])
 
   React.useEffect(() => {
-    if (!isMobile) {
-      setMobileArchiveMenuId(null)
-      clearMobileArchiveLongPress()
+    if (!showConversationSection) {
+      setConversationActionMenuId(null)
+      clearConversationActionLongPress()
     }
-  }, [clearMobileArchiveLongPress, isMobile])
+  }, [clearConversationActionLongPress, showConversationSection])
 
   React.useEffect(() => {
-    if (!mobileArchiveMenuId) return
+    if (!conversationActionMenuId) return
 
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target
       if (
         target instanceof HTMLElement &&
-        target.closest("[data-mobile-archive-menu='true']")
+        target.closest("[data-conversation-action-menu='true']")
       ) {
         return
       }
-      setMobileArchiveMenuId(null)
+      setConversationActionMenuId(null)
     }
 
     document.addEventListener("pointerdown", handlePointerDown)
     return () => document.removeEventListener("pointerdown", handlePointerDown)
-  }, [mobileArchiveMenuId])
+  }, [conversationActionMenuId])
 
   React.useEffect(() => {
     if (!isFiltering) {
@@ -575,7 +603,7 @@ export function AppSidebar() {
   const openSidebarSearch = React.useCallback(() => {
     setOpen(true)
     setArchiveViewActive(false)
-    setMobileArchiveMenuId(null)
+    setConversationActionMenuId(null)
     setSearchActive(true)
     window.setTimeout(() => searchInputRef.current?.focus(), 0)
   }, [setOpen])
@@ -671,7 +699,7 @@ export function AppSidebar() {
 
   const handleNewChat = React.useCallback(() => {
     setArchiveViewActive(false)
-    setMobileArchiveMenuId(null)
+    setConversationActionMenuId(null)
     if (isMobile) setOpenMobile(false)
     newChat()
     navigateHome()
@@ -679,11 +707,13 @@ export function AppSidebar() {
 
   const handleSelectConversation = React.useCallback(
     (conversation: Conversation) => {
-      if (mobileArchiveLongPressCompletedRef.current === conversation.id) {
-        mobileArchiveLongPressCompletedRef.current = null
+      if (
+        conversationActionLongPressCompletedRef.current === conversation.id
+      ) {
+        conversationActionLongPressCompletedRef.current = null
         return
       }
-      setMobileArchiveMenuId(null)
+      setConversationActionMenuId(null)
 
       selectConversation(conversation.id, conversation)
       navigateHome()
@@ -696,7 +726,7 @@ export function AppSidebar() {
     (event: React.MouseEvent, id: string) => {
       event.preventDefault()
       event.stopPropagation()
-      setMobileArchiveMenuId(null)
+      setConversationActionMenuId(null)
       const archivedAt = Date.now()
       archiveConversation(id)
       setArchivedConversations((current) => [
@@ -745,6 +775,7 @@ export function AppSidebar() {
 
   const handleDeleteConversation = React.useCallback(
     (id: string) => {
+      setConversationActionMenuId(null)
       deleteConversation(id)
       setSearchResults((current) =>
         current
@@ -756,6 +787,17 @@ export function AppSidebar() {
       )
     },
     [deleteConversation]
+  )
+
+  const handleDeleteConversationAction = React.useCallback(
+    (event: React.MouseEvent, id: string) => {
+      event.preventDefault()
+      event.stopPropagation()
+      handleDeleteConversation(id)
+      if (isMobile) setOpenMobile(false)
+      navigateHome()
+    },
+    [handleDeleteConversation, isMobile, navigateHome, setOpenMobile]
   )
 
   const closeMobileSidebar = React.useCallback(() => {
@@ -951,7 +993,7 @@ export function AppSidebar() {
                     }
                     title={showArchiveView ? "Recents" : "Archived chats"}
                     onClick={() => {
-                      setMobileArchiveMenuId(null)
+                      setConversationActionMenuId(null)
                       setArchiveViewActive((active) => !active)
                     }}
                     className={`flex size-6 items-center justify-center rounded-md transition-all hover:bg-[#e7e5dd] hover:text-foreground focus-visible:ring-2 focus-visible:ring-foreground/15 focus-visible:outline-none dark:hover:bg-white/[0.1] ${
@@ -1016,9 +1058,9 @@ export function AppSidebar() {
                               handleConversationLongPressStart(event, conv)
                             }
                             onPointerMove={handleConversationLongPressMove}
-                            onPointerUp={clearMobileArchiveLongPress}
-                            onPointerCancel={clearMobileArchiveLongPress}
-                            onPointerLeave={clearMobileArchiveLongPress}
+                            onPointerUp={clearConversationActionLongPress}
+                            onPointerCancel={clearConversationActionLongPress}
+                            onPointerLeave={clearConversationActionLongPress}
                             onContextMenu={(event) =>
                               handleConversationLongPressContextMenu(
                                 event,
@@ -1032,15 +1074,14 @@ export function AppSidebar() {
                               if (event.pointerType === "touch") return
                               void prefetchConversationMessages(conv.id)
                             }}
-                            aria-haspopup={
-                              isMobile && !isArchived ? "menu" : undefined
-                            }
+                            aria-haspopup={!isArchived ? "menu" : undefined}
                             aria-expanded={
-                              isMobile && !isArchived
-                                ? mobileArchiveMenuId === conv.id
+                              !isArchived
+                                ? conversationActionMenuId === conv.id
                                 : undefined
                             }
-                            className={`text-[15px] text-foreground/75 group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${mobileArchiveMenuId === conv.id ? "bg-[#f0ede6] text-foreground dark:bg-muted" : ""} ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
+                            draggable={false}
+                            className={`touch-pan-y select-none text-[15px] text-foreground/75 [-webkit-touch-callout:none] [-webkit-user-select:none] group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${conversationActionMenuId === conv.id ? "bg-[#f0ede6] text-foreground dark:bg-muted" : ""} ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
                           >
                             <span className="min-w-0 flex-1">
                               <span
@@ -1099,31 +1140,59 @@ export function AppSidebar() {
                                 </DropdownMenuItem>
                               </DropdownMenuContent>
                             </DropdownMenu>
-                          ) : isMobile ? (
+                          ) : (
                             <>
-                              <div
-                                data-sidebar="menu-action"
-                                aria-hidden="true"
-                                className="pointer-events-none absolute top-0 right-0 bottom-0 flex h-full w-[42px] items-center justify-center rounded-md text-foreground"
-                              >
-                                {isRunning ? (
-                                  <LoaderCircle className="!size-[16px] animate-spin text-foreground/45" />
-                                ) : activityLabel ? (
-                                  <span
-                                    className={`w-full truncate text-center text-[12px] tabular-nums ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
-                                    title={formatConversationActivityTitle(
-                                      activityAt
-                                    )}
-                                  >
-                                    {activityLabel}
-                                  </span>
-                                ) : unread ? (
-                                  <span className="size-2 rounded-full bg-[#b76440]" />
-                                ) : null}
-                              </div>
-                              {mobileArchiveMenuId === conv.id && (
+                              {isMobile ? (
                                 <div
-                                  data-mobile-archive-menu="true"
+                                  data-sidebar="menu-action"
+                                  aria-hidden="true"
+                                  className="pointer-events-none absolute top-0 right-0 bottom-0 flex h-full w-[42px] items-center justify-center rounded-md text-foreground"
+                                >
+                                  {isRunning ? (
+                                    <LoaderCircle className="!size-[16px] animate-spin text-foreground/45" />
+                                  ) : activityLabel ? (
+                                    <span
+                                      className={`w-full truncate text-center text-[12px] tabular-nums ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
+                                      title={formatConversationActivityTitle(
+                                        activityAt
+                                      )}
+                                    >
+                                      {activityLabel}
+                                    </span>
+                                  ) : unread ? (
+                                    <span className="size-2 rounded-full bg-[#b76440]" />
+                                  ) : null}
+                                </div>
+                              ) : (
+                                <SidebarMenuAction
+                                  type="button"
+                                  aria-label="Archive conversation"
+                                  title="Archive"
+                                  onClick={(event) =>
+                                    handleArchiveConversation(event, conv.id)
+                                  }
+                                  className="!top-0 !right-0 !bottom-0 !h-full !w-[42px] !rounded-md text-foreground hover:bg-[#e7e5dd] focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none dark:hover:bg-white/[0.1]"
+                                >
+                                  {isRunning ? (
+                                    <LoaderCircle className="!size-[16px] animate-spin text-foreground/45 group-focus-within/menu-item:hidden group-hover/menu-item:hidden" />
+                                  ) : activityLabel ? (
+                                    <span
+                                      className={`w-full truncate text-center text-[12px] tabular-nums group-focus-within/menu-item:hidden group-hover/menu-item:hidden ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
+                                      title={formatConversationActivityTitle(
+                                        activityAt
+                                      )}
+                                    >
+                                      {activityLabel}
+                                    </span>
+                                  ) : unread ? (
+                                    <span className="size-2 rounded-full bg-[#b76440] group-focus-within/menu-item:hidden group-hover/menu-item:hidden" />
+                                  ) : null}
+                                  <Archive className="hidden !size-[15px] group-focus-within/menu-item:block group-hover/menu-item:block" />
+                                </SidebarMenuAction>
+                              )}
+                              {conversationActionMenuId === conv.id && (
+                                <div
+                                  data-conversation-action-menu="true"
                                   role="menu"
                                   className="absolute top-[calc(100%-2px)] right-2 z-50 w-36 rounded-lg border border-border/60 bg-background p-1 shadow-lg dark:bg-popover"
                                   onClick={(event) => event.stopPropagation()}
@@ -1145,35 +1214,26 @@ export function AppSidebar() {
                                     />
                                     Archive
                                   </button>
+                                  <button
+                                    type="button"
+                                    role="menuitem"
+                                    onClick={(event) =>
+                                      handleDeleteConversationAction(
+                                        event,
+                                        conv.id
+                                      )
+                                    }
+                                    className="flex h-9 w-full items-center gap-2 rounded-md px-2 text-left text-[14px] text-[#802020] transition-colors hover:bg-red-50 focus-visible:ring-2 focus-visible:ring-[#802020]/20 focus-visible:outline-none dark:hover:bg-red-950/30"
+                                  >
+                                    <Trash
+                                      className="size-4"
+                                      strokeWidth={1.5}
+                                    />
+                                    Delete
+                                  </button>
                                 </div>
                               )}
                             </>
-                          ) : (
-                            <SidebarMenuAction
-                              type="button"
-                              aria-label="Archive conversation"
-                              title="Archive"
-                              onClick={(event) =>
-                                handleArchiveConversation(event, conv.id)
-                              }
-                              className="!top-0 !right-0 !bottom-0 !h-full !w-[42px] !rounded-md text-foreground hover:bg-[#e7e5dd] focus:ring-0 focus:outline-none focus-visible:ring-0 focus-visible:outline-none dark:hover:bg-white/[0.1]"
-                            >
-                              {isRunning ? (
-                                <LoaderCircle className="!size-[16px] animate-spin text-foreground/45 group-focus-within/menu-item:hidden group-hover/menu-item:hidden" />
-                              ) : activityLabel ? (
-                                <span
-                                  className={`w-full truncate text-center text-[12px] tabular-nums group-focus-within/menu-item:hidden group-hover/menu-item:hidden ${unread ? "font-semibold text-[#b76440]" : "font-normal text-foreground/45"}`}
-                                  title={formatConversationActivityTitle(
-                                    activityAt
-                                  )}
-                                >
-                                  {activityLabel}
-                                </span>
-                              ) : unread ? (
-                                <span className="size-2 rounded-full bg-[#b76440] group-focus-within/menu-item:hidden group-hover/menu-item:hidden" />
-                              ) : null}
-                              <Archive className="hidden !size-[15px] group-focus-within/menu-item:block group-hover/menu-item:block" />
-                            </SidebarMenuAction>
                           )}
                         </SidebarMenuItem>
                       )
@@ -1219,7 +1279,7 @@ export function AppSidebar() {
               </Link>
             </SidebarMenuButton>
           </SidebarMenuItem>
-          {isAdmin && (
+          {showSettingsLink && (
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild

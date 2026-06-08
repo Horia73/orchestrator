@@ -43,6 +43,7 @@ export type SubsystemId =
     | 'observability'
     | 'inbox'
     | 'setup'
+    | 'profile_admin'
 
 export interface SubsystemManifestEntry {
     /** Stable id used by ActivateIntegrationTools and the activation store. */
@@ -212,6 +213,17 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'HomeAssistantConfigure',
             'WhatsAppStatus',
             'WhatsAppConnect',
+        ],
+    },
+    {
+        id: 'profile_admin',
+        label: 'Profile administration',
+        capability: 'Admin-only profile and integration-sharing changes: inspect profiles/connections, grant or revoke Home Assistant connection access, and set a profile default connection. Activate only when the admin asks to change profile access; mutation tools require explicit confirmation and non-admin profiles cannot see or run them.',
+        toolIds: [
+            'ProfileAdminListAccess',
+            'ProfileAdminGrantHomeAssistantAccess',
+            'ProfileAdminRevokeHomeAssistantAccess',
+            'ProfileAdminSetHomeAssistantDefault',
         ],
     },
 ]

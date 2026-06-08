@@ -11,7 +11,7 @@ import { PptxViewer } from "@/components/office/pptx-viewer"
 import { SvgViewer } from "@/components/office/svg-viewer"
 import { CodeViewer } from "@/components/code-viewer"
 import { ViewerErrorBoundary } from "@/components/office/viewer-error-boundary"
-import { isDocxFile, isSvgFile, isCodeOrTextFile } from "@/lib/preview-kinds"
+import { isDocxFile, isSvgFile, isSpreadsheetFile, isPresentationFile, isCodeOrTextFile } from "@/lib/preview-kinds"
 import type { Attachment } from "@/lib/types"
 
 interface FilePreviewModalProps {
@@ -134,10 +134,10 @@ export function FilePreviewModal({ attachment, gallery, onClose }: FilePreviewMo
     if (active.type === "pdf") {
         return framed(<PdfViewer url={url} filename={active.filename} onClose={onClose} />, false)
     }
-    if (active.type === "spreadsheet") {
+    if (isSpreadsheetFile(active)) {
         return framed(<SpreadsheetViewer url={url} filename={active.filename} mimeType={active.mimeType} onClose={onClose} />)
     }
-    if (active.type === "presentation") {
+    if (isPresentationFile(active)) {
         return framed(
             <PptxViewer
                 previewUrl={appPath(`/api/uploads/${encodeURIComponent(active.id)}/preview-pdf`)}

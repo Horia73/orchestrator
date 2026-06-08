@@ -7,6 +7,7 @@ import {
     buildToolsSection,
 } from './shared'
 import { ORCHESTRATOR_PROMPT } from './orchestrator/index'
+import { buildSkillsIndex } from '@/lib/skills/prompt'
 
 export function buildOrchestratorPrompt(ctx: PromptContext): string {
     // Order matters for prompt caching: static blocks first (core, safety,
@@ -16,6 +17,7 @@ export function buildOrchestratorPrompt(ctx: PromptContext): string {
         buildSafetyCore(),
         buildArtifactAuthoring(),
         buildRuntimeContext(ctx),
+        buildSkillsIndex(),
         buildToolsSection(ctx),
         buildAgentsSection(ctx), // Populated from orchestrator.canCallAgents via route.ts.
     ].filter(Boolean)

@@ -125,6 +125,19 @@ export interface HomeAssistantIntegrationStatusEntry {
         confirmOtherDomains: boolean
         updatedAt: number
     }
+    connection: HomeAssistantConnectionStatusEntry | null
+    availableConnections: HomeAssistantConnectionStatusEntry[]
+}
+
+export interface HomeAssistantConnectionStatusEntry {
+    id: string
+    provider: "home_assistant"
+    displayName: string
+    ownerProfileId: string
+    ownerName: string
+    access: "read" | "write" | "setup"
+    source: "owned" | "shared"
+    selected: boolean
 }
 
 export interface MapsIntegrationStatusEntry {

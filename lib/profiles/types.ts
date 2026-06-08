@@ -31,6 +31,7 @@ export type ToolPermissionId =
   | "delegate_agents"
   | "web_access"
   | "memory"
+  | "skills"
   | "scheduling"
   | "monitoring"
   | "microscripts"
@@ -101,6 +102,7 @@ export const TOOL_PERMISSION_IDS: ToolPermissionId[] = [
   "delegate_agents",
   "web_access",
   "memory",
+  "skills",
   "scheduling",
   "monitoring",
   "microscripts",
@@ -125,7 +127,7 @@ const MEMBER_SURFACE_DEFAULTS: Record<ProfileSurface, boolean> = {
   chat: true,
   inbox: true,
   library: true,
-  scheduling: false,
+  scheduling: true,
   watchlist: true,
   monitor: false,
   maps: true,
@@ -141,9 +143,10 @@ const MEMBER_TOOL_DEFAULTS: Record<ToolPermissionId, boolean> = {
   delegate_agents: true,
   web_access: true,
   memory: true,
-  scheduling: false,
+  skills: true,
+  scheduling: true,
   monitoring: false,
-  microscripts: false,
+  microscripts: true,
   backups: false,
   updates: false,
   models: false,

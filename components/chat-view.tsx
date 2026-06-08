@@ -842,10 +842,8 @@ export function ChatView() {
         }
         messageTopAnchorReleaseTimeoutRef.current = window.setTimeout(() => {
           messageTopAnchorReleaseTimeoutRef.current = null
-          if (isMessageNearTopAnchor(messageId, 8)) {
-            scrollMessageToTop(messageId, "auto")
-          }
           if (messageTopAnchorMessageIdRef.current === messageId) {
+            scrollMessageToTop(messageId, "auto")
             messageTopAnchorMessageIdRef.current = null
             messageTopAnchorStartedAtRef.current = 0
           }
@@ -909,7 +907,7 @@ export function ChatView() {
 
       messageTopAnchorFrameIdRef.current = window.requestAnimationFrame(run)
     },
-    [isMessageNearTopAnchor, scrollMessageToTop, syncScrollState]
+    [scrollMessageToTop, syncScrollState]
   )
 
   const persistTailSpacerState = React.useCallback(
@@ -1020,6 +1018,14 @@ export function ChatView() {
     setScrollButtonVisible,
   ])
 
+  const refreshPendingMessageTopAnchor = React.useCallback(() => {
+    const messageId = messageTopAnchorMessageIdRef.current
+    if (!messageId) return false
+    if (!prepareTailSpacerForSubmittedMessage(messageId)) return false
+    scheduleMessageTopAnchor(messageId)
+    return true
+  }, [prepareTailSpacerForSubmittedMessage, scheduleMessageTopAnchor])
+
   const cancelMessageTopAnchor = React.useCallback(() => {
     if (
       messageTopAnchorFrameIdRef.current === null &&
@@ -1092,6 +1098,8 @@ export function ChatView() {
         if (Math.abs(nextClientHeight - previousClientHeight) <= 1) return
         previousClientHeight = nextClientHeight
 
+        if (refreshPendingMessageTopAnchor()) return
+
         if (
           lastDistanceFromBottomRef.current <= STICKY_BOTTOM_THRESHOLD ||
           autoScrollEnabledRef.current
@@ -1108,7 +1116,12 @@ export function ChatView() {
       if (frame !== null) window.cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [conversationId, scrollToBottom, syncScrollState])
+  }, [
+    conversationId,
+    refreshPendingMessageTopAnchor,
+    scrollToBottom,
+    syncScrollState,
+  ])
 
   React.useLayoutEffect(() => {
     const anchor = olderLoadAnchorRef.current
@@ -1136,6 +1149,8 @@ export function ChatView() {
     const element = scrollContainerRef.current
     if (!element) return
 
+    if (refreshPendingMessageTopAnchor()) return
+
     if (
       lastDistanceFromBottomRef.current <= STICKY_BOTTOM_THRESHOLD ||
       autoScrollEnabledRef.current
@@ -1146,7 +1161,12 @@ export function ChatView() {
     }
 
     syncScrollState()
-  }, [keyboardInset, scrollToBottom, syncScrollState])
+  }, [
+    keyboardInset,
+    refreshPendingMessageTopAnchor,
+    scrollToBottom,
+    syncScrollState,
+  ])
 
   React.useEffect(() => {
     const element = inputContainerRef.current

@@ -306,39 +306,41 @@ install_linux_native_dependencies() {
 }
 
 # Python document-processing libraries the in-app agent uses for docx/xlsx/pptx/
-# pdf work. Without them the agent falls back to raw OOXML zip parsing. The
-# Docker runner stage bakes the same set in (see Dockerfile); this keeps native
-# Linux installs at parity. Best-effort: PEP 668 (Debian/recent Arch) marks the
-# system env externally-managed, hence --break-system-packages, and the whole
-# step is non-fatal (`|| true`) since a missing wheel or older pip must never
-# abort the install.
+# pdf work. The Docker runner stage bakes the same set in (see Dockerfile);
+# this keeps native Linux installs at parity. Best-effort: PEP 668
+# (Debian/recent Arch) marks the system env externally-managed, hence
+# --break-system-packages, and the whole step is non-fatal (`|| true`) since a
+# missing wheel or older pip must never abort the install.
 install_python_doc_libs() {
   [ "$(uname -s)" = "Linux" ] || return
   command -v python3 >/dev/null 2>&1 || return
-  log "Ensuring Python document libraries (python-docx, openpyxl, python-pptx, pypdf)"
+  log "Ensuring Python document libraries (docx/xlsx/pptx/pdf/OCR)"
   run_sudo python3 -m pip install --break-system-packages --no-cache-dir \
-    python-docx openpyxl python-pptx pypdf >/dev/null 2>&1 || \
+    defusedxml "markitdown[pptx]" pandas pillow pdf2image pdfplumber pypdfium2 pytesseract \
+    python-docx openpyxl reportlab python-pptx pypdf >/dev/null 2>&1 || \
     run_sudo python3 -m pip install --no-cache-dir \
-      python-docx openpyxl python-pptx pypdf >/dev/null 2>&1 || \
+      defusedxml "markitdown[pptx]" pandas pillow pdf2image pdfplumber pypdfium2 pytesseract \
+      python-docx openpyxl reportlab python-pptx pypdf >/dev/null 2>&1 || \
     log "Could not install Python document libraries automatically; the agent will fall back to raw file parsing."
 }
 
-# CLI tools the in-app agent shells out to (ripgrep/jq/sqlite3/pdftotext/strings/ffmpeg).
+# CLI tools the in-app agent shells out to (ripgrep/jq/sqlite3/pdftotext/
+# pdftoppm/qpdf/tesseract/pandoc/strings/ffmpeg).
 # Best-effort: a package name that differs or is missing on a given distro must
 # never abort the install, hence the trailing `|| true`. The container build
 # installs the same set in the Dockerfile runner stage; this keeps native
 # installs at parity.
 install_agent_runtime_tools() {
   [ "$(uname -s)" = "Linux" ] || return
-  log "Ensuring agent runtime CLI tools (ripgrep, jq, sqlite3, poppler-utils, binutils, ffmpeg)"
+  log "Ensuring agent runtime CLI tools (ripgrep, jq, sqlite3, poppler-utils, qpdf, tesseract, pandoc, binutils, ffmpeg)"
   if command -v apt-get >/dev/null 2>&1; then
-    run_sudo apt-get install -y ripgrep jq sqlite3 poppler-utils binutils ffmpeg || true
+    run_sudo apt-get install -y ripgrep jq sqlite3 poppler-utils qpdf tesseract-ocr pandoc binutils ffmpeg libreoffice-writer libreoffice-calc libreoffice-impress || true
   elif command -v dnf >/dev/null 2>&1; then
-    run_sudo dnf install -y ripgrep jq sqlite poppler-utils binutils ffmpeg || true
+    run_sudo dnf install -y ripgrep jq sqlite poppler-utils qpdf tesseract pandoc binutils ffmpeg libreoffice-writer libreoffice-calc libreoffice-impress || true
   elif command -v yum >/dev/null 2>&1; then
-    run_sudo yum install -y ripgrep jq sqlite poppler-utils binutils ffmpeg || true
+    run_sudo yum install -y ripgrep jq sqlite poppler-utils qpdf tesseract pandoc binutils ffmpeg libreoffice-writer libreoffice-calc libreoffice-impress || true
   elif command -v pacman >/dev/null 2>&1; then
-    run_sudo pacman -Sy --noconfirm ripgrep jq sqlite poppler binutils ffmpeg || true
+    run_sudo pacman -Sy --noconfirm ripgrep jq sqlite poppler qpdf tesseract pandoc binutils ffmpeg libreoffice-fresh || true
   fi
 }
 

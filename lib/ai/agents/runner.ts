@@ -15,6 +15,7 @@ import type {
 import { MAX_AGENT_DEPTH } from './types'
 import { getAgent } from './registry'
 import { AUDIO_CONTEXT_AGENT_ID } from './audio-context-agent'
+import { resolveRuntimeAgentConfig } from './runtime-agent-config'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
 import {
@@ -115,6 +116,7 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
 
 async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId, cwd, attachments } = args
+    const runtimeTarget = resolveRuntimeAgentConfig(target, runtime.provider)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
     if (agentThreadId) touchAgentThreadRuntime(agentThreadId, runtime.provider, runtime.model)
 
@@ -130,7 +132,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     // require a buildPrompt for their system prompt.
     const isProviderBackedWithoutPrompt = runtime.provider === 'browser'
     const isCliBacked = runtime.provider === 'claude-code' || runtime.provider === 'codex'
-    if (!target.buildPrompt && !isCliBacked && !isProviderBackedWithoutPrompt) {
+    if (!runtimeTarget.buildPrompt && !isCliBacked && !isProviderBackedWithoutPrompt) {
         return {
             success: false,
             error: `Sub-agent ${target.id} is missing buildPrompt — text agents require one.`,
@@ -192,8 +194,8 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
 
     // Resolve sub-agent's tools. If it can call further sub-agents, include
     // delegate_to so the depth chain can extend (until MAX_AGENT_DEPTH).
-    const canDelegate = (target.canCallAgents?.length ?? 0) > 0 && subDepth < MAX_AGENT_DEPTH
-    const baseTools = getToolsForAgent(target.tools).filter(tool => {
+    const canDelegate = (runtimeTarget.canCallAgents?.length ?? 0) > 0 && subDepth < MAX_AGENT_DEPTH
+    const baseTools = getToolsForAgent(runtimeTarget.tools).filter(tool => {
         // Do not advertise an unusable delegation tool at the depth cap.
         if (tool.id !== 'delegate_to' && tool.id !== 'delegate_parallel') return true
         return canDelegate
@@ -203,18 +205,18 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     const candidateTools = filterReadOnlyIfNeeded(
         filterIntegrationToolExposure(
             dedupeTools(canDelegate
-                ? [...baseTools, ...getToolsForBuiltins(target.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
-                : [...baseTools, ...getToolsForBuiltins(target.builtins)]),
+                ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
+                : [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins)]),
             {
                 conversationId: parentCtx.conversationId,
                 origin: parentCtx.appOrigin,
-                agentId: target.id,
+                agentId: runtimeTarget.id,
                 preactivatedCapabilities: parentCtx.preactivatedCapabilities,
             }
         ),
         parentCtx.toolSurfaceMode,
     )
-    const toolSurface = resolveProviderToolSurface(candidateTools, target.builtins, provider.capabilities)
+    const toolSurface = resolveProviderToolSurface(candidateTools, runtimeTarget.builtins, provider.capabilities)
     const agentTools = toolSurface.tools
     const agentBuiltins = toolSurface.builtins
 
@@ -268,7 +270,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     // tool is withheld (above), so the roster and the runtime_context
     // delegation line must agree and advertise nothing the agent can't use.
     const availableAgents = canDelegate
-        ? (target.canCallAgents ?? [])
+        ? (runtimeTarget.canCallAgents ?? [])
             .map(id => getAgent(id))
             .filter((a): a is AgentConfig => a !== undefined)
         : []
@@ -277,19 +279,19 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     // CLI-backed agents can still receive a built system prompt. Providers
     // adapt it to their own invocation mechanism. Agents without a
     // `buildPrompt` get an undefined prompt.
-    const systemPrompt = target.buildPrompt
-        ? target.buildPrompt({
-            agentId: target.id,
+    const systemPrompt = runtimeTarget.buildPrompt
+        ? runtimeTarget.buildPrompt({
+            agentId: runtimeTarget.id,
             userName: '',
-            assistantName: target.name,
+            assistantName: runtimeTarget.name,
             availableTools: agentTools,
             availableBuiltins: agentBuiltins,
             customToolNamePrefix: provider.capabilities.customToolNamePrefix,
             availableAgents,
             conversationId: parentCtx.conversationId,
             agentThreadId,
-            declaredToolIds: target.tools,
-            declaredTools: getToolsForAgent(target.tools),
+            declaredToolIds: runtimeTarget.tools,
+            declaredTools: getToolsForAgent(runtimeTarget.tools),
             preactivatedCapabilities: parentCtx.preactivatedCapabilities,
             delegationDepth: subDepth,
             maxDelegationDepth: MAX_AGENT_DEPTH,

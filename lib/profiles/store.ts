@@ -4,7 +4,10 @@ import path from "path"
 
 import Database from "better-sqlite3"
 
-import { ORCHESTRATOR_STATE_DIR } from "@/lib/runtime-paths"
+import {
+  ORCHESTRATOR_STATE_DIR,
+  runtimePathsForProfile,
+} from "@/lib/runtime-paths"
 
 import {
   ADMIN_PROFILE_ID,
@@ -261,7 +264,8 @@ export function updateProfile(
 
 export function deleteProfile(
   profileId: string,
-  actorProfileId: string | null = null
+  actorProfileId: string | null = null,
+  options?: { deleteState?: boolean }
 ): boolean {
   const id = normalizeStoredProfileId(profileId)
   if (id === ADMIN_PROFILE_ID) {
@@ -280,6 +284,7 @@ export function deleteProfile(
       summary: `Deleted profile ${existing.name}`,
       payload: {},
     })
+    if (options?.deleteState) deleteProfileStateDirectory(id)
   }
   return result.changes > 0
 }
@@ -684,6 +689,18 @@ function normalizeStoredWebhookSlug(value: string): string {
   const clean = value.trim().toLowerCase()
   if (/^[a-z0-9][a-z0-9_-]{0,79}$/.test(clean)) return clean
   throw new Error(`Invalid webhook slug: ${value}`)
+}
+
+function deleteProfileStateDirectory(profileId: string): void {
+  const profileRoot = path.resolve(
+    /* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR,
+    "profiles"
+  )
+  const target = path.resolve(runtimePathsForProfile(profileId).stateDir)
+  if (target === profileRoot || !target.startsWith(`${profileRoot}${path.sep}`)) {
+    throw new Error(`Refusing to delete unsafe profile state path: ${target}`)
+  }
+  fs.rmSync(target, { recursive: true, force: true })
 }
 
 function uniqueProfileId(name: string): string {

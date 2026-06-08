@@ -3,6 +3,7 @@ import { communicationToolExecutors } from "./communication"
 import { coreToolExecutors } from "./core"
 import { googleWorkspaceToolExecutors } from "./google-workspace"
 import { homeAssistantToolExecutors } from "./home-assistant"
+import { profileAdminToolExecutors } from "./profile-admin"
 import { createRunActivatedIntegrationToolExecutor } from "./run-activated"
 import { ALL_TOOL_DEFS } from "../tool-catalog"
 import type { ToolExecutor } from "./types"
@@ -15,6 +16,7 @@ export const toolExecutors: Record<string, ToolExecutor> = {
   ...googleWorkspaceToolExecutors,
   ...homeAssistantToolExecutors,
   ...automationToolExecutors,
+  ...profileAdminToolExecutors,
 }
 
 toolExecutors.RunActivatedIntegrationTool =

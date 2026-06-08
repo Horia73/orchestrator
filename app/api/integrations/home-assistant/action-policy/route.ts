@@ -7,6 +7,10 @@ import {
     getHomeAssistantIntegrationStatus,
     saveHomeAssistantActionPolicy,
 } from '@/lib/integrations/home-assistant'
+import {
+    hasGrantAccess,
+    resolveIntegrationConnectionForProfile,
+} from '@/lib/integrations/connection-store'
 import { recordIntegrationStatuses } from '@/lib/integrations/status-snapshot'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
@@ -29,9 +33,22 @@ export async function GET(request: Request) {
 }
 
 export async function PUT(request: Request) {
-  return runWithRequestProfile(request, async () => {
+  return runWithRequestProfile(request, async (current) => {
         const guard = guardSensitiveRequest(request)
         if (guard) return guard
+        const connection = resolveIntegrationConnectionForProfile(
+            current.profile.id,
+            'home_assistant'
+        )
+        if (connection && !hasGrantAccess(connection.access, 'setup')) {
+            return NextResponse.json(
+                {
+                    error: 'Managing Home Assistant action policy requires Manage access to the selected connection.',
+                    code: 'connection_access_denied',
+                },
+                { status: 403 }
+            )
+        }
 
         let body: unknown
         try {

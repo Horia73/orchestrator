@@ -4,7 +4,17 @@ import { randomUUID } from 'crypto'
 import WebSocket from 'ws'
 
 import { getEnvValue } from '@/lib/config'
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { activeRuntimePaths, runtimePathsForProfile } from '@/lib/runtime-paths'
+import { getActiveProfileId, runWithProfileContext } from '@/lib/profiles/context'
+import { getProfile } from '@/lib/profiles/store'
+import {
+    ensureHomeAssistantConnectionForProfile,
+    listAccessibleIntegrationConnections,
+    resolveIntegrationConnectionForProfile,
+    setPreferredIntegrationConnection,
+    type AccessibleIntegrationConnection,
+    type GrantableIntegrationAccess,
+} from '@/lib/integrations/connection-store'
 import {
     cleanDomainFilter,
     cleanEntity,
@@ -27,11 +37,11 @@ const DEFAULT_MAX_RESULTS = 500
 const MAX_RESULTS_CAP = 5_000
 const MAX_IMAGE_BYTES = 5 * 1024 * 1024
 function actionPolicyPath(): string {
-    return path.join(activeRuntimePaths().privateStateDir, 'home-assistant-action-policy.json')
+    return actionPolicyPathForProfile(getResolvedHomeAssistantOwnerProfileId())
 }
 
 function actionAuditPath(): string {
-    return path.join(activeRuntimePaths().privateStateDir, 'home-assistant-action-audit.jsonl')
+    return actionAuditPathForProfile(getResolvedHomeAssistantOwnerProfileId())
 }
 const DIRECT_ACTION_DOMAINS = ['light', 'cover', 'climate', 'notify'] as const
 
@@ -79,6 +89,19 @@ export interface HomeAssistantIntegrationStatus {
     error?: string
     capabilities: string[]
     actionMode: HomeAssistantActionPolicy
+    connection: HomeAssistantConnectionStatus | null
+    availableConnections: HomeAssistantConnectionStatus[]
+}
+
+export interface HomeAssistantConnectionStatus {
+    id: string
+    provider: 'home_assistant'
+    displayName: string
+    ownerProfileId: string
+    ownerName: string
+    access: GrantableIntegrationAccess
+    source: 'owned' | 'shared'
+    selected: boolean
 }
 
 export interface HomeAssistantConfigInput {
@@ -262,7 +285,8 @@ interface NormalizedServiceCall {
 }
 
 export async function getHomeAssistantIntegrationStatus(validate = true): Promise<HomeAssistantIntegrationStatus> {
-    const config = getHomeAssistantConfig()
+    const resolved = resolveHomeAssistantRuntimeConnection()
+    const config = resolved.config
     const configured = config.missing.length === 0
     const base: HomeAssistantIntegrationStatus = {
         id: 'homeAssistant',
@@ -282,6 +306,13 @@ export async function getHomeAssistantIntegrationStatus(validate = true): Promis
         lastCheckedAt: validate && configured ? Date.now() : null,
         capabilities: [...READ_ONLY_CAPABILITIES],
         actionMode: getHomeAssistantActionPolicy(),
+        connection: resolved.selected ? homeAssistantConnectionStatus(resolved.selected, true) : null,
+        availableConnections: resolved.available.map(item =>
+            homeAssistantConnectionStatus(
+                item,
+                item.connection.id === resolved.selected?.connection.id
+            )
+        ),
     }
 
     if (!configured || !validate) return base
@@ -320,7 +351,7 @@ export async function getHomeAssistantIntegrationStatus(validate = true): Promis
 }
 
 export async function saveHomeAssistantConfig(input: HomeAssistantConfigInput): Promise<HomeAssistantIntegrationStatus> {
-    const current = getHomeAssistantConfig()
+    const current = getHomeAssistantEnvConfig()
     const pasted = parseEnvAssignments(input.rawEnv ?? '')
     const baseUrl = cleanConfigValue(input.baseUrl)
         || firstDefinedEnvValue(pasted, URL_ENV_KEYS)
@@ -341,6 +372,13 @@ export async function saveHomeAssistantConfig(input: HomeAssistantConfigInput): 
     })
     process.env.HOME_ASSISTANT_URL = normalizedUrl
     process.env.HOME_ASSISTANT_TOKEN = token
+    const connection = ensureHomeAssistantConnectionForProfile(getActiveProfileId())
+    setPreferredIntegrationConnection({
+        profileId: getActiveProfileId(),
+        provider: 'home_assistant',
+        connectionId: connection.id,
+        actorProfileId: getActiveProfileId(),
+    })
 
     return getHomeAssistantIntegrationStatus(true)
 }
@@ -1230,7 +1268,75 @@ function sleep(ms: number): Promise<void> {
     return new Promise(resolve => setTimeout(resolve, ms))
 }
 
-function getHomeAssistantConfig(): HomeAssistantConfig {
+interface ResolvedHomeAssistantRuntimeConnection {
+    selected: AccessibleIntegrationConnection | null
+    available: AccessibleIntegrationConnection[]
+    config: HomeAssistantConfig
+}
+
+function resolveHomeAssistantRuntimeConnection(): ResolvedHomeAssistantRuntimeConnection {
+    const activeProfileId = getActiveProfileId()
+    const ownConfig = getHomeAssistantEnvConfig()
+
+    if (ownConfig.baseUrl && ownConfig.token && ownConfig.missing.length === 0) {
+        ensureHomeAssistantConnectionForProfile(activeProfileId)
+    }
+
+    const available = listAccessibleIntegrationConnections(activeProfileId, 'home_assistant')
+    const selected = resolveIntegrationConnectionForProfile(activeProfileId, 'home_assistant')
+
+    if (selected) {
+        return {
+            selected,
+            available,
+            config: getHomeAssistantEnvConfigForProfile(selected.connection.ownerProfileId),
+        }
+    }
+
+    return {
+        selected: null,
+        available,
+        config: ownConfig,
+    }
+}
+
+function getResolvedHomeAssistantOwnerProfileId(): string {
+    return (
+        resolveHomeAssistantRuntimeConnection().selected?.connection.ownerProfileId ??
+        getActiveProfileId()
+    )
+}
+
+function getHomeAssistantEnvConfigForProfile(profileId: string): HomeAssistantConfig {
+    return runWithProfileContext({ profileId }, () => getHomeAssistantEnvConfig())
+}
+
+function homeAssistantConnectionStatus(
+    item: AccessibleIntegrationConnection,
+    selected: boolean
+): HomeAssistantConnectionStatus {
+    const owner = getProfile(item.connection.ownerProfileId)
+    return {
+        id: item.connection.id,
+        provider: 'home_assistant',
+        displayName: item.connection.displayName,
+        ownerProfileId: item.connection.ownerProfileId,
+        ownerName: owner?.name ?? item.connection.ownerProfileId,
+        access: item.access,
+        source: item.source,
+        selected,
+    }
+}
+
+function actionPolicyPathForProfile(profileId: string): string {
+    return path.join(runtimePathsForProfile(profileId).privateStateDir, 'home-assistant-action-policy.json')
+}
+
+function actionAuditPathForProfile(profileId: string): string {
+    return path.join(runtimePathsForProfile(profileId).privateStateDir, 'home-assistant-action-audit.jsonl')
+}
+
+function getHomeAssistantEnvConfig(): HomeAssistantConfig {
     const baseUrlLookup = firstEnv(URL_ENV_KEYS)
     const tokenLookup = firstEnv(TOKEN_ENV_KEYS)
     const missing: string[] = []
@@ -1260,7 +1366,7 @@ function getHomeAssistantConfig(): HomeAssistantConfig {
 }
 
 function requireHomeAssistantConfig(): { baseUrl: string; token: string } {
-    const config = getHomeAssistantConfig()
+    const config = resolveHomeAssistantRuntimeConnection().config
     if (!config.baseUrl || !config.token || config.missing.length > 0) {
         throw new Error(`Home Assistant is not configured. Missing: ${config.missing.join(', ')}`)
     }

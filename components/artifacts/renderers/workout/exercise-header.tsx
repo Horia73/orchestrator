@@ -40,6 +40,19 @@ export function ExerciseHeader({
     const alternatives = exercise.alternatives ?? []
     const hasContext = !!(exercise.previous || exercise.personalBest)
     const glossaryTerms = React.useMemo(() => collectExerciseGlossaryTerms(exercise), [exercise])
+    const hasInfo = cues.length > 0
+        || alternatives.length > 0
+        || !!exercise.videoUrl
+        || !!exercise.description
+        || !!exercise.imageUrl
+        || !!exercise.imageQuery
+        || glossaryTerms.length > 0
+    const [infoOpen, setInfoOpen] = React.useState(false)
+    const infoPanelId = React.useId()
+
+    React.useEffect(() => {
+        setInfoOpen(false)
+    }, [exercise.id])
 
     return (
         <header className={cn("flex flex-col gap-1.5", className)}>
@@ -47,19 +60,38 @@ export function ExerciseHeader({
                 <h3 className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-foreground">
                     {exercise.name}
                 </h3>
-                {cues.length > 0 || alternatives.length > 0 || exercise.videoUrl || exercise.description || exercise.imageUrl || glossaryTerms.length > 0 ? (
-                    <FormCuesPopover
-                        exerciseName={exercise.name}
-                        cues={cues}
-                        description={exercise.description}
-                        imageUrl={exercise.imageUrl}
-                        videoUrl={exercise.videoUrl}
-                        alternatives={alternatives}
-                        glossaryTerms={glossaryTerms}
-                    />
+                {hasInfo ? (
+                    <button
+                        type="button"
+                        aria-label="Exercise info"
+                        aria-expanded={infoOpen}
+                        aria-controls={infoPanelId}
+                        title="Exercise info"
+                        onClick={() => setInfoOpen((open) => !open)}
+                        className={cn(
+                            "flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-colors",
+                            "hover:bg-muted hover:text-foreground",
+                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        )}
+                    >
+                        <Info className="size-3.5" strokeWidth={1.75} />
+                    </button>
                 ) : null}
             </div>
             <MuscleChips muscles={exercise.muscleGroups} />
+            {hasInfo && infoOpen ? (
+                <ExerciseInfoPanel
+                    id={infoPanelId}
+                    exerciseName={exercise.name}
+                    cues={cues}
+                    description={exercise.description}
+                    imageUrl={exercise.imageUrl}
+                    imageQuery={exercise.imageQuery}
+                    videoUrl={exercise.videoUrl}
+                    alternatives={alternatives}
+                    glossaryTerms={glossaryTerms}
+                />
+            ) : null}
             {hasContext ? (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground">
                     {exercise.previous ? (
@@ -151,19 +183,23 @@ function PrBadge({
     )
 }
 
-function FormCuesPopover({
+function ExerciseInfoPanel({
+    id,
     exerciseName,
     cues,
     description,
     imageUrl,
+    imageQuery,
     videoUrl,
     alternatives,
     glossaryTerms,
 }: {
+    id: string
     exerciseName: string
     cues: string[]
     description?: string
     imageUrl?: string
+    imageQuery?: string
     videoUrl?: string
     alternatives?: string[]
     glossaryTerms: string[]
@@ -172,32 +208,17 @@ function FormCuesPopover({
     const glossaryEntries = glossaryTerms
         .map((term) => [term, getGlossary(term)] as const)
         .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof getGlossary>>] => !!entry[1])
-    const hasDemoContext = !!(imageUrl || description || cues.length > 0 || videoUrl || hasAlternatives)
-    const [open, setOpen] = React.useState(false)
     return (
-        <details
-            className="group/cues relative"
-            open={open}
-            onToggle={(event) => setOpen(event.currentTarget.open)}
+        <div
+            id={id}
+            className="mt-1.5 w-full min-w-0 overflow-hidden rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-sm"
         >
-            <summary
-                aria-label="Exercise info"
-                title="Exercise info"
-                className={cn(
-                    "flex size-7 cursor-pointer list-none items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-colors",
-                    "hover:bg-muted hover:text-foreground",
-                    "[&::-webkit-details-marker]:hidden",
-                )}
-            >
-                <Info className="size-3.5" strokeWidth={1.75} />
-            </summary>
-            <div className="absolute right-0 top-full z-20 mt-1 w-[min(20rem,calc(100vw-2rem))] rounded-lg border border-border/70 bg-popover p-3 text-[12.5px] shadow-lg">
-                {open && hasDemoContext ? (
-                    <ExerciseDemoImage
-                        exerciseName={exerciseName}
-                        imageUrl={imageUrl}
-                    />
-                ) : null}
+            <div className="min-w-0 break-words [overflow-wrap:anywhere]">
+                <ExerciseDemoImage
+                    exerciseName={exerciseName}
+                    imageUrl={imageUrl}
+                    imageQuery={imageQuery}
+                />
                 {description ? (
                     <p className="mb-3 text-[12.5px] leading-relaxed text-foreground/85">
                         {description}
@@ -277,7 +298,7 @@ function FormCuesPopover({
                     </a>
                 ) : null}
             </div>
-        </details>
+        </div>
     )
 }
 
@@ -292,25 +313,73 @@ interface WorkoutImage {
 function ExerciseDemoImage({
     exerciseName,
     imageUrl,
+    imageQuery,
 }: {
     exerciseName: string
     imageUrl?: string
+    imageQuery?: string
 }) {
-    const [broken, setBroken] = React.useState(false)
+    const [directBroken, setDirectBroken] = React.useState(false)
+    const [fetched, setFetched] = React.useState<WorkoutImage | null>(null)
+    const [loading, setLoading] = React.useState(false)
+    const [failed, setFailed] = React.useState(false)
 
     React.useEffect(() => {
-        setBroken(false)
-    }, [imageUrl])
+        setDirectBroken(false)
+        setFetched(null)
+        setFailed(false)
+    }, [imageQuery, imageUrl])
 
-    if (!imageUrl || broken) return null
+    const lookupQuery = React.useMemo(() => {
+        const explicit = imageQuery?.trim()
+        if (explicit) return explicit
+        if (!imageUrl) return `${exerciseName} exercise gym machine`
+        return ''
+    }, [exerciseName, imageQuery, imageUrl])
 
-    const display: WorkoutImage = {
-        url: imageUrl,
-        sourceUrl: imageUrl,
-        attribution: 'Demo image',
-        width: 16,
-        height: 9,
+    const shouldFetch = (!imageUrl || directBroken) && !!lookupQuery
+
+    React.useEffect(() => {
+        if (!shouldFetch) return
+        const controller = new AbortController()
+        setLoading(true)
+        setFailed(false)
+        setFetched(null)
+        fetch(`/api/workout-images?q=${encodeURIComponent(lookupQuery)}&limit=1`, {
+            signal: controller.signal,
+        })
+            .then((response) => {
+                if (!response.ok) throw new Error(`status ${response.status}`)
+                return response.json() as Promise<{ images?: WorkoutImage[] }>
+            })
+            .then((data) => {
+                setFetched(data.images?.[0] ?? null)
+            })
+            .catch((err) => {
+                if (err instanceof DOMException && err.name === 'AbortError') return
+                setFailed(true)
+            })
+            .finally(() => setLoading(false))
+        return () => controller.abort()
+    }, [lookupQuery, shouldFetch])
+
+    const display: WorkoutImage | null = imageUrl && !directBroken
+        ? {
+            url: imageUrl,
+            sourceUrl: imageUrl,
+            attribution: 'Demo image',
+            width: 16,
+            height: 9,
+        }
+        : fetched
+
+    if (loading && !display) {
+        return (
+            <div className="mb-3 aspect-video animate-pulse rounded-md border border-border/50 bg-muted/45" aria-label="Loading demo image" />
+        )
     }
+
+    if (!display || failed) return null
 
     const ratio = display.width > 0 && display.height > 0
         ? `${display.width} / ${display.height}`
@@ -323,9 +392,16 @@ function ExerciseDemoImage({
                 src={display.url}
                 alt={`${exerciseName} demo`}
                 loading="lazy"
+                referrerPolicy="no-referrer"
                 className="block w-full object-cover"
                 style={{ aspectRatio: ratio }}
-                onError={() => setBroken(true)}
+                onError={() => {
+                    if (display.url === imageUrl) setDirectBroken(true)
+                    else {
+                        setFetched(null)
+                        setFailed(true)
+                    }
+                }}
             />
             <figcaption className="flex items-center justify-between gap-2 px-2 py-1 text-[10px] text-muted-foreground">
                 <span className="min-w-0 truncate">{display.attribution}</span>

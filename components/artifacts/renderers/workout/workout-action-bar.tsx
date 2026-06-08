@@ -9,8 +9,8 @@ import type { WorkoutSessionApi, WorkoutSetRef } from "@/lib/workout/use-workout
 /**
  * Session action bar.
  *
- * The renderer mounts this once as a fixed bottom control. Row taps are free
- * order; this bar owns only session-level start/finish/discard.
+ * Session-level start/finish/discard controls. Row taps are free order; this
+ * bar owns only the workout lifecycle.
  */
 export function WorkoutActionBar({
     sessionApi,
@@ -23,26 +23,25 @@ export function WorkoutActionBar({
 }) {
     const { isActive, isFinished, start, finish, reset } = sessionApi
     const activeSet = sessionApi.session.activeSet
-    const hasFloatingTimer = !!activeSet || !!sessionApi.session.rest
     const [finishEarlySets, setFinishEarlySets] = React.useState<WorkoutSetRef[] | null>(null)
 
-    if (placement === 'top' || isFinished) return null
+    if (isFinished) return null
 
     const shellClass = cn(
-        "pointer-events-auto fixed inset-x-0 z-30 mx-auto w-[min(640px,calc(100vw-1.5rem))]",
-        "animate-in slide-in-from-bottom-2 fade-in fill-mode-both duration-300",
-        hasFloatingTimer ? "bottom-[5.75rem]" : "bottom-3",
+        "w-full",
+        placement === 'bottom' && "mt-1",
         className,
     )
 
     if (!isActive) {
+        if (placement !== 'top') return null
         return (
             <div className={shellClass} role="region" aria-label="Workout session controls">
                 <button
                     type="button"
                     onClick={start}
                     className={cn(
-                        "group/start flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-2xl shadow-black/15 transition-transform",
+                        "group/start flex w-full items-center justify-center gap-2 rounded-xl bg-primary px-4 py-3 text-sm font-semibold text-primary-foreground shadow-sm transition-transform",
                         "hover:opacity-95 active:scale-[0.99]",
                         "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2",
                     )}
@@ -53,6 +52,8 @@ export function WorkoutActionBar({
             </div>
         )
     }
+
+    if (placement !== 'bottom') return null
 
     const handleFinish = () => {
         if (activeSet) return
@@ -66,7 +67,7 @@ export function WorkoutActionBar({
     return (
         <>
             <div className={shellClass} role="region" aria-label="Workout session controls">
-                <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-card p-2 shadow-2xl shadow-black/15">
+                <div className="flex items-center gap-2 rounded-xl border border-border/60 bg-card p-2 shadow-sm">
                     <button
                         type="button"
                         onClick={reset}

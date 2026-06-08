@@ -20,6 +20,24 @@ export async function fetchCurrentProfile(): Promise<CurrentProfileResponse> {
   return (await res.json()) as CurrentProfileResponse
 }
 
+let currentProfileCache: CurrentProfileResponse | null = null
+let currentProfileRequest: Promise<CurrentProfileResponse> | null = null
+
+function loadCurrentProfile(): Promise<CurrentProfileResponse> {
+  if (!currentProfileRequest) {
+    currentProfileRequest = fetchCurrentProfile()
+      .then((next) => {
+        currentProfileCache = next
+        return next
+      })
+      .finally(() => {
+        currentProfileRequest = null
+      })
+  }
+
+  return currentProfileRequest
+}
+
 export async function fetchProfiles(): Promise<{
   profiles: Array<AdminProfileView | PublicProfile>
   isAdmin: boolean
@@ -35,15 +53,14 @@ export async function fetchProfiles(): Promise<{
 }
 
 export function useCurrentProfile() {
-  const [state, setState] = React.useState<CurrentProfileResponse>({
-    profile: null,
-    isAdmin: false,
-  })
-  const [loading, setLoading] = React.useState(true)
+  const [state, setState] = React.useState<CurrentProfileResponse>(
+    () => currentProfileCache ?? { profile: null, isAdmin: false }
+  )
+  const [loading, setLoading] = React.useState(currentProfileCache === null)
 
   React.useEffect(() => {
     let cancelled = false
-    fetchCurrentProfile()
+    loadCurrentProfile()
       .then((next) => {
         if (!cancelled) setState(next)
       })

@@ -66,6 +66,8 @@ import { librarySearchTool } from "./library-search"
 import { findPastUploadsTool } from "./find-past-uploads"
 import { createBackupTool } from "./create-backup"
 import { hostStatusTool } from "./host-status"
+import { skillTools } from "./skills"
+import { profileAdminTools } from "./profile-admin"
 
 export const ALL_TOOL_DEFS: ToolDef[] = [
   listDirTool,
@@ -128,6 +130,8 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   findPastUploadsTool,
   createBackupTool,
   hostStatusTool,
+  ...skillTools,
+  ...profileAdminTools,
 ]
 
 export const BUILTIN_TOOL_IDS: Partial<Record<ProviderBuiltin, string[]>> = {

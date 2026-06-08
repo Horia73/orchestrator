@@ -97,6 +97,12 @@ export function HomeAssistantCard({
                     <span className="text-foreground/75">
                         {entry.actionMode.enabled ? "Read + action mode" : "Read-only API tools"}
                     </span>
+                    <span className="text-foreground/55">Connection</span>
+                    <span className="truncate text-foreground/75">
+                        {entry.connection
+                            ? `${entry.connection.displayName} (${entry.connection.source === "owned" ? "own" : `shared by ${entry.connection.ownerName}`}, ${accessLabel(entry.connection.access)})`
+                            : "No profile connection"}
+                    </span>
                 </div>
 
                 {entry.error && <InlineNotice tone="error" text={entry.error} />}
@@ -127,6 +133,12 @@ export function HomeAssistantCard({
             </CardContent>
         </Card>
     )
+}
+
+function accessLabel(access: "read" | "write" | "setup"): string {
+    if (access === "setup") return "manage"
+    if (access === "write") return "read + control"
+    return "read"
 }
 
 function HomeAssistantSetupGuide() {

@@ -14,6 +14,11 @@ import { executeTodoWrite } from "../todo-write"
 import { executeReportAgentNeed } from "../agent-needs"
 import { executeSetEnv } from "../set-env"
 import { executeActivateIntegrationTools } from "../integrations"
+import {
+  executeActivateSkill,
+  executeReadSkillFile,
+  executeSkillSearch,
+} from "../skills"
 import type { ToolExecutor } from "./types"
 
 const executeBashLazy: ToolExecutor = async (args, ctx) => {
@@ -40,4 +45,7 @@ export const coreToolExecutors: Record<string, ToolExecutor> = {
   ReportAgentNeed: executeReportAgentNeed,
   SetEnv: executeSetEnv,
   ActivateIntegrationTools: executeActivateIntegrationTools,
+  SkillSearch: executeSkillSearch,
+  ActivateSkill: executeActivateSkill,
+  ReadSkillFile: executeReadSkillFile,
 }

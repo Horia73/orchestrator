@@ -19,6 +19,7 @@ import {
     type IntegrationStatusSnapshot,
 } from '@/lib/integrations/status-snapshot'
 import { getActivatedIntegrations } from '@/lib/integrations/activation-store'
+import { isAdminProfileId } from '@/lib/profiles/context'
 
 // ---------------------------------------------------------------------------
 // Tiered integration exposure.
@@ -283,8 +284,12 @@ export function buildSubsystemsContextBlock(
 ): string {
     if (SUBSYSTEM_MANIFEST.length === 0) return ''
     const activated = effectiveActivated(opts)
+    const visibleSubsystems = SUBSYSTEM_MANIFEST.filter(
+        (entry) => entry.id !== 'profile_admin' || isAdminProfileId()
+    )
+    if (visibleSubsystems.length === 0) return ''
 
-    const lines = SUBSYSTEM_MANIFEST.map((entry) => {
+    const lines = visibleSubsystems.map((entry) => {
         const gated = entry.toolIds ?? []
         const isActive = activated.has(entry.id)
         const parts = [`- ${entry.label} (id: ${entry.id}) — ${entry.capability}`]

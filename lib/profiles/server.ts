@@ -366,6 +366,7 @@ export function updateProfileInputFromBody(body: unknown): UpdateProfileInput {
 }
 
 export const profileStore = {
+  getProfile,
   createProfile,
   updateProfile,
   deleteProfile,

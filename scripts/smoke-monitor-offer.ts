@@ -104,6 +104,8 @@ async function main(): Promise<void> {
                 confirmOtherDomains: true,
                 updatedAt: 0,
             },
+            connection: null,
+            availableConnections: [],
         }
     }
     function waStatus(opts: { connected: boolean; phoneNumber?: string; lastReadyAt?: number }): WhatsAppIntegrationStatus {

@@ -30,6 +30,8 @@ const SANITIZED_CONFIG = [
     '[features]',
     'multi_agent = false',
     'apps = false',
+    'plugins = false',
+    'skills = false',
     '',
 ].join('\n')
 

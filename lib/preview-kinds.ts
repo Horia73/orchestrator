@@ -22,6 +22,24 @@ export function isSvgFile(att: Pick<Attachment, "filename" | "mimeType">): boole
     return ext(att.filename) === "svg" || att.mimeType === "image/svg+xml"
 }
 
+/** Excel / tabular. Matched by extension + MIME (NOT the stored Attachment.type)
+ *  so files uploaded before office types existed still route correctly. */
+export function isSpreadsheetFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
+    const e = ext(att.filename)
+    if (e === "xlsx" || e === "xls" || e === "csv" || e === "tsv") return true
+    const m = att.mimeType.toLowerCase()
+    return m.includes("spreadsheetml") || m === "application/vnd.ms-excel" || m === "text/csv"
+}
+
+/** PowerPoint. Extension + MIME so legacy uploads (stored type "other") route
+ *  to the slide viewer; .ppt is handled by the same server-side conversion. */
+export function isPresentationFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
+    const e = ext(att.filename)
+    if (e === "pptx" || e === "ppt") return true
+    const m = att.mimeType.toLowerCase()
+    return m.includes("presentationml") || m === "application/vnd.ms-powerpoint"
+}
+
 /** Extension → Shiki language id. Covers the source/markup/config files an
  *  assistant actually receives. Anything not listed renders as plain text. */
 const EXT_LANG: Record<string, string> = {
@@ -50,7 +68,9 @@ export function extToShikiLang(filename: string): string {
 /** Whether a file should open in the syntax-highlighted code/text viewer.
  *  True for text/* and json/xml MIME, or any known source extension. */
 export function isCodeOrTextFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
-    if (isDocxFile(att)) return false
+    // Office OOXML containers are ZIPs whose MIME contains "xml" (openXMLformats)
+    // — exclude them so they never fall into the code viewer as raw ZIP bytes.
+    if (isDocxFile(att) || isSpreadsheetFile(att) || isPresentationFile(att)) return false
     const mime = att.mimeType.toLowerCase()
     if (mime.startsWith("text/")) return true
     if (mime.includes("json") || mime.includes("xml")) return true
@@ -60,6 +80,11 @@ export function isCodeOrTextFile(att: Pick<Attachment, "filename" | "mimeType">)
 /** Whether a file opens in the in-app preview modal (vs. download-only). */
 export function isInAppPreviewable(att: Pick<Attachment, "filename" | "mimeType" | "type">): boolean {
     if (att.type === "image" || att.type === "video" || att.type === "pdf") return true
-    if (att.type === "spreadsheet" || att.type === "presentation") return true
-    return isDocxFile(att) || isCodeOrTextFile(att)
+    return (
+        isSpreadsheetFile(att) ||
+        isPresentationFile(att) ||
+        isDocxFile(att) ||
+        isSvgFile(att) ||
+        isCodeOrTextFile(att)
+    )
 }

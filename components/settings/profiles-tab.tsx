@@ -31,6 +31,7 @@ import {
   MessageCircle,
   MessageSquare,
   Plus,
+  RotateCcw,
   Save,
   Settings,
   ShieldCheck,
@@ -38,6 +39,7 @@ import {
   Terminal,
   Trash2,
   UserPlus,
+  UserX,
   Users,
   X,
 } from "lucide-react"
@@ -47,6 +49,7 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select } from "@/components/ui/select"
 import { Switch } from "@/components/ui/switch"
+import { useConfirm } from "@/components/ui/confirm-dialog"
 import { profileInitials } from "@/components/profiles/use-profiles"
 import type { AdminProfileView } from "@/lib/profiles/server"
 import {
@@ -63,6 +66,32 @@ import {
 } from "@/lib/profiles/types"
 
 type IconType = React.ComponentType<{ className?: string }>
+type GrantAccess = "read" | "write" | "setup"
+
+interface IntegrationConnectionView {
+  id: string
+  provider: "home_assistant"
+  ownerProfileId: string
+  displayName: string
+  createdAt: number
+  updatedAt: number
+}
+
+interface IntegrationConnectionGrantView {
+  connectionId: string
+  profileId: string
+  access: GrantAccess
+  createdByProfileId: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+interface IntegrationConnectionPreferenceView {
+  profileId: string
+  provider: "home_assistant"
+  connectionId: string
+  updatedAt: number
+}
 
 const SURFACE_META: Record<
   ProfileSurface,
@@ -90,6 +119,7 @@ const TOOL_META: Record<
   delegate_agents: { label: "Delegate agents", description: "Spawn sub-agents", icon: Bot },
   web_access: { label: "Web access", description: "Search and fetch the web", icon: Globe },
   memory: { label: "Memory", description: "Read and write long-term memory", icon: Brain },
+  skills: { label: "Skills", description: "Use installed workflow skills", icon: Braces },
   scheduling: { label: "Scheduling", description: "Create scheduled tasks", icon: CalendarClock },
   monitoring: { label: "Monitoring", description: "Configure Smart Monitor", icon: Activity },
   microscripts: { label: "Microscripts", description: "Run saved microscripts", icon: Braces },
@@ -140,6 +170,7 @@ function timeAgo(ts: number): string {
 }
 
 export function ProfilesTab() {
+  const { confirm, dialog } = useConfirm()
   const [profiles, setProfiles] = React.useState<AdminProfileView[]>([])
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [draft, setDraft] = React.useState<AdminProfileView | null>(null)
@@ -152,8 +183,19 @@ export function ProfilesTab() {
   const [showProfilePassword, setShowProfilePassword] = React.useState(false)
   const [clearProfilePassword, setClearProfilePassword] = React.useState(false)
   const [audit, setAudit] = React.useState<ProfileAuditEvent[]>([])
+  const [connections, setConnections] = React.useState<IntegrationConnectionView[]>([])
+  const [connectionGrants, setConnectionGrants] = React.useState<
+    IntegrationConnectionGrantView[]
+  >([])
+  const [connectionPreferences, setConnectionPreferences] = React.useState<
+    IntegrationConnectionPreferenceView[]
+  >([])
   const [saving, setSaving] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] =
+    React.useState<AdminProfileView | null>(null)
+  const [deleteConfirmName, setDeleteConfirmName] = React.useState("")
+  const [deleteProfileData, setDeleteProfileData] = React.useState(true)
 
   const original = profiles.find((profile) => profile.id === selectedId) ?? null
   const selected = draft ?? original
@@ -173,15 +215,26 @@ export function ProfilesTab() {
   }, [profilePassword, profilePasswordConfirm])
 
   const load = React.useCallback(async () => {
-    const [profilesRes, auditRes] = await Promise.all([
+    const [profilesRes, auditRes, connectionsRes] = await Promise.all([
       fetch("/api/profiles", { cache: "no-store" }),
       fetch("/api/profiles/audit?limit=80", { cache: "no-store" }),
+      fetch("/api/integrations/connections", { cache: "no-store" }),
     ])
     const profilesData = await profilesRes.json()
     const auditData = await auditRes.json()
+    const connectionsData = connectionsRes.ok
+      ? await connectionsRes.json()
+      : { connections: [], grants: [], preferences: [] }
     const rows = (profilesData.profiles ?? []) as AdminProfileView[]
     setProfiles(rows)
     setAudit((auditData.events ?? []) as ProfileAuditEvent[])
+    setConnections((connectionsData.connections ?? []) as IntegrationConnectionView[])
+    setConnectionGrants(
+      (connectionsData.grants ?? []) as IntegrationConnectionGrantView[]
+    )
+    setConnectionPreferences(
+      (connectionsData.preferences ?? []) as IntegrationConnectionPreferenceView[]
+    )
     setSelectedId((current) => current ?? rows[0]?.id ?? null)
   }, [])
 
@@ -262,20 +315,145 @@ export function ProfilesTab() {
     }
   }
 
-  async function deleteProfile(profile: AdminProfileView) {
+  async function patchProfileStatus(
+    profile: AdminProfileView,
+    disabledAt: number | null,
+    failureMessage: string
+  ) {
+    if (profile.role === "admin") return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch(`/api/profiles/${encodeURIComponent(profile.id)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ disabledAt }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok) throw new Error(data.error ?? failureMessage)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : failureMessage)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function deactivateProfile(profile: AdminProfileView) {
+    const ok = await confirm({
+      title: `Deactivate "${profile.name}"?`,
+      message:
+        "This removes the profile from sign-in and blocks existing sessions, but keeps its workspace, tokens, chats, and settings for restore.",
+      confirmLabel: "Deactivate",
+      destructive: true,
+    })
+    if (!ok) return
+    await patchProfileStatus(profile, Date.now(), "Failed to deactivate profile")
+  }
+
+  async function restoreProfile(profile: AdminProfileView) {
+    const ok = await confirm({
+      title: `Restore "${profile.name}"?`,
+      message: "This profile will be selectable again on the profile screen.",
+      confirmLabel: "Restore",
+    })
+    if (!ok) return
+    await patchProfileStatus(profile, null, "Failed to restore profile")
+  }
+
+  function openPermanentDelete(profile: AdminProfileView) {
+    setDeleteTarget(profile)
+    setDeleteConfirmName("")
+    setDeleteProfileData(true)
+  }
+
+  async function deleteProfilePermanently(profile: AdminProfileView) {
     if (profile.role === "admin") return
     setSaving(true)
     setError(null)
     try {
       const res = await fetch(`/api/profiles/${encodeURIComponent(profile.id)}`, {
         method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          confirmName: deleteConfirmName.trim(),
+          deleteState: deleteProfileData,
+        }),
       })
       const data = await res.json().catch(() => ({}))
-      if (!res.ok) throw new Error(data.error ?? "Failed to delete profile")
+      if (!res.ok)
+        throw new Error(data.error ?? "Failed to permanently delete profile")
+      setDeleteTarget(null)
+      setDeleteConfirmName("")
       setSelectedId(null)
       await load()
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to delete profile")
+      setError(
+        err instanceof Error ? err.message : "Failed to permanently delete profile"
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function updateHomeAssistantGrant(
+    profile: AdminProfileView,
+    connectionId: string,
+    access: IntegrationAccess
+  ) {
+    if (profile.role === "admin") return
+    setSaving(true)
+    setError(null)
+    try {
+      const body =
+        access === "none"
+          ? { action: "revoke", profileId: profile.id, connectionId }
+          : { action: "grant", profileId: profile.id, connectionId, access }
+      const res = await fetch("/api/integrations/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(body),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok)
+        throw new Error(data.error ?? "Failed to update Home Assistant access")
+      await load()
+    } catch (err) {
+      setError(
+        err instanceof Error
+          ? err.message
+          : "Failed to update Home Assistant access"
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  async function setHomeAssistantDefault(
+    profile: AdminProfileView,
+    connectionId: string
+  ) {
+    if (profile.role === "admin") return
+    setSaving(true)
+    setError(null)
+    try {
+      const res = await fetch("/api/integrations/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "prefer",
+          profileId: profile.id,
+          connectionId,
+        }),
+      })
+      const data = await res.json().catch(() => ({}))
+      if (!res.ok)
+        throw new Error(data.error ?? "Failed to set default connection")
+      await load()
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to set default connection"
+      )
     } finally {
       setSaving(false)
     }
@@ -294,6 +472,7 @@ export function ProfilesTab() {
   const lockRole = selected?.id === "admin_horia"
 
   return (
+    <>
     <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
       {/* Left column — roster */}
       <div className="space-y-3">
@@ -353,7 +532,8 @@ export function ProfilesTab() {
                 "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
                 profile.id === selectedId
                   ? "bg-[#f0ede6] dark:bg-muted"
-                  : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/50"
+                  : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/50",
+                profile.disabledAt && "opacity-60"
               )}
             >
               <span
@@ -370,9 +550,14 @@ export function ProfilesTab() {
                   {profile.locked && (
                     <Lock className="size-3 shrink-0 text-foreground/40" />
                   )}
+                  {profile.disabledAt && (
+                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-normal text-foreground/45">
+                      Disabled
+                    </span>
+                  )}
                 </span>
                 <span className="block truncate text-[12px] capitalize text-foreground/45">
-                  {profile.role}
+                  {profile.disabledAt ? "inactive" : profile.role}
                 </span>
               </span>
             </button>
@@ -410,6 +595,11 @@ export function ProfilesTab() {
                       {selected.name || "Untitled profile"}
                     </h2>
                     <RoleBadge role={selected.role} />
+                    {selected.disabledAt && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
+                        Disabled
+                      </span>
+                    )}
                     {selected.locked && (
                       <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
                         <Lock className="size-3" />
@@ -423,18 +613,40 @@ export function ProfilesTab() {
                 </div>
               </div>
               <div className="flex items-center gap-2">
-                {selected.role !== "admin" && (
+                {selected.role !== "admin" && selected.disabledAt ? (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="lg"
+                      onClick={() => void restoreProfile(selected)}
+                      disabled={saving}
+                    >
+                      <RotateCcw className="size-4" />
+                      Restore
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="lg"
+                      onClick={() => openPermanentDelete(selected)}
+                      disabled={saving}
+                      className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="size-4" />
+                      Delete permanently
+                    </Button>
+                  </>
+                ) : selected.role !== "admin" ? (
                   <Button
                     variant="ghost"
                     size="lg"
-                    onClick={() => void deleteProfile(selected)}
+                    onClick={() => void deactivateProfile(selected)}
                     disabled={saving}
                     className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                   >
-                    <Trash2 className="size-4" />
-                    Delete
+                    <UserX className="size-4" />
+                    Deactivate
                   </Button>
-                )}
+                ) : null}
                 <Button
                   size="lg"
                   onClick={() => void saveProfile()}
@@ -724,6 +936,21 @@ export function ProfilesTab() {
                       }
                     />
                   </div>
+
+                  <HomeAssistantSharingPanel
+                    profile={selected}
+                    profiles={profiles}
+                    connections={connections}
+                    grants={connectionGrants}
+                    preferences={connectionPreferences}
+                    saving={saving}
+                    onAccessChange={(connectionId, access) =>
+                      void updateHomeAssistantGrant(selected, connectionId, access)
+                    }
+                    onSetDefault={(connectionId) =>
+                      void setHomeAssistantDefault(selected, connectionId)
+                    }
+                  />
                 </SectionCard>
               </>
             )}
@@ -771,6 +998,245 @@ export function ProfilesTab() {
           )}
         </SectionCard>
       </div>
+    </div>
+    {dialog}
+    <PermanentProfileDeleteDialog
+      profile={deleteTarget}
+      confirmName={deleteConfirmName}
+      deleteProfileData={deleteProfileData}
+      saving={saving}
+      onConfirmNameChange={setDeleteConfirmName}
+      onDeleteProfileDataChange={setDeleteProfileData}
+      onCancel={() => setDeleteTarget(null)}
+      onConfirm={() => {
+        if (deleteTarget) void deleteProfilePermanently(deleteTarget)
+      }}
+    />
+    </>
+  )
+}
+
+function PermanentProfileDeleteDialog({
+  profile,
+  confirmName,
+  deleteProfileData,
+  saving,
+  onConfirmNameChange,
+  onDeleteProfileDataChange,
+  onCancel,
+  onConfirm,
+}: {
+  profile: AdminProfileView | null
+  confirmName: string
+  deleteProfileData: boolean
+  saving: boolean
+  onConfirmNameChange: (value: string) => void
+  onDeleteProfileDataChange: (value: boolean) => void
+  onCancel: () => void
+  onConfirm: () => void
+}) {
+  React.useEffect(() => {
+    if (!profile) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === "Escape") onCancel()
+    }
+    document.addEventListener("keydown", onKey)
+    return () => document.removeEventListener("keydown", onKey)
+  }, [profile, onCancel])
+
+  if (!profile) return null
+
+  const canConfirm = confirmName.trim() === profile.name
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/40" onClick={onCancel} />
+      <div className="relative w-full max-w-md rounded-xl border border-border/60 bg-background p-5 shadow-xl">
+        <div className="text-[15px] font-semibold text-foreground">
+          Delete &quot;{profile.name}&quot; permanently?
+        </div>
+        <p className="mt-1.5 text-[13px] leading-relaxed text-foreground/60">
+          This removes the profile record, sessions, and webhook ownership. Type
+          the profile name to confirm.
+        </p>
+        <div className="mt-4 space-y-3">
+          <Field label="Profile name">
+            <Input
+              autoFocus
+              value={confirmName}
+              onChange={(event) => onConfirmNameChange(event.target.value)}
+              placeholder={profile.name}
+              className="h-9"
+            />
+          </Field>
+          <label className="flex items-start gap-2 rounded-xl border border-border/60 bg-background/60 px-3 py-2.5 text-[12.5px] text-foreground/65">
+            <input
+              type="checkbox"
+              checked={deleteProfileData}
+              onChange={(event) =>
+                onDeleteProfileDataChange(event.target.checked)
+              }
+              className="mt-0.5"
+            />
+            <span>
+              Delete this profile&apos;s local workspace, private tokens, uploads,
+              artifacts, and browser state.
+            </span>
+          </label>
+        </div>
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            type="button"
+            onClick={onCancel}
+            disabled={saving}
+            className="rounded-md px-3 py-1.5 text-[13px] text-foreground/70 hover:bg-[#f0ede6] disabled:opacity-60 dark:hover:bg-muted"
+          >
+            Cancel
+          </button>
+          <button
+            type="button"
+            onClick={onConfirm}
+            disabled={saving || !canConfirm}
+            className="rounded-md bg-[#802020] px-3 py-1.5 text-[13px] text-white hover:opacity-90 disabled:cursor-not-allowed disabled:opacity-50"
+          >
+            {saving ? "Deleting..." : "Delete permanently"}
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+function HomeAssistantSharingPanel({
+  profile,
+  profiles,
+  connections,
+  grants,
+  preferences,
+  saving,
+  onAccessChange,
+  onSetDefault,
+}: {
+  profile: AdminProfileView
+  profiles: AdminProfileView[]
+  connections: IntegrationConnectionView[]
+  grants: IntegrationConnectionGrantView[]
+  preferences: IntegrationConnectionPreferenceView[]
+  saving: boolean
+  onAccessChange: (connectionId: string, access: IntegrationAccess) => void
+  onSetDefault: (connectionId: string) => void
+}) {
+  if (profile.role === "admin") return null
+
+  const profileGrants = grants.filter((grant) => grant.profileId === profile.id)
+  const grantsByConnection = new Map(
+    profileGrants.map((grant) => [grant.connectionId, grant])
+  )
+  const preferredConnectionId =
+    preferences.find(
+      (preference) =>
+        preference.profileId === profile.id &&
+        preference.provider === "home_assistant"
+    )?.connectionId ?? null
+  const activeConnections = connections.filter((connection) =>
+    profiles.some(
+      (candidate) =>
+        candidate.id === connection.ownerProfileId && !candidate.disabledAt
+    )
+  )
+
+  return (
+    <div className="mt-1 border-t border-border/50 pt-3">
+      <div className="mb-2 flex items-start gap-2">
+        <span className="mt-0.5 grid size-7 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+          <House className="size-4" />
+        </span>
+        <div className="min-w-0">
+          <div className="text-[13.5px] font-medium text-foreground">
+            Home Assistant connections
+          </div>
+          <div className="text-[12px] text-foreground/50">
+            Let this profile use its own connection or a connection shared by
+            another profile. Tokens stay with the owner.
+          </div>
+        </div>
+      </div>
+
+      {activeConnections.length === 0 ? (
+        <div className="rounded-xl border border-border/60 bg-background/60 px-3.5 py-3 text-[12.5px] text-foreground/55">
+          No Home Assistant connection records yet. Connect Home Assistant from
+          Auth first, then share it here.
+        </div>
+      ) : (
+        <div className="grid gap-2">
+          {activeConnections.map((connection) => {
+            const owner = profiles.find(
+              (candidate) => candidate.id === connection.ownerProfileId
+            )
+            const owned = connection.ownerProfileId === profile.id
+            const grant = grantsByConnection.get(connection.id)
+            const access: IntegrationAccess = owned
+              ? "setup"
+              : grant?.access ?? "none"
+            const canUse = owned || access !== "none"
+            const isDefault =
+              preferredConnectionId === connection.id ||
+              (!preferredConnectionId && owned)
+
+            return (
+              <div
+                key={connection.id}
+                className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5"
+              >
+                <div className="min-w-0">
+                  <div className="flex min-w-0 items-center gap-2">
+                    <span className="truncate text-[13.5px] font-medium text-foreground">
+                      {connection.displayName}
+                    </span>
+                    {owned && (
+                      <span className="rounded-full bg-muted px-2 py-0.5 text-[10.5px] font-medium text-foreground/50">
+                        Own
+                      </span>
+                    )}
+                    {isDefault && canUse && (
+                      <span className="rounded-full bg-foreground px-2 py-0.5 text-[10.5px] font-medium text-background">
+                        Default
+                      </span>
+                    )}
+                  </div>
+                  <div className="mt-0.5 truncate text-[12px] text-foreground/45">
+                    Owner: {owner?.name ?? connection.ownerProfileId}
+                  </div>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Select
+                    value={access}
+                    options={ACCESS_OPTIONS}
+                    disabled={saving || owned || Boolean(profile.disabledAt)}
+                    onValueChange={(value) =>
+                      onAccessChange(connection.id, value as IntegrationAccess)
+                    }
+                    className="w-[140px] shrink-0 [&>button]:h-8 [&>button]:text-[13px]"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={
+                      saving ||
+                      Boolean(profile.disabledAt) ||
+                      !canUse ||
+                      isDefault
+                    }
+                    onClick={() => onSetDefault(connection.id)}
+                  >
+                    Use default
+                  </Button>
+                </div>
+              </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

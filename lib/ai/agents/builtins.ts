@@ -255,6 +255,19 @@ export const APP_GUIDE_TOOL_IDS: string[] = [
     'host_status',
 ]
 
+export const SKILL_TOOL_IDS: string[] = [
+    'SkillSearch',
+    'ActivateSkill',
+    'ReadSkillFile',
+]
+
+export const PROFILE_ADMIN_TOOL_IDS: string[] = [
+    'ProfileAdminListAccess',
+    'ProfileAdminGrantHomeAssistantAccess',
+    'ProfileAdminRevokeHomeAssistantAccess',
+    'ProfileAdminSetHomeAssistantDefault',
+]
+
 export const WATCHLIST_TOOL_IDS: string[] = [
     'WatchlistAddFinancialInstrument',
     'WatchlistAddProduct',

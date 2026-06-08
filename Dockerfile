@@ -68,8 +68,13 @@ RUN apt-get update \
     python3-pip \
     ripgrep \
     sqlite3 \
+    pandoc \
     libreoffice-impress \
+    libreoffice-writer \
+    libreoffice-calc \
     libreoffice-core \
+    qpdf \
+    tesseract-ocr \
     fonts-crosextra-carlito \
     fonts-crosextra-caladea \
   && rm -rf /var/lib/apt/lists/*
@@ -82,8 +87,17 @@ RUN apt-get update \
 # system env externally-managed; --break-system-packages is the standard escape
 # hatch inside a throwaway container image.
 RUN pip3 install --break-system-packages --no-cache-dir \
+    defusedxml \
+    markitdown[pptx] \
+    pandas \
+    pillow \
+    pdf2image \
+    pdfplumber \
+    pypdfium2 \
+    pytesseract \
     python-docx \
     openpyxl \
+    reportlab \
     python-pptx \
     pypdf
 

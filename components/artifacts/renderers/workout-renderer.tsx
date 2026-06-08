@@ -72,22 +72,31 @@ function WorkoutView({
     const sessionApi = useWorkoutSession(workout.sessionId, workout)
     const renderedWorkout = sessionApi.workout
     const interactive = sessionApi.isActive || sessionApi.isFinished
+    const hasFloatingTimer = !!sessionApi.session.activeSet || !!sessionApi.session.rest
     const addedExerciseCount = React.useMemo(
         () => (sessionApi.session.addedGroups ?? []).reduce((sum, group) => sum + group.exercises.length, 0),
         [sessionApi.session.addedGroups],
     )
     const previousAddedExerciseCount = React.useRef<number | null>(null)
     const [recentlyAddedExerciseId, setRecentlyAddedExerciseId] = React.useState<string | null>(null)
-    const nextExercise = React.useMemo(
-        () => sessionApi.nextSet ? findExercise(renderedWorkout, sessionApi.nextSet.exerciseId) : null,
-        [renderedWorkout, sessionApi.nextSet],
+    const continuationSet = React.useMemo(() => {
+        const restExerciseId = sessionApi.session.rest?.exerciseId
+        if (restExerciseId) {
+            const nextForRestExercise = sessionApi.remainingSets.find((set) => set.exerciseId === restExerciseId)
+            if (nextForRestExercise) return nextForRestExercise
+        }
+        return sessionApi.nextSet
+    }, [sessionApi.nextSet, sessionApi.remainingSets, sessionApi.session.rest?.exerciseId])
+    const continuationExercise = React.useMemo(
+        () => continuationSet ? findExercise(renderedWorkout, continuationSet.exerciseId) : null,
+        [renderedWorkout, continuationSet],
     )
     const startNextSet = React.useCallback(() => {
-        if (!sessionApi.nextSet || !nextExercise || sessionApi.session.activeSet) return
-        sessionApi.startSet(nextExercise, sessionApi.nextSet.setIndex)
-    }, [sessionApi, nextExercise])
-    const nextSetLabel = sessionApi.nextSet
-        ? `${sessionApi.nextSet.exerciseName} · set ${sessionApi.nextSet.setIndex + 1}`
+        if (!continuationSet || !continuationExercise || sessionApi.session.activeSet) return
+        sessionApi.startSet(continuationExercise, continuationSet.setIndex)
+    }, [sessionApi, continuationExercise, continuationSet])
+    const nextSetLabel = continuationSet
+        ? `${continuationSet.exerciseName} · set ${continuationSet.setIndex + 1}`
         : undefined
 
     React.useEffect(() => {
@@ -121,12 +130,14 @@ function WorkoutView({
                 data-workout
                 data-session-id={workout.sessionId}
                 className={cn(
-                    "flex w-full min-w-0 max-w-full flex-col gap-4 overflow-hidden pb-28 text-foreground",
+                    "flex w-full min-w-0 max-w-full flex-col gap-4 overflow-x-hidden text-foreground",
+                    hasFloatingTimer ? "pb-28" : "pb-6",
                     className,
                 )}
                 aria-label={title || workout.title}
             >
                 <WorkoutHeader workout={renderedWorkout} />
+                <WorkoutActionBar sessionApi={sessionApi} placement="top" />
                 <WorkoutProgressStats workout={renderedWorkout} sessionApi={sessionApi} />
 
                 {renderedWorkout.warmup ? (
@@ -173,8 +184,6 @@ function WorkoutView({
                     </div>
                 ) : null}
 
-                <WorkoutActionBar sessionApi={sessionApi} placement="bottom" />
-
                 {sessionApi.isFinished ? (
                     <SessionSummary
                         workout={renderedWorkout}
@@ -188,6 +197,8 @@ function WorkoutView({
                         Source: {renderedWorkout.attribution}
                     </footer>
                 ) : null}
+
+                <WorkoutActionBar sessionApi={sessionApi} placement="bottom" />
             </article>
 
             {sessionApi.session.activeSet ? (
@@ -201,7 +212,7 @@ function WorkoutView({
                     rest={sessionApi.session.rest}
                     onAdjust={sessionApi.adjustRest}
                     onSkip={sessionApi.skipRest}
-                    onStartNext={nextExercise && sessionApi.nextSet && !sessionApi.session.activeSet ? startNextSet : undefined}
+                    onStartNext={continuationExercise && continuationSet && !sessionApi.session.activeSet ? startNextSet : undefined}
                     nextLabel={nextSetLabel}
                     alertBeforeSec={renderedWorkout.restAlertSec ?? 5}
                 />

@@ -2,6 +2,10 @@ import type { ToolDef } from "@/lib/ai/agents/types"
 
 import { getActiveProfileId, isAdminProfileId } from "./context"
 import { getProfile } from "./store"
+import {
+  hasGrantAccess,
+  resolveIntegrationConnectionForProfile,
+} from "@/lib/integrations/connection-store"
 import type {
   IntegrationAccess,
   IntegrationPermissionId,
@@ -35,6 +39,7 @@ const TOOL_TAGS: Record<string, ToolPermissionId> = {
   shell: "shell",
   delegation: "delegate_agents",
   memory: "memory",
+  skills: "skills",
   scheduling: "scheduling",
   monitoring: "monitoring",
   microscripts: "microscripts",
@@ -72,6 +77,10 @@ export function deniedToolReason(
   if (explicit && !permissions.tools[explicit]) return denied(explicit)
 
   for (const tag of tool.tags ?? []) {
+    if (tag === "profile-admin") {
+      return "Admin profile required for profile administration."
+    }
+
     const toolPermission = TOOL_TAGS[tag]
     if (toolPermission && !permissions.tools[toolPermission]) {
       return denied(toolPermission)
@@ -94,6 +103,16 @@ export function deniedToolReason(
       const needed = neededIntegrationAccess(tool)
       if (!hasIntegrationAccess(permissions, integration, needed)) {
         return `Profile is not allowed to use ${integration} with ${needed} access.`
+      }
+      if (integration === "home_assistant") {
+        const profileId = getActiveProfileId()
+        const connection = resolveIntegrationConnectionForProfile(
+          profileId,
+          "home_assistant"
+        )
+        if (connection && !hasGrantAccess(connection.access, needed)) {
+          return `Profile is not allowed to use Home Assistant connection ${connection.connection.displayName} with ${needed} access.`
+        }
       }
     }
   }

@@ -260,7 +260,7 @@ export function SetRow({
                 {detailText ? (
                     <div
                         className={cn(
-                            "mt-0.5 truncate text-[11px]",
+                            "mt-0.5 whitespace-pre-wrap break-words text-[11px] leading-snug [overflow-wrap:anywhere]",
                             logged?.skipped ? "font-medium text-amber-700 dark:text-amber-300" : "text-muted-foreground",
                         )}
                         title={detailText}
