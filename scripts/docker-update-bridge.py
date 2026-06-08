@@ -10,6 +10,7 @@ import shutil
 import signal
 import struct
 import subprocess
+import sys
 import termios
 import threading
 import time
@@ -29,6 +30,7 @@ APP_PORT = os.environ.get("ORCHESTRATOR_PORT", "3000")
 SERVICE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_SERVICE", "orchestrator")
 IMAGE_NAME = os.environ.get("ORCHESTRATOR_UPDATE_IMAGE", "orchestrator:local")
 ROLLBACK_IMAGE_NAME = os.environ.get("ORCHESTRATOR_ROLLBACK_IMAGE", "orchestrator:rollback")
+PRUNE_AFTER_UPDATE = os.environ.get("ORCHESTRATOR_UPDATE_PRUNE_AFTER_BUILD", "1") != "0"
 # CLIs live in the bind-mounted /home/node volume, so neither the image build
 # nor their own headless (`-p`) runs ever update them. These let the Updates
 # page refresh them in place inside that volume.
@@ -213,6 +215,32 @@ def save_current_image_for_rollback(job_id: str, target_ref: str) -> None:
         f"{f' version={version}' if version else ''}"
         f"{f' commit={commit}' if commit else ''}."
     )
+
+
+def prune_docker_build_artifacts(stage: str) -> None:
+    if not PRUNE_AFTER_UPDATE:
+        write_log(
+            f"Skipping Docker prune {stage}; "
+            "ORCHESTRATOR_UPDATE_PRUNE_AFTER_BUILD=0."
+        )
+        return
+
+    docker = docker_command()
+    write_log(
+        f"Pruning Docker build artifacts {stage}; "
+        f"preserving tagged images such as {ROLLBACK_IMAGE_NAME}."
+    )
+    commands = [
+        [docker, "image", "prune", "-f"],
+        [docker, "builder", "prune", "-a", "-f"],
+    ]
+    for command in commands:
+        code, _ = run_capture(command)
+        if code != 0:
+            write_log(
+                "Best-effort Docker prune command failed "
+                f"with exit code {code}: {' '.join(command)}"
+            )
 
 
 def compose_command() -> list[str]:
@@ -557,6 +585,7 @@ def update_stack(payload: dict) -> None:
             raise RuntimeError(f"{APP_DIR} is not a git checkout.")
 
         save_current_image_for_rollback(job_id, target_ref)
+        prune_docker_build_artifacts("before rebuild")
 
         if target_tag:
             run(["git", "-C", str(APP_DIR), "fetch", "origin", "tag", target_tag, "--tags"])
@@ -583,6 +612,7 @@ def update_stack(payload: dict) -> None:
         # them defensively every update.
         scrub_stale_build_env(APP_DIR / ".env")
         run([*compose_command(), "up", "--build", "-d"], env=compose_env)
+        prune_docker_build_artifacts("after rebuild")
         notify_app(
             job_id,
             "completed",
@@ -1031,4 +1061,10 @@ def main() -> None:
 
 
 if __name__ == "__main__":
-    main()
+    if len(sys.argv) > 1:
+        if sys.argv[1] != "--save-rollback":
+            raise SystemExit(f"Unknown argument: {sys.argv[1]}")
+        LOG_DIR.mkdir(parents=True, exist_ok=True)
+        save_current_image_for_rollback("manual", sys.argv[2] if len(sys.argv) > 2 else BRANCH)
+    else:
+        main()

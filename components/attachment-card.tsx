@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { FileText, Image as ImageIcon, Video, Play, Pause } from "lucide-react"
+import { FileText, FileSpreadsheet, Presentation, Image as ImageIcon, Video, Play, Pause } from "lucide-react"
 import { formatDuration } from "@/lib/utils"
 import { appPath } from "@/lib/app-path"
 import { PdfThumbnail } from "@/components/pdf-thumbnail"
@@ -118,6 +118,8 @@ const iconMap = {
     video: Video,
     pdf: FileText,
     document: FileText,
+    spreadsheet: FileSpreadsheet,
+    presentation: Presentation,
     other: FileText,
 }
 

@@ -10,7 +10,10 @@ export interface Attachment {
   /** File size in bytes */
   size: number
   /** Category for display/routing */
-  type: "image" | "pdf" | "document" | "audio" | "video" | "other"
+  type: "image" | "pdf" | "document" | "spreadsheet" | "presentation" | "audio" | "video" | "other"
+  /** Optional explicit fetch URL. Uploads resolve to /api/uploads/[id] by
+   *  default; set this for files served elsewhere (e.g. workspace files). */
+  url?: string
 }
 
 export interface TokenUsageBreakdown {

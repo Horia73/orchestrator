@@ -14,6 +14,8 @@ import {
   Cpu,
   Download,
   Dumbbell,
+  Eye,
+  EyeOff,
   FileCog,
   FilePen,
   FileText,
@@ -144,7 +146,10 @@ export function ProfilesTab() {
   const [creating, setCreating] = React.useState(false)
   const [newName, setNewName] = React.useState("")
   const [newPassword, setNewPassword] = React.useState("")
+  const [showNewPassword, setShowNewPassword] = React.useState(false)
   const [profilePassword, setProfilePassword] = React.useState("")
+  const [profilePasswordConfirm, setProfilePasswordConfirm] = React.useState("")
+  const [showProfilePassword, setShowProfilePassword] = React.useState(false)
   const [clearProfilePassword, setClearProfilePassword] = React.useState(false)
   const [audit, setAudit] = React.useState<ProfileAuditEvent[]>([])
   const [saving, setSaving] = React.useState(false)
@@ -158,6 +163,14 @@ export function ProfilesTab() {
     if (profilePassword.trim() || clearProfilePassword) return true
     return JSON.stringify(draft) !== JSON.stringify(original)
   }, [draft, original, profilePassword, clearProfilePassword])
+
+  const passwordError = React.useMemo(() => {
+    const next = profilePassword.trim()
+    if (!next) return null
+    if (next.length < 4) return "Password must be at least 4 characters."
+    if (next !== profilePasswordConfirm.trim()) return "Passwords don't match."
+    return null
+  }, [profilePassword, profilePasswordConfirm])
 
   const load = React.useCallback(async () => {
     const [profilesRes, auditRes] = await Promise.all([
@@ -182,6 +195,8 @@ export function ProfilesTab() {
     const profile = profiles.find((item) => item.id === selectedId) ?? null
     setDraft(profile ? structuredClone(profile) : null)
     setProfilePassword("")
+    setProfilePasswordConfirm("")
+    setShowProfilePassword(false)
     setClearProfilePassword(false)
   }, [profiles, selectedId])
 
@@ -215,7 +230,7 @@ export function ProfilesTab() {
   }
 
   async function saveProfile() {
-    if (!draft) return
+    if (!draft || passwordError) return
     const password = profilePassword.trim()
     setSaving(true)
     setError(null)
@@ -236,6 +251,8 @@ export function ProfilesTab() {
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error ?? "Failed to save profile")
       setProfilePassword("")
+      setProfilePasswordConfirm("")
+      setShowProfilePassword(false)
       setClearProfilePassword(false)
       await load()
     } catch (err) {
@@ -307,12 +324,12 @@ export function ProfilesTab() {
               placeholder="Name"
               className="h-9"
             />
-            <Input
-              type="password"
+            <PasswordInput
               value={newPassword}
-              onChange={(event) => setNewPassword(event.target.value)}
+              onChange={setNewPassword}
               placeholder="Optional password"
-              className="h-9"
+              show={showNewPassword}
+              onToggleShow={() => setShowNewPassword((value) => !value)}
             />
             <Button
               type="submit"
@@ -421,7 +438,7 @@ export function ProfilesTab() {
                 <Button
                   size="lg"
                   onClick={() => void saveProfile()}
-                  disabled={saving || !dirty}
+                  disabled={saving || !dirty || Boolean(passwordError)}
                 >
                   <Save className="size-4" />
                   {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
@@ -528,156 +545,188 @@ export function ProfilesTab() {
                       : "Anyone on this device can open this profile."}
                   </div>
                 </div>
-                {selected.locked && (
-                  <label className="flex shrink-0 items-center gap-2 text-[12px] text-foreground/55">
-                    <Switch
-                      checked={clearProfilePassword}
-                      disabled={Boolean(profilePassword)}
-                      onCheckedChange={setClearProfilePassword}
-                      aria-label="Remove password"
-                    />
-                    Remove
-                  </label>
-                )}
+                {selected.locked &&
+                  (clearProfilePassword ? (
+                    <span className="flex shrink-0 items-center gap-2 text-[12px] font-medium text-destructive">
+                      Will be removed on save
+                      <button
+                        type="button"
+                        onClick={() => setClearProfilePassword(false)}
+                        className="rounded-md px-1.5 py-0.5 text-foreground/55 underline-offset-2 hover:text-foreground hover:underline"
+                      >
+                        Undo
+                      </button>
+                    </span>
+                  ) : (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setClearProfilePassword(true)
+                        setProfilePassword("")
+                        setProfilePasswordConfirm("")
+                      }}
+                      className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    >
+                      <Trash2 className="size-3.5" />
+                      Remove
+                    </Button>
+                  ))}
               </div>
-              <Input
-                type="password"
-                value={profilePassword}
-                onChange={(event) => {
-                  setProfilePassword(event.target.value)
-                  if (event.target.value) setClearProfilePassword(false)
-                }}
-                placeholder={
-                  selected.locked
-                    ? "New password (leave blank to keep current)"
-                    : "Set a password"
-                }
-                className="h-9"
-              />
+
+              {!clearProfilePassword && (
+                <div className="space-y-2">
+                  <PasswordInput
+                    value={profilePassword}
+                    onChange={setProfilePassword}
+                    show={showProfilePassword}
+                    onToggleShow={() => setShowProfilePassword((value) => !value)}
+                    placeholder={
+                      selected.locked
+                        ? "New password (leave blank to keep current)"
+                        : "Set a password"
+                    }
+                  />
+                  {profilePassword && (
+                    <PasswordInput
+                      value={profilePasswordConfirm}
+                      onChange={setProfilePasswordConfirm}
+                      show={showProfilePassword}
+                      onToggleShow={() =>
+                        setShowProfilePassword((value) => !value)
+                      }
+                      placeholder="Confirm password"
+                    />
+                  )}
+                  {passwordError && (
+                    <p className="text-[12px] text-destructive">{passwordError}</p>
+                  )}
+                </div>
+              )}
             </SectionCard>
 
-            {isAdmin && (
+            {isAdmin ? (
               <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-muted/40 px-4 py-3">
                 <ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground/60" />
                 <div className="text-[13px] leading-relaxed text-foreground/70">
                   <span className="font-medium text-foreground">Full access.</span>{" "}
-                  Admins bypass every permission check — the controls below are
-                  locked for this profile.
+                  Admins bypass every permission check, so surface, tool, and
+                  integration limits don&apos;t apply. Switch this profile to{" "}
+                  <span className="font-medium text-foreground">Member</span> to
+                  set per-area access.
                 </div>
               </div>
+            ) : (
+              <>
+                {/* Surfaces */}
+                <SectionCard
+                  icon={AppWindow}
+                  title="Surfaces"
+                  description="Pages and workspaces this profile can open."
+                >
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {PROFILE_SURFACES.map((surface) => {
+                      const meta = SURFACE_META[surface]
+                      return (
+                        <ToggleRow
+                          key={surface}
+                          icon={meta.icon}
+                          label={meta.label}
+                          description={meta.description}
+                          checked={selected.permissions.surfaces[surface]}
+                          onChange={(checked) =>
+                            updateDraft((p) => {
+                              p.permissions.surfaces[surface] = checked
+                            })
+                          }
+                        />
+                      )
+                    })}
+                  </div>
+                </SectionCard>
+
+                {/* Tools */}
+                <SectionCard
+                  icon={Terminal}
+                  title="Tools"
+                  description="Capabilities the assistant may use on this profile's behalf."
+                >
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {TOOL_PERMISSION_IDS.map((tool) => {
+                      const meta = TOOL_META[tool]
+                      return (
+                        <ToggleRow
+                          key={tool}
+                          icon={meta.icon}
+                          label={meta.label}
+                          description={meta.description}
+                          checked={selected.permissions.tools[tool]}
+                          onChange={(checked) =>
+                            updateDraft((p) => {
+                              p.permissions.tools[tool] = checked
+                            })
+                          }
+                        />
+                      )
+                    })}
+                  </div>
+                </SectionCard>
+
+                {/* Integrations */}
+                <SectionCard
+                  icon={Globe}
+                  title="Integrations"
+                  description="Per-connection access level for external services."
+                >
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {INTEGRATION_PERMISSION_IDS.map((integration) => {
+                      const meta = INTEGRATION_META[integration]
+                      const Icon = meta.icon
+                      return (
+                        <div
+                          key={integration}
+                          className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5"
+                        >
+                          <div className="flex min-w-0 items-center gap-3">
+                            <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+                              <Icon className="size-4" />
+                            </span>
+                            <span className="truncate text-[13.5px] font-medium text-foreground">
+                              {meta.label}
+                            </span>
+                          </div>
+                          <Select
+                            value={selected.permissions.integrations[integration]}
+                            options={ACCESS_OPTIONS}
+                            onValueChange={(value) =>
+                              updateDraft((p) => {
+                                p.permissions.integrations[integration] =
+                                  value as IntegrationAccess
+                              })
+                            }
+                            className="w-[140px] shrink-0 [&>button]:h-8 [&>button]:text-[13px]"
+                          />
+                        </div>
+                      )
+                    })}
+                  </div>
+
+                  <div className="mt-1 border-t border-border/50 pt-3">
+                    <ToggleRow
+                      icon={KeyRound}
+                      label="Inherit admin API keys"
+                      description="Use the owner's provider keys for model calls."
+                      checked={selected.permissions.inheritAdminApiKeys}
+                      onChange={(checked) =>
+                        updateDraft((p) => {
+                          p.permissions.inheritAdminApiKeys = checked
+                        })
+                      }
+                    />
+                  </div>
+                </SectionCard>
+              </>
             )}
-
-            {/* Surfaces */}
-            <SectionCard
-              icon={AppWindow}
-              title="Surfaces"
-              description="Pages and workspaces this profile can open."
-            >
-              <div className="grid gap-2 sm:grid-cols-2">
-                {PROFILE_SURFACES.map((surface) => {
-                  const meta = SURFACE_META[surface]
-                  return (
-                    <ToggleRow
-                      key={surface}
-                      icon={meta.icon}
-                      label={meta.label}
-                      description={meta.description}
-                      checked={selected.permissions.surfaces[surface]}
-                      disabled={isAdmin}
-                      onChange={(checked) =>
-                        updateDraft((p) => {
-                          p.permissions.surfaces[surface] = checked
-                        })
-                      }
-                    />
-                  )
-                })}
-              </div>
-            </SectionCard>
-
-            {/* Tools */}
-            <SectionCard
-              icon={Terminal}
-              title="Tools"
-              description="Capabilities the assistant may use on this profile's behalf."
-            >
-              <div className="grid gap-2 sm:grid-cols-2">
-                {TOOL_PERMISSION_IDS.map((tool) => {
-                  const meta = TOOL_META[tool]
-                  return (
-                    <ToggleRow
-                      key={tool}
-                      icon={meta.icon}
-                      label={meta.label}
-                      description={meta.description}
-                      checked={selected.permissions.tools[tool]}
-                      disabled={isAdmin}
-                      onChange={(checked) =>
-                        updateDraft((p) => {
-                          p.permissions.tools[tool] = checked
-                        })
-                      }
-                    />
-                  )
-                })}
-              </div>
-            </SectionCard>
-
-            {/* Integrations */}
-            <SectionCard
-              icon={Globe}
-              title="Integrations"
-              description="Per-connection access level for external services."
-            >
-              <div className="grid gap-2 sm:grid-cols-2">
-                {INTEGRATION_PERMISSION_IDS.map((integration) => {
-                  const meta = INTEGRATION_META[integration]
-                  const Icon = meta.icon
-                  return (
-                    <div
-                      key={integration}
-                      className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5"
-                    >
-                      <div className="flex min-w-0 items-center gap-3">
-                        <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
-                          <Icon className="size-4" />
-                        </span>
-                        <span className="truncate text-[13.5px] font-medium text-foreground">
-                          {meta.label}
-                        </span>
-                      </div>
-                      <Select
-                        value={selected.permissions.integrations[integration]}
-                        disabled={isAdmin}
-                        options={ACCESS_OPTIONS}
-                        onValueChange={(value) =>
-                          updateDraft((p) => {
-                            p.permissions.integrations[integration] =
-                              value as IntegrationAccess
-                          })
-                        }
-                        className="w-[140px] shrink-0 [&>button]:h-8 [&>button]:text-[13px]"
-                      />
-                    </div>
-                  )
-                })}
-              </div>
-
-              <div className="mt-1 border-t border-border/50 pt-3">
-                <ToggleRow
-                  icon={KeyRound}
-                  label="Inherit admin API keys"
-                  description="Use the owner's provider keys for model calls."
-                  checked={selected.permissions.inheritAdminApiKeys}
-                  disabled={isAdmin}
-                  onChange={(checked) =>
-                    updateDraft((p) => {
-                      p.permissions.inheritAdminApiKeys = checked
-                    })
-                  }
-                />
-              </div>
-            </SectionCard>
           </>
         ) : (
           <div className="grid place-items-center rounded-2xl border border-dashed border-border/70 bg-card/50 px-6 py-16 text-center">
@@ -702,21 +751,23 @@ export function ProfilesTab() {
               No profile activity yet.
             </div>
           ) : (
-            <ol className="-my-1">
-              {audit.map((event) => (
-                <li
-                  key={event.id}
-                  className="flex gap-3 border-b border-border/40 py-2.5 last:border-0"
-                >
-                  <span className="w-20 shrink-0 pt-px text-[12px] text-foreground/40">
-                    {timeAgo(event.createdAt)}
-                  </span>
-                  <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/75">
-                    {event.summary}
-                  </span>
-                </li>
-              ))}
-            </ol>
+            <div className="max-h-72 overflow-y-auto pr-1 [scrollbar-width:thin]">
+              <ol className="-mt-1">
+                {audit.map((event) => (
+                  <li
+                    key={event.id}
+                    className="flex gap-3 border-b border-border/40 py-2.5 last:border-0"
+                  >
+                    <span className="w-20 shrink-0 pt-px text-[12px] text-foreground/40">
+                      {timeAgo(event.createdAt)}
+                    </span>
+                    <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/75">
+                      {event.summary}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+            </div>
           )}
         </SectionCard>
       </div>
@@ -787,6 +838,43 @@ function Field({
       </label>
       {children}
       {hint && <p className="text-[11.5px] text-foreground/45">{hint}</p>}
+    </div>
+  )
+}
+
+function PasswordInput({
+  value,
+  onChange,
+  placeholder,
+  show,
+  onToggleShow,
+  autoFocus,
+}: {
+  value: string
+  onChange: (value: string) => void
+  placeholder?: string
+  show: boolean
+  onToggleShow: () => void
+  autoFocus?: boolean
+}) {
+  return (
+    <div className="relative">
+      <Input
+        type={show ? "text" : "password"}
+        value={value}
+        autoFocus={autoFocus}
+        onChange={(event) => onChange(event.target.value)}
+        placeholder={placeholder}
+        className="h-9 pr-9"
+      />
+      <button
+        type="button"
+        onClick={onToggleShow}
+        aria-label={show ? "Hide password" : "Show password"}
+        className="absolute right-0 top-0 grid h-9 w-9 place-items-center rounded-r-md text-foreground/40 outline-none transition-colors hover:text-foreground/70 focus-visible:text-foreground/70"
+      >
+        {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+      </button>
     </div>
   )
 }

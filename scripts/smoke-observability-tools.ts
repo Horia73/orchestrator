@@ -27,6 +27,7 @@ async function main(): Promise<void> {
         logToolCall,
         sealInterruptedStreamingRequestLogs,
     } = await import('@/lib/observability/store')
+    const { updateConfig } = await import('@/lib/config')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -34,6 +35,8 @@ async function main(): Promise<void> {
         console.log(`${ok ? '✓' : '✗'} ${label}${ok ? '' : `  (${JSON.stringify(detail)})`}`)
         if (!ok) failures++
     }
+
+    updateConfig({ timezone: 'Europe/Bucharest' })
 
     const now = Date.now()
     const task = createScheduledTask({
@@ -60,12 +63,17 @@ async function main(): Promise<void> {
 
     const runs = await executeSearchPastRuns({ range: 'all', q: 'runtime history', limit: 5 })
     check('search_past_runs succeeds', runs.success === true)
-    const runRows = (runs.data as { runs: Array<{ run_id: string; task_title: string }> }).runs
+    const runsData = runs.data as { timezone: string; runs: Array<{ run_id: string; task_title: string; started_at: string; started_at_utc: string }> }
+    const runRows = runsData.runs
     check('search_past_runs finds smoke run', runRows.length === 1 && runRows[0].task_title === task.title, runs.data)
+    check('search_past_runs reports configured timezone', runsData.timezone === 'Europe/Bucharest', runs.data)
+    check('search_past_runs has local and UTC timestamps', runRows[0].started_at !== runRows[0].started_at_utc && runRows[0].started_at_utc.endsWith('Z'), runRows[0])
 
     const run = await executeGetPastRun({ run_id: runRows[0].run_id })
     check('get_past_run succeeds', run.success === true)
-    check('get_past_run returns summary', (run.data as { summary: string }).summary.includes('Smoke marker'))
+    const runData = run.data as { summary: string; timezone: string; started_at: string; started_at_utc: string }
+    check('get_past_run returns summary', runData.summary.includes('Smoke marker'))
+    check('get_past_run returns local time first', runData.timezone === 'Europe/Bucharest' && runData.started_at !== runData.started_at_utc, runData)
 
     const requestId = 'req_observability_smoke'
     logRequestStart({
@@ -95,14 +103,19 @@ async function main(): Promise<void> {
 
     const logs = await executeSearchAgentLogs({ range: 'all', q: 'smoke marker', limit: 5 })
     check('search_agent_logs succeeds', logs.success === true)
-    const logRows = (logs.data as { logs: Array<{ request_id: string }> }).logs
+    const logsData = logs.data as { timezone: string; logs: Array<{ request_id: string; started_at: string; started_at_utc: string }> }
+    const logRows = logsData.logs
     check('search_agent_logs finds request', logRows.some((row) => row.request_id === requestId), logs.data)
+    check('search_agent_logs reports configured timezone', logsData.timezone === 'Europe/Bucharest', logs.data)
+    check('search_agent_logs has local and UTC timestamps', logRows.some((row) => row.request_id === requestId && row.started_at !== row.started_at_utc && row.started_at_utc.endsWith('Z')), logs.data)
 
     const log = await executeGetAgentLog({ request_id: requestId })
     check('get_agent_log succeeds', log.success === true)
-    const logData = log.data as { output_text: string; tool_logs: unknown[] }
+    const logData = log.data as { output_text: string; timezone: string; started_at: string; started_at_utc: string; tool_logs: Array<{ started_at: string; started_at_utc: string }> }
     check('get_agent_log returns output text', logData.output_text.includes('Runtime history'))
     check('get_agent_log returns tool logs', logData.tool_logs.length === 1)
+    check('get_agent_log returns local time first', logData.timezone === 'Europe/Bucharest' && logData.started_at !== logData.started_at_utc, logData)
+    check('get_agent_log tool logs include UTC companion', logData.tool_logs[0]?.started_at !== logData.tool_logs[0]?.started_at_utc, logData.tool_logs)
 
     const browserRequestId = 'req_observability_browser_usage'
     logRequestStart({

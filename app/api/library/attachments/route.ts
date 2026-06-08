@@ -24,7 +24,7 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
  */
 type LibraryEntryType = AttachmentLibraryEntry["type"]
 const MEDIA_TYPES = new Set<LibraryEntryType>(["image", "video"])
-const FILE_TYPES = new Set<LibraryEntryType>(["pdf", "document", "other"])
+const FILE_TYPES = new Set<LibraryEntryType>(["pdf", "document", "spreadsheet", "presentation", "other"])
 
 interface LibraryAttachmentResponse {
   id: string

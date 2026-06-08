@@ -1,4 +1,5 @@
 import { spawn } from 'child_process'
+import path from 'path'
 
 import type {
     AIProvider,
@@ -854,12 +855,18 @@ async function listCodexRuntimeSkills(
 
 function parseCodexSkillsList(result: AnyObj, cwd: string): RuntimeSkill[] {
     const data = Array.isArray(result.data) ? result.data : []
+    // skills/list was scoped to this single cwd, but Codex may echo back a
+    // normalized/realpath form (trailing slash, resolved symlinks) that won't
+    // string-equal the path we passed — likely on the server, where the agent
+    // workspace lives under a symlinked Docker volume. Prefer entries whose cwd
+    // matches after normalization; if none match, fall back to every returned
+    // entry rather than silently dropping all skills over a path-format
+    // mismatch (that left Codex runs with an empty skill list).
+    const records = data.filter((e): e is AnyObj => Boolean(e) && typeof e === 'object')
+    const matching = records.filter(record => codexCwdMatches(record.cwd, cwd))
+    const entries = matching.length > 0 ? matching : records
     const skills: RuntimeSkill[] = []
-    for (const entry of data) {
-        if (!entry || typeof entry !== 'object') continue
-        const record = entry as AnyObj
-        const entryCwd = typeof record.cwd === 'string' ? record.cwd : cwd
-        if (entryCwd !== cwd) continue
+    for (const record of entries) {
         const listed = Array.isArray(record.skills) ? record.skills : []
         for (const raw of listed) {
             if (!raw || typeof raw !== 'object') continue
@@ -877,6 +884,11 @@ function parseCodexSkillsList(result: AnyObj, cwd: string): RuntimeSkill[] {
         }
     }
     return skills
+}
+
+function codexCwdMatches(entryCwd: unknown, cwd: string): boolean {
+    if (typeof entryCwd !== 'string' || !entryCwd) return false
+    return path.resolve(entryCwd) === path.resolve(cwd)
 }
 
 function buildCodexTurnInput(prompt: string, skills: RuntimeSkill[]): AnyObj[] {

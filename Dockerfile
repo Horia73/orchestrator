@@ -68,6 +68,10 @@ RUN apt-get update \
     python3-pip \
     ripgrep \
     sqlite3 \
+    libreoffice-impress \
+    libreoffice-core \
+    fonts-crosextra-carlito \
+    fonts-crosextra-caladea \
   && rm -rf /var/lib/apt/lists/*
 
 # Python document-processing libraries for the in-container agent. The base
@@ -81,7 +85,8 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     python-docx \
     openpyxl \
     python-pptx \
-    pypdf
+    pypdf \
+    unoserver
 
 COPY --from=builder --chown=node:node /app /app
 

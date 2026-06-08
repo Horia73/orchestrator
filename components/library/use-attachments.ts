@@ -9,7 +9,7 @@ export interface LibraryAttachment {
   filename: string
   mimeType: string
   size: number
-  type: "image" | "pdf" | "document" | "audio" | "video" | "other"
+  type: "image" | "pdf" | "document" | "spreadsheet" | "presentation" | "audio" | "video" | "other"
   source: "attachment" | "workspace"
   url: string
   conversationId?: string

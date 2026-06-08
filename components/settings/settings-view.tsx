@@ -26,7 +26,7 @@ import { AuthTab } from "@/components/settings/auth-tab"
 import { ModelsTab } from "@/components/settings/models-tab"
 import { ProfilesTab } from "@/components/settings/profiles-tab"
 
-const TAB_IDS = ["models", "profiles", "auth", "files", "logs", "usage", "updates"] as const
+const TAB_IDS = ["models", "auth", "files", "logs", "usage", "profiles", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TABS: Array<{
@@ -35,11 +35,11 @@ const TABS: Array<{
   icon: React.ComponentType<{ className?: string }>
 }> = [
   { id: "models", label: "Models", icon: Cpu },
-  { id: "profiles", label: "Profiles", icon: UsersRound },
   { id: "auth", label: "Auth", icon: KeyRound },
   { id: "files", label: "Files", icon: FileText },
   { id: "logs", label: "Logs", icon: Activity },
   { id: "usage", label: "Usage", icon: BarChart3 },
+  { id: "profiles", label: "Profiles", icon: UsersRound },
   { id: "updates", label: "Updates", icon: Download },
 ]
 

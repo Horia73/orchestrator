@@ -570,7 +570,7 @@ export interface AttachmentLibraryEntry {
   filename: string
   mimeType: string
   size: number
-  type: "image" | "pdf" | "document" | "audio" | "video" | "other"
+  type: "image" | "pdf" | "document" | "spreadsheet" | "presentation" | "audio" | "video" | "other"
   /** Source conversation + message context for "view in chat" linking. */
   conversationId: string
   conversationTitle: string

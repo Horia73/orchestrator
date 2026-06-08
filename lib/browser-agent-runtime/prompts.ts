@@ -6,6 +6,8 @@
 import type { RetrievedMemory } from './memory';
 import type { BrowserCoordinateSpace, BrowserDownloadFile } from './browser';
 import { formatBrowserAgentTextForLog, redactBrowserAgentText } from './redaction';
+import { getConfiguredTimezone } from '@/lib/config';
+import { formatDateTimeInTimezone } from '@/lib/timezone';
 
 /**
  * Per-session memory block. Kept OUT of buildSystemPrompt so the system prompt
@@ -35,7 +37,9 @@ export function buildSystemPrompt(
    escalationEnabled: boolean = true,
 ): string {
    const now = new Date();
-   const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' });
+   const timezone = getConfiguredTimezone();
+   const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone });
+   const localTime = formatDateTimeInTimezone(now, timezone);
    const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
    const responseActionList = isAdvancedMode
       ? `${baseActions} | "ask" | "yield_control"`
@@ -104,7 +108,10 @@ export function buildSystemPrompt(
       : '';
 
    return `You are an AI browser automation agent. You control a web browser by providing COORDINATES (x, y) to click.
-Current Date: ${dateString}${advancedPrefix}${soloModeNote}
+Current Date: ${dateString}
+Current Local Time: ${localTime} ${timezone}
+UTC Time: ${now.toISOString()}
+Time Basis: Use Current Local Time and ${timezone} for relative dates/times, deadlines, schedules, and user-facing timestamps. Use UTC only for raw logs/protocol timestamps.${advancedPrefix}${soloModeNote}
 
 ## 🤝 CONTINUED TASKS & REPLIES
 If the Goal contains "[Previous Goal: ...]", it means the user is replying to you!

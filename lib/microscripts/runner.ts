@@ -7,6 +7,7 @@ import { createHash, randomUUID } from 'crypto'
 
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { getConfiguredTimezone } from '@/lib/config'
+import { formatDateTimeInTimezone } from '@/lib/timezone'
 import { resolveAppOrigin } from '@/lib/app-origin'
 import { createInboxConversation } from '@/lib/scheduling/store'
 import { sendInboxPushNotification } from '@/lib/push-notifications'
@@ -830,7 +831,7 @@ async function runPythonPhase(
         ctx: {
             timezone,
             datetime_utc: new Date(now).toISOString(),
-            local_time: new Date(now).toLocaleString('en-CA', { timeZone: timezone, hour12: false }),
+            local_time: formatDateTimeInTimezone(now, timezone),
             script: {
                 id: script.id,
                 title: script.title,

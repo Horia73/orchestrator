@@ -16,7 +16,7 @@ import {
 import { getAgentThread, listAgentThreadsForContext, type AgentThread } from '@/lib/db'
 import { buildRuntimeAccessContext } from '@/lib/runtime-access'
 import { BROWSER_AGENT_CAPABILITY_HINT } from '@/lib/ai/agents/browser-agent-capabilities'
-import { dateStampInTimezone, systemTimezone } from '@/lib/timezone'
+import { dateStampInTimezone, formatDateTimeInTimezone, systemTimezone } from '@/lib/timezone'
 
 /** First sentence of a tool description, normalized and length-capped — used
  *  for the compact gated-capability tool menus in <integrations>/<subsystems>. */
@@ -345,7 +345,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`today: ${todayStamp} (${tz} date — MEMORY_DAY files are named by this)`)
     lines.push(`datetime_utc: ${nowDate.toISOString()}`)
     lines.push(`timezone: ${tz}`)
-    lines.push(`local_time: ${nowDate.toLocaleString('en-CA', { timeZone: tz, hour12: false })} (resolve the user's relative dates/times against this)`)
+    lines.push(`local_time: ${formatDateTimeInTimezone(nowDate, tz)} (resolve the user's relative dates/times against this)`)
     lines.push('time_basis: Use timezone/local_time as the default for relative dates, schedules, reminders, monitors, notifications, and user-facing timestamps. Use UTC only for raw logs, protocol timestamps, or when the user explicitly asks for UTC.')
     const hostTz = systemTimezone()
     if (hostTz !== tz) lines.push(`host_timezone: ${hostTz}`)
@@ -509,10 +509,12 @@ function buildAgentThreadsContextBlock(ctx: PromptContext): string {
 }
 
 function formatAgentThread(thread: AgentThread): string {
-    const updated = new Date(thread.updatedAt).toISOString()
+    const tz = getConfig().timezone
+    const updated = formatDateTimeInTimezone(thread.updatedAt, tz)
+    const updatedUtc = new Date(thread.updatedAt).toISOString()
     const runtime = [thread.provider, thread.model].filter(Boolean).join('/') || 'runtime not recorded yet'
     const summary = thread.summary ? `; summary="${compactForPrompt(thread.summary, 240)}"` : ''
-    return `${thread.id}; agent=${thread.agentId}; title="${compactForPrompt(thread.title, 120)}"; updated=${updated}; runtime=${runtime}${summary}`
+    return `${thread.id}; agent=${thread.agentId}; title="${compactForPrompt(thread.title, 120)}"; updated=${updated} ${tz}; updated_utc=${updatedUtc}; runtime=${runtime}${summary}`
 }
 
 function compactForPrompt(value: string, limit: number): string {

@@ -20,6 +20,10 @@ export const PRIVATE_STATE_DIR = path.join(/* turbopackIgnore: true */ ORCHESTRA
 
 export const WORKSPACE_ENV_PATH = path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, '.env.local');
 export const UPLOADS_DIR = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, 'uploads');
+/** Cache for derived preview artifacts (e.g. PPTX→PDF conversions). Bounded,
+ *  evictable, and deliberately under the state dir — never /tmp, which fills
+ *  the host eMMC and breaks unrelated subsystems. */
+export const PREVIEW_CACHE_DIR = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, 'preview-cache');
 export const AGENT_WORKSPACE_DIR = WORKSPACE_DIR;
 export const ARTIFACTS_DIR = path.join(/* turbopackIgnore: true */ WORKSPACE_DIR, 'artifacts');
 
@@ -30,6 +34,7 @@ export interface RuntimePathSet {
   privateStateDir: string;
   workspaceEnvPath: string;
   uploadsDir: string;
+  previewCacheDir: string;
   agentWorkspaceDir: string;
   artifactsDir: string;
 }
@@ -58,6 +63,7 @@ export function runtimePathsForProfile(
     privateStateDir,
     workspaceEnvPath: path.join(/* turbopackIgnore: true */ workspaceDir, '.env.local'),
     uploadsDir: path.join(/* turbopackIgnore: true */ stateDir, 'uploads'),
+    previewCacheDir: path.join(/* turbopackIgnore: true */ stateDir, 'preview-cache'),
     agentWorkspaceDir: workspaceDir,
     artifactsDir: path.join(/* turbopackIgnore: true */ workspaceDir, 'artifacts'),
   };

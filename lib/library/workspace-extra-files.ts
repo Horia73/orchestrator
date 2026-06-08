@@ -17,7 +17,7 @@ export interface ExtraWorkspaceLibraryEntry {
   filename: string
   mimeType: string
   size: number
-  type: "image" | "pdf" | "document" | "audio" | "video" | "other"
+  type: "image" | "pdf" | "document" | "spreadsheet" | "presentation" | "audio" | "video" | "other"
   source: "workspace"
   url: string
   workspacePath: string

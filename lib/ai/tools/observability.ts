@@ -4,7 +4,7 @@ import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import type { ScheduledAction } from '@/lib/scheduling/schema'
 import { codeMapPath, getRuntimeIndexStatus, readRuntimeIndexEntries } from '@/lib/runtime-index'
 import { getConfiguredTimezone } from '@/lib/config'
-import { dateStampInTimezone } from '@/lib/timezone'
+import { dateStampInTimezone, formatDateTimeInTimezone } from '@/lib/timezone'
 import { booleanArg, clamp, numberArg, stringArg, truncateText } from './helpers'
 
 type Range = '1h' | '24h' | '7d' | '30d' | 'all'
@@ -23,7 +23,7 @@ const RANGE_MS: Record<Range, number | null> = {
 export const searchPastRunsTool: ToolDef = {
     id: 'search_past_runs',
     name: 'search_past_runs',
-    description: 'Read-only search over Scheduling Past runs stored in SQLite. Use this when you need prior scheduled task outcomes, monitor wake decisions, summaries, surfaced state, or errors without injecting run history into your prompt.',
+    description: 'Read-only search over Scheduling Past runs stored in SQLite. Use this when you need prior scheduled task outcomes, monitor wake decisions, summaries, surfaced state, or errors without injecting run history into your prompt. Returned started_at/ended_at are user-facing local times in the app-configured timezone; *_utc fields are raw debug timestamps.',
     input_schema: {
         type: 'object',
         properties: {
@@ -43,7 +43,7 @@ export const searchPastRunsTool: ToolDef = {
 export const getPastRunTool: ToolDef = {
     id: 'get_past_run',
     name: 'get_past_run',
-    description: 'Read one Scheduling Past run by run_id, including its full stored summary clipped to max_chars. Read-only.',
+    description: 'Read one Scheduling Past run by run_id, including its full stored summary clipped to max_chars. Read-only. Returned started_at/ended_at are user-facing local times in the app-configured timezone; *_utc fields are raw debug timestamps.',
     input_schema: {
         type: 'object',
         properties: {
@@ -58,7 +58,7 @@ export const getPastRunTool: ToolDef = {
 export const searchAgentLogsTool: ToolDef = {
     id: 'search_agent_logs',
     name: 'search_agent_logs',
-    description: 'Read-only search over model request logs stored in SQLite. Use this for prior orchestrator/sub-agent runs, provider/model/status, input/output previews, token counts, errors, and request ids.',
+    description: 'Read-only search over model request logs stored in SQLite. Use this for prior orchestrator/sub-agent runs, provider/model/status, input/output previews, token counts, errors, and request ids. Returned started_at/ended_at are user-facing local times in the app-configured timezone; *_utc fields are raw debug timestamps.',
     input_schema: {
         type: 'object',
         properties: {
@@ -77,7 +77,7 @@ export const searchAgentLogsTool: ToolDef = {
 export const getAgentLogTool: ToolDef = {
     id: 'get_agent_log',
     name: 'get_agent_log',
-    description: 'Read one model request log by request_id, including clipped input/output text and tool logs on demand. Read-only.',
+    description: 'Read one model request log by request_id, including clipped input/output text and tool logs on demand. Read-only. Returned started_at/ended_at are user-facing local times in the app-configured timezone; *_utc fields are raw debug timestamps.',
     input_schema: {
         type: 'object',
         properties: {
@@ -135,6 +135,7 @@ export async function executeSearchPastRuns(args: Record<string, unknown>): Prom
         q: stringArg(args, ['q']) || undefined,
         limit,
     })
+    const timezone = getConfiguredTimezone()
 
     return {
         success: true,
@@ -142,13 +143,17 @@ export async function executeSearchPastRuns(args: Record<string, unknown>): Prom
             count: result.runs.length,
             total: result.total,
             range,
+            timezone,
+            time_basis: 'Use started_at/ended_at for user-facing times. Use started_at_utc/ended_at_utc only for raw logs or protocol timestamps.',
             runs: result.runs.map((run) => ({
                 run_id: run.id,
                 task_id: run.taskId,
                 task_title: run.taskTitle,
                 task_action: describeAction(run.taskAction),
-                started_at: new Date(run.startedAt).toISOString(),
-                ended_at: new Date(run.endedAt).toISOString(),
+                started_at: formatDateTimeInTimezone(run.startedAt, timezone),
+                ended_at: formatDateTimeInTimezone(run.endedAt, timezone),
+                started_at_utc: new Date(run.startedAt).toISOString(),
+                ended_at_utc: new Date(run.endedAt).toISOString(),
                 duration_ms: Math.max(0, run.endedAt - run.startedAt),
                 status: run.status,
                 trigger: run.trigger,
@@ -169,6 +174,7 @@ export async function executeGetPastRun(args: Record<string, unknown>): Promise<
     if (!run) return { success: false, error: `No past run with id ${runId}.` }
     const maxChars = parseMaxChars(args, 12_000)
     const summary = truncateText(run.summary, maxChars)
+    const timezone = getConfiguredTimezone()
     return {
         success: true,
         data: {
@@ -176,8 +182,12 @@ export async function executeGetPastRun(args: Record<string, unknown>): Promise<
             task_id: run.taskId,
             task_title: run.taskTitle,
             task_action: describeAction(run.taskAction),
-            started_at: new Date(run.startedAt).toISOString(),
-            ended_at: new Date(run.endedAt).toISOString(),
+            timezone,
+            time_basis: 'Use started_at/ended_at for user-facing times. Use started_at_utc/ended_at_utc only for raw logs or protocol timestamps.',
+            started_at: formatDateTimeInTimezone(run.startedAt, timezone),
+            ended_at: formatDateTimeInTimezone(run.endedAt, timezone),
+            started_at_utc: new Date(run.startedAt).toISOString(),
+            ended_at_utc: new Date(run.endedAt).toISOString(),
             duration_ms: Math.max(0, run.endedAt - run.startedAt),
             status: run.status,
             trigger: run.trigger,
@@ -204,6 +214,7 @@ export async function executeSearchAgentLogs(args: Record<string, unknown>): Pro
         q: stringArg(args, ['q']) || undefined,
         limit: parseLimit(args, 20, 100),
     })
+    const timezone = getConfiguredTimezone()
     return {
         success: true,
         data: {
@@ -211,6 +222,8 @@ export async function executeSearchAgentLogs(args: Record<string, unknown>): Pro
             total: page.total,
             next_cursor: page.nextCursor,
             range,
+            timezone,
+            time_basis: 'Use started_at/ended_at for user-facing times. Use started_at_utc/ended_at_utc only for raw logs or protocol timestamps.',
             logs: page.rows.map((row) => ({
                 request_id: row.id,
                 conversation_id: row.conversationId,
@@ -222,8 +235,10 @@ export async function executeSearchAgentLogs(args: Record<string, unknown>): Pro
                 model: row.model,
                 thinking_level: row.thinkingLevel,
                 status: row.status,
-                started_at: new Date(row.startedAt).toISOString(),
-                ended_at: row.endedAt ? new Date(row.endedAt).toISOString() : null,
+                started_at: formatDateTimeInTimezone(row.startedAt, timezone),
+                ended_at: row.endedAt ? formatDateTimeInTimezone(row.endedAt, timezone) : null,
+                started_at_utc: new Date(row.startedAt).toISOString(),
+                ended_at_utc: row.endedAt ? new Date(row.endedAt).toISOString() : null,
                 duration_ms: row.durationMs,
                 input_tokens: row.inputTokens,
                 output_tokens: row.outputTokens,
@@ -249,6 +264,7 @@ export async function executeGetAgentLog(args: Record<string, unknown>): Promise
     if (!row) return { success: false, error: `No agent log with request_id ${requestId}.` }
     const input = includeText ? truncateText(row.inputText ?? '', maxChars) : null
     const output = includeText ? truncateText(row.outputText ?? '', maxChars) : null
+    const timezone = getConfiguredTimezone()
     return {
         success: true,
         data: {
@@ -262,8 +278,12 @@ export async function executeGetAgentLog(args: Record<string, unknown>): Promise
             model: row.model,
             thinking_level: row.thinkingLevel,
             status: row.status,
-            started_at: new Date(row.startedAt).toISOString(),
-            ended_at: row.endedAt ? new Date(row.endedAt).toISOString() : null,
+            timezone,
+            time_basis: 'Use started_at/ended_at for user-facing times. Use started_at_utc/ended_at_utc only for raw logs or protocol timestamps.',
+            started_at: formatDateTimeInTimezone(row.startedAt, timezone),
+            ended_at: row.endedAt ? formatDateTimeInTimezone(row.endedAt, timezone) : null,
+            started_at_utc: new Date(row.startedAt).toISOString(),
+            ended_at_utc: row.endedAt ? new Date(row.endedAt).toISOString() : null,
             duration_ms: row.durationMs,
             thinking_ms: row.thinkingMs,
             tokens: {
@@ -289,7 +309,8 @@ export async function executeGetAgentLog(args: Record<string, unknown>): Promise
                     id: tool.id,
                     tool_name: tool.toolName,
                     success: tool.success,
-                    started_at: new Date(tool.startedAt).toISOString(),
+                    started_at: formatDateTimeInTimezone(tool.startedAt, timezone),
+                    started_at_utc: new Date(tool.startedAt).toISOString(),
                     duration_ms: tool.durationMs,
                     error: tool.errorMessage,
                 })),

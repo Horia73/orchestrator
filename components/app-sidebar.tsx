@@ -287,6 +287,8 @@ export function AppSidebar() {
     isOnInbox ||
     isOnLibrary
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
+  const isCompactRouteNav =
+    shouldConstrainTabletNav && isTabletNavViewport && !isMobile
   const inboxUnread = useInboxUnread()
   const { profile: currentProfile, isAdmin } = useCurrentProfile()
   const [searchActive, setSearchActive] = React.useState(false)
@@ -324,6 +326,7 @@ export function AppSidebar() {
   const normalizedSearchQuery = normalizeSearchText(deferredSearchQuery.trim())
   const isFiltering = normalizedSearchQuery.length > 0
   const showArchiveView = archiveViewActive && !isFiltering
+  const showConversationSection = !isCollapsed && !isCompactRouteNav
 
   const filteredConversations = React.useMemo(
     () =>
@@ -577,26 +580,22 @@ export function AppSidebar() {
     window.setTimeout(() => searchInputRef.current?.focus(), 0)
   }, [setOpen])
 
-  const sidebarOpenRef = React.useRef(sidebarOpen)
   const tabletRestoreOpenRef = React.useRef<boolean | null>(null)
 
-  React.useEffect(() => {
-    sidebarOpenRef.current = sidebarOpen
-  }, [sidebarOpen])
-
   useIsomorphicLayoutEffect(() => {
-    const active = shouldConstrainTabletNav && isTabletNavViewport && !isMobile
-    if (active && tabletRestoreOpenRef.current === null) {
-      tabletRestoreOpenRef.current = sidebarOpenRef.current
-      setOpen(false)
+    if (isCompactRouteNav) {
+      if (tabletRestoreOpenRef.current === null) {
+        tabletRestoreOpenRef.current = sidebarOpen
+      }
+      if (sidebarOpen) setOpen(false)
       return
     }
-    if (!active && tabletRestoreOpenRef.current !== null) {
+    if (!isCompactRouteNav && tabletRestoreOpenRef.current !== null) {
       const shouldRestore = tabletRestoreOpenRef.current
       tabletRestoreOpenRef.current = null
       if (shouldRestore) setOpen(true)
     }
-  }, [isMobile, isTabletNavViewport, setOpen, shouldConstrainTabletNav])
+  }, [isCompactRouteNav, setOpen, sidebarOpen])
 
   React.useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
@@ -938,7 +937,7 @@ export function AppSidebar() {
           </SidebarGroupContent>
         </SidebarGroup>
 
-        {!isCollapsed && (
+        {showConversationSection && (
           <>
             {/* Recents section */}
             <SidebarGroup className="group/archive-section min-h-0 flex-1 py-0">
@@ -1293,19 +1292,23 @@ export function AppSidebar() {
 }
 
 function useMediaQuery(query: string): boolean {
-  // Initial state stays `false` to match the server render (no hydration
-  // mismatch); the layout effect then corrects it before paint, so the
-  // constrain logic sees the real viewport in the mount frame rather than
-  // a paint later.
-  const [matches, setMatches] = React.useState(false)
+  const subscribe = React.useCallback(
+    (onStoreChange: () => void) => {
+      const media = window.matchMedia(query)
+      media.addEventListener("change", onStoreChange)
+      return () => media.removeEventListener("change", onStoreChange)
+    },
+    [query]
+  )
+  const getSnapshot = React.useCallback(
+    () => window.matchMedia(query).matches,
+    [query]
+  )
+  const getServerSnapshot = React.useCallback(() => false, [])
 
-  useIsomorphicLayoutEffect(() => {
-    const media = window.matchMedia(query)
-    const update = () => setMatches(media.matches)
-    update()
-    media.addEventListener("change", update)
-    return () => media.removeEventListener("change", update)
-  }, [query])
-
-  return matches
+  return React.useSyncExternalStore(
+    subscribe,
+    getSnapshot,
+    getServerSnapshot
+  )
 }

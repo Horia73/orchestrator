@@ -53,6 +53,16 @@ export function classifyUploadMime(mime: string): Attachment['type'] {
     if (mime === 'application/pdf') return 'pdf'
     if (mime.startsWith('audio/')) return 'audio'
     if (mime.startsWith('video/')) return 'video'
+    // Office & tabular formats route to dedicated in-app viewers. CSV is a
+    // text/* type but belongs in the spreadsheet grid, so it has to be matched
+    // before the generic text rule below.
+    if (
+        mime.includes('spreadsheetml') ||
+        mime === 'application/vnd.ms-excel' ||
+        mime === 'text/csv'
+    ) return 'spreadsheet'
+    if (mime.includes('presentationml') || mime === 'application/vnd.ms-powerpoint') return 'presentation'
+    if (mime.includes('wordprocessingml') || mime === 'application/msword') return 'document'
     if (mime.startsWith('text/') || mime.includes('json') || mime.includes('xml') || mime.includes('csv')) return 'document'
     return 'other'
 }

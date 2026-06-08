@@ -35,6 +35,7 @@ function formatMessageTimestampFull(timestamp: number) {
 const COLLAPSED_HEIGHT = 460
 const COLLAPSED_HEIGHT_FLOOR = 180
 const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
+const WORKED_FOR_RECENT_COMPLETION_WINDOW_MS = 90_000
 
 function getThoughtTitle(content: string): string {
     const boldTitleRegex = /\*\*(.+?)\*\*/g
@@ -642,6 +643,7 @@ function WorkedForBlock({
     status,
     messageId,
     openOnMount = false,
+    animateClosedOnMount = false,
     onArtifactClick,
     onArtifactExpand,
     onAgentOpen,
@@ -654,6 +656,8 @@ function WorkedForBlock({
     messageId: string
     /** Open on first render — used when the user explicitly loads deferred details. */
     openOnMount?: boolean
+    /** Start open for a just-finished live turn, then animate into the default closed state. */
+    animateClosedOnMount?: boolean
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
@@ -661,12 +665,20 @@ function WorkedForBlock({
     suppressArtifactTypes?: string[]
 }) {
     const openStorageKey = `worked:${messageId}:open`
+    const [savedOpenState] = React.useState<boolean | null>(() => {
+        const saved = localStorage.getItem(openStorageKey)
+        return saved === null ? null : saved === "true"
+    })
+    const [autoCollapseArmed, setAutoCollapseArmed] = React.useState(
+        () => animateClosedOnMount && !openOnMount && savedOpenState === null
+    )
     const [isOpen, setIsOpen] = React.useState(() => {
         if (openOnMount) return true
-        const saved = localStorage.getItem(openStorageKey)
-        return saved === "true"
+        if (savedOpenState !== null) return savedOpenState
+        return animateClosedOnMount
     })
     const toggleOpen = React.useCallback(() => {
+        setAutoCollapseArmed(false)
         setIsOpen((prev) => {
             const next = !prev
             localStorage.setItem(openStorageKey, String(next))
@@ -676,7 +688,9 @@ function WorkedForBlock({
     }, [openStorageKey])
 
     React.useEffect(() => {
-        if (openOnMount) setIsOpen(true)
+        if (!openOnMount) return
+        setAutoCollapseArmed(false)
+        setIsOpen(true)
     }, [openOnMount])
 
     // Mount the (expensive) reasoning body lazily — only once the disclosure
@@ -693,6 +707,21 @@ function WorkedForBlock({
 
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
+    React.useEffect(() => {
+        if (!isMounted || !autoCollapseArmed) return
+        let firstFrame = 0
+        let secondFrame = 0
+        firstFrame = window.requestAnimationFrame(() => {
+            secondFrame = window.requestAnimationFrame(() => {
+                setIsOpen(false)
+                setAutoCollapseArmed(false)
+            })
+        })
+        return () => {
+            window.cancelAnimationFrame(firstFrame)
+            window.cancelAnimationFrame(secondFrame)
+        }
+    }, [autoCollapseArmed, isMounted])
 
     // Duration is the source of truth; older rows (and providers that never
     // stamped it) fall back to the activity summary, then a bare "Worked".
@@ -715,6 +744,7 @@ function WorkedForBlock({
             <button
                 type="button"
                 onClick={toggleOpen}
+                aria-expanded={isOpen}
                 className="flex items-center gap-1.5 text-[15px] text-muted-foreground transition-colors hover:text-foreground group w-fit max-w-full min-w-0"
             >
                 <span className="min-w-0 truncate">{label}</span>
@@ -728,12 +758,18 @@ function WorkedForBlock({
 
             <div
                 className={cn(
-                    "grid",
-                    isMounted && "transition-[grid-template-rows,opacity] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+                    "grid will-change-[grid-template-rows,opacity]",
+                    isMounted && "transition-[grid-template-rows,opacity] duration-[440ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
                     isOpen ? "grid-rows-[1fr] opacity-100" : "grid-rows-[0fr] opacity-0"
                 )}
             >
-                <div className="overflow-hidden min-h-0">
+                <div
+                    className={cn(
+                        "overflow-hidden min-h-0",
+                        isMounted && "transition-[transform,opacity] duration-[440ms] ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        isOpen ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
+                    )}
+                >
                     <div className="tool-call-scroll mt-2 max-h-[70vh] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
                         {bodyMounted && (
                         <div className="relative flex flex-col pb-2">
@@ -1307,7 +1343,9 @@ function MessageBubbleComponent({
     const [detailLoading, setDetailLoading] = React.useState(false)
     const [detailLoadFailed, setDetailLoadFailed] = React.useState(false)
     const [openLoadedDetails, setOpenLoadedDetails] = React.useState(false)
+    const [mountedAt] = React.useState(() => Date.now())
     const autoLoadAttemptedRef = React.useRef<string | null>(null)
+    const wasStreamingAssistantMessageRef = React.useRef(Boolean(message.role === "assistant" && isStreamingMessage))
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -1361,6 +1399,10 @@ function MessageBubbleComponent({
         loadDeferredDetails,
         message.id,
     ])
+
+    React.useEffect(() => {
+        wasStreamingAssistantMessageRef.current = Boolean(message.role === "assistant" && isStreamingMessage)
+    }, [isStreamingMessage, message.role])
 
     // Latest version per identifier produced by this message — those are the
     // artifacts the hover-meta row exposes copy/download/expand for.
@@ -1465,6 +1507,19 @@ function MessageBubbleComponent({
         finalItems = timeline.slice(splitAt)
     }
     const showWorkedFor = workItems.length > 0
+    const messageAgeAtMount = mountedAt - message.timestamp
+    const isRecentFinalAssistantMessage = Boolean(
+        isLatestAssistantMessage &&
+        message.durationMs != null &&
+        messageAgeAtMount >= 0 &&
+        messageAgeAtMount <= WORKED_FOR_RECENT_COMPLETION_WINDOW_MS
+    )
+    const animateWorkedForClosedOnMount = Boolean(
+        showWorkedFor &&
+        !openLoadedDetails &&
+        !isStreamingMessage &&
+        (wasStreamingAssistantMessageRef.current || isRecentFinalAssistantMessage)
+    )
 
     const renderTimelineItem = (item: MessageTimelineItem) =>
         item.type === "reasoning" ? (
@@ -1519,6 +1574,7 @@ function MessageBubbleComponent({
                         status={message.status}
                         messageId={message.id}
                         openOnMount={openLoadedDetails}
+                        animateClosedOnMount={animateWorkedForClosedOnMount}
                         onArtifactClick={onArtifactClick}
                         onArtifactExpand={onArtifactExpand}
                         onAgentOpen={onAgentOpen}

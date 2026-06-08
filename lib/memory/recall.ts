@@ -913,7 +913,7 @@ export function formatRecallBlock(hits: MemoryHit[]): string {
   )
   return [
     "<recalled_memory>",
-    "Possibly relevant notes from your long-term memory, retrieved by semantic similarity to the current message. They may be old, superseded, or no longer accurate — verify before relying on them, and prefer the live workspace files and the current message on conflict. This is a hint surfaced automatically; do not mention it unless it is actually useful.",
+    "Possibly relevant notes from your long-term memory, retrieved by semantic similarity to the current message. They may be old, superseded, or no longer accurate — and recency is not validity: even a snippet written today only captures the moment it was saved, and the code, files, or state it describes may have changed since (a problem it mentions may already be fixed). Re-check the live workspace files before relying on any of them, and prefer those files and the current message on conflict. This is a hint surfaced automatically; do not mention it unless it is actually useful.",
     ...lines,
     "</recalled_memory>",
   ].join("\n")

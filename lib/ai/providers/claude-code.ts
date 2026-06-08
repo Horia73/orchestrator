@@ -19,11 +19,6 @@ import { createBinding, clearBinding } from '@/lib/cli/mcp-bindings'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { latestUserPromptWithPortableHistory } from './history'
-import {
-    appendRuntimeSkillsToSystemPrompt,
-    appendRuntimeSkillsToUserPrompt,
-    discoverClaudeCodeSkills,
-} from './runtime-skills'
 
 // Our custom tools reach Claude Code through one stdio MCP server. Claude Code
 // surfaces MCP tools to the model as `mcp__<server>__<tool>`, never the bare
@@ -109,11 +104,15 @@ export class ClaudeCodeProvider implements AIProvider {
         }
 
         const cwd = options.cwd ?? activeRuntimePaths().agentWorkspaceDir
-        const runtimeSkills = discoverClaudeCodeSkills(cwd)
-        const systemPrompt = appendRuntimeSkillsToSystemPrompt(options.systemPrompt, 'claude-code', runtimeSkills)
-        const prompt = systemPrompt
-            ? rawPrompt
-            : appendRuntimeSkillsToUserPrompt(rawPrompt, 'claude-code', runtimeSkills)
+        // Skills are NOT injected as text here. With the `Skill` built-in in the
+        // `--tools` allowlist below, the `claude` CLI autodiscovers skills
+        // natively (personal `~/.claude/skills`, project `.claude/skills`, and
+        // installed plugin skills) and does its own progressive disclosure —
+        // strictly better than the partial list a manual scan produced (it
+        // missed plugin skills entirely). Codex still injects, since its
+        // `skills/list` RPC is the native discovery path there.
+        const systemPrompt = options.systemPrompt
+        const prompt = rawPrompt
 
         const spec = CLI_SPECS['claude-code']
         const args = [...spec.generationArgs(prompt)]
@@ -141,17 +140,20 @@ export class ClaudeCodeProvider implements AIProvider {
         const tools = customToolsForClaudeCode(options.tools ?? [])
         const nativeToolNames = claudeCodeToolNames(options.builtins ?? [])
         const hasMcpTools = tools.length > 0 && Boolean(options.toolContext)
-        // Claude Code 2.x DEFERS MCP (custom) tool schemas: they are not placed
-        // in the active tool list at launch — the model must load them on demand
-        // via the ToolSearch built-in (e.g. `select:mcp__orch-tools__set_task_state`).
-        // Our `--tools` allowlist restricts the built-in set to the workspace
-        // tools and would exclude ToolSearch, which leaves EVERY orch tool
-        // (set_task_state, notify_inbox, delegate_to, …) undiscoverable — the
-        // model then dead-ends on "No such tool available". So expose ToolSearch
-        // whenever we bridge custom tools through the MCP server.
-        const nativeToolsForRun = hasMcpTools && !nativeToolNames.includes('ToolSearch')
-            ? [...nativeToolNames, 'ToolSearch']
-            : nativeToolNames
+        // Claude Code 2.x DEFERS any tool that isn't in the `--tools` allowlist:
+        // it's absent from the launch tool list and the model dead-ends on
+        // "No such tool available". Two built-ins we depend on are not workspace
+        // tools, so they must be added back explicitly:
+        //   • Skill — gates Agent Skills. Without it the CLI neither loads skill
+        //     metadata into the prompt nor lets the model invoke skills, so
+        //     native autodiscovery (personal + project + plugin SKILL.md) is
+        //     dead and the agent reports it has no skills. Always add it.
+        //   • ToolSearch — loads our MCP custom-tool schemas on demand
+        //     (`select:mcp__orch-tools__set_task_state`); without it EVERY orch
+        //     tool (set_task_state, notify_inbox, delegate_to, …) is
+        //     undiscoverable. Only needed when we bridge tools through MCP.
+        const extraNativeTools = hasMcpTools ? ['Skill', 'ToolSearch'] : ['Skill']
+        const nativeToolsForRun = Array.from(new Set([...nativeToolNames, ...extraNativeTools]))
         if (nativeToolsForRun.length > 0) {
             args.push('--tools', nativeToolsForRun.join(','))
         }
@@ -202,8 +204,10 @@ export class ClaudeCodeProvider implements AIProvider {
             args.push('--allowedTools', [...nativeToolsForRun, `mcp__${ORCH_TOOLS_MCP_SERVER_NAME}`].join(','))
             // No human in the loop — accept whatever tools we expose.
             args.push('--permission-mode', 'bypassPermissions')
-        } else if (nativeToolNames.length > 0) {
-            args.push('--allowedTools', nativeToolNames.join(','))
+        } else if (nativeToolsForRun.length > 0) {
+            // Plain coder mode (no MCP bridge): still expose Skill so Claude
+            // Code can use Agent Skills while it drives on its own.
+            args.push('--allowedTools', nativeToolsForRun.join(','))
             args.push('--permission-mode', 'bypassPermissions')
         }
 

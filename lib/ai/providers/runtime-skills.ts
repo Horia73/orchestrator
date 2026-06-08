@@ -1,9 +1,3 @@
-import fs from 'fs'
-import os from 'os'
-import path from 'path'
-
-import { activeRuntimePaths } from '@/lib/runtime-paths'
-
 export type CliSkillProvider = 'codex' | 'claude-code'
 
 export interface RuntimeSkill {
@@ -72,95 +66,6 @@ export function selectExplicitlyRequestedSkills(prompt: string, skills: RuntimeS
     return out
 }
 
-export function discoverClaudeCodeSkills(cwd = activeRuntimePaths().agentWorkspaceDir): RuntimeSkill[] {
-    const roots = claudeSkillRoots(cwd)
-    const skills: RuntimeSkill[] = []
-    for (const root of roots) {
-        for (const skillPath of skillMarkdownFiles(root.path)) {
-            const skill = readSkillMetadata(skillPath, root.scope)
-            if (skill) skills.push(skill)
-        }
-    }
-    return dedupeSkills(skills)
-}
-
-function claudeSkillRoots(cwd: string): Array<{ path: string; scope: string }> {
-    const roots: Array<{ path: string; scope: string }> = [
-        { path: path.join(os.homedir(), '.claude', 'skills'), scope: 'user' },
-    ]
-
-    for (const dir of parentDirs(cwd)) {
-        roots.push({ path: path.join(dir, '.claude', 'skills'), scope: 'project' })
-    }
-
-    return roots
-}
-
-function parentDirs(start: string): string[] {
-    const out: string[] = []
-    let current = path.resolve(start || process.cwd())
-    for (;;) {
-        out.push(current)
-        if (pathExists(path.join(current, '.git'))) break
-        const next = path.dirname(current)
-        if (next === current) break
-        current = next
-    }
-    return out
-}
-
-function skillMarkdownFiles(root: string): string[] {
-    try {
-        const entries = fs.readdirSync(root, { withFileTypes: true })
-        const out: string[] = []
-        for (const entry of entries) {
-            if (!entry.isDirectory()) continue
-            const skillPath = path.join(root, entry.name, 'SKILL.md')
-            if (fileExists(skillPath)) out.push(skillPath)
-        }
-        return out
-    } catch {
-        return []
-    }
-}
-
-function readSkillMetadata(skillPath: string, scope: string): RuntimeSkill | null {
-    try {
-        const raw = fs.readFileSync(skillPath, 'utf-8').slice(0, 16_000)
-        const frontmatter = parseFrontmatter(raw)
-        const fallbackName = path.basename(path.dirname(skillPath))
-        const name = cleanSkillName(frontmatter.name) || fallbackName
-        if (!name) return null
-        return {
-            name,
-            description: truncateOneLine(frontmatter.description ?? '', MAX_DESCRIPTION_CHARS),
-            path: skillPath,
-            scope,
-        }
-    } catch {
-        return null
-    }
-}
-
-function parseFrontmatter(raw: string): Record<string, string> {
-    if (!raw.startsWith('---')) return {}
-    const end = raw.indexOf('\n---', 3)
-    if (end < 0) return {}
-    const body = raw.slice(3, end)
-    const out: Record<string, string> = {}
-    for (const line of body.split(/\r?\n/)) {
-        const match = line.match(/^([A-Za-z0-9_-]+):\s*(.*)$/)
-        if (!match) continue
-        const key = match[1]
-        let value = match[2].trim()
-        if ((value.startsWith('"') && value.endsWith('"')) || (value.startsWith("'") && value.endsWith("'"))) {
-            value = value.slice(1, -1)
-        }
-        if (value && value !== '|' && value !== '>') out[key] = value
-    }
-    return out
-}
-
 function dedupeSkills(skills: RuntimeSkill[]): RuntimeSkill[] {
     const seen = new Set<string>()
     const out: RuntimeSkill[] = []
@@ -196,23 +101,6 @@ function truncateOneLine(value: string, maxChars: number): string {
     const oneLine = value.replace(/\s+/g, ' ').trim()
     if (oneLine.length <= maxChars) return oneLine
     return `${oneLine.slice(0, Math.max(0, maxChars - 1)).trim()}...`
-}
-
-function fileExists(filePath: string): boolean {
-    try {
-        return fs.statSync(filePath).isFile()
-    } catch {
-        return false
-    }
-}
-
-function pathExists(filePath: string): boolean {
-    try {
-        fs.statSync(filePath)
-        return true
-    } catch {
-        return false
-    }
 }
 
 function escapeRegExp(value: string): string {

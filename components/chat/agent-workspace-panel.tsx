@@ -8,6 +8,7 @@ import { StreamingBubble } from "@/components/message-bubble"
 import { TodoBar } from "@/components/todo-bar"
 import { TerminalOutput } from "@/components/tool-call-view"
 import { FULL_HISTORY_SCROLLBACK } from "@/components/tool-call-terminal"
+import { useTrapWheel } from "@/components/use-trap-wheel"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -19,8 +20,6 @@ const BROWSER_AGENT_TERMINAL_STYLE: React.CSSProperties = {
   height: "min(460px, calc(100vh - 260px))",
   minHeight: "320px",
 }
-
-const SCROLLABLE_OVERFLOW = new Set(["auto", "scroll", "overlay"])
 
 type SelectedAgentTool = {
   runId: string
@@ -41,6 +40,7 @@ export function AgentWorkspacePanel({
   const [selectedTool, setSelectedTool] =
     React.useState<SelectedAgentTool | null>(null)
   const scrollbarVisible = useRevealOnScroll()
+  const wheelTrapRef = useTrapWheel<HTMLDivElement>()
 
   React.useEffect(() => {
     setSelectedTool(null)
@@ -58,9 +58,9 @@ export function AgentWorkspacePanel({
 
   return (
     <div
+      ref={wheelTrapRef}
       className="flex h-full min-h-0 flex-col border-l border-border bg-background"
       data-agent-scroll-visible={scrollbarVisible.active ? "true" : "false"}
-      onWheelCapture={containWheelWithinPanel}
       onScrollCapture={scrollbarVisible.reveal}
     >
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
@@ -159,76 +159,6 @@ function useRevealOnScroll() {
   )
 
   return { active, reveal }
-}
-
-function containWheelWithinPanel(event: React.WheelEvent<HTMLElement>) {
-  const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
-
-  // xterm manages its own wheel-to-scroll on `.xterm-viewport`, and CSS
-  // `overscroll-behavior: contain` already keeps the chain off the page.
-  // Intercepting here (stopPropagation) would freeze the terminal, so when the
-  // buffer has something to scroll we let the event reach xterm untouched.
-  if (axis === "y") {
-    const xtermRoot =
-      event.target instanceof Element ? event.target.closest(".xterm") : null
-    const viewport = xtermRoot?.querySelector<HTMLElement>(".xterm-viewport")
-    if (viewport && viewport.scrollHeight > viewport.clientHeight + 1) return
-  }
-
-  const scroller = findScrollableAncestor(
-    event.target,
-    event.currentTarget,
-    axis
-  )
-  if (!scroller) return
-
-  event.stopPropagation()
-  const delta = axis === "y" ? event.deltaY : event.deltaX
-  if (shouldBlockScrollChain(scroller, axis, delta)) {
-    event.preventDefault()
-  }
-}
-
-function findScrollableAncestor(
-  target: EventTarget | null,
-  boundary: HTMLElement,
-  axis: "x" | "y"
-): HTMLElement | null {
-  let node = target instanceof HTMLElement ? target : null
-  while (node) {
-    if (isScrollableOnAxis(node, axis)) return node
-    if (node === boundary) break
-    node = node.parentElement
-  }
-  return null
-}
-
-function isScrollableOnAxis(element: HTMLElement, axis: "x" | "y"): boolean {
-  const style = window.getComputedStyle(element)
-  if (axis === "y") {
-    return (
-      SCROLLABLE_OVERFLOW.has(style.overflowY) &&
-      element.scrollHeight > element.clientHeight + 1
-    )
-  }
-  return (
-    SCROLLABLE_OVERFLOW.has(style.overflowX) &&
-    element.scrollWidth > element.clientWidth + 1
-  )
-}
-
-function shouldBlockScrollChain(
-  element: HTMLElement,
-  axis: "x" | "y",
-  delta: number
-): boolean {
-  if (delta === 0) return false
-  if (axis === "y") {
-    const max = element.scrollHeight - element.clientHeight
-    return delta < 0 ? element.scrollTop <= 0 : element.scrollTop >= max - 1
-  }
-  const max = element.scrollWidth - element.clientWidth
-  return delta < 0 ? element.scrollLeft <= 0 : element.scrollLeft >= max - 1
 }
 
 function AgentToolResultPreview({

@@ -42,3 +42,31 @@ export function dateStampInTimezone(
   if (!year || !month || !day) return d.toISOString().slice(0, 10)
   return `${year}-${month}-${day}`
 }
+
+export function formatDateTimeInTimezone(
+  date: Date | number = new Date(),
+  timezone = DEFAULT_TIMEZONE
+): string {
+  const d = typeof date === "number" ? new Date(date) : date
+  const tz = normalizeTimezone(timezone)
+  const local = new Intl.DateTimeFormat("sv-SE", {
+    timeZone: tz,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  }).format(d)
+  const offset =
+    new Intl.DateTimeFormat("en-US", {
+      timeZone: tz,
+      hour: "2-digit",
+      hourCycle: "h23",
+      timeZoneName: "shortOffset",
+    })
+      .formatToParts(d)
+      .find((part) => part.type === "timeZoneName")?.value ?? ""
+  return offset ? `${local} ${offset}` : local
+}

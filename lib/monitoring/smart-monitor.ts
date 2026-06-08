@@ -47,8 +47,10 @@ function clipLine(text: string, maxChars = 500): string {
 
 function renderTaskRunLine(run: TaskRunRecord): string {
     const out = run.error || run.summary || '(no output)'
+    const timezone = getConfig().timezone
     return [
-        new Date(run.startedAt).toISOString(),
+        `${formatLocalDateTime(run.startedAt, timezone)} ${timezone}`,
+        `utc=${new Date(run.startedAt).toISOString()}`,
         run.status,
         run.surfaced ? 'Inbox' : 'silent',
         run.trigger,
