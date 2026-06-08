@@ -35,7 +35,6 @@ function formatMessageTimestampFull(timestamp: number) {
 const COLLAPSED_HEIGHT = 460
 const COLLAPSED_HEIGHT_FLOOR = 180
 const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
-const WORKED_FOR_RECENT_COMPLETION_WINDOW_MS = 90_000
 
 function getThoughtTitle(content: string): string {
     const boldTitleRegex = /\*\*(.+?)\*\*/g
@@ -634,7 +633,9 @@ function ThoughtBlock({
 // is the committed-message counterpart to the live, per-phase ThoughtBlocks;
 // streaming keeps those expanded and this never renders mid-stream. Simpler than
 // ThoughtBlock by design (no live height/auto-scroll machinery): default closed,
-// open-state persisted, expanded body capped with internal scroll.
+// open-state persisted, expanded body capped with internal scroll. A finished
+// turn renders straight into the collapsed state — it never pops open just to
+// animate shut, which used to flash on every remount and desync the tail spacer.
 // ---------------------------------------------------------------------------
 
 function WorkedForBlock({
@@ -643,7 +644,6 @@ function WorkedForBlock({
     status,
     messageId,
     openOnMount = false,
-    animateClosedOnMount = false,
     onArtifactClick,
     onArtifactExpand,
     onAgentOpen,
@@ -656,8 +656,6 @@ function WorkedForBlock({
     messageId: string
     /** Open on first render — used when the user explicitly loads deferred details. */
     openOnMount?: boolean
-    /** Start open for a just-finished live turn, then animate into the default closed state. */
-    animateClosedOnMount?: boolean
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onArtifactExpand?: (artifact: ArtifactRow) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
@@ -669,16 +667,12 @@ function WorkedForBlock({
         const saved = localStorage.getItem(openStorageKey)
         return saved === null ? null : saved === "true"
     })
-    const [autoCollapseArmed, setAutoCollapseArmed] = React.useState(
-        () => animateClosedOnMount && !openOnMount && savedOpenState === null
-    )
     const [isOpen, setIsOpen] = React.useState(() => {
         if (openOnMount) return true
         if (savedOpenState !== null) return savedOpenState
-        return animateClosedOnMount
+        return false
     })
     const toggleOpen = React.useCallback(() => {
-        setAutoCollapseArmed(false)
         setIsOpen((prev) => {
             const next = !prev
             localStorage.setItem(openStorageKey, String(next))
@@ -689,7 +683,6 @@ function WorkedForBlock({
 
     React.useEffect(() => {
         if (!openOnMount) return
-        setAutoCollapseArmed(false)
         setIsOpen(true)
     }, [openOnMount])
 
@@ -707,21 +700,6 @@ function WorkedForBlock({
 
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
-    React.useEffect(() => {
-        if (!isMounted || !autoCollapseArmed) return
-        let firstFrame = 0
-        let secondFrame = 0
-        firstFrame = window.requestAnimationFrame(() => {
-            secondFrame = window.requestAnimationFrame(() => {
-                setIsOpen(false)
-                setAutoCollapseArmed(false)
-            })
-        })
-        return () => {
-            window.cancelAnimationFrame(firstFrame)
-            window.cancelAnimationFrame(secondFrame)
-        }
-    }, [autoCollapseArmed, isMounted])
 
     // Duration is the source of truth; older rows (and providers that never
     // stamped it) fall back to the activity summary, then a bare "Worked".
@@ -1343,9 +1321,7 @@ function MessageBubbleComponent({
     const [detailLoading, setDetailLoading] = React.useState(false)
     const [detailLoadFailed, setDetailLoadFailed] = React.useState(false)
     const [openLoadedDetails, setOpenLoadedDetails] = React.useState(false)
-    const [mountedAt] = React.useState(() => Date.now())
     const autoLoadAttemptedRef = React.useRef<string | null>(null)
-    const wasStreamingAssistantMessageRef = React.useRef(Boolean(message.role === "assistant" && isStreamingMessage))
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -1399,10 +1375,6 @@ function MessageBubbleComponent({
         loadDeferredDetails,
         message.id,
     ])
-
-    React.useEffect(() => {
-        wasStreamingAssistantMessageRef.current = Boolean(message.role === "assistant" && isStreamingMessage)
-    }, [isStreamingMessage, message.role])
 
     // Latest version per identifier produced by this message — those are the
     // artifacts the hover-meta row exposes copy/download/expand for.
@@ -1507,19 +1479,6 @@ function MessageBubbleComponent({
         finalItems = timeline.slice(splitAt)
     }
     const showWorkedFor = workItems.length > 0
-    const messageAgeAtMount = mountedAt - message.timestamp
-    const isRecentFinalAssistantMessage = Boolean(
-        isLatestAssistantMessage &&
-        message.durationMs != null &&
-        messageAgeAtMount >= 0 &&
-        messageAgeAtMount <= WORKED_FOR_RECENT_COMPLETION_WINDOW_MS
-    )
-    const animateWorkedForClosedOnMount = Boolean(
-        showWorkedFor &&
-        !openLoadedDetails &&
-        !isStreamingMessage &&
-        (wasStreamingAssistantMessageRef.current || isRecentFinalAssistantMessage)
-    )
 
     const renderTimelineItem = (item: MessageTimelineItem) =>
         item.type === "reasoning" ? (
@@ -1574,7 +1533,6 @@ function MessageBubbleComponent({
                         status={message.status}
                         messageId={message.id}
                         openOnMount={openLoadedDetails}
-                        animateClosedOnMount={animateWorkedForClosedOnMount}
                         onArtifactClick={onArtifactClick}
                         onArtifactExpand={onArtifactExpand}
                         onAgentOpen={onAgentOpen}

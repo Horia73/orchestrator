@@ -111,6 +111,7 @@ export function ChatView() {
   // null  → streaming bubble holds the minHeight
   // string → committed AI message with that id holds it
   const minHeightActiveRef = React.useRef(minHeight > 0) // mirrors minHeight > 0 for use in effects
+  const minHeightRef = React.useRef(minHeight) // current spacer, read inside observers without re-subscribing
   const followStreamingRef = React.useRef(false) // user clicked scroll-btn during streaming
 
   const [previewAttachment, setPreviewAttachment] =
@@ -129,6 +130,7 @@ export function ChatView() {
 
   React.useEffect(() => {
     minHeightActiveRef.current = minHeight > 0
+    minHeightRef.current = minHeight
   }, [minHeight])
 
   const [artifact, setArtifact] = React.useState<ArtifactState | null>(
@@ -1395,6 +1397,100 @@ export function ChatView() {
     scheduleMessageTopAnchor,
     showStreamingBubble,
     isStreamingThisConversation,
+  ])
+
+  // The committed tail message can keep changing height after stream end without
+  // flipping any React dependency above: deferred reasoning bodies mount lazily,
+  // Shiki highlights on idle, fonts/images settle. Any of those shrinks the
+  // answer below the viewport while the spacer — measured once at stream end —
+  // stays too small, so the top-anchor is lost ("the virtual space disappears").
+  // Observe the committed message's content box and re-derive the spacer whenever
+  // it settles. Also recompute when the tab regains visibility: a stream that
+  // finishes in a backgrounded tab measures under throttled rAF/layout, so the
+  // spacer is stale until the user returns.
+  React.useLayoutEffect(() => {
+    if (
+      !conversationId ||
+      isStreamingThisConversation ||
+      !minHeightMsgId ||
+      minHeightMsgId !== latestAssistantMessageId
+    )
+      return
+    const messages = activeConversation?.messages ?? []
+    const lastMsg = messages[messages.length - 1]
+    const previousMsg = messages[messages.length - 2]
+    if (
+      !lastMsg ||
+      lastMsg.id !== minHeightMsgId ||
+      lastMsg.role !== "assistant" ||
+      previousMsg?.role !== "user"
+    )
+      return
+    const assistantElement = document.getElementById(`message-${lastMsg.id}`)
+    // Observe the content child, not the wrapper: the spacer is applied as the
+    // wrapper's paddingBottom, so observing the wrapper would feed our own update
+    // back in. getCommittedTailSpacer also measures the content child's height.
+    const content = assistantElement?.firstElementChild
+    if (
+      !(assistantElement instanceof HTMLElement) ||
+      !(content instanceof HTMLElement)
+    )
+      return
+
+    let frame: number | null = null
+    const recompute = () => {
+      frame = null
+      const nextSpacer = getCommittedTailSpacer(previousMsg.id, assistantElement)
+      if (
+        Math.abs(nextSpacer - minHeightRef.current) <=
+        TAIL_SPACER_UPDATE_THRESHOLD_PX
+      )
+        return
+      minHeightActiveRef.current = nextSpacer > 0
+      setMinHeight(nextSpacer)
+      localStorage.setItem(
+        `chat:minHeight:${conversationId}`,
+        JSON.stringify({
+          minHeight: nextSpacer,
+          minHeightMsgId: lastMsg.id,
+          viewportHeight: window.innerHeight,
+        })
+      )
+      if (
+        restoredScrollConversationRef.current === conversationId &&
+        isMessageNearTopAnchor(previousMsg.id)
+      ) {
+        scheduleMessageTopAnchor(previousMsg.id)
+      }
+    }
+
+    const scheduleRecompute = () => {
+      if (frame !== null) return
+      frame = window.requestAnimationFrame(recompute)
+    }
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "visible") scheduleRecompute()
+    }
+
+    const observer = new ResizeObserver(scheduleRecompute)
+    observer.observe(content)
+    document.addEventListener("visibilitychange", onVisibilityChange)
+    window.addEventListener("focus", scheduleRecompute)
+    return () => {
+      if (frame !== null) window.cancelAnimationFrame(frame)
+      observer.disconnect()
+      document.removeEventListener("visibilitychange", onVisibilityChange)
+      window.removeEventListener("focus", scheduleRecompute)
+    }
+  }, [
+    activeConversation?.messages,
+    conversationId,
+    getCommittedTailSpacer,
+    isMessageNearTopAnchor,
+    isStreamingThisConversation,
+    latestAssistantMessageId,
+    minHeightMsgId,
+    scheduleMessageTopAnchor,
   ])
 
   // Finishing a resumed stream can resize the tail spacer before the browser's
