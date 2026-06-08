@@ -1,5 +1,4 @@
 #!/usr/bin/env node
-import { spawn } from 'child_process'
 import fs from 'fs'
 import http from 'http'
 import net from 'net'
@@ -63,62 +62,13 @@ server.listen(port, host, () => {
   console.log(`✓ Ready`)
 })
 
-// Warm LibreOffice daemon for in-app PowerPoint preview. unoserver keeps a
-// headless soffice running so /api/uploads/[id]/preview-pdf converts in ~1-2s
-// instead of paying the ~10s cold start on every first open. Absent (local
-// dev / no LibreOffice) it disables itself silently and the route returns 503.
-const office = startLibreOfficeDaemon()
-
 for (const signal of ['SIGINT', 'SIGTERM']) {
   process.on(signal, () => {
-    office.stop()
     server.close(() => {
       app.close().finally(() => process.exit(0))
     })
     setTimeout(() => process.exit(1), 5000).unref()
   })
-}
-
-function startLibreOfficeDaemon() {
-  if (process.env.ORCHESTRATOR_DISABLE_OFFICE_PREVIEW === '1') return { stop() {} }
-  let child = null
-  let stopped = false
-  let attempts = 0
-
-  const spawnDaemon = () => {
-    if (stopped) return
-    const proc = spawn('unoserver', ['--interface', '127.0.0.1', '--port', '2003'], {
-      stdio: 'ignore',
-    })
-    child = proc
-    proc.on('error', (err) => {
-      if (err && err.code === 'ENOENT') {
-        stopped = true
-        console.log('[start] unoserver not installed — PowerPoint preview disabled')
-        return
-      }
-      console.error('[start] unoserver error', err)
-    })
-    proc.on('exit', (code, signal) => {
-      if (child === proc) child = null
-      if (stopped) return
-      attempts += 1
-      const delay = Math.min(30000, 1000 * Math.min(attempts, 10))
-      console.error(`[start] unoserver exited (code=${code}, signal=${signal}); restarting in ${delay}ms`)
-      setTimeout(spawnDaemon, delay).unref()
-    })
-    // Reset the backoff only if *this* daemon stays up for a healthy stretch —
-    // identity check so a prior spawn's timer can't reset for a newer child.
-    setTimeout(() => { if (child === proc && !proc.killed) attempts = 0 }, 60000).unref()
-  }
-
-  spawnDaemon()
-  return {
-    stop() {
-      stopped = true
-      if (child) { try { child.kill('SIGTERM') } catch { /* already gone */ } }
-    },
-  }
 }
 
 server.on('error', (err) => {

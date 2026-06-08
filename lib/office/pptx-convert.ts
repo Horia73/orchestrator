@@ -14,8 +14,11 @@ import { resolveExistingUploadPath } from "@/lib/uploads"
  * are immutable UUID files) under the bounded preview cache — deliberately NOT
  * /tmp, which fills the host eMMC.
  *
- * Conversion prefers `unoconvert` (a warm `unoserver` daemon, ~1–2 s) and falls
- * back to a cold `soffice --headless` direct convert when the daemon is absent.
+ * Conversion runs `soffice --headless` directly (~2 s) with a private, writable
+ * UserInstallation profile per call — the container user has no /etc/passwd entry
+ * so LibreOffice can't create its default profile. Results are cached per deck,
+ * so the cold start is paid once. If a warm `unoconvert`/`unoserver` daemon is
+ * ever present it's preferred, but it is not required.
  */
 
 const CACHE_CAP_BYTES = 512 * 1024 * 1024
@@ -171,10 +174,23 @@ async function doConvert(uploadId: string, input: string, cacheDir: string, out:
 
     if (sofficeBin) {
         // soffice forces its output name from the input basename, so convert into
-        // a private temp dir and rename the result out.
+        // a private temp dir and rename the result out. A unique writable
+        // UserInstallation profile (inside that dir) is required — the container
+        // user has no passwd entry, so the default ~/.config profile creation
+        // fails ("User installation could not be completed"). Per-call profiles
+        // also avoid the single-instance profile lock under concurrency.
         const tmpDir = await fs.mkdtemp(path.join(cacheDir, ".conv-"))
+        const profileUri = `file://${path.join(tmpDir, "profile")}`
         try {
-            await run(sofficeBin, ["--headless", "--convert-to", "pdf", "--outdir", tmpDir, input])
+            await run(sofficeBin, [
+                "--headless",
+                `-env:UserInstallation=${profileUri}`,
+                "--convert-to",
+                "pdf",
+                "--outdir",
+                tmpDir,
+                input,
+            ])
             const produced = path.join(tmpDir, `${path.parse(input).name}.pdf`)
             if (await isValidPdf(produced)) return await finish(produced)
             lastErr = new Error(`${sofficeBin} produced no valid output`)

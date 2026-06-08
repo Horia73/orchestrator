@@ -85,8 +85,7 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     python-docx \
     openpyxl \
     python-pptx \
-    pypdf \
-    unoserver
+    pypdf
 
 COPY --from=builder --chown=node:node /app /app
 
