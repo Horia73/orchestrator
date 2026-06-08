@@ -7,7 +7,7 @@ process.chdir(tmpRoot)
 
 async function main(): Promise<void> {
     const { guardSensitiveRequest } = await import('@/lib/api/request-guard')
-    const { shouldGuardApiRequest } = await import('../proxy')
+    const { isProfileExemptPath, shouldGuardApiRequest } = await import('../proxy')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -38,6 +38,10 @@ async function main(): Promise<void> {
     check(
         'webhook endpoint creation stays guarded',
         shouldGuardApiRequest('/api/webhooks', 'POST') === true,
+    )
+    check(
+        'MCP exec skips profile gate',
+        isProfileExemptPath('/api/cli/mcp-exec') === true,
     )
 
     const publicApiRequest = new Request('https://orchestrator.example.com/api/config', {

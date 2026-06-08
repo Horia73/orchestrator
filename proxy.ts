@@ -19,6 +19,7 @@ const PROFILE_EXEMPT_PATH_PREFIXES = [
 ]
 
 const PROFILE_EXEMPT_EXACT_PATHS = new Set([
+  "/api/cli/mcp-exec",
   "/favicon.ico",
   "/icon.svg",
   "/icon-192.png",
@@ -77,7 +78,7 @@ function maybeGateProfileRequest(request: NextRequest): NextResponse | null {
   return NextResponse.redirect(url)
 }
 
-function isProfileExemptPath(pathname: string): boolean {
+export function isProfileExemptPath(pathname: string): boolean {
   if (PROFILE_EXEMPT_EXACT_PATHS.has(pathname)) return true
   return PROFILE_EXEMPT_PATH_PREFIXES.some(
     (prefix) => pathname === prefix || pathname.startsWith(`${prefix}/`)
