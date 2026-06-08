@@ -16,6 +16,7 @@ import {
 } from "@/hooks/use-file-attachments"
 import { useMessageDraft } from "@/hooks/use-message-draft"
 import { isMobileKeyboardViewport } from "@/hooks/use-keyboard-inset"
+import { computeMarkdownListContinuation } from "@/lib/markdown-list-continuation"
 import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
 
@@ -48,60 +49,6 @@ function focusWithoutViewportScroll(textarea: HTMLTextAreaElement | null) {
             window.scrollTo(scrollX, scrollY)
         }
     })
-}
-
-// Matches a markdown list item: optional indent, then a bullet (-, *, +), an
-// ordered marker (1. / 1)), or a single-letter marker (A. / a)), at least one
-// space, then the rest of the line. Letters are limited to one character so a
-// sentence like "Note. ..." isn't mistaken for a list.
-const LIST_ITEM_RE = /^(\s*)(?:([-*+])|(\d+)([.)])|([A-Za-z])([.)]))(\s+)(.*)$/
-
-interface ListContinuation {
-    nextValue: string
-    nextCaret: number
-}
-
-// Next letter in the same case, capped at z/Z so it never overflows past the
-// alphabet (a 27th item just repeats the last letter).
-function nextLetter(letter: string): string {
-    if (letter === "z" || letter === "Z") return letter
-    return String.fromCharCode(letter.charCodeAt(0) + 1)
-}
-
-// Given the textarea value and caret position, returns how to continue a
-// markdown list on the next line, or null when the caret's line isn't a list
-// item. Non-empty item → inserts "\n" + the next marker (numbers and letters
-// auto-increment). Empty item → drops the marker so the list ends, like Word.
-function computeListContinuation(value: string, caret: number): ListContinuation | null {
-    const lineStart = value.lastIndexOf("\n", caret - 1) + 1
-    let lineEnd = value.indexOf("\n", caret)
-    if (lineEnd === -1) lineEnd = value.length
-
-    const match = LIST_ITEM_RE.exec(value.slice(lineStart, lineEnd))
-    if (!match) return null
-
-    const [, indent, bullet, num, numSep, letter, letterSep, spaces, content] = match
-    const marker = bullet ?? (num ? `${num}${numSep}` : `${letter}${letterSep}`)
-
-    if (content.trim().length === 0) {
-        // Empty list item → exit the list by removing the marker entirely.
-        const markerLength = indent.length + marker.length + spaces.length
-        return {
-            nextValue: value.slice(0, lineStart) + value.slice(lineStart + markerLength),
-            nextCaret: lineStart,
-        }
-    }
-
-    const nextMarker = bullet
-        ? bullet
-        : num
-            ? `${Number(num) + 1}${numSep}`
-            : `${nextLetter(letter)}${letterSep}`
-    const insertion = `\n${indent}${nextMarker}${spaces}`
-    return {
-        nextValue: value.slice(0, caret) + insertion + value.slice(caret),
-        nextCaret: caret + insertion.length,
-    }
 }
 
 interface ChatInputProps {
@@ -260,20 +207,25 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
             if (event.key !== "Enter") return
+
+            const textarea = event.currentTarget
+            if (textarea.selectionStart === textarea.selectionEnd) {
+                const continuation = computeMarkdownListContinuation(textarea.value, textarea.selectionStart)
+                if (continuation) {
+                    event.preventDefault()
+                    pendingSelectionRef.current = continuation.nextCaret
+                    draft.setValue(continuation.nextValue)
+                    return
+                }
+            }
+
             if (event.shiftKey) {
-                // Shift+Enter inserts a newline. When the caret sits on a
-                // markdown list item, continue the list automatically; otherwise
-                // fall through to the browser's default newline.
-                const textarea = event.currentTarget
-                if (textarea.selectionStart !== textarea.selectionEnd) return
-                const continuation = computeListContinuation(textarea.value, textarea.selectionStart)
-                if (!continuation) return
-                event.preventDefault()
-                pendingSelectionRef.current = continuation.nextCaret
-                draft.setValue(continuation.nextValue)
                 return
             }
-            if (isMobileKeyboardViewport()) return
+            if (isMobileKeyboardViewport()) {
+                return
+            }
+
             event.preventDefault()
             handleSubmit()
         },
@@ -285,7 +237,6 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
         setIsRecording(true)
         voice.start()
     }, [isStreamingActiveConversation, voice])
-
     const handlePreviewClick = React.useCallback((att: AttachedFile) => {
         if (att.uploaded) setPreviewAttachment(att.uploaded)
     }, [])

@@ -68,6 +68,59 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         if (text.length > 0) showPasteNotice()
     }, [showPasteNotice])
 
+    const sendInput = React.useCallback((data: string) => {
+        if (!data) return
+        void fetch(`/api/cli/${encodeURIComponent(sessionId)}/input`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ data }),
+        }).catch(() => { /* surfaced via stream errors */ })
+    }, [sessionId])
+
+    const focusTerminal = React.useCallback(() => {
+        try {
+            termRef.current?.focus()
+        } catch {}
+    }, [])
+
+    const handleTerminalPointerDown = React.useCallback((event: React.PointerEvent<HTMLDivElement>) => {
+        if (event.pointerType === "mouse" && event.button !== 0) return
+        focusTerminal()
+    }, [focusTerminal])
+
+    const handleMobileInputChange = React.useCallback((event: React.ChangeEvent<HTMLInputElement>) => {
+        const value = event.currentTarget.value
+        if (!value) return
+        sendInput(value)
+        event.currentTarget.value = ""
+    }, [sendInput])
+
+    const handleMobileInputKeyDown = React.useCallback((event: React.KeyboardEvent<HTMLInputElement>) => {
+        if (event.key === "Enter") {
+            event.preventDefault()
+            sendInput("\r")
+            event.currentTarget.value = ""
+        } else if (event.key === "Backspace" && event.currentTarget.value.length === 0) {
+            event.preventDefault()
+            sendInput("\x7f")
+        } else if (event.key === "Tab") {
+            event.preventDefault()
+            sendInput("\t")
+        } else if (event.key === "Escape") {
+            event.preventDefault()
+            sendInput("\x1b")
+        }
+    }, [sendInput])
+
+    const handleMobileInputPaste = React.useCallback((event: React.ClipboardEvent<HTMLInputElement>) => {
+        const text = event.clipboardData?.getData("text") ?? ""
+        if (!text) return
+        event.preventDefault()
+        sendInput(text)
+        event.currentTarget.value = ""
+        showPasteNotice()
+    }, [sendInput, showPasteNotice])
+
     React.useEffect(() => {
         return () => {
             if (pasteNoticeTimerRef.current !== null) {
@@ -116,6 +169,15 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         term.loadAddon(fit)
         term.loadAddon(links)
         term.open(containerRef.current)
+        const helperTextarea = containerRef.current.querySelector<HTMLTextAreaElement>(".xterm-helper-textarea")
+        if (helperTextarea) {
+            helperTextarea.setAttribute("autocapitalize", "none")
+            helperTextarea.setAttribute("autocomplete", "off")
+            helperTextarea.setAttribute("autocorrect", "off")
+            helperTextarea.setAttribute("enterkeyhint", "enter")
+            helperTextarea.setAttribute("inputmode", "text")
+            helperTextarea.spellcheck = false
+        }
         try { fit.fit() } catch { /* container not laid out yet */ }
         term.focus()
 
@@ -125,11 +187,7 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         // Forward keystrokes to the PTY. xterm gives us the raw escape
         // sequences (arrow keys etc.) which we pass through unchanged.
         const dataDisposable = term.onData(data => {
-            void fetch(`/api/cli/${encodeURIComponent(sessionId)}/input`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ data }),
-            }).catch(() => { /* surfaced via stream errors */ })
+            sendInput(data)
         })
 
         return () => {
@@ -138,8 +196,7 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
             termRef.current = null
             fitRef.current = null
         }
-        // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [])
+    }, [sendInput])
 
     // ---- Resize -----------------------------------------------------------
     React.useEffect(() => {
@@ -213,6 +270,7 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
         <div
             className={cn("flex flex-col overflow-hidden rounded-lg border border-border/70 bg-[#0c0c0e]", className)}
             onPasteCapture={handlePasteCapture}
+            onPointerDown={handleTerminalPointerDown}
         >
             <div className="flex items-center gap-1.5 border-b border-zinc-800/80 bg-zinc-950 px-3 py-1.5">
                 <span className="size-2.5 rounded-full bg-rose-500/80" />
@@ -235,7 +293,24 @@ export function CliTerminal({ sessionId, onExit, onText, className }: CliTermina
                 )}
             </div>
 
-            <div ref={containerRef} className="min-h-[280px] flex-1 px-2 py-2" />
+            <div ref={containerRef} className="min-h-[220px] flex-1 px-2 py-2" />
+            <div className="border-t border-zinc-800/80 bg-zinc-950 px-2 py-2 md:hidden">
+                <input
+                    type="text"
+                    inputMode="text"
+                    enterKeyHint="enter"
+                    autoCapitalize="none"
+                    autoComplete="off"
+                    autoCorrect="off"
+                    spellCheck={false}
+                    aria-label="Terminal input"
+                    placeholder="Terminal input"
+                    onChange={handleMobileInputChange}
+                    onKeyDown={handleMobileInputKeyDown}
+                    onPaste={handleMobileInputPaste}
+                    className="h-9 w-full rounded-md border border-zinc-800 bg-[#0c0c0e] px-2 font-mono text-[13px] text-zinc-100 outline-none placeholder:text-zinc-600 focus:border-zinc-600 focus:ring-1 focus:ring-zinc-600"
+                />
+            </div>
         </div>
     )
 }

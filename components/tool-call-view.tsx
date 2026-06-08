@@ -122,7 +122,7 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
             <div
                 ref={terminalWrapRef}
                 className={cn(
-                    "relative z-10 flex flex-col overflow-x-auto overflow-y-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm [touch-action:pan-x_pan-y]",
+                    "tool-call-scroll relative z-10 flex flex-col overflow-x-auto overflow-y-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm [touch-action:pan-x_pan-y]",
                     TOOL_CALL_INSET_CLASS
                 )}
                 style={TOOL_CALL_PANEL_STYLE}
@@ -202,7 +202,7 @@ function ToolFrame({
         <div className={cn("relative z-10 overflow-hidden rounded-md border border-border bg-background text-left shadow-sm", TOOL_CALL_INSET_CLASS)}>
             <div
                 ref={bodyRef}
-                className={cn("overflow-auto bg-background", bodyClassName)}
+                className={cn("tool-call-scroll overflow-auto bg-background", bodyClassName)}
                 style={TOOL_CALL_PANEL_STYLE}
             >
                 {children}
@@ -381,7 +381,7 @@ interface CodeRow {
 function CodeRows({ rows }: { rows: CodeRow[] }) {
     if (rows.length === 0) return <div className="px-3 py-3 text-[13px] text-muted-foreground">No content.</div>
     return (
-        <div className="overflow-x-auto bg-background font-mono text-[12px] leading-5">
+        <div className="tool-call-scroll tool-call-scroll-x overflow-x-auto bg-background font-mono text-[12px] leading-5">
             {rows.map((row, index) => (
                 <div key={`${row.lineNumber}-${index}`} className="grid min-w-[520px] grid-cols-[56px_minmax(0,1fr)]">
                     <span className="select-none border-r border-border/40 px-2 text-right text-foreground/35">
@@ -466,7 +466,7 @@ function GrepPreview({ entry, data }: { entry: ToolCallReasoningEntry; data: Par
                                 {group.rows.length}
                             </span>
                         </div>
-                        <div className="overflow-x-auto font-mono text-[12px] leading-5">
+                        <div className="tool-call-scroll tool-call-scroll-x overflow-x-auto font-mono text-[12px] leading-5">
                             {group.rows.map((row, index) => (
                                 <div key={`${row.line}-${row.column}-${index}`} className="grid min-w-[520px] grid-cols-[56px_minmax(0,1fr)]">
                                     <span className="select-none border-r border-border/40 px-2 text-right text-foreground/35">
@@ -559,8 +559,8 @@ function EditPreview({ entry, data }: { entry: ToolCallReasoningEntry; data: Par
             ]} />
             {(oldText || newText) && (
                 <div className="grid gap-1 font-mono text-[12px]">
-                    <pre className="overflow-auto rounded border border-red-500/20 bg-red-500/5 p-2 text-red-700 dark:text-red-300">- {oldText}</pre>
-                    <pre className="overflow-auto rounded border border-emerald-500/20 bg-emerald-500/5 p-2 text-emerald-700 dark:text-emerald-300">+ {newText}</pre>
+                    <pre className="tool-call-scroll overflow-auto rounded border border-red-500/20 bg-red-500/5 p-2 text-red-700 dark:text-red-300">- {oldText}</pre>
+                    <pre className="tool-call-scroll overflow-auto rounded border border-emerald-500/20 bg-emerald-500/5 p-2 text-emerald-700 dark:text-emerald-300">+ {newText}</pre>
                 </div>
             )}
         </div>

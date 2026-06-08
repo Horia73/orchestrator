@@ -33,6 +33,7 @@ function formatMessageTimestampFull(timestamp: number) {
 // ---------------------------------------------------------------------------
 
 const COLLAPSED_HEIGHT = 460
+const COLLAPSED_HEIGHT_FLOOR = 180
 const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
 
 function getThoughtTitle(content: string): string {
@@ -176,23 +177,49 @@ function useAvailableHeight(
 
     React.useEffect(() => {
         if (!isActive) return
+        let frame: number | null = null
 
         const compute = () => {
-            const block = blockRef.current
-            if (!block) return
-            const input = document.querySelector<HTMLElement>('[data-chat-input-container="true"]')
-            if (!input) return
+            if (frame !== null) window.cancelAnimationFrame(frame)
+            frame = window.requestAnimationFrame(() => {
+                frame = null
+                const block = blockRef.current
+                if (!block) return
+                const input = document.querySelector<HTMLElement>('[data-chat-input-container="true"]')
 
-            const blockRect = block.getBoundingClientRect()
-            const inputRect = input.getBoundingClientRect()
-            const available = Math.floor(inputRect.top - blockRect.top - COLLAPSED_BOTTOM_GAP)
-            setHeight(Math.max(COLLAPSED_HEIGHT, available))
+                const blockRect = block.getBoundingClientRect()
+                const inputRect = input?.getBoundingClientRect()
+                const viewportHeight = window.visualViewport?.height ?? window.innerHeight
+                const viewportBottom = window.visualViewport
+                    ? window.visualViewport.offsetTop + viewportHeight
+                    : viewportHeight
+                const bottom = inputRect?.top ?? viewportBottom
+                const available = Math.floor(bottom - blockRect.top - COLLAPSED_BOTTOM_GAP)
+                const nextHeight = Math.max(COLLAPSED_HEIGHT_FLOOR, available)
+                setHeight((current) => current === nextHeight ? current : nextHeight)
+            })
         }
 
         compute()
-        // Recompute once after layout settles
-        const frame = requestAnimationFrame(compute)
-        return () => cancelAnimationFrame(frame)
+
+        const block = blockRef.current
+        const input = document.querySelector<HTMLElement>('[data-chat-input-container="true"]')
+        const observer = new ResizeObserver(compute)
+        if (block) observer.observe(block)
+        if (input) observer.observe(input)
+        window.visualViewport?.addEventListener("resize", compute)
+        window.visualViewport?.addEventListener("scroll", compute)
+        window.addEventListener("resize", compute)
+        window.addEventListener("orientationchange", compute)
+
+        return () => {
+            if (frame !== null) window.cancelAnimationFrame(frame)
+            observer.disconnect()
+            window.visualViewport?.removeEventListener("resize", compute)
+            window.visualViewport?.removeEventListener("scroll", compute)
+            window.removeEventListener("resize", compute)
+            window.removeEventListener("orientationchange", compute)
+        }
     }, [blockRef, isActive])
 
     return height
@@ -705,7 +732,7 @@ function WorkedForBlock({
                 )}
             >
                 <div className="overflow-hidden min-h-0">
-                    <div className="mt-2 max-h-[70vh] overflow-y-auto pr-1">
+                    <div className="tool-call-scroll mt-2 max-h-[70vh] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
                         {bodyMounted && (
                         <div className="relative flex flex-col pb-2">
                             <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
