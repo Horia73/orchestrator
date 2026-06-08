@@ -34,6 +34,7 @@ import {
   uploadChatAttachments,
 } from "./chat-store-api"
 import { chatReducer, type ChatState } from "./chat-store-reducer"
+import { publishLocalSubmitAnchor } from "@/lib/chat-local-submit-anchor"
 import {
   ChatFetchError,
   INITIAL_MESSAGE_PAGE_SIZE,
@@ -56,6 +57,7 @@ import {
   writeUnreadConversationIds,
   type ActiveChatStream,
   type ConversationLoadState,
+  type StreamingStatus,
   type StreamingReasoning,
 } from "./chat-store-utils"
 
@@ -401,6 +403,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     },
     [updateUnreadConversationIds]
   )
+
+  const recoveryStreamingStatus = React.useCallback((): StreamingStatus => {
+    if (typeof navigator !== "undefined" && !navigator.onLine) {
+      return "offline"
+    }
+    return "recovering"
+  }, [])
 
   const handleAssistantFinished = React.useCallback(
     (conversationId: string, message: Message) => {
@@ -758,6 +767,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       messageId?: string | null
     ): Promise<"final" | "running" | null> => {
       for (let attempt = 0; attempt < STREAM_RECOVERY_ATTEMPTS; attempt += 1) {
+        dispatch({
+          type: "SET_STREAMING",
+          isStreaming: true,
+          conversationId,
+          messageId: messageId ?? undefined,
+          status: recoveryStreamingStatus(),
+        })
         const [messagesResult, stream] = await Promise.allSettled([
           refreshConversationMessages(conversationId),
           checkServerStreaming(conversationId),
@@ -804,6 +820,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               conversationId,
               messageId: activeStream.messageId,
               snapshot,
+              status: "recovering",
             })
             dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
             return "running"
@@ -814,6 +831,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             isStreaming: true,
             conversationId,
             messageId: activeStream.messageId,
+            status: recoveryStreamingStatus(),
           })
           dispatch({ type: "CHAT_STREAM_STARTED", stream: activeStream })
           return "running"
@@ -869,6 +887,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       checkServerStreaming,
       handleAssistantFinished,
       hydrateStreamMessage,
+      recoveryStreamingStatus,
       refreshConversationMessages,
     ]
   )
@@ -1007,6 +1026,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
               isStreaming: true,
               conversationId,
               messageId: stream.messageId,
+              status: hasStreamingPayload ? undefined : recoveryStreamingStatus(),
             })
             dispatch({ type: "CHAT_STREAM_STARTED", stream })
           }
@@ -1035,6 +1055,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   }, [
     checkServerStreaming,
     recoverInterruptedStream,
+    recoveryStreamingStatus,
     state.activeConversationId,
     state.isStreaming,
     state.streamingContent,
@@ -1109,6 +1130,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   type: "SET_STREAMING",
                   isStreaming: true,
                   conversationId: data.payload.conversationId,
+                  status: recoveryStreamingStatus(),
                 })
               }
             }
@@ -1206,6 +1228,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     applyConversationArchiveState,
     applyConversationTitle,
     handleAssistantFinished,
+    recoveryStreamingStatus,
     reconcileConversationSummaries,
     reconcileUnknownConversation,
   ])
@@ -1446,6 +1469,14 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         allMessages = [...(conv?.messages ?? []), userMessage]
       }
 
+      if (options?.activateConversation !== false) {
+        publishLocalSubmitAnchor({
+          conversationId,
+          messageId: userMessage.id,
+          submittedAt: userMessage.timestamp,
+        })
+      }
+
       // Start streaming
       const assistantMsgId = generateId()
       const abortController = new AbortController()
@@ -1460,6 +1491,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         isStreaming: true,
         conversationId,
         messageId: assistantMsgId,
+        status: "connecting",
       })
 
       // Seed the live thinking counter; the dedicated effect drives the ticks
@@ -2281,6 +2313,13 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                 .toLowerCase()
                 .includes("load failed"))
           ) {
+            dispatch({
+              type: "SET_STREAMING",
+              isStreaming: true,
+              conversationId: finalConvId,
+              messageId: assistantMsgId,
+              status: recoveryStreamingStatus(),
+            })
             const recovered = await recoverInterruptedStream(
               finalConvId,
               assistantMsgId
@@ -2346,6 +2385,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       handleAssistantFinished,
       markConversationRead,
       recoverInterruptedStream,
+      recoveryStreamingStatus,
       state.conversations,
     ]
   )

@@ -15,6 +15,8 @@ export interface ActiveChatStream {
   startedAt: number
 }
 
+export type StreamingStatus = "connecting" | "recovering" | "offline" | null
+
 export function updateAgentEntry(
   reasoning: StreamingReasoning,
   runId: string,
@@ -101,6 +103,7 @@ export const stoppedStreamState = {
   streamingContentSegments: [] as NonNullable<Message["contentSegments"]>,
   streamingReasoning: [] as StreamingReasoning,
   streamingMode: null as "reasoning" | "content" | null,
+  streamingStatus: null as StreamingStatus,
   thinkingSeconds: 0,
   thinkingDone: false,
   streamingMessageId: null as string | null,

@@ -2,7 +2,7 @@
 
 import * as React from "react"
 import Link from "next/link"
-import { usePathname, useRouter } from "next/navigation"
+import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   Archive,
   ArchiveRestore,
@@ -257,6 +257,7 @@ export function AppSidebar() {
   } = useSidebar()
   const pathname = usePathname()
   const router = useRouter()
+  const searchParams = useSearchParams()
   const isCollapsed = sidebarState === "collapsed"
   const isOnChatHome = pathname === "/"
   const isOnSettings = pathname?.startsWith("/settings") ?? false
@@ -656,10 +657,10 @@ export function AppSidebar() {
   // Wrap chat actions so they always land on the chat page —
   // users can fire them from /settings or any other route.
   const navigateHome = React.useCallback(() => {
-    if (pathname === "/") return
+    if (pathname === "/" && searchParams.toString().length === 0) return
     if (isMobile) router.replace("/")
     else router.push("/")
-  }, [isMobile, pathname, router])
+  }, [isMobile, pathname, router, searchParams])
 
   const handleNewChat = React.useCallback(() => {
     setArchiveViewActive(false)
@@ -677,17 +678,9 @@ export function AppSidebar() {
       }
       setMobileArchiveMenuId(null)
 
-      if (isMobile) {
-        setOpenMobile(false)
-        window.requestAnimationFrame(() => {
-          selectConversation(conversation.id, conversation)
-          navigateHome()
-        })
-        return
-      }
-
       selectConversation(conversation.id, conversation)
       navigateHome()
+      if (isMobile) setOpenMobile(false)
     },
     [isMobile, navigateHome, selectConversation, setOpenMobile]
   )

@@ -1606,6 +1606,7 @@ interface StreamingBubbleProps {
     content: string
     contentSegments: ContentSegment[]
     streamingMode: "reasoning" | "content" | null
+    streamingStatus?: "connecting" | "recovering" | "offline" | null
     compact?: boolean
     suppressArtifactTypes?: string[]
     showCursor?: boolean
@@ -1628,10 +1629,22 @@ interface StreamingBubbleProps {
     messageId?: string
 }
 
-export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, compact = false, suppressArtifactTypes, showCursor = true, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
+function streamingStatusLabel(
+    status: StreamingBubbleProps["streamingStatus"],
+    seconds?: number
+): string {
+    const roundedSeconds = Math.max(0, Math.round(seconds ?? 0))
+    const suffix = roundedSeconds > 0 ? ` (${roundedSeconds}s)` : ""
+    if (status === "offline") return `Waiting for connection${suffix}`
+    if (status === "recovering") return `Reconnecting${suffix}`
+    return `Connecting${suffix}`
+}
+
+export function StreamingBubble({ reasoning, content, contentSegments, streamingMode, streamingStatus, compact = false, suppressArtifactTypes, showCursor = true, onArtifactClick, onArtifactExpand, onAgentOpen, onAttachmentClick, thinkingSeconds, thinkingDone, messageId, searchToolDisplay = "expanded", thoughtAutoOpen = true, thoughtAutoExpandTools = false, liveCollapsedTitle = false }: StreamingBubbleProps) {
     const reasoningGroups = React.useMemo(() => groupReasoningByPhase(reasoning), [reasoning])
     const timeline = React.useMemo(() => buildInterleavedTimeline(reasoningGroups, contentSegments), [reasoningGroups, contentSegments])
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
+    const hasVisiblePayload = reasoning.length > 0 || content.trim().length > 0 || contentSegments.some(segment => segment.content.trim().length > 0)
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -1677,11 +1690,14 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                     </div>
                 )
             ))}
-            {showCursor && reasoning.length === 0 && !content && (
-                <div className="flex items-center gap-1 pl-1 pt-1">
-                    <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse" />
-                    <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.2s]" />
-                    <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.4s]" />
+            {showCursor && !hasVisiblePayload && (
+                <div className="flex min-h-7 items-center gap-2 pl-1 pt-1 text-[15px] leading-6 text-muted-foreground">
+                    <span className="flex items-center gap-1" aria-hidden="true">
+                        <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse" />
+                        <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.2s]" />
+                        <span className="size-1.5 rounded-full bg-muted-foreground/40 animate-pulse [animation-delay:0.4s]" />
+                    </span>
+                    <span>{streamingStatusLabel(streamingStatus, thinkingSeconds)}</span>
                 </div>
             )}
         </div>
