@@ -1,11 +1,12 @@
 import { NextResponse } from 'next/server'
 
-import { getBinding } from '@/lib/cli/mcp-bindings'
+import { decodePortableBinding, getBinding, type Binding } from '@/lib/cli/mcp-bindings'
 import { executeTool } from '@/lib/ai/tools/executor'
 import { getAgent } from '@/lib/ai/agents/registry'
-import { getToolsForAgent } from '@/lib/ai/tools/registry'
+import { getTool, getToolsForAgent } from '@/lib/ai/tools/registry'
 import { operationalIntegrationFor } from '@/lib/integrations/manifest'
 import { subsystemForGatedTool } from '@/lib/integrations/subsystem-manifest'
+import { runWithProfileContext } from '@/lib/profiles/context'
 
 /**
  * MCP-server proxy endpoint.
@@ -41,11 +42,32 @@ export async function POST(req: Request) {
     if (!body?.token || typeof body.token !== 'string') {
         return NextResponse.json({ error: 'missing token' }, { status: 400 })
     }
-    const binding = getBinding(body.token)
+    const binding = resolveBinding(body.token)
     if (!binding) {
         return NextResponse.json({ error: 'unknown or expired token' }, { status: 401 })
     }
 
+    return runWithProfileContext(binding.profileContext, () => handleBoundRequest(body, binding))
+}
+
+function resolveBinding(token: string): Binding | null {
+    const inMemory = getBinding(token)
+    if (inMemory) return inMemory
+
+    const portable = decodePortableBinding(token)
+    if (!portable) return null
+
+    return {
+        ctx: portable.ctx,
+        toolDefs: portable.toolIds
+            .map(id => getTool(id))
+            .filter((tool): tool is NonNullable<ReturnType<typeof getTool>> => Boolean(tool)),
+        createdAt: portable.createdAt,
+        profileContext: portable.profileContext,
+    }
+}
+
+async function handleBoundRequest(body: Body, binding: Binding) {
     if (body.action === 'list') {
         // Map our ToolDef shape onto MCP's tool descriptor shape. Names go
         // through as-is; Claude Code prefixes them with `mcp__<server>__` when
