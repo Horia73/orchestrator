@@ -36,6 +36,16 @@ async function main(): Promise<void> {
     playbooks
   )
 
+  // 1b. MEMORY_ARCHIVE.md registration (cold tier) --------------------------
+  const archive = WORKSPACE_FILE_DEFINITIONS.find((d) => d.id === "memory-archive")
+  check(
+    "MEMORY_ARCHIVE.md registered as a markdown durable file with a template",
+    archive?.relativePath === "MEMORY_ARCHIVE.md" &&
+      archive?.kind === "markdown" &&
+      Boolean(archive?.defaultContent),
+    archive
+  )
+
   // 2. Reflection task spec is schema-valid ---------------------------------
   const { CreateScheduledTaskInputSchema } = await import(
     "@/lib/scheduling/schema"
@@ -72,6 +82,13 @@ async function main(): Promise<void> {
       parsed.data.action.kind === "agent" &&
         parsed.data.action.prompt.length > 0 &&
         parsed.data.action.prompt.length <= 8000
+    )
+    check(
+      "reflection prompt drives hot/cold curation + lossless densification",
+      parsed.data.action.kind === "agent" &&
+        parsed.data.action.prompt.includes("MEMORY_ARCHIVE.md") &&
+        /densify/i.test(parsed.data.action.prompt),
+      parsed.data.action.kind === "agent" ? parsed.data.action.prompt.slice(0, 200) : undefined
     )
     check(
       "reflection is created as an always-on system task",

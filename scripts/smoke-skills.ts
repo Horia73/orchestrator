@@ -1,7 +1,9 @@
 import assert from "assert"
 import fs from "fs"
 
+import { coder } from "@/lib/ai/agents/coder"
 import { orchestrator } from "@/lib/ai/agents/orchestrator"
+import { resolveRuntimeAgentConfig } from "@/lib/ai/agents/runtime-agent-config"
 import { worker } from "@/lib/ai/agents/worker"
 import { DELEGATING_WORKSPACE_TOOLS } from "@/lib/ai/agents/builtins"
 import {
@@ -68,10 +70,19 @@ const EXPECTED_SKILLS = [
     runtimeNeedle: "examples/3p-updates.md",
     includeFile: "examples/general-comms.md",
   },
+  {
+    id: "frontend-design",
+    query: "build a polished standalone dashboard",
+    expectedSearchTerm: "standalone",
+    requiredFiles: ["LICENSE.txt"],
+    runtimeNeedle: "Orchestrator UI",
+    includeFile: "SKILL.md",
+  },
 ]
 
 async function main() {
   const skills = listSkills()
+  assertNoProviderNativeSkillLeaks()
 
   for (const expected of EXPECTED_SKILLS) {
     const skill = findSkill(expected.id)
@@ -164,7 +175,20 @@ async function main() {
     assert.ok(getToolExecutor(id), `${id} should have an executor`)
     assert.ok(orchestrator.tools.includes(id), `orchestrator should expose ${id}`)
     assert.ok(worker.tools.includes(id), `worker should expose ${id}`)
+    assert.ok(!coder.tools.includes(id), `registered CLI coder should not expose ${id}`)
     assert.ok(!DELEGATING_WORKSPACE_TOOLS.includes(id), `${id} should not be in generic delegating tools`)
+  }
+
+  const cliCoder = resolveRuntimeAgentConfig(coder, "claude-code")
+  assert.strictEqual(cliCoder.buildPrompt, undefined, "CLI coder should remain promptless")
+  for (const id of ["SkillSearch", "ActivateSkill", "ReadSkillFile"]) {
+    assert.ok(!cliCoder.tools.includes(id), `CLI coder should not expose ${id}`)
+  }
+
+  const apiCoder = resolveRuntimeAgentConfig(coder, "openai")
+  assert.ok(apiCoder.buildPrompt, "API coder should receive a prompt builder")
+  for (const id of ["SkillSearch", "ActivateSkill", "ReadSkillFile"]) {
+    assert.ok(apiCoder.tools.includes(id), `API coder should expose ${id}`)
   }
 
   assert.ok(
@@ -209,6 +233,46 @@ async function main() {
   }
 
   console.log(`smoke-skills passed (${skills.length} installed skill${skills.length === 1 ? "" : "s"}).`)
+}
+
+function assertNoProviderNativeSkillLeaks() {
+  const forbidden = [
+    /\bClaude\b/,
+    /\bclaude\.ai\b/i,
+    /\bAnthropic\b/,
+    /\bCODEX_HOME\b/,
+    /\.codex\b/,
+    /\bartifact-tool\b/,
+    /\bGoogle Slides\b/,
+  ]
+  const offenders: string[] = []
+
+  for (const file of walkFiles("skills")) {
+    if (file.endsWith("/LICENSE.txt") || file.endsWith("\\LICENSE.txt")) continue
+    const content = fs.readFileSync(file, "utf8")
+    const matched = forbidden.find((pattern) => pattern.test(content))
+    if (matched) offenders.push(`${file}: ${matched}`)
+  }
+
+  assert.deepStrictEqual(
+    offenders,
+    [],
+    "Bundled skill runtime instructions should not leak provider-native/Claude-specific wording"
+  )
+}
+
+function walkFiles(root: string): string[] {
+  if (!fs.existsSync(root)) return []
+  const out: string[] = []
+  for (const entry of fs.readdirSync(root, { withFileTypes: true })) {
+    const fullPath = `${root}/${entry.name}`
+    if (entry.isDirectory()) {
+      out.push(...walkFiles(fullPath))
+    } else if (entry.isFile()) {
+      out.push(fullPath)
+    }
+  }
+  return out
 }
 
 main().catch((err) => {

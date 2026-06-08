@@ -80,10 +80,12 @@ export function LocationDayMap({
   className?: string
 }) {
   const [failed, setFailed] = React.useState(false)
-  const stopCoords = stops
-    .map((stop) => stop.position)
-    .filter((coord): coord is LocationCoordinate => Boolean(coord))
-  const coordinates = route.length >= 2 ? [...route, ...stopCoords] : stopCoords
+  const coordinates = React.useMemo(() => {
+    const stopCoords = stops
+      .map((stop) => stop.position)
+      .filter((coord): coord is LocationCoordinate => Boolean(coord))
+    return route.length >= 2 ? [...route, ...stopCoords] : stopCoords
+  }, [route, stops])
   const viewport = React.useMemo(
     () => viewportForCoordinates(coordinates),
     [coordinates]

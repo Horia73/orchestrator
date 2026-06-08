@@ -33,6 +33,7 @@ import type { MemoryRecallHit } from "@/lib/types"
 import db from "@/lib/db"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 import { getConfiguredTimezone, getMemoryEmbeddingSettings } from "@/lib/config"
+import { MAX_CONTEXT_FILE_CHARS } from "@/lib/ai/prompts/shared"
 import { activeRuntimePaths } from "@/lib/runtime-paths"
 import { dateStampInTimezone } from "@/lib/timezone"
 import {
@@ -219,7 +220,24 @@ const SYNC_DEBOUNCE_MS = 15_000
 
 // Durable files the prompt builder already injects every turn (lib/ai/prompts/
 // shared.ts). The silent pass excludes them so it only surfaces *new* signal.
-const DURABLE_SOURCES = ["USER.md", "MEMORY.md", "MONITORS.md", "PLAYBOOKS.md"]
+// All durable markdown files we INDEX for semantic recall (content searchable),
+// regardless of whether they are injected into the prompt.
+const INDEXED_DURABLE_FILES = [
+  "USER.md",
+  "MEMORY.md",
+  "MEMORY_ARCHIVE.md",
+  "MONITORS.md",
+  "PLAYBOOKS.md",
+]
+
+// The HOT tier the prompt builder injects in full every ordinary orchestrator
+// turn (lib/ai/prompts/shared.ts buildWorkspaceContextFiles). The silent recall
+// pass excludes these so it only surfaces *new* signal — see inContextSources,
+// which also re-enables a hot file whose tail overflowed the per-file budget.
+// MEMORY_ARCHIVE.md is the recall-only cold tier and MONITORS.md is injected
+// only on the Smart Monitor wake (not this chat recall path), so NEITHER is hot
+// here: both must stay recall-reachable.
+const HOT_DURABLE_SOURCES = ["USER.md", "MEMORY.md", "PLAYBOOKS.md"]
 const MEMORY_DAY_DIR = "MEMORY_DAY"
 const CONVERSATION_SOURCE_PREFIX = "conversation:"
 const MAX_CONVERSATION_ATTACHMENT_NAMES = 12
@@ -239,6 +257,9 @@ const TEMPLATE_NOISE = [
   "a smart monitor entry is active only",
   "each entry should define status",
   "each playbook should have",
+  "cold storage for durable memory",
+  "the nightly reflection moves rarely-used",
+  "this file is not loaded into the prompt every turn",
 ]
 
 // ---------------------------------------------------------------------------
@@ -269,7 +290,7 @@ function readSource(relPath: string): string | null {
 /** All markdown memory source files currently on disk (durable + every daily note). */
 export function listMemorySourceFiles(): string[] {
   const out: string[] = []
-  for (const rel of DURABLE_SOURCES) {
+  for (const rel of INDEXED_DURABLE_FILES) {
     if (readSource(rel) !== null) out.push(rel)
   }
   const dir = workspacePath(MEMORY_DAY_DIR)
@@ -403,9 +424,25 @@ export function listMemorySources(): string[] {
   return listMemorySourceSnapshots().map((entry) => entry.source)
 }
 
-/** Sources already in the prompt this turn: durable files + last 3 configured-local days. */
-function inContextSources(): Set<string> {
-  const set = new Set<string>(DURABLE_SOURCES)
+/**
+ * Sources already fully in the prompt this turn — excluded from the silent pass
+ * so it only surfaces *new* signal. The hot durable files (USER/MEMORY/PLAYBOOKS)
+ * plus the last 3 configured-local days are injected by the prompt builder.
+ *
+ * Crucially, a hot file is only excluded when it FITS the per-file budget. If it
+ * overflowed (the prompt builder clips the tail with a `[truncated]` marker), the
+ * dropped tail is NOT in the prompt, so we leave the source recall-eligible and
+ * let semantic recall surface the overflow on demand. Nothing is silently lost.
+ * MONITORS.md and MEMORY_ARCHIVE.md are deliberately absent here (cold tier).
+ * Exported for the recall smoke test.
+ */
+export function inContextSources(): Set<string> {
+  const set = new Set<string>()
+  for (const source of HOT_DURABLE_SOURCES) {
+    const content = readSource(source)
+    if (content === null) continue
+    if (content.length <= MAX_CONTEXT_FILE_CHARS) set.add(source)
+  }
   const timezone = getConfiguredTimezone()
   for (let back = 0; back <= 2; back++) {
     const stamp = dateStampInTimezone(Date.now() - back * 86_400_000, timezone)

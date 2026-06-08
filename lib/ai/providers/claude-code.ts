@@ -195,8 +195,9 @@ export class ClaudeCodeProvider implements AIProvider {
             // No human in the loop — accept whatever tools we expose.
             args.push('--permission-mode', 'bypassPermissions')
         } else if (nativeToolsForRun.length > 0) {
-            // Plain coder mode (no MCP bridge): still expose Skill so Claude
-            // Code can use Agent Skills while it drives on its own.
+            // Plain coder mode (no MCP bridge): expose only the native CLI
+            // tools requested by AgentConfig.builtins. Orchestrator-owned
+            // workflow skills are available only through our custom tool layer.
             args.push('--allowedTools', nativeToolsForRun.join(','))
             args.push('--permission-mode', 'bypassPermissions')
         }

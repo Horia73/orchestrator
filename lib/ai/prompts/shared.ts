@@ -543,8 +543,15 @@ const CONTEXT_FILE_IDS = new Set([
     'integration-index',
 ])
 
-const MAX_CONTEXT_FILE_CHARS = 16_000
-const MAX_CONTEXT_TOTAL_CHARS = 64_000
+// Generous ceilings: the hot durable tier (USER/MEMORY/PLAYBOOKS + recent daily
+// memory) is meant to fit fully. These are a backstop, not the primary control —
+// overflow is NOT silently lost, it stays reachable via semantic recall (see
+// recall.ts `inContextSources`, which only excludes what actually fit here).
+// MEMORY_ARCHIVE and (for the plain orchestrator) MONITORS are intentionally
+// never injected and live entirely in the recall-only cold tier. Keeping the hot
+// tier lean is the reflection pass's job, not the clipper's.
+export const MAX_CONTEXT_FILE_CHARS = 40_000
+export const MAX_CONTEXT_TOTAL_CHARS = 200_000
 
 function readWorkspaceFile(relPath: string): string | null {
     const workspaceDir = activeRuntimePaths().agentWorkspaceDir
@@ -598,6 +605,12 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         // sub-agents (researcher, coder, …) never replay procedures, so keep it
         // out of their prompts alongside the onboarding script.
         if (!isOrchestrator && (file.id === 'boot' || file.id === 'onboarding' || file.id === 'playbooks')) continue
+        // MONITORS.md is documentation/preference memory only the Smart Monitor
+        // wake needs in full every run. The plain orchestrator (and the other
+        // orchestrator-class aliases like the inbox agent / conversation namer)
+        // read it on demand or via semantic recall instead of paying its full
+        // size in context every turn. Inject it only on the Smart Monitor wake.
+        if (file.id === 'monitors' && agentId !== 'smart-monitor-agent') continue
         if (remaining <= 0) break
 
         if (file.id === 'memory-day') {

@@ -141,6 +141,39 @@ async function main(): Promise<void> {
     conversationChunks
   )
 
+  // --- hot/cold tier: inContextSources exclusion + indexing ----------------
+  const { activeRuntimePaths: arp } = await import("@/lib/runtime-paths")
+  const wsDir = arp().agentWorkspaceDir
+  fs.mkdirSync(wsDir, { recursive: true })
+  fs.writeFileSync(path.join(wsDir, "USER.md"), "# USER\n\nsmall hot file")
+  fs.writeFileSync(path.join(wsDir, "MEMORY.md"), "# MEMORY\n\nsmall hot file")
+  fs.writeFileSync(path.join(wsDir, "PLAYBOOKS.md"), "# PLAYBOOKS\n\nsmall hot file")
+  fs.writeFileSync(path.join(wsDir, "MONITORS.md"), "# MONITORS\n\ncold for the plain orchestrator")
+  fs.writeFileSync(path.join(wsDir, "MEMORY_ARCHIVE.md"), "# MEMORY ARCHIVE\n\narchived durable fact about grapes")
+  const ctxSrc = recall.inContextSources()
+  check(
+    "inContextSources excludes the hot tier (USER/MEMORY/PLAYBOOKS)",
+    ctxSrc.has("USER.md") && ctxSrc.has("MEMORY.md") && ctxSrc.has("PLAYBOOKS.md"),
+    [...ctxSrc]
+  )
+  check(
+    "inContextSources leaves the cold tier recall-reachable (MONITORS + archive NOT excluded)",
+    !ctxSrc.has("MONITORS.md") && !ctxSrc.has("MEMORY_ARCHIVE.md"),
+    [...ctxSrc]
+  )
+  // Overflow guard: a hot file past the per-file budget keeps its tail reachable.
+  fs.writeFileSync(path.join(wsDir, "MEMORY.md"), "# MEMORY\n\n" + "x".repeat(50_000))
+  check(
+    "inContextSources re-enables an overflowed hot file (truncated tail stays recall-reachable)",
+    !recall.inContextSources().has("MEMORY.md")
+  )
+  const indexed = recall.listMemorySources()
+  check(
+    "listMemorySources indexes the cold tier (MEMORY_ARCHIVE.md + MONITORS.md)",
+    indexed.includes("MEMORY_ARCHIVE.md") && indexed.includes("MONITORS.md"),
+    indexed
+  )
+
   // --- store: content marker + generations --------------------------------
   store.clearMemoryIndex()
   const dim = 4

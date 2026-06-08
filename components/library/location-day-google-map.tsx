@@ -157,11 +157,9 @@ function stopTimeSummary(stop: LocationStop): string | undefined {
 }
 
 function buildMapArtifact({
-  title,
   route,
   stops,
 }: {
-  title: string
   route: LocationCoordinate[]
   stops: LocationStop[]
 }): MapArtifact | null {
@@ -220,8 +218,8 @@ export function LocationDayGoogleMap({
   className?: string
 }) {
   const artifact = React.useMemo(
-    () => buildMapArtifact({ title, route, stops }),
-    [route, stops, title]
+    () => buildMapArtifact({ route, stops }),
+    [route, stops]
   )
 
   if (!artifact) {

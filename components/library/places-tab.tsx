@@ -814,16 +814,6 @@ function formatStopWindow(stop: {
   return duration ? `${duration} min` : "Time not summarized"
 }
 
-function formatDayLabel(day: LocationDaySummary): string {
-  const parsed = Date.parse(`${day.date}T12:00:00Z`)
-  if (!Number.isFinite(parsed)) return day.label
-  return new Intl.DateTimeFormat(undefined, {
-    weekday: "short",
-    month: "short",
-    day: "numeric",
-  }).format(new Date(parsed))
-}
-
 function formatDayLabelLong(day: LocationDaySummary): string {
   const parsed = Date.parse(`${day.date}T12:00:00Z`)
   if (!Number.isFinite(parsed)) return day.label

@@ -95,6 +95,7 @@ const DAILY_MEMORY_FILE_RE = /^(\d{4}-\d{2}-\d{2})\.md$/
 const MEMORY_FILE_IDS = [
   "user",
   "memory",
+  "memory-archive",
   "memory-day",
   "monitors",
   "playbooks",
@@ -301,6 +302,24 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
       "Permanent memory belongs here.",
       "",
       "Keep this file compact. Store durable facts, recurring preferences, standing instructions, long-running goals, and decisions that should affect future behavior. Do not store one-off chatter, temporary state, unverified assumptions, or sensitive data unless the user explicitly wants it remembered.",
+      "",
+    ].join("\n"),
+  },
+  {
+    id: "memory-archive",
+    label: "Memory archive",
+    relativePath: "MEMORY_ARCHIVE.md",
+    kind: "markdown",
+    category: "knowledge",
+    surface: "editor",
+    description:
+      "Cold long-term memory: durable facts demoted from MEMORY.md because they are rarely needed day-to-day. Never injected into the prompt, but indexed for semantic recall, so demotion is lossless.",
+    defaultContent: [
+      "# MEMORY ARCHIVE",
+      "",
+      "Cold storage for durable memory. The nightly reflection moves rarely-used durable facts here from MEMORY.md to keep the always-loaded memory lean.",
+      "",
+      "This file is NOT loaded into the prompt every turn. It is indexed for semantic recall, so anything here still surfaces when a message is relevant to it. Promote a fact back to MEMORY.md when it becomes routinely relevant again. Keep entries compact and durable; never store secrets or transient state.",
       "",
     ].join("\n"),
   },
