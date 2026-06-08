@@ -40,6 +40,7 @@ export function AgentWorkspacePanel({
 }) {
   const [selectedTool, setSelectedTool] =
     React.useState<SelectedAgentTool | null>(null)
+  const scrollbarVisible = useRevealOnScroll()
 
   React.useEffect(() => {
     setSelectedTool(null)
@@ -58,7 +59,9 @@ export function AgentWorkspacePanel({
   return (
     <div
       className="flex h-full min-h-0 flex-col border-l border-border bg-background"
+      data-agent-scroll-visible={scrollbarVisible.active ? "true" : "false"}
       onWheelCapture={containWheelWithinPanel}
+      onScrollCapture={scrollbarVisible.reveal}
     >
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
         <div className="min-w-0">
@@ -120,6 +123,42 @@ export function AgentWorkspacePanel({
       </div>
     </div>
   )
+}
+
+// Reveal the panel's scrollbars only while a surface is actively scrolling,
+// then fade them back out — mirrors the chat view's scrollbar behavior.
+// `onScrollCapture` on the panel root catches scroll events from every nested
+// surface (scroll doesn't bubble, but the capture phase reaches the ancestor).
+function useRevealOnScroll() {
+  const [active, setActive] = React.useState(false)
+  const activeRef = React.useRef(false)
+  const fadeTimeoutRef = React.useRef<number | null>(null)
+
+  const reveal = React.useCallback(() => {
+    if (!activeRef.current) {
+      activeRef.current = true
+      setActive(true)
+    }
+    if (fadeTimeoutRef.current !== null) {
+      window.clearTimeout(fadeTimeoutRef.current)
+    }
+    fadeTimeoutRef.current = window.setTimeout(() => {
+      activeRef.current = false
+      fadeTimeoutRef.current = null
+      setActive(false)
+    }, 900)
+  }, [])
+
+  React.useEffect(
+    () => () => {
+      if (fadeTimeoutRef.current !== null) {
+        window.clearTimeout(fadeTimeoutRef.current)
+      }
+    },
+    []
+  )
+
+  return { active, reveal }
 }
 
 function containWheelWithinPanel(event: React.WheelEvent<HTMLElement>) {
@@ -243,13 +282,13 @@ function AgentToolResultPreview({
           </button>
         )}
       </div>
-      <div className="min-h-0 flex-1 overflow-auto p-3">
+      <div className="agent-scroll min-h-0 flex-1 overflow-auto p-3">
         {args && (
           <details className="mb-3 rounded-md border border-border/70 bg-muted/25">
             <summary className="cursor-pointer px-3 py-2 text-[12px] font-medium text-muted-foreground">
               Arguments
             </summary>
-            <pre className="overflow-auto px-3 pb-3 text-[12px] leading-relaxed text-muted-foreground">
+            <pre className="agent-scroll overflow-auto px-3 pb-3 text-[12px] leading-relaxed text-muted-foreground">
               {args}
             </pre>
           </details>
@@ -280,7 +319,7 @@ function AgentRunPane({
   const isBrowserAgent = run.agentId === "browser_agent"
 
   return (
-    <div className="min-h-0 overflow-auto px-4 py-4">
+    <div className="agent-scroll min-h-0 overflow-auto px-4 py-4">
       {compact && (
         <div className="mb-3 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
           Nested agent: {run.agentName}
@@ -290,7 +329,7 @@ function AgentRunPane({
         <div className="mb-1 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
           Prompt
         </div>
-        <div className="max-h-44 overflow-auto text-[13px] break-words whitespace-pre-wrap text-muted-foreground">
+        <div className="agent-scroll max-h-44 overflow-auto text-[13px] break-words whitespace-pre-wrap text-muted-foreground">
           {run.prompt}
         </div>
       </div>

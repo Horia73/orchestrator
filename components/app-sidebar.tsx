@@ -55,6 +55,14 @@ import {
 } from "@/components/profiles/use-profiles"
 import type { Conversation } from "@/lib/types"
 
+// Runs before the browser paints on the client (so the tablet-nav collapse
+// is applied in the same frame the sidebar mounts), and degrades to a plain
+// effect during SSR to avoid the useLayoutEffect-on-server warning. AppSidebar
+// is mounted per-route, so without this the sidebar paints one expanded frame
+// — flashing the conversation list — before a post-paint effect collapses it.
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect
+
 const TABLET_NAV_MEDIA =
   "(min-width: 768px) and (max-width: 1180px), (pointer: coarse) and (min-width: 768px) and (max-width: 1366px)"
 const SEARCH_DEBOUNCE_MS = 180
@@ -575,7 +583,7 @@ export function AppSidebar() {
     sidebarOpenRef.current = sidebarOpen
   }, [sidebarOpen])
 
-  React.useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const active = shouldConstrainTabletNav && isTabletNavViewport && !isMobile
     if (active && tabletRestoreOpenRef.current === null) {
       tabletRestoreOpenRef.current = sidebarOpenRef.current
@@ -1292,9 +1300,13 @@ export function AppSidebar() {
 }
 
 function useMediaQuery(query: string): boolean {
+  // Initial state stays `false` to match the server render (no hydration
+  // mismatch); the layout effect then corrects it before paint, so the
+  // constrain logic sees the real viewport in the mount frame rather than
+  // a paint later.
   const [matches, setMatches] = React.useState(false)
 
-  React.useEffect(() => {
+  useIsomorphicLayoutEffect(() => {
     const media = window.matchMedia(query)
     const update = () => setMatches(media.matches)
     update()

@@ -1560,7 +1560,20 @@ export function ChatView() {
 
           autoScrollEnabledRef.current = false
           followStreamingRef.current = false
-          scheduleMessageTopAnchor(previousMsg.id)
+          // This branch is only reachable when an assistant turn is already
+          // mid-stream as we (re)enter the conversation — switching back into a
+          // live chat, or reloading/recovering an interrupted stream. A genuine
+          // send has a `user` tail (handled above), so here the scroll-restore
+          // layout effect has already placed the view where the user left it.
+          // Only re-pin the user message if they were actually reading at the
+          // top anchor; otherwise honor the restored position instead of
+          // yanking them back up to their message.
+          if (
+            restoredScrollConversationRef.current === conversationId &&
+            isMessageNearTopAnchor(previousMsg.id)
+          ) {
+            scheduleMessageTopAnchor(previousMsg.id)
+          }
         } else {
           // Keep manual-follow behavior: do not auto-follow streaming unless
           // the user explicitly taps the scroll button.
@@ -1613,6 +1626,7 @@ export function ChatView() {
     conversationId,
     getCommittedTailSpacer,
     getTailResponseMinHeight,
+    isMessageNearTopAnchor,
     isStreamingThisConversation,
     messageCount,
     minHeight,
@@ -1731,8 +1745,20 @@ export function ChatView() {
     ]
   )
 
+  const handleAgentClose = React.useCallback(() => {
+    setActiveAgentRunId(null)
+    restoreSidebar()
+  }, [restoreSidebar])
+
   const handleAgentOpen = React.useCallback(
     (run: AgentCallReasoningEntry) => {
+      // Re-click on the same agent's chip toggles the panel shut, so the
+      // inline button is a press-press affordance instead of a dead end once
+      // the panel is already showing that agent (mirrors handleArtifactExpand).
+      if (activeAgentRunId === run.runId) {
+        handleAgentClose()
+        return
+      }
       const panelAlreadyOpen =
         artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
       if (!panelAlreadyOpen) {
@@ -1744,6 +1770,8 @@ export function ChatView() {
       setSidebarOpen(false)
     },
     [
+      activeAgentRunId,
+      handleAgentClose,
       activePanelAgentRun,
       artifactOpen,
       genArtifact,
@@ -1751,11 +1779,6 @@ export function ChatView() {
       sidebarOpen,
     ]
   )
-
-  const handleAgentClose = React.useCallback(() => {
-    setActiveAgentRunId(null)
-    restoreSidebar()
-  }, [restoreSidebar])
 
   const handleLoadMessageDetails = React.useCallback(
     (messageId: string) => {

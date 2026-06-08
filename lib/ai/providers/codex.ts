@@ -34,6 +34,12 @@ import {
     todosFromCodexPlan,
     type AnyObj,
 } from './codex-helpers'
+import {
+    appendRuntimeSkillsToSystemPrompt,
+    appendRuntimeSkillsToUserPrompt,
+    selectExplicitlyRequestedSkills,
+    type RuntimeSkill,
+} from './runtime-skills'
 
 /**
  * Codex provider backed by `codex app-server`.
@@ -705,13 +711,20 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     capabilities: { experimentalApi: true },
                 })
 
+                const effectiveCwd = cwd ?? activeRuntimePaths().agentWorkspaceDir
+                const runtimeSkills = await listCodexRuntimeSkills(request, effectiveCwd, rememberDiagnostic)
+                const effectiveSystemPrompt = appendRuntimeSkillsToSystemPrompt(systemPrompt, 'codex', runtimeSkills)
+                const effectivePrompt = effectiveSystemPrompt
+                    ? prompt
+                    : appendRuntimeSkillsToUserPrompt(prompt, 'codex', runtimeSkills)
+
                 const threadParams = buildThreadParams({
                     model,
-                    systemPrompt,
+                    systemPrompt: effectiveSystemPrompt,
                     tools,
                     builtins,
                     nativeCoderRun,
-                    cwd,
+                    cwd: effectiveCwd,
                 })
 
                 let threadResult: AnyObj
@@ -737,7 +750,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
                 const turnParams: AnyObj = {
                     threadId: activeThreadId,
-                    input: [{ type: 'text', text: prompt, text_elements: [] }],
+                    input: buildCodexTurnInput(effectivePrompt, runtimeSkills),
                 }
                 const effort = mapEffortForCodex(thinkingLevel)
                 if (effort) turnParams.effort = effort
@@ -820,6 +833,59 @@ function buildThreadParams(args: {
     }
 
     return params
+}
+
+async function listCodexRuntimeSkills(
+    request: (method: string, params: unknown, timeoutMs?: number) => Promise<unknown>,
+    cwd: string,
+    rememberDiagnostic: (text: string) => void,
+): Promise<RuntimeSkill[]> {
+    try {
+        const result = await request('skills/list', {
+            cwds: [cwd],
+            forceReload: false,
+        }, 15_000) as AnyObj
+        return parseCodexSkillsList(result, cwd)
+    } catch (err) {
+        rememberDiagnostic(`skills/list failed: ${err instanceof Error ? err.message : String(err)}`)
+        return []
+    }
+}
+
+function parseCodexSkillsList(result: AnyObj, cwd: string): RuntimeSkill[] {
+    const data = Array.isArray(result.data) ? result.data : []
+    const skills: RuntimeSkill[] = []
+    for (const entry of data) {
+        if (!entry || typeof entry !== 'object') continue
+        const record = entry as AnyObj
+        const entryCwd = typeof record.cwd === 'string' ? record.cwd : cwd
+        if (entryCwd !== cwd) continue
+        const listed = Array.isArray(record.skills) ? record.skills : []
+        for (const raw of listed) {
+            if (!raw || typeof raw !== 'object') continue
+            const skill = raw as AnyObj
+            const name = typeof skill.name === 'string' ? skill.name.trim() : ''
+            if (!name) continue
+            const description = typeof skill.description === 'string' ? skill.description : undefined
+            const skillPath = typeof skill.path === 'string' ? skill.path : undefined
+            const scope = typeof skill.scope === 'string'
+                ? skill.scope
+                : typeof skill.kind === 'string'
+                    ? skill.kind
+                    : undefined
+            skills.push({ name, description, path: skillPath, scope })
+        }
+    }
+    return skills
+}
+
+function buildCodexTurnInput(prompt: string, skills: RuntimeSkill[]): AnyObj[] {
+    const input: AnyObj[] = [{ type: 'text', text: prompt, text_elements: [] }]
+    for (const skill of selectExplicitlyRequestedSkills(prompt, skills)) {
+        if (!skill.path) continue
+        input.push({ type: 'skill', name: skill.name, path: skill.path })
+    }
+    return input
 }
 
 function codexAllowsShell(builtins: ProviderBuiltin[]): boolean {

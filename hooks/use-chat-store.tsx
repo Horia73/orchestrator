@@ -820,31 +820,38 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         }
 
         if (recoveredMessage) {
-          if (isTerminalAssistantMessage(recoveredMessage)) {
+          const hydratedMessage =
+            (await hydrateStreamMessage(
+              conversationId,
+              recoveredMessage,
+              messageId
+            )) ?? recoveredMessage
+
+          if (isTerminalAssistantMessage(hydratedMessage)) {
             dispatch({
               type: "ADD_ASSISTANT_MESSAGE",
               conversationId,
-              message: recoveredMessage,
+              message: hydratedMessage,
             })
-            handleAssistantFinished(conversationId, recoveredMessage)
+            handleAssistantFinished(conversationId, hydratedMessage)
             return "final"
           }
 
           const hasProgress =
-            recoveredMessage.content.trim().length > 0 ||
-            (recoveredMessage.reasoning?.length ?? 0) > 0 ||
-            recoveredMessage.contentSegments?.some(
+            hydratedMessage.content.trim().length > 0 ||
+            (hydratedMessage.reasoning?.length ?? 0) > 0 ||
+            hydratedMessage.contentSegments?.some(
               (segment) => segment.content.length > 0
             )
           if (attempt === STREAM_RECOVERY_ATTEMPTS - 1 && hasProgress) {
             const abortedMessage: Message = {
-              ...recoveredMessage,
+              ...hydratedMessage,
               status: "aborted",
               reasoning: markReasoningStopped(
-                recoveredMessage.reasoning,
+                hydratedMessage.reasoning,
                 Date.now()
               ),
-              thinkingDuration: recoveredMessage.thinkingDuration ?? 0,
+              thinkingDuration: hydratedMessage.thinkingDuration ?? 0,
             }
             dispatch({
               type: "ADD_ASSISTANT_MESSAGE",
@@ -906,7 +913,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       if (streamingRef.current) return
 
       const knownStream = activeChatStreamsRef.current[conversationId]
-      if (!knownStream && !isStreamingStateRef.current) return
+      const wasHiddenDuringStream = streamPageWasHiddenRef.current
+      if (!knownStream && !isStreamingStateRef.current && !wasHiddenDuringStream)
+        return
 
       const currentSequence = ++sequence
       void (async () => {
@@ -916,6 +925,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           streams.find((item) => item.conversationId === conversationId) ??
           activeChatStreamsRef.current[conversationId]
         await recoverInterruptedStream(conversationId, stream?.messageId)
+        if (currentSequence === sequence) {
+          streamPageWasHiddenRef.current = false
+        }
       })()
     }
 
@@ -1188,6 +1200,18 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             messageId: data.payload.messageId,
           })
           reconcileConversationSummaries("after stream end")
+          if (
+            document.visibilityState === "visible" &&
+            data.payload.conversationId === activeConversationIdRef.current &&
+            !streamingRef.current
+          ) {
+            void recoverInterruptedStream(
+              data.payload.conversationId,
+              typeof data.payload.messageId === "string"
+                ? data.payload.messageId
+                : undefined
+            )
+          }
         }
       } catch (err) {
         console.error("Failed to parse SSE event", err)
@@ -1208,6 +1232,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     handleAssistantFinished,
     reconcileConversationSummaries,
     reconcileUnknownConversation,
+    recoverInterruptedStream,
   ])
 
   const newChat = React.useCallback(() => {

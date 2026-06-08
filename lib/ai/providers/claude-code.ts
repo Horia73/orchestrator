@@ -19,6 +19,11 @@ import { createBinding, clearBinding } from '@/lib/cli/mcp-bindings'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeUsage } from '@/lib/observability/usage-mapper'
 import { latestUserPromptWithPortableHistory } from './history'
+import {
+    appendRuntimeSkillsToSystemPrompt,
+    appendRuntimeSkillsToUserPrompt,
+    discoverClaudeCodeSkills,
+} from './runtime-skills'
 
 // Our custom tools reach Claude Code through one stdio MCP server. Claude Code
 // surfaces MCP tools to the model as `mcp__<server>__<tool>`, never the bare
@@ -96,12 +101,19 @@ export class ClaudeCodeProvider implements AIProvider {
         // produces ONE assistant turn. When resuming, earlier turns live in the
         // resumed session; after a provider/model switch, we embed prior chat
         // history in this one prompt so the fresh session can continue.
-        const prompt = latestUserPromptWithPortableHistory(options.messages, Boolean(options.prevSession?.id))
-        if (!prompt.trim()) {
+        const rawPrompt = latestUserPromptWithPortableHistory(options.messages, Boolean(options.prevSession?.id))
+        if (!rawPrompt.trim()) {
             cb.onError('claude-code: empty prompt')
             cb.onDone({})
             return
         }
+
+        const cwd = options.cwd ?? activeRuntimePaths().agentWorkspaceDir
+        const runtimeSkills = discoverClaudeCodeSkills(cwd)
+        const systemPrompt = appendRuntimeSkillsToSystemPrompt(options.systemPrompt, 'claude-code', runtimeSkills)
+        const prompt = systemPrompt
+            ? rawPrompt
+            : appendRuntimeSkillsToUserPrompt(rawPrompt, 'claude-code', runtimeSkills)
 
         const spec = CLI_SPECS['claude-code']
         const args = [...spec.generationArgs(prompt)]
@@ -111,10 +123,10 @@ export class ClaudeCodeProvider implements AIProvider {
         // limit (~256KB on macOS) and our prompts can be ~10KB, so write to
         // a temp file and use the *-file variant. Cleaned up after the run.
         const cleanups: Array<() => void> = []
-        if (options.systemPrompt && options.systemPrompt.trim()) {
+        if (systemPrompt && systemPrompt.trim()) {
             const dir = mkdtempSync(join(tmpdir(), 'orch-cc-prompt-'))
             const path = join(dir, 'system-prompt.txt')
-            writeFileSync(path, options.systemPrompt, 'utf-8')
+            writeFileSync(path, systemPrompt, 'utf-8')
             args.push('--append-system-prompt-file', path)
             cleanups.push(() => { try { rmSync(dir, { recursive: true, force: true }) } catch { /* fine */ } })
         }
@@ -224,7 +236,7 @@ export class ClaudeCodeProvider implements AIProvider {
             bin: spec.bin,
             args,
             model: options.model,
-            cwd: options.cwd,
+            cwd,
             signal: options.signal,
             callbacks: cb,
             initialSessionId: sessionId,

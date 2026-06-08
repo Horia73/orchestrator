@@ -453,11 +453,43 @@ button:not(:disabled),
     background: color-mix(in oklch, var(--foreground) 35%, transparent);
   }
 
+  /* Agent workspace panel — slim scrollbars that stay hidden until the
+     surface is actually scrolling. Visibility is driven by
+     `data-agent-scroll-visible` toggled on the panel root, so every nested
+     scroll surface (run pane, prompt box, tool-result preview) reveals and
+     fades together. */
+  .agent-scroll {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 180ms ease;
+  }
+  .agent-scroll::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .agent-scroll::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    transition: background-color 180ms ease;
+  }
+  [data-agent-scroll-visible="true"] .agent-scroll {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 35%, transparent)
+      transparent;
+  }
+  [data-agent-scroll-visible="true"] .agent-scroll::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 35%, transparent);
+  }
+
 }
 
+/* Kill the document-level scrollbar on the settings route, and hide
+   scrollbars within the settings content subtree. Scope the "hide every
+   descendant" part to `[data-orch-settings-content]` — NOT to
+   `html[data-orch-settings-page] *`, which would also override the
+   persistent sidebar's `scrollbar-gutter: stable` and reflow the
+   conversation list whenever you enter/leave settings. */
 html[data-orch-settings-page="true"],
 html[data-orch-settings-page="true"] body,
-html[data-orch-settings-page="true"] *,
 [data-orch-settings-content="true"],
 [data-orch-settings-content="true"] * {
   scrollbar-width: none !important;
@@ -466,7 +498,6 @@ html[data-orch-settings-page="true"] *,
 
 html[data-orch-settings-page="true"]::-webkit-scrollbar,
 html[data-orch-settings-page="true"] body::-webkit-scrollbar,
-html[data-orch-settings-page="true"] *::-webkit-scrollbar,
 [data-orch-settings-content="true"]::-webkit-scrollbar,
 [data-orch-settings-content="true"] *::-webkit-scrollbar {
   width: 0 !important;
