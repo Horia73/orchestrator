@@ -21,6 +21,7 @@ import {
   type ActiveChatStream,
   type ConversationLoadState,
   type ConversationMessagePageState,
+  type StreamingStatus,
   type StreamingReasoning,
 } from "./chat-store-utils"
 
@@ -38,6 +39,7 @@ export interface ChatState {
   streamingContentSegments: NonNullable<Message["contentSegments"]>
   streamingReasoning: StreamingReasoning
   streamingMode: "reasoning" | "content" | null
+  streamingStatus: StreamingStatus
   thinkingSeconds: number
   thinkingDone: boolean
   /**
@@ -92,6 +94,7 @@ export type ChatAction =
       conversationId?: string
       messageId?: string
       snapshot?: Message
+      status?: StreamingStatus
     }
   | { type: "APPEND_STREAMING_THINKING_CHUNK"; chunk: string; phase: number }
   | { type: "APPEND_STREAMING_CONTENT"; chunk: string; phase: number }
@@ -718,6 +721,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         isStreaming: true,
         streamingConversationId: nextConversationId,
         streamingMessageId: nextMessageId,
+        streamingStatus: hasSnapshotPayload
+          ? null
+          : action.status !== undefined
+            ? action.status
+            : sameStream
+              ? state.streamingStatus
+              : "connecting",
         ...(hasSnapshotPayload
           ? {
               streamingContent: snapshot?.content ?? "",
@@ -727,6 +737,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
                 snapshotReasoning ?? [],
                 snapshotSegments ?? []
               ),
+              streamingStatus: null,
               thinkingDone:
                 typeof snapshot?.thinkingDuration === "number"
                   ? true
@@ -759,6 +770,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         ...state,
         streamingReasoning: reasoning,
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     }
     case "APPEND_STREAMING_CONTENT": {
@@ -780,6 +792,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         streamingContent: state.streamingContent + action.chunk,
         streamingContentSegments: segments,
         streamingMode: "content",
+        streamingStatus: null,
       }
     }
     case "ADD_STREAMING_TOOL_CALL":
@@ -789,7 +802,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             entry.type === "tool_call" && entry.toolCallId === action.toolCallId
         )
       ) {
-        return { ...state, streamingMode: "reasoning" }
+        return { ...state, streamingMode: "reasoning", streamingStatus: null }
       }
       return {
         ...state,
@@ -809,6 +822,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           },
         ],
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     case "APPEND_STREAMING_TOOL_DELTA":
       return {
@@ -824,6 +838,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : entry
         ),
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     case "SET_STREAMING_TOOL_RESULT":
       return {
@@ -842,6 +857,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             : entry
         ),
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     case "UPSERT_STREAMING_AGENT_CALL": {
       const exists = state.streamingReasoning.some(
@@ -858,6 +874,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             )
           : [...state.streamingReasoning, action.entry],
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     }
     case "APPEND_STREAMING_AGENT_THINKING":
@@ -869,6 +886,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           (entry) => appendAgentThought(entry, action.chunk, action.phase)
         ),
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     case "APPEND_STREAMING_AGENT_CONTENT":
       return {
@@ -878,6 +896,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           action.runId,
           (entry) => appendAgentContent(entry, action.chunk, action.phase)
         ),
+        streamingStatus: null,
       }
     case "ADD_STREAMING_AGENT_TOOL_CALL":
       return {
@@ -913,6 +932,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             }
           }
         ),
+        streamingStatus: null,
       }
     case "APPEND_STREAMING_AGENT_TOOL_DELTA":
       return {
@@ -934,6 +954,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ),
           })
         ),
+        streamingStatus: null,
       }
     case "SET_STREAMING_AGENT_TOOL_RESULT":
       return {
@@ -960,6 +981,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             ),
           })
         ),
+        streamingStatus: null,
       }
     case "SET_STREAMING_AGENT_DONE":
       return {
@@ -981,6 +1003,7 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             thinkingDuration: action.thinkingDuration ?? entry.thinkingDuration,
           })
         ),
+        streamingStatus: null,
       }
     case "ADD_STREAMING_CONTEXT_COMPACTION":
       if (
@@ -989,12 +1012,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             entry.type === "context_compaction" && entry.id === action.entry.id
         )
       ) {
-        return { ...state, streamingMode: "reasoning" }
+        return { ...state, streamingMode: "reasoning", streamingStatus: null }
       }
       return {
         ...state,
         streamingReasoning: [...state.streamingReasoning, action.entry],
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     case "ADD_STREAMING_MEMORY_RECALL":
       if (
@@ -1003,12 +1027,13 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             entry.type === "memory_recall" && entry.id === action.entry.id
         )
       ) {
-        return { ...state, streamingMode: "reasoning" }
+        return { ...state, streamingMode: "reasoning", streamingStatus: null }
       }
       return {
         ...state,
         streamingReasoning: [...state.streamingReasoning, action.entry],
         streamingMode: "reasoning",
+        streamingStatus: null,
       }
     case "UPDATE_CONTEXT_USAGE":
       return {

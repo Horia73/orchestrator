@@ -242,6 +242,7 @@ export function MapChatPanel({
                     content={state.streamingContent}
                     contentSegments={state.streamingContentSegments}
                     streamingMode={state.streamingMode}
+                    streamingStatus={state.streamingStatus}
                     showCursor={
                       state.streamingReasoning.length === 0 &&
                       state.streamingContent.length === 0

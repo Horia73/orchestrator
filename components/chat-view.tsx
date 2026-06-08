@@ -45,6 +45,14 @@ import { MarkdownImagePreviewProvider } from "@/components/markdown-renderer"
 import { ArtifactPanel as AntArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
+import {
+  consumeLocalSubmitAnchor,
+  isLocalSubmitAnchorDetail,
+  isLocalSubmitAnchorFresh,
+  LOCAL_SUBMIT_ANCHOR_EVENT,
+  readLocalSubmitAnchor,
+  type LocalSubmitAnchor,
+} from "@/lib/chat-local-submit-anchor"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
@@ -79,6 +87,8 @@ export function ChatView() {
     streamMessageId: string | null
     anchor: SavedScrollRestore
   } | null>(null)
+  const pendingLocalSubmitAnchorRef =
+    React.useRef<LocalSubmitAnchor | null>(null)
   const restoreOlderAttemptRef = React.useRef<{
     conversationId: string
     attempts: number
@@ -423,6 +433,24 @@ export function ChatView() {
   React.useEffect(() => {
     activeIdRef.current = state.activeConversationId
   }, [state.activeConversationId])
+
+  React.useEffect(() => {
+    const handleLocalSubmitAnchor = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail
+      if (!isLocalSubmitAnchorDetail(detail)) return
+      pendingLocalSubmitAnchorRef.current = detail
+    }
+
+    window.addEventListener(
+      LOCAL_SUBMIT_ANCHOR_EVENT,
+      handleLocalSubmitAnchor
+    )
+    return () =>
+      window.removeEventListener(
+        LOCAL_SUBMIT_ANCHOR_EVENT,
+        handleLocalSubmitAnchor
+      )
+  }, [])
 
   const setScrollButtonVisible = React.useCallback((visible: boolean) => {
     if (showScrollBtnRef.current === visible) return
@@ -884,6 +912,114 @@ export function ChatView() {
     [isMessageNearTopAnchor, scrollMessageToTop, syncScrollState]
   )
 
+  const persistTailSpacerState = React.useCallback(
+    (nextMinHeight: number, nextMinHeightMsgId: string | null) => {
+      minHeightActiveRef.current = nextMinHeight > 0
+      setMinHeightMsgId(nextMinHeightMsgId)
+      setMinHeight(nextMinHeight)
+
+      if (conversationId) {
+        if (nextMinHeight > 0) {
+          localStorage.setItem(
+            `chat:minHeight:${conversationId}`,
+            JSON.stringify({
+              minHeight: nextMinHeight,
+              minHeightMsgId: nextMinHeightMsgId,
+              viewportHeight: window.innerHeight,
+            })
+          )
+        } else {
+          localStorage.removeItem(`chat:minHeight:${conversationId}`)
+        }
+      }
+    },
+    [conversationId]
+  )
+
+  const prepareTailSpacerForSubmittedMessage = React.useCallback(
+    (userMessageId: string) => {
+      const messages = activeConversation?.messages ?? []
+      const userIndex = messages.findIndex(
+        (message) => message.id === userMessageId && message.role === "user"
+      )
+      if (userIndex < 0) return false
+
+      const lastMessage = messages[messages.length - 1]
+      const nextMessage = messages[userIndex + 1]
+      let nextMinHeight = 0
+      let nextMinHeightMsgId: string | null = null
+
+      if (lastMessage?.id === userMessageId) {
+        nextMinHeight = getTailResponseMinHeight(
+          userMessageId,
+          streamingBubbleContainerRef.current
+        )
+      } else if (isAssistantMessageInProgress(nextMessage)) {
+        if (showStreamingBubble) {
+          nextMinHeight = getTailResponseMinHeight(
+            userMessageId,
+            streamingBubbleContainerRef.current
+          )
+        } else {
+          const assistantElement = document.getElementById(
+            `message-${nextMessage.id}`
+          )
+          nextMinHeight =
+            assistantElement instanceof HTMLElement
+              ? getCommittedTailSpacer(userMessageId, assistantElement)
+              : getTailResponseMinHeight(userMessageId, null)
+          nextMinHeightMsgId =
+            assistantElement instanceof HTMLElement ? nextMessage.id : null
+        }
+      } else {
+        return false
+      }
+
+      persistTailSpacerState(nextMinHeight, nextMinHeightMsgId)
+      return true
+    },
+    [
+      activeConversation?.messages,
+      getCommittedTailSpacer,
+      getTailResponseMinHeight,
+      persistTailSpacerState,
+      showStreamingBubble,
+    ]
+  )
+
+  const consumeSubmittedMessageAnchor = React.useCallback(() => {
+    if (!conversationId) return false
+
+    const pending = pendingLocalSubmitAnchorRef.current
+    const anchor =
+      pending?.conversationId === conversationId &&
+      isLocalSubmitAnchorFresh(pending)
+        ? pending
+        : readLocalSubmitAnchor(conversationId)
+    if (!anchor) return false
+
+    const messageElement = document.getElementById(`message-${anchor.messageId}`)
+    if (!messageElement) return false
+    if (!prepareTailSpacerForSubmittedMessage(anchor.messageId)) return false
+
+    pendingLocalSubmitAnchorRef.current = null
+    consumeLocalSubmitAnchor(conversationId, anchor.messageId)
+    autoScrollEnabledRef.current = false
+    followStreamingRef.current = false
+    setScrollButtonVisible(false)
+    suppressBtnRef.current = true
+    window.setTimeout(() => {
+      suppressBtnRef.current = false
+    }, 300)
+    scheduleMessageTopAnchor(anchor.messageId)
+    return true
+  }, [
+    conversationId,
+    prepareTailSpacerForSubmittedMessage,
+    scheduleMessageTopAnchor,
+    setScrollButtonVisible,
+  ])
+
   const cancelMessageTopAnchor = React.useCallback(() => {
     if (
       messageTopAnchorFrameIdRef.current === null &&
@@ -904,6 +1040,17 @@ export function ChatView() {
     ignoreSyncRef.current = false
     syncScrollState()
   }, [syncScrollState])
+
+  React.useLayoutEffect(() => {
+    consumeSubmittedMessageAnchor()
+  }, [
+    consumeSubmittedMessageAnchor,
+    isStreamingThisConversation,
+    messageCount,
+    state.streamingContent,
+    state.streamingContentSegments,
+    state.streamingReasoning,
+  ])
 
   React.useEffect(() => {
     const element = scrollContainerRef.current
@@ -1502,87 +1649,89 @@ export function ChatView() {
           localStorage.setItem(anchorTakenKey, currentStreamMessageId)
         }
 
-        const messages = activeConversation?.messages || []
-        const lastMsg = messages[messages.length - 1]
-        const previousMsg = messages[messages.length - 2]
+        if (!consumeSubmittedMessageAnchor()) {
+          const messages = activeConversation?.messages || []
+          const lastMsg = messages[messages.length - 1]
+          const previousMsg = messages[messages.length - 2]
 
-        if (lastMsg?.role === "user") {
-          const neededSpace = getTailResponseMinHeight(
-            lastMsg.id,
-            streamingBubbleContainerRef.current
-          )
-
-          minHeightActiveRef.current = neededSpace > 0
-          setMinHeightMsgId(null) // streaming bubble takes over
-          setMinHeight(neededSpace)
-
-          if (conversationId) {
-            localStorage.setItem(
-              `chat:minHeight:${conversationId}`,
-              JSON.stringify({
-                minHeight: neededSpace,
-                minHeightMsgId: null,
-                viewportHeight: window.innerHeight,
-              })
+          if (lastMsg?.role === "user") {
+            const neededSpace = getTailResponseMinHeight(
+              lastMsg.id,
+              streamingBubbleContainerRef.current
             )
-          }
 
-          autoScrollEnabledRef.current = false
-          followStreamingRef.current = false
-          scheduleMessageTopAnchor(lastMsg.id)
-        } else if (
-          isAssistantMessageInProgress(lastMsg) &&
-          hasAssistantProgress(lastMsg) &&
-          previousMsg?.role === "user"
-        ) {
-          const assistantElement = document.getElementById(
-            `message-${lastMsg.id}`
-          )
-          const neededSpace =
-            assistantElement instanceof HTMLElement
-              ? getCommittedTailSpacer(previousMsg.id, assistantElement)
-              : minHeight
+            minHeightActiveRef.current = neededSpace > 0
+            setMinHeightMsgId(null) // streaming bubble takes over
+            setMinHeight(neededSpace)
 
-          minHeightActiveRef.current = neededSpace > 0
-          setMinHeightMsgId(lastMsg.id)
-          setMinHeight(neededSpace)
+            if (conversationId) {
+              localStorage.setItem(
+                `chat:minHeight:${conversationId}`,
+                JSON.stringify({
+                  minHeight: neededSpace,
+                  minHeightMsgId: null,
+                  viewportHeight: window.innerHeight,
+                })
+              )
+            }
 
-          if (conversationId) {
-            localStorage.setItem(
-              `chat:minHeight:${conversationId}`,
-              JSON.stringify({
-                minHeight: neededSpace,
-                minHeightMsgId: lastMsg.id,
-                viewportHeight: window.innerHeight,
-              })
-            )
-          }
-
-          autoScrollEnabledRef.current = false
-          followStreamingRef.current = false
-          // This branch is only reachable when an assistant turn is already
-          // mid-stream as we (re)enter the conversation — switching back into a
-          // live chat, or reloading/recovering an interrupted stream. A genuine
-          // send has a `user` tail (handled above), so here the scroll-restore
-          // layout effect has already placed the view where the user left it.
-          // Only re-pin the user message if they were actually reading at the
-          // top anchor; otherwise honor the restored position instead of
-          // yanking them back up to their message.
-          if (
-            restoredScrollConversationRef.current === conversationId &&
-            isMessageNearTopAnchor(previousMsg.id)
+            autoScrollEnabledRef.current = false
+            followStreamingRef.current = false
+            scheduleMessageTopAnchor(lastMsg.id)
+          } else if (
+            isAssistantMessageInProgress(lastMsg) &&
+            hasAssistantProgress(lastMsg) &&
+            previousMsg?.role === "user"
           ) {
-            scheduleMessageTopAnchor(previousMsg.id)
+            const assistantElement = document.getElementById(
+              `message-${lastMsg.id}`
+            )
+            const neededSpace =
+              assistantElement instanceof HTMLElement
+                ? getCommittedTailSpacer(previousMsg.id, assistantElement)
+                : minHeight
+
+            minHeightActiveRef.current = neededSpace > 0
+            setMinHeightMsgId(lastMsg.id)
+            setMinHeight(neededSpace)
+
+            if (conversationId) {
+              localStorage.setItem(
+                `chat:minHeight:${conversationId}`,
+                JSON.stringify({
+                  minHeight: neededSpace,
+                  minHeightMsgId: lastMsg.id,
+                  viewportHeight: window.innerHeight,
+                })
+              )
+            }
+
+            autoScrollEnabledRef.current = false
+            followStreamingRef.current = false
+            // This branch is only reachable when an assistant turn is already
+            // mid-stream as we (re)enter the conversation — switching back into a
+            // live chat, or reloading/recovering an interrupted stream. A genuine
+            // send has a `user` tail (handled above), so here the scroll-restore
+            // layout effect has already placed the view where the user left it.
+            // Only re-pin the user message if they were actually reading at the
+            // top anchor; otherwise honor the restored position instead of
+            // yanking them back up to their message.
+            if (
+              restoredScrollConversationRef.current === conversationId &&
+              isMessageNearTopAnchor(previousMsg.id)
+            ) {
+              scheduleMessageTopAnchor(previousMsg.id)
+            }
+          } else {
+            // Keep manual-follow behavior: do not auto-follow streaming unless
+            // the user explicitly taps the scroll button.
+            autoScrollEnabledRef.current = false
+            followStreamingRef.current = false
+            setMinHeight(0)
+            setMinHeightMsgId(null)
+            if (conversationId)
+              localStorage.removeItem(`chat:minHeight:${conversationId}`)
           }
-        } else {
-          // Keep manual-follow behavior: do not auto-follow streaming unless
-          // the user explicitly taps the scroll button.
-          autoScrollEnabledRef.current = false
-          followStreamingRef.current = false
-          setMinHeight(0)
-          setMinHeightMsgId(null)
-          if (conversationId)
-            localStorage.removeItem(`chat:minHeight:${conversationId}`)
         }
       }
     }
@@ -1624,6 +1773,7 @@ export function ChatView() {
   }, [
     artifactOpen,
     conversationId,
+    consumeSubmittedMessageAnchor,
     getCommittedTailSpacer,
     getTailResponseMinHeight,
     isMessageNearTopAnchor,
@@ -2254,7 +2404,9 @@ export function ChatView() {
                               content={state.streamingContent}
                               contentSegments={state.streamingContentSegments}
                               streamingMode={state.streamingMode}
+                              streamingStatus={state.streamingStatus}
                               showCursor={showInitialStreamingCursor}
+                              showStreamingStatusLabel={isMobile}
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
                               onAgentOpen={handleAgentOpen}

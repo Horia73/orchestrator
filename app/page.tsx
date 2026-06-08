@@ -35,14 +35,24 @@ function useViewFadeIn(viewKey: string, enabled: boolean) {
 export default function Page() {
   const { state, selectConversation, isSwitchingConversation } = useChatStore()
   const searchParams = useSearchParams()
+  const lastAppliedChatParamRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     const chatId = searchParams.get("chat")
-    if (!chatId || state.isLoading || state.activeConversationId === chatId)
+    if (!chatId) {
+      lastAppliedChatParamRef.current = null
       return
+    }
+    if (state.isLoading) return
+    if (state.activeConversationId === chatId) {
+      lastAppliedChatParamRef.current = chatId
+      return
+    }
+    if (lastAppliedChatParamRef.current === chatId) return
     if (
       state.conversations.some((conversation) => conversation.id === chatId)
     ) {
+      lastAppliedChatParamRef.current = chatId
       selectConversation(chatId)
     }
   }, [

@@ -5,6 +5,10 @@ import { getConversation } from '@/lib/db'
 import { getInboxConversation, searchTaskRuns } from '@/lib/scheduling/store'
 import type { RequestLogRow } from '@/lib/observability/schema'
 import type { AgentCallReasoningEntry, Message, ReasoningEntry } from '@/lib/types'
+import {
+    normalizeLogTranscriptForPreview,
+    type RequestLogTranscript,
+} from '@/lib/observability/log-transcript'
 import { runWithProfileContext } from '@/lib/profiles/context'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
@@ -17,15 +21,13 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
         }
         const transcript = runWithProfileContext(
             { profileId: detail.profile.id, role: detail.profile.role },
-            () => getRequestTranscript(detail.row)
+            () => normalizeLogTranscriptForPreview(
+                detail.row,
+                getRequestTranscript(detail.row)
+            )
         )
         return NextResponse.json({ log: detail.row, toolLogs: detail.toolLogs, transcript })
   })
-}
-
-type RequestLogTranscript = {
-    userMessage: Message | null
-    assistantMessage: Message
 }
 
 function getRequestTranscript(log: RequestLogRow): RequestLogTranscript | null {

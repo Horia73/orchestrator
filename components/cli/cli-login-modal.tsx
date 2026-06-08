@@ -5,6 +5,7 @@ import { Copy, ExternalLink, Terminal as TerminalIcon, X } from "lucide-react"
 import { copyTextToClipboard } from "@/lib/clipboard"
 
 import { cn } from "@/lib/utils"
+import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { CliTerminal } from "./cli-terminal"
 
 interface CliLoginModalProps {
@@ -38,6 +39,7 @@ function extractUrls(text: string): string[] {
  * above it that auto-extracts OAuth links so the user can click through.
  */
 export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginModalProps) {
+    const keyboardInset = useMobileKeyboardInset()
     const [sessionId, setSessionId] = React.useState<string | null>(null)
     const [error, setError] = React.useState<string | null>(null)
     const [exited, setExited] = React.useState<{ code: number | null } | null>(null)
@@ -95,12 +97,17 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
 
     return (
         <div
-            className="fixed inset-0 z-50 flex items-center justify-center bg-foreground/40 px-4 backdrop-blur-sm"
+            className="fixed inset-0 z-50 flex items-stretch justify-center overflow-hidden bg-foreground/40 px-2 py-2 pt-[calc(0.5rem+env(safe-area-inset-top))] backdrop-blur-sm sm:items-center sm:px-4 sm:py-4"
             onClick={onClose}
         >
             <div
-                className="flex w-full max-w-3xl flex-col gap-3 rounded-2xl border border-border/70 bg-card p-5 shadow-2xl"
+                className="flex h-[calc(100dvh-1rem)] w-full max-w-3xl flex-col gap-3 overflow-hidden rounded-2xl border border-border/70 bg-card p-4 shadow-2xl sm:h-auto sm:max-h-[calc(100dvh-2rem)] sm:p-5"
                 onClick={e => e.stopPropagation()}
+                style={{
+                    height: keyboardInset > 0
+                        ? `calc(100dvh - ${keyboardInset + 8}px)`
+                        : undefined,
+                }}
             >
                 <div className="flex items-start justify-between gap-3">
                     <div className="flex items-center gap-2">
@@ -173,10 +180,10 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
                         sessionId={sessionId}
                         onExit={code => setExited({ code })}
                         onText={onText}
-                        className="h-[440px]"
+                        className="min-h-[240px] flex-1 sm:h-[440px] sm:flex-none"
                     />
                 ) : (
-                    <div className="flex h-[440px] items-center justify-center rounded-lg border border-border/60 bg-muted/30 text-[13px] text-foreground/55">
+                    <div className="flex min-h-[240px] flex-1 items-center justify-center rounded-lg border border-border/60 bg-muted/30 text-[13px] text-foreground/55 sm:h-[440px] sm:flex-none">
                         {error ? "Failed to start." : "Starting CLI session…"}
                     </div>
                 )}
