@@ -6,6 +6,7 @@ import {
   CheckCircle2,
   ChevronDown,
   ChevronLeft,
+  Eye,
   FileJson,
   FileText,
   Folder,
@@ -13,11 +14,15 @@ import {
   KeyRound,
   Loader2,
   Lock,
+  Pencil,
   Search,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { EnvEditor } from "@/components/settings/files-env-editor"
+import { MarkdownRenderer } from "@/components/markdown-renderer"
+
+type MarkdownView = "preview" | "edit"
 
 type FileKind = "json" | "env" | "markdown"
 type FileCategory = "knowledge" | "behavior" | "integrations" | "onboarding" | "system" | "models"
@@ -90,6 +95,8 @@ export function FilesTab() {
   const [error, setError] = React.useState<string | null>(null)
   const [saveState, setSaveState] = React.useState<SaveState>({ kind: "idle" })
   const [dailyMemoryOpen, setDailyMemoryOpen] = React.useState(true)
+  // Markdown files render as rich preview by default; toggle to edit the source.
+  const [markdownView, setMarkdownView] = React.useState<MarkdownView>("preview")
   // On narrow viewports the list and editor share one column; this toggles
   // which one is visible (drill-in). Both panes always show from `lg` up.
   const [mobileDetailOpen, setMobileDetailOpen] = React.useState(false)
@@ -201,6 +208,10 @@ export function FilesTab() {
     if (!selectedId || !flatFiles.some(file => file.id === selectedId)) return
     rememberLastSelectedFileId(selectedId)
   }, [flatFiles, selectedId])
+
+  React.useEffect(() => {
+    setMarkdownView("preview")
+  }, [selectedId])
 
   React.useEffect(() => {
     if (!selectedId) {
@@ -372,13 +383,22 @@ export function FilesTab() {
             </div>
           </div>
 
-          <StatusBadge
-            state={saveState}
-            invalidJson={jsonInvalid}
-            readOnly={selectedFile?.readOnly === true}
-            dirty={dirty}
-            explicitSave={selectedFile?.kind === "env"}
-          />
+          <div className="flex shrink-0 items-center gap-2">
+            {selectedFile?.kind === "markdown" && (
+              <MarkdownViewToggle
+                view={markdownView}
+                onChange={setMarkdownView}
+                readOnly={selectedFile.readOnly === true}
+              />
+            )}
+            <StatusBadge
+              state={saveState}
+              invalidJson={jsonInvalid}
+              readOnly={selectedFile?.readOnly === true}
+              dirty={dirty}
+              explicitSave={selectedFile?.kind === "env"}
+            />
+          </div>
         </div>
 
         {error && (
@@ -409,6 +429,21 @@ export function FilesTab() {
                 if (saveState.kind !== "idle") setSaveState({ kind: "idle" })
               }}
             />
+          ) : selectedFile?.kind === "markdown" && markdownView === "preview" ? (
+            <div
+              data-files-main-scroll
+              className="h-full min-h-0 overflow-auto rounded-lg border border-border/70 bg-background px-4 py-3"
+            >
+              {content.trim() ? (
+                <div className="text-[13px] leading-6 text-foreground">
+                  <MarkdownRenderer content={content} compact />
+                </div>
+              ) : (
+                <p className="text-[13px] text-foreground/45">
+                  Empty file — switch to {selectedFile.readOnly ? "Source" : "Edit"} to view the raw text.
+                </p>
+              )}
+            </div>
           ) : selectedFile ? (
             <textarea
               data-files-main-scroll
@@ -433,6 +468,46 @@ export function FilesTab() {
           )}
         </div>
       </section>
+    </div>
+  )
+}
+
+function MarkdownViewToggle({
+  view,
+  onChange,
+  readOnly,
+}: {
+  view: MarkdownView
+  onChange: (view: MarkdownView) => void
+  readOnly: boolean
+}) {
+  const options: Array<{ value: MarkdownView; label: string; icon: typeof Eye }> = [
+    { value: "preview", label: "Preview", icon: Eye },
+    { value: "edit", label: readOnly ? "Source" : "Edit", icon: Pencil },
+  ]
+  return (
+    <div className="inline-flex shrink-0 items-center gap-0.5 rounded-md border border-border/70 bg-muted/40 p-0.5">
+      {options.map(option => {
+        const Icon = option.icon
+        const active = view === option.value
+        return (
+          <button
+            key={option.value}
+            type="button"
+            onClick={() => onChange(option.value)}
+            aria-pressed={active}
+            className={cn(
+              "inline-flex items-center gap-1 rounded px-2 py-1 text-[12px] font-medium transition-colors",
+              active
+                ? "bg-background text-foreground shadow-sm"
+                : "text-foreground/55 hover:text-foreground"
+            )}
+          >
+            <Icon className="size-3.5" />
+            {option.label}
+          </button>
+        )
+      })}
     </div>
   )
 }
