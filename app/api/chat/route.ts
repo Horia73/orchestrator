@@ -1533,10 +1533,23 @@ export async function POST(request: Request) {
                       })
 
                       const completedConversation = getConversation(conversationId)
+                      // The notification body should carry only the final answer —
+                      // the text that renders after the last reasoning/tool phase
+                      // (the "Worked for…" block) in chat — not the interim
+                      // narration emitted before or between tool calls. Content
+                      // segments merge consecutive same-phase chunks, so the last
+                      // non-empty segment is exactly that closing answer; for a
+                      // single-phase turn it equals the whole response. Fall back to
+                      // the full content if there are no segments to read.
+                      const finalAnswer =
+                        [...accContentSegments]
+                          .reverse()
+                          .find((segment) => segment.content.trim().length > 0)
+                          ?.content ?? accContent
                       void sendChatCompletionPushNotification({
                         conversationId,
                         title: completedConversation?.title ?? "Chat finished",
-                        body: accContent,
+                        body: finalAnswer,
                       }).catch((error) => {
                         console.warn(
                           "Failed to send chat completion notification",
