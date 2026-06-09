@@ -109,12 +109,17 @@ export async function fetchConversationSummaries(): Promise<unknown> {
 export async function fetchConversationMessagePage(
   conversationId: string,
   limit: number,
-  before?: string
+  before?: string,
+  // The initial (visible) page loads "full" so reasoning/tool blocks render
+  // in their final layout on the first paint after a refresh — no deferred
+  // flags, no per-message detail fetch, no post-hydration reflow. Older
+  // history pages stay "slim" and hydrate per message on demand.
+  detail: "slim" | "full" = "slim"
 ): Promise<MessagePageResponse> {
   const beforeParam =
     before === undefined ? "" : `&before=${encodeURIComponent(before)}`
   const res = await fetch(
-    `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&detail=slim${beforeParam}`,
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&detail=${detail}${beforeParam}`,
     { cache: "no-store" }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)

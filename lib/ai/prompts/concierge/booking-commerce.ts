@@ -18,7 +18,7 @@ Prepare reversible steps without delay:
 - verify totals and rules;
 - bring the flow to the last safe point.
 
-For time-critical one-shot releases, drops, reservations, claims, or points/free redemptions, do a preflight early: verify login/session state, target item/slot, direct links/IDs, exact open time/timezone, cost/points ceiling, fallback pages, and blockers such as login, 2FA/codes, or browser challenges/captchas. Think through what the executor will need if the user is unavailable at the deadline, and package those details into the handoff. If the parent handoff includes scoped user confirmation to execute at the critical time, do not ask again at the deadline; route the executor with that authorization, safe autonomous recovery instructions, ordinary in-session visual challenge handling, and abort conditions.
+For time-critical one-shot releases, drops, reservations, claims, or points/free redemptions, do a preflight early: verify login/session state, target item/slot, direct links/IDs, exact open time/timezone, cost/points ceiling, fallback pages, and blockers such as 2FA/codes or browser challenges/captchas. Think through what the executor will need if the user is unavailable at the deadline, and package those details into the handoff. If the parent handoff includes scoped user confirmation to execute at the critical time, do not ask again at the deadline; route the executor with that authorization, safe autonomous recovery instructions, ordinary in-session visual challenge handling, and abort conditions.
 </booking_preparation>
 
 <confirmation_request_format>

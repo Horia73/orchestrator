@@ -117,6 +117,8 @@ async function runStatus(id: CliId): Promise<ProbeResult> {
             })
         }, STATUS_TIMEOUT_MS)
 
+        proc.stdout.setEncoding('utf8')
+        proc.stderr.setEncoding('utf8')
         proc.stdout.on('data', chunk => { stdout += chunk.toString() })
         proc.stderr.on('data', chunk => { stderr += chunk.toString() })
         proc.on('error', err => {

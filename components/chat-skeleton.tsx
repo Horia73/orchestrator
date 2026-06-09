@@ -2,6 +2,8 @@
 
 import * as React from "react"
 import { ChevronDown } from "lucide-react"
+import { LAYOUT_TRANSITION } from "@/components/chat/chat-view-helpers"
+import { cn } from "@/lib/utils"
 
 export function ChatSkeleton() {
     const [hasArtifact] = React.useState(() => {
@@ -20,7 +22,10 @@ export function ChatSkeleton() {
 
     return (
         <div
-            className="grid min-h-0 flex-1 overflow-hidden transition-[grid-template-columns] duration-[260ms] ease-[cubic-bezier(0.22,1,0.36,1)]"
+            className={cn(
+                "grid min-h-0 flex-1 overflow-hidden transition-[grid-template-columns]",
+                LAYOUT_TRANSITION
+            )}
             style={{ gridTemplateColumns: hasArtifact ? "minmax(0, 1.15fr) minmax(0, 0.85fr)" : "minmax(0, 1fr) 0fr" }}
         >
             <div className="relative flex min-h-0 min-w-0 flex-col border-r border-transparent">

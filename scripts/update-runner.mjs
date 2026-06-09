@@ -147,7 +147,11 @@ function writeState(patch) {
     ...patch,
     updatedAt: Date.now(),
   }
-  fs.writeFileSync(statePath, JSON.stringify(next, null, 2), 'utf-8')
+  // Atomic replace: a crash mid-write must never leave a half-written state
+  // file behind, since the app's update status endpoint reads it live.
+  const tmpPath = `${statePath}.tmp`
+  fs.writeFileSync(tmpPath, JSON.stringify(next, null, 2), 'utf-8')
+  fs.renameSync(tmpPath, statePath)
 }
 
 function log(message) {

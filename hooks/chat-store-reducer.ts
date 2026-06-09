@@ -343,18 +343,28 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
           isLoadingOlder: false,
         }
       }
-      const savedId =
-        typeof window !== "undefined"
+      // Restore the last-open conversation from localStorage only when this
+      // tab has no active selection (first load, or returning from a route
+      // that cleared the list). Summary refreshes fire on every focus/SSE
+      // reconnect; re-reading localStorage there would let another tab's
+      // selection hijack this tab's open conversation. A currently-active id
+      // is still validated against the fresh list so a remotely deleted
+      // conversation falls back to Home.
+      const candidateId =
+        state.activeConversationId ??
+        (typeof window !== "undefined"
           ? localStorage.getItem("chat:active-id")
-          : null
-      const validSavedId = merged.some((c) => c.id === savedId) ? savedId : null
+          : null)
+      const validActiveId = merged.some((c) => c.id === candidateId)
+        ? candidateId
+        : null
       return {
         ...state,
         conversations: merged,
         conversationLoadState,
         conversationLoadErrors,
         conversationMessagePages,
-        activeConversationId: validSavedId,
+        activeConversationId: validActiveId,
         isLoading: false,
       }
     }
@@ -1224,6 +1234,8 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         }
       }
 
+      // Stamp the stop moment as the message timestamp — the server's terminal
+      // persist does the same, so the row a refresh loads matches this one.
       const partialMessage: Message = hasStreamingPayload
         ? {
             ...existingAssistantMessage,
@@ -1241,16 +1253,14 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
               (stream?.startedAt != null
                 ? Math.max(0, action.timestamp - stream.startedAt)
                 : undefined),
-            timestamp:
-              existingAssistantMessage?.timestamp ??
-              stream?.startedAt ??
-              action.timestamp,
+            timestamp: action.timestamp,
           }
         : {
             ...existingAssistantMessage!,
             status: "aborted",
             reasoning: stoppedExistingReasoning,
             thinkingDuration: existingAssistantMessage!.thinkingDuration ?? 0,
+            timestamp: action.timestamp,
           }
       const isNewMessage = !existingConversation?.messages.some(
         (message) => message.id === partialMessage.id

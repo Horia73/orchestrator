@@ -536,6 +536,11 @@ async function runClaudeStreamJson({ bin, args, model, cwd, signal, callbacks, i
             }
         }
 
+        // setEncoding routes chunks through a StringDecoder so a multi-byte
+        // UTF-8 character split across chunk boundaries never decodes to
+        // replacement chars (which would corrupt stream-json lines).
+        proc.stdout?.setEncoding('utf8')
+        proc.stderr?.setEncoding('utf8')
         proc.stdout?.on('data', chunk => consumeLines(chunk.toString()))
         proc.stderr?.on('data', chunk => {
             // claude writes init banners and warnings here. Forward when

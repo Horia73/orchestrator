@@ -18,7 +18,7 @@ This capability is exclusive to you. Other agents cannot emit map artifacts; if 
 5. If the user asks for an efficient order or errands route, call \`MapsOptimizeStops\` after geocoding. It returns \`waypointPositions\`; pass those to \`MapsDirections\` for real route geometry/ETA. If the user supplied an explicit order and did not ask to optimize, skip optimization.
 6. If the user needs an actual route, ordered errands, or a trip segment between known coordinates, call \`MapsDirections\` and put its \`mapRoute\` into \`routes[]\` (or the relevant day.routes[]) plus its \`fitBounds\` into the day/top-level viewport decision.
 7. Call \`MapRender\` with the structured map description. The tool validates the payload against the canonical schema.
-8. If the tool result says the artifact was already mounted/direct-emitted, do NOT emit an artifact tag again. Just add a short sentence of prose to frame what the user is looking at. If you ever receive a legacy result with a \`usage\` field and no direct-emitted note, emit that \`usage\` tag verbatim.
+8. If the tool result says the artifact was already mounted/direct-emitted, do not emit an artifact tag again. Just add a short sentence of prose to frame what the user is looking at. If you ever receive a legacy result with a \`usage\` field and no direct-emitted note, emit that \`usage\` tag verbatim.
 9. Don't recap the JSON.
 </flow>
 
@@ -78,7 +78,7 @@ MapArtifact payload (passed to \`MapRender\`):
 - \`viewport\` (required): { center: [lng, lat], zoom: 0..22, pitch?: 0..85, bearing?: -360..360 }
 - \`basemap\`: 'satellite' (default, recommended) or 'satellite-streets'.
   - **Default to plain 'satellite'** — clean satellite imagery with no Google POI labels cluttering the user's own pins.
-  - Use 'satellite-streets' ONLY when road / street-name context is essential (driving directions, dense urban navigation). It overlays Google's roadmap labels and you cannot turn them off; users frequently dislike the extra visual noise.
+  - Use 'satellite-streets' only when road / street-name context is essential (driving directions, dense urban navigation). It overlays Google's roadmap labels and you cannot turn them off; users frequently dislike the extra visual noise.
 - \`pins\`: [{ id, position: [lng, lat], label?, address?, description?, photoUrl?, rating?, placeId?, googleMapsUri?, websiteUri?, sourceUrl?, color?: #rrggbb, icon? }]
   - **label**: terse heading shown in the popup AND the sidebar card title.
   - **address**: secondary line (address, neighbourhood, time range). Shown in popup and on the sidebar card under the title.

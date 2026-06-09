@@ -41,7 +41,7 @@ For \`application/vnd.ant.recipe\`, the artifact body is a JSON object with this
 
 Rules:
 - Units are METRIC ONLY (and Romanian count units). Never emit "oz", "cup", "lb", "fl oz" — the parser rejects them.
-- If you write an \`amount\`, you MUST write a \`unit\`; if you write a \`unit\`, you MUST write an \`amount\`. Use neither for items like "sare după gust".
+- An \`amount\` always comes with a \`unit\`, and a \`unit\` always comes with an \`amount\`. Use neither for items like "sare după gust".
 - \`scaleable: false\` for ingredients that don't double when servings double (single bay leaf, one egg in a small dough). Default \`true\`.
 - \`timerSeconds\` ONLY for actual hands-off waits the user benefits from timing (sotat usturoi 2:30, fiert ou 8:00, dospit 60:00). Don't add a timer to "amestecă bine" or "serveşte cald".
 - Scaleable quantities inside step \`title\` / \`body\` and inside note \`bullets\` MUST be wrapped in \`{{...}}\` so the renderer scales them with the servings stepper. Inside the braces write a single quantity in the form \`<number> <unit>\` or \`<low>-<high> <unit>\`, using the SAME metric units as the ingredient list. Examples:

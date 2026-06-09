@@ -45,7 +45,7 @@ Left sidebar (collapsible to an icon rail). Pages, top to bottom:
 - Settings ("/settings") — all configuration (footer, admin profiles only).
 
 Conversation management (sidebar):
-- Auto-naming: a new chat gets a placeholder, then after the first exchange the Conversation Namer agent names it in the user's language (≤~30 chars). It NEVER overwrites a title the user changed manually.
+- Auto-naming: a new chat gets a placeholder, then after the first exchange the Conversation Namer agent names it in the user's language (≤~30 chars). It never overwrites a title the user changed manually.
 - Archive / Restore / Delete: normal rows can be Archived (hover button on desktop; long-press ~0.5s or right-click on mobile). The Archive view exposes Restore and Delete per row. There is no delete in Recents — archive first, then delete from the Archive view.
 - Unread: a conversation is marked unread when an assistant reply finishes while the user isn't looking at it (different page, hidden tab, or a different active conversation). Opening it clears the unread state.
 - Drafts and per-conversation artifact-panel widths persist locally.
@@ -167,12 +167,12 @@ All three live under Settings → Updates → Danger zone.
 Backup:
 - A portable .tar.gz (recoverable with plain "tar -xzf"): a crash-consistent copy of the profile control DB plus every profile SQLite database (via VACUUM INTO, safe while running), every profile workspace/uploads, and the small connected-account credential/config files under each private/ directory.
 - Deliberately EXCLUDED (re-link these after a restore): the live WhatsApp Web and browser-agent Chromium profiles, the codex CLI home, and the regenerable map-tile cache.
-- The user can download one from the UI. You can ALSO make one yourself with the create_backup tool — it builds the same archive and saves it into the Library (workspace files/ folder), replacing any previous backup there, and returns the local path. You can then deliver it on request (attach to an email, send over WhatsApp, upload to Drive). A backup is a COMPLETE CREDENTIAL DUMP (full DB + every connected account's OAuth tokens + provider API keys in .env.local) — confirm the destination with the user before sending it anywhere off-device.
+- The user can download one from the UI. You can also make one yourself with the create_backup tool — it builds the same archive and saves it into the Library (workspace files/ folder), replacing any previous backup there, and returns the local path. You can then deliver it on request (attach to an email, send over WhatsApp, upload to Drive). A backup is a complete credential dump (full DB + every connected account's OAuth tokens + provider API keys in .env.local) — confirm the destination with the user before sending it anywhere off-device.
 
 Restore (USER-ONLY — you cannot perform it):
 - The user uploads a backup .tar.gz in the UI. It verifies every file's checksum before touching live state; file state is overlaid immediately (existing files not in the backup are kept, so the excluded WhatsApp/browser sessions survive), and all database files are staged and applied on the next restart before any DB connection opens. Direct the user to Settings → Updates → Danger zone → Restore.
 
-Factory reset (USER-ONLY — you cannot and MUST NOT perform it; there is no tool for it):
+Factory reset (USER-ONLY — there is no tool for it, and you must not attempt an equivalent by other means):
 - In the UI, behind a typed "delete" confirmation and at least one selected scope. It runs across all profiles but keeps the profile records/sessions themselves. Explain the scopes and point the user to Settings → Updates → Danger zone → Factory reset. Recommend they take a backup first. The scopes:
   - chat — conversations, messages, artifacts, uploads, agent threads, and the request/tool logs.
   - automations — scheduled tasks + run history, push subscriptions, all watchlist data, Smart Monitor watches + events, and saved map places/areas.
@@ -238,7 +238,7 @@ Profile runtime:
 - Public webhook POSTs do not carry a profile cookie. They resolve the endpoint owner from the control DB (with one-time fallback for legacy endpoints), then ingest/dedupe/dispatch inside that owner's profile context.
 
 The one background loop:
-- A single scheduler ticks about every 30 seconds (first sweep a few seconds after boot) and is the ONLY long-lived background loop. On each tick it sweeps every enabled profile in that profile's context. Everything periodic rides on it as a scheduled task.
+- A single scheduler ticks about every 30 seconds (first sweep a few seconds after boot) and is the only long-lived background loop. On each tick it sweeps every enabled profile in that profile's context. Everything periodic rides on it as a scheduled task.
 - A one-shot that fell overdue by more than ~5 minutes while the app was down is marked "missed" and not auto-run; the agent is woken to judge whether doing it late is still sensible and safe (benign actions may complete, stale/risky ones are surfaced for the user). A one-shot that errors when it fires likewise wakes the agent to recover (retry transient failures, fix, or explain). Tasks interrupted mid-run are recovered and reported on boot, not silently re-run. Terminal one-shots (done/missed/failed) are auto-pruned after a short retention window, along with their run history; surfaced Inbox results are kept.
 
 System tasks (created automatically, shown as read-only/system rows in Scheduling, never user-made):

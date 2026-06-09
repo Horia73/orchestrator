@@ -54,6 +54,7 @@ import {
   useCurrentProfile,
 } from "@/components/profiles/use-profiles"
 import type { Conversation } from "@/lib/types"
+import { VIEW_FADE_MS, VIEW_LEAVE_EVENT } from "@/lib/view-fade"
 
 // Runs before the browser paints on the client (so the tablet-nav collapse
 // is applied in the same frame the sidebar mounts), and degrades to a plain
@@ -811,6 +812,35 @@ export function AppSidebar() {
     router.push(`/profiles?next=${encodeURIComponent(pathname || "/")}`)
   }, [closeMobileSidebar, pathname, router])
 
+  // Navigate to the inbox with a fade-out hand-off. From the chat/home view we
+  // ease that shell out (it listens for VIEW_LEAVE_EVENT) and only then swap
+  // routes, so the inbox fades in over a blank background instead of flashing a
+  // skeleton. From other routes — or for modified / reduced-motion clicks — we
+  // fall through to the plain Link navigation (no artificial delay).
+  const handleInboxNavigate = React.useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      closeMobileSidebar()
+      if (!isOnChatHome) return
+      if (
+        event.metaKey ||
+        event.ctrlKey ||
+        event.shiftKey ||
+        event.altKey ||
+        event.button !== 0
+      )
+        return
+      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
+        return
+      event.preventDefault()
+      window.dispatchEvent(new Event(VIEW_LEAVE_EVENT))
+      window.setTimeout(() => {
+        if (isMobile) router.replace("/inbox")
+        else router.push("/inbox")
+      }, VIEW_FADE_MS)
+    },
+    [closeMobileSidebar, isMobile, isOnChatHome, router]
+  )
+
   const handleLogoutProfile = React.useCallback(() => {
     setProfileMenuOpen(false)
     profileTriggerRef.current?.blur()
@@ -963,7 +993,7 @@ export function AppSidebar() {
                   <Link
                     href="/inbox"
                     replace={isMobile}
-                    onClick={closeMobileSidebar}
+                    onClick={handleInboxNavigate}
                   >
                     <InboxIcon className="size-4" />
                     <span>Inbox</span>

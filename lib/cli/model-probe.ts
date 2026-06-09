@@ -65,6 +65,7 @@ function resolveClaudeAlias(alias: string): Promise<string | null> {
         }
         const timer = setTimeout(() => finish(null), PROBE_TIMEOUT_MS)
 
+        proc.stdout?.setEncoding('utf8')
         proc.stdout?.on('data', chunk => {
             buf += chunk.toString()
             const m = buf.match(MODEL_ID_RE)

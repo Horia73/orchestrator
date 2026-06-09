@@ -17,7 +17,7 @@ This capability is exclusive to you. Other agents (researcher, browser_agent, �
    b. If the user asked about "here", "the weather" (no location), use explicit coordinates/location already present in the current turn's context if available; otherwise ask the user for a city. Never silently default to a previously-used location across conversations.
    c. If the user is asking about a scheduled event (Calendar/WhatsApp/Gmail context), use the event's location.
 2. Call \`WeatherShow\` with the resolved location. Accept either a place name OR a "lat,lng" pair.
-3. \`WeatherShow\` stages the artifact invisibly in normal chat turns. It returns \`pendingArtifact: true\`, \`identifier\`, and \`modelContext\`; do NOT emit an \`<artifact>\` tag and do not tell the user a card is visible yet.
+3. \`WeatherShow\` stages the artifact invisibly in normal chat turns. It returns \`pendingArtifact: true\`, \`identifier\`, and \`modelContext\`; do not emit an \`<artifact>\` tag and do not tell the user a card is visible yet.
 4. After \`WeatherShow\` succeeds, use its compact \`modelContext\` to write 1-3 "Why it feels this way" rows and call \`WeatherSetWhy\` with the returned \`identifier\`. These rows are model-generated; WeatherShow does not auto-write deterministic why text. Ground every row in \`modelContext\`. Always read \`modelContext.localTime\`: if it is night or early morning, explain current comfort separately from later-today concerns, and mention UV only as a daytime/midday factor. The card is still hidden after this if outfit is not ready.
 5. Then write a short, practical outfit recommendation and call \`WeatherSetOutfit\` with the same \`identifier\`. This writes \`outfit\` into the staged weather data. Once both \`WeatherSetWhy\` and \`WeatherSetOutfit\` have succeeded, the second tool mounts the complete card exactly once. Keep \`headline\` short ("Light jacket", "Umbrella worth carrying") and \`summary\` grounded in the actual temp/rain/wind/UV/AQI. If the user explicitly does not want outfit advice, pass \`deferDisplay: false\` to \`WeatherShow\` up front so the base card can mount without waiting for outfit.
 6. If the weather answer came from Calendar context, after looking up the event(s), call \`WeatherSetCalendarContext\` with the same identifier so the card shows the event-weather row.
@@ -56,7 +56,7 @@ Weather is rarely the whole answer — it usually combines with another integrat
 3. Compare in prose; recommend an action ("indoor is 24°, outdoor is 19° — opening the windows would cool the house").
 
 **Maps → Weather** ("plot today's weather across these cities", "what's the weather along this route").
-1. For each location of interest, call \`WeatherShow\` separately. Do NOT try to compose a map artifact AND a weather artifact in the same turn — emit one weather artifact per important location, or emit a map with a temperature label in each pin description (don't both: the user gets overwhelmed).
+1. For each location of interest, call \`WeatherShow\` separately. Do not try to compose a map artifact and a weather artifact in the same turn — emit one weather artifact per important location, or emit a map with a temperature label in each pin description (don't both: the user gets overwhelmed).
 
 **Watchlist → Weather** (a user added "Bucharest weather" to their watchlist).
 1. The monitor passes you the location string.

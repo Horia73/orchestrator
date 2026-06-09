@@ -13,11 +13,16 @@
 //    (it excludes the durable files + the last 3 daily files, which the prompt
 //    builder already injects). That targets exactly the "months later, similar
 //    thing comes up" case.
-//  - Two precision filters keep that pass honest: near-duplicate suppression
-//    (selectDiverse) collapses the same fact re-logged across days, and a
-//    coverage gate (shouldSuppressByCoverage) drops the whole block when a broad,
+//  - Precision filters keep that pass honest (all silent-pass-only; the explicit
+//    memory_search tool stays wide): assistant-authored conversation chunks are
+//    skipped (long, multi-topic, they paraphrase everything — the dominant
+//    false-positive source), old daily/conversation chunks pay a small age
+//    penalty, candidates far below the turn's best score are dropped
+//    (applyTopGap — cosine scores are uncalibrated globally but comparable
+//    within one query), near-duplicate suppression (selectDiverse) collapses
+//    the same fact re-logged across days, and a coverage gate
+//    (shouldSuppressByCoverage) drops the whole block when a broad,
 //    multi-intent message is matched only by a small tangential slice of memory.
-//    Both are silent-pass concerns; the explicit memory_search tool stays wide.
 //  - When the model is multimodal (Gemini) and the turn carries an image/PDF, the
 //    attachment ALSO drives recall (recallByAsset): it embeds into the shared
 //    text+image space to surface (a) older text notes it resembles cross-modally
@@ -142,6 +147,30 @@ const TOOL_THRESHOLD = clampNumber(
   0,
   1
 )
+
+// Relative cutoff for the SILENT pass: drop candidates more than this far below
+// the turn's best semantic score. Absolute cosine thresholds can't separate
+// "relevant" from "topically adjacent" (the score distribution shifts with query
+// length and language), but scores ARE comparable within a single query: when
+// one note matches clearly, notes much weaker than it are tangential riders.
+const RECALL_TOP_GAP = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_TOP_GAP,
+  0.05,
+  0,
+  1
+)
+
+// Small score penalty for OLD dated chunks (daily ledger + conversation
+// messages) in the silent pass, growing linearly to AGE_PENALTY_MAX over
+// AGE_PENALTY_HORIZON_DAYS. A year-old ledger line must clear a slightly higher
+// bar than today's; durable files (USER/MEMORY/...) are curated and never pay it.
+const AGE_PENALTY_MAX = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_AGE_PENALTY,
+  0.03,
+  0,
+  0.2
+)
+const AGE_PENALTY_HORIZON_DAYS = 365
 
 // Near-duplicate suppression. Vectors are unit-normalized (cosine == dot), so
 // this is a similarity in [0,1]. Kept high/conservative: it only collapses hits
@@ -752,6 +781,13 @@ export interface SearchOptions {
   /** Silent per-turn pass only: suppress entirely when a broad, multi-intent
    *  message is matched only by a small tangential slice of memory (default false). */
   coverageGate?: boolean
+  /** Silent pass only: skip assistant-authored conversation chunks (default false). */
+  excludeAssistantTurns?: boolean
+  /** Silent pass only: drop semantic candidates more than this far below the
+   *  turn's best score (0/undefined = off). */
+  topGap?: number
+  /** Silent pass only: penalize old dated chunks slightly (default false). */
+  agePenalty?: boolean
 }
 
 function isSourceExcluded(
@@ -761,6 +797,53 @@ function isSourceExcluded(
 ): boolean {
   if (exact.has(source)) return true
   return prefixes.some((prefix) => source.startsWith(prefix))
+}
+
+// Conversation chunk titles carry the speaking role ("Conversation › <title> ›
+// Assistant · 2026-01-03"), which is the only role marker that survives into the
+// vector rows — so existing indexes work without a re-embed.
+const ASSISTANT_TITLE_RE = /›\s*Assistant(?:\s*·|\s*$)/
+
+/** True for a conversation chunk authored by the assistant. Exported for tests. */
+export function isAssistantConversationChunk(source: string, title: string): boolean {
+  return source.startsWith(CONVERSATION_SOURCE_PREFIX) && ASSISTANT_TITLE_RE.test(title)
+}
+
+const DAY_SOURCE_RE = /^MEMORY_DAY\/(\d{4}-\d{2}-\d{2})\.md$/
+const CONVERSATION_TITLE_DATE_RE = /·\s*(\d{4}-\d{2}-\d{2})\s*$/
+
+/**
+ * Score penalty in [0, AGE_PENALTY_MAX] for dated chunks (daily ledger files by
+ * filename, conversation chunks by the date in their title). Undated sources
+ * (the curated durable files) pay nothing. Exported for tests.
+ */
+export function recallAgePenalty(
+  source: string,
+  title: string,
+  now: number = Date.now()
+): number {
+  if (AGE_PENALTY_MAX <= 0) return 0
+  const stamp =
+    DAY_SOURCE_RE.exec(source)?.[1] ??
+    (source.startsWith(CONVERSATION_SOURCE_PREFIX)
+      ? CONVERSATION_TITLE_DATE_RE.exec(title)?.[1]
+      : undefined)
+  if (!stamp) return 0
+  const ageMs = now - Date.parse(stamp)
+  if (!Number.isFinite(ageMs) || ageMs <= 0) return 0
+  return (
+    AGE_PENALTY_MAX *
+    Math.min(1, ageMs / (AGE_PENALTY_HORIZON_DAYS * 86_400_000))
+  )
+}
+
+/** Keep only candidates within `gap` of the best score. Exported for tests. */
+export function applyTopGap(candidates: MemoryHit[], gap: number): MemoryHit[] {
+  if (!(gap > 0) || candidates.length <= 1) return candidates
+  let best = -Infinity
+  for (const c of candidates) if (c.score > best) best = c.score
+  const cutoff = best - gap
+  return candidates.filter((c) => c.score >= cutoff)
 }
 
 /**
@@ -867,7 +950,7 @@ export async function searchMemory(
   const mode = opts.mode ?? "semantic"
   const dedup = opts.dedup ?? true
 
-  const candidates: MemoryHit[] = []
+  let candidates: MemoryHit[] = []
   const seenIds = new Set<string>()
   const vectorById = new Map<string, Float32Array>()
 
@@ -876,14 +959,20 @@ export async function searchMemory(
     const rows = loadVectorRows(getEmbeddingModel(), getEmbeddingDim())
     for (const r of rows) {
       if (isSourceExcluded(r.source, exclude, excludePrefixes)) continue
+      if (opts.excludeAssistantTurns && isAssistantConversationChunk(r.source, r.title)) {
+        continue
+      }
       if (r.vector.length !== qVec.length) continue
-      const score = dot(qVec, r.vector)
+      const score =
+        dot(qVec, r.vector) -
+        (opts.agePenalty ? recallAgePenalty(r.source, r.title) : 0)
       if (score >= threshold) {
         candidates.push({ id: r.id, source: r.source, title: r.title, text: r.text, score })
         seenIds.add(r.id)
         vectorById.set(r.id, r.vector)
       }
     }
+    candidates = applyTopGap(candidates, opts.topGap ?? 0)
   }
 
   if (mode === "hybrid" && candidates.length < topK) {
@@ -1120,6 +1209,8 @@ async function recallByAsset(
     const vectorById = new Map<string, Float32Array>()
     for (const r of rows) {
       if (isSourceExcluded(r.source, exclude, excludeSourcePrefixes)) continue
+      // Same precision rule as the text pass: assistant turns are too broad.
+      if (isAssistantConversationChunk(r.source, r.title)) continue
       if (r.vector.length !== vec.length) continue
       const score = dot(vec, r.vector)
       if (score >= getImageMemoryThreshold()) {
@@ -1222,6 +1313,9 @@ export async function getRecalledMemory(
             excludeSourcePrefixes,
             mode: "semantic",
             coverageGate: true,
+            excludeAssistantTurns: true,
+            topGap: RECALL_TOP_GAP,
+            agePenalty: true,
           })
         : Promise.resolve([])
     const assetPromise = asset
@@ -1391,8 +1485,9 @@ export interface RecallSearchPreview {
 
 /**
  * Settings calibration view: show both the raw score distribution and the exact
- * automatic text-recall result. The latter applies the production threshold,
- * excludes sources already in prompt context, dedups, and runs the coverage gate.
+ * automatic text-recall result. The latter applies the full production filter
+ * chain: threshold, in-context source exclusion, assistant-turn exclusion, age
+ * penalty, top-gap cutoff, dedup, and the coverage gate.
  */
 export async function previewRecallSearch(
   query: string,
@@ -1417,6 +1512,9 @@ export async function previewRecallSearch(
       excludeSources: inContextSources(),
       mode: "semantic",
       coverageGate: true,
+      excludeAssistantTurns: true,
+      topGap: RECALL_TOP_GAP,
+      agePenalty: true,
     }),
   ])
   return { rawHits, automaticHits, threshold, topK: RECALL_TOP_K }

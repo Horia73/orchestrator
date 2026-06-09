@@ -331,6 +331,15 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
         signal?.addEventListener('abort', onAbort, { once: true })
 
+        // setEncoding routes chunks through a StringDecoder so a multi-byte
+        // UTF-8 character split across chunk boundaries never decodes to
+        // replacement chars (which would corrupt JSON-RPC lines).
+        proc.stdout?.setEncoding('utf8')
+        proc.stderr?.setEncoding('utf8')
+        // Writes can race the CLI dying; without a listener an EPIPE on stdin
+        // becomes an uncaught stream error that takes down the whole server.
+        proc.stdin?.on('error', err => rememberDiagnostic(`stdin write failed: ${err.message}`))
+
         proc.stdout?.on('data', chunk => {
             stdoutBuf += chunk.toString()
             for (;;) {
@@ -346,7 +355,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     rememberDiagnostic(line)
                     continue
                 }
-                void handleMessage(msg)
+                handleMessage(msg).catch(err => {
+                    rememberDiagnostic(`message handling failed: ${err instanceof Error ? err.message : String(err)}`)
+                })
             }
         })
 
@@ -369,7 +380,9 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
         proc.on('exit', code => {
             if (stdoutBuf.trim()) {
-                try { void handleMessage(JSON.parse(stdoutBuf.trim()) as AnyObj) } catch { rememberDiagnostic(stdoutBuf) }
+                try {
+                    handleMessage(JSON.parse(stdoutBuf.trim()) as AnyObj).catch(() => rememberDiagnostic(stdoutBuf))
+                } catch { rememberDiagnostic(stdoutBuf) }
             }
             if (stderrBuf.trim()) rememberDiagnostic(stderrBuf)
             if (aborted) {

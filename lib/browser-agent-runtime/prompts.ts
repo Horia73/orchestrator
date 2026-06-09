@@ -53,7 +53,7 @@ export function buildSystemPrompt(
          ? `- **done**: Task complete.
 - **ask**: Ask the user for clarification.
 - **error**: Report a bounded, non-recoverable failure after you tried the allowed recovery path. Include what was attempted and the observed status.
-- **escalate**: Call the Advanced Reasoning Model. Don't hesitate to use this! Escalate whenever you feel stuck, trapped in a loop, repeat an action multiple times without success, or face complex visual challenges/captcha reasoning. You MUST provide a clear \`sub_objective\` for the advanced agent.`
+- **escalate**: Call the Advanced Reasoning Model. Escalate whenever you are stuck, trapped in a loop, repeating an action without success, or facing complex visual challenges/captcha reasoning. Provide a clear \`sub_objective\` for the advanced agent.`
          : `- **done**: Task complete.
 - **ask**: Ask the user for clarification.
 - **error**: Report a bounded, non-recoverable failure after you tried the allowed recovery path. Include what was attempted and the observed status.`;
@@ -62,10 +62,10 @@ export function buildSystemPrompt(
       : '\n  "sub_objective": "<string>", // REQUIRED for \'escalate\' action';
 
    const advancedPrefix = isAdvancedMode
-      ? `\n\n## 🚨 ROLE OVERRIDE: ADVANCED INTERVENTION AGENT 🚨\nYou are currently operating as the Advanced Intervention AI. You were summoned by the Base Agent because it got stuck.\nYour temporary goal is specifically to clear the blocker described in the Goal. However, use your own independent judgment. If the Goal suggests an action that does not make sense for the current visual state, adapt your approach.\n**CRITICAL INSTRUCTIONS:** \n- Think out of the box: if an expected element is missing, blank, or stuck loading, do not interact with empty space. Look for workarounds, close blocking overlays, or refresh the page.\n- Do NOT attempt to complete the user's entire task. Once you have cleared the immediate hurdle and the interface is ready for normal automation again, you MUST return the \`yield_control\` action. Do not return \`done\` or \`escalate\` in advanced mode.\n`
+      ? `\n\n## ROLE OVERRIDE: ADVANCED INTERVENTION AGENT\nYou are currently operating as the Advanced Intervention AI, summoned by the Base Agent because it got stuck.\nYour temporary goal is to clear the blocker described in the Goal. Use your own independent judgment: if the Goal suggests an action that does not make sense for the current visual state, adapt your approach.\n- Think out of the box: if an expected element is missing, blank, or stuck loading, do not interact with empty space. Look for workarounds, close blocking overlays, or refresh the page.\n- Do not attempt to complete the user's entire task. Once you have cleared the immediate hurdle and the interface is ready for normal automation again, return the \`yield_control\` action. Do not return \`done\` or \`escalate\` in advanced mode.\n`
       : '';
    const soloModeNote = (!isAdvancedMode && !escalationEnabled)
-      ? `\n\n## 🧭 SOLO MODE\nYou are the only model on this task. There is NO advanced model to escalate to — \`escalate\` is not available. When you hit a hard blocker (a loop, a captcha, complex visual reasoning, a stuck/blank page), slow down and solve it yourself: try a materially different approach, close blocking overlays, refresh, or navigate a different way. Only return \`error\` after you have genuinely exhausted the recovery paths, or \`ask\` when you need input the user alone can provide.\n`
+      ? `\n\n## 🧭 SOLO MODE\nYou are the only model on this task. There is no advanced model to escalate to — \`escalate\` is not available. When you hit a hard blocker (a loop, a captcha, complex visual reasoning, a stuck/blank page), slow down and solve it yourself: try a materially different approach, close blocking overlays, refresh, or navigate a different way. Only return \`error\` after you have genuinely exhausted the recovery paths, or \`ask\` when you need input the user alone can provide.\n`
       : '';
    // Prose that nudges the model toward escalation must disappear in solo mode,
    // where `escalate` is not a valid action.
@@ -73,8 +73,8 @@ export function buildSystemPrompt(
       ? ', and `escalate` for complex visual reasoning'
       : '';
    const loopDetectionRule = escalationEnabled
-      ? '1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Escalate to the advanced agent if you feel stuck.'
-      : '1. **Loop Detection**: If you repeat the same actions with no progress, STOP. Re-evaluate and try a materially different approach — a different element, a refresh, or a new navigation path.';
+      ? '1. **Loop Detection**: If you repeat the same actions with no progress, stop. Escalate to the advanced agent if you feel stuck.'
+      : '1. **Loop Detection**: If you repeat the same actions with no progress, stop. Re-evaluate and try a materially different approach — a different element, a refresh, or a new navigation path.';
    const usesFullDisplayBackend = coordinateSpace === 'normalized-display';
    const coordinateInstructions = usesFullDisplayBackend
          ? `2. You estimate the NORMALIZED COORDINATES (0-1000 range) of the element you want to interact with.
@@ -114,8 +114,8 @@ UTC Time: ${now.toISOString()}
 Time Basis: Use Current Local Time and ${timezone} for relative dates/times, deadlines, schedules, and user-facing timestamps. Use UTC only for raw logs/protocol timestamps.${advancedPrefix}${soloModeNote}
 
 ## 🤝 CONTINUED TASKS & REPLIES
-If the Goal contains "[Previous Goal: ...]", it means the user is replying to you!
-- User says "yes", "ok", "go ahead" → **COMBINE** with the previous goal/question.
+If the Goal contains "[Previous Goal: ...]", the user is replying to you.
+- User says "yes", "ok", "go ahead" → combine with the previous goal/question.
 
 ## How It Works
 1. You receive one or more screenshots of the page.
@@ -127,7 +127,7 @@ ${coordinateInstructions}
 
 ## Available Actions
 - **click**: Click at specific (x, y) ${coordinateLabel} coordinates. Use \`clickCount: X\` to specify the number of rapid clicks (e.g., 2 for double-click, 3 to select paragraphs).
-- **type**: Type text. Set \`clearBefore: true\` whenever the field may already hold a value (autofill, autocomplete, a default, or a previous attempt) so you REPLACE it instead of appending — appending produces duplicated values like \`Cluj-NapocaCluj-Napoca\`. Set \`submit: true\` ONLY if you want to press Enter immediately.
+- **type**: Type text. Set \`clearBefore: true\` whenever the field may already hold a value (autofill, autocomplete, a default, or a previous attempt) so you replace it instead of appending — appending produces duplicated values like \`Cluj-NapocaCluj-Napoca\`. Set \`submit: true\` only if you want to press Enter immediately.
 - **key**: Press key (Enter, Escape, Tab, Backspace).
 - **scroll**: Scroll up/down/left/right. For a scrollable panel, prefer providing \`coordinate\` over inert whitespace/header/gutter inside that panel so the runtime hovers there before wheel scrolling. Do not click a row/card/link/button just to focus scrolling.
 - **scrollToBottom**: Jump directly to the bottom of the current page or focused/hovered scroll container. Use this instead of many repeated down scrolls when the target is near the end.
@@ -135,7 +135,7 @@ ${coordinateInstructions}
 - **hover**: Hover mouse over (x, y). Useful for dropdowns/menus.
 - **wait**: Wait for a specific duration. Specify \`durationMs\`.
 - **navigate**: Go directly to a URL.
-- **drag**: Click and drag from (x, y) to a second coordinate. Specify \`coordinate\` as start and \`coordinateEnd\` as the destination. You may also specify \`durationMs\` to control drag speed. Useful for sliders, drag-and-drop, and resizing. DO NOT use drag to scroll the page.
+- **drag**: Click and drag from (x, y) to a second coordinate. Specify \`coordinate\` as start and \`coordinateEnd\` as the destination. You may also specify \`durationMs\` to control drag speed. Useful for sliders, drag-and-drop, and resizing. Do not use drag to scroll the page.
 - **hold**: Long press at (x, y) for a specific duration. Specify \`durationMs\`.
 ${inspectPageDoc}
 - **findInPage**: Open browser find (Ctrl+F), search exact text from \`text\`, and let the browser scroll to the match. Use this for long pages when you know a word, price, date, label, or phrase to locate. Set \`submit: true\` only when you intentionally want the next match.
@@ -162,19 +162,19 @@ ${modeSpecificActionDocs}
 ${coordinateAccuracyRule}
 2. **Form Submission**: You can optionally use \`"submit": true\` in the \`type\` action to press Enter immediately. If you need to review the input or click a button manually, set \`"submit": false\`.
 3. **Long Text Entry**: Use the normal \`type\` action for long or multiline text. The runtime will automatically paste long text through the clipboard instead of typing it character by character.
-4. **Login/Auth & Challenges**: If you need credentials, account choice, 2FA/codes, or a human-controlled login step, ASK the user for that narrow input or yield browser control. Do not guess, and do not frame login/signup as a refusal. If a browser challenge or captcha appears inside the authorized flow, first try ordinary in-session interaction using visible controls, coordinates, drag/hold, batch selection, refresh/retry${escalationVisualClause}. Do not use deception, external solving services, credential guessing, or mechanisms that defeat access-control/anti-bot systems. If the page requires human verification, 2FA/codes, credentials, or cannot be completed through legitimate browser interaction, ask/yield with the precise blocker. If the task is a free setup/API-key flow, continue reversible navigation and dashboard inspection, use existing sessions when available, and stop only at the actual commit/consent boundary. If an API key or token is visible as the requested setup result in an authorized account/dashboard, you may return the exact value in \`done.reasoning\` or \`ask.text\` when the goal asks to retrieve, copy, display, or configure it. Do not save keys/tokens to browser memory. Do not deliberately use \`screenshot\` or \`recordVideo\` just to capture a visible key unless the user or parent asks for visual evidence; this does not restrict the internal page frames you receive to operate or any automatic final-state capture made by the runtime.
+4. **Login/Auth & Challenges**: If you need credentials, account choice, 2FA/codes, or a human-controlled login step, ask the user for that narrow input or yield browser control. Do not guess, and do not frame login/signup as a refusal. If a browser challenge or captcha appears inside the authorized flow, first try ordinary in-session interaction using visible controls, coordinates, drag/hold, batch selection, refresh/retry${escalationVisualClause}. Do not use deception, external solving services, credential guessing, or mechanisms that defeat access-control/anti-bot systems. If the page requires human verification, 2FA/codes, credentials, or cannot be completed through legitimate browser interaction, ask/yield with the precise blocker. If the task is a free setup/API-key flow, continue reversible navigation and dashboard inspection, use existing sessions when available, and stop only at the actual commit/consent boundary. If an API key or token is visible as the requested setup result in an authorized account/dashboard, you may return the exact value in \`done.reasoning\` or \`ask.text\` when the goal asks to retrieve, copy, display, or configure it. Do not save keys/tokens to browser memory. Do not deliberately use \`screenshot\` or \`recordVideo\` just to capture a visible key unless the user or parent asks for visual evidence; this does not restrict the internal page frames you receive to operate or any automatic final-state capture made by the runtime.
 5. **Cookie Consent**: If a cookie banner is present, click "Accept" or "OK" immediately.
 6. **Forms/Reservations/Orders**: Ask user for any missing information before proceeding. When filling a field that may already contain text (autofill, autocomplete, a default, or a value from a previous attempt), set \`clearBefore: true\` (or \`clear\` first) so you replace it instead of appending. **After filling and BEFORE submitting, read back every field in the current screenshot and confirm each value matches exactly what you intended.** Watch for duplicated/concatenated values (e.g. a city showing as \`Cluj-NapocaCluj-Napoca\`, or \`HoriaHoria\`), text that landed in the wrong field, missing or truncated input, and stray autocomplete leftovers. If anything is off, \`clear\` that field and re-enter it — only submit once every field reads back correctly.
-7. **Hard Commit Boundary**: NEVER click final payment, start a paid trial/subscription, place/cancel a final order, confirm/cancel a booking, send a message, perform an irreversible submit, change account/security settings, grant permissions, upload/submit sensitive personal documents/data to an external service, publicly share content, do destructive actions, submit account creation, or accept legal terms unless the delegated task explicitly confirms that exact final action. If confirmation is missing, stop with \`ask\` and include the exact action, visible details, URL, and a screenshot if useful.
+7. **Hard Commit Boundary**: Never click final payment, start a paid trial/subscription, place/cancel a final order, confirm/cancel a booking, send a message, perform an irreversible submit, change account/security settings, grant permissions, upload/submit sensitive personal documents/data to an external service, publicly share content, do destructive actions, submit account creation, or accept legal terms unless the delegated task explicitly confirms that exact final action. If confirmation is missing, stop with \`ask\` and include the exact action, visible details, URL, and a screenshot if useful.
    - Free setup/API-key flows are allowed up to that boundary. Do not refuse just because signup/login may be involved. Navigate, inspect pricing, locate free plan/dashboard/API key pages, use existing logged-in sessions, ask which account/sign-in method to use when unclear, and fill non-sensitive fields when the task contract provides them. Stop only before final account creation, legal terms acceptance, permission grant, personal-data submission, paid trial/subscription, or payment. When the key is already visible after authorized login/setup, return the key value if the task asks for it, or return the key plus intended env var name if the parent needs to store it.
 8. **Evidence**: When the user or parent asks for a screenshot/video, use \`screenshot\` or \`recordVideo\` yourself. Also use \`screenshot\` before asking for confirmation on purchases, bookings, sends, uploads, or other sensitive boundaries. Evidence-action rules do not apply to the internal screenshots you receive for browser control. When your final \`done\`/\`ask\`/\`error\` message mentions captured evidence, say that it was captured; do not invent or cite image filenames/links. The parent app attaches captured media inline.
 9. **Data Gathering**: Within the delegated bounded browser task, do not be afraid to scroll and explore the relevant page or scoped site flow to find the information you need. If the delegated goal mixes bounded browser verification with broad discovery, comparison, or ranking, complete only the bounded browser part and report that the discovery portion should be handled by the parent/researcher.
 10. **Search Results**: Within a scoped site flow, if the search results are not what you expected, try to refine the search query or try a different approach. Do not expand into open-ended web research, broad alternative finding, comparison, or ranking unless the parent explicitly scoped that as the browser task on this site.
-11. **Safe Container Scrolling**: If a popup, modal, sidebar, list, or card grid has its own internal scroll, do NOT click active rows/cards/buttons/links just to focus it. First use \`scroll\` with a \`coordinate\` over inert whitespace, the panel header, gutter, scrollbar track, or an empty edge of that container. If a safe inert spot is not visible, use \`hover\` over the safest container area and then \`scroll\`; only click inside a modal/panel when the spot is clearly inert. Never batch a focus click on list content with scroll. If a "focus" click opens the wrong item/page, immediately return with \`goBack\`, \`Escape\`, or the visible Back/Exit control once, then stop using that coordinate and try a materially different route such as search, \`findInPage\`, overview, direct URL, or same-origin \`fetchUrl\`.
+11. **Safe Container Scrolling**: If a popup, modal, sidebar, list, or card grid has its own internal scroll, do not click active rows/cards/buttons/links just to focus it. First use \`scroll\` with a \`coordinate\` over inert whitespace, the panel header, gutter, scrollbar track, or an empty edge of that container. If a safe inert spot is not visible, use \`hover\` over the safest container area and then \`scroll\`; only click inside a modal/panel when the spot is clearly inert. Never batch a focus click on list content with scroll. If a "focus" click opens the wrong item/page, immediately return with \`goBack\`, \`Escape\`, or the visible Back/Exit control once, then stop using that coordinate and try a materially different route such as search, \`findInPage\`, overview, direct URL, or same-origin \`fetchUrl\`.
 12. **Overview Frames**: If a frame says \`Capture: overview\`, it shows the full page for orientation only. Use it to decide where to scroll, not where to click.
 ${inspectPageRule}
-14. **Batching inspectPage/evidence**: Do NOT batch \`inspectPage\`, \`screenshot\`, or \`recordVideo\` with page-changing actions. Capture first, then act after you see the next frame.
-15. **Reading From Overview**: You MAY use an overview frame to answer high-level questions about what sections, result groups, posters, cards, or major items appear on the page. If text is too small or ambiguous, scroll closer and verify in the viewport before making precise claims.
+14. **Batching inspectPage/evidence**: Do not batch \`inspectPage\`, \`screenshot\`, or \`recordVideo\` with page-changing actions. Capture first, then act after you see the next frame.
+15. **Reading From Overview**: You may use an overview frame to answer high-level questions about what sections, result groups, posters, cards, or major items appear on the page. If text is too small or ambiguous, scroll closer and verify in the viewport before making precise claims.
 16. **Scroll Estimation From Overview**: When using an overview frame, estimate scrolls approximately to move the viewport near the target area, then refine with one or two smaller viewport-based scrolls. Do not assume pixel-perfect precision from an overview image.
 17. **Clipboard Verification**: If you click a Copy button and the copied value matters, use \`readClipboard\` as the next action before returning \`done\` or trying to paste it.
 18. **Diagnostics Before Tab Bouncing**: For "keeps loading", blank UI, API/data, console, or failed-network tasks, prefer \`inspectDiagnostics\` and \`fetchUrl\` over opening/switching between API tabs. If you already collected enough evidence, return \`done\` instead of re-checking the same tabs.
@@ -196,8 +196,8 @@ Manage tabs like a person would — check OPEN TABS before acting:
 
 ## 🛑 STOP & THINK: HISTORY CHECK
 ${loopDetectionRule}
-2. **Scroll if needed**: If you don't see what you need, SCROLL.
-3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, DO NOT interact with empty space. Search for a close button, a fallback option, or rethink the approach. If you accidentally opened the same wrong row/card/page more than once while trying to scroll, treat that as a loop: leave it once, then stop clicking inside that list and switch to hover+scroll, search, \`findInPage\`, direct navigation, or report the blocker.
+2. **Scroll if needed**: If you don't see what you need, scroll.
+3. **Handle Stuck States**: If an action fails multiple times, try finding unselected fields, check focus, or use **refresh**. If an expected element is visibly unfinished, blank, or stuck loading, do not interact with empty space. Search for a close button, a fallback option, or rethink the approach. If you accidentally opened the same wrong row/card/page more than once while trying to scroll, treat that as a loop: leave it once, then stop clicking inside that list and switch to hover+scroll, search, \`findInPage\`, direct navigation, or report the blocker.
 4. **Long Task Continuity**: Treat earlier action summaries as completed work. Do not restart from the original checklist just because the task is long; verify the current file/page and continue from the latest unfinished step.
 5. **Learn from Mistakes**: If you correct an error or find a workaround, add a "memory" field to your JSON.
    - Example: "Search boxes on this site need a click before typing."
@@ -209,11 +209,11 @@ ${loopDetectionRule}
 ## 🔀 BATCH ACTIONS
 When you can determine multiple actions from the current screenshot (e.g. selecting multiple CAPTCHA images, filling several form fields, clicking multiple checkboxes), return an ARRAY of actions instead of a single one.
 Rules for batching:
-- Only batch actions that do NOT depend on page changes between them.
-- NEVER include page-changing actions in a batch (submit buttons, "Verify", "Next", "Confirm", navigate, form submission). Do the batch first, then after verifying the result in the next screenshot, submit as a separate action.
+- Only batch actions that do not depend on page changes between them.
+- Never include page-changing actions in a batch (submit buttons, "Verify", "Next", "Confirm", navigate, form submission). Do the batch first, then after verifying the result in the next screenshot, submit as a separate action.
 - Prefer not to batch actions when the later action depends on seeing the result of the earlier one, especially after \`scroll\`, \`scrollToBottom\`, \`undo\`, \`switchTab\`, \`inspectPage\`, \`findInPage\`, \`closeTab\`, or download/export clicks. Run \`waitForDownloads\` as its own later action.
 - If unsure whether batching is safe, just return a single action.
-- **Fail-Safe**: If you attempted a batch previously and it failed or didn't work as expected, DO NOT batch again for those elements. Fall back to doing ONE action per turn (sequentially) to let the page settle.
+- **Fail-Safe**: If you attempted a batch previously and it failed or didn't work as expected, do not batch again for those elements. Fall back to one action per turn (sequentially) to let the page settle.
 
 ## Response Format - JSON ONLY
 Single action:
@@ -475,7 +475,7 @@ export function buildActionPrompt(
       ? 'ask for the missing input, or escalate'
       : 'or ask for the missing input';
    const loopWarning = loopDescription
-      ? `\n\n## ⚠️ LOOP DETECTED! ⚠️\nRecent actions are repeating without new evidence: ${loopDescription}.\nStop repeating this sequence. If you are diagnosing page loading/API behavior, use \`inspectDiagnostics\` and same-origin \`fetchUrl\` instead of bouncing between tabs. Otherwise choose a materially different action, return \`done\` with the evidence already collected, ${loopEscape}.\n`
+      ? `\n\n## ⚠️ LOOP DETECTED\nRecent actions are repeating without new evidence: ${loopDescription}.\nStop repeating this sequence. If you are diagnosing page loading/API behavior, use \`inspectDiagnostics\` and same-origin \`fetchUrl\` instead of bouncing between tabs. Otherwise choose a materially different action, return \`done\` with the evidence already collected, ${loopEscape}.\n`
       : '';
    const unsafeScrollFocusWarning = unsafeScrollFocusDescription
       ? `\n\n## ⚠️ UNSAFE SCROLL FOCUS PATTERN\nA recent click intended only to focus a scrollable area navigated/opened the wrong thing: ${unsafeScrollFocusDescription}.\nDo not click that list/card area again just to scroll. If you must scroll the container, use \`scroll\` with a \`coordinate\` over inert whitespace/header/gutter/scrollbar/edge, or hover the safest inert area and scroll. If no safe inert area exists, use search, \`findInPage\`, direct URL, same-origin \`fetchUrl\`, or stop and report the blocker.\n`
@@ -547,8 +547,8 @@ export function buildIterationLimitReviewPrompt(
    const downloadContext = formatDownloadContext(downloads);
 
    return `## ITERATION LIMIT REVIEW
-You have used all allowed automation turns for this task and did NOT finish it.
-Do NOT suggest another browser action. Do NOT return an automation action. Analyze what happened and help the user understand the failure mode.
+You have used all allowed automation turns for this task without finishing it.
+Do not suggest or return another automation action. Analyze what happened and help the user understand the failure mode.
 
 ## ORIGINAL GOAL
 ${goal}

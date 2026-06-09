@@ -12,12 +12,8 @@ import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { appApiPath } from "@/lib/app-path"
 import { publishChatScrollTarget } from "@/lib/chat-scroll-target"
 import { cn } from "@/lib/utils"
+import { VIEW_FADE_MS, VIEW_LEAVE_EVENT } from "@/lib/view-fade"
 import type { Conversation } from "@/lib/types"
-
-// Keep this in sync with the `transition-opacity duration-*` class on the view
-// shell below. It's both the CSS fade length and the minimum time the shell is
-// held hidden during a switch (see useFadeGate).
-const VIEW_FADE_MS = 150
 
 function useViewFadeIn(viewKey: string, enabled: boolean) {
   const [enteredViewKey, setEnteredViewKey] = React.useState<string | null>(
@@ -189,6 +185,25 @@ export default function Page() {
   // as a clean fade-out → fade-in instead of a mid-flight reversal/jitter.
   const viewVisible = useFadeGate(rawViewVisible, VIEW_FADE_MS)
 
+  // Fade this view out ahead of a route change (e.g. the sidebar Inbox link)
+  // so it eases out instead of hard-cutting to the next route's blank loading
+  // boundary. The sidebar fires VIEW_LEAVE_EVENT, waits one fade, then
+  // navigates. Self-clears as a safety net if a navigation never lands (so the
+  // page can't get stuck blank).
+  const [leaving, setLeaving] = React.useState(false)
+  React.useEffect(() => {
+    const onLeave = () => setLeaving(true)
+    window.addEventListener(VIEW_LEAVE_EVENT, onLeave)
+    return () => window.removeEventListener(VIEW_LEAVE_EVENT, onLeave)
+  }, [])
+  React.useEffect(() => {
+    if (!leaving) return
+    const timer = window.setTimeout(() => setLeaving(false), VIEW_FADE_MS + 1000)
+    return () => window.clearTimeout(timer)
+  }, [leaving])
+
+  const shellVisible = viewVisible && !leaving
+
   // Hold the first-load splash until the view is genuinely ready (initial
   // conversation messages loaded + scroll-restored + faded in) rather than just
   // until the conversation *list* loaded. Otherwise the splash lifts while the
@@ -211,7 +226,7 @@ export default function Page() {
           <div
             className={cn(
               "relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background transition-opacity duration-150 ease-out motion-reduce:transition-none",
-              viewVisible ? "opacity-100" : "pointer-events-none opacity-0"
+              shellVisible ? "opacity-100" : "pointer-events-none opacity-0"
             )}
           >
             {state.activeConversationId && activeConversationStatus === "error" ? (

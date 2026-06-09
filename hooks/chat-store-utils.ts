@@ -61,7 +61,7 @@ export function appendAgentContent(
       content: last.content + chunk,
     }
   } else {
-    contentSegments.push({ phase: 0, content: chunk })
+    contentSegments.push({ phase, content: chunk })
   }
   return { ...entry, content: entry.content + chunk, contentSegments }
 }

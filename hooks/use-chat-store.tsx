@@ -72,6 +72,27 @@ export interface SendMessageOptions {
 // virtually every real conversation; deeper targets degrade to "not found".
 const MAX_LOAD_UNTIL_PRESENT_FETCHES = 12
 
+// Terminal stream events (done/stopped/error) carry the server-persisted
+// message so local state ends up exactly what a refresh would load from the
+// DB — same timestamp, durationMs, sanitized reasoning, and error text.
+// Returns null when the payload is missing or malformed; callers fall back
+// to the locally-accumulated message.
+function assistantMessageFromStreamEvent(
+  value: unknown,
+  expectedId: string
+): Message | null {
+  if (!value || typeof value !== "object") return null
+  const message = value as Message
+  if (
+    message.id !== expectedId ||
+    message.role !== "assistant" ||
+    typeof message.content !== "string" ||
+    typeof message.timestamp !== "number"
+  )
+    return null
+  return message
+}
+
 interface ChatContextType {
   state: ChatState
   unreadConversationIds: Set<string>
@@ -659,7 +680,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         try {
           const page = await fetchConversationMessagePage(
             conversationId,
-            INITIAL_MESSAGE_PAGE_SIZE
+            INITIAL_MESSAGE_PAGE_SIZE,
+            undefined,
+            "full"
           )
           dispatch({
             type: "LOAD_MESSAGE_PAGE_SUCCESS",
@@ -2304,13 +2327,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     )
                   }
                 } else if (data.type === "done") {
-                  // Stream complete — build the final message from accumulated data
-                  // (server already saved to DB, so this is just for local state)
+                  // Stream complete — adopt the server-persisted message so a
+                  // refresh shows the exact same state; fall back to the
+                  // locally-accumulated payload if the event lacks it.
                   streamDoneRef.current = true
                   if (Array.isArray(data.attachments)) {
                     accAttachments = data.attachments as Attachment[]
                   }
-                  const finalMsg: Message = {
+                  const finalMsg: Message = assistantMessageFromStreamEvent(
+                    data.message,
+                    assistantMsgId
+                  ) ?? {
                     id: assistantMsgId,
                     role: "assistant",
                     content: accContent,
@@ -2347,7 +2374,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                   }
                 } else if (data.type === "stopped") {
                   streamDoneRef.current = true
-                  const finalMsg: Message = {
+                  const finalMsg: Message = assistantMessageFromStreamEvent(
+                    data.message,
+                    assistantMsgId
+                  ) ?? {
                     id: assistantMsgId,
                     role: "assistant",
                     content: accContent,
@@ -2370,12 +2400,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     message: finalMsg,
                   })
                 } else if (data.type === "error") {
-                  // Provider/runtime error mid-stream. The server has already
-                  // persisted this assistant message with status:"error" via
-                  // its own onError path, so the post-refresh DB load shows
-                  // the same content. We mirror it into local state so the
-                  // user sees the error *immediately* without needing to
-                  // refresh — symmetrically with the "stopped" branch above.
+                  // Provider/runtime error mid-stream. The server persists the
+                  // message (with the [Error: …] text) and ships it on this
+                  // event, so the post-refresh DB load shows the same content.
+                  // Mirror it into local state so the user sees the error
+                  // immediately — symmetrically with the "stopped" branch.
                   streamDoneRef.current = true
                   const rawError =
                     typeof data.error === "string" && data.error.trim()
@@ -2385,7 +2414,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     accContent && accContent.trim().length > 0
                       ? `${accContent}\n\n[Error: ${rawError}]`
                       : `[Error: ${rawError}]`
-                  const finalMsg: Message = {
+                  const finalMsg: Message = assistantMessageFromStreamEvent(
+                    data.message,
+                    assistantMsgId
+                  ) ?? {
                     id: assistantMsgId,
                     role: "assistant",
                     content: errorBody,

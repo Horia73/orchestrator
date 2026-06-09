@@ -58,7 +58,7 @@ Safety and lifecycle:
 - If the user explicitly wants ongoing behavior, set stop.persistent=true and still keep maxConsecutiveFailures.
 - Default temporary scripts expire after 24h when persistent=false and no expiresAt is set.
 - Pause/delete scripts as soon as the user no longer needs them.
-- Do not create always-on scripts casually. State what will run, how often, which permissions it has, and when it stops.
+- Always-on scripts need explicit justification: state what will run, how often, which permissions it has, and when it stops.
 - Service calls, writes, sends, agent wakes, app tool calls, account changes, or other side effects require explicit user approval of the permission boundary before creation.
 - For trusted scripts, prefer broad but explicit profiles when the user asked for flexibility: allow direct Python network, workspace files, and tool_call patterns. Still state what will run, how often, and when it stops.
 

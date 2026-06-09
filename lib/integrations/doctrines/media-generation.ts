@@ -5,7 +5,7 @@
 // lib/integrations/subsystem-manifest.ts + lib/integrations/exposure.ts).
 export const MEDIA_GENERATION_DOCTRINE = `
 <media_generation_guidance>
-Use specialist media agents when the user asks for generated/edited media, or when another agent needs an asset to complete the task. The selected provider/model comes from Settings for that media agent. OpenAI is not a fallback for Google and Google is not a fallback for OpenAI; if Settings says OpenAI, prompt for the OpenAI image model and expect it to work. If Settings says Google, prompt for the Google model and expect it to work.
+Use specialist media agents when the user asks for generated/edited media, or when another agent needs an asset to complete the task. The selected provider/model comes from Settings for that media agent. OpenAI is not a fallback for Google and Google is not a fallback for OpenAI: prompt for the model the Settings provider selects, and if it fails or is unavailable report the blocker instead of silently switching providers.
 
 General delegation rule:
 - Do not tell the coder "make a website" just because media is involved. Delegate to coder only when implementation work is needed. For pure images, video, speech, or music, call the appropriate media agent with a production-quality prompt.

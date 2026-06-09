@@ -533,20 +533,17 @@ export async function POST(request: Request) {
         force?: boolean
         thinkingDuration?: number
         status?: Message["status"]
-      }) => {
+        /** Provider/runtime error to surface inside the bubble (error persists). */
+        errorText?: string
+      }): Message | null => {
         const force = opts?.force ?? false
         const now = Date.now()
         if (
           !force &&
           now - lastProgressPersistAt < STREAM_PROGRESS_PERSIST_INTERVAL_MS
         )
-          return
+          return null
         lastProgressPersistAt = now
-
-        const persistAttachments = withInlineUploadAttachments(
-          accContent || "",
-          accAttachments
-        )
 
         const effectiveStatus = opts?.status ?? terminalMessageStatus ?? undefined
         // Mid-stream progress saves keep the assistant row pinned to its start
@@ -557,35 +554,55 @@ export async function POST(request: Request) {
         // the conversation (its completion arrives via /api/sync, not this tab's
         // reader) leaves lastMessageAt frozen at start time, so the unread calc
         // reads it as already-read: no bold + no "finished" dot in the sidebar.
-        // Mirrors the client's local-reader done/stopped/error paths, which all
-        // stamp Date.now() on the final message.
         const isTerminalPersist =
           effectiveStatus === "ok" ||
           effectiveStatus === "error" ||
           effectiveStatus === "aborted"
 
-        addMessage(
-          conversationId,
-          sanitizeMessageForPersistence({
-            id: messageId,
-            role: "assistant",
-            content: accContent || "",
-            status: effectiveStatus,
-            contentSegments: accContentSegments,
-            reasoning: accReasoning,
-            thinking: accThinking || "",
-            thinkingDuration: opts?.thinkingDuration,
-            // Total turn wall-clock, stamped only on the terminal persist (the row's
-            // timestamp is rewritten to `now` here, so the start is otherwise lost).
-            durationMs: isTerminalPersist
-              ? Math.max(0, now - assistantMsg.timestamp)
-              : undefined,
-            toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
-            attachments:
-              persistAttachments.length > 0 ? persistAttachments : undefined,
-            timestamp: isTerminalPersist ? now : assistantMsg.timestamp,
-          })
+        // Error turns surface the failure inside the bubble. Persist exactly
+        // what the live client renders so a refresh shows the same message.
+        const content =
+          effectiveStatus === "error" && opts?.errorText
+            ? accContent
+              ? `${accContent}\n\n[Error: ${opts.errorText}]`
+              : `[Error: ${opts.errorText}]`
+            : accContent || ""
+        const contentSegments =
+          effectiveStatus === "error" &&
+          accContentSegments.length === 0 &&
+          content
+            ? [{ phase: 0, content }]
+            : accContentSegments
+
+        const persistAttachments = withInlineUploadAttachments(
+          content,
+          accAttachments
         )
+
+        const message = sanitizeMessageForPersistence({
+          id: messageId,
+          role: "assistant",
+          content,
+          status: effectiveStatus,
+          contentSegments,
+          reasoning: accReasoning,
+          thinking: accThinking || "",
+          thinkingDuration: opts?.thinkingDuration,
+          // Total turn wall-clock, stamped only on the terminal persist (the row's
+          // timestamp is rewritten to `now` here, so the start is otherwise lost).
+          durationMs: isTerminalPersist
+            ? Math.max(0, now - assistantMsg.timestamp)
+            : undefined,
+          toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
+          attachments:
+            persistAttachments.length > 0 ? persistAttachments : undefined,
+          timestamp: isTerminalPersist ? now : assistantMsg.timestamp,
+        })
+        addMessage(conversationId, message)
+        // Terminal events ship this persisted row to the live client, which
+        // adopts it verbatim — the message you watched stream is byte-for-byte
+        // the one a refresh loads from the DB.
+        return message
       }
 
       const appendThinkingChunk = (chunk: string) => {
@@ -1405,12 +1422,17 @@ export async function POST(request: Request) {
                           reasoning: sanitizeReasoningForPersistence(accReasoning),
                           contentSegments: accContentSegments,
                         })
-                        persistAssistantProgress({
+                        const persisted = persistAssistantProgress({
                           force: true,
                           thinkingDuration: 0,
                           status: "aborted",
                         })
-                        send({ type: "stopped", messageId, durationMs: elapsedMs() })
+                        send({
+                          type: "stopped",
+                          messageId,
+                          durationMs: persisted?.durationMs ?? elapsedMs(),
+                          message: persisted ?? undefined,
+                        })
                         return
                       }
 
@@ -1422,7 +1444,7 @@ export async function POST(request: Request) {
 
                       // Save final message and emit an add_message sync event.
                       terminalMessageStatus = "ok"
-                      persistAssistantProgress({
+                      const persisted = persistAssistantProgress({
                         force: true,
                         thinkingDuration: meta.thinkingDuration,
                         status: "ok",
@@ -1526,10 +1548,11 @@ export async function POST(request: Request) {
                         messageId,
                         status: "ok",
                         thinkingDuration: meta.thinkingDuration,
-                        durationMs: elapsedMs(),
+                        durationMs: persisted?.durationMs ?? elapsedMs(),
                         usage: meta.usage,
                         interactionId: meta.sessionId,
                         attachments: accAttachments,
+                        message: persisted ?? undefined,
                       })
 
                       const completedConversation = getConversation(conversationId)
@@ -1569,12 +1592,17 @@ export async function POST(request: Request) {
                           reasoning: sanitizeReasoningForPersistence(accReasoning),
                           contentSegments: accContentSegments,
                         })
-                        persistAssistantProgress({
+                        const persisted = persistAssistantProgress({
                           force: true,
                           thinkingDuration: 0,
                           status: terminalMessageStatus,
                         })
-                        send({ type: "stopped", messageId, durationMs: elapsedMs() })
+                        send({
+                          type: "stopped",
+                          messageId,
+                          durationMs: persisted?.durationMs ?? elapsedMs(),
+                          message: persisted ?? undefined,
+                        })
                         return
                       }
                       logRequestFail(
@@ -1619,12 +1647,17 @@ export async function POST(request: Request) {
                       reasoning: sanitizeReasoningForPersistence(accReasoning),
                       contentSegments: accContentSegments,
                     })
-                    persistAssistantProgress({
+                    const persisted = persistAssistantProgress({
                       force: true,
                       thinkingDuration: 0,
                       status: terminalMessageStatus,
                     })
-                    send({ type: "stopped", messageId, durationMs: elapsedMs() })
+                    send({
+                      type: "stopped",
+                      messageId,
+                      durationMs: persisted?.durationMs ?? elapsedMs(),
+                      message: persisted ?? undefined,
+                    })
                   } else {
                     logRequestFail(messageId, msg, Date.now(), accContent || null, {
                       reasoning: sanitizeReasoningForPersistence(accReasoning),
@@ -1656,15 +1689,17 @@ export async function POST(request: Request) {
                 }
                 terminalStreamError = attemptStreamError
                 terminalMessageStatus = "error"
-                persistAssistantProgress({
+                const persisted = persistAssistantProgress({
                   force: true,
                   thinkingDuration: 0,
                   status: terminalMessageStatus,
+                  errorText: attemptStreamError,
                 })
                 send({
                   type: "error",
                   error: attemptStreamError,
-                  durationMs: elapsedMs(),
+                  durationMs: persisted?.durationMs ?? elapsedMs(),
+                  message: persisted ?? undefined,
                 })
                 break
               }
@@ -1674,43 +1709,29 @@ export async function POST(request: Request) {
                 lastModelAttemptError ?? "All configured model attempts failed."
               terminalStreamError = error
               terminalMessageStatus = "error"
-              persistAssistantProgress({
+              const persisted = persistAssistantProgress({
                 force: true,
                 thinkingDuration: 0,
                 status: terminalMessageStatus,
+                errorText: error,
               })
-              send({ type: "error", error, durationMs: elapsedMs() })
+              send({
+                type: "error",
+                error,
+                durationMs: persisted?.durationMs ?? elapsedMs(),
+                message: persisted ?? undefined,
+              })
             }
           } catch (error: unknown) {
             const msg = error instanceof Error ? error.message : "Unknown error"
             const aborted = serverAbortController.signal.aborted
             console.error("Streaming error:", msg)
 
-            const errorPersistAttachments = withInlineUploadAttachments(
-              accContent || "",
-              accAttachments
-            )
-
-            addMessage(conversationId, {
-              id: messageId,
-              role: "assistant",
-              content: aborted
-                ? accContent
-                : accContent
-                  ? `${accContent}\n\n[Error: ${msg}]`
-                  : `[Error: ${msg}]`,
-              status: aborted ? "aborted" : "error",
-              contentSegments: accContentSegments,
-              reasoning: accReasoning,
-              thinking: accThinking || "",
+            const persisted = persistAssistantProgress({
+              force: true,
               thinkingDuration: 0,
-              durationMs: elapsedMs(),
-              timestamp: assistantMsg.timestamp,
-              toolCalls: accToolCalls.length > 0 ? accToolCalls : undefined,
-              attachments:
-                errorPersistAttachments.length > 0
-                  ? errorPersistAttachments
-                  : undefined,
+              status: aborted ? "aborted" : "error",
+              errorText: aborted ? undefined : msg,
             })
 
             if (aborted) {
@@ -1727,8 +1748,18 @@ export async function POST(request: Request) {
 
             send(
               aborted
-                ? { type: "stopped", messageId, durationMs: elapsedMs() }
-                : { type: "error", error: msg, durationMs: elapsedMs() }
+                ? {
+                    type: "stopped",
+                    messageId,
+                    durationMs: persisted?.durationMs ?? elapsedMs(),
+                    message: persisted ?? undefined,
+                  }
+                : {
+                    type: "error",
+                    error: msg,
+                    durationMs: persisted?.durationMs ?? elapsedMs(),
+                    message: persisted ?? undefined,
+                  }
             )
           } finally {
             clearChatStream(conversationId, messageId)

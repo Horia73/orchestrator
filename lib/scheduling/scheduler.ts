@@ -148,61 +148,61 @@ async function tickProfile(profileId: string): Promise<void> {
     const now = Date.now()
     const due = getDueCandidates(now)
     for (const task of due) {
-            if (state.inFlight.has(taskRunKey(profileId, task.id))) continue
+        if (state.inFlight.has(taskRunKey(profileId, task.id))) continue
 
-            // One-shot that came due while we were offline → missed, not run on
-            // its original schedule. Instead of a dead "it was not executed"
-            // notice, wake the agent to assess whether doing it late still makes
-            // sense (benign/idempotent actions may be carried out; stale or risky
-            // ones are surfaced for the user to decide).
-            if (
-                task.schedule.kind === 'once' &&
-                task.nextRunAt != null &&
-                now - task.nextRunAt > MISSED_GRACE_MS
-            ) {
-                const dueAt = task.nextRunAt
-                const missed = markMissed(task.id, now)
-                if (missed) {
-                    log(`missed "${missed.title}" (${missed.id}, ${profileId})`)
-                    const key = taskRunKey(profileId, task.id)
-                    if (!state.inFlight.has(key)) {
-                        state.inFlight.add(key)
-                        void runWithProfileContext({ profileId }, async () => {
+        // One-shot that came due while we were offline → missed, not run on
+        // its original schedule. Instead of a dead "it was not executed"
+        // notice, wake the agent to assess whether doing it late still makes
+        // sense (benign/idempotent actions may be carried out; stale or risky
+        // ones are surfaced for the user to decide).
+        if (
+            task.schedule.kind === 'once' &&
+            task.nextRunAt != null &&
+            now - task.nextRunAt > MISSED_GRACE_MS
+        ) {
+            const dueAt = task.nextRunAt
+            const missed = markMissed(task.id, now)
+            if (missed) {
+                log(`missed "${missed.title}" (${missed.id}, ${profileId})`)
+                const key = taskRunKey(profileId, task.id)
+                if (!state.inFlight.has(key)) {
+                    state.inFlight.add(key)
+                    void runWithProfileContext({ profileId }, async () => {
+                        try {
+                            const { runSchedulerEscalation } = await import('./run')
+                            await runSchedulerEscalation(missed, { kind: 'missed', dueAt }, now)
+                            log(`assessed missed one-shot "${missed.title}" (${missed.id}, ${profileId})`)
+                        } catch (err) {
+                            // Fall back to a passive notice so the miss is never silent.
                             try {
-                                const { runSchedulerEscalation } = await import('./run')
-                                await runSchedulerEscalation(missed, { kind: 'missed', dueAt }, now)
-                                log(`assessed missed one-shot "${missed.title}" (${missed.id}, ${profileId})`)
-                            } catch (err) {
-                                // Fall back to a passive notice so the miss is never silent.
-                                try {
-                                    const { postInboxNotice } = await import('./run')
-                                    postInboxNotice(
-                                        missed,
-                                        `⚠️ Missed scheduled task **${missed.title}** — it was due ${new Date(
-                                            dueAt,
-                                        ).toISOString()} but the app was not running.`,
-                                    )
-                                } catch { /* notice best-effort */ }
-                                log(`missed-assessment failed for ${missed.id}: ${err instanceof Error ? err.message : String(err)}`)
-                            } finally {
-                                state.inFlight.delete(key)
-                            }
-                        })
-                    }
+                                const { postInboxNotice } = await import('./run')
+                                postInboxNotice(
+                                    missed,
+                                    `⚠️ Missed scheduled task **${missed.title}** — it was due ${new Date(
+                                        dueAt,
+                                    ).toISOString()} but the app was not running.`,
+                                )
+                            } catch { /* notice best-effort */ }
+                            log(`missed-assessment failed for ${missed.id}: ${err instanceof Error ? err.message : String(err)}`)
+                        } finally {
+                            state.inFlight.delete(key)
+                        }
+                    })
                 }
-                continue
             }
-
-            let claimed
-            try {
-                claimed = claimForRun(task.id, now)
-            } catch (err) {
-                markTaskError(task.id, err instanceof Error ? err.message : 'Schedule compute failed', now)
-                continue
-            }
-            if (!claimed) continue
-            void executeAndFinish(profileId, claimed.task, claimed.isOnce, now)
+            continue
         }
+
+        let claimed
+        try {
+            claimed = claimForRun(task.id, now)
+        } catch (err) {
+            markTaskError(task.id, err instanceof Error ? err.message : 'Schedule compute failed', now)
+            continue
+        }
+        if (!claimed) continue
+        void executeAndFinish(profileId, claimed.task, claimed.isOnce, now)
+    }
 }
 
 /** Idempotent. Safe to call repeatedly (HMR, multiple imports). */
@@ -211,32 +211,32 @@ export function startScheduler(): void {
     state.started = true
 
     for (const profile of listProfiles()) {
-    try {
-        const recovered = runWithProfileContext(
-            { profileId: profile.id, role: profile.role },
-            () => recoverStuckRunning(Date.now())
-        )
-        if (recovered.length > 0) {
-            void import('./run')
-                .then(({ postInboxNotice }) => {
-                    for (const task of recovered) {
-                        try {
-                            runWithProfileContext(
-                                { profileId: profile.id, role: profile.role },
-                                () => postInboxNotice(
-                                    task,
-                                    `⚠️ Scheduled task **${task.title}** was interrupted by a restart and did not complete. It was not re-run.`,
+        try {
+            const recovered = runWithProfileContext(
+                { profileId: profile.id, role: profile.role },
+                () => recoverStuckRunning(Date.now())
+            )
+            if (recovered.length > 0) {
+                void import('./run')
+                    .then(({ postInboxNotice }) => {
+                        for (const task of recovered) {
+                            try {
+                                runWithProfileContext(
+                                    { profileId: profile.id, role: profile.role },
+                                    () => postInboxNotice(
+                                        task,
+                                        `⚠️ Scheduled task **${task.title}** was interrupted by a restart and did not complete. It was not re-run.`,
+                                    )
                                 )
-                            )
-                        } catch { /* best-effort */ }
-                    }
-                })
-                .catch(() => { /* best-effort */ })
+                            } catch { /* best-effort */ }
+                        }
+                    })
+                    .catch(() => { /* best-effort */ })
+                log(`recovered ${recovered.length} interrupted one-shot task(s) for ${profile.id}`)
+            }
+        } catch (err) {
+            log(`boot recovery failed for ${profile.id}: ${err instanceof Error ? err.message : String(err)}`)
         }
-        if (recovered.length > 0) log(`recovered ${recovered.length} interrupted one-shot task(s) for ${profile.id}`)
-    } catch (err) {
-        log(`boot recovery failed for ${profile.id}: ${err instanceof Error ? err.message : String(err)}`)
-    }
     }
 
     state.timer = setInterval(() => { void tick() }, TICK_MS)

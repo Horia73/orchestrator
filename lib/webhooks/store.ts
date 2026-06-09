@@ -184,7 +184,14 @@ function emitWebhookEventsChanged(endpointId: string | undefined, eventId?: stri
 }
 
 function parseJsonObject(raw: string): Record<string, unknown> {
-    const parsed = JSON.parse(raw)
+    // Degrade a corrupt row to an empty payload instead of failing the
+    // whole event listing.
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(raw)
+    } catch {
+        return {}
+    }
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
         ? parsed as Record<string, unknown>
         : {}

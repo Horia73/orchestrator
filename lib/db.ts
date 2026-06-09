@@ -1102,7 +1102,8 @@ export function addMessage(conversationId: string, message: Message) {
             durationMs = excluded.durationMs,
             toolCalls = excluded.toolCalls,
             attachments = excluded.attachments,
-            replyActions = excluded.replyActions
+            replyActions = excluded.replyActions,
+            timestamp = excluded.timestamp
     `)
 
   const updateConv = db.prepare(`

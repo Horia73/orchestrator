@@ -639,6 +639,18 @@ function InboxViewInner() {
   >(new Set())
   const keyboardInset = useMobileKeyboardInset()
 
+  // Fade the whole inbox in once the list is ready, instead of flashing a
+  // skeleton. While `loading` the view stays at opacity-0 (a blank bridge after
+  // the previous view faded out); the moment the list resolves we ease it in on
+  // the next frame. Sticky once entered — background refreshes never set
+  // `loading`, so this fires exactly once on first load.
+  const [entered, setEntered] = React.useState(false)
+  React.useEffect(() => {
+    if (loading || entered) return
+    const frame = window.requestAnimationFrame(() => setEntered(true))
+    return () => window.cancelAnimationFrame(frame)
+  }, [loading, entered])
+
   useDocumentViewportLock()
 
   const handledItemParam = React.useRef<string | null>(null)
@@ -793,7 +805,12 @@ function InboxViewInner() {
   }, [selectedId])
 
   return (
-    <div className="flex h-full min-h-0 overflow-hidden bg-background text-foreground">
+    <div
+      className={cn(
+        "flex h-full min-h-0 overflow-hidden bg-background text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
+        entered ? "opacity-100" : "opacity-0"
+      )}
+    >
       {dialog}
       <div
         className={cn(
@@ -894,22 +911,7 @@ function InboxViewInner() {
                 touchAction: "pan-y",
               }}
             >
-              {loading && items.length === 0 ? (
-                <div className="divide-y divide-border/60 dark:divide-white/10">
-                  {[1, 2, 3, 4, 5].map((i) => (
-                    <div key={i} className="px-4 py-3">
-                      <div className="flex items-start gap-3">
-                        <div className="mt-1 size-2 animate-pulse rounded-full bg-[#e6e1db] dark:bg-white/10" />
-                        <div className="min-w-0 flex-1 space-y-2">
-                          <div className="h-3 w-32 animate-pulse rounded bg-[#e6e1db] dark:bg-white/10" />
-                          <div className="h-4 w-2/3 animate-pulse rounded bg-[#e6e1db] dark:bg-white/10" />
-                          <div className="h-3 w-full animate-pulse rounded bg-[#f0ede6] dark:bg-white/[0.06]" />
-                        </div>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : filteredItems.length === 0 ? (
+              {filteredItems.length === 0 ? (
                 <EmptyList query={query} filter={folderFilter} />
               ) : (
                 <div>

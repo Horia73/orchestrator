@@ -19,7 +19,7 @@ When evidence conflicts:
 When evidence is missing:
 - say what you tried;
 - mark the field unknown;
-- do not infer stock, delivery, price, compatibility, eligibility, or legality unless the source states it.
+- do not state stock, delivery, price, compatibility, eligibility, or legality as fact unless the source states it; a clearly-labeled estimate with its basis is the only acceptable substitute.
 
 For images:
 - include image URLs only when they come from or clearly correspond to the exact listing/page;

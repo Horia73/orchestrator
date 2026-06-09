@@ -229,7 +229,7 @@ export async function exchangeGoogleOAuthCode(args: {
         }),
     })
     const json = await response.json().catch(() => ({})) as GoogleOAuthTokenResponse
-    if (!response.ok || json.error) {
+    if (!response.ok || json.error || !json.access_token) {
         throw new Error(json.error_description || json.error || `Token exchange failed (${response.status})`)
     }
     return json

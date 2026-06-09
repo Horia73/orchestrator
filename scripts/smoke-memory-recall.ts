@@ -326,6 +326,67 @@ async function main(): Promise<void> {
     recall.selectDiverse(cand, new Map(), 4).length === 3
   )
 
+  // --- silent-pass precision filters: assistant turns, age penalty, top gap ---
+  check(
+    "isAssistantConversationChunk flags assistant conversation chunks",
+    recall.isAssistantConversationChunk(
+      "conversation:c1:m1",
+      "Conversation › Kitchen moodboard › Assistant · 2026-01-03"
+    ) === true
+  )
+  check(
+    "isAssistantConversationChunk keeps user conversation chunks",
+    recall.isAssistantConversationChunk(
+      "conversation:c1:m2",
+      "Conversation › Kitchen moodboard › User · 2026-01-03"
+    ) === false
+  )
+  check(
+    "isAssistantConversationChunk ignores markdown sources",
+    recall.isAssistantConversationChunk("MEMORY.md", "MEMORY.md › Assistant") === false
+  )
+
+  const now = Date.parse("2026-06-09T00:00:00.000Z")
+  check(
+    "recallAgePenalty: durable files pay nothing",
+    recall.recallAgePenalty("MEMORY.md", "MEMORY.md › X", now) === 0
+  )
+  const freshPenalty = recall.recallAgePenalty("MEMORY_DAY/2026-06-08.md", "t", now)
+  const oldPenalty = recall.recallAgePenalty("MEMORY_DAY/2025-06-09.md", "t", now)
+  const ancientPenalty = recall.recallAgePenalty("MEMORY_DAY/2020-01-01.md", "t", now)
+  check(
+    "recallAgePenalty grows with age and is capped",
+    freshPenalty < oldPenalty &&
+      oldPenalty <= ancientPenalty &&
+      ancientPenalty <= 0.2,
+    { freshPenalty, oldPenalty, ancientPenalty }
+  )
+  check(
+    "recallAgePenalty reads conversation dates from the chunk title",
+    recall.recallAgePenalty(
+      "conversation:c1:m1",
+      "Conversation › T › User · 2025-06-09",
+      now
+    ) === oldPenalty
+  )
+
+  const gapCand = [
+    { id: "g1", source: src, title: "t", text: "strong match", score: 0.84 },
+    { id: "g2", source: src, title: "t", text: "close second", score: 0.81 },
+    { id: "g3", source: src, title: "t", text: "tangential rider", score: 0.7 },
+  ]
+  const gapped = recall.applyTopGap(gapCand, 0.05)
+  check(
+    "applyTopGap drops candidates far below the best score",
+    gapped.length === 2 && gapped.every((h) => h.id !== "g3"),
+    gapped.map((h) => h.id)
+  )
+  check("applyTopGap is a no-op when disabled", recall.applyTopGap(gapCand, 0).length === 3)
+  check(
+    "applyTopGap keeps a lone candidate",
+    recall.applyTopGap([gapCand[0]], 0.05).length === 1
+  )
+
   // --- repeat suppression: hide repeated marginal hits, keep strong ones ------
   const repeated = recall.suppressRepeatedRecallHits(
     [
