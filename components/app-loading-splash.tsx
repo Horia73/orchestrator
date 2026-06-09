@@ -40,7 +40,7 @@ export function AppLoadingSplash({ loading }: { loading: boolean }) {
         exiting ? "opacity-0" : "opacity-100"
       )}
     >
-      <span className="app-splash-word [font-family:var(--font-display)] text-2xl font-normal tracking-[-0.03em] text-foreground/70 md:text-3xl">
+      <span className="app-splash-word -translate-y-[10vh] [font-family:var(--font-display)] text-[clamp(3rem,15vw,3.75rem)] font-medium tracking-[-0.035em] text-foreground/80 md:-translate-y-[6vh] md:text-7xl">
         Orchestrator
       </span>
     </div>
