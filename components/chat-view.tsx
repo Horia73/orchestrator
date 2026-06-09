@@ -2712,10 +2712,17 @@ export function ChatView() {
 
           <ChatConnectionPill
             status={
-              isStreamingThisConversation ? state.streamingStatus : null
+              isStreamingThisConversation &&
+              (state.streamingStatus === "recovering" ||
+                state.streamingStatus === "offline")
+                ? state.streamingStatus
+                : null
             }
             style={{
-              bottom: inputOffset + keyboardInset + (showScrollBtn ? 48 : 8),
+              bottom:
+                keyboardInset > 0
+                  ? keyboardInset + 12
+                  : "calc(env(safe-area-inset-bottom) + 16px)",
             }}
           />
         </div>

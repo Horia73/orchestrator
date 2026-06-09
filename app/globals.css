@@ -297,6 +297,24 @@ button:not(:disabled),
     animation: libraryMediaShimmer 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
 
+  /* Bare-text connection status ("Server is reconnecting…") — no chip, just a
+     calm light sweep across the glyphs so it reads as alive without a spinner
+     or a bar. Reuses the thought-title sweep keyframe at a slower, gentler
+     pace. */
+  .connection-status-text {
+    color: transparent;
+    background-image: linear-gradient(
+      90deg,
+      color-mix(in oklch, var(--muted-foreground) 50%, transparent) 0%,
+      var(--foreground) 50%,
+      color-mix(in oklch, var(--muted-foreground) 50%, transparent) 100%
+    );
+    background-size: 220% 100%;
+    -webkit-background-clip: text;
+    background-clip: text;
+    animation: thoughtTitleLiveSweep 2s ease-in-out infinite;
+  }
+
   /* Transient tint when a deep-link (Library → "View in chat") jumps to a
      message, so the eye lands on the right one. */
   .message-jump-highlight {
@@ -388,6 +406,14 @@ button:not(:disabled),
     .app-splash-word {
       animation: none;
       opacity: 0.8;
+    }
+    /* Drop the sweep but keep the text legible (the gradient clip would render
+       transparent without an animation to reveal it). */
+    .connection-status-text {
+      animation: none;
+      background-image: none;
+      color: var(--muted-foreground);
+      -webkit-text-fill-color: var(--muted-foreground);
     }
   }
 
