@@ -10,6 +10,11 @@ Location Intelligence is an optional local subsystem. It is off by default and s
 4. The daily task reverse-geocodes meaningful inferred-stay start points, except `home`, and persists useful non-home labels/addresses to `place_aliases.json`.
 5. Library > Places reads local JSON files and renders a map, route approximation, stats, summarized Places, and raw observations. For raw points, apparent stays are inferred from the gap until the next webhook sample.
 
+Daily summary invariants:
+
+- Gym summaries must derive `gym_detected` and gym session fields from confirmed session state (`current_session.notified`, `confirmed_at`, `ended_at`, weekly session ids) and from a valid `gym_candidate` -> `gym_departure` dwell, not only from a raw `gym_arrival_confirmed` row.
+- For manual/non-webhook runs, daily maintenance must run before pending adherence handling so the just-ended local day always writes `days/YYYY-MM-DD.json` and `routine.json`, even when a weekly adherence check is pending or deferred.
+
 Supported journal files:
 
 - `points.jsonl`

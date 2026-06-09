@@ -153,6 +153,16 @@ export interface HomeAssistantLogbookOptions {
     maxResults?: number
 }
 
+export interface HomeAssistantErrorLogResult {
+    available: boolean
+    endpoint: '/api/error_log'
+    length: number
+    truncated: boolean
+    text: string
+    status?: number
+    message?: string
+}
+
 export interface HomeAssistantCalendarOptions {
     calendarEntityId: string
     start: string
@@ -282,6 +292,17 @@ interface NormalizedServiceCall {
     policy: HomeAssistantActionPolicy
     risk: 'direct' | 'confirmation_required'
     serviceSchema: unknown
+}
+
+class HomeAssistantApiError extends Error {
+    constructor(
+        message: string,
+        readonly status: number,
+        readonly body: string,
+    ) {
+        super(message)
+        this.name = 'HomeAssistantApiError'
+    }
 }
 
 export async function getHomeAssistantIntegrationStatus(validate = true): Promise<HomeAssistantIntegrationStatus> {
@@ -527,10 +548,29 @@ export async function homeAssistantLogbook(options: HomeAssistantLogbookOptions 
     }
 }
 
-export async function homeAssistantErrorLog(maxChars = 60_000) {
-    const text = await homeAssistantRestText('/api/error_log')
+export async function homeAssistantErrorLog(maxChars = 60_000): Promise<HomeAssistantErrorLogResult> {
+    let text: string
+    try {
+        text = await homeAssistantRestText('/api/error_log')
+    } catch (err) {
+        if (err instanceof HomeAssistantApiError && (err.status === 404 || err.status === 410)) {
+            return {
+                available: false,
+                endpoint: '/api/error_log',
+                status: err.status,
+                length: 0,
+                truncated: false,
+                text: '',
+                message:
+                    'Home Assistant did not expose GET /api/error_log on this instance. Other Home Assistant API tools can still work; use HomeAssistantLogbook, HomeAssistantListStates, or HomeAssistantWebSocketRead for read-only inspection.',
+            }
+        }
+        throw err
+    }
     const max = clampInt(maxChars, 1_000, 200_000)
     return {
+        available: true,
+        endpoint: '/api/error_log',
         length: text.length,
         truncated: text.length > max,
         text: text.length > max ? text.slice(-max) : text,
@@ -973,7 +1013,8 @@ async function homeAssistantFetch(pathAndQuery: string, init: RequestInit = {}, 
             signal: init.signal ?? controller.signal,
         })
         if (!response.ok) {
-            throw new Error(`Home Assistant API failed (${response.status}): ${await responseErrorText(response)}`)
+            const body = await responseErrorText(response)
+            throw new HomeAssistantApiError(`Home Assistant API failed (${response.status}): ${body}`, response.status, body)
         }
         return response
     } catch (err) {

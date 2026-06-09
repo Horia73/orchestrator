@@ -31,6 +31,7 @@ const DEFAULT_COORDINATE_ALIAS_RADIUS_METERS = 300
 const MAX_ACCURACY_ALIAS_RADIUS_BONUS_METERS = 100
 const MAX_OBSERVATION_STOP_MATCH_METERS = 100
 const INFERRED_STAY_MINUTES = 7
+const GYM_DWELL_MINUTES = 5
 const STATIONARY_SPEED_KMH = 1
 const DRIVING_SPEED_KMH = 12
 const MOTION_ACTIVITY_LABELS = new Set([
@@ -62,6 +63,13 @@ interface PointSummary {
   lastSeenAt: string | null
   route: LocationCoordinate[]
   observations: LocationStop[]
+  gymEvents: GymEventSample[]
+}
+
+interface GymEventSample {
+  event: string
+  timestampMs: number
+  nearGym: boolean
 }
 
 interface DayReadResult {
@@ -791,14 +799,112 @@ function extractStats(
     distanceMeters,
     sampleCount: explicitSampleCount ?? pointSummary?.sampleCount ?? null,
     stopCount: stops.length,
-    gymDetected: booleanFromKeys(raw, [
+    gymDetected: gymDetectedFromRaw(raw) || gymDetectedFromPoints(pointSummary),
+  }
+}
+
+function gymDetectedFromRaw(raw: unknown): boolean {
+  if (
+    booleanFromKeys(raw, [
       "gymDetected",
       "gym_detected",
       "visitedGym",
       "visited_gym",
       "gym",
-    ]),
+    ])
+  ) {
+    return true
   }
+
+  if (!isRecord(raw)) return false
+
+  const gym = raw.gym
+  if (
+    isRecord(gym) &&
+    booleanFromKeys(gym, [
+      "confirmed_session",
+      "confirmedSession",
+      "session_confirmed",
+      "sessionConfirmed",
+      "detected",
+    ])
+  ) {
+    return true
+  }
+
+  const session = firstRecordFromKeys(raw, [
+    "current_session",
+    "currentSession",
+    "gym_session",
+    "gymSession",
+  ])
+  if (confirmedGymSessionRecord(session)) return true
+
+  const sessions = firstArrayFromKeys(raw, [
+    "gym_sessions",
+    "gymSessions",
+    "confirmed_gym_sessions",
+    "confirmedGymSessions",
+  ])
+  return Boolean(sessions?.some(confirmedGymSessionRecord))
+}
+
+function confirmedGymSessionRecord(value: unknown): boolean {
+  if (!isRecord(value)) return false
+  if (
+    booleanFromKeys(value, [
+      "confirmed",
+      "notified",
+      "counted",
+      "detected",
+      "session_confirmed",
+      "sessionConfirmed",
+    ])
+  ) {
+    return true
+  }
+  return Boolean(
+    stringFromKeys(value, [
+      "confirmed_at",
+      "confirmedAt",
+      "notified_at",
+      "notifiedAt",
+    ])
+  )
+}
+
+function gymDetectedFromPoints(pointSummary: PointSummary | null): boolean {
+  if (!pointSummary) return false
+  return (
+    pointSummary.gymEvents.some(
+      (sample) => sample.event === "gym_arrival_confirmed"
+    ) || hasGymCandidateDepartureDwell(pointSummary.gymEvents)
+  )
+}
+
+function hasGymCandidateDepartureDwell(events: GymEventSample[]): boolean {
+  let candidateStartMs: number | null = null
+  for (const sample of [...events].sort(
+    (a, b) => a.timestampMs - b.timestampMs
+  )) {
+    if (sample.event === "gym_arrival_confirmed") return true
+    if (sample.event === "gym_candidate" || sample.nearGym) {
+      candidateStartMs = candidateStartMs ?? sample.timestampMs
+      continue
+    }
+    if (sample.event === "gym_departure") {
+      if (
+        candidateStartMs !== null &&
+        sample.timestampMs - candidateStartMs >= GYM_DWELL_MINUTES * 60_000
+      ) {
+        return true
+      }
+      candidateStartMs = null
+      continue
+    }
+    if (sample.event === "gym_pass_by") candidateStartMs = null
+  }
+  return false
 }
 
 function extractRoute(raw: unknown): LocationCoordinate[] | null {
@@ -854,6 +960,7 @@ async function readPointSummaries(
       lastSeenAt: null,
       route: [],
       observations: [],
+      gymEvents: [],
     }
     summary.sampleCount += 1
     if (timestamp) {
@@ -875,6 +982,7 @@ async function readPointSummaries(
     if (observation && summary.observations.length < MAX_STOP_COUNT) {
       summary.observations.push(observation)
     }
+    collectGymEventSample(summary, point)
     summaries.set(date, summary)
   })
 
@@ -884,6 +992,7 @@ async function readPointSummaries(
       ...summary,
       route: thinCoordinates(summary.route, MAX_ROUTE_POINTS),
       observations,
+      gymEvents: summary.gymEvents,
     })
   }
   return summaries
@@ -901,6 +1010,7 @@ async function readPointSummaryForDate(
     lastSeenAt: null,
     route: [],
     observations: [],
+    gymEvents: [],
   }
 
   await readPoints(filePath, (point) => {
@@ -926,6 +1036,7 @@ async function readPointSummaryForDate(
     if (observation && summary.observations.length < MAX_STOP_COUNT) {
       summary.observations.push(observation)
     }
+    collectGymEventSample(summary, point)
   })
 
   if (summary.sampleCount === 0 && summary.route.length === 0) return null
@@ -933,7 +1044,19 @@ async function readPointSummaryForDate(
     ...summary,
     route: thinCoordinates(summary.route, MAX_ROUTE_POINTS),
     observations: withObservationDurations(summary.observations),
+    gymEvents: summary.gymEvents,
   }
+}
+
+function collectGymEventSample(summary: PointSummary, point: unknown): void {
+  if (!isRecord(point)) return
+  const event = cleanText(stringFromKeys(point, ["event"]), 80)
+  const nearGym = booleanFromKeys(point, ["near_gym", "nearGym"])
+  if (!event && !nearGym) return
+
+  const timestampMs = timestampMsForPoint(point)
+  if (timestampMs === null) return
+  summary.gymEvents.push({ event, timestampMs, nearGym })
 }
 
 async function readPoints(
@@ -1293,6 +1416,14 @@ function firstArrayFromKeys(value: unknown, keys: string[]): unknown[] | null {
   return Array.isArray(found) ? found : null
 }
 
+function firstRecordFromKeys(
+  value: unknown,
+  keys: string[]
+): Record<string, unknown> | null {
+  const found = firstValueFromKeys(value, keys)
+  return isRecord(found) ? found : null
+}
+
 function firstValueFromKeys(value: unknown, keys: string[]): unknown {
   if (!isRecord(value)) return undefined
   for (const key of keys) {
@@ -1387,6 +1518,13 @@ function timestampForPoint(point: unknown): string | null {
   }
   const parsed = Date.parse(raw)
   return Number.isFinite(parsed) ? new Date(parsed).toISOString() : null
+}
+
+function timestampMsForPoint(point: unknown): number | null {
+  const timestamp = timestampForPoint(point)
+  if (!timestamp) return null
+  const parsed = Date.parse(timestamp)
+  return Number.isFinite(parsed) ? parsed : null
 }
 
 function normalizeTimeString(value: string): string | null {
