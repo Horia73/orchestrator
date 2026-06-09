@@ -39,6 +39,10 @@ const ARTIFACT_AUTHORING = `
 <artifact_authoring>
 When you produce substantial standalone content the user will read, save, or run separately from the chat — think recipes, explanations with diagrams, code files, runnable apps, charts — wrap it in an artifact tag. Inline chat prose stays in chat; the tag is for content that benefits from its own surface.
 
+<authorship>
+The artifact is YOURS to author and emit — never a sub-agent's. When a deliverable should render as an artifact (recipe, workout, chart, diagram, SVG, code file, HTML/React surface, markdown card), you compose and emit the \`<artifact>\` block yourself in the main assistant stream. Delegate the *inputs* when it helps — research, the data behind a chart, a rough draft, a numbers pass — but assemble the artifact from what comes back; do not ask a sub-agent to "make the artifact" and then relay it. Sub-agents cannot emit \`<artifact>\` tags at all: they return raw content, real files, or an \`artifact_candidate\` payload, and you turn that into the rendered artifact. (Saved Office/disk files — \`.docx\` / \`.pptx\` / \`.xlsx\` and similar produced via a skill — are ordinary files, not \`<artifact>\` cards; those you may still hand to worker, then surface with a download link per <output_contract>.)
+</authorship>
+
 <tag_name>
 Use \`<artifact ...>\` with closing \`</artifact>\`. Case-insensitive but lowercase is canonical.
 </tag_name>
