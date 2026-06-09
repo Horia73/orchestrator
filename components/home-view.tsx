@@ -7,11 +7,6 @@ import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { displayUserName, useRuntimeConfig } from "@/hooks/use-runtime-config"
 
-// Last measured on-screen keyboard height, remembered across focuses (and
-// remounts) within the session. A *subsequent* focus uses it to pre-position
-// the content before iOS Safari opens the keyboard — see the lift effect.
-let lastKeyboardInset = 0
-
 function getGreeting(userName: string): string {
   const hour = new Date().getHours()
   const name = displayUserName(userName)
@@ -25,26 +20,12 @@ function getGreeting(userName: string): string {
 export function HomeView() {
   const { userName } = useRuntimeConfig()
   const greeting = getGreeting(userName)
+  // useMobileKeyboardInset reports the cached keyboard height the instant the
+  // field is focused (before iOS opens the keyboard), so the lift below lands
+  // pre-emptively and Safari never pans the page.
   const keyboardInset = useMobileKeyboardInset()
   const contentRef = React.useRef<HTMLDivElement>(null)
   const [keyboardLift, setKeyboardLift] = React.useState(0)
-  const [isInputFocused, setIsInputFocused] = React.useState(false)
-
-  // Remember the real keyboard height once it's measured, so the *next* focus
-  // can act on it before iOS finishes the open animation.
-  React.useEffect(() => {
-    if (keyboardInset > 0) lastKeyboardInset = keyboardInset
-  }, [keyboardInset])
-
-  // The height we lay out against. While focused but before the visual viewport
-  // has resized (the gap iOS Safari fills by panning the whole page), fall back
-  // to the cached height so the content is already where Safari wants it.
-  const effectiveInset =
-    keyboardInset > 0
-      ? keyboardInset
-      : isInputFocused
-        ? lastKeyboardInset
-        : 0
 
   React.useLayoutEffect(() => {
     const root = document.documentElement
@@ -58,7 +39,7 @@ export function HomeView() {
 
   React.useLayoutEffect(() => {
     const element = contentRef.current
-    if (!element || effectiveInset <= 0) {
+    if (!element || keyboardInset <= 0) {
       setKeyboardLift(0)
       return
     }
@@ -76,7 +57,7 @@ export function HomeView() {
         // roughly where Safari would scroll the focused field to, so Safari
         // has no reason to pan the viewport (which is what dragged the top bar
         // up). offsetTop is unaffected by our transform, so there's no loop.
-        const visibleHeight = viewportHeight - effectiveInset
+        const visibleHeight = viewportHeight - keyboardInset
         const desiredTop = Math.max(0, (visibleHeight - element.offsetHeight) / 2)
         const nextLift = Math.max(0, Math.round(element.offsetTop - desiredTop))
 
@@ -94,7 +75,7 @@ export function HomeView() {
       if (frame !== null) window.cancelAnimationFrame(frame)
       observer.disconnect()
     }
-  }, [effectiveInset])
+  }, [keyboardInset])
 
   return (
     <div className="absolute inset-0 flex min-h-0 flex-col items-center justify-center overflow-hidden px-4 pb-[clamp(5rem,22dvh,13rem)]">
@@ -103,13 +84,7 @@ export function HomeView() {
       </div>
       <div
         ref={contentRef}
-        className="flex w-full max-w-[672px] flex-col items-center gap-7"
-        onFocus={() => setIsInputFocused(true)}
-        onBlur={(event) => {
-          if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
-            setIsInputFocused(false)
-          }
-        }}
+        className="flex w-full max-w-[672px] flex-col items-center gap-7 transition-transform duration-200 ease-out motion-reduce:transition-none"
         style={{
           transform:
             keyboardLift > 0

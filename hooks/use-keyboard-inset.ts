@@ -41,37 +41,104 @@ function readMobileKeyboardInset() {
   return inset > MOBILE_KEYBOARD_INSET_THRESHOLD ? Math.round(inset) : 0
 }
 
+// Last real keyboard height, remembered across focuses (and component mounts)
+// for the whole session. The first focus warms it; every focus after that can
+// act on it before iOS Safari has even started opening the keyboard.
+let cachedKeyboardInset = 0
+
+function isEditableElement(node: EventTarget | null): boolean {
+  if (!(node instanceof HTMLElement)) return false
+  const tag = node.tagName
+  return tag === "TEXTAREA" || tag === "INPUT" || node.isContentEditable
+}
+
 export function useMobileKeyboardInset() {
   const [keyboardInset, setKeyboardInset] = React.useState(0)
 
   React.useEffect(() => {
     let frame: number | null = null
+    // Non-zero between a focus and the moment the visual viewport actually
+    // shrinks. iOS Safari fills that gap by *panning* the whole page to reveal
+    // the focused field; by reporting the cached height immediately we let each
+    // surface pre-position its input first, so Safari has nothing to pan and the
+    // reactive race (the jitter) never starts.
+    let predictedInset = 0
+    let predictionTimer: number | null = null
 
-    const update = () => {
+    const apply = (value: number) =>
+      setKeyboardInset((current) => (current === value ? current : value))
+
+    const clearPrediction = () => {
+      predictedInset = 0
+      if (predictionTimer !== null) {
+        window.clearTimeout(predictionTimer)
+        predictionTimer = null
+      }
+    }
+
+    const measure = () => {
       if (frame !== null) window.cancelAnimationFrame(frame)
       frame = window.requestAnimationFrame(() => {
         frame = null
-        const nextInset = readMobileKeyboardInset()
-        setKeyboardInset((currentInset) =>
-          currentInset === nextInset ? currentInset : nextInset
-        )
+        const measured = readMobileKeyboardInset()
+        if (measured > 0) {
+          cachedKeyboardInset = measured
+          clearPrediction()
+          apply(measured)
+        } else {
+          // Real viewport hasn't resized yet — hold the prediction if we have
+          // one, otherwise the keyboard is closed.
+          apply(predictedInset)
+        }
       })
     }
 
-    update()
+    const onFocusIn = (event: FocusEvent) => {
+      if (!isMobileKeyboardViewport()) return
+      if (!isEditableElement(event.target)) return
+      if (cachedKeyboardInset <= 0) return
+      if (readMobileKeyboardInset() > 0) return // keyboard already up
+
+      predictedInset = cachedKeyboardInset
+      apply(predictedInset)
+
+      // Hardware/Bluetooth keyboard: focus fires but no on-screen keyboard
+      // arrives, so the visual viewport never shrinks. Drop the prediction so
+      // the layout doesn't stay lifted over empty space.
+      if (predictionTimer !== null) window.clearTimeout(predictionTimer)
+      predictionTimer = window.setTimeout(() => {
+        predictionTimer = null
+        if (readMobileKeyboardInset() === 0) {
+          predictedInset = 0
+          apply(0)
+        }
+      }, 600)
+    }
+
+    const onFocusOut = () => {
+      clearPrediction()
+      measure()
+    }
+
+    measure()
 
     const visualViewport = window.visualViewport
-    visualViewport?.addEventListener("resize", update)
-    visualViewport?.addEventListener("scroll", update)
-    window.addEventListener("resize", update)
-    window.addEventListener("orientationchange", update)
+    visualViewport?.addEventListener("resize", measure)
+    visualViewport?.addEventListener("scroll", measure)
+    window.addEventListener("resize", measure)
+    window.addEventListener("orientationchange", measure)
+    document.addEventListener("focusin", onFocusIn)
+    document.addEventListener("focusout", onFocusOut)
 
     return () => {
       if (frame !== null) window.cancelAnimationFrame(frame)
-      visualViewport?.removeEventListener("resize", update)
-      visualViewport?.removeEventListener("scroll", update)
-      window.removeEventListener("resize", update)
-      window.removeEventListener("orientationchange", update)
+      if (predictionTimer !== null) window.clearTimeout(predictionTimer)
+      visualViewport?.removeEventListener("resize", measure)
+      visualViewport?.removeEventListener("scroll", measure)
+      window.removeEventListener("resize", measure)
+      window.removeEventListener("orientationchange", measure)
+      document.removeEventListener("focusin", onFocusIn)
+      document.removeEventListener("focusout", onFocusOut)
     }
   }, [])
 
