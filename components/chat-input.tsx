@@ -333,7 +333,15 @@ export function ChatInput({
                         }}
                         className={cn(
                             "w-full resize-none bg-transparent px-5 outline-none",
-                            "[tab-size:2]",
+                            // List-continuation inserts a real tab (\t) after the
+                            // marker (see markdown-list-continuation). In a
+                            // proportional font tab-size:2 lands the first stop
+                            // right after "1." (≈3px gap — looks glued) and gives
+                            // different gaps per marker width, so items don't
+                            // align. tab-size:6 pushes every single-char marker
+                            // (1.–9., -, a.) past the first stop so their text
+                            // aligns at one hanging indent with a paragraph-like gap.
+                            "[tab-size:6]",
                             "[font-family:var(--font-display)] tracking-[-0.02em]",
                             "text-[16px]",
                             "placeholder:font-medium placeholder:text-foreground/65",
