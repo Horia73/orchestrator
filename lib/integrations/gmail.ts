@@ -4,6 +4,7 @@ import { randomBytes } from 'crypto'
 
 import { resolveOAuthRedirectUri } from '@/lib/app-origin'
 import { getEnvValue } from '@/lib/config'
+import { runIdBatch, type BatchItemResult, type BatchResult } from '@/lib/integrations/batch'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     base64UrlDecodeBuffer,
@@ -599,6 +600,70 @@ export async function gmailModifyLabels(
 
 export async function gmailArchive(targetType: GmailModifyTargetType, id: string) {
     return gmailModifyLabels(targetType, id, [], ['INBOX'])
+}
+
+// Gmail's native bulk endpoint. messages.batchModify mutates up to 1000 message
+// IDs per request and returns 204 (no body). There is NO threads.batchModify —
+// thread targets fall back to a bounded-concurrency loop over the single modify.
+const GMAIL_BATCH_MODIFY_MAX = 1000
+
+export async function gmailBatchModifyLabels(
+    targetType: GmailModifyTargetType,
+    ids: string[],
+    addLabelIds: string[],
+    removeLabelIds: string[]
+): Promise<BatchResult> {
+    const cleanIds = ids.map(id => cleanHeaderValue(id)).filter((id): id is string => Boolean(id))
+    if (cleanIds.length === 0) throw new Error('At least one Gmail target ID is required.')
+    const addLabels = cleanLabelIds(addLabelIds)
+    const removeLabels = cleanLabelIds(removeLabelIds)
+
+    if (targetType !== 'message') {
+        // Threads have no batch endpoint — loop per-thread.
+        return runIdBatch(cleanIds, id => gmailModifyLabels('thread', id, addLabels, removeLabels), { concurrency: 6 })
+    }
+
+    const items: BatchItemResult[] = []
+    for (let offset = 0; offset < cleanIds.length; offset += GMAIL_BATCH_MODIFY_MAX) {
+        const chunk = cleanIds.slice(offset, offset + GMAIL_BATCH_MODIFY_MAX)
+        try {
+            await gmailApi<unknown>('/users/me/messages/batchModify', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ ids: chunk, addLabelIds: addLabels, removeLabelIds: removeLabels }),
+            })
+            for (const id of chunk) items.push({ id, ok: true })
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error)
+            for (const id of chunk) items.push({ id, ok: false, error: message })
+        }
+    }
+    const succeeded = items.reduce((n, item) => (item.ok ? n + 1 : n), 0)
+    return { batch: true, total: cleanIds.length, succeeded, failed: cleanIds.length - succeeded, items }
+}
+
+export function gmailBatchArchive(targetType: GmailModifyTargetType, ids: string[]): Promise<BatchResult> {
+    return gmailBatchModifyLabels(targetType, ids, [], ['INBOX'])
+}
+
+export function gmailBatchMarkRead(targetType: GmailModifyTargetType, ids: string[]): Promise<BatchResult> {
+    return gmailBatchModifyLabels(targetType, ids, [], ['UNREAD'])
+}
+
+export function gmailBatchMarkUnread(targetType: GmailModifyTargetType, ids: string[]): Promise<BatchResult> {
+    return gmailBatchModifyLabels(targetType, ids, ['UNREAD'], [])
+}
+
+export function gmailBatchTrash(targetType: GmailModifyTargetType, ids: string[]): Promise<BatchResult> {
+    return runIdBatch(ids, id => gmailTrash(targetType, id), { concurrency: 6 })
+}
+
+export function gmailBatchUntrash(targetType: GmailModifyTargetType, ids: string[]): Promise<BatchResult> {
+    return runIdBatch(ids, id => gmailUntrash(targetType, id), { concurrency: 6 })
+}
+
+export function gmailBatchDeletePermanently(targetType: GmailModifyTargetType, ids: string[]): Promise<BatchResult> {
+    return runIdBatch(ids, id => gmailDeletePermanently(targetType, id), { concurrency: 4 })
 }
 
 export async function gmailMarkRead(targetType: GmailModifyTargetType, id: string) {

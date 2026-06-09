@@ -1,15 +1,15 @@
 "use client"
 
 import * as React from "react"
-import { MapPinned, PanelRightClose, Plus } from "lucide-react"
+import { MapPinned, X } from "lucide-react"
 
 import { ChatInput } from "@/components/chat-input"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
-import { Button } from "@/components/ui/button"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import { useChatStore } from "@/hooks/use-chat-store"
 import type { SendMessageOptions } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
+import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { cn } from "@/lib/utils"
 
@@ -40,27 +40,39 @@ export function MapChatPanel({
 }: MapChatPanelProps) {
   const { newChat, selectConversation, sendMessage, state } = useChatStore()
   const keyboardInset = useMobileKeyboardInset()
+  const scrollbarVisible = useRevealOnScroll()
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const preferredSelectionRef = React.useRef<string | null>(null)
-  const manualConversationOverrideRef = React.useRef(false)
   const lastPreferredConversationIdRef = React.useRef<string | null>(null)
+  const blankConversationPreparedRef = React.useRef(false)
 
   React.useEffect(() => {
     if (lastPreferredConversationIdRef.current !== preferredConversationId) {
       lastPreferredConversationIdRef.current = preferredConversationId ?? null
       preferredSelectionRef.current = null
-      manualConversationOverrideRef.current = false
+      blankConversationPreparedRef.current = false
     }
   }, [preferredConversationId])
 
   React.useEffect(() => {
-    if (!preferredConversationId) return
-    if (!open || manualConversationOverrideRef.current) return
-    if (preferredSelectionRef.current === preferredConversationId) return
-    preferredSelectionRef.current = preferredConversationId
-    if (state.activeConversationId === preferredConversationId) return
-    selectConversation(preferredConversationId)
+    if (!open) {
+      blankConversationPreparedRef.current = false
+      return
+    }
+
+    if (preferredConversationId) {
+      if (preferredSelectionRef.current === preferredConversationId) return
+      preferredSelectionRef.current = preferredConversationId
+      if (state.activeConversationId === preferredConversationId) return
+      selectConversation(preferredConversationId)
+      return
+    }
+
+    if (blankConversationPreparedRef.current) return
+    blankConversationPreparedRef.current = true
+    if (state.activeConversationId) newChat()
   }, [
+    newChat,
     open,
     preferredConversationId,
     selectConversation,
@@ -124,12 +136,6 @@ export function MapChatPanel({
     [onMapArtifact]
   )
 
-  const handleNewChat = React.useCallback(() => {
-    manualConversationOverrideRef.current = true
-    preferredSelectionRef.current = null
-    newChat()
-  }, [newChat])
-
   if (!open) return null
 
   const panel = (
@@ -137,16 +143,18 @@ export function MapChatPanel({
       <section
         aria-label="Maps chat"
         className={cn(
-          "flex min-h-0 flex-col overflow-hidden border border-border/70 bg-background shadow-xl",
+          "relative flex min-h-0 flex-col overflow-hidden border border-border/70 bg-background shadow-xl",
           docked
             ? "h-full w-[380px] max-w-[100vw] shrink-0 rounded-none border-y-0 border-r-0 shadow-none"
             : mobile
-              ? "fixed inset-x-2 bottom-[calc(env(safe-area-inset-bottom)_+_3.25rem)] z-[80] h-[min(74dvh,700px)] rounded-lg"
+              ? "fixed inset-0 z-[80] h-dvh w-screen rounded-none border-0"
               : "absolute top-0 right-0 bottom-0 z-[70] w-[380px] rounded-none border-y-0 border-r-0 shadow-none"
         )}
+        data-scrollbar-visible={scrollbarVisible.active ? "true" : "false"}
+        onScrollCapture={scrollbarVisible.reveal}
       >
-        <header className="relative z-10 shrink-0 border-b border-border/60 bg-background px-3 py-3">
-          <div className="flex min-w-0 items-center gap-2 pr-[calc(2.5rem_+_0.5rem)]">
+        <header className="relative z-10 shrink-0 border-b border-border/60 bg-background px-3 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
+          <div className="flex min-w-0 items-center gap-2">
             <div
               className="grid h-8 min-w-0 flex-1 grid-cols-3 rounded-lg bg-muted p-0.5"
               aria-label="Map sidebar mode"
@@ -173,27 +181,16 @@ export function MapChatPanel({
                 Map
               </button>
             </div>
-            <Button
+            <button
               type="button"
-              variant="ghost"
-              size="icon"
-              className="size-8 shrink-0"
-              onClick={handleNewChat}
-              aria-label="New maps chat"
-              title="New maps chat"
+              onClick={onCollapse}
+              className="flex size-8 shrink-0 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+              aria-label="Close maps chat"
+              title="Close maps chat"
             >
-              <Plus className="size-4" />
-            </Button>
+              <X className="size-4" />
+            </button>
           </div>
-          <button
-            type="button"
-            onClick={onCollapse}
-            aria-label="Collapse sidebar"
-            title="Collapse sidebar"
-            className="absolute top-3 right-3 z-20 flex size-10 items-center justify-center rounded-full border border-border/70 bg-background/95 text-foreground shadow-lg backdrop-blur transition-colors hover:bg-muted"
-          >
-            <PanelRightClose className="size-4" />
-          </button>
           <div className="mt-3 min-w-0 px-1">
             <div className="truncate text-[13px] font-semibold text-foreground">
               {activeConversation?.title ?? activeMapTitle}
@@ -208,7 +205,7 @@ export function MapChatPanel({
 
         <div
           ref={scrollRef}
-          className="chat-scroll-container min-h-0 flex-1 overflow-y-auto"
+          className="transient-scrollbar min-h-0 flex-1 overflow-y-auto"
           style={{
             WebkitOverflowScrolling: "touch",
             overscrollBehaviorY: "contain",
@@ -298,6 +295,8 @@ export function MapChatPanel({
           <div className="pointer-events-auto">
             <ChatInput
               variant="chat"
+              density="compact"
+              draftNamespace="maps-chat"
               placeholder="Message..."
               buildSendOptions={buildSendOptions}
             />

@@ -3,13 +3,17 @@ import {
     type RecipeImageResult,
 } from '@/lib/recipe/image-search'
 
-export type WorkoutImageResult = RecipeImageResult
+import { searchExerciseGifs } from './exercise-gif-search'
+
+export interface WorkoutImageResult extends Omit<RecipeImageResult, 'mime'> {
+    /** Workout demos can be animated GIFs from ExerciseDB OSS or static images from fallback providers. */
+    mime: RecipeImageResult['mime'] | 'image/gif'
+}
 
 /**
- * Keyless exercise image lookup backed by Wikimedia Commons. We reuse the
- * generic Commons parser/cache from recipe images and bias the query toward
- * exercise/machine setup so the first result is more likely to be useful in
- * a gym context.
+ * Keyless exercise media lookup. ExerciseDB OSS GIFs are preferred because
+ * workout cards need motion; Wikimedia Commons remains the still-image
+ * fallback for exercises that have no confident GIF match.
  */
 export async function searchWorkoutImages(
     rawQuery: string,
@@ -17,10 +21,14 @@ export async function searchWorkoutImages(
 ): Promise<WorkoutImageResult[]> {
     const query = rawQuery.trim()
     if (!query) return []
+
+    const exerciseGifs = await searchExerciseGifs(query, options)
+    if (exerciseGifs.length > 0) return exerciseGifs
+
     const enriched = /\b(exercise|workout|gym|machine|fitness|strength)\b/i.test(query)
         ? query
         : `${query} exercise gym machine`
-    const primary = await searchRecipeImages(enriched, options)
+    const primary = await searchRecipeImages(enriched, options) as WorkoutImageResult[]
     if (primary.length > 0) return primary
 
     const simplified = query
@@ -28,11 +36,11 @@ export async function searchWorkoutImages(
         .replace(/\s+/g, ' ')
         .trim()
     if (simplified && simplified.toLowerCase() !== query.toLowerCase()) {
-        return searchRecipeImages(simplified, options)
+        return searchRecipeImages(simplified, options) as Promise<WorkoutImageResult[]>
     }
 
     if (enriched.toLowerCase() !== query.toLowerCase()) {
-        return searchRecipeImages(query, options)
+        return searchRecipeImages(query, options) as Promise<WorkoutImageResult[]>
     }
 
     return []

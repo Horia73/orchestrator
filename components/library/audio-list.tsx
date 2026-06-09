@@ -128,7 +128,7 @@ function AudioRow({
   const fileUrl = libraryItemUrl(attachment)
   const chatHref =
     attachment.conversationId && attachment.messageId
-      ? `/?conversation=${encodeURIComponent(attachment.conversationId)}#message-${encodeURIComponent(attachment.messageId)}`
+      ? `/?chat=${encodeURIComponent(attachment.conversationId)}&msg=${encodeURIComponent(attachment.messageId)}`
       : null
 
   return (

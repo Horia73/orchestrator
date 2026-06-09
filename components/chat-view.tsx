@@ -38,6 +38,7 @@ import {
   type SavedScrollRestore,
 } from "@/components/chat/chat-view-helpers"
 import { ChatInput } from "@/components/chat-input"
+import { ChatConnectionPill } from "@/components/chat-connection-pill"
 import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
 import { FilePreviewModal } from "@/components/file-preview-modal"
@@ -53,6 +54,14 @@ import {
   readLocalSubmitAnchor,
   type LocalSubmitAnchor,
 } from "@/lib/chat-local-submit-anchor"
+import {
+  CHAT_SCROLL_TARGET_EVENT,
+  consumeChatScrollTarget,
+  isChatScrollTargetDetail,
+  isChatScrollTargetFresh,
+  readChatScrollTarget,
+  type ChatScrollTarget,
+} from "@/lib/chat-scroll-target"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
@@ -60,7 +69,8 @@ import { cn } from "@/lib/utils"
 import type { AgentCallReasoningEntry, Attachment } from "@/lib/types"
 
 export function ChatView() {
-  const { state, loadOlderMessages, loadMessageDetails } = useChatStore()
+  const { state, loadOlderMessages, loadMessageDetails, loadMessagesUntilPresent } =
+    useChatStore()
   const layoutContainerRef = React.useRef<HTMLDivElement>(null)
   const scrollContainerRef = React.useRef<HTMLDivElement>(null)
   const inputContainerRef = React.useRef<HTMLDivElement>(null)
@@ -89,6 +99,10 @@ export function ChatView() {
   } | null>(null)
   const pendingLocalSubmitAnchorRef =
     React.useRef<LocalSubmitAnchor | null>(null)
+  // Deep-link "scroll to this message" target (Library → "View in chat").
+  const pendingScrollTargetRef = React.useRef<ChatScrollTarget | null>(null)
+  const consumedScrollTargetRef = React.useRef<string | null>(null)
+  const highlightTimeoutRef = React.useRef<number | null>(null)
   const restoreOlderAttemptRef = React.useRef<{
     conversationId: string
     attempts: number
@@ -118,6 +132,9 @@ export function ChatView() {
     React.useState<Attachment | null>(null)
   const [previewGallery, setPreviewGallery] =
     React.useState<Attachment[] | undefined>(undefined)
+  const [highlightedMessageId, setHighlightedMessageId] = React.useState<
+    string | null
+  >(null)
   // Open the lightbox on a clicked attachment, carrying its sibling group so
   // the modal can offer left/right gallery navigation across images/videos.
   const openPreview = React.useCallback(
@@ -452,6 +469,17 @@ export function ChatView() {
         LOCAL_SUBMIT_ANCHOR_EVENT,
         handleLocalSubmitAnchor
       )
+  }, [])
+
+  React.useEffect(() => {
+    const handleScrollTarget = (event: Event) => {
+      const detail = (event as CustomEvent<unknown>).detail
+      if (!isChatScrollTargetDetail(detail)) return
+      pendingScrollTargetRef.current = detail
+    }
+    window.addEventListener(CHAT_SCROLL_TARGET_EVENT, handleScrollTarget)
+    return () =>
+      window.removeEventListener(CHAT_SCROLL_TARGET_EVENT, handleScrollTarget)
   }, [])
 
   const setScrollButtonVisible = React.useCallback((visible: boolean) => {
@@ -1544,6 +1572,19 @@ export function ChatView() {
     if (restoredScrollConversationRef.current === conversationId) return
     if (messageCount === 0) return
 
+    // A deep-link jump (Library → "View in chat") owns the initial scroll for
+    // this conversation; don't let the default restore / settleBottom fight it.
+    // Marking restore done is sticky, so a later normal open of this same
+    // conversation (after the target is consumed) is unaffected.
+    if (
+      pendingScrollTargetRef.current?.conversationId === conversationId ||
+      readChatScrollTarget(conversationId)
+    ) {
+      restoredScrollConversationRef.current = conversationId
+      setRestoredScrollConversationId(conversationId)
+      return
+    }
+
     ignoreSyncRef.current = true
     setIsRestoringScroll(true)
     setScrollButtonVisible(false)
@@ -1719,6 +1760,86 @@ export function ChatView() {
     setScrollButtonVisible,
     syncScrollState,
   ])
+
+  // ---- Deep-link "scroll to message" (Library → "View in chat") -----------
+  // Once the target conversation's messages are in the DOM, scroll to the
+  // requested message and highlight it. Pages older messages first if the
+  // target is beyond the loaded page. Suppressed default scroll-restore (above)
+  // hands the initial scroll to scheduleMessageTopAnchor.
+  const consumeScrollTarget = React.useCallback(() => {
+    if (!conversationId) return
+    const loadState = state.conversationLoadState[conversationId]
+    if (loadState !== "partial" && loadState !== "full") return
+
+    const pending = pendingScrollTargetRef.current
+    const target =
+      pending?.conversationId === conversationId &&
+      isChatScrollTargetFresh(pending)
+        ? pending
+        : readChatScrollTarget(conversationId)
+    if (!target) return
+
+    const key = `${conversationId}:${target.messageId}`
+    if (consumedScrollTargetRef.current === key) return
+    consumedScrollTargetRef.current = key
+    pendingScrollTargetRef.current = null
+    consumeChatScrollTarget(conversationId, target.messageId)
+
+    const runJump = () => {
+      if (activeIdRef.current !== conversationId) return
+      autoScrollEnabledRef.current = false
+      followStreamingRef.current = false
+      setScrollButtonVisible(false)
+      scheduleMessageTopAnchor(target.messageId)
+      setHighlightedMessageId(target.messageId)
+    }
+
+    const present =
+      activeConversation?.messages.some((m) => m.id === target.messageId) ??
+      false
+    if (present) {
+      runJump()
+      return
+    }
+
+    // Older than the loaded page — page back until it's in the DOM, then jump.
+    // On failure reset the dedupe guard so a deliberate re-click can retry.
+    void loadMessagesUntilPresent(conversationId, target.messageId).then(
+      (found) => {
+        if (activeIdRef.current !== conversationId) return
+        if (found) runJump()
+        else consumedScrollTargetRef.current = null
+      }
+    )
+  }, [
+    conversationId,
+    activeConversation?.messages,
+    state.conversationLoadState,
+    loadMessagesUntilPresent,
+    scheduleMessageTopAnchor,
+    setScrollButtonVisible,
+  ])
+
+  React.useLayoutEffect(() => {
+    consumeScrollTarget()
+  }, [consumeScrollTarget])
+
+  React.useEffect(() => {
+    if (!highlightedMessageId) return
+    if (highlightTimeoutRef.current !== null) {
+      window.clearTimeout(highlightTimeoutRef.current)
+    }
+    highlightTimeoutRef.current = window.setTimeout(() => {
+      highlightTimeoutRef.current = null
+      setHighlightedMessageId(null)
+    }, 1500)
+    return () => {
+      if (highlightTimeoutRef.current !== null) {
+        window.clearTimeout(highlightTimeoutRef.current)
+        highlightTimeoutRef.current = null
+      }
+    }
+  }, [highlightedMessageId])
 
   React.useEffect(() => {
     const streamingStarted =
@@ -2406,7 +2527,7 @@ export function ChatView() {
                 <ChevronDown className="size-3.5 shrink-0 text-muted-foreground" />
               </button>
             </div>
-            <div className="pointer-events-none absolute inset-x-0 bottom-[-20px] h-5 bg-gradient-to-b from-background via-background/70 to-transparent" />
+            <div className="pointer-events-none absolute inset-x-0 bottom-[-20px] h-5 bg-gradient-to-b from-background via-background/70 to-background/0" />
           </div>
 
           <div
@@ -2474,7 +2595,11 @@ export function ChatView() {
                           <div
                             key={message.id}
                             id={`message-${message.id}`}
-                            className="scroll-mt-6 md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16"
+                            className={cn(
+                              "scroll-mt-6 md:-ml-16 md:w-[calc(100%+4rem)] md:pl-16",
+                              message.id === highlightedMessageId &&
+                                "message-jump-highlight"
+                            )}
                             style={
                               message.id === minHeightMsgId &&
                               index === activeConversation.messages.length - 1
@@ -2522,7 +2647,6 @@ export function ChatView() {
                               streamingMode={state.streamingMode}
                               streamingStatus={state.streamingStatus}
                               showCursor={showInitialStreamingCursor}
-                              showStreamingStatusLabel={isMobile}
                               onArtifactClick={handleArtifactClick}
                               onArtifactExpand={handleArtifactExpand}
                               onAgentOpen={handleAgentOpen}
@@ -2585,6 +2709,15 @@ export function ChatView() {
               </button>
             </div>
           )}
+
+          <ChatConnectionPill
+            status={
+              isStreamingThisConversation ? state.streamingStatus : null
+            }
+            style={{
+              bottom: inputOffset + keyboardInset + (showScrollBtn ? 48 : 8),
+            }}
+          />
         </div>
 
         <div

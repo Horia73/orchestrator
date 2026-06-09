@@ -16,7 +16,10 @@ import {
 } from "@/hooks/use-file-attachments"
 import { useMessageDraft } from "@/hooks/use-message-draft"
 import { isMobileKeyboardViewport } from "@/hooks/use-keyboard-inset"
-import { computeMarkdownListContinuation } from "@/lib/markdown-list-continuation"
+import {
+    computeMarkdownListContinuation,
+    computeMarkdownListTabSpacing,
+} from "@/lib/markdown-list-continuation"
 import { cn } from "@/lib/utils"
 import type { Attachment } from "@/lib/types"
 
@@ -53,6 +56,8 @@ function focusWithoutViewportScroll(textarea: HTMLTextAreaElement | null) {
 
 interface ChatInputProps {
     variant?: "home" | "chat"
+    density?: "default" | "compact"
+    draftNamespace?: string
     placeholder?: string
     buildSendOptions?: (content: string) => SendMessageOptions | undefined
     onSend?: (
@@ -63,7 +68,14 @@ interface ChatInputProps {
     ) => void
 }
 
-export function ChatInput({ variant = "home", placeholder, buildSendOptions, onSend }: ChatInputProps) {
+export function ChatInput({
+    variant = "home",
+    density = "default",
+    draftNamespace = "chat",
+    placeholder,
+    buildSendOptions,
+    onSend,
+}: ChatInputProps) {
     const {
         sendMessage,
         stopStreaming,
@@ -77,7 +89,7 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
     const [previewAttachment, setPreviewAttachment] = React.useState<Attachment | null>(null)
     const [isRecording, setIsRecording] = React.useState(false)
 
-    const draft = useMessageDraft({ namespace: "chat", threadId: activeConversationId })
+    const draft = useMessageDraft({ namespace: draftNamespace, threadId: activeConversationId })
     const {
         fileInputRef,
         isDragging,
@@ -128,7 +140,8 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
         isStreaming && activeConversationId && streamingConversationId === activeConversationId
     )
     const canSend = hasContent && !hasPendingAttachments && !hasFailedAttachments && !isStreamingActiveConversation
-    const maxHeight = isChat ? 160 : 200
+    const isCompact = isChat && density === "compact"
+    const maxHeight = isCompact ? 92 : isChat ? 160 : 200
 
     React.useEffect(() => {
         return draft.restore(textareaRef)
@@ -204,6 +217,20 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
         }
     }, [buildSendOptions, draft, hasFailedAttachments, hasPendingAttachments, isStreamingActiveConversation, onSend, sendMessage])
 
+    const handleTextChange = React.useCallback(
+        (event: React.ChangeEvent<HTMLTextAreaElement>) => {
+            const textarea = event.currentTarget
+            const spacing = computeMarkdownListTabSpacing(textarea.value, textarea.selectionStart)
+            if (spacing) {
+                pendingSelectionRef.current = spacing.nextCaret
+                draft.setValue(spacing.nextValue)
+                return
+            }
+            draft.setValue(textarea.value)
+        },
+        [draft]
+    )
+
     const handleKeyDown = React.useCallback(
         (event: React.KeyboardEvent<HTMLTextAreaElement>) => {
             if (event.key !== "Enter") return
@@ -248,7 +275,9 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
                 className={cn(
                     "relative w-full border border-transparent bg-white dark:bg-card",
                     "transition-all duration-200 ease-out",
-                    isChat
+                    isCompact
+                        ? "max-w-full rounded-xl shadow-[0_0_0_0.5px_rgba(93,72,57,0.36)] focus-within:shadow-[0_0_0_0.5px_rgba(93,72,57,0.48)] dark:shadow-[0_0_0_0.5px_rgba(255,255,255,0.2)] dark:focus-within:shadow-[0_0_0_0.5px_rgba(255,255,255,0.28)]"
+                        : isChat
                         ? "max-w-full rounded-2xl shadow-[0_0_0_0.5px_rgba(93,72,57,0.42)] focus-within:shadow-[0_0_0_0.5px_rgba(93,72,57,0.52)] dark:shadow-[0_0_0_0.5px_rgba(255,255,255,0.22)] dark:focus-within:shadow-[0_0_0_0.5px_rgba(255,255,255,0.3)]"
                         : "max-w-[672px] rounded-[20px] shadow-[0_0_0_0.5px_rgba(93,72,57,0.3),0_10px_22px_rgba(44,30,18,0.06)] focus-within:shadow-[0_0_0_0.5px_rgba(93,72,57,0.38),0_12px_26px_rgba(44,30,18,0.08)] dark:shadow-[0_0_0_0.5px_rgba(255,255,255,0.2),0_10px_22px_rgba(0,0,0,0.24)] dark:focus-within:shadow-[0_0_0_0.5px_rgba(255,255,255,0.26),0_12px_26px_rgba(0,0,0,0.28)]",
                     isDragging && "ring-2 ring-primary/30"
@@ -291,7 +320,7 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
                     <textarea
                         ref={textareaRef}
                         value={draft.value}
-                        onChange={(e) => draft.setValue(e.target.value)}
+                        onChange={handleTextChange}
                         onKeyDown={handleKeyDown}
                         onPaste={handlePaste}
                         enterKeyHint="enter"
@@ -304,10 +333,13 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
                         }}
                         className={cn(
                             "w-full resize-none bg-transparent px-5 outline-none",
+                            "[tab-size:2]",
                             "[font-family:var(--font-display)] tracking-[-0.02em]",
                             "text-[16px]",
                             "placeholder:font-medium placeholder:text-foreground/65",
-                            isChat
+                            isCompact
+                                ? "max-h-[92px] min-h-[38px] px-4 pt-2.5 pb-1.5"
+                                : isChat
                                 ? "max-h-[160px] min-h-[46px] pt-3.5 pb-2"
                                 : "max-h-[200px] min-h-[66px] pt-[19px]"
                         )}
@@ -315,7 +347,12 @@ export function ChatInput({ variant = "home", placeholder, buildSendOptions, onS
                     {isRecording && voice.overlay}
                 </div>
 
-                <div className="flex items-center justify-between px-3 pb-3">
+                <div
+                    className={cn(
+                        "flex items-center justify-between",
+                        isCompact ? "px-2.5 pb-2" : "px-3 pb-3"
+                    )}
+                >
                     {isRecording ? voice.leftButton : (
                         <button
                             type="button"

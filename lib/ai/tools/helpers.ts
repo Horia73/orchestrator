@@ -41,6 +41,32 @@ export function clamp(n: number, min: number, max: number): number {
     return Math.min(max, Math.max(min, n))
 }
 
+/**
+ * Collect target IDs from a tool's args, scanning each key in order. A key may
+ * hold a single string (one ID) or an array of strings (many IDs). Used by
+ * batch-capable per-item tools that accept both a singular field (e.g. `id`,
+ * `chat_id`) and a plural one (e.g. `ids`, `chat_ids`). Trims, drops empties,
+ * and de-duplicates while preserving first-seen order.
+ */
+export function collectIds(args: Record<string, unknown>, keys: string[]): string[] {
+    const out: string[] = []
+    const seen = new Set<string>()
+    const push = (value: unknown): void => {
+        if (typeof value !== 'string') return
+        const trimmed = value.trim()
+        if (trimmed && !seen.has(trimmed)) {
+            seen.add(trimmed)
+            out.push(trimmed)
+        }
+    }
+    for (const key of keys) {
+        const value = args[key]
+        if (Array.isArray(value)) value.forEach(push)
+        else push(value)
+    }
+    return out
+}
+
 export function truncateText(text: string, maxChars = DEFAULT_MAX_OUTPUT_CHARS): { text: string; truncated: boolean } {
     if (text.length <= maxChars) return { text, truncated: false }
     const keepHead = Math.floor(maxChars * 0.6)

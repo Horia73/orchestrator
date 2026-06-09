@@ -37,6 +37,7 @@ import { chatReducer, type ChatState } from "./chat-store-reducer"
 import { publishLocalSubmitAnchor } from "@/lib/chat-local-submit-anchor"
 import {
   ChatFetchError,
+  CLIENT_MAX_MESSAGE_PAGE_SIZE,
   INITIAL_MESSAGE_PAGE_SIZE,
   OLDER_MESSAGE_PAGE_SIZE,
   STREAM_RECOVERY_ATTEMPTS,
@@ -67,6 +68,10 @@ export interface SendMessageOptions {
   activateConversation?: boolean
 }
 
+// 12 × 200 ≈ 2400 messages of reach for a deep-link jump target — covers
+// virtually every real conversation; deeper targets degrade to "not found".
+const MAX_LOAD_UNTIL_PRESENT_FETCHES = 12
+
 interface ChatContextType {
   state: ChatState
   unreadConversationIds: Set<string>
@@ -80,6 +85,14 @@ interface ChatContextType {
   prefetchConversationMessages: (id: string) => Promise<void>
   loadMessageDetails: (conversationId: string, messageId: string) => Promise<void>
   loadOlderMessages: (id: string) => Promise<void>
+  /** Page older messages until `messageId` is loaded (or a cap is hit), so a
+   *  deep-link can scroll to a message beyond the initial page. Resolves true
+   *  if the message is now loaded. */
+  loadMessagesUntilPresent: (
+    conversationId: string,
+    messageId: string,
+    opts?: { maxFetches?: number }
+  ) => Promise<boolean>
   archiveConversation: (id: string) => void
   unarchiveConversation: (id: string, conversation?: Conversation) => void
   deleteConversation: (id: string) => void
@@ -139,6 +152,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const activeConversationIdRef = React.useRef<string | null>(null)
   const pathnameRef = React.useRef(pathname)
   const conversationsRef = React.useRef<Conversation[]>([])
+  const conversationMessagePagesRef = React.useRef(
+    state.conversationMessagePages
+  )
   const activeChatStreamsRef = React.useRef<Record<string, ActiveChatStream>>(
     {}
   )
@@ -165,6 +181,11 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     conversationsRef.current = state.conversations
   }, [state.conversations])
+
+  // Assigned during render (not in an effect) so layout-effect consumers — the
+  // chat view's deep-link jump reads this to seed its older-message paging —
+  // see the current page cursors instead of the previous commit's.
+  conversationMessagePagesRef.current = state.conversationMessagePages
 
   React.useEffect(() => {
     unreadConversationIdsRef.current = unreadConversationIds
@@ -1335,6 +1356,68 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     [state.conversationMessagePages]
   )
 
+  // Page older messages (largest page size, fewest round-trips) until the
+  // target message is loaded. Loops on a LOCAL cursor seeded once from the
+  // current page state — React state is stale within the synchronous loop, so
+  // we advance the cursor from each fetch response instead. Reuses the same
+  // LOAD_OLDER_MESSAGES_* / LOAD_MESSAGE_PAGE_SUCCESS actions as
+  // loadOlderMessages so isLoadingOlder stays coherent (the merge-by-id reducer
+  // makes "prepend" pages safe). Bounded so a very deep target degrades to a
+  // graceful "not found" rather than an unbounded fetch storm.
+  const loadMessagesUntilPresent = React.useCallback(
+    async (
+      conversationId: string,
+      messageId: string,
+      opts?: { maxFetches?: number }
+    ): Promise<boolean> => {
+      const maxFetches = opts?.maxFetches ?? MAX_LOAD_UNTIL_PRESENT_FETCHES
+      const alreadyLoaded = conversationsRef.current
+        .find((c) => c.id === conversationId)
+        ?.messages.some((m) => m.id === messageId)
+      if (alreadyLoaded) return true
+
+      const page = conversationMessagePagesRef.current[conversationId]
+      let cursor = page?.nextCursor ?? null
+      let hasMore = page?.hasMore ?? false
+      if (!hasMore || !cursor) return false
+
+      for (let i = 0; i < maxFetches && hasMore && cursor; i++) {
+        if (activeConversationIdRef.current !== conversationId) return false
+        dispatch({ type: "LOAD_OLDER_MESSAGES_START", id: conversationId })
+        let nextPage
+        try {
+          nextPage = await fetchConversationMessagePage(
+            conversationId,
+            CLIENT_MAX_MESSAGE_PAGE_SIZE,
+            cursor
+          )
+        } catch (err) {
+          dispatch({
+            type: "LOAD_OLDER_MESSAGES_ERROR",
+            id: conversationId,
+            error:
+              err instanceof Error ? err.message : "Failed to load history",
+          })
+          return false
+        }
+        dispatch({
+          type: "LOAD_MESSAGE_PAGE_SUCCESS",
+          id: conversationId,
+          messages: nextPage.messages,
+          total: nextPage.total,
+          hasMore: nextPage.hasMore,
+          nextCursor: nextPage.nextCursor,
+          mode: "prepend",
+        })
+        cursor = nextPage.nextCursor
+        hasMore = nextPage.hasMore
+        if (nextPage.messages.some((m) => m.id === messageId)) return true
+      }
+      return false
+    },
+    []
+  )
+
   const deleteConversation = React.useCallback(
     (id: string) => {
       if (activeConversationIdRef.current === id) {
@@ -1556,6 +1639,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
           const reader = response.body?.getReader()
           if (!reader) throw new Error("No response body")
+
+          // Server accepted the stream — we're connected. Clear the
+          // "connecting" status now (rather than waiting for the first token)
+          // so the bottom pill reflects connection, not the model's latency.
+          dispatch({
+            type: "SET_STREAMING",
+            isStreaming: true,
+            conversationId: finalConvId,
+            messageId: assistantMsgId,
+            status: null,
+          })
 
           const decoder = new TextDecoder()
           let buffer = ""
@@ -2446,6 +2540,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       prefetchConversationMessages: loadInitialMessages,
       loadMessageDetails,
       loadOlderMessages,
+      loadMessagesUntilPresent,
       archiveConversation,
       unarchiveConversation,
       deleteConversation,
@@ -2462,6 +2557,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       loadInitialMessages,
       loadMessageDetails,
       loadOlderMessages,
+      loadMessagesUntilPresent,
       archiveConversation,
       unarchiveConversation,
       deleteConversation,

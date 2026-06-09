@@ -34,22 +34,36 @@ export function LibraryLoadableImage({
     skeletonClassName,
     onLoad,
     onError,
+    onNaturalSize,
     ...props
 }: Omit<React.ImgHTMLAttributes<HTMLImageElement>, "src" | "alt"> & {
     src: string
     alt: string
     skeletonClassName?: string
+    /** Fires with the image's intrinsic dimensions once decoded — covers both
+     *  the `onLoad` path and the cached/`complete`-on-mount path (where some
+     *  browsers skip the load event). Lets callers lay out by aspect ratio. */
+    onNaturalSize?: (width: number, height: number) => void
 }) {
     const imageRef = React.useRef<HTMLImageElement | null>(null)
     const [loaded, setLoaded] = React.useState(false)
+
+    const reportNaturalSize = React.useCallback(() => {
+        const img = imageRef.current
+        if (img && img.naturalWidth > 0 && img.naturalHeight > 0)
+            onNaturalSize?.(img.naturalWidth, img.naturalHeight)
+    }, [onNaturalSize])
 
     React.useEffect(() => {
         setLoaded(false)
     }, [src])
 
     React.useEffect(() => {
-        if (imageRef.current?.complete) setLoaded(true)
-    }, [src])
+        if (imageRef.current?.complete) {
+            setLoaded(true)
+            reportNaturalSize()
+        }
+    }, [src, reportNaturalSize])
 
     return (
         <>
@@ -61,6 +75,7 @@ export function LibraryLoadableImage({
                 alt={alt}
                 onLoad={(event) => {
                     setLoaded(true)
+                    reportNaturalSize()
                     onLoad?.(event)
                 }}
                 onError={(event) => {

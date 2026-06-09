@@ -18,7 +18,8 @@ import {
     saveGoogleCalendarOAuthConfig,
     startGoogleCalendarOAuth,
 } from '@/lib/integrations/google-calendar'
-import { booleanArg, clamp, numberArg, stringArg } from './helpers'
+import { runIdBatch } from '@/lib/integrations/batch'
+import { booleanArg, clamp, collectIds, numberArg, stringArg } from './helpers'
 
 const DEFAULT_ORIGIN = 'http://localhost:3000'
 
@@ -193,16 +194,17 @@ export const googleCalendarUpdateEventTool: ToolDef = {
 export const googleCalendarDeleteEventTool: ToolDef = {
     id: 'GoogleCalendarDeleteEvent',
     name: 'GoogleCalendarDeleteEvent',
-    description: 'Deletes a Google Calendar event. Only use after explicit user approval of the exact calendar, event, and notification behavior.',
+    description: 'Deletes a Google Calendar event. Only use after explicit user approval of the exact calendar, event, and notification behavior. To delete several events on the same calendar in one call, pass event_ids (array); the single confirmation covers the whole batch.',
     input_schema: {
         type: 'object',
         properties: {
             calendar_id: calendarIdSchema(),
-            event_id: { type: 'string', description: 'Event ID to delete.' },
+            event_id: { type: 'string', description: 'A single event ID to delete. Use event_ids for multiple.' },
+            event_ids: { type: 'array', items: { type: 'string' }, description: 'Multiple event IDs on the same calendar to delete in ONE batch call. Returns a per-item summary.' },
             send_updates: sendUpdatesSchema(),
-            confirmed_by_user: confirmationSchema('Must be true only after explicit approval to delete this event.'),
+            confirmed_by_user: confirmationSchema('Must be true only after explicit approval to delete these events. Covers every id in the batch.'),
         },
-        required: ['event_id', 'confirmed_by_user'],
+        required: ['confirmed_by_user'],
     },
     tags: ['write', 'google-calendar', 'event', 'destructive', 'external_action'],
 }
@@ -210,12 +212,13 @@ export const googleCalendarDeleteEventTool: ToolDef = {
 export const googleCalendarRespondToEventTool: ToolDef = {
     id: 'GoogleCalendarRespondToEvent',
     name: 'GoogleCalendarRespondToEvent',
-    description: 'RSVPs to an event as the connected Google account. Only use after explicit user approval.',
+    description: 'RSVPs to an event as the connected Google account. Only use after explicit user approval. To RSVP to several events with the same response in one call, pass event_ids (array).',
     input_schema: {
         type: 'object',
         properties: {
             calendar_id: calendarIdSchema(),
-            event_id: { type: 'string', description: 'Event ID.' },
+            event_id: { type: 'string', description: 'A single event ID. Use event_ids for multiple.' },
+            event_ids: { type: 'array', items: { type: 'string' }, description: 'Multiple event IDs on the same calendar to RSVP to with the same response in ONE batch call.' },
             response_status: {
                 type: 'string',
                 enum: ['accepted', 'declined', 'tentative', 'needsAction'],
@@ -224,7 +227,7 @@ export const googleCalendarRespondToEventTool: ToolDef = {
             send_updates: sendUpdatesSchema(),
             confirmed_by_user: confirmationSchema('Must be true only after explicit approval to RSVP.'),
         },
-        required: ['event_id', 'response_status', 'confirmed_by_user'],
+        required: ['response_status', 'confirmed_by_user'],
     },
     tags: ['write', 'google-calendar', 'event', 'external_action'],
 }
@@ -232,17 +235,18 @@ export const googleCalendarRespondToEventTool: ToolDef = {
 export const googleCalendarMoveEventTool: ToolDef = {
     id: 'GoogleCalendarMoveEvent',
     name: 'GoogleCalendarMoveEvent',
-    description: 'Moves an event to another calendar. Only use after explicit user approval of source, destination, event, and notification behavior.',
+    description: 'Moves an event to another calendar. Only use after explicit user approval of source, destination, event, and notification behavior. To move several events from the same source to the same destination in one call, pass event_ids (array).',
     input_schema: {
         type: 'object',
         properties: {
             calendar_id: calendarIdSchema('Source calendar ID. Defaults to primary.'),
-            event_id: { type: 'string', description: 'Event ID to move.' },
+            event_id: { type: 'string', description: 'A single event ID to move. Use event_ids for multiple.' },
+            event_ids: { type: 'array', items: { type: 'string' }, description: 'Multiple event IDs from the same source calendar to move to the same destination in ONE batch call.' },
             destination_calendar_id: { type: 'string', description: 'Destination calendar ID.' },
             send_updates: sendUpdatesSchema(),
-            confirmed_by_user: confirmationSchema('Must be true only after explicit approval to move this event.'),
+            confirmed_by_user: confirmationSchema('Must be true only after explicit approval to move these events.'),
         },
-        required: ['event_id', 'destination_calendar_id', 'confirmed_by_user'],
+        required: ['destination_calendar_id', 'confirmed_by_user'],
     },
     tags: ['write', 'google-calendar', 'event', 'external_action'],
 }
@@ -399,54 +403,46 @@ export async function executeGoogleCalendarDeleteEvent(args: Record<string, unkn
     if (args.confirmed_by_user !== true) {
         return { success: false, error: 'confirmed_by_user must be true before deleting a Google Calendar event.' }
     }
-    const eventId = stringArg(args, ['event_id', 'eventId'])
-    if (!eventId) return { success: false, error: 'Missing required parameter: event_id' }
-    return {
-        success: true,
-        data: await googleCalendarDeleteEvent(
-            stringArg(args, ['calendar_id', 'calendarId']) || 'primary',
-            eventId,
-            { sendUpdates: sendUpdatesArg(args) }
-        ),
+    const eventIds = collectIds(args, ['event_ids', 'event_id', 'eventId', 'ids', 'id'])
+    if (eventIds.length === 0) return { success: false, error: 'Missing required parameter: event_id' }
+    const calendarId = stringArg(args, ['calendar_id', 'calendarId']) || 'primary'
+    const options = { sendUpdates: sendUpdatesArg(args) }
+    if (eventIds.length === 1) {
+        return { success: true, data: await googleCalendarDeleteEvent(calendarId, eventIds[0], options) }
     }
+    return { success: true, data: await runIdBatch(eventIds, id => googleCalendarDeleteEvent(calendarId, id, options), { concurrency: 5 }) }
 }
 
 export async function executeGoogleCalendarRespondToEvent(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirmed_by_user !== true) {
         return { success: false, error: 'confirmed_by_user must be true before RSVPing to a Google Calendar event.' }
     }
-    const eventId = stringArg(args, ['event_id', 'eventId'])
-    if (!eventId) return { success: false, error: 'Missing required parameter: event_id' }
+    const eventIds = collectIds(args, ['event_ids', 'event_id', 'eventId', 'ids', 'id'])
+    if (eventIds.length === 0) return { success: false, error: 'Missing required parameter: event_id' }
     const responseStatus = enumArg(args, ['response_status', 'responseStatus'], ['accepted', 'declined', 'tentative', 'needsAction'])
     if (!responseStatus) return { success: false, error: 'response_status must be accepted, declined, tentative, or needsAction.' }
-    return {
-        success: true,
-        data: await googleCalendarRespondToEvent(
-            stringArg(args, ['calendar_id', 'calendarId']) || 'primary',
-            eventId,
-            responseStatus,
-            { sendUpdates: sendUpdatesArg(args) }
-        ),
+    const calendarId = stringArg(args, ['calendar_id', 'calendarId']) || 'primary'
+    const options = { sendUpdates: sendUpdatesArg(args) }
+    if (eventIds.length === 1) {
+        return { success: true, data: await googleCalendarRespondToEvent(calendarId, eventIds[0], responseStatus, options) }
     }
+    return { success: true, data: await runIdBatch(eventIds, id => googleCalendarRespondToEvent(calendarId, id, responseStatus, options), { concurrency: 5 }) }
 }
 
 export async function executeGoogleCalendarMoveEvent(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirmed_by_user !== true) {
         return { success: false, error: 'confirmed_by_user must be true before moving a Google Calendar event.' }
     }
-    const eventId = stringArg(args, ['event_id', 'eventId'])
+    const eventIds = collectIds(args, ['event_ids', 'event_id', 'eventId', 'ids', 'id'])
     const destinationCalendarId = stringArg(args, ['destination_calendar_id', 'destinationCalendarId'])
-    if (!eventId) return { success: false, error: 'Missing required parameter: event_id' }
+    if (eventIds.length === 0) return { success: false, error: 'Missing required parameter: event_id' }
     if (!destinationCalendarId) return { success: false, error: 'Missing required parameter: destination_calendar_id' }
-    return {
-        success: true,
-        data: await googleCalendarMoveEvent(
-            stringArg(args, ['calendar_id', 'calendarId']) || 'primary',
-            eventId,
-            destinationCalendarId,
-            { sendUpdates: sendUpdatesArg(args) }
-        ),
+    const calendarId = stringArg(args, ['calendar_id', 'calendarId']) || 'primary'
+    const options = { sendUpdates: sendUpdatesArg(args) }
+    if (eventIds.length === 1) {
+        return { success: true, data: await googleCalendarMoveEvent(calendarId, eventIds[0], destinationCalendarId, options) }
     }
+    return { success: true, data: await runIdBatch(eventIds, id => googleCalendarMoveEvent(calendarId, id, destinationCalendarId, options), { concurrency: 5 }) }
 }
 
 function parseWindowArgs(args: Record<string, unknown>):

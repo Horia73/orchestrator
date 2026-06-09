@@ -228,8 +228,8 @@ const PlannedSetBaseSchema = z.object({
     rpe: RpeSchema.optional(),
     /** Target RIR. */
     rir: RirSchema.optional(),
-    /** Inline notes shown next to the set. Tempo prescriptions, form cues
-     *  specific to this set, etc. */
+    /** Inline notes shown next to the set. Tempo prescriptions, technique
+     *  reminders specific to this set, etc. */
     notes: z.string().min(1).max(200).optional(),
 })
 
@@ -418,17 +418,16 @@ const ExerciseBaseSchema = z.object({
     equipment: z.array(WorkoutEquipmentSchema).max(6).optional(),
     /** Muscle groups worked. */
     muscleGroups: z.array(MuscleGroupSchema).min(1).max(8),
-    /** Short form cues — shown in the expandable exercise info panel. */
-    formCues: z.array(z.string().min(1).max(280)).max(8).optional(),
     /** Longer exercise description shown in the info popover. Useful for
      *  machine setup, seat/pad adjustment, range-of-motion notes, and
      *  "what this is supposed to feel like" guidance. */
     description: z.string().min(1).max(1000).optional(),
-    /** Optional direct demo image. Include only when it is a stable, verified
-     *  URL for this exact exercise/setup; the renderer may fall back to web
-     *  image search only when the user opens the exercise info panel. */
+    /** Optional direct demo image/GIF. Include only when it is a stable,
+     *  verified URL for this exact exercise/setup; the renderer resolves an
+     *  ExerciseDB GIF first and may fall back to still-image search only when
+     *  the user opens the exercise info panel. */
     imageUrl: z.string().url().max(2048).optional(),
-    /** Optional web image lookup query used by the renderer as a fallback
+    /** Optional demo GIF/image lookup query used by the renderer as a fallback
      *  when no direct `imageUrl` is available. Prefer `description`,
      *  `videoUrl`, or a verified `imageUrl` for exact machine setups. */
     imageQuery: z.string().min(1).max(180).optional(),

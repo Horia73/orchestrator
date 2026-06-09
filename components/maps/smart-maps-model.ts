@@ -21,6 +21,7 @@ export interface SmartMapItem {
   id: string
   conversationId: string
   conversationTitle: string | null
+  conversationOrigin?: "user" | "inbox" | null
   identifier: string
   version: number
   title: string

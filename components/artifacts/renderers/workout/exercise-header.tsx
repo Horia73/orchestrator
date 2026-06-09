@@ -36,17 +36,13 @@ export function ExerciseHeader({
     units: WorkoutUnits
     className?: string
 }) {
-    const cues = exercise.formCues ?? []
     const alternatives = exercise.alternatives ?? []
     const hasContext = !!(exercise.previous || exercise.personalBest)
     const glossaryTerms = React.useMemo(() => collectExerciseGlossaryTerms(exercise), [exercise])
-    const hasInfo = cues.length > 0
-        || alternatives.length > 0
-        || !!exercise.videoUrl
-        || !!exercise.description
-        || !!exercise.imageUrl
-        || !!exercise.imageQuery
-        || glossaryTerms.length > 0
+    // The (i) panel always offers something useful: the renderer resolves a
+    // demo image from the built-in exercise library (keyed by id/name) even
+    // when the model supplied no extra metadata, so the button shows for every
+    // exercise.
     const [infoOpen, setInfoOpen] = React.useState(false)
     const infoPanelId = React.useId()
 
@@ -60,30 +56,30 @@ export function ExerciseHeader({
                 <h3 className="min-w-0 flex-1 truncate text-base font-semibold leading-tight text-foreground">
                     {exercise.name}
                 </h3>
-                {hasInfo ? (
-                    <button
-                        type="button"
-                        aria-label="Exercise info"
-                        aria-expanded={infoOpen}
-                        aria-controls={infoPanelId}
-                        title="Exercise info"
-                        onClick={() => setInfoOpen((open) => !open)}
-                        className={cn(
-                            "flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-colors",
-                            "hover:bg-muted hover:text-foreground",
-                            "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        )}
-                    >
-                        <Info className="size-3.5" strokeWidth={1.75} />
-                    </button>
-                ) : null}
+                <button
+                    type="button"
+                    aria-label="Exercise info"
+                    aria-expanded={infoOpen}
+                    aria-controls={infoPanelId}
+                    title="Exercise info"
+                    onClick={() => setInfoOpen((open) => !open)}
+                    className={cn(
+                        "flex size-7 shrink-0 items-center justify-center rounded-md border border-border/60 bg-background text-muted-foreground transition-colors",
+                        "hover:bg-muted hover:text-foreground",
+                        "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                    )}
+                >
+                    <Info className="size-3.5" strokeWidth={1.75} />
+                </button>
             </div>
             <MuscleChips muscles={exercise.muscleGroups} />
-            {hasInfo && infoOpen ? (
+            {infoOpen ? (
                 <ExerciseInfoPanel
                     id={infoPanelId}
+                    exerciseId={exercise.id}
                     exerciseName={exercise.name}
-                    cues={cues}
+                    muscleGroups={exercise.muscleGroups}
+                    equipment={exercise.equipment}
                     description={exercise.description}
                     imageUrl={exercise.imageUrl}
                     imageQuery={exercise.imageQuery}
@@ -185,8 +181,10 @@ function PrBadge({
 
 function ExerciseInfoPanel({
     id,
+    exerciseId,
     exerciseName,
-    cues,
+    muscleGroups,
+    equipment,
     description,
     imageUrl,
     imageQuery,
@@ -195,8 +193,10 @@ function ExerciseInfoPanel({
     glossaryTerms,
 }: {
     id: string
+    exerciseId: string
     exerciseName: string
-    cues: string[]
+    muscleGroups?: readonly string[]
+    equipment?: readonly string[]
     description?: string
     imageUrl?: string
     imageQuery?: string
@@ -208,6 +208,7 @@ function ExerciseInfoPanel({
     const glossaryEntries = glossaryTerms
         .map((term) => [term, getGlossary(term)] as const)
         .filter((entry): entry is readonly [string, NonNullable<ReturnType<typeof getGlossary>>] => !!entry[1])
+    const hasTerms = glossaryEntries.length > 0
     return (
         <div
             id={id}
@@ -215,7 +216,10 @@ function ExerciseInfoPanel({
         >
             <div className="min-w-0 break-words [overflow-wrap:anywhere]">
                 <ExerciseDemoImage
+                    exerciseId={exerciseId}
                     exerciseName={exerciseName}
+                    muscleGroups={muscleGroups}
+                    equipment={equipment}
                     imageUrl={imageUrl}
                     imageQuery={imageQuery}
                 />
@@ -224,25 +228,11 @@ function ExerciseInfoPanel({
                         {description}
                     </p>
                 ) : null}
-                {cues.length > 0 ? (
-                    <>
-                        <div className="mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55">
-                            Form cues
-                        </div>
-                        <ul className="flex flex-col gap-1.5 text-foreground/85">
-                            {cues.map((c, i) => (
-                                <li key={i} className="leading-relaxed">
-                                    {c}
-                                </li>
-                            ))}
-                        </ul>
-                    </>
-                ) : null}
-                {glossaryEntries.length > 0 ? (
+                {hasTerms ? (
                     <>
                         <div className={cn(
                             "mb-1 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55",
-                            (description || cues.length > 0) && "mt-3",
+                            description && "mt-3",
                         )}>
                             Terms
                         </div>
@@ -267,7 +257,7 @@ function ExerciseInfoPanel({
                     <>
                         <div className={cn(
                             "mb-1 inline-flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-foreground/55",
-                            cues.length > 0 && "mt-3",
+                            (description || hasTerms) && "mt-3",
                         )}>
                             <Replace className="size-3" strokeWidth={2} aria-hidden />
                             Alternatives
@@ -290,8 +280,8 @@ function ExerciseInfoPanel({
                         target="_blank"
                         rel="noopener noreferrer"
                         className={cn(
-                            "mt-2 inline-flex items-center gap-1 text-[11.5px] font-medium text-primary hover:underline",
-                            cues.length === 0 && !hasAlternatives && "mt-0",
+                            "inline-flex items-center gap-1 text-[11.5px] font-medium text-primary hover:underline",
+                            (description || hasTerms || hasAlternatives) && "mt-2",
                         )}
                     >
                         Demo video →
@@ -311,11 +301,17 @@ interface WorkoutImage {
 }
 
 function ExerciseDemoImage({
+    exerciseId,
     exerciseName,
+    muscleGroups,
+    equipment,
     imageUrl,
     imageQuery,
 }: {
+    exerciseId: string
     exerciseName: string
+    muscleGroups?: readonly string[]
+    equipment?: readonly string[]
     imageUrl?: string
     imageQuery?: string
 }) {
@@ -328,16 +324,28 @@ function ExerciseDemoImage({
         setDirectBroken(false)
         setFetched(null)
         setFailed(false)
-    }, [imageQuery, imageUrl])
+    }, [exerciseId, imageQuery, imageUrl])
 
-    const lookupQuery = React.useMemo(() => {
+    // The resolver matches the exercise against a built-in image library
+    // (keyed by id/name) and only falls back to a keyless web search (`q`)
+    // when there is no library match. We send identity (id/name/muscle/
+    // equipment) so the match is precise even when the display name is
+    // localized.
+    const requestPath = React.useMemo(() => {
+        const params = new URLSearchParams()
+        if (exerciseId) params.set('id', exerciseId)
+        if (exerciseName) params.set('name', exerciseName)
+        const muscle = (muscleGroups ?? []).slice(0, 4).join(',')
+        if (muscle) params.set('muscle', muscle)
+        const equip = (equipment ?? []).slice(0, 4).join(',')
+        if (equip) params.set('equipment', equip)
         const explicit = imageQuery?.trim()
-        if (explicit) return explicit
-        if (!imageUrl) return `${exerciseName} exercise gym machine`
-        return ''
-    }, [exerciseName, imageQuery, imageUrl])
+        params.set('q', explicit || `${exerciseName} exercise gym machine`)
+        params.set('limit', '1')
+        return `/api/workout-images?${params.toString()}`
+    }, [exerciseId, exerciseName, muscleGroups, equipment, imageQuery])
 
-    const shouldFetch = (!imageUrl || directBroken) && !!lookupQuery
+    const shouldFetch = !imageUrl || directBroken
 
     React.useEffect(() => {
         if (!shouldFetch) return
@@ -345,7 +353,7 @@ function ExerciseDemoImage({
         setLoading(true)
         setFailed(false)
         setFetched(null)
-        fetch(`/api/workout-images?q=${encodeURIComponent(lookupQuery)}&limit=1`, {
+        fetch(requestPath, {
             signal: controller.signal,
         })
             .then((response) => {
@@ -361,7 +369,7 @@ function ExerciseDemoImage({
             })
             .finally(() => setLoading(false))
         return () => controller.abort()
-    }, [lookupQuery, shouldFetch])
+    }, [requestPath, shouldFetch])
 
     const display: WorkoutImage | null = imageUrl && !directBroken
         ? {

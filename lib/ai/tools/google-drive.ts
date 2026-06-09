@@ -32,7 +32,8 @@ import {
     saveGoogleDriveOAuthConfig,
     startGoogleDriveOAuth,
 } from '@/lib/integrations/google-drive'
-import { clamp, ensureParentDir, numberArg, stringArg } from './helpers'
+import { runIdBatch } from '@/lib/integrations/batch'
+import { clamp, collectIds, ensureParentDir, numberArg, stringArg } from './helpers'
 import { displayPath, resolveSandboxed, resolveSandboxedWritable } from './sandbox'
 
 const DEFAULT_ORIGIN = 'http://localhost:3000'
@@ -254,11 +255,12 @@ export const googleDriveUpdateMetadataTool = driveWriteTool('GoogleDriveUpdateMe
     trashed: { type: 'boolean', description: 'Optional trashed state.' },
 }, ['file_id', 'confirmed_by_user'])
 
-export const googleDriveMoveFileTool = driveWriteTool('GoogleDriveMoveFile', 'GoogleDriveMoveFile', 'Moves a Drive file to another folder after explicit approval.', {
+export const googleDriveMoveFileTool = driveWriteTool('GoogleDriveMoveFile', 'GoogleDriveMoveFile', 'Moves a Drive file to another folder after explicit approval. To move several files to the same destination in one call, pass file_ids (array).', {
     file_id: fileIdSchema(),
+    file_ids: fileIdsSchema('move to the same destination folder'),
     destination_folder_id: { type: 'string', description: 'Destination folder ID.' },
     remove_parent_ids: { type: 'array', items: { type: 'string' }, description: 'Optional parent IDs to remove. Defaults to current parents.' },
-}, ['file_id', 'destination_folder_id', 'confirmed_by_user'])
+}, ['destination_folder_id', 'confirmed_by_user'])
 
 export const googleDriveCopyFileTool = driveWriteTool('GoogleDriveCopyFile', 'GoogleDriveCopyFile', 'Copies a Drive file after explicit approval.', {
     file_id: fileIdSchema(),
@@ -267,18 +269,21 @@ export const googleDriveCopyFileTool = driveWriteTool('GoogleDriveCopyFile', 'Go
     description: { type: 'string', description: 'Optional copied file description.' },
 }, ['file_id', 'confirmed_by_user'])
 
-export const googleDriveTrashFileTool = driveWriteTool('GoogleDriveTrashFile', 'GoogleDriveTrashFile', 'Moves a Drive file to Trash after explicit approval.', {
+export const googleDriveTrashFileTool = driveWriteTool('GoogleDriveTrashFile', 'GoogleDriveTrashFile', 'Moves a Drive file to Trash after explicit approval. To trash several files in one call, pass file_ids (array).', {
     file_id: fileIdSchema(),
-}, ['file_id', 'confirmed_by_user'])
+    file_ids: fileIdsSchema('move to Trash'),
+}, ['confirmed_by_user'])
 
-export const googleDriveUntrashFileTool = driveWriteTool('GoogleDriveUntrashFile', 'GoogleDriveUntrashFile', 'Restores a Drive file from Trash after explicit approval.', {
+export const googleDriveUntrashFileTool = driveWriteTool('GoogleDriveUntrashFile', 'GoogleDriveUntrashFile', 'Restores a Drive file from Trash after explicit approval. To restore several files in one call, pass file_ids (array).', {
     file_id: fileIdSchema(),
-}, ['file_id', 'confirmed_by_user'])
+    file_ids: fileIdsSchema('restore from Trash'),
+}, ['confirmed_by_user'])
 
-export const googleDriveDeleteFileTool = driveWriteTool('GoogleDriveDeleteFile', 'GoogleDriveDeleteFile', 'Permanently deletes a Drive file. This cannot be undone and requires explicit approval.', {
+export const googleDriveDeleteFileTool = driveWriteTool('GoogleDriveDeleteFile', 'GoogleDriveDeleteFile', 'Permanently deletes a Drive file. This cannot be undone and requires explicit approval. To delete several files in one call, pass file_ids (array); the single confirmation covers the whole batch.', {
     file_id: fileIdSchema(),
-    confirm_permanent_delete: { type: 'boolean', description: 'Must be true only after explicit approval for permanent deletion.' },
-}, ['file_id', 'confirmed_by_user', 'confirm_permanent_delete'])
+    file_ids: fileIdsSchema('permanently delete'),
+    confirm_permanent_delete: { type: 'boolean', description: 'Must be true only after explicit approval for permanent deletion. Covers every id in the batch.' },
+}, ['confirmed_by_user', 'confirm_permanent_delete'])
 
 export const googleDriveListPermissionsTool: ToolDef = {
     id: 'GoogleDriveListPermissions',
@@ -529,14 +534,15 @@ export async function executeGoogleDriveUpdateMetadata(args: Record<string, unkn
 
 export async function executeGoogleDriveMoveFile(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirmed_by_user !== true) return confirmationError('moving a Drive file')
-    const fileId = stringArg(args, ['file_id', 'fileId'])
+    const fileIds = collectIds(args, ['file_ids', 'file_id', 'fileId', 'ids', 'id'])
     const destinationFolderId = stringArg(args, ['destination_folder_id', 'destinationFolderId'])
-    if (!fileId) return missing('file_id')
+    if (fileIds.length === 0) return missing('file_id')
     if (!destinationFolderId) return missing('destination_folder_id')
-    return {
-        success: true,
-        data: await googleDriveMoveFile(fileId, destinationFolderId, stringArrayArg(args, ['remove_parent_ids', 'removeParentIds'])),
+    const removeParentIds = stringArrayArg(args, ['remove_parent_ids', 'removeParentIds'])
+    if (fileIds.length === 1) {
+        return { success: true, data: await googleDriveMoveFile(fileIds[0], destinationFolderId, removeParentIds) }
     }
+    return { success: true, data: await runIdBatch(fileIds, id => googleDriveMoveFile(id, destinationFolderId, removeParentIds), { concurrency: 5 }) }
 }
 
 export async function executeGoogleDriveCopyFile(args: Record<string, unknown>): Promise<ToolResult> {
@@ -555,25 +561,28 @@ export async function executeGoogleDriveCopyFile(args: Record<string, unknown>):
 
 export async function executeGoogleDriveTrashFile(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirmed_by_user !== true) return confirmationError('trashing a Drive file')
-    const fileId = stringArg(args, ['file_id', 'fileId'])
-    if (!fileId) return missing('file_id')
-    return { success: true, data: await googleDriveTrashFile(fileId) }
+    const fileIds = collectIds(args, ['file_ids', 'file_id', 'fileId', 'ids', 'id'])
+    if (fileIds.length === 0) return missing('file_id')
+    if (fileIds.length === 1) return { success: true, data: await googleDriveTrashFile(fileIds[0]) }
+    return { success: true, data: await runIdBatch(fileIds, id => googleDriveTrashFile(id), { concurrency: 5 }) }
 }
 
 export async function executeGoogleDriveUntrashFile(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirmed_by_user !== true) return confirmationError('restoring a Drive file from Trash')
-    const fileId = stringArg(args, ['file_id', 'fileId'])
-    if (!fileId) return missing('file_id')
-    return { success: true, data: await googleDriveUntrashFile(fileId) }
+    const fileIds = collectIds(args, ['file_ids', 'file_id', 'fileId', 'ids', 'id'])
+    if (fileIds.length === 0) return missing('file_id')
+    if (fileIds.length === 1) return { success: true, data: await googleDriveUntrashFile(fileIds[0]) }
+    return { success: true, data: await runIdBatch(fileIds, id => googleDriveUntrashFile(id), { concurrency: 5 }) }
 }
 
 export async function executeGoogleDriveDeleteFile(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirmed_by_user !== true || args.confirm_permanent_delete !== true) {
         return { success: false, error: 'confirmed_by_user and confirm_permanent_delete must both be true before permanent Drive deletion.' }
     }
-    const fileId = stringArg(args, ['file_id', 'fileId'])
-    if (!fileId) return missing('file_id')
-    return { success: true, data: await googleDriveDeleteFile(fileId) }
+    const fileIds = collectIds(args, ['file_ids', 'file_id', 'fileId', 'ids', 'id'])
+    if (fileIds.length === 0) return missing('file_id')
+    if (fileIds.length === 1) return { success: true, data: await googleDriveDeleteFile(fileIds[0]) }
+    return { success: true, data: await runIdBatch(fileIds, id => googleDriveDeleteFile(id), { concurrency: 4 }) }
 }
 
 export async function executeGoogleDriveListPermissions(args: Record<string, unknown>): Promise<ToolResult> {
@@ -740,8 +749,16 @@ function enumArg<T extends string>(args: Record<string, unknown>, keys: string[]
     return allowed.includes(value as T) ? value as T : undefined
 }
 
-function fileIdSchema(description = 'Google Drive file ID.'): ToolParameter {
+function fileIdSchema(description = 'A single Google Drive file ID. Use file_ids to act on multiple.'): ToolParameter {
     return { type: 'string', description }
+}
+
+function fileIdsSchema(action: string): ToolParameter {
+    return {
+        type: 'array',
+        items: { type: 'string' },
+        description: `Multiple Google Drive file IDs to ${action} in ONE batch call. Preferred over repeated single-id calls. Returns a per-item summary.`,
+    }
 }
 
 function confirmationSchema(description: string): ToolParameter {

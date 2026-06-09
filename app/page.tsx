@@ -1,14 +1,18 @@
 "use client"
 
 import * as React from "react"
-import { useSearchParams } from "next/navigation"
+import { useRouter, useSearchParams } from "next/navigation"
 import { AppSidebar } from "@/components/app-sidebar"
+import { AppLoadingSplash } from "@/components/app-loading-splash"
 import { ChatView } from "@/components/chat-view"
 import { HomeView } from "@/components/home-view"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
+import { appApiPath } from "@/lib/app-path"
+import { publishChatScrollTarget } from "@/lib/chat-scroll-target"
 import { cn } from "@/lib/utils"
+import type { Conversation } from "@/lib/types"
 
 function useViewFadeIn(viewKey: string, enabled: boolean) {
   const [enteredViewKey, setEnteredViewKey] = React.useState<string | null>(
@@ -35,27 +39,76 @@ function useViewFadeIn(viewKey: string, enabled: boolean) {
 export default function Page() {
   const { state, selectConversation, isSwitchingConversation } = useChatStore()
   const searchParams = useSearchParams()
+  const router = useRouter()
   const lastAppliedChatParamRef = React.useRef<string | null>(null)
+  const lastAppliedMsgParamRef = React.useRef<string | null>(null)
+  const desiredChatIdRef = React.useRef<string | null>(null)
 
   React.useEffect(() => {
     const chatId = searchParams.get("chat")
+    desiredChatIdRef.current = chatId
     if (!chatId) {
       lastAppliedChatParamRef.current = null
       return
     }
+
+    // A `&msg=<id>` deep-link (Library → "View in chat") asks the chat view to
+    // scroll to a specific message. Publish the request (sessionStorage +
+    // event, so it survives the /library → / navigation and a fresh ChatView
+    // mount) BEFORE selecting, then strip `msg` from the URL so refresh/back
+    // doesn't re-jump. Runs above the "already active" early-return so an
+    // already-open chat still jumps. Guarded to fire once per chat:msg.
+    const msgId = searchParams.get("msg")
+    if (msgId && lastAppliedMsgParamRef.current !== `${chatId}:${msgId}`) {
+      lastAppliedMsgParamRef.current = `${chatId}:${msgId}`
+      publishChatScrollTarget({
+        conversationId: chatId,
+        messageId: msgId,
+        requestedAt: Date.now(),
+      })
+      const next = new URLSearchParams(searchParams)
+      next.delete("msg")
+      const qs = next.toString()
+      router.replace(qs ? `/?${qs}` : "/", { scroll: false })
+    }
+
     if (state.isLoading) return
     if (state.activeConversationId === chatId) {
       lastAppliedChatParamRef.current = chatId
       return
     }
     if (lastAppliedChatParamRef.current === chatId) return
+
     if (
       state.conversations.some((conversation) => conversation.id === chatId)
     ) {
       lastAppliedChatParamRef.current = chatId
       selectConversation(chatId)
+      return
     }
+
+    // The id isn't in the sidebar list — most commonly an archived
+    // conversation, which the list query filters out. Fetch it directly
+    // (getConversation has no archived filter) and inject it so a deep-link
+    // (e.g. Library → "View in chat") resolves to the right chat instead of
+    // silently falling back to the last-active one. The refs keep this from
+    // looping or applying a stale result after the user navigates elsewhere.
+    lastAppliedChatParamRef.current = chatId
+    void (async () => {
+      try {
+        const res = await fetch(
+          appApiPath(`/api/conversations/${encodeURIComponent(chatId)}`)
+        )
+        if (!res.ok) return
+        const conversation = (await res.json()) as Conversation
+        if (desiredChatIdRef.current !== chatId) return
+        selectConversation(chatId, conversation)
+      } catch {
+        // Network/parse failure — leave the current view untouched.
+      }
+    })()
   }, [
+    router,
     searchParams,
     selectConversation,
     state.activeConversationId,
@@ -90,6 +143,7 @@ export default function Page() {
 
   return (
     <>
+      <AppLoadingSplash loading={state.isLoading} />
       <AppSidebar />
       <SidebarInset className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
         {viewReady && (

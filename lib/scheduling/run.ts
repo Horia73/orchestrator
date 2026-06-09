@@ -139,7 +139,13 @@ function bodyFromNotifications(notifications: NotifyRequest[]): string {
 export async function runScheduledTask(
   task: ScheduledTask,
   firedAt: number,
-  opts: { trigger: "schedule" | "manual" } = { trigger: "schedule" }
+  opts: {
+    trigger: "schedule" | "manual"
+    /** When the scheduler will hand a failed one-shot to the escalation/recovery
+     *  wake, suppress the raw-error Inbox surface here so the user sees one
+     *  coherent recovery message instead of a stack trace followed by a fix. */
+    suppressAutoErrorSurface?: boolean
+  } = { trigger: "schedule" }
 ): Promise<ScheduledRunResult> {
   const conversationId = `inbox_${randomUUID()}`
   const isOnce = task.schedule.kind === "once"
@@ -523,7 +529,10 @@ export async function runScheduledTask(
   let surface = false
   let inboxBody = assistantContent
   if (!ok) {
-    surface = true // errors always surface
+    // Errors normally surface immediately. When a failed one-shot will be handed
+    // to the escalation/recovery wake, stay silent here — that wake owns the
+    // user-facing message (transient blips self-heal without bothering the user).
+    surface = !opts.suppressAutoErrorSurface
   } else if (opts.trigger === "manual") {
     surface = true // the user pressed Run now and is watching
   } else if (task.action.kind === "agent" || task.action.kind === "monitor") {
@@ -641,4 +650,115 @@ export function postInboxNotice(task: ScheduledTask, text: string): string {
     error: "missed",
   })
   return id
+}
+
+// ---------------------------------------------------------------------------
+// Scheduler escalation — when a one-shot does NOT complete cleanly (it failed
+// when it fired, or it was missed while the app was offline), the scheduler
+// wakes the orchestrator with full context and lets it DECIDE: recover a
+// transient failure, judge whether a missed action is still worth doing, or
+// surface a clear explanation with next steps. This preserves the
+// "deterministic deferred work" guarantees while making exceptional outcomes
+// agentic instead of a dead row plus a raw error in the Inbox.
+// ---------------------------------------------------------------------------
+
+export type EscalationSituation =
+  | { kind: "errored"; error: string | undefined }
+  | { kind: "missed"; dueAt: number }
+
+function describePlannedAction(task: ScheduledTask): string {
+  if (task.action.kind === "tool") {
+    let args = "{}"
+    try {
+      args = JSON.stringify(task.action.args ?? {})
+    } catch {
+      args = "(unserializable arguments)"
+    }
+    return [
+      "Planned action — a deterministic tool call:",
+      `• what it does: ${task.action.summary}`,
+      `• tool id: ${task.action.toolId}`,
+      `• arguments: ${clip(args, 1500)}`,
+    ].join("\n")
+  }
+  if (task.action.kind === "agent") {
+    return [
+      "Planned action — wake a model with this instruction:",
+      clip(task.action.prompt, 3000),
+    ].join("\n")
+  }
+  return `Planned action: ${task.action.kind} (system-managed).`
+}
+
+function humanizeDuration(ms: number): string {
+  const mins = Math.max(1, Math.round(ms / 60_000))
+  if (mins < 60) return `${mins} minute${mins === 1 ? "" : "s"}`
+  const hours = Math.round(mins / 60)
+  if (hours < 48) return `${hours} hour${hours === 1 ? "" : "s"}`
+  const days = Math.round(hours / 24)
+  return `${days} day${days === 1 ? "" : "s"}`
+}
+
+function buildEscalationPrompt(
+  task: ScheduledTask,
+  situation: EscalationSituation,
+  now: number
+): string {
+  const head = [
+    "This is a SCHEDULER ESCALATION run — automatic background handling triggered because a one-shot scheduled task did not complete normally. It is NOT a fresh user request, and no one is necessarily watching the screen right now.",
+    "",
+    `Task: "${task.title}"`,
+    `Original schedule: ${describeSchedule(task.schedule)}.`,
+    "",
+    describePlannedAction(task),
+    "",
+  ]
+  if (situation.kind === "errored") {
+    return [
+      ...head,
+      `It FAILED when it fired. Error reported: ${situation.error ?? "Unknown error"}`,
+      "",
+      "Decide what to do, using your judgement and whatever context or tools you need:",
+      "- If the failure looks TRANSIENT (network, rate limit, a provider/integration hiccup, a momentary auth blip) and the action is still worth doing, just DO IT NOW: for a tool action, perform the equivalent tool call yourself with the same arguments; for an agent action, carry out the original instruction now.",
+      "- If retrying as-is would just fail again (expired/invalid credentials, a misconfigured or disconnected integration, a missing permission, changed external state), FIX the root cause if you safely can and then complete it. If you cannot, call notify_inbox with a specific, plain-language explanation and concrete next steps for the user.",
+      "- If the action is no longer useful, or is unsafe to perform now, skip it and finish.",
+      "- Follow <safety_core>: for irreversible, external, costly, or message-sending actions, only act autonomously if the original task setup already authorized it; otherwise ask via notify_inbox first.",
+      "",
+      "Surface to the user via notify_inbox ONLY when there is something they need to know or decide. If you quietly recovered it, a short notify_inbox confirmation is good; if nothing useful came of it, finish silently (this run is logged to Past runs regardless). Do not reschedule this same task id — if you want a later retry, create a fresh scheduled task.",
+    ].join("\n")
+  }
+  const lateness = humanizeDuration(Math.max(0, now - situation.dueAt))
+  return [
+    ...head,
+    `It was MISSED: it was due at ${new Date(situation.dueAt).toISOString()} but this app was offline then, so it never ran. It is now about ${lateness} late (current time ${new Date(now).toISOString()}).`,
+    "",
+    "Decide, based on context, whether running it now still makes sense:",
+    "- If it is still useful AND clearly safe/idempotent to do late (an internal toggle or state change, fetching or summarizing information, a reminder that is still relevant), DO IT NOW and notify the user if appropriate.",
+    "- If it was time-sensitive and the window has passed (a deadline, a meeting, a limited drop / booking / redemption that is over), do NOT perform it; briefly tell the user via notify_inbox that it was missed and is now stale, plus any genuinely useful context or alternative.",
+    "- If it is irreversible, external, costly, or message-sending and there is ANY doubt about doing it late, do NOT execute it autonomously — call notify_inbox with the context and offer it as an explicit choice / action for the user.",
+    "- If it is pointless now, finish silently.",
+    "",
+    "Default to CAUTION on real-world side effects; default to HELPFULNESS on benign or idempotent actions. Follow <safety_core>. Do not reschedule this same task id.",
+  ].join("\n")
+}
+
+/**
+ * Wake the orchestrator to handle a one-shot that errored or was missed. Wraps
+ * the escalation prompt in a synthetic agent action and runs it through the
+ * normal scheduled-run path, so it records a Past-runs entry under the same task
+ * and surfaces to the Inbox only if the agent calls notify_inbox (or the
+ * recovery run itself errors). Called directly by the scheduler — never via the
+ * escalate-on-error path — so it cannot recurse. Never throws.
+ */
+export async function runSchedulerEscalation(
+  task: ScheduledTask,
+  situation: EscalationSituation,
+  now: number
+): Promise<ScheduledRunResult> {
+  const prompt = buildEscalationPrompt(task, situation, now)
+  const syntheticTask: ScheduledTask = {
+    ...task,
+    action: { kind: "agent", agentId: "orchestrator", prompt, adaptive: false },
+  }
+  return runScheduledTask(syntheticTask, now, { trigger: "schedule" })
 }

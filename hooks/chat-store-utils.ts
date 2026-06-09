@@ -111,6 +111,9 @@ export const stoppedStreamState = {
 
 export const INITIAL_MESSAGE_PAGE_SIZE = 32
 export const OLDER_MESSAGE_PAGE_SIZE = 64
+/** Server caps a message page at 200; use the max when paging toward a
+ *  deep-link target so we reach it in as few round-trips as possible. */
+export const CLIENT_MAX_MESSAGE_PAGE_SIZE = 200
 export const STREAM_RECOVERY_ATTEMPTS = 8
 export const STREAM_RECOVERY_DELAY_MS = 750
 

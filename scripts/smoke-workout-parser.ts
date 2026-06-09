@@ -108,7 +108,6 @@ const rich = {
                     kind: 'weighted',
                     equipment: ['barbell', 'bench', 'rack'],
                     muscleGroups: ['chest', 'triceps', 'front_delt'],
-                    formCues: ['Scapulae retracted', 'Bar path slight diagonal toward shoulders'],
                     defaultRestSec: 150,
                     previous: {
                         date: '2026-05-21',

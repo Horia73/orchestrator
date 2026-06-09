@@ -699,6 +699,9 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
         state.isStreaming &&
         state.streamingConversationId === nextConversationId &&
         state.streamingMessageId === nextMessageId
+      const sameConversation =
+        state.isStreaming &&
+        state.streamingConversationId === nextConversationId
       const snapshot = action.snapshot
       const snapshotSegments =
         snapshot?.contentSegments && snapshot.contentSegments.length > 0
@@ -715,9 +718,32 @@ export function chatReducer(state: ChatState, action: ChatAction): ChatState {
             snapshot.content.length > 0)
       )
 
+      // A reconnect ("recovering"/"offline") fires when returning to a
+      // backgrounded tab or switching away and back mid-stream. Those dispatches
+      // carry no snapshot yet, so blanking to a fresh cursor flashes the live
+      // text away for a beat before recovery re-hydrates it. Hold the existing
+      // streaming UI in place while we reconnect within the same conversation;
+      // the snapshot branch below still swaps in fresh content smoothly once it
+      // arrives. A brand-new send uses "connecting" (not a reconnect status), so
+      // it still starts clean.
+      const isReconnectStatus =
+        action.status === "recovering" || action.status === "offline"
+      const hasExistingStreamPayload =
+        state.streamingContent.length > 0 ||
+        state.streamingContentSegments.some(
+          (segment) => segment.content.length > 0
+        ) ||
+        state.streamingReasoning.length > 0
+      const preserveStreamPayload =
+        sameStream ||
+        (sameConversation &&
+          isReconnectStatus &&
+          !hasSnapshotPayload &&
+          hasExistingStreamPayload)
+
       return {
         ...state,
-        ...(sameStream ? {} : stoppedStreamState),
+        ...(preserveStreamPayload ? {} : stoppedStreamState),
         isStreaming: true,
         streamingConversationId: nextConversationId,
         streamingMessageId: nextMessageId,

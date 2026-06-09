@@ -30,6 +30,15 @@ import {
 // prompt or broken integration cannot loop forever (cost / runaway guard).
 const MAX_CONSECUTIVE_FAILURES = 5
 
+// One-shot tasks in a terminal run state are kept briefly so the user can still
+// see "it ran / it was missed / it failed", then auto-pruned so completed
+// throwaway tasks don't accumulate forever. Errors linger longer than successes
+// because they are diagnostic. The surfaced Inbox result lives in a separate
+// conversation and is NOT removed by pruning — only the task row + its run
+// history (which is unreachable once the task is gone) are dropped.
+const TERMINAL_ONESHOT_TTL_MS = 24 * 60 * 60_000 // done, missed
+const FAILED_ONESHOT_TTL_MS = 72 * 60 * 60_000 // error
+
 function emitScheduledTaskChanged(taskId: string, reason: string) {
   emitAppEvent({ type: "scheduled_tasks.changed", taskId, reason })
 }
@@ -238,6 +247,48 @@ export function deleteScheduledTask(id: string): boolean {
   const deleted = res.changes > 0
   if (deleted) emitScheduledTaskChanged(id, "deleted")
   return deleted
+}
+
+/**
+ * Drop one-shot tasks that have reached a terminal run state (done / missed /
+ * error) and sat past their retention window, together with their now-unreachable
+ * run history. Recurring tasks and user-paused tasks are never touched. Surfaced
+ * Inbox conversations are independent and intentionally preserved. Returns the
+ * ids removed so the caller can log. Cheap and idempotent — safe to call often.
+ */
+export function pruneTerminalOneShots(nowMs: number): string[] {
+  const doneMissedThreshold = nowMs - TERMINAL_ONESHOT_TTL_MS
+  const errorThreshold = nowMs - FAILED_ONESHOT_TTL_MS
+  const run = db.transaction((): string[] => {
+    const rows = db
+      .prepare(
+        `
+        SELECT id FROM scheduled_tasks
+        WHERE json_extract(schedule, '$.kind') = 'once'
+          AND (
+            (status IN ('done', 'missed') AND updatedAt < @doneMissedThreshold)
+            OR (status = 'error' AND updatedAt < @errorThreshold)
+          )
+      `
+      )
+      .all({ doneMissedThreshold, errorThreshold }) as Array<{ id: string }>
+    if (rows.length === 0) return []
+    const ids = rows.map((r) => r.id)
+    const deleteRuns = db.prepare(
+      "DELETE FROM scheduled_task_runs WHERE taskId = ?"
+    )
+    const deleteTask = db.prepare("DELETE FROM scheduled_tasks WHERE id = ?")
+    for (const id of ids) {
+      deleteRuns.run(id)
+      deleteTask.run(id)
+    }
+    return ids
+  })
+  const ids = run()
+  // One coalesced event is enough — the Scheduling UI refetches the whole list
+  // on any scheduled_tasks.changed.
+  if (ids.length > 0) emitScheduledTaskChanged(ids[ids.length - 1], "pruned")
+  return ids
 }
 
 // ---------------------------------------------------------------------------

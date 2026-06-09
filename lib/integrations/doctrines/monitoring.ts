@@ -74,7 +74,7 @@ Phase 2 — graduate (ask once, then act):
 - If the user declines, record that in task_state and do not re-offer for that sender for a good while (no nagging).
 
 Phase 3 — auto-archive + report:
-- Once gmail_archive is allowed for the watch, archive matching mail (GmailArchive) at wake time. Record each archive in a per-sender archive ledger in task_state, e.g. archived[sender] = { count, distinctDays, lastArchivedAt, lastMessageId }.
+- Once gmail_archive is allowed for the watch, archive matching mail (GmailArchive) at wake time. When several messages match in one wake, pass GmailArchive a single ids array (batch) rather than one call per message — fewer tool calls, lower latency, and you get a per-item succeeded/failed summary to fold into the ledger. Record each archive in a per-sender archive ledger in task_state, e.g. archived[sender] = { count, distinctDays, lastArchivedAt, lastMessageId }.
 - In every digest, include a short, honest report of what you did since the last digest: "Auto-archived M messages: <sender> (k), <sender> (k)…" so the automation is never silent.
 
 Phase 4 — offer unsubscribe (downstream of your own archiving):

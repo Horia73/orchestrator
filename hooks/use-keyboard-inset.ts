@@ -29,8 +29,14 @@ function readMobileKeyboardInset() {
     window.innerHeight,
     document.documentElement.clientHeight
   )
-  const visualViewportBottom = visualViewport.offsetTop + visualViewport.height
-  const inset = layoutViewportHeight - visualViewportBottom
+  // Keyboard height = how much the visual viewport shrank. Deliberately ignore
+  // visualViewport.offsetTop: that tracks where iOS Safari has *panned* the
+  // page to keep the focused field visible, not the keyboard's size. Folding it
+  // in made the inset wobble with the pan — a feedback loop (inset → input
+  // transform / list margin / scroll-to-bottom → layout shift → Safari re-pans
+  // → inset) that jittered the input, the message list, and the header for the
+  // whole keyboard animation.
+  const inset = layoutViewportHeight - visualViewport.height
 
   return inset > MOBILE_KEYBOARD_INSET_THRESHOLD ? Math.round(inset) : 0
 }

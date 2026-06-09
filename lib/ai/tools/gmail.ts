@@ -6,6 +6,13 @@ import {
     type GmailOutgoingAttachment,
     type GmailModifyTargetType,
     gmailArchive,
+    gmailBatchArchive,
+    gmailBatchDeletePermanently,
+    gmailBatchMarkRead,
+    gmailBatchMarkUnread,
+    gmailBatchModifyLabels,
+    gmailBatchTrash,
+    gmailBatchUntrash,
     gmailCreateDraft,
     gmailCreateLabel,
     gmailDeletePermanently,
@@ -23,7 +30,7 @@ import {
     gmailGetUnsubscribeInfo,
     gmailUnsubscribe,
 } from '@/lib/integrations/gmail'
-import { clamp, ensureParentDir, numberArg, stringArg } from './helpers'
+import { clamp, collectIds, ensureParentDir, numberArg, stringArg } from './helpers'
 import { displayPath, resolveSandboxed, resolveSandboxedWritable } from './sandbox'
 
 const MAX_OUTGOING_ATTACHMENT_BYTES = 25 * 1024 * 1024
@@ -93,16 +100,17 @@ export const gmailSendEmailTool: ToolDef = {
 export const gmailModifyLabelsTool: ToolDef = {
     id: 'GmailModifyLabels',
     name: 'GmailModifyLabels',
-    description: 'Adds or removes Gmail label IDs on a message or thread. Use GmailListLabels first when label IDs are not known.',
+    description: 'Adds or removes Gmail label IDs on a message or thread. Use GmailListLabels first when label IDs are not known. To label several messages/threads with the same labels in one call, pass ids (array).',
     input_schema: {
         type: 'object',
         properties: {
             target_type: targetTypeParam(),
-            id: { type: 'string', description: 'Gmail message ID or thread ID.' },
+            id: { type: 'string', description: 'A single Gmail message ID or thread ID. Use ids to act on multiple.' },
+            ids: { type: 'array', items: { type: 'string' }, description: 'Multiple Gmail message/thread IDs to apply the same label change to in ONE batch call. All must match target_type.' },
             add_label_ids: { type: 'array', items: { type: 'string' }, description: 'Label IDs to add.' },
             remove_label_ids: { type: 'array', items: { type: 'string' }, description: 'Label IDs to remove.' },
         },
-        required: ['target_type', 'id'],
+        required: ['target_type'],
     },
     tags: ['write', 'gmail', 'email'],
 }
@@ -116,15 +124,16 @@ export const gmailUntrashTool = simpleTargetTool('GmailUntrash', 'GmailUntrash',
 export const gmailDeleteTool: ToolDef = {
     id: 'GmailDeletePermanently',
     name: 'GmailDeletePermanently',
-    description: 'Permanently deletes a Gmail message or thread. This cannot be undone. Only use after explicit user approval for permanent deletion.',
+    description: 'Permanently deletes a Gmail message or thread. This cannot be undone. Only use after explicit user approval for permanent deletion. To delete several at once, pass ids (array); the single confirmation covers the whole batch.',
     input_schema: {
         type: 'object',
         properties: {
             target_type: targetTypeParam(),
-            id: { type: 'string', description: 'Gmail message ID or thread ID.' },
-            confirm_permanent_delete: { type: 'boolean', description: 'Must be true only after explicit user approval for permanent deletion.' },
+            id: { type: 'string', description: 'A single Gmail message ID or thread ID. Use ids to delete multiple.' },
+            ids: { type: 'array', items: { type: 'string' }, description: 'Multiple Gmail message/thread IDs to permanently delete in ONE batch call. All must match target_type.' },
+            confirm_permanent_delete: { type: 'boolean', description: 'Must be true only after explicit user approval for permanent deletion. Covers every id in the batch.' },
         },
-        required: ['target_type', 'id', 'confirm_permanent_delete'],
+        required: ['target_type', 'confirm_permanent_delete'],
     },
     tags: ['write', 'gmail', 'email', 'destructive'],
 }
@@ -259,44 +268,51 @@ export async function executeGmailModifyLabels(args: Record<string, unknown>): P
     const add = stringArrayArg(args, 'add_label_ids')
     const remove = stringArrayArg(args, 'remove_label_ids')
     if (add.length === 0 && remove.length === 0) return { success: false, error: 'Provide at least one label ID to add or remove.' }
-    return { success: true, data: await gmailModifyLabels(parsed.targetType, parsed.id, add, remove) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailModifyLabels(parsed.targetType, parsed.ids[0], add, remove) }
+    return { success: true, data: await gmailBatchModifyLabels(parsed.targetType, parsed.ids, add, remove) }
 }
 
 export async function executeGmailArchive(args: Record<string, unknown>): Promise<ToolResult> {
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
-    return { success: true, data: await gmailArchive(parsed.targetType, parsed.id) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailArchive(parsed.targetType, parsed.ids[0]) }
+    return { success: true, data: await gmailBatchArchive(parsed.targetType, parsed.ids) }
 }
 
 export async function executeGmailMarkRead(args: Record<string, unknown>): Promise<ToolResult> {
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
-    return { success: true, data: await gmailMarkRead(parsed.targetType, parsed.id) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailMarkRead(parsed.targetType, parsed.ids[0]) }
+    return { success: true, data: await gmailBatchMarkRead(parsed.targetType, parsed.ids) }
 }
 
 export async function executeGmailMarkUnread(args: Record<string, unknown>): Promise<ToolResult> {
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
-    return { success: true, data: await gmailMarkUnread(parsed.targetType, parsed.id) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailMarkUnread(parsed.targetType, parsed.ids[0]) }
+    return { success: true, data: await gmailBatchMarkUnread(parsed.targetType, parsed.ids) }
 }
 
 export async function executeGmailTrash(args: Record<string, unknown>): Promise<ToolResult> {
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
-    return { success: true, data: await gmailTrash(parsed.targetType, parsed.id) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailTrash(parsed.targetType, parsed.ids[0]) }
+    return { success: true, data: await gmailBatchTrash(parsed.targetType, parsed.ids) }
 }
 
 export async function executeGmailUntrash(args: Record<string, unknown>): Promise<ToolResult> {
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
-    return { success: true, data: await gmailUntrash(parsed.targetType, parsed.id) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailUntrash(parsed.targetType, parsed.ids[0]) }
+    return { success: true, data: await gmailBatchUntrash(parsed.targetType, parsed.ids) }
 }
 
 export async function executeGmailDeletePermanently(args: Record<string, unknown>): Promise<ToolResult> {
     if (args.confirm_permanent_delete !== true) return { success: false, error: 'confirm_permanent_delete must be true before permanent deletion.' }
     const parsed = parseTargetArgs(args)
     if (!parsed.ok) return parsed.error
-    return { success: true, data: await gmailDeletePermanently(parsed.targetType, parsed.id) }
+    if (parsed.ids.length === 1) return { success: true, data: await gmailDeletePermanently(parsed.targetType, parsed.ids[0]) }
+    return { success: true, data: await gmailBatchDeletePermanently(parsed.targetType, parsed.ids) }
 }
 
 export async function executeGmailUnsubscribeInfo(args: Record<string, unknown>): Promise<ToolResult> {
@@ -387,14 +403,15 @@ function simpleTargetTool(id: string, name: string, description: string): ToolDe
     return {
         id,
         name,
-        description,
+        description: `${description} To act on several at once, pass ids (array) in a single call instead of calling this tool repeatedly.`,
         input_schema: {
             type: 'object',
             properties: {
                 target_type: targetTypeParam(),
-                id: { type: 'string', description: 'Gmail message ID or thread ID.' },
+                id: { type: 'string', description: 'A single Gmail message ID or thread ID. Use ids to act on multiple.' },
+                ids: { type: 'array', items: { type: 'string' }, description: 'Multiple Gmail message/thread IDs to act on in ONE batch call. All must match target_type. Preferred over repeated single-id calls. Returns a per-item summary (succeeded/failed).' },
             },
-            required: ['target_type', 'id'],
+            required: ['target_type'],
         },
         tags: ['write', 'gmail', 'email'],
     }
@@ -441,15 +458,15 @@ function nullableStringArg(args: Record<string, unknown>, keys: string[]): strin
 }
 
 function parseTargetArgs(args: Record<string, unknown>):
-    | { ok: true; targetType: GmailModifyTargetType; id: string }
+    | { ok: true; targetType: GmailModifyTargetType; ids: string[] }
     | { ok: false; error: ToolResult } {
     const targetType = stringArg(args, ['target_type', 'targetType']) as GmailModifyTargetType
-    const id = stringArg(args, ['id', 'message_id', 'thread_id'])
+    const ids = collectIds(args, ['ids', 'id', 'message_ids', 'message_id', 'thread_ids', 'thread_id'])
     if (targetType !== 'message' && targetType !== 'thread') {
         return { ok: false, error: { success: false, error: 'target_type must be "message" or "thread".' } }
     }
-    if (!id) return { ok: false, error: { success: false, error: 'Missing required parameter: id' } }
-    return { ok: true, targetType, id }
+    if (ids.length === 0) return { ok: false, error: { success: false, error: 'Provide id (single) or ids (array).' } }
+    return { ok: true, targetType, ids }
 }
 
 function parseOutgoingAttachments(args: Record<string, unknown>):

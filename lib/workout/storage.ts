@@ -30,6 +30,16 @@ export function exercisesDir(): string {
     return path.join(workoutsDir(), 'exercises')
 }
 
+/**
+ * In-progress session state lives here, keyed by the stable artifact row id
+ * (NOT the sessionId), so a session resumes when the artifact is re-opened
+ * from the inbox or on another device. This is the live autosave; the
+ * finished-session history under `sessions/` is written separately on Finish.
+ */
+export function activeSessionsDir(): string {
+    return path.join(workoutsDir(), 'active')
+}
+
 export function historyMarkdownPath(): string {
     return path.join(workoutsDir(), 'HISTORY.md')
 }
@@ -44,6 +54,15 @@ export function sessionMarkdownPath(slug: string): string {
 
 export function exerciseHistoryPath(id: string): string {
     return path.join(exercisesDir(), `${id}.json`)
+}
+
+/** Sanitize an artifact id into a safe single-segment filename. */
+function safeArtifactId(artifactId: string): string {
+    return artifactId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120) || 'artifact'
+}
+
+export function activeSessionPath(artifactId: string): string {
+    return path.join(activeSessionsDir(), `${safeArtifactId(artifactId)}.json`)
 }
 
 function ensureDir(dir: string): void {
@@ -96,6 +115,33 @@ export function writeExerciseHistory(history: ExerciseHistory): string {
 
 export function readExerciseHistory(id: string): ExerciseHistory | null {
     return readJsonOrNull<ExerciseHistory>(exerciseHistoryPath(id))
+}
+
+// === active (in-progress) session autosave =================================
+
+/**
+ * Persist the live, in-progress session state for an artifact. Opaque payload
+ * (the client's `WorkoutSessionState` plus an `updatedAt` stamp) — the server
+ * only stores and returns it; the client owns its shape. Keyed by artifactId so
+ * resume works across reloads and devices, independent of localStorage.
+ */
+export function writeActiveSession(artifactId: string, payload: unknown): string {
+    const filePath = activeSessionPath(artifactId)
+    writeAtomic(filePath, JSON.stringify(payload))
+    return filePath
+}
+
+export function readActiveSession<T = unknown>(artifactId: string): T | null {
+    return readJsonOrNull<T>(activeSessionPath(artifactId))
+}
+
+export function deleteActiveSession(artifactId: string): void {
+    try {
+        const filePath = activeSessionPath(artifactId)
+        if (fs.existsSync(filePath)) fs.unlinkSync(filePath)
+    } catch {
+        /* best-effort */
+    }
 }
 
 export function listExerciseHistoryIds(): string[] {

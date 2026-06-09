@@ -7,13 +7,18 @@ import { ArrowLeft, X } from "lucide-react"
 import { ArtifactBody } from "@/components/artifacts/artifact-inline"
 import { ArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
+import { WorkoutSurfaceView } from "@/components/workout/workout-surface-view"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { cn } from "@/lib/utils"
+
+type ArtifactPageRow = ArtifactRow & {
+    conversationOrigin?: "user" | "inbox" | null
+}
 
 export default function ArtifactFullscreenPage() {
     const params = useParams<{ id: string }>()
     const router = useRouter()
-    const [artifact, setArtifact] = React.useState<ArtifactRow | null>(null)
+    const [artifact, setArtifact] = React.useState<ArtifactPageRow | null>(null)
     const [error, setError] = React.useState<string | null>(null)
 
     React.useEffect(() => {
@@ -22,18 +27,29 @@ export default function ArtifactFullscreenPage() {
         fetch(`/api/artifacts/${encodeURIComponent(params.id)}`)
             .then(async (r) => {
                 if (!r.ok) throw new Error(r.status === 404 ? "Artifact not found" : `Failed to load (${r.status})`)
-                return (await r.json()) as ArtifactRow
+                return (await r.json()) as ArtifactPageRow
             })
             .then((row) => { if (!cancelled) setArtifact(row) })
             .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : String(e)) })
         return () => { cancelled = true }
     }, [params?.id])
 
+    const returnHref = React.useMemo(
+        () => artifact ? returnHrefForArtifact(artifact) : "/",
+        [artifact]
+    )
+
+    const handleBack = React.useCallback(() => {
+        router.push(returnHref)
+    }, [returnHref, router])
+
     const handleClose = React.useCallback(() => {
-        try { window.close() } catch { /* not opened by script */ }
-        if (window.history.length > 1) router.back()
-        else router.push("/")
-    }, [router])
+        try {
+            window.close()
+            if (window.closed) return
+        } catch { /* not opened by script */ }
+        router.push(returnHref)
+    }, [returnHref, router])
 
     if (error) {
         return (
@@ -51,15 +67,33 @@ export default function ArtifactFullscreenPage() {
         )
     }
 
+    // Workouts get the dedicated full-screen surface with the in-surface AI
+    // coach (lateral chat) — every entry point (launch card, library, deep
+    // link) funnels through here.
+    if (artifact.type === "application/vnd.ant.workout") {
+        return (
+            <ConversationArtifactsProvider conversationId={artifact.conversationId}>
+                <WorkoutSurfaceView
+                    artifact={artifact}
+                    onBack={handleBack}
+                    onClose={handleClose}
+                />
+            </ConversationArtifactsProvider>
+        )
+    }
+
     const opensInFullscreen =
         artifact.display === "fullscreen" ||
-        artifact.type === "application/vnd.ant.workout" ||
         artifact.type === "application/vnd.ant.recipe"
 
     return (
         <ConversationArtifactsProvider conversationId={artifact.conversationId}>
             {opensInFullscreen ? (
-                <FullscreenArtifact artifact={artifact} onClose={handleClose} />
+                <FullscreenArtifact
+                    artifact={artifact}
+                    onBack={handleBack}
+                    onClose={handleClose}
+                />
             ) : (
                 <div className="h-dvh w-screen bg-background">
                     <ArtifactPanel
@@ -76,9 +110,11 @@ export default function ArtifactFullscreenPage() {
 
 function FullscreenArtifact({
     artifact,
+    onBack,
     onClose,
 }: {
     artifact: ArtifactRow
+    onBack: () => void
     onClose: () => void
 }) {
     const isWorkout = artifact.type === "application/vnd.ant.workout"
@@ -97,7 +133,7 @@ function FullscreenArtifact({
                 )}>
                     <button
                         type="button"
-                        onClick={onClose}
+                        onClick={onBack}
                         className="flex size-10 shrink-0 items-center justify-center rounded-full text-foreground/70 transition-colors hover:bg-muted hover:text-foreground"
                         aria-label="Back"
                         title="Back"
@@ -134,6 +170,13 @@ function FullscreenArtifact({
             </div>
         </main>
     )
+}
+
+function returnHrefForArtifact(artifact: ArtifactPageRow): string {
+    const id = encodeURIComponent(artifact.conversationId)
+    return artifact.conversationOrigin === "inbox"
+        ? `/inbox?item=${id}`
+        : `/?chat=${id}`
 }
 
 function prettyType(mime: string): string {

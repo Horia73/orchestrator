@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { getArtifactById } from '@/lib/artifacts/store'
+import { getArtifactByIdWithConversationOrigin } from '@/lib/artifacts/store'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /** GET /api/artifacts/:id — fetch a single artifact row by its stable UUID. */
@@ -9,7 +9,7 @@ export async function GET(
 ) {
   return runWithRequestProfile(_request, async () => {
         const { id } = await params
-        const row = getArtifactById(id)
+        const row = getArtifactByIdWithConversationOrigin(id)
         if (!row) {
             return NextResponse.json({ error: 'Not found' }, { status: 404 })
         }

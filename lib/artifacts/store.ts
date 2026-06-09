@@ -33,10 +33,20 @@ interface RawArtifactRow {
 
 interface RawArtifactListRow extends RawArtifactRow {
     conversationTitle: string | null
+    conversationOrigin: string | null
+}
+
+interface RawArtifactWithOriginRow extends RawArtifactRow {
+    conversationOrigin: string | null
 }
 
 export interface ArtifactListItem extends ArtifactRow {
     conversationTitle: string | null
+    conversationOrigin: 'user' | 'inbox' | null
+}
+
+export interface ArtifactWithConversationOrigin extends ArtifactRow {
+    conversationOrigin: 'user' | 'inbox' | null
 }
 
 function resolveArtifactReadPath(filePath: string): string | null {
@@ -72,7 +82,14 @@ function parseListRow(r: RawArtifactListRow): ArtifactListItem {
     return {
         ...parseRow(r),
         conversationTitle: r.conversationTitle,
+        conversationOrigin: parseConversationOrigin(r.conversationOrigin),
     }
+}
+
+function parseConversationOrigin(value: string | null): 'user' | 'inbox' | null {
+    if (value === 'inbox') return 'inbox'
+    if (value === 'user' || value == null) return 'user'
+    return null
 }
 
 interface InsertArgs {
@@ -229,6 +246,23 @@ export function getArtifactById(id: string): ArtifactRow | null {
     return row ? parseRow(row) : null
 }
 
+export function getArtifactByIdWithConversationOrigin(
+    id: string,
+): ArtifactWithConversationOrigin | null {
+    const row = db.prepare(`
+        SELECT a.*, COALESCE(c.origin, 'user') AS conversationOrigin
+          FROM artifacts a
+          LEFT JOIN conversations c ON c.id = a.conversationId
+         WHERE a.id = ?
+    `).get(id) as RawArtifactWithOriginRow | undefined
+    if (!row) return null
+    const parsed = parseRow(row)
+    return {
+        ...parsed,
+        conversationOrigin: parseConversationOrigin(row.conversationOrigin),
+    }
+}
+
 export function deleteArtifactIdentifierChainById(
     id: string,
     options: { conversationId?: string; type?: string } = {},
@@ -276,7 +310,7 @@ export function listLatestArtifactsByType(type: string, limit = 100): ArtifactLi
     const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 500))
     const rows = db
         .prepare(
-            `SELECT a.*, c.title AS conversationTitle
+            `SELECT a.*, c.title AS conversationTitle, COALESCE(c.origin, 'user') AS conversationOrigin
                FROM artifacts a
                JOIN (
                    SELECT conversationId, identifier, MAX(version) AS v

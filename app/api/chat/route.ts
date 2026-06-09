@@ -98,6 +98,9 @@ import {
   type ChatRequestBody,
 } from "./route-request"
 import { createArtifactStreamBridge } from "./artifact-stream"
+import { repairArtifactContent } from "@/lib/artifacts/repair"
+import { runTextSubAgent } from "@/lib/ai/agents/runner"
+import { artifactRepairAgent } from "@/lib/ai/agents/artifact-repair"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
@@ -871,6 +874,59 @@ export async function POST(request: Request) {
             send({ type: "context_usage", contextUsage: persisted })
           }
 
+          // Fix any strict-schema artifact that failed validation this turn:
+          // ask the repair model to correct the exact error, then commit the
+          // fixed card (or report the precise failure). Invoked once after the
+          // model stream completes, before the SSE stream closes.
+          const repairPendingArtifacts = async () => {
+            const pending = artifactStream.takePendingRepairs()
+            for (const repair of pending) {
+              const repaired = await repairArtifactContent({
+                type: repair.attrs.type,
+                content: repair.content,
+                error: repair.error,
+                maxAttempts: 2,
+                generate: async (userPrompt) => {
+                  const result = await runTextSubAgent({
+                    target: artifactRepairAgent,
+                    prompt: userPrompt,
+                    parentCtx: {
+                      callerAgentId: orchestrator.id,
+                      depth: 0,
+                      conversationId,
+                      parentRequestId: messageId,
+                      signal: serverAbortController.signal,
+                      onAgentEvent: (event) => handleAgentEvent(event, send),
+                      appOrigin: requestOrigin,
+                    },
+                  })
+                  if (!result.success) return null
+                  const data = result.data as { output?: unknown } | undefined
+                  return typeof data?.output === "string" ? data.output : null
+                },
+              })
+              if (repaired.ok) {
+                artifactStream.commitRepairedArtifact(repair, repaired.content)
+                // Keep the stored message body (and thus future-turn history +
+                // reloads) consistent with the card the user now sees. Guarded:
+                // only when the original body is present verbatim — it isn't if
+                // the model wrapped it in a fence that got stripped before insert.
+                if (repair.content && accContent.includes(repair.content)) {
+                  accContent = accContent.replace(repair.content, repaired.content)
+                  persistAssistantProgress({ force: true, status: "ok" })
+                }
+                console.log(
+                  `[artifact-repair] type=${repair.attrs.type} identifier=${repair.attrs.identifier} repaired after ${repaired.attempts} attempt(s)`
+                )
+              } else {
+                artifactStream.reportRepairFailure(repair.clientToken, repaired.error)
+                console.warn(
+                  `[artifact-repair] type=${repair.attrs.type} identifier=${repair.attrs.identifier} repair failed after ${repaired.attempts} attempt(s): ${repaired.error}`
+                )
+              }
+            }
+          }
+
           try {
             let lastModelAttemptError: string | null = null
             for (
@@ -1521,6 +1577,22 @@ export async function POST(request: Request) {
                     },
                   }
                 )
+
+                // In-turn artifact repair: if any strict-schema artifact failed
+                // validation while streaming, fix it now (the repair model
+                // corrects the exact error) before the stream closes. The `done`
+                // event has already been sent, but the client keeps reading
+                // until stream close and applies the artifact row independently,
+                // so the corrected card replaces the streaming placeholder with
+                // no broken-card flash.
+                if (
+                  !terminalStreamError &&
+                  !attemptStreamError &&
+                  !serverAbortController.signal.aborted &&
+                  artifactStream.hasPendingRepairs()
+                ) {
+                  await repairPendingArtifacts()
+                }
               } catch (error: unknown) {
                 const msg = error instanceof Error ? error.message : "Unknown error"
                 if (!attemptStreamError) {

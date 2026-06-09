@@ -114,6 +114,9 @@ export interface WorkoutSessionState {
     /** Optional current working-set timer. A set is logged only after
      *  Finish -> edit actuals -> Save. */
     activeSet?: ActiveSetState
+    /** ISO timestamp of the last persist. Used to reconcile localStorage vs
+     *  the server copy on hydration (newer wins). Stamped at write time. */
+    updatedAt?: string
     /** Schema version for forward-migration tolerance. */
     _v: number
 }
@@ -129,40 +132,52 @@ function storageKey(sessionId: string) {
 }
 
 /**
- * Read persisted state. Returns empty state if missing, malformed, or from
- * an incompatible storage version. Never throws.
+ * Coerce an arbitrary persisted payload (from localStorage OR the server) into
+ * a clean session state. Returns empty state if missing, malformed, the wrong
+ * session, or from an incompatible storage version. Never throws.
+ */
+function coercePersistedSession(raw: unknown, sessionId: string): WorkoutSessionState {
+    const parsed = raw as (Partial<WorkoutSessionState> & { updatedAt?: string }) | null
+    if (!parsed || typeof parsed !== 'object' || parsed.sessionId !== sessionId || parsed._v !== STORAGE_VERSION) {
+        return EMPTY_STATE(sessionId)
+    }
+    const restEvents = normalizeRestEvents((parsed as { restEvents?: unknown }).restEvents)
+    let rest = parsed.rest
+    let activeSet = parsed.activeSet
+    // Clear stale rest timer — if the page was closed mid-rest, when we come
+    // back the rest is meaningless; better to drop it than resume an alert
+    // from 6 hours ago.
+    if (rest && rest.endsAt && rest.endsAt < Date.now() - 10 * 60 * 1000) {
+        restEvents.push(restToEvent(rest, 'completed', rest.endsAt))
+        rest = undefined
+    }
+    if (activeSet?.startedAt && activeSet.startedAt < Date.now() - 12 * 60 * 60 * 1000) {
+        activeSet = undefined
+    }
+    return {
+        sessionId,
+        startedAt: parsed.startedAt,
+        completedAt: parsed.completedAt,
+        logsByExerciseId: parsed.logsByExerciseId ?? {},
+        addedGroups: normalizeAddedGroups((parsed as { addedGroups?: unknown }).addedGroups),
+        restEvents,
+        rest,
+        activeSet,
+        updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
+        _v: STORAGE_VERSION,
+    }
+}
+
+/**
+ * Read persisted state from localStorage. Returns empty state if missing,
+ * malformed, or from an incompatible storage version. Never throws.
  */
 function readPersistedState(sessionId: string): WorkoutSessionState {
     if (typeof window === 'undefined') return EMPTY_STATE(sessionId)
     try {
         const raw = window.localStorage.getItem(storageKey(sessionId))
         if (!raw) return EMPTY_STATE(sessionId)
-        const parsed = JSON.parse(raw) as Partial<WorkoutSessionState>
-        if (!parsed || parsed.sessionId !== sessionId || parsed._v !== STORAGE_VERSION) {
-            return EMPTY_STATE(sessionId)
-        }
-        const restEvents = normalizeRestEvents((parsed as { restEvents?: unknown }).restEvents)
-        // Clear stale rest timer — if the page was closed mid-rest, when
-        // we come back the rest is meaningless; better to drop it than
-        // resume an alert from 6 hours ago.
-        if (parsed.rest && parsed.rest.endsAt && parsed.rest.endsAt < Date.now() - 10 * 60 * 1000) {
-            restEvents.push(restToEvent(parsed.rest, 'completed', parsed.rest.endsAt))
-            parsed.rest = undefined
-        }
-        if (parsed.activeSet?.startedAt && parsed.activeSet.startedAt < Date.now() - 12 * 60 * 60 * 1000) {
-            parsed.activeSet = undefined
-        }
-        return {
-            sessionId,
-            startedAt: parsed.startedAt,
-            completedAt: parsed.completedAt,
-            logsByExerciseId: parsed.logsByExerciseId ?? {},
-            addedGroups: normalizeAddedGroups((parsed as { addedGroups?: unknown }).addedGroups),
-            restEvents,
-            rest: parsed.rest,
-            activeSet: parsed.activeSet,
-            _v: STORAGE_VERSION,
-        }
+        return coercePersistedSession(JSON.parse(raw), sessionId)
     } catch {
         return EMPTY_STATE(sessionId)
     }
@@ -355,13 +370,31 @@ function findRemainingSets(order: readonly WorkoutSetRef[], state: WorkoutSessio
     return order.filter((set) => !isSetAdvanced(state.logsByExerciseId[set.exerciseId]?.sets[set.setIndex]))
 }
 
+/** Stamp the current time so localStorage and the server copy can be compared
+ *  on hydration (newer wins). */
+function stampSession(session: WorkoutSessionState): WorkoutSessionState & { updatedAt: string } {
+    return { ...session, updatedAt: new Date().toISOString() }
+}
+
 function persistSessionState(sessionId: string, session: WorkoutSessionState): void {
     if (typeof window === 'undefined') return
     try {
-        window.localStorage.setItem(storageKey(sessionId), JSON.stringify(session))
+        window.localStorage.setItem(storageKey(sessionId), JSON.stringify(stampSession(session)))
     } catch {
         /* quota / privacy mode — fail silently */
     }
+}
+
+/** Signature of the meaningful (non-ephemeral) session content. Drives server
+ *  autosave dedup so we don't POST on every rest-timer tick or remount. */
+function sessionContentSignature(session: WorkoutSessionState): string {
+    return JSON.stringify({
+        startedAt: session.startedAt,
+        completedAt: session.completedAt,
+        logsByExerciseId: session.logsByExerciseId,
+        addedGroups: session.addedGroups,
+        restEvents: session.restEvents,
+    })
 }
 
 function collectExerciseIds(workout: WorkoutArtifact, addedGroups: readonly ExerciseGroup[] | undefined): Set<string> {
@@ -389,11 +422,24 @@ function uniqueExerciseId(id: string, used: Set<string>): string {
 export function useWorkoutSession(
     sessionId: string,
     workout: WorkoutArtifact,
+    opts?: { artifactId?: string },
 ): WorkoutSessionApi {
+    const artifactId = opts?.artifactId
     const [session, setSession] = React.useState<WorkoutSessionState>(() => EMPTY_STATE(sessionId))
     const [restoredSessionId, setRestoredSessionId] = React.useState<string | null>(null)
     const isRestored = restoredSessionId === sessionId
     const latestSessionRef = React.useRef(session)
+    // Signature of the last content we pushed to the server, for autosave dedup.
+    const lastServerSaveRef = React.useRef<string | null>(null)
+    // Gate server writes until we've reconciled with the server copy on mount,
+    // so a stale local state can't clobber a newer server state in the window
+    // before hydration resolves. `false` until the GET settles (or there's no
+    // artifactId to reconcile against).
+    const [serverChecked, setServerChecked] = React.useState(false)
+    const serverCheckedRef = React.useRef(false)
+    React.useEffect(() => {
+        serverCheckedRef.current = serverChecked
+    }, [serverChecked])
     const effectiveWorkout = React.useMemo(
         () => buildEffectiveWorkout(workout, { addedGroups: session.addedGroups }),
         [workout, session.addedGroups],
@@ -405,7 +451,13 @@ export function useWorkoutSession(
     }, [session])
 
     React.useEffect(() => {
+        lastServerSaveRef.current = null
+        setServerChecked(!artifactId)
+    }, [artifactId])
+
+    React.useEffect(() => {
         setRestoredSessionId(null)
+        setServerChecked(false)
         const restored = readPersistedState(sessionId)
         latestSessionRef.current = restored
         setSession(restored)
@@ -430,7 +482,29 @@ export function useWorkoutSession(
     React.useEffect(() => {
         if (typeof window === 'undefined') return
         if (!isRestored) return
-        const flush = () => persistSessionState(sessionId, latestSessionRef.current)
+        const flush = () => {
+            const current = latestSessionRef.current
+            persistSessionState(sessionId, current)
+            // Best-effort server flush on unload so a half-done session isn't
+            // lost to the 1.5s autosave debounce. keepalive lets it outlive the
+            // page; failures are silently ignored (localStorage already has it).
+            // Gated on serverChecked so we never clobber a newer server copy
+            // before hydration has reconciled.
+            if (artifactId && serverCheckedRef.current && current.startedAt) {
+                const sig = sessionContentSignature(current)
+                if (sig !== lastServerSaveRef.current) {
+                    lastServerSaveRef.current = sig
+                    try {
+                        void fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/workout-session`, {
+                            method: 'PUT',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ session: stampSession(current) }),
+                            keepalive: true,
+                        }).catch(() => undefined)
+                    } catch { /* ignore */ }
+                }
+            }
+        }
         window.addEventListener('pagehide', flush)
         window.addEventListener('beforeunload', flush)
         return () => {
@@ -439,7 +513,67 @@ export function useWorkoutSession(
             window.removeEventListener('pagehide', flush)
             window.removeEventListener('beforeunload', flush)
         }
-    }, [sessionId, isRestored])
+    }, [sessionId, isRestored, artifactId])
+
+    // Hydrate from the server copy (keyed by artifactId) once the local restore
+    // is done. The server copy survives reloads, inbox re-opens, and lets a
+    // session resume on another device. Newer-wins: adopt the server state only
+    // when there is no local progress or the server stamp is more recent.
+    React.useEffect(() => {
+        if (!artifactId) return
+        if (!isRestored) return
+        let cancelled = false
+        const local = latestSessionRef.current
+        void fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/workout-session`, {
+            headers: { Accept: 'application/json' },
+        })
+            .then((r) => (r.ok ? r.json() : null))
+            .then((data: { session?: unknown } | null) => {
+                if (cancelled || !data?.session) return
+                const server = coercePersistedSession(data.session, sessionId)
+                if (!server.startedAt && !server.completedAt) return
+                const localHasProgress = !!local.startedAt || !!local.completedAt
+                const serverIsNewer = !!server.updatedAt
+                    && (!local.updatedAt || server.updatedAt > local.updatedAt)
+                if (localHasProgress && !serverIsNewer) return
+                latestSessionRef.current = server
+                setSession(server)
+                lastServerSaveRef.current = sessionContentSignature(server)
+            })
+            .catch(() => undefined)
+            .finally(() => {
+                if (!cancelled) setServerChecked(true)
+            })
+        return () => {
+            cancelled = true
+        }
+    }, [artifactId, isRestored, sessionId])
+
+    // Autosave the in-progress session to the server, debounced. Only meaningful
+    // (started) sessions are pushed, and the content signature dedups so rest-
+    // timer churn / remounts don't spam the endpoint.
+    React.useEffect(() => {
+        if (typeof window === 'undefined') return
+        if (!artifactId) return
+        if (!isRestored) return
+        if (!serverChecked) return
+        if (!session.startedAt) return
+        const sig = sessionContentSignature(session)
+        if (sig === lastServerSaveRef.current) return
+        const timer = window.setTimeout(() => {
+            lastServerSaveRef.current = sig
+            void fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/workout-session`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ session: stampSession(latestSessionRef.current) }),
+                keepalive: true,
+            }).catch(() => {
+                // Allow a retry on the next change.
+                lastServerSaveRef.current = null
+            })
+        }, 1500)
+        return () => window.clearTimeout(timer)
+    }, [session, artifactId, isRestored, serverChecked])
 
     const isActive = !!session.startedAt && !session.completedAt
     const isFinished = !!session.completedAt
@@ -461,7 +595,14 @@ export function useWorkoutSession(
 
     const reset = React.useCallback(() => {
         setSession(EMPTY_STATE(sessionId))
-    }, [sessionId])
+        lastServerSaveRef.current = null
+        if (artifactId) {
+            void fetch(`/api/artifacts/${encodeURIComponent(artifactId)}/workout-session`, {
+                method: 'DELETE',
+                keepalive: true,
+            }).catch(() => undefined)
+        }
+    }, [sessionId, artifactId])
 
     const ensureLog = (state: WorkoutSessionState, exerciseId: string): ExerciseSessionLog => {
         return state.logsByExerciseId[exerciseId] ?? { sets: [] }

@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server'
 
 import { searchWorkoutImages } from '@/lib/workout/image-search'
+import { resolveExerciseImage } from '@/lib/workout/exercise-image-db'
+import { resolveExerciseGif } from '@/lib/workout/exercise-gif-search'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const runtime = 'nodejs'
@@ -18,12 +20,32 @@ export async function GET(request: Request) {
         const url = new URL(request.url)
         const query = (url.searchParams.get('q') ?? '').trim().slice(0, 200)
         const limit = clampInt(url.searchParams.get('limit'), 1, 1, 4)
+        const name = (url.searchParams.get('name') ?? '').trim().slice(0, 160)
+        const id = (url.searchParams.get('id') ?? '').trim().slice(0, 120)
+        const muscles = splitList(url.searchParams.get('muscle'))
+        const equipment = splitList(url.searchParams.get('equipment'))
+
+        // Primary source: ExerciseDB OSS animated GIFs. For a personal,
+        // non-commercial workout card, seeing the movement is more useful
+        // than a static setup photo. The local Free Exercise DB photo index
+        // remains a deterministic fallback when the GIF API has no confident
+        // match or is temporarily unavailable.
+        if (name || id) {
+            const gif = await resolveExerciseGif({ id, name, muscles, equipment })
+            if (gif) {
+                return NextResponse.json({ images: [gif] }, { headers: SUCCESS_HEADERS })
+            }
+
+            const hit = resolveExerciseImage({ id, name, muscles, equipment })
+            if (hit) {
+                return NextResponse.json({ images: [hit] }, { headers: SUCCESS_HEADERS })
+            }
+        }
 
         if (!query) {
-            return NextResponse.json(
-                { error: 'Missing query parameter `q`.' },
-                { status: 400, headers: ERROR_HEADERS },
-            )
+            // No library match and nothing to search for → empty (not an error),
+            // so the renderer simply hides the demo image.
+            return NextResponse.json({ images: [] }, { headers: SUCCESS_HEADERS })
         }
 
         if (!withinRateLimit(extractClientKey(request))) {
@@ -51,6 +73,11 @@ function clampInt(raw: string | null, fallback: number, min: number, max: number
     const n = Number.parseInt(raw, 10)
     if (!Number.isFinite(n)) return fallback
     return Math.min(max, Math.max(min, n))
+}
+
+function splitList(raw: string | null): string[] {
+    if (!raw) return []
+    return raw.split(',').map((s) => s.trim()).filter(Boolean).slice(0, 8)
 }
 
 function extractClientKey(request: Request): string {

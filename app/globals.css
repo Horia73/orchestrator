@@ -297,6 +297,13 @@ button:not(:disabled),
     animation: libraryMediaShimmer 1.25s cubic-bezier(0.4, 0, 0.2, 1) infinite;
   }
 
+  /* Transient tint when a deep-link (Library → "View in chat") jumps to a
+     message, so the eye lands on the right one. */
+  .message-jump-highlight {
+    animation: messageJumpHighlight 1500ms cubic-bezier(0.4, 0, 0.2, 1);
+    border-radius: 0.75rem;
+  }
+
   @keyframes thoughtTitleSwap {
     from { opacity: 0.55; }
     to { opacity: 1; }
@@ -339,10 +346,48 @@ button:not(:disabled),
     }
   }
 
+  @keyframes messageJumpHighlight {
+    0%,
+    15% {
+      background-color: color-mix(in oklch, var(--primary) 16%, transparent);
+    }
+    100% {
+      background-color: transparent;
+    }
+  }
+
+  /* First-load splash wordmark: a slow breathing fade so the screen feels
+     alive without a spinner or progress bar. The overlay itself fades out
+     (handled in AppLoadingSplash) once the app is ready. */
+  .app-splash-word {
+    animation: appSplashBreathe 2400ms ease-in-out infinite;
+  }
+
+  @keyframes appSplashBreathe {
+    0%,
+    100% {
+      opacity: 0.45;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+
   @media (prefers-reduced-motion: reduce) {
     .library-media-shimmer {
       animation: none;
       opacity: 0.55;
+    }
+    /* Static brief tint instead of an animated fade; the JS timer still
+       removes the class after ~1.5s. */
+    .message-jump-highlight {
+      animation: none;
+      background-color: color-mix(in oklch, var(--primary) 12%, transparent);
+    }
+    /* Hold a calm static wordmark rather than the breathing pulse. */
+    .app-splash-word {
+      animation: none;
+      opacity: 0.8;
     }
   }
 
@@ -508,6 +553,30 @@ button:not(:disabled),
   }
   [data-agent-scroll-visible="true"] .agent-scroll::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--foreground) 35%, transparent);
+  }
+
+  .transient-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+    transition: scrollbar-color 180ms ease;
+  }
+  .transient-scrollbar::-webkit-scrollbar {
+    width: 5px;
+    height: 5px;
+  }
+  .transient-scrollbar::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 999px;
+    transition: background-color 180ms ease;
+  }
+  .transient-scrollbar[data-scrollbar-visible="true"],
+  [data-scrollbar-visible="true"] .transient-scrollbar {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 32%, transparent)
+      transparent;
+  }
+  .transient-scrollbar[data-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+  [data-scrollbar-visible="true"] .transient-scrollbar::-webkit-scrollbar-thumb {
+    background: color-mix(in oklch, var(--foreground) 32%, transparent);
   }
 
 }

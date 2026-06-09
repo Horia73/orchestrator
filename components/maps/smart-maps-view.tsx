@@ -69,8 +69,14 @@ import { cn } from "@/lib/utils"
 const MAP_SIDE_PANEL_TRANSITION_MS = 300
 const RENDERER_SIDE_PANEL_FLOW_QUERY = "(min-width: 1280px)"
 const WIDE_SIDE_PANEL_DOCK_QUERY = "(min-width: 1536px)"
+const SMART_MAPS_LOCAL_CONVERSATION_ID = "smart-maps-local"
+const SMART_MAPS_HANDOFF_CONVERSATION_ID = "smart-maps-handoff"
 const useIsomorphicLayoutEffect =
   typeof window === "undefined" ? React.useEffect : React.useLayoutEffect
+
+type SmartMapsArtifactRow = ArtifactRow & {
+  conversationOrigin?: "user" | "inbox" | null
+}
 
 function useMediaQuery(query: string): boolean {
   const [matches, setMatches] = React.useState(false)
@@ -84,6 +90,21 @@ function useMediaQuery(query: string): boolean {
   }, [query])
 
   return matches
+}
+
+function sourceConversationIdForMapChat(
+  artifact: SmartMapsArtifactRow | null
+): string | null {
+  if (!artifact) return null
+  if (
+    artifact.conversationId === SMART_MAPS_LOCAL_CONVERSATION_ID ||
+    artifact.conversationId === SMART_MAPS_HANDOFF_CONVERSATION_ID
+  ) {
+    return null
+  }
+  if (artifact.conversationOrigin === "user") return artifact.conversationId
+  if (artifact.conversationOrigin == null) return null
+  return null
 }
 
 export function SmartMapsView({
@@ -150,7 +171,7 @@ export function SmartMapsView({
     null
   )
   const [selectedArtifact, setSelectedArtifact] =
-    React.useState<ArtifactRow | null>(null)
+    React.useState<SmartMapsArtifactRow | null>(null)
   const [selectedLoading, setSelectedLoading] = React.useState(false)
   const [selectedError, setSelectedError] = React.useState<string | null>(null)
   const [mapSettings, setMapSettings] =
@@ -504,7 +525,7 @@ export function SmartMapsView({
               ? "Map not found"
               : `Failed to load map (${res.status})`
           )
-        return (await res.json()) as ArtifactRow
+        return (await res.json()) as SmartMapsArtifactRow
       })
       .then((row) => {
         if (cancelled) return
@@ -609,6 +630,7 @@ export function SmartMapsView({
     savedPlacesRouteDraft?.title ??
     selectedArtifact?.title ??
     `Smart Maps - ${homeLabel}`
+  const sourceMapConversationId = sourceConversationIdForMapChat(selectedArtifact)
   const isHome = !selectedArtifact && !savedPlacesRouteDraft
   const searchCenter = React.useMemo(
     () =>
@@ -1543,7 +1565,7 @@ export function SmartMapsView({
       mobile={!docked && isMobile}
       docked={docked}
       activeMapTitle={activeTitle}
-      preferredConversationId={selectedArtifact?.conversationId ?? null}
+      preferredConversationId={sourceMapConversationId}
       buildPromptContext={buildMapChatPromptContext}
       onShowPlaces={() => openSidePanelMode("places")}
       onShowMap={() => openSidePanelMode("map")}

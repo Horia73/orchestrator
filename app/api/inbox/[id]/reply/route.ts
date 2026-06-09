@@ -30,6 +30,8 @@ const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
   "image",
   "pdf",
   "document",
+  "spreadsheet",
+  "presentation",
   "audio",
   "video",
   "other",

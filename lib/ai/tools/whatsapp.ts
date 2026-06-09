@@ -22,7 +22,8 @@ import {
 import { formatAssetReference } from '@/lib/ai/media-assets'
 import type { Attachment } from '@/lib/types'
 import { MAX_UPLOAD_FILE_BYTES, persistUploadBytes, resolveExistingUploadPath } from '@/lib/uploads'
-import { booleanArg, clamp, numberArg, stringArg } from './helpers'
+import { runIdBatch } from '@/lib/integrations/batch'
+import { booleanArg, clamp, collectIds, numberArg, stringArg } from './helpers'
 import { displayPath, isInsideProtectedAgentPath, resolveSandboxed } from './sandbox'
 
 const MAX_WHATSAPP_MESSAGE_CHARS = 20_000
@@ -252,20 +253,25 @@ export const whatsappSendMediaTool: ToolDef = {
 export const whatsappDeleteMessageTool: ToolDef = {
     id: 'WhatsAppDeleteMessageForEveryone',
     name: 'WhatsAppDeleteMessageForEveryone',
-    description: 'Deletes a WhatsApp message for everyone. This is the only WhatsApp delete mode exposed. Use only after the user explicitly approved deleting that exact message for everyone.',
+    description: 'Deletes a WhatsApp message for everyone. This is the only WhatsApp delete mode exposed. Use only after the user explicitly approved deleting that exact message for everyone. To delete several at once, pass message_ids (array); the single confirmation covers the whole batch.',
     input_schema: {
         type: 'object',
         properties: {
             message_id: {
                 type: 'string',
-                description: 'Exact WhatsApp message ID to delete for everyone.',
+                description: 'A single WhatsApp message ID to delete for everyone. Use message_ids for multiple.',
+            },
+            message_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Multiple WhatsApp message IDs to delete for everyone in ONE batch call. Returns a per-item summary.',
             },
             confirmed_by_user: {
                 type: 'boolean',
-                description: 'Must be true only after the user explicitly approves deleting this exact message for everyone.',
+                description: 'Must be true only after the user explicitly approves deleting these messages for everyone. Covers every id in the batch.',
             },
         },
-        required: ['message_id', 'confirmed_by_user'],
+        required: ['confirmed_by_user'],
     },
     tags: ['write', 'whatsapp', 'messages', 'destructive', 'external_action'],
 }
@@ -277,16 +283,22 @@ export const whatsappMarkChatReadTool: ToolDef = {
         'Marks a WhatsApp chat as read on the connected device (clears the unread badge for that chat on the user\'s phone).',
         'Use only when the user explicitly asks to mark a chat as read, or when an Inbox quick-action requests it.',
         'Reading messages programmatically with WhatsAppReadChat does NOT mark them read — this tool is the only way to clear unread on WhatsApp.',
+        'To clear unread on several chats at once, pass chat_ids (array) in one call instead of calling this tool repeatedly.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
             chat_id: {
                 type: 'string',
-                description: 'WhatsApp chat ID, usually returned by WhatsAppListChats or carried in monitor candidate details.',
+                description: 'A single WhatsApp chat ID, usually returned by WhatsAppListChats or carried in monitor candidate details. Use chat_ids for multiple.',
+            },
+            chat_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Multiple WhatsApp chat IDs to mark read in ONE batch call. Returns a per-item summary.',
             },
         },
-        required: ['chat_id'],
+        required: [],
     },
     tags: ['write', 'whatsapp', 'messages', 'external_action'],
 }
@@ -297,16 +309,22 @@ export const whatsappMarkChatUnreadTool: ToolDef = {
     description: [
         'Marks a WhatsApp chat as unread on the connected device (restores the unread badge so the user sees it again on their phone).',
         'Use when the user wants a chat to remain visibly unread after the assistant has surfaced or summarized it, or when an Inbox quick-action requests it.',
+        'To restore the unread badge on several chats at once, pass chat_ids (array) in one call.',
     ].join(' '),
     input_schema: {
         type: 'object',
         properties: {
             chat_id: {
                 type: 'string',
-                description: 'WhatsApp chat ID, usually returned by WhatsAppListChats or carried in monitor candidate details.',
+                description: 'A single WhatsApp chat ID, usually returned by WhatsAppListChats or carried in monitor candidate details. Use chat_ids for multiple.',
+            },
+            chat_ids: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Multiple WhatsApp chat IDs to mark unread in ONE batch call. Returns a per-item summary.',
             },
         },
-        required: ['chat_id'],
+        required: [],
     },
     tags: ['write', 'whatsapp', 'messages', 'external_action'],
 }
@@ -493,25 +511,26 @@ export async function executeWhatsAppDeleteMessageForEveryone(args: Record<strin
         return { success: false, error: 'confirmed_by_user must be true after explicit user approval before deleting a WhatsApp message for everyone.' }
     }
 
-    const messageId = stringArg(args, ['message_id', 'messageId', 'id'])
-    if (!messageId) return { success: false, error: 'Missing required parameter: message_id' }
+    const messageIds = collectIds(args, ['message_ids', 'message_id', 'messageId', 'ids', 'id'])
+    if (messageIds.length === 0) return { success: false, error: 'Missing required parameter: message_id' }
 
-    const result = await whatsappDeleteMessageForEveryone(messageId)
-    return { success: true, data: result }
+    if (messageIds.length === 1) return { success: true, data: await whatsappDeleteMessageForEveryone(messageIds[0]) }
+    // WhatsApp Web runs through a single client session — keep concurrency low.
+    return { success: true, data: await runIdBatch(messageIds, id => whatsappDeleteMessageForEveryone(id), { concurrency: 3 }) }
 }
 
 export async function executeWhatsAppMarkChatRead(args: Record<string, unknown>): Promise<ToolResult> {
-    const chatId = stringArg(args, ['chat_id', 'chatId'])
-    if (!chatId) return { success: false, error: 'Missing required parameter: chat_id' }
-    const result = await whatsappMarkChatRead(chatId)
-    return { success: true, data: result }
+    const chatIds = collectIds(args, ['chat_ids', 'chat_id', 'chatId', 'ids', 'id'])
+    if (chatIds.length === 0) return { success: false, error: 'Missing required parameter: chat_id' }
+    if (chatIds.length === 1) return { success: true, data: await whatsappMarkChatRead(chatIds[0]) }
+    return { success: true, data: await runIdBatch(chatIds, id => whatsappMarkChatRead(id), { concurrency: 3 }) }
 }
 
 export async function executeWhatsAppMarkChatUnread(args: Record<string, unknown>): Promise<ToolResult> {
-    const chatId = stringArg(args, ['chat_id', 'chatId'])
-    if (!chatId) return { success: false, error: 'Missing required parameter: chat_id' }
-    const result = await whatsappMarkChatUnread(chatId)
-    return { success: true, data: result }
+    const chatIds = collectIds(args, ['chat_ids', 'chat_id', 'chatId', 'ids', 'id'])
+    if (chatIds.length === 0) return { success: false, error: 'Missing required parameter: chat_id' }
+    if (chatIds.length === 1) return { success: true, data: await whatsappMarkChatUnread(chatIds[0]) }
+    return { success: true, data: await runIdBatch(chatIds, id => whatsappMarkChatUnread(id), { concurrency: 3 }) }
 }
 
 interface ParsedAttachmentInput {

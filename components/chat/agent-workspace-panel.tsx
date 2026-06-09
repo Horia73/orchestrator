@@ -9,6 +9,7 @@ import { TodoBar } from "@/components/todo-bar"
 import { TerminalOutput } from "@/components/tool-call-view"
 import { FULL_HISTORY_SCROLLBACK } from "@/components/tool-call-terminal"
 import { useTrapWheel } from "@/components/use-trap-wheel"
+import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -123,42 +124,6 @@ export function AgentWorkspacePanel({
       </div>
     </div>
   )
-}
-
-// Reveal the panel's scrollbars only while a surface is actively scrolling,
-// then fade them back out — mirrors the chat view's scrollbar behavior.
-// `onScrollCapture` on the panel root catches scroll events from every nested
-// surface (scroll doesn't bubble, but the capture phase reaches the ancestor).
-function useRevealOnScroll() {
-  const [active, setActive] = React.useState(false)
-  const activeRef = React.useRef(false)
-  const fadeTimeoutRef = React.useRef<number | null>(null)
-
-  const reveal = React.useCallback(() => {
-    if (!activeRef.current) {
-      activeRef.current = true
-      setActive(true)
-    }
-    if (fadeTimeoutRef.current !== null) {
-      window.clearTimeout(fadeTimeoutRef.current)
-    }
-    fadeTimeoutRef.current = window.setTimeout(() => {
-      activeRef.current = false
-      fadeTimeoutRef.current = null
-      setActive(false)
-    }, 900)
-  }, [])
-
-  React.useEffect(
-    () => () => {
-      if (fadeTimeoutRef.current !== null) {
-        window.clearTimeout(fadeTimeoutRef.current)
-      }
-    },
-    []
-  )
-
-  return { active, reveal }
 }
 
 function AgentToolResultPreview({

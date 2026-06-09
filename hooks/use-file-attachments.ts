@@ -30,6 +30,17 @@ export function revokeAttachmentPreviewUrls(attachments: AttachedFile[]) {
     for (const attachment of attachments) revokeAttachmentPreviewUrl(attachment)
 }
 
+const ATTACHMENT_TYPES = new Set<Attachment["type"]>([
+    "image",
+    "pdf",
+    "document",
+    "spreadsheet",
+    "presentation",
+    "audio",
+    "video",
+    "other",
+])
+
 function isAttachment(value: unknown): value is Attachment {
     if (!value || typeof value !== "object") return false
     const candidate = value as Record<string, unknown>
@@ -38,14 +49,8 @@ function isAttachment(value: unknown): value is Attachment {
         typeof candidate.filename === "string" &&
         typeof candidate.mimeType === "string" &&
         typeof candidate.size === "number" &&
-        (
-            candidate.type === "image" ||
-            candidate.type === "pdf" ||
-            candidate.type === "document" ||
-            candidate.type === "audio" ||
-            candidate.type === "video" ||
-            candidate.type === "other"
-        )
+        typeof candidate.type === "string" &&
+        ATTACHMENT_TYPES.has(candidate.type as Attachment["type"])
     )
 }
 

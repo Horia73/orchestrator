@@ -116,6 +116,101 @@ async function main(): Promise<void> {
         prompt.includes("search-only subtask"),
       prompt.match(/current public-web research.*/)?.[0]
     )
+
+    // --- terminal one-shot pruning -------------------------------------------
+    const { finishRun, pruneTerminalOneShots, listTaskRuns, recordTaskRun } =
+      await import("@/lib/scheduling/store")
+
+    const day = 24 * hourMs
+    const mkOnce = (title: string) =>
+      createScheduledTask({
+        title,
+        action: { kind: "tool", toolId: "noop", args: {}, summary: "noop" },
+        schedule: { kind: "once", fireAt: base + 1000 * hourMs },
+        enabled: true,
+        createdBy: "user",
+      })
+
+    // done + old → pruned, together with its run history
+    const doneOld = mkOnce("done old")
+    recordTaskRun({
+      taskId: doneOld.id,
+      startedAt: base - 2 * day,
+      status: "ok",
+      trigger: "schedule",
+      surfaced: false,
+      conversationId: null,
+      summary: "done",
+    })
+    finishRun(doneOld.id, {
+      ok: true,
+      isOnce: true,
+      conversationId: null,
+      nowMs: base - 2 * day,
+    })
+
+    // done + recent → kept (inside the 24h window)
+    const doneRecent = mkOnce("done recent")
+    finishRun(doneRecent.id, {
+      ok: true,
+      isOnce: true,
+      conversationId: null,
+      nowMs: base - hourMs,
+    })
+
+    // error linger longer (72h): old → pruned, recent → kept
+    const errOld = mkOnce("error old")
+    finishRun(errOld.id, {
+      ok: false,
+      isOnce: true,
+      conversationId: null,
+      error: "boom",
+      nowMs: base - 4 * day,
+    })
+    const errRecent = mkOnce("error recent")
+    finishRun(errRecent.id, {
+      ok: false,
+      isOnce: true,
+      conversationId: null,
+      error: "boom",
+      nowMs: base - 2 * day,
+    })
+
+    // a still-scheduled one-shot must never be pruned regardless of age
+    const pending = mkOnce("pending")
+
+    const pruned = pruneTerminalOneShots(base)
+    check(
+      "prune removes done one-shot past 24h TTL",
+      getScheduledTask(doneOld.id) === null
+    )
+    check(
+      "prune drops the pruned task's run history too",
+      listTaskRuns(doneOld.id).length === 0
+    )
+    check(
+      "prune keeps a recent done one-shot",
+      getScheduledTask(doneRecent.id) !== null
+    )
+    check(
+      "prune removes errored one-shot past 72h TTL",
+      getScheduledTask(errOld.id) === null
+    )
+    check(
+      "prune keeps an errored one-shot within 72h",
+      getScheduledTask(errRecent.id) !== null
+    )
+    check(
+      "prune never touches a still-scheduled one-shot",
+      getScheduledTask(pending.id) !== null
+    )
+    check(
+      "prune returns exactly the removed ids",
+      pruned.length === 2 &&
+        pruned.includes(doneOld.id) &&
+        pruned.includes(errOld.id),
+      pruned
+    )
   } finally {
     Date.now = realDateNow
   }

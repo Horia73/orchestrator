@@ -5,7 +5,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import type { Exercise, ExerciseGroup, WorkoutArtifact } from "@/lib/workout/schema"
 import { parseWorkoutArtifact } from "@/lib/workout/parser"
-import { useWorkoutSession } from "@/lib/workout/use-workout-session"
+import { useWorkoutSession, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
 
 import { WorkoutErrorCard } from "./workout/workout-error-card"
 import { WorkoutHeader } from "./workout/workout-header"
@@ -69,7 +69,35 @@ function WorkoutView({
     artifactId?: string
     className?: string
 }) {
-    const sessionApi = useWorkoutSession(workout.sessionId, workout)
+    const sessionApi = useWorkoutSession(workout.sessionId, workout, { artifactId })
+    return (
+        <WorkoutCanvas
+            sessionApi={sessionApi}
+            title={title}
+            artifactId={artifactId}
+            className={className}
+        />
+    )
+}
+
+/**
+ * Presentational workout canvas. Takes an already-created session API instead
+ * of creating its own, so the in-surface chat (the `/artifact/[id]` workout
+ * surface) can lift `useWorkoutSession` to the surface level and share the live
+ * session state with the chat's prompt context. In the inline chat path,
+ * `WorkoutView` creates the session and passes it straight through.
+ */
+export function WorkoutCanvas({
+    sessionApi,
+    title,
+    artifactId,
+    className,
+}: {
+    sessionApi: WorkoutSessionApi
+    title: string
+    artifactId?: string
+    className?: string
+}) {
     const renderedWorkout = sessionApi.workout
     const interactive = sessionApi.isActive || sessionApi.isFinished
     const hasFloatingTimer = !!sessionApi.session.activeSet || !!sessionApi.session.rest
@@ -128,13 +156,13 @@ function WorkoutView({
         <>
             <article
                 data-workout
-                data-session-id={workout.sessionId}
+                data-session-id={renderedWorkout.sessionId}
                 className={cn(
                     "flex w-full min-w-0 max-w-full flex-col gap-4 overflow-x-hidden text-foreground",
                     hasFloatingTimer ? "pb-28" : "pb-6",
                     className,
                 )}
-                aria-label={title || workout.title}
+                aria-label={title || renderedWorkout.title}
             >
                 <WorkoutHeader workout={renderedWorkout} />
                 <WorkoutActionBar sessionApi={sessionApi} placement="top" />

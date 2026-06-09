@@ -1353,7 +1353,7 @@ function ShellBody({
           className={cn(
             "pointer-events-none absolute top-0 right-0 bottom-0 z-[70] flex justify-end overflow-hidden transition-[width,opacity,transform] will-change-[width,transform,opacity]",
             sidePanelInFlow &&
-              "xl:relative xl:inset-auto xl:z-auto xl:h-full xl:shrink-0",
+              "xl:relative xl:inset-auto xl:z-[70] xl:h-full xl:shrink-0",
             "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
             sidePanelSlotOpen
               ? "w-[380px] translate-x-0 opacity-100"
