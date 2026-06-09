@@ -42,6 +42,11 @@ ENV NODE_ENV=production \
     WHATSAPP_CHROME_EXECUTABLE_PATH=/usr/bin/chromium \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
 
+RUN groupmod --gid 1002 node \
+  && usermod --uid 1002 --gid 1002 node \
+  && mkdir -p /home/node \
+  && chown -R node:node /home/node
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     ca-certificates \
@@ -49,9 +54,12 @@ RUN apt-get update \
     curl \
     ffmpeg \
     git \
+    g++ \
     fonts-liberation \
     imagemagick \
+    make \
     openbox \
+    pkg-config \
     tini \
     tigervnc-standalone-server \
     xauth \

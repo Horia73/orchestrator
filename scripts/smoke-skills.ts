@@ -204,6 +204,7 @@ async function main() {
   assert.ok(!promptIndex.includes("# PPTX Skill"), "prompt index should not inline SKILL.md")
 
   const dockerfile = fs.readFileSync("Dockerfile", "utf8")
+  const runnerStage = dockerfile.split("FROM node:22-bookworm-slim AS runner")[1] ?? ""
   for (const needle of [
     "pandoc",
     "libreoffice-writer",
@@ -218,6 +219,9 @@ async function main() {
     "pytesseract",
   ]) {
     assert.ok(dockerfile.includes(needle), `Dockerfile should include ${needle}`)
+  }
+  for (const needle of ["usermod --uid 1002", "groupmod --gid 1002", "g++", "make", "pkg-config"]) {
+    assert.ok(runnerStage.includes(needle), `Dockerfile runner stage should include ${needle}`)
   }
 
   const installScript = fs.readFileSync("scripts/install.sh", "utf8")

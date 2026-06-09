@@ -274,7 +274,8 @@ export const homeAssistantLogbookTool: ToolDef = {
 export const homeAssistantErrorLogTool: ToolDef = {
     id: 'HomeAssistantErrorLog',
     name: 'HomeAssistantErrorLog',
-    description: 'Reads the Home Assistant error log tail from GET /api/error_log. Read-only.',
+    description:
+        'Reads the Home Assistant error log tail from documented GET /api/error_log. Read-only. If this Home Assistant instance does not expose that endpoint, returns available=false with a clear message instead of failing the whole integration.',
     input_schema: {
         type: 'object',
         properties: {

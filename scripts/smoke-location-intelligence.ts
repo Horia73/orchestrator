@@ -161,7 +161,7 @@ const points = [
     lng: 23.987654,
     accuracy_m: 10,
     activity: "Automotive",
-    event: "sample",
+    event: "gym_departure",
     speed_kmh_from_previous: 0,
   },
   {
@@ -234,6 +234,7 @@ fs.writeFileSync(
       date: "2026-05-30",
       timezone: "Europe/Bucharest",
       sample_count: 4,
+      gym_detected: false,
       stops: [
         {
           label: "unknown",
@@ -384,6 +385,11 @@ try {
     }
   )
   check(
+    "gym candidate departure dwell overrides stale false day flag",
+    day?.stats.gymDetected === true,
+    { gymDetected: day?.stats.gymDetected }
+  )
+  check(
     "unresolved long automotive day gap becomes inferred stay",
     day?.stops[4]?.label === "Inferred stay",
     { label: day?.stops[4]?.label }
@@ -393,9 +399,13 @@ try {
     day?.observations[4]?.label === "Inferred stay",
     { label: day?.observations[4]?.label }
   )
-  check("short moving day stop uses speed-derived label", day?.stops[6]?.label === "Driving", {
-    label: day?.stops[6]?.label,
-  })
+  check(
+    "short moving day stop uses speed-derived label",
+    day?.stops[6]?.label === "Driving",
+    {
+      label: day?.stops[6]?.label,
+    }
+  )
   check(
     "short moving raw observation uses speed-derived label",
     day?.observations[6]?.label === "Driving",
@@ -420,6 +430,33 @@ try {
       notablePlaces: list.days[0]?.notablePlaces,
     }
   )
+
+  const runbook = fs.readFileSync(
+    path.join(process.cwd(), "lib", "integrations", "runbooks.ts"),
+    "utf-8"
+  )
+  const docs = fs.readFileSync(
+    path.join(process.cwd(), "docs", "location-intelligence.md"),
+    "utf-8"
+  )
+  for (const [label, text] of [
+    ["runbook", runbook],
+    ["docs", docs],
+  ] as const) {
+    check(
+      `${label} requires gym summaries from confirmed state or dwell`,
+      text.includes("confirmed session state") &&
+        text.includes("gym_candidate") &&
+        text.includes("gym_departure"),
+      text.match(/confirmed session state.*gym_departure/)?.[0]
+    )
+    check(
+      `${label} requires daily maintenance before pending adherence`,
+      text.includes("daily maintenance must run before pending adherence") &&
+        text.includes("routine.json"),
+      text.match(/daily maintenance must run before pending adherence.*/)?.[0]
+    )
+  }
 } finally {
   fs.rmSync(stateDir, { recursive: true, force: true })
 }

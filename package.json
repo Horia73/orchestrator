@@ -29,6 +29,8 @@
     "memory:status": "tsx scripts/memory-status.ts",
     "smoke:microscripts": "tsx scripts/smoke-microscripts.ts",
     "smoke:webhooks": "tsx scripts/smoke-webhooks.ts",
+    "smoke:location-intelligence": "tsx scripts/smoke-location-intelligence.ts",
+    "smoke:home-assistant": "tsx scripts/smoke-home-assistant.ts",
     "smoke:maps": "tsx scripts/smoke-maps.ts",
     "smoke:weather": "tsx scripts/smoke-weather.ts",
     "smoke:app-path": "tsx scripts/smoke-app-path.ts",
