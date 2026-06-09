@@ -266,6 +266,29 @@ const WORKSPACE_PATH_MARKER = "/.orchestrator/workspace/"
 const DOWNLOADABLE_WORKSPACE_EXT_RE =
   /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp)(?:[?#].*)?$/i
 
+// iOS standalone PWAs frequently swallow the *first* tap on a `target="_blank"`
+// link — the user has to tap twice for it to open. Driving the open from the
+// click gesture via `window.open` makes a single tap reliable there, and
+// behaves identically to the default on desktop (we bail on modifier/middle
+// clicks so "open in new tab/window" keeps working).
+function handleNewTabLinkClick(
+  event: React.MouseEvent<HTMLAnchorElement>,
+  href: string
+) {
+  if (
+    event.defaultPrevented ||
+    event.button !== 0 ||
+    event.metaKey ||
+    event.ctrlKey ||
+    event.shiftKey ||
+    event.altKey
+  ) {
+    return
+  }
+  event.preventDefault()
+  window.open(href, "_blank", "noopener,noreferrer")
+}
+
 function workspaceDownloadHref(href: string | undefined): string | undefined {
   const raw = href?.trim()
   if (!raw || raw.startsWith("#") || raw.startsWith("?")) return undefined
@@ -347,6 +370,7 @@ const baseComponents: Components = {
           href={trimmed}
           target="_blank"
           rel="noopener noreferrer"
+          onClick={(event) => handleNewTabLinkClick(event, trimmed)}
           className="font-mono text-[13px] break-all text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
         >
           {children}
@@ -383,6 +407,11 @@ const baseComponents: Components = {
         href={resolvedHref}
         target={downloadHref ? undefined : "_blank"}
         rel={downloadHref ? undefined : "noopener noreferrer"}
+        onClick={
+          downloadHref || !resolvedHref
+            ? undefined
+            : (event) => handleNewTabLinkClick(event, resolvedHref)
+        }
         className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
       >
         {children}

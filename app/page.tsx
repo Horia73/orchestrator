@@ -189,11 +189,22 @@ export default function Page() {
   // as a clean fade-out → fade-in instead of a mid-flight reversal/jitter.
   const viewVisible = useFadeGate(rawViewVisible, VIEW_FADE_MS)
 
+  // Hold the first-load splash until the view is genuinely ready (initial
+  // conversation messages loaded + scroll-restored + faded in) rather than just
+  // until the conversation *list* loaded. Otherwise the splash lifts while the
+  // active chat is still populating/settling, and the user watches the text
+  // shift into place. Sticky once revealed, so later conversation switches never
+  // re-show the splash.
+  const [appRevealed, setAppRevealed] = React.useState(false)
+  React.useEffect(() => {
+    if (viewVisible) setAppRevealed(true)
+  }, [viewVisible])
+
   useDocumentViewportLock()
 
   return (
     <>
-      <AppLoadingSplash loading={state.isLoading} />
+      <AppLoadingSplash loading={!appRevealed} />
       <AppSidebar />
       <SidebarInset className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
         {viewReady && (

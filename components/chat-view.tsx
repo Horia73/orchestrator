@@ -65,6 +65,7 @@ import {
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
+import { useServerConnection } from "@/hooks/use-server-connection"
 import { cn } from "@/lib/utils"
 import type { AgentCallReasoningEntry, Attachment } from "@/lib/types"
 
@@ -189,6 +190,9 @@ export function ChatView() {
     state.streamingConversationId === conversationId
   )
   const isStreamingThisConversationRef = React.useRef(false)
+  // Real device→server reachability while a response is streaming — drives the
+  // "Reconnecting…" hint independently of the stream-recovery state machine.
+  const isReconnecting = useServerConnection(isStreamingThisConversation)
   const messageCount = activeConversation?.messages.length ?? 0
   const messagePage = conversationId
     ? state.conversationMessagePages[conversationId]
@@ -1051,6 +1055,16 @@ export function ChatView() {
   const refreshPendingMessageTopAnchor = React.useCallback(() => {
     const messageId = messageTopAnchorMessageIdRef.current
     if (!messageId) return false
+    // The smooth scroll-to-top is already in flight (startedAt is stamped the
+    // moment the animation fires and cleared on release). Re-preparing the tail
+    // spacer or re-scheduling now mutates layout mid-animation, which iOS Safari
+    // resolves by abandoning the smooth scroll and snapping to the end — the
+    // "sometimes it glides, sometimes it jumps" race on send, since whether a
+    // ResizeObserver / keyboard-inset tick lands inside the ~420ms window is
+    // timing-dependent. Keep the anchor guard truthy so those callers still skip
+    // their instant scrollToBottom fallback, but leave the running animation
+    // alone; the release pass snaps to the exact target once it settles.
+    if (messageTopAnchorStartedAtRef.current > 0) return true
     if (!prepareTailSpacerForSubmittedMessage(messageId)) return false
     scheduleMessageTopAnchor(messageId)
     return true
@@ -1092,10 +1106,27 @@ export function ChatView() {
     const element = scrollContainerRef.current
     if (!element) return
 
+    // A genuine user scroll gesture (wheel/touch) means the user has taken
+    // control of the scroll position. Always clear the programmatic-scroll lock
+    // so the scroll handler can re-evaluate the scroll-to-bottom button. Without
+    // this, if `ignoreSyncRef` was left set by a prior programmatic scroll /
+    // restore (the `cancelMessageTopAnchor` path only clears it when a send
+    // anchor is pending), the button could stay hidden no matter how far the
+    // user scrolls up.
+    const markUserScrollIntent = () => {
+      if (!ignoreSyncRef.current) return
+      ignoreSyncRef.current = false
+      syncScrollState()
+    }
+
     syncScrollState()
     element.addEventListener("scroll", syncScrollState, { passive: true })
     element.addEventListener("wheel", cancelMessageTopAnchor, { passive: true })
+    element.addEventListener("wheel", markUserScrollIntent, { passive: true })
     element.addEventListener("touchmove", cancelMessageTopAnchor, {
+      passive: true,
+    })
+    element.addEventListener("touchmove", markUserScrollIntent, {
       passive: true,
     })
 
@@ -1109,7 +1140,9 @@ export function ChatView() {
     return () => {
       element.removeEventListener("scroll", syncScrollState)
       element.removeEventListener("wheel", cancelMessageTopAnchor)
+      element.removeEventListener("wheel", markUserScrollIntent)
       element.removeEventListener("touchmove", cancelMessageTopAnchor)
+      element.removeEventListener("touchmove", markUserScrollIntent)
       window.removeEventListener("stop-chat-autoscroll", stopAutoscroll)
     }
   }, [cancelMessageTopAnchor, syncScrollState, conversationId])
@@ -1198,7 +1231,11 @@ export function ChatView() {
     syncScrollState,
   ])
 
-  React.useEffect(() => {
+  // Measure synchronously before paint so the scroll-to-bottom button is placed
+  // against the real input height from the first frame — otherwise it briefly
+  // uses the stale default offset and can overlap the input until the observer
+  // catches up.
+  React.useLayoutEffect(() => {
     const element = inputContainerRef.current
     if (!element) return
 
@@ -2675,7 +2712,14 @@ export function ChatView() {
                 : "pb-[calc(0.5rem+env(safe-area-inset-bottom))] md:pb-3"
             )}
             style={{
-              right: isMobile ? 0 : 14,
+              // Inset the bottom input overlay from the right edge on every
+              // viewport so its opaque bg never paints over the chat scrollbar.
+              // Previously mobile used 0 (full-bleed), which buried the overlay
+              // scrollbar behind the input block once scrolled to the bottom.
+              // The cleared strip is empty scroll-padding over a background-
+              // colored fill, so the gap reads as bg-on-bg (invisible) while the
+              // scrollbar shows through it.
+              right: 14,
               transform:
                 keyboardInset > 0
                   ? `translate3d(0, -${keyboardInset}px, 0)`
@@ -2711,13 +2755,7 @@ export function ChatView() {
           )}
 
           <ChatConnectionPill
-            status={
-              isStreamingThisConversation &&
-              (state.streamingStatus === "recovering" ||
-                state.streamingStatus === "offline")
-                ? state.streamingStatus
-                : null
-            }
+            reconnecting={isReconnecting}
             style={{
               bottom:
                 keyboardInset > 0
