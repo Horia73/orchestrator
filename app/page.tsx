@@ -14,6 +14,11 @@ import { publishChatScrollTarget } from "@/lib/chat-scroll-target"
 import { cn } from "@/lib/utils"
 import type { Conversation } from "@/lib/types"
 
+// Keep this in sync with the `transition-opacity duration-*` class on the view
+// shell below. It's both the CSS fade length and the minimum time the shell is
+// held hidden during a switch (see useFadeGate).
+const VIEW_FADE_MS = 150
+
 function useViewFadeIn(viewKey: string, enabled: boolean) {
   const [enteredViewKey, setEnteredViewKey] = React.useState<string | null>(
     null
@@ -34,6 +39,48 @@ function useViewFadeIn(viewKey: string, enabled: boolean) {
   }, [enabled, viewKey])
 
   return enabled && enteredViewKey === viewKey
+}
+
+// Hiding is immediate (the fade-out starts the instant a switch begins), but
+// returning to visible is held for at least `minHiddenMs`. On a fast
+// conversation switch the raw visibility would flip back to true before the
+// opacity transition reached 0, reversing the fade mid-flight and swapping the
+// new chat in at a partial opacity — which reads as a jitter/flicker. The floor
+// lets the fade-out complete (and the new chat swap in invisibly) before the
+// fade-in, turning the blip into a deliberate fade-out → fade-in. It never
+// shortens anything: a slow chat load already exceeds the floor, so the hold is
+// absorbed and the fade-in fires as soon as the chat is ready.
+function useFadeGate(target: boolean, minHiddenMs: number) {
+  const [canShow, setCanShow] = React.useState(true)
+  const hiddenAtRef = React.useRef<number | null>(null)
+
+  React.useEffect(() => {
+    if (!target) {
+      if (hiddenAtRef.current == null) hiddenAtRef.current = performance.now()
+      setCanShow(false)
+      return
+    }
+
+    if (hiddenAtRef.current == null) {
+      setCanShow(true)
+      return
+    }
+
+    const remaining = minHiddenMs - (performance.now() - hiddenAtRef.current)
+    if (remaining <= 0) {
+      hiddenAtRef.current = null
+      setCanShow(true)
+      return
+    }
+
+    const timer = window.setTimeout(() => {
+      hiddenAtRef.current = null
+      setCanShow(true)
+    }, remaining)
+    return () => window.clearTimeout(timer)
+  }, [target, minHiddenMs])
+
+  return target && canShow
 }
 
 export default function Page() {
@@ -133,11 +180,14 @@ export default function Page() {
     state.activeConversationId != null &&
     (activeConversationStatus === "summary" ||
       activeConversationStatus === "loading")
-  const viewVisible =
+  const rawViewVisible =
     viewReady &&
     viewEntered &&
     !isSwitchingConversation &&
     !activeConversationPending
+  // Hold the shell hidden for at least one fade length so a fast switch reads
+  // as a clean fade-out → fade-in instead of a mid-flight reversal/jitter.
+  const viewVisible = useFadeGate(rawViewVisible, VIEW_FADE_MS)
 
   useDocumentViewportLock()
 
