@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { Calendar, ChevronDown, ChevronUp, Clock, ListChecks, Trophy, Weight } from "lucide-react"
+import { Calendar, ChevronDown, ChevronUp, Clock, ListChecks, Timer, Trophy, Weight } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatDuration } from "@/lib/workout/format"
@@ -23,6 +23,15 @@ export interface SessionSummaryRow {
     prCount: number
     exerciseCount: number
     exerciseNames: string[]
+    /** Present only on sessions logged after the rest-analytics change. */
+    restSummary?: {
+        totalRestSec: number
+        avgRestSec?: number
+        plannedAvgRestSec?: number
+        skippedCount: number
+    }
+    /** Completed sets per targeted muscle group; feeds the muscle-balance view. */
+    muscleBreakdown?: Array<{ group: string; sets: number }>
 }
 
 /**
@@ -112,6 +121,16 @@ function SessionRow({ session }: { session: SessionSummaryRow }) {
                         <Stat icon={<ListChecks className="size-3" />} value={`${session.totalSetsCompleted}/${session.totalSetsPlanned} sets`} />
                         {session.totalVolumeKg > 0 ? (
                             <Stat icon={<Weight className="size-3" />} value={`${Math.round(session.totalVolumeKg).toLocaleString()} ${session.units}`} />
+                        ) : null}
+                        {session.restSummary?.avgRestSec ? (
+                            <Stat
+                                icon={<Timer className="size-3" />}
+                                value={`${formatDuration(Math.round(session.restSummary.avgRestSec))} rest${
+                                    session.restSummary.skippedCount
+                                        ? ` · ${session.restSummary.skippedCount} skip`
+                                        : ''
+                                }`}
+                            />
                         ) : null}
                         {session.prCount > 0 ? (
                             <Stat

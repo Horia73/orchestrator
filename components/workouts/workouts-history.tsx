@@ -12,6 +12,9 @@ import {
     ExerciseLeaderboard,
     type ExerciseSummary,
 } from "@/components/workouts/exercise-leaderboard"
+import { MuscleBalance } from "@/components/workouts/muscle-balance"
+import { TrainingCalendar } from "@/components/workouts/training-calendar"
+import { Sparkline } from "@/components/workouts/sparkline"
 
 /**
  * Workouts history dashboard — the visual the Library page mounts under
@@ -88,6 +91,12 @@ export function WorkoutsHistory({
                 </div>
             ) : null}
 
+            {sessions === null ? (
+                <div className="h-32 animate-pulse rounded-xl border border-border/40 bg-muted/30" />
+            ) : (
+                <TrainingCalendar sessions={sessions} />
+            )}
+
             {sessions === null || exercises === null || bodyMetrics === null ? (
                 <OverviewSkeleton />
             ) : (
@@ -97,6 +106,12 @@ export function WorkoutsHistory({
                     bodyMetrics={bodyMetrics}
                     onMetricsSaved={() => void load()}
                 />
+            )}
+
+            {sessions === null ? (
+                <div className="h-40 animate-pulse rounded-xl border border-border/40 bg-muted/30" />
+            ) : (
+                <MuscleBalance sessions={sessions} />
             )}
 
             <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
@@ -224,6 +239,19 @@ function BodyMetricsCard({
     const [open, setOpen] = React.useState(false)
     const [saving, setSaving] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
+
+    // Oldest→newest weight series for the trend sparkline. `entries` arrives
+    // newest-first from the API.
+    const weightSeries = React.useMemo(
+        () => payload.entries
+            .map((e) => e.weightKg)
+            .filter((w): w is number => typeof w === 'number' && Number.isFinite(w))
+            .reverse(),
+        [payload.entries],
+    )
+    const weightDelta = weightSeries.length >= 2
+        ? Math.round((weightSeries[weightSeries.length - 1] - weightSeries[0]) * 10) / 10
+        : null
     const [draft, setDraft] = React.useState(() => ({
         heightCm: latest?.heightCm?.toString() ?? '',
         weightKg: latest?.weightKg?.toString() ?? '',
@@ -290,6 +318,33 @@ function BodyMetricsCard({
                 <MetricLine icon={<Weight className="size-3" />} label="Body fat" value={latest?.bodyFatPct ? `${latest.bodyFatPct}%` : '—'} />
                 <MetricLine icon={<Activity className="size-3" />} label="Muscle" value={latest?.musclePct ? `${latest.musclePct}%` : '—'} />
             </div>
+
+            {weightSeries.length >= 2 ? (
+                <div className="mt-2 flex items-center justify-between gap-2 border-t border-border/40 pt-2">
+                    <Sparkline
+                        values={weightSeries}
+                        width={104}
+                        height={26}
+                        strokeClass="text-foreground/70"
+                        ariaLabel="Weight trend"
+                    />
+                    {weightDelta !== null ? (
+                        <span
+                            className={cn(
+                                "shrink-0 text-[10.5px] font-medium tabular-nums",
+                                weightDelta > 0
+                                    ? "text-amber-600 dark:text-amber-400"
+                                    : weightDelta < 0
+                                        ? "text-emerald-600 dark:text-emerald-400"
+                                        : "text-muted-foreground",
+                            )}
+                            title={`Across ${weightSeries.length} logged entries`}
+                        >
+                            {weightDelta > 0 ? '+' : ''}{weightDelta} kg
+                        </span>
+                    ) : null}
+                </div>
+            ) : null}
 
             {open ? (
                 <div className="mt-2 border-t border-border/45 pt-2">
