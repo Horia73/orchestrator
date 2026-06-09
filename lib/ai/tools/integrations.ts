@@ -7,7 +7,7 @@ import {
 import { getIntegrationManifest } from '@/lib/integrations/manifest'
 import { getSubsystemManifest } from '@/lib/integrations/subsystem-manifest'
 import { refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
-import { activateIntegrations } from '@/lib/integrations/activation-store'
+import { activateIntegrations, getActivatedIntegrations } from '@/lib/integrations/activation-store'
 import { isAdminProfileId } from '@/lib/profiles/context'
 
 // ---------------------------------------------------------------------------
@@ -107,7 +107,20 @@ export async function executeActivateIntegrationTools(
     const skipped: string[] = []
     const report: string[] = []
 
+    // Activation persists for the whole conversation. If a capability is already
+    // active, re-activating it just re-dumps its (often large) tool descriptor
+    // into context for no gain — return a compact pointer instead so repeated
+    // calls stay cheap.
+    const alreadyActive = getActivatedIntegrations(conversationId)
+    const capabilityLabel = (id: string): string =>
+        (isSubsystemId(id) ? getSubsystemManifest(id)?.label : getIntegrationManifest(id)?.label) ?? id
+
     for (const id of ids) {
+        if (alreadyActive.has(id)) {
+            activatedNow.push(id)
+            report.push(`${capabilityLabel(id)} is already active for this conversation — its tools remain available; no need to re-activate. If a specific schema is not directly visible this turn, call RunActivatedIntegrationTool with its tool_id.`)
+            continue
+        }
         if (isSubsystemId(id)) {
             const subsystem = getSubsystemManifest(id)
             if (!subsystem) continue
