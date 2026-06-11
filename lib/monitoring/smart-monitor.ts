@@ -99,8 +99,11 @@ function formatLocalDateTime(ms: number, timezone: string): string {
 
 function buildRuntimeTimeBlock(now: number, watches: Array<{ notify: { quietHours?: { timezone: string } } }>): string[] {
     const zones = new Set<string>()
-    const configured = getConfig().timezone
+    const config = getConfig()
+    const configured = config.timezone
     if (configured && isValidTimezone(configured)) zones.add(configured)
+    const globalQuietTimezone = config.smartMonitor?.quietHours?.timezone
+    if (globalQuietTimezone && isValidTimezone(globalQuietTimezone)) zones.add(globalQuietTimezone)
     for (const watch of watches) {
         const tz = watch.notify.quietHours?.timezone
         if (tz && isValidTimezone(tz)) zones.add(tz)
