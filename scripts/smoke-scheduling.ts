@@ -8,6 +8,8 @@ import os from "os"
 import path from "path"
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "scheduling-smoke-"))
+const originalStateDir = process.env.ORCHESTRATOR_STATE_DIR
+process.env.ORCHESTRATOR_STATE_DIR = tmpRoot
 process.chdir(tmpRoot)
 
 async function main(): Promise<void> {
@@ -213,6 +215,8 @@ async function main(): Promise<void> {
     )
   } finally {
     Date.now = realDateNow
+    if (originalStateDir === undefined) delete process.env.ORCHESTRATOR_STATE_DIR
+    else process.env.ORCHESTRATOR_STATE_DIR = originalStateDir
   }
 
   if (failures > 0) {
