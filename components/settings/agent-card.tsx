@@ -494,9 +494,6 @@ function BrowserAgentCard({
 
       <CardContent>
         <div className="flex flex-col gap-4">
-          <BrowserBackendControls
-            status={data.config.browserAgentBackend}
-          />
           <BrowserModelSlotControls
             title="Light model"
             slot="light"
@@ -555,29 +552,6 @@ function BrowserAgentCard({
         )}
       </CardContent>
     </Card>
-  )
-}
-
-function BrowserBackendControls({
-  status,
-}: {
-  status: SettingsBootstrap["config"]["browserAgentBackend"]
-}) {
-  return (
-    <Field label="Browser backend" hint="Patchright">
-      <div className="flex flex-col gap-2">
-        <div className="rounded-lg bg-muted p-0.5" title={status.reason}>
-          <div className="inline-flex h-7 w-full min-w-0 items-center justify-center gap-1 rounded-md bg-background px-1.5 text-[11.5px] font-medium text-foreground shadow-sm">
-            <Check className="size-3 shrink-0" />
-            <span className="min-w-0 truncate">Patchright</span>
-          </div>
-        </div>
-
-        <p className="truncate text-[11.5px] text-foreground/50" title={status.reason}>
-          {status.reason}
-        </p>
-      </div>
-    </Field>
   )
 }
 

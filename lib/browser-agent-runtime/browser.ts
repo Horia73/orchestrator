@@ -37,6 +37,8 @@ import type {
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
+    BrowserPageSettleOptions,
+    BrowserPageSettleResult,
     BrowserPageSession,
     BrowserPageSessionCapabilities,
     BrowserPageErrorEntry,
@@ -94,6 +96,11 @@ interface BrowserFrameMetrics {
     pageHeight: number;
     scrollX: number;
     scrollY: number;
+}
+
+interface BrowserPageSettleSignature extends BrowserFrameMetrics {
+    url: string;
+    readyState: string;
 }
 
 const DISPLAY_AUTOMATION_COMMANDS = ['import', 'xdotool'] as const;
@@ -872,6 +879,99 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         });
     };
 
+    const getPageSettleSignature = async (activePage: Page): Promise<BrowserPageSettleSignature> => {
+        return activePage.evaluate(() => {
+            const doc = document.documentElement;
+            const body = document.body;
+
+            const pageWidth = Math.max(
+                window.innerWidth,
+                doc?.scrollWidth || 0,
+                doc?.clientWidth || 0,
+                body?.scrollWidth || 0,
+                body?.clientWidth || 0,
+            );
+            const pageHeight = Math.max(
+                window.innerHeight,
+                doc?.scrollHeight || 0,
+                doc?.clientHeight || 0,
+                body?.scrollHeight || 0,
+                body?.clientHeight || 0,
+            );
+
+            return {
+                url: window.location.href,
+                readyState: document.readyState,
+                viewportWidth: window.innerWidth,
+                viewportHeight: window.innerHeight,
+                pageWidth,
+                pageHeight,
+                scrollX: window.scrollX,
+                scrollY: window.scrollY,
+            };
+        });
+    };
+
+    const pageSettleKey = (signature: BrowserPageSettleSignature): string => [
+        signature.url,
+        signature.readyState,
+        signature.viewportWidth,
+        signature.viewportHeight,
+        signature.pageWidth,
+        signature.pageHeight,
+        signature.scrollX,
+        signature.scrollY,
+    ].join('|');
+
+    const waitForPageSettled = async (
+        session: BrowserSessionState,
+        options: BrowserPageSettleOptions = {},
+    ): Promise<BrowserPageSettleResult> => {
+        const timeoutMs = Math.max(0, Math.floor(options.timeoutMs ?? 1500));
+        const stableMs = Math.max(0, Math.floor(options.stableMs ?? 350));
+        const pollMs = Math.max(50, Math.floor(options.pollMs ?? 100));
+        const startedAt = Date.now();
+
+        let activePage: Page;
+        try {
+            activePage = await ensureActivePage(session);
+        } catch {
+            return { settled: false, elapsedMs: Date.now() - startedAt, reason: 'error' };
+        }
+
+        let lastKey = '';
+        let stableSince = 0;
+
+        while (Date.now() - startedAt <= timeoutMs) {
+            let signature: BrowserPageSettleSignature;
+            try {
+                signature = await getPageSettleSignature(activePage);
+            } catch {
+                return { settled: false, elapsedMs: Date.now() - startedAt, reason: 'error' };
+            }
+
+            const ready = signature.readyState !== 'loading';
+            const key = pageSettleKey(signature);
+            const now = Date.now();
+
+            if (ready && key === lastKey) {
+                stableSince = stableSince || now;
+                if (now - stableSince >= stableMs) {
+                    return { settled: true, elapsedMs: now - startedAt, reason: 'stable' };
+                }
+            } else {
+                lastKey = key;
+                stableSince = ready ? now : 0;
+            }
+
+            const remainingMs = timeoutMs - (Date.now() - startedAt);
+            if (remainingMs <= 0) break;
+            await sleep(Math.min(pollMs, remainingMs));
+        }
+
+        return { settled: false, elapsedMs: Date.now() - startedAt, reason: 'timeout' };
+    };
+
     const withViewportOverlay = async <T>(activePage: Page, work: () => Promise<T>): Promise<T> => {
         const overlayId = `__ai_browser_agent_viewport_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`;
 
@@ -1222,6 +1322,69 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
         }
     };
 
+    const drawPageClickMarker = async (
+        page: Page,
+        point: { x: number; y: number },
+    ): Promise<boolean> => {
+        try {
+            return await page.evaluate(({ x, y }) => {
+                try {
+                    const markerSize = 24;
+                    const div = document.createElement('div');
+                    div.style.position = 'fixed';
+                    div.style.left = `${x - markerSize / 2}px`;
+                    div.style.top = `${y - markerSize / 2}px`;
+                    div.style.width = `${markerSize}px`;
+                    div.style.height = `${markerSize}px`;
+                    div.style.borderRadius = '50%';
+                    div.style.backgroundColor = 'rgba(255, 0, 0, 0.72)';
+                    div.style.border = '3px solid white';
+                    div.style.boxShadow = '0 0 12px rgba(0,0,0,0.55)';
+                    div.style.zIndex = '2147483647';
+                    div.style.pointerEvents = 'none';
+                    div.id = `ai-click-${Date.now()}`;
+
+                    const parent = document.fullscreenElement || document.documentElement || document.body;
+                    if (!parent) return false;
+                    parent.appendChild(div);
+
+                    setTimeout(() => div.remove(), 2000);
+                    return true;
+                } catch {
+                    return false;
+                }
+            }, point);
+        } catch {
+            return false;
+        }
+    };
+
+    const drawDisplayClickMarker = async (
+        session: BrowserSessionState,
+        x: number,
+        y: number,
+    ): Promise<boolean> => {
+        try {
+            const activePage = await ensureActivePage(session);
+            const pagePoint = await activePage.evaluate(({ displayX, displayY }) => {
+                const sideChrome = Math.max(0, Math.round((window.outerWidth - window.innerWidth) / 2));
+                const topChrome = Math.max(0, Math.round(window.outerHeight - window.innerHeight - sideChrome));
+                const pageX = Math.round(displayX - window.screenX - sideChrome);
+                const pageY = Math.round(displayY - window.screenY - topChrome);
+                return {
+                    x: pageX,
+                    y: pageY,
+                    visible: pageX >= 0 && pageY >= 0 && pageX < window.innerWidth && pageY < window.innerHeight,
+                };
+            }, { displayX: x, displayY: y });
+
+            if (!pagePoint.visible) return false;
+            return await drawPageClickMarker(activePage, pagePoint);
+        } catch {
+            return false;
+        }
+    };
+
     const clickDisplayCoordinate = async (
         session: BrowserSessionState,
         x: number,
@@ -1235,6 +1398,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             log(`🖱️ Display click at ${safeX}, ${safeY} (Count: ${repeat})`);
             await xdotool(['mousemove', String(safeX), String(safeY)]);
             session.lastMousePosition = { x: safeX, y: safeY };
+            if (await drawDisplayClickMarker(session, safeX, safeY)) {
+                await sleep(120);
+            }
             for (let i = 0; i < repeat; i++) {
                 await xdotool(['mousedown', '1']);
                 await sleep(45);
@@ -1553,36 +1719,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
                     await sleep(12 + Math.random() * 16);
 
-                    // Draw the marker before the click so it's on screen at the
-                    // moment of the click, not after the page has already reacted.
-                    // pointerEvents:none keeps it from intercepting the click.
-                    try {
-                        await activePage.evaluate(({ x, y }) => {
-                            try {
-                                const div = document.createElement('div');
-                                div.style.position = 'fixed';
-                                div.style.left = `${x - 10}px`;
-                                div.style.top = `${y - 10}px`;
-                                div.style.width = '20px';
-                                div.style.height = '20px';
-                                div.style.borderRadius = '50%';
-                                div.style.backgroundColor = 'rgba(255, 0, 0, 0.7)';
-                                div.style.border = '3px solid white';
-                                div.style.boxShadow = '0 0 10px rgba(0,0,0,0.5)';
-                                div.style.zIndex = '2147483647';
-                                div.style.pointerEvents = 'none';
-                                div.id = `ai-click-${Date.now()}`;
-
-                                const parent = document.fullscreenElement || document.documentElement || document.body;
-                                if (parent) parent.appendChild(div);
-
-                                setTimeout(() => div.remove(), 2000);
-                            } catch {
-                                // Ignore internal DOM errors
-                            }
-                        }, { x: safeX, y: safeY });
-                    } catch {
-                        // Page not ready (e.g. mid-navigation) — skip the marker.
+                    // Draw the marker before the click and leave a short beat so
+                    // it is visible in the live view before the page reacts.
+                    if (await drawPageClickMarker(activePage, { x: safeX, y: safeY })) {
+                        await sleep(120);
                     }
 
                     if (count === 2) {
@@ -2178,6 +2318,10 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
             async waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]> {
                 await waitForSessionDownloads(session, timeoutMs, options);
                 return session.downloads.map((download) => cloneDownload(download));
+            },
+
+            waitForPageSettled(options?: BrowserPageSettleOptions): Promise<BrowserPageSettleResult> {
+                return waitForPageSettled(session, options);
             },
 
             getDiagnostics(): BrowserDiagnosticsSnapshot {

@@ -59,10 +59,12 @@ export class BrowserProvider implements AIProvider {
                     ? `Browser video (${Math.round(capture.durationMs / 1000)}s)`
                     : 'Browser screenshot'
             )
-            callbacks.onContent(`${label}: ${formatAssetReference(asset)}\n`)
+            const assetReference = formatAssetReference(asset)
+            callbacks.onContent(`${label}: ${assetReference}\n`)
             const message = `Saved ${label.toLowerCase()} (${asset.attachment.filename}).`
             recordStatus(message)
             callbacks.onThinking(`${message}\n`)
+            callbacks.onThinking(`${label}: ${assetReference}\n`)
             return asset
         }
         const sessionManager = getBrowserSessionManager()
@@ -222,7 +224,7 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
         },
         runtime: {
             ...DEFAULT_AGENT_CONFIG.runtime,
-            actionSettleDelayMs: 1000,
+            actionSettleDelayMs: 1200,
         },
         llm: {
             provider: lightProvider,

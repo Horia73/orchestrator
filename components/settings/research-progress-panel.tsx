@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { AlertCircle, Bot, CheckCircle2, CircleDotDashed, FileSearch, Loader2, RefreshCw, X } from "lucide-react"
+import { AlertCircle, Bot, CheckCircle2, CircleDotDashed, FileSearch, Loader2, RefreshCw, Search, Square, X } from "lucide-react"
 
 import { StreamingBubble } from "@/components/message-bubble"
 import { appendBoundedToolDelta } from "@/lib/ai/reasoning-limits"
@@ -13,9 +13,18 @@ import type { ModelResearchClientEvent } from "@/components/settings/use-setting
 interface ResearchProgressPanelProps {
   events: ModelResearchClientEvent[]
   researching: boolean
-  statusOnly?: boolean
   modelStatuses?: CurrentModelResearchStatus[]
-  onCollapse: () => void
+  /** Count of active models with incomplete metadata — drives the Start button. */
+  researchableCount?: number
+  /** Whether a usable provider + ready researcher exists (gates Start). */
+  canResearch?: boolean
+  /** Max concurrent model researchers, shown on the running Start/Stop affordance. */
+  concurrency?: number
+  /** Kick off a run against every incomplete model. */
+  onStartAll?: () => void
+  /** Abort the in-flight run. */
+  onStop?: () => void
+  onClose: () => void
   onClear: () => void
   onResearchModel?: (providerId: string, modelId: string) => void
 }
@@ -69,12 +78,12 @@ interface ResearchTimeline {
   activeRun?: ResearchRun
 }
 
-export function ResearchProgressPanel({ events, researching, statusOnly = false, modelStatuses = [], onCollapse, onClear, onResearchModel }: ResearchProgressPanelProps) {
+export function ResearchProgressPanel({ events, researching, modelStatuses = [], researchableCount = 0, canResearch = true, concurrency = 6, onStartAll, onStop, onClose, onClear, onResearchModel }: ResearchProgressPanelProps) {
   const timeline = React.useMemo(() => buildResearchTimeline(events), [events])
   const [selectedKey, setSelectedKey] = React.useState<string | null>(null)
   const [selectedStatusKey, setSelectedStatusKey] = React.useState<string | null>(null)
   const [now, setNow] = React.useState(() => Date.now())
-  const hasRunTimeline = !statusOnly && (researching || events.length > 0 || timeline.runs.length > 0)
+  const hasRunTimeline = researching || events.length > 0 || timeline.runs.length > 0
   const statusSummary = React.useMemo(() => summarizeModelStatuses(modelStatuses), [modelStatuses])
 
   React.useEffect(() => {
@@ -160,7 +169,7 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
 
   return (
     <section className="overflow-hidden rounded-xl border border-border/70 bg-card">
-      <div className="flex items-start justify-between gap-3 border-b border-border/60 px-4 py-3">
+      <div className="flex flex-col gap-2 border-b border-border/60 px-3 py-2.5 sm:flex-row sm:items-start sm:justify-between sm:gap-3 sm:px-4 sm:py-3">
         <div className="min-w-0">
           <div className="flex items-center gap-2">
             {researching ? (
@@ -178,23 +187,65 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
             )}
             <h3 className="text-[13px] font-semibold text-foreground/80">{title}</h3>
           </div>
-          <p className="mt-0.5 truncate text-[12px] text-foreground/50">{headline}</p>
+          <p className="mt-0.5 line-clamp-2 text-[12px] text-foreground/50 sm:truncate">{headline}</p>
+          {!hasRunTimeline && !researching && (
+            <p className="mt-0.5 text-[11.5px] text-foreground/40">
+              {researchableCount > 0
+                ? `Review the ${researchableCount} incomplete model${researchableCount === 1 ? "" : "s"} below, then start research.`
+                : "Pick a model to review its metadata, or re-research one to refresh it."}
+            </p>
+          )}
         </div>
-        <div className="flex shrink-0 items-center gap-1">
+        <div className="flex shrink-0 flex-wrap items-center gap-1.5">
+          {researching ? (
+            onStop && (
+              <button
+                type="button"
+                onClick={onStop}
+                className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 text-[12.5px] font-medium whitespace-nowrap text-destructive transition-colors hover:bg-destructive/10"
+                title={`Stop the run (up to ${concurrency} at once)`}
+              >
+                <Square className="size-3.5 fill-current" />
+                Stop
+              </button>
+            )
+          ) : (
+            onStartAll &&
+            researchableCount > 0 && (
+              <button
+                type="button"
+                onClick={onStartAll}
+                disabled={!canResearch}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-lg bg-foreground px-3 text-[12.5px] font-medium whitespace-nowrap text-background transition-colors hover:bg-foreground/90",
+                  !canResearch && "cursor-not-allowed opacity-50"
+                )}
+                title={
+                  canResearch
+                    ? `Research all ${researchableCount} incomplete model${researchableCount === 1 ? "" : "s"} from official docs`
+                    : "Connect a model provider before running research"
+                }
+              >
+                <Search className="size-3.5" />
+                Start research ({researchableCount})
+              </button>
+            )
+          )}
           {!researching && events.length > 0 && (
             <button
               type="button"
               onClick={onClear}
-              className="inline-flex h-7 items-center rounded-md px-2 text-[12px] font-medium text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
+              className="inline-flex h-8 items-center rounded-lg px-2.5 text-[12px] font-medium text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
             >
               Clear
             </button>
           )}
           <button
             type="button"
-            onClick={onCollapse}
-            className="inline-flex size-7 shrink-0 items-center justify-center rounded-md text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
-            aria-label="Hide research preview"
+            onClick={onClose}
+            className="inline-flex size-8 shrink-0 items-center justify-center rounded-lg text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
+            aria-label="Close research panel"
+            title="Close"
           >
             <X className="size-3.5" />
           </button>
@@ -202,7 +253,7 @@ export function ResearchProgressPanel({ events, researching, statusOnly = false,
       </div>
 
       <div className="grid min-h-0 lg:h-[min(76vh,780px)] lg:min-h-[520px] lg:grid-cols-[230px_minmax(0,1fr)]">
-        <div className="max-h-48 overflow-auto border-b border-border/60 bg-muted/15 p-2 lg:max-h-none lg:border-r lg:border-b-0">
+        <div className="max-h-56 overflow-auto border-b border-border/60 bg-muted/15 p-2 lg:max-h-none lg:border-r lg:border-b-0">
           {!hasRunTimeline && modelStatuses.length > 0 ? (
             <div className="space-y-1">
               {modelStatuses.map(model => {

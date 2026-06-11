@@ -145,6 +145,8 @@ export interface AgentConfig {
   status?: AgentStatus
   /** Settings surfacing tier. Unset means `primary` (user-facing roster). */
   tier?: AgentTier
+  /** Internal runtime specialization for one-shot calls that must not be registry-visible. */
+  runtimeRole?: "artifact_repair"
   /** System prompt builder — receives runtime context, returns the prompt string. Optional for non-text agents. */
   buildPrompt?: (ctx: PromptContext) => string
   /** Provider id. Falls back to runtime/global settings if unset. */

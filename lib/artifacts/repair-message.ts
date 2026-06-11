@@ -17,7 +17,7 @@ import { isStrictArtifactType, validateArtifactContent } from './validation'
 //
 // The model round-trip is injected (`generate`) so this module stays free of
 // any agent-runner dependency and is unit-testable; callers bind it to the
-// Artifact Repair agent via lib/ai/agents/repair-generate.ts.
+// artifact's source agent runtime via lib/ai/agents/repair-generate.ts.
 // ---------------------------------------------------------------------------
 
 export interface RepairMessageArtifactsArgs {
@@ -86,7 +86,7 @@ function collectArtifactBlocks(content: string): ParsedArtifactBlock[] {
 
 /**
  * Validate every strict-schema artifact block in `content` and repair the
- * invalid ones with the injected repair model. Valid blocks (and permissive
+ * invalid ones with the injected repair generation. Valid blocks (and permissive
  * types) cost zero model calls. Returns the corrected content plus a report;
  * a `failed` entry means the artifact will still be rejected at persist time
  * and the caller should log it loudly.

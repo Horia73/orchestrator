@@ -37,6 +37,8 @@ export interface AgentControllerOptions {
     stepDelayMs?: number;
     actionSettleDelayMs?: number;
     waitActionDelayMs?: number;
+    captureSettleTimeoutMs?: number;
+    captureSettleStableMs?: number;
     advancedProvider?: VisionConfig['provider'];
     advancedModel?: string;
     advancedThinkingLevel?: 'low' | 'medium' | 'high' | 'xhigh';
@@ -118,6 +120,8 @@ export function createAgentController(
     const stepDelayMs = options.stepDelayMs ?? 500;
     const actionSettleDelayMs = options.actionSettleDelayMs ?? 1000;
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
+    const captureSettleTimeoutMs = options.captureSettleTimeoutMs ?? 1500;
+    const captureSettleStableMs = options.captureSettleStableMs ?? 350;
     const advancedProvider = options.advancedProvider ?? 'google';
     const advancedModel = options.advancedModel ?? 'gemini-3.1-pro-preview';
     const advancedThinkingLevel = options.advancedThinkingLevel ?? 'low';
@@ -136,6 +140,7 @@ export function createAgentController(
     let clipboard: string | null = null;
     let pendingTrace: ActionTrace | null = null;
     let pendingSupplementalFrames: BrowserFrameSnapshot[] = [];
+    let pendingCaptureSettle = false;
     let lastTerminalAction: AgentTerminalAction | null = null;
 
     let escalationState: {
@@ -220,6 +225,7 @@ export function createAgentController(
             actionHistory = [];
             pendingTrace = null;
             pendingSupplementalFrames = [];
+            pendingCaptureSettle = false;
             lastTerminalAction = null;
 
             if (escalationState) {
@@ -262,6 +268,17 @@ export function createAgentController(
                     if (shouldStop) break;
 
                     iterationCount++;
+
+                    if (pendingCaptureSettle) {
+                        pendingCaptureSettle = false;
+                        const settle = await browser.waitForPageSettled({
+                            timeoutMs: captureSettleTimeoutMs,
+                            stableMs: captureSettleStableMs,
+                        });
+                        if (settle.reason === 'timeout') {
+                            onStatusUpdate(`⏱️ Page still changing after ${settle.elapsedMs}ms; scanning current state.`);
+                        }
+                    }
 
                     onStatusUpdate('📸 Scanning page...');
                     const tabsBefore = await browser.getOpenTabCount();
@@ -332,6 +349,8 @@ export function createAgentController(
 
                     let shouldBreak = false;
                     let shouldRestartLoop = false;
+                    const frameCapturedAtMs = Date.parse(frame.timestamp);
+                    let executedEarlierActionInBatch = false;
 
                     for (let i = 0; i < actions.length; i++) {
                         const action = actions[i];
@@ -493,7 +512,8 @@ export function createAgentController(
                         }
 
                         const batchLabel = actions.length > 1 ? ` [${i + 1}/${actions.length}]` : '';
-                        const desc = formatAction(action);
+                        const coordinateMode = vision.getCoordinateMode();
+                        const desc = formatAction(action, coordinateMode);
                         onStatusUpdate(`➡️ ${batchLabel} ${desc}`);
 
                         while (paused && !shouldStop) {
@@ -509,8 +529,11 @@ export function createAgentController(
                         }, {
                             actionSettleDelayMs,
                             waitActionDelayMs,
+                            waitElapsedMs: action.action === 'wait' && !executedEarlierActionInBatch && Number.isFinite(frameCapturedAtMs)
+                                ? Date.now() - frameCapturedAtMs
+                                : 0,
                             onEvidence,
-                            coordinateMode: vision.getCoordinateMode(),
+                            coordinateMode,
                         });
                         const success = execution.success;
                         pendingTrace = execution.trace;
@@ -554,6 +577,7 @@ export function createAgentController(
                             reasoning: action.reasoning,
                             success,
                         });
+                        executedEarlierActionInBatch = true;
 
                         // If action failed, stop batch and let AI re-evaluate with a new screenshot
                         if (!success) {
@@ -561,6 +585,10 @@ export function createAgentController(
                                 onStatusUpdate(`⚠️ Batch stopped at action ${i + 1}/${actions.length} (failed). Re-evaluating...`);
                             }
                             break;
+                        }
+
+                        if (actionCanChangeVisualState(action)) {
+                            pendingCaptureSettle = true;
                         }
 
                         if (action.action === 'inspectPage' || action.action === 'findInPage') {
@@ -723,6 +751,7 @@ export function createAgentController(
             }
             pendingTrace = null;
             pendingSupplementalFrames = [];
+            pendingCaptureSettle = false;
             lastTerminalAction = null;
             if (clearCurrentGoal) {
                 currentGoal = null;
@@ -782,6 +811,48 @@ async function resolveCoordinate(
     return mode === 'pixel'
         ? clampToViewport(coordinate, viewport.width, viewport.height)
         : denormalize(coordinate, viewport.width, viewport.height);
+}
+
+function formatPoint(coordinate: [number, number]): string {
+    return `[${coordinate[0]}, ${coordinate[1]}]`;
+}
+
+function formatResolvedCoordinate(
+    requested: [number, number],
+    resolved: [number, number],
+    mode: VisionCoordinateMode = 'normalized'
+): string {
+    if (mode === 'pixel') {
+        const clamped = requested[0] !== resolved[0] || requested[1] !== resolved[1];
+        return clamped
+            ? `viewport ${formatPoint(resolved)} (clamped from ${formatPoint(requested)})`
+            : `viewport ${formatPoint(resolved)}`;
+    }
+
+    return `viewport ${formatPoint(resolved)} from normalized ${formatPoint(requested)}`;
+}
+
+function actionCanChangeVisualState(action: AgentAction): boolean {
+    if (action.action === 'type') return true;
+    if (action.action === 'key') return true;
+    return [
+        'click',
+        'clear',
+        'pasteLink',
+        'scroll',
+        'scrollToBottom',
+        'undo',
+        'navigate',
+        'goBack',
+        'goForward',
+        'refresh',
+        'switchTab',
+        'newTab',
+        'closeTab',
+        'findInPage',
+        'hold',
+        'drag',
+    ].includes(action.action);
 }
 
 function sleep(ms: number): Promise<void> {
@@ -1031,6 +1102,7 @@ async function executeAction(
     timing: {
         actionSettleDelayMs: number;
         waitActionDelayMs: number;
+        waitElapsedMs?: number;
         onEvidence?: (capture: BrowserEvidenceCapture) => void | Promise<void>;
         coordinateMode?: VisionCoordinateMode;
     }
@@ -1039,10 +1111,11 @@ async function executeAction(
         switch (action.action) {
             case 'click':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
                     const count = action.clickCount || 1;
                     const countStr = count > 1 ? ` (x${count})` : '';
-                    onStatusUpdate(`🖱️  Clicking at [${x}, ${y}]${countStr} (from ${action.coordinate})`);
+                    onStatusUpdate(`🖱️  Clicking ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)}${countStr}`);
                     const result = await browser.clickCoordinate(x, y, count);
                     await sleep(timing.actionSettleDelayMs);
                     return { success: result, trace: null, supplementalFrames: [] };
@@ -1051,8 +1124,9 @@ async function executeAction(
 
             case 'hover':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
-                    onStatusUpdate(`🖱️  Hovering at [${x}, ${y}]`);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
+                    onStatusUpdate(`🖱️  Hovering ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)}`);
                     await browser.hoverCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
                     return { success: true, trace: null, supplementalFrames: [] };
@@ -1154,9 +1228,10 @@ async function executeAction(
 
             case 'hold':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
                     const holdDuration = action.durationMs || 10000;
-                    onStatusUpdate(`🖱️  Holding at [${x}, ${y}] for ${holdDuration}ms`);
+                    onStatusUpdate(`🖱️  Holding ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} for ${holdDuration}ms`);
                     const result = await browser.holdCoordinate(x, y, holdDuration);
                     await sleep(timing.actionSettleDelayMs);
                     return {
@@ -1169,10 +1244,12 @@ async function executeAction(
 
             case 'drag':
                 if (action.coordinate && action.coordinateEnd) {
-                    const [startX, startY] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
-                    const [endX, endY] = await resolveCoordinate(browser, action.coordinateEnd, timing.coordinateMode);
+                    const start = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const end = await resolveCoordinate(browser, action.coordinateEnd, timing.coordinateMode);
+                    const [startX, startY] = start;
+                    const [endX, endY] = end;
                     const dragDuration = action.durationMs || 900;
-                    onStatusUpdate(`🖱️  Dragging from [${startX}, ${startY}] to [${endX}, ${endY}] over ${dragDuration}ms`);
+                    onStatusUpdate(`🖱️  Dragging from ${formatResolvedCoordinate(action.coordinate, start, timing.coordinateMode)} to ${formatResolvedCoordinate(action.coordinateEnd, end, timing.coordinateMode)} over ${dragDuration}ms`);
                     const result = await browser.dragCoordinate(startX, startY, endX, endY, dragDuration);
                     await sleep(timing.actionSettleDelayMs);
                     return {
@@ -1185,8 +1262,9 @@ async function executeAction(
 
             case 'clear':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
-                    onStatusUpdate(`🖱️  Clicking [${x}, ${y}] to focus before clearing`);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
+                    onStatusUpdate(`🖱️  Clicking ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} to focus before clearing`);
                     await browser.clickCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
                 }
@@ -1197,8 +1275,9 @@ async function executeAction(
             case 'type':
                 if (action.text) {
                     if (action.coordinate) {
-                        const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
-                        onStatusUpdate(`🖱️  Clicking [${x}, ${y}] to focus`);
+                        const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                        const [x, y] = resolved;
+                        onStatusUpdate(`🖱️  Clicking ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} to focus`);
                         await browser.clickCoordinate(x, y);
                         await sleep(timing.actionSettleDelayMs);
                     }
@@ -1240,8 +1319,9 @@ async function executeAction(
             case 'scroll': {
                 const amountText = action.scrollAmount ? ` by ${action.scrollAmount}px` : '';
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
-                    onStatusUpdate(`🖱️  Hovering at [${x}, ${y}] before scroll (from ${action.coordinate})`);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
+                    onStatusUpdate(`🖱️  Hovering ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} before scroll`);
                     await browser.hoverCoordinate(x, y);
                     await sleep(300);
                 }
@@ -1286,9 +1366,21 @@ async function executeAction(
                 return { success: true, trace: null, supplementalFrames: [] };
 
             case 'wait': {
-                const waitDuration = action.durationMs || timing.waitActionDelayMs;
-                onStatusUpdate(`⏳ Waiting for ${waitDuration}ms...`);
-                await sleep(waitDuration);
+                const requestedWait = action.durationMs || timing.waitActionDelayMs;
+                const alreadyElapsed = Math.max(0, Math.floor(timing.waitElapsedMs || 0));
+                const waitDuration = Math.max(0, requestedWait - alreadyElapsed);
+
+                if (alreadyElapsed > 0 && waitDuration === 0) {
+                    onStatusUpdate(`⏭️ Wait ${requestedWait}ms already elapsed since the screenshot (${alreadyElapsed}ms). Continuing...`);
+                } else if (alreadyElapsed > 0) {
+                    onStatusUpdate(`⏳ Waiting ${waitDuration}ms more (requested ${requestedWait}ms; ${alreadyElapsed}ms elapsed since the screenshot)...`);
+                } else {
+                    onStatusUpdate(`⏳ Waiting for ${waitDuration}ms...`);
+                }
+
+                if (waitDuration > 0) {
+                    await sleep(waitDuration);
+                }
                 return { success: true, trace: null, supplementalFrames: [] };
             }
 
@@ -1382,9 +1474,10 @@ async function executeAction(
             case 'getLink': {
                 let linkToCopy: string | null = null;
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
                     linkToCopy = await browser.getHrefAt(x, y);
-                    onStatusUpdate(`🔗 Checked link at [${x}, ${y}]`);
+                    onStatusUpdate(`🔗 Checked link at ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)}`);
                 }
 
                 if (!linkToCopy) {
@@ -1417,8 +1510,9 @@ async function executeAction(
                 }
 
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
-                    onStatusUpdate(`🖱️ Clicking to focus for paste at [${x}, ${y}]`);
+                    const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [x, y] = resolved;
+                    onStatusUpdate(`🖱️ Clicking ${formatResolvedCoordinate(action.coordinate, resolved, timing.coordinateMode)} to focus for paste`);
                     await browser.clickCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
                 }

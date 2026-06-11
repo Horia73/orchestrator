@@ -499,6 +499,7 @@ export interface PendingNotification {
     title?: string
     body: string
     actions?: InboxReplyAction[]
+    sourceAgentId?: string
 }
 
 interface RunPolicyCounters {
@@ -1168,6 +1169,7 @@ async function executeAgentWake(
                 title: typeof args.title === 'string' ? args.title.trim() : undefined,
                 body,
                 actions: normalizeInboxReplyActions(args.actions),
+                sourceAgentId: target.id,
             })
         },
     }
@@ -1453,12 +1455,19 @@ async function postMicroscriptInbox(script: Microscript, notifications: PendingN
     // tool, which imports this module — same cycle-avoidance pattern as
     // executeAgentWake above.
     const { repairMessageArtifactsWithAgent } = await import('@/lib/ai/agents/repair-generate')
-    const repair = await repairMessageArtifactsWithAgent({
-        content: composed,
-        conversationId,
-        surface: 'microscript',
-    })
-    const body = repair.content
+    const { getAgent } = await import('@/lib/ai/agents/registry')
+    const sourceAgentId = visibleNotifications.find((n) => n.sourceAgentId)?.sourceAgentId
+    const sourceAgent = (sourceAgentId ? getAgent(sourceAgentId) : undefined) ?? getAgent('orchestrator')
+    let body = composed
+    if (sourceAgent) {
+        const repair = await repairMessageArtifactsWithAgent({
+            content: composed,
+            sourceAgent,
+            conversationId,
+            surface: 'microscript',
+        })
+        body = repair.content
+    }
     const actions = visibleNotifications.flatMap((n) => n.actions ?? [])
     const title = visibleNotifications.length === 1 && visibleNotifications[0]?.title
         ? visibleNotifications[0].title

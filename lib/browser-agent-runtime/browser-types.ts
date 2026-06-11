@@ -78,6 +78,18 @@ export interface BrowserDownloadWaitOptions {
     baselineCount?: number;
 }
 
+export interface BrowserPageSettleOptions {
+    timeoutMs?: number;
+    stableMs?: number;
+    pollMs?: number;
+}
+
+export interface BrowserPageSettleResult {
+    settled: boolean;
+    elapsedMs: number;
+    reason: 'stable' | 'timeout' | 'unsupported' | 'error';
+}
+
 export interface BrowserConsoleEntry {
     timestamp: string;
     level: string;
@@ -194,6 +206,7 @@ export interface BrowserPageSession {
     getViewport(): Promise<{ width: number; height: number }>;
     getDownloads(): BrowserDownloadFile[];
     waitForDownloads(timeoutMs?: number, options?: BrowserDownloadWaitOptions): Promise<BrowserDownloadFile[]>;
+    waitForPageSettled(options?: BrowserPageSettleOptions): Promise<BrowserPageSettleResult>;
     getDiagnostics(): BrowserDiagnosticsSnapshot;
     fetchUrl(url: string): Promise<BrowserFetchResult>;
     getLatestAgentFrame(): BrowserFrameSnapshot | null;

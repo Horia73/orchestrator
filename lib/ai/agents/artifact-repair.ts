@@ -1,7 +1,5 @@
 import type { AgentConfig } from './types'
 
-export const ARTIFACT_REPAIR_AGENT_ID = 'artifact_repair'
-
 export function buildArtifactRepairPrompt(): string {
     return [
         'You repair structured artifact JSON in Orchestrator that failed strict schema validation.',
@@ -20,29 +18,24 @@ export function buildArtifactRepairPrompt(): string {
 }
 
 // ---------------------------------------------------------------------------
-// Artifact Repair.
+// Artifact repair runtime.
 //
-// A tiny utility agent that takes a strict-schema artifact body that failed
-// validation (workout / recipe / map / weather) plus the exact parser error,
-// and returns a corrected body. No tools, no delegation — a one-shot,
-// minimal-edit JSON fix. Invoked by the chat route's in-turn repair pass when
-// `insertArtifact` rejects an emitted artifact, so the user sees the corrected
-// card instead of a broken one. Defaults to a cheap/fast model; the per-type
-// schema is not needed in-prompt because the validator surfaces one concrete
-// issue at a time and the route re-validates and re-prompts until it passes.
+// Artifact repair is intentionally NOT a registered agent. The model that
+// generated the artifact (or the owning surface's agent) gets one internal,
+// tool-less retry prompt with the exact validation error, then the caller
+// re-validates the corrected JSON. Keeping the source agent id/model avoids a
+// user-visible repair specialist while still constraining the retry
+// with a purpose-built system prompt.
 // ---------------------------------------------------------------------------
 
-export const artifactRepairAgent: AgentConfig = {
-    id: ARTIFACT_REPAIR_AGENT_ID,
-    name: 'Artifact Repair',
-    description: 'Fixes structured artifact JSON that failed strict schema validation, with the smallest possible change.',
-    kind: 'text',
-    tier: 'system',
-    provider: 'google',
-    model: 'gemini-3-flash-preview',
-    thinkingLevel: 'minimal',
-    buildPrompt: buildArtifactRepairPrompt,
-    tools: [],
-    builtins: [],
-    canCallAgents: [],
+export function buildArtifactRepairRuntimeAgent(sourceAgent: AgentConfig): AgentConfig {
+    return {
+        ...sourceAgent,
+        kind: 'text',
+        runtimeRole: 'artifact_repair',
+        buildPrompt: buildArtifactRepairPrompt,
+        tools: [],
+        builtins: [],
+        canCallAgents: [],
+    }
 }

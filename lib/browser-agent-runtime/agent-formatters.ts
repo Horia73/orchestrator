@@ -1,22 +1,29 @@
 import type { BrowserDownloadFile } from './browser';
 import type { IterationLimitReview } from './prompts';
-import type { AgentAction } from './vision';
+import type { AgentAction, VisionCoordinateMode } from './vision';
 import { formatBrowserAgentTextForLog } from './redaction';
 
 function reason(action: AgentAction): string {
     return formatBrowserAgentTextForLog(action.reasoning, '', 220);
 }
 
-export function formatAction(action: AgentAction): string {
+function coordinateLabel(mode: VisionCoordinateMode = 'normalized'): string {
+    return mode === 'pixel' ? 'viewport' : 'normalized';
+}
+
+function formatCoordinate(coordinate: [number, number] | undefined, mode: VisionCoordinateMode = 'normalized'): string {
+    if (!coordinate) return `${coordinateLabel(mode)} [?]`;
+    return `${coordinateLabel(mode)} [${coordinate[0]}, ${coordinate[1]}]`;
+}
+
+export function formatAction(action: AgentAction, coordinateMode: VisionCoordinateMode = 'normalized'): string {
     switch (action.action) {
         case 'click': {
-            const coords = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
             const count = action.clickCount && action.clickCount > 1 ? ' (Double Click)' : '';
-            return `Click ${coords}${count} - ${reason(action)}`;
+            return `Click ${formatCoordinate(action.coordinate, coordinateMode)}${count} - ${reason(action)}`;
         }
         case 'hover': {
-            const coords = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
-            return `Hover ${coords} - ${reason(action)}`;
+            return `Hover ${formatCoordinate(action.coordinate, coordinateMode)} - ${reason(action)}`;
         }
         case 'inspectPage':
             return `Inspect Full Page - ${reason(action)}`;
@@ -33,24 +40,23 @@ export function formatAction(action: AgentAction): string {
             return `Record video${duration} - ${reason(action)}`;
         }
         case 'hold': {
-            const coords = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
             const duration = action.durationMs ? ` for ${action.durationMs}ms` : '';
-            return `Hold ${coords}${duration} - ${reason(action)}`;
+            return `Hold ${formatCoordinate(action.coordinate, coordinateMode)}${duration} - ${reason(action)}`;
         }
         case 'drag': {
-            const start = action.coordinate ? `[${action.coordinate[0]}, ${action.coordinate[1]}]` : '[?]';
-            const end = action.coordinateEnd ? `[${action.coordinateEnd[0]}, ${action.coordinateEnd[1]}]` : '[?]';
+            const start = formatCoordinate(action.coordinate, coordinateMode);
+            const end = formatCoordinate(action.coordinateEnd, coordinateMode);
             const duration = action.durationMs ? ` over ${action.durationMs}ms` : '';
             return `Drag from ${start} to ${end}${duration} - ${reason(action)}`;
         }
         case 'type': {
-            const coords = action.coordinate ? ` at [${action.coordinate[0]}, ${action.coordinate[1]}]` : '';
+            const coords = action.coordinate ? ` at ${formatCoordinate(action.coordinate, coordinateMode)}` : '';
             const clear = action.clearBefore ? ' (Clear First)' : '';
             const enter = action.submit ? ' + Enter' : '';
             return `Type "${formatBrowserAgentTextForLog(action.text, action.reasoning, 20)}"${coords}${clear}${enter} - ${reason(action)}`;
         }
         case 'clear': {
-            const coords = action.coordinate ? ` at [${action.coordinate[0]}, ${action.coordinate[1]}]` : '';
+            const coords = action.coordinate ? ` at ${formatCoordinate(action.coordinate, coordinateMode)}` : '';
             return `Clear Input${coords} - ${reason(action)}`;
         }
         case 'key':

@@ -86,23 +86,20 @@ export function formatAgentSidebarSummary(
   data: SettingsBootstrap
 ): string {
   if (agent.id === "browser_agent") {
-    const backend = "Patchright"
     const light = formatProviderModel(
       data,
       data.config.browserAgent.light.provider,
       data.config.browserAgent.light.model
     ).model
     if (!data.config.browserAgent.proEnabled) {
-      return `${backend} · ${light}`
+      return light
     }
     const pro = formatProviderModel(
       data,
       data.config.browserAgent.pro.provider,
       data.config.browserAgent.pro.model
     ).model
-    return light === pro
-      ? `${backend} · ${light}`
-      : `${backend} · ${light} / ${pro}`
+    return light === pro ? light : `${light} / ${pro}`
   }
 
   const override = data.config.agentOverrides[agent.id]
@@ -157,7 +154,6 @@ export function buildAgentContextDetails(
   const status = agent.status === "planned" ? "Planned" : "Active"
 
   if (agent.id === "browser_agent") {
-    const backend = "Patchright"
     const light = formatProviderModel(
       data,
       data.config.browserAgent.light.provider,
@@ -172,7 +168,6 @@ export function buildAgentContextDetails(
     return [
       { label: "Status", value: status },
       { label: "Kind", value: agent.kind },
-      { label: "Backend", value: backend },
       {
         label: "Mode",
         value: proEnabled ? "Multi (light + pro)" : "Single (light only)",

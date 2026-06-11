@@ -14,6 +14,7 @@ export function isCliCodeProvider(providerId: string): boolean {
 }
 
 export function resolveRuntimeAgentConfig(target: AgentConfig, providerId: string): AgentConfig {
+    if (target.runtimeRole === 'artifact_repair') return target
     if (target.id !== 'coder' || isCliCodeProvider(providerId)) return target
 
     return {

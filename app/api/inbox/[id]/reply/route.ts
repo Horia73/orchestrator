@@ -244,6 +244,7 @@ async function continueInboxReply(args: {
       // is stored, so the reply never lands with a card persist would reject.
       const repair = await repairMessageArtifactsWithAgent({
         content: assistantContent,
+        sourceAgent: agent,
         conversationId: args.id,
         surface: "inbox-reply",
         appOrigin: args.appOrigin,

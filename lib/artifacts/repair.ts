@@ -20,7 +20,7 @@ export interface RepairArtifactArgs {
     /** The exact validation error that rejected `content`. */
     error: string
     /**
-     * Runs the repair model once with the given user prompt and returns its raw
+     * Runs one repair generation with the given user prompt and returns its raw
      * text output (or null on failure). Injected by the caller so this module
      * stays free of any agent-runner / provider dependency and is unit-testable.
      */

@@ -101,7 +101,7 @@ import {
 import { createArtifactStreamBridge } from "./artifact-stream"
 import { repairArtifactContent } from "@/lib/artifacts/repair"
 import { runTextSubAgent } from "@/lib/ai/agents/runner"
-import { artifactRepairAgent } from "@/lib/ai/agents/artifact-repair"
+import { buildArtifactRepairRuntimeAgent } from "@/lib/ai/agents/artifact-repair"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 /** Persist in-progress assistant output periodically so reloads can catch up */
@@ -893,11 +893,12 @@ export async function POST(request: Request) {
           }
 
           // Fix any strict-schema artifact that failed validation this turn:
-          // ask the repair model to correct the exact error, then commit the
-          // fixed card (or report the precise failure). Invoked once after the
-          // model stream completes, before the SSE stream closes.
+          // re-prompt the generating agent with the exact error, then commit
+          // the fixed card (or report the precise failure). Invoked once after
+          // the model stream completes, before the SSE stream closes.
           const repairPendingArtifacts = async () => {
             const pending = artifactStream.takePendingRepairs()
+            const repairTarget = buildArtifactRepairRuntimeAgent(orchestrator)
             for (const repair of pending) {
               const repaired = await repairArtifactContent({
                 type: repair.attrs.type,
@@ -906,7 +907,7 @@ export async function POST(request: Request) {
                 maxAttempts: 2,
                 generate: async (userPrompt) => {
                   const result = await runTextSubAgent({
-                    target: artifactRepairAgent,
+                    target: repairTarget,
                     prompt: userPrompt,
                     parentCtx: {
                       callerAgentId: orchestrator.id,
@@ -914,7 +915,6 @@ export async function POST(request: Request) {
                       conversationId,
                       parentRequestId: messageId,
                       signal: serverAbortController.signal,
-                      onAgentEvent: (event) => handleAgentEvent(event, send),
                       appOrigin: requestOrigin,
                     },
                   })
@@ -1643,12 +1643,12 @@ export async function POST(request: Request) {
                 )
 
                 // In-turn artifact repair: if any strict-schema artifact failed
-                // validation while streaming, fix it now (the repair model
-                // corrects the exact error) before the stream closes. The `done`
-                // event has already been sent, but the client keeps reading
-                // until stream close and applies the artifact row independently,
-                // so the corrected card replaces the streaming placeholder with
-                // no broken-card flash.
+                // validation while streaming, fix it now by feeding the exact
+                // error back to the generating agent before the stream closes.
+                // The `done` event has already been sent, but the client keeps
+                // reading until stream close and applies the artifact row
+                // independently, so the corrected card replaces the streaming
+                // placeholder with no broken-card flash.
                 if (
                   !terminalStreamError &&
                   !attemptStreamError &&

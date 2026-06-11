@@ -16,7 +16,6 @@ import { inboxAgent } from './inbox-agent'
 import { smartMonitorAgent } from './smart-monitor-agent'
 import { audioContextAgent, audioTranscriptAgent } from './audio-context-agent'
 import { conversationNamer } from './conversation-namer'
-import { artifactRepairAgent } from './artifact-repair'
 
 // ---------------------------------------------------------------------------
 // Agent Registry
@@ -39,7 +38,6 @@ register(smartMonitorAgent)
 register(audioContextAgent)
 register(audioTranscriptAgent)
 register(conversationNamer)
-register(artifactRepairAgent)
 register(worker)
 register(coder)
 register(conciergeAgent)

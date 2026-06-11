@@ -1,6 +1,7 @@
 import { randomUUID } from 'crypto'
-import { artifactRepairAgent } from './artifact-repair'
+import { buildArtifactRepairRuntimeAgent } from './artifact-repair'
 import { runTextSubAgent } from './runner'
+import type { AgentConfig } from './types'
 import {
     repairMessageArtifacts,
     type RepairMessageArtifactsResult,
@@ -8,16 +9,18 @@ import {
 
 // ---------------------------------------------------------------------------
 // Binds the pure validate+repair pass (lib/artifacts/repair-message.ts) to the
-// Artifact Repair agent for background surfaces. The chat route keeps its own
-// streaming-aware wiring; scheduled runs, microscripts, and inline Inbox
-// replies call `repairMessageArtifactsWithAgent` right before they store the
-// assistant message.
+// same agent runtime that generated the artifact for background surfaces. The
+// chat route keeps its own streaming-aware wiring; scheduled runs,
+// microscripts, and inline Inbox replies call `repairMessageArtifactsWithAgent`
+// right before they store the assistant message.
 // ---------------------------------------------------------------------------
 
 export interface RepairMessageWithAgentArgs {
     /** Complete assistant message content about to be stored. */
     content: string
-    /** Conversation the repair sub-agent run is logged under. */
+    /** Agent whose runtime produced/owns this content. */
+    sourceAgent: AgentConfig
+    /** Conversation the internal repair retry is logged under. */
     conversationId: string
     /** Caller label for log lines: 'scheduled-run' | 'microscript' | 'inbox-reply'. */
     surface: string
@@ -30,25 +33,27 @@ export interface RepairMessageWithAgentArgs {
 }
 
 /**
- * Validate + repair every strict-schema artifact in `content` using the
- * Artifact Repair agent. Never throws: on any unexpected failure it returns
- * the original content so the calling surface still delivers its message
- * (persist will then reject the broken artifact exactly as before).
+ * Validate + repair every strict-schema artifact in `content` by re-prompting
+ * the source agent with the exact validation error. Never throws: on any
+ * unexpected failure it returns the original content so the calling surface
+ * still delivers its message (persist will then reject the broken artifact
+ * exactly as before).
  */
 export async function repairMessageArtifactsWithAgent(
     args: RepairMessageWithAgentArgs,
 ): Promise<RepairMessageArtifactsResult> {
     const parentRequestId = args.parentRequestId ?? `artifact_repair_${randomUUID()}`
+    const repairTarget = buildArtifactRepairRuntimeAgent(args.sourceAgent)
     try {
         return await repairMessageArtifacts({
             content: args.content,
             surface: args.surface,
             generate: async (userPrompt) => {
                 const result = await runTextSubAgent({
-                    target: artifactRepairAgent,
+                    target: repairTarget,
                     prompt: userPrompt,
                     parentCtx: {
-                        callerAgentId: artifactRepairAgent.id,
+                        callerAgentId: args.sourceAgent.id,
                         depth: 0,
                         conversationId: args.conversationId,
                         parentRequestId,

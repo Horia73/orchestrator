@@ -9,8 +9,6 @@ import {
   GripVertical,
   Loader2,
   RefreshCcw,
-  Search,
-  Square,
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
@@ -18,7 +16,7 @@ import { cn } from "@/lib/utils"
 import { AgentCard } from "@/components/settings/agent-card"
 import { ModelRegistrySummary } from "@/components/settings/models-registry-summary"
 import { MemoryCard } from "@/components/settings/memory-card"
-import { ResearchProgressPanel } from "@/components/settings/research-progress-panel"
+import { ModelResearchCard } from "@/components/settings/model-research-card"
 import {
   useSettings,
   type AgentInfo,
@@ -30,13 +28,7 @@ import {
   agentHasProviderWarning,
   buildAgentActivity,
   buildAgentContextDetails,
-  buildModelResearchStatuses,
-  countResearchableModels,
   formatAgentSidebarSummary,
-  formatResearchButtonLabel,
-  getResearchUnavailableReason,
-  hasUsableModelProvider,
-  isResearcherProviderReady,
   moveIdAround,
   moveIdToEnd,
   orderAgentsByConfig,
@@ -52,25 +44,13 @@ export function ModelsTab() {
     error,
     refreshModels,
     refreshing,
-    researchModels,
-    researchModel,
-    stopResearchModels,
     researching,
-    researchEvents,
-    clearResearchEvents,
     setAgentOrder,
   } = useSettings()
   const [lastRefresh, setLastRefresh] = React.useState<{
     ok: boolean
     summary: string
   } | null>(null)
-  const [lastResearch, setLastResearch] = React.useState<{
-    ok: boolean
-    summary: string
-  } | null>(null)
-  const [researchPreviewOpen, setResearchPreviewOpen] = React.useState(true)
-  const [researchStatusOpen, setResearchStatusOpen] = React.useState(false)
-  const [researchStatusMode, setResearchStatusMode] = React.useState(false)
   const [selectedAgentId, setSelectedAgentId] = React.useState<string | null>(
     null
   )
@@ -86,14 +66,6 @@ export function ModelsTab() {
   const lastSelectedAgentParamRef = React.useRef<string | null>(null)
   const [agentOrderSaveState, setAgentOrderSaveState] =
     React.useState<AgentOrderSaveState>({ kind: "idle" })
-  const hasUsableProviders = data ? hasUsableModelProvider(data) : false
-  const researcherReady = data ? isResearcherProviderReady(data) : false
-  const researchUnavailableReason = data
-    ? getResearchUnavailableReason(data)
-    : null
-  const researchableModelCount = data
-    ? countResearchableModels(data.providers, data.providerStatus)
-    : 0
   const savedOrderedAgents = React.useMemo(
     () =>
       data ? orderAgentsByConfig(data.agents, data.config.agentOrder) : [],
@@ -128,19 +100,6 @@ export function ModelsTab() {
     orderedAgents.find((agent) => agent.id === selectedAgentId) ??
     orderedAgents[0] ??
     null
-  const currentResearchStatuses = React.useMemo(
-    () =>
-      data
-        ? buildModelResearchStatuses(data.providers, data.providerStatus)
-        : [],
-    [data]
-  )
-  const liveResearchConcurrency = React.useMemo(() => {
-    const ready = [...researchEvents]
-      .reverse()
-      .find((event) => event.type === "ready")
-    return ready?.type === "ready" ? (ready.concurrency ?? 6) : 6
-  }, [researchEvents])
 
   React.useEffect(() => {
     if (orderedAgents.length === 0) return
@@ -351,96 +310,12 @@ export function ModelsTab() {
     }
   }
 
-  const handleResearch = async () => {
-    if (refreshing || researching) return
-    if (!hasUsableProviders || !researcherReady) {
-      setResearchStatusOpen(false)
-      setResearchStatusMode(false)
-      setLastResearch({
-        ok: false,
-        summary:
-          researchUnavailableReason ??
-          "Connect a model provider before running research.",
-      })
-      return
-    }
-    setResearchPreviewOpen(true)
-    setResearchStatusOpen(true)
-    if (researchableModelCount === 0) {
-      setResearchStatusMode(true)
-      return
-    }
-    setResearchStatusMode(false)
-    try {
-      setLastResearch(null)
-      const events = await researchModels()
-      const done = [...events].reverse().find((e) => e.type === "done")
-      const stopped = [...events].reverse().find((e) => e.type === "stopped")
-      setLastResearch({
-        ok: true,
-        summary:
-          stopped?.type === "stopped"
-            ? stopped.message
-            : done?.type === "done"
-              ? `${done.updated} patched · ${done.incomplete ?? 0} incomplete · ${done.failed} failed`
-              : "Research finished",
-      })
-    } catch (err) {
-      setLastResearch({
-        ok: false,
-        summary: err instanceof Error ? err.message : "Research failed",
-      })
-    }
-  }
-
-  const handleResearchModel = async (providerId: string, modelId: string) => {
-    if (refreshing || researching) return
-    if (!hasUsableProviders || !researcherReady) {
-      setLastResearch({
-        ok: false,
-        summary:
-          researchUnavailableReason ??
-          "Connect a model provider before running research.",
-      })
-      return
-    }
-    setResearchPreviewOpen(true)
-    setResearchStatusOpen(true)
-    setResearchStatusMode(false)
-    try {
-      setLastResearch(null)
-      const events = await researchModel(providerId, modelId)
-      const done = [...events].reverse().find((e) => e.type === "done")
-      const stopped = [...events].reverse().find((e) => e.type === "stopped")
-      setLastResearch({
-        ok: true,
-        summary:
-          stopped?.type === "stopped"
-            ? stopped.message
-            : done?.type === "done"
-              ? `${done.updated} patched · ${done.incomplete ?? 0} incomplete · ${done.failed} failed`
-              : "Research finished",
-      })
-    } catch (err) {
-      setLastResearch({
-        ok: false,
-        summary: err instanceof Error ? err.message : "Research failed",
-      })
-    }
-  }
-
   // Auto-clear refresh feedback after a few seconds.
   React.useEffect(() => {
     if (!lastRefresh) return
     const t = setTimeout(() => setLastRefresh(null), 5000)
     return () => clearTimeout(t)
   }, [lastRefresh])
-
-  React.useEffect(() => {
-    if (!lastResearch || !lastResearch.ok) return
-    const t = setTimeout(() => setLastResearch(null), 7000)
-    return () => clearTimeout(t)
-  }, [lastResearch])
 
   if (loading) {
     return (
@@ -493,51 +368,6 @@ export function ModelsTab() {
         <div className="flex flex-col gap-1.5 sm:items-end">
           <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
             <button
-              onClick={handleResearch}
-              disabled={refreshing || researching}
-              className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium whitespace-nowrap text-foreground/70 transition-colors",
-                "hover:bg-muted/60 hover:text-foreground",
-                (researching || !hasUsableProviders || !researcherReady) &&
-                  "opacity-60"
-              )}
-              title={
-                !hasUsableProviders || !researcherReady
-                  ? (researchUnavailableReason ??
-                    "Connect a model provider before running research")
-                  : researchableModelCount > 0
-                    ? researching
-                      ? `Running up to ${liveResearchConcurrency} model researchers at once`
-                      : `Ask the researcher to fill ${researchableModelCount} active incomplete model${researchableModelCount === 1 ? "" : "s"} from official docs`
-                    : "Open current model research status"
-              }
-            >
-              {researching ? (
-                <Loader2 className="size-3.5 animate-spin" />
-              ) : (
-                <Search className="size-3.5" />
-              )}
-              {researching
-                ? `Researching · max ${liveResearchConcurrency}`
-                : formatResearchButtonLabel(
-                    researchableModelCount,
-                    hasUsableProviders && researcherReady
-                  )}
-            </button>
-            {researching && (
-              <button
-                onClick={stopResearchModels}
-                className={cn(
-                  "inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 text-[12.5px] font-medium whitespace-nowrap text-destructive transition-colors",
-                  "hover:bg-destructive/10"
-                )}
-                title="Stop the current research run"
-              >
-                <Square className="size-3.5 fill-current" />
-                Stop research
-              </button>
-            )}
-            <button
               onClick={handleRefresh}
               disabled={refreshing || researching}
               className={cn(
@@ -563,10 +393,9 @@ export function ModelsTab() {
             </p>
           </div>
 
-          {/* Refresh/research feedback gets its own reserved line so showing or
-              clearing it never reflows — or wraps — the action buttons above.
-              Single line + truncate keeps a long provider summary from growing
-              the header height. */}
+          {/* Refresh feedback gets its own reserved line so showing or clearing
+              it never reflows — or wraps — the action buttons above. Single line
+              + truncate keeps a long provider summary from growing the header. */}
           <div className="flex min-h-[16px] max-w-full items-center justify-end gap-x-3 overflow-hidden">
             {lastRefresh && (
               <span
@@ -582,43 +411,12 @@ export function ModelsTab() {
                 <span className="truncate">{lastRefresh.summary}</span>
               </span>
             )}
-            {lastResearch && (
-              <span
-                className={cn(
-                  "inline-flex min-w-0 items-center gap-1 text-[11.5px] tabular-nums",
-                  lastResearch.ok
-                    ? "text-emerald-700 dark:text-emerald-500"
-                    : "text-destructive"
-                )}
-                title={lastResearch.summary}
-              >
-                {lastResearch.ok && <CheckCircle2 className="size-3 shrink-0" />}
-                <span className="truncate">{lastResearch.summary}</span>
-              </span>
-            )}
           </div>
         </div>
       </div>
-      {(researchStatusOpen || researching || researchEvents.length > 0) &&
-        (researchPreviewOpen ? (
-          <ResearchProgressPanel
-            events={researchEvents}
-            researching={researching}
-            statusOnly={researchStatusMode && !researching}
-            modelStatuses={currentResearchStatuses}
-            onCollapse={() => setResearchPreviewOpen(false)}
-            onClear={clearResearchEvents}
-            onResearchModel={handleResearchModel}
-          />
-        ) : (
-          <ResearchPreviewCollapsed
-            eventCount={researchEvents.length}
-            researching={researching}
-            statusVisible={researchStatusOpen}
-            onShow={() => setResearchPreviewOpen(true)}
-            onClear={clearResearchEvents}
-          />
-        ))}
+
+      <ModelResearchCard />
+
       <AgentSettingsLayout
         data={data}
         orderedAgents={orderedAgents}
@@ -1146,56 +944,5 @@ function AgentMiniBadge({
     >
       {children}
     </span>
-  )
-}
-
-function ResearchPreviewCollapsed({
-  eventCount,
-  researching,
-  statusVisible,
-  onShow,
-  onClear,
-}: {
-  eventCount: number
-  researching: boolean
-  statusVisible: boolean
-  onShow: () => void
-  onClear: () => void
-}) {
-  return (
-    <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/70 bg-card px-3 py-2.5">
-      <div className="flex min-w-0 items-center gap-2 text-[12.5px] text-foreground/55">
-        {researching ? (
-          <Loader2 className="size-3.5 animate-spin" />
-        ) : (
-          <CheckCircle2 className="size-3.5 text-emerald-600" />
-        )}
-        <span className="truncate">
-          {eventCount > 0
-            ? `Research preview hidden · ${eventCount} event${eventCount === 1 ? "" : "s"} saved`
-            : statusVisible
-              ? "Model research status hidden"
-              : "Research preview hidden"}
-        </span>
-      </div>
-      <div className="flex items-center gap-1.5">
-        <button
-          type="button"
-          onClick={onShow}
-          className="inline-flex h-7 items-center rounded-md border border-border bg-background px-2 text-[12px] font-medium text-foreground/70 transition-colors hover:bg-muted/60 hover:text-foreground"
-        >
-          Show preview
-        </button>
-        {!researching && eventCount > 0 && (
-          <button
-            type="button"
-            onClick={onClear}
-            className="inline-flex h-7 items-center rounded-md px-2 text-[12px] font-medium text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
-          >
-            Clear
-          </button>
-        )}
-      </div>
-    </div>
   )
 }

@@ -1,6 +1,10 @@
 import { randomUUID } from "crypto"
 
-import type { AgentRunEvent, ToolExecutionContext } from "@/lib/ai/agents/types"
+import type {
+  AgentConfig,
+  AgentRunEvent,
+  ToolExecutionContext,
+} from "@/lib/ai/agents/types"
 import type { SmartCheapPassResult } from "@/lib/monitoring/smart-monitor-cheap-pass"
 import type {
   ContentSegment,
@@ -178,6 +182,7 @@ export async function runScheduledTask(
   let attachments: Message["attachments"]
   let error: string | undefined
   const notifications: NotifyRequest[] = []
+  let repairSourceAgent: AgentConfig | null = null
 
   try {
     if (task.action.kind === "tool") {
@@ -277,6 +282,7 @@ export async function runScheduledTask(
           error = "orchestrator agent missing"
           assistantContent = `❌ ${error}`
         } else {
+          repairSourceAgent = agent
           let topRunId: string | null = null
           let capturedState: unknown = undefined
           const doneByRun = new Map<
@@ -399,6 +405,7 @@ export async function runScheduledTask(
         error = `Unknown agent: ${task.action.agentId}`
         assistantContent = `❌ ${error}`
       } else {
+        repairSourceAgent = agent
         let topRunId: string | null = null
         let capturedState: unknown = undefined
         const doneByRun = new Map<
@@ -560,13 +567,19 @@ export async function runScheduledTask(
     const { repairMessageArtifactsWithAgent } = await import(
       "@/lib/ai/agents/repair-generate"
     )
-    const repair = await repairMessageArtifactsWithAgent({
-      content: inboxBody,
-      conversationId,
-      surface: "scheduled-run",
-      scheduledTaskId: task.id,
-    })
-    inboxBody = repair.content
+    const sourceAgent =
+      repairSourceAgent ??
+      (await import("@/lib/ai/agents/registry")).getAgent("orchestrator")
+    if (sourceAgent) {
+      const repair = await repairMessageArtifactsWithAgent({
+        content: inboxBody,
+        sourceAgent,
+        conversationId,
+        surface: "scheduled-run",
+        scheduledTaskId: task.id,
+      })
+      inboxBody = repair.content
+    }
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",
