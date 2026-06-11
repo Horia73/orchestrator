@@ -4,10 +4,12 @@ import * as React from "react"
 import { CalendarDays, Flame } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { SectionCard } from "@/components/workouts/section-card"
 
 const WEEKS = 16
 const DAY_MS = 86_400_000
 const WEEKDAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"]
+const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
 
 /**
  * GitHub-style training heatmap + consistency headline, built purely from
@@ -27,18 +29,10 @@ export function TrainingCalendar({
     const model = React.useMemo(() => buildCalendar(sessions, nowMs), [sessions, nowMs])
 
     return (
-        <section
-            className={cn(
-                "flex flex-col gap-3 rounded-xl border border-border/60 bg-card px-4 py-3.5 shadow-sm",
-                className,
-            )}
-            aria-label="Training consistency"
-        >
-            <div className="flex flex-wrap items-center justify-between gap-x-4 gap-y-2">
-                <h2 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/65">
-                    <CalendarDays className="size-3.5 text-muted-foreground" strokeWidth={2} />
-                    Training calendar
-                </h2>
+        <SectionCard
+            title="Training calendar"
+            icon={<CalendarDays className="size-3.5" strokeWidth={2} />}
+            actions={
                 <div className="flex items-center gap-4">
                     <HeadlineStat
                         icon={<Flame className="size-3.5" strokeWidth={2} />}
@@ -49,10 +43,13 @@ export function TrainingCalendar({
                     <HeadlineStat value={String(model.thisWeekCount)} label="this week" />
                     <HeadlineStat value={String(model.last30Count)} label="last 30d" />
                 </div>
-            </div>
-
+            }
+            className={className}
+            contentClassName="flex flex-col gap-2 px-4 py-3.5"
+        >
             <div className="flex gap-1.5 overflow-x-auto">
-                <div className="flex flex-col gap-[3px] pr-0.5 pt-[2px]">
+                <div className="flex flex-col gap-[3px] pr-0.5">
+                    <span className="h-[12px]" aria-hidden />
                     {WEEKDAY_LABELS.map((label, i) => (
                         <span
                             key={i}
@@ -62,14 +59,26 @@ export function TrainingCalendar({
                         </span>
                     ))}
                 </div>
-                <div className="flex gap-[3px]">
-                    {model.columns.map((col, ci) => (
-                        <div key={ci} className="flex flex-col gap-[3px]">
-                            {col.map((cell, ri) => (
-                                <Cell key={ri} cell={cell} />
-                            ))}
-                        </div>
-                    ))}
+                <div className="flex flex-col gap-[3px]">
+                    <div className="flex gap-[3px]" aria-hidden>
+                        {model.monthLabels.map((label, ci) => (
+                            <span
+                                key={ci}
+                                className="h-[12px] w-[13px] overflow-visible whitespace-nowrap text-[8.5px] leading-none text-muted-foreground/55"
+                            >
+                                {label}
+                            </span>
+                        ))}
+                    </div>
+                    <div className="flex gap-[3px]">
+                        {model.columns.map((col, ci) => (
+                            <div key={ci} className="flex flex-col gap-[3px]">
+                                {col.map((cell, ri) => (
+                                    <Cell key={ri} cell={cell} />
+                                ))}
+                            </div>
+                        ))}
+                    </div>
                 </div>
             </div>
 
@@ -80,7 +89,7 @@ export function TrainingCalendar({
                 ))}
                 <span>more</span>
             </div>
-        </section>
+        </SectionCard>
     )
 }
 
@@ -99,14 +108,14 @@ function HeadlineStat({
         <div className="flex flex-col items-end leading-none">
             <span
                 className={cn(
-                    "inline-flex items-center gap-1 text-base font-semibold tabular-nums text-foreground",
+                    "inline-flex items-center gap-1 text-sm font-semibold tabular-nums text-foreground",
                     accent && "text-amber-600 dark:text-amber-400",
                 )}
             >
                 {icon ? <span className={cn(accent && "text-amber-500")}>{icon}</span> : null}
                 {value}
             </span>
-            <span className="mt-0.5 text-[10px] uppercase tracking-wider text-muted-foreground">{label}</span>
+            <span className="mt-0.5 text-[9.5px] uppercase tracking-wider text-muted-foreground">{label}</span>
         </div>
     )
 }
@@ -166,6 +175,8 @@ function buildCalendar(sessions: Array<{ startedAt: string }>, nowMs: number) {
     const gridStart = new Date(today.getTime() - (mondayIndex(today) + (WEEKS - 1) * 7) * DAY_MS)
 
     const columns: DayCell[][] = []
+    const monthLabels: string[] = []
+    let prevMonth = -1
     for (let c = 0; c < WEEKS; c++) {
         const col: DayCell[] = []
         for (let r = 0; r < 7; r++) {
@@ -179,7 +190,15 @@ function buildCalendar(sessions: Array<{ startedAt: string }>, nowMs: number) {
             })
         }
         columns.push(col)
+        // Label a column when its Monday lands in a new month. Months are
+        // ≥4 columns apart so the overflowing labels never collide.
+        const colMonth = new Date(gridStart.getTime() + c * 7 * DAY_MS).getMonth()
+        monthLabels.push(colMonth !== prevMonth ? MONTH_LABELS[colMonth] : "")
+        prevMonth = colMonth
     }
+    // The left edge otherwise gets two adjacent labels when the window opens
+    // days before a month boundary ("Feb Mar …") — drop the partial one.
+    if (monthLabels[1]) monthLabels[0] = ""
 
     // Headline counts.
     const todayMs = today.getTime()
@@ -205,7 +224,7 @@ function buildCalendar(sessions: Array<{ startedAt: string }>, nowMs: number) {
         else break
     }
 
-    return { columns, weekStreak, thisWeekCount, last30Count }
+    return { columns, monthLabels, weekStreak, thisWeekCount, last30Count }
 }
 
 function isoKey(d: Date): string {

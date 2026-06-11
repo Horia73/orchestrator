@@ -1,3 +1,5 @@
+import os from "node:os"
+
 const localTraceExcludes = [
   ".orchestrator/**",
   ".next/**",
@@ -16,6 +18,11 @@ const previewBasePath = normalizePreviewBasePath(process.env.ORCHESTRATOR_PREVIE
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   ...(previewBasePath ? { basePath: previewBasePath, assetPrefix: previewBasePath } : {}),
+  // Lets other devices on the network (phone/tablet) load Next's dev resources
+  // when `next dev -H 0.0.0.0` is reachable over LAN. Without this Next blocks
+  // cross-origin dev requests and the app silently fails to boot on the phone.
+  // Auto-probed each dev start (survives DHCP changes) — no hardcoded IPs.
+  allowedDevOrigins: devLanOrigins(),
   devIndicators: {
     position: "bottom-right",
   },
@@ -53,6 +60,41 @@ const nextConfig = {
 }
 
 export default nextConfig
+
+// Hosts allowed to load Next dev resources from another device on the LAN.
+// Probed live so it tracks the current IP/Wi-Fi instead of a pinned value.
+function devLanOrigins() {
+  if (process.env.NODE_ENV === "production") return []
+  const hosts = new Set()
+
+  // Every non-internal IPv4 this machine currently holds (e.g. 192.168.x.y).
+  for (const ifaces of Object.values(os.networkInterfaces())) {
+    for (const iface of ifaces || []) {
+      if (iface.family === "IPv4" && !iface.internal) hosts.add(iface.address)
+    }
+  }
+
+  // Bonjour name — a phone can reach the Mac as `<name>.local`.
+  const hostname = os.hostname()
+  if (hostname) {
+    hosts.add(hostname)
+    hosts.add(`${hostname.replace(/\.local\.?$/i, "")}.local`)
+  }
+
+  // Explicitly configured LAN IP / public URL host, when present.
+  const lanIp = process.env.ORCHESTRATOR_HOST_LAN_IP?.trim()
+  if (lanIp) hosts.add(lanIp)
+  const publicUrl = process.env.ORCHESTRATOR_PUBLIC_URL?.trim()
+  if (publicUrl) {
+    try {
+      hosts.add(new URL(publicUrl).hostname)
+    } catch {
+      // Ignore a malformed ORCHESTRATOR_PUBLIC_URL — the rest still applies.
+    }
+  }
+
+  return [...hosts].filter(Boolean)
+}
 
 function normalizePreviewBasePath(value) {
   if (!value) return null

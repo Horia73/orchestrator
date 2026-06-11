@@ -1551,6 +1551,26 @@ export function addAgentThreadTurn(
   transaction()
 }
 
+/**
+ * Drop the oldest messages of a thread beyond `keepLast`. Long-lived wake
+ * threads (e.g. one per Microscript) append two messages per wake forever;
+ * pruning keeps the replayed history bounded without touching recent context.
+ */
+export function pruneAgentThreadMessages(threadId: string, keepLast: number) {
+  db.prepare(
+    `
+        DELETE FROM agent_thread_messages
+        WHERE threadId = @threadId
+          AND id NOT IN (
+            SELECT id FROM agent_thread_messages
+            WHERE threadId = @threadId
+            ORDER BY timestamp DESC, id DESC
+            LIMIT @keepLast
+          )
+    `
+  ).run({ threadId, keepLast: Math.max(1, Math.floor(keepLast)) })
+}
+
 export function touchAgentThreadRuntime(
   threadId: string,
   provider: string,

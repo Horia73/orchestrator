@@ -4,10 +4,31 @@ import { guardSensitiveRequest } from "@/lib/api/request-guard"
 import { runWithRequestProfile } from "@/lib/profiles/server"
 import {
   deletePushSubscription,
+  listPushSubscriptions,
   savePushSubscription,
 } from "@/lib/push-notifications"
 
 export const runtime = "nodejs"
+
+export async function GET(request: Request) {
+  return runWithRequestProfile(request, async () => {
+      const guard = guardSensitiveRequest(request)
+      if (guard) return guard
+
+      try {
+        return NextResponse.json(
+          { subscriptions: listPushSubscriptions() },
+          { headers: { "Cache-Control": "no-store" } }
+        )
+      } catch (error) {
+        console.error("Failed to list push subscriptions", error)
+        return NextResponse.json(
+          { error: "Failed to list push subscriptions" },
+          { status: 500 }
+        )
+      }
+  })
+}
 
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {

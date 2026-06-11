@@ -4,6 +4,8 @@ import * as React from "react"
 import { useRouter, useSearchParams } from "next/navigation"
 import { LockKeyhole, Plus, UserRound } from "lucide-react"
 
+import { ViewFade } from "@/components/route-fade"
+import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { profileInitials, fetchProfiles } from "./use-profiles"
 import type { PublicProfile } from "@/lib/profiles/server"
 
@@ -22,6 +24,12 @@ export function ProfilePicker() {
   const [busy, setBusy] = React.useState(false)
 
   const next = sanitizeNext(searchParams.get("next"))
+  const dialogOpen = Boolean(selected) || creating
+
+  // While the password/create dialog is up, pin the document so the iOS
+  // keyboard reveal can't pan the whole page — the dialog sits in the upper
+  // part of the viewport, above the keyboard, and stays put.
+  useDocumentViewportLock(dialogOpen)
 
   React.useEffect(() => {
     let cancelled = false
@@ -41,6 +49,15 @@ export function ProfilePicker() {
     if (busy) return
     setCreating(true)
     setSelected(null)
+    setPassword("")
+    setNewName("")
+    setError(null)
+  }
+
+  function closeDialog() {
+    if (busy) return
+    setSelected(null)
+    setCreating(false)
     setPassword("")
     setNewName("")
     setError(null)
@@ -118,9 +135,14 @@ export function ProfilePicker() {
   }
 
   return (
-    <main className="relative flex min-h-dvh w-full flex-1 items-center justify-center overflow-hidden bg-background px-5 py-8 text-foreground sm:px-8">
-      <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.72),rgba(255,255,255,0)_42%,rgba(0,0,0,0.035))] dark:bg-[linear-gradient(180deg,rgba(255,255,255,0.055),rgba(255,255,255,0)_42%,rgba(0,0,0,0.22))]" />
-      <div className="relative flex w-full max-w-6xl flex-col items-center justify-center text-center">
+    <main className="relative flex min-h-dvh w-full flex-1 overflow-y-auto bg-background text-foreground">
+      {/* Single reveal: hold blank until the profile list resolved, then fade
+          the whole picker in fully formed — no header-first / tiles-later
+          pop-in. Centered via m-auto so overflowing content stays scrollable. */}
+      <ViewFade
+        ready={!loading}
+        className="relative m-auto flex w-full max-w-6xl flex-col items-center px-5 pt-[calc(2rem+env(safe-area-inset-top))] pb-[calc(2rem+env(safe-area-inset-bottom))] text-center sm:px-8"
+      >
         <div className="mb-12 sm:mb-14">
           <div className="mb-4 text-xs font-medium tracking-[0.22em] text-foreground/40 uppercase">
             Orchestrator
@@ -130,58 +152,75 @@ export function ProfilePicker() {
           </h1>
         </div>
 
-        {loading ? (
-          <div className="text-center text-sm text-muted-foreground">Loading profiles...</div>
-        ) : (
-          <div className="flex w-full flex-wrap items-start justify-center gap-x-6 gap-y-8 sm:gap-x-9 sm:gap-y-10">
-            {profiles.map((profile) => (
-              <button
-                key={profile.id}
-                type="button"
-                disabled={busy}
-                onClick={() => selectProfile(profile)}
-                className="group flex w-36 min-w-0 flex-col items-center gap-4 rounded-md p-2 text-center outline-none transition duration-200 ease-out hover:-translate-y-1 focus-visible:ring-2 focus-visible:ring-foreground/25 disabled:pointer-events-none disabled:opacity-60 sm:w-44 md:w-48"
-              >
-                <div
-                  className="relative grid size-32 place-items-center overflow-hidden rounded-md text-5xl font-semibold text-white shadow-[0_18px_48px_-28px_rgba(0,0,0,0.65)] ring-1 ring-black/10 transition duration-200 group-hover:shadow-[0_24px_60px_-30px_rgba(0,0,0,0.72)] group-hover:ring-4 group-hover:ring-foreground/20 sm:size-40 sm:text-6xl md:size-44"
-                  style={{ backgroundColor: profile.color }}
-                >
-                  <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(145deg,rgba(255,255,255,0.22),rgba(255,255,255,0)_42%,rgba(0,0,0,0.16))]" />
-                  {profile.avatar ? (
-                    <span className="relative text-6xl sm:text-7xl">{profile.avatar}</span>
-                  ) : (
-                    <span className="relative">{profileInitials(profile.name)}</span>
-                  )}
-                  {profile.locked && (
-                    <span className="absolute top-3 right-3 rounded-full bg-black/25 p-1.5">
-                      <LockKeyhole className="size-4" />
-                    </span>
-                  )}
-                </div>
-                <span className="w-full truncate text-base font-medium text-foreground/70 group-hover:text-foreground sm:text-lg">
-                  {profile.name}
-                </span>
-              </button>
-            ))}
-
+        <div className="flex w-full flex-wrap items-start justify-center gap-x-6 gap-y-8 sm:gap-x-9 sm:gap-y-10">
+          {profiles.map((profile) => (
             <button
+              key={profile.id}
               type="button"
               disabled={busy}
-              onClick={openCreateProfile}
-              className="group flex w-36 min-w-0 flex-col items-center gap-4 rounded-md p-2 text-center outline-none transition duration-200 ease-out hover:-translate-y-1 focus-visible:ring-2 focus-visible:ring-foreground/25 disabled:pointer-events-none disabled:opacity-60 sm:w-44 md:w-48"
+              onClick={() => selectProfile(profile)}
+              className="group flex w-36 min-w-0 flex-col items-center gap-4 rounded-md p-2 text-center outline-none transition duration-200 ease-out focus-visible:ring-2 focus-visible:ring-foreground/25 disabled:pointer-events-none disabled:opacity-60 pointer-fine:hover:-translate-y-1 sm:w-44 md:w-48"
             >
-              <div className="grid size-32 place-items-center rounded-md border border-dashed border-foreground/25 bg-muted/35 text-foreground/45 shadow-[0_18px_48px_-34px_rgba(0,0,0,0.45)] transition duration-200 group-hover:border-foreground/45 group-hover:bg-muted/55 group-hover:text-foreground sm:size-40 md:size-44">
-                <Plus className="size-12 sm:size-14" />
+              <div
+                className="relative grid size-32 place-items-center overflow-hidden rounded-md text-5xl font-semibold text-white shadow-[0_18px_48px_-28px_rgba(0,0,0,0.65)] ring-1 ring-black/10 transition duration-200 pointer-fine:group-hover:shadow-[0_24px_60px_-30px_rgba(0,0,0,0.72)] pointer-fine:group-hover:ring-4 pointer-fine:group-hover:ring-foreground/20 sm:size-40 sm:text-6xl md:size-44"
+                style={{ backgroundColor: profile.color }}
+              >
+                <div className="pointer-events-none absolute inset-0 bg-[linear-gradient(145deg,rgba(255,255,255,0.22),rgba(255,255,255,0)_42%,rgba(0,0,0,0.16))]" />
+                {profile.avatar ? (
+                  <span className="relative text-6xl sm:text-7xl">{profile.avatar}</span>
+                ) : (
+                  <span className="relative">{profileInitials(profile.name)}</span>
+                )}
+                {profile.locked && (
+                  <span className="absolute top-3 right-3 rounded-full bg-black/25 p-1.5">
+                    <LockKeyhole className="size-4" />
+                  </span>
+                )}
               </div>
-              <span className="text-base font-medium text-foreground/55 group-hover:text-foreground sm:text-lg">
-                Add profile
+              <span className="w-full truncate text-base font-medium text-foreground/70 group-hover:text-foreground sm:text-lg">
+                {profile.name}
               </span>
             </button>
-          </div>
-        )}
+          ))}
 
-        {(selected || creating || error) && (
-          <div className="mx-auto mt-12 w-full max-w-md rounded-md border border-border/80 bg-card/95 p-5 text-left shadow-[0_24px_70px_-40px_rgba(0,0,0,0.65)] backdrop-blur">
+          <button
+            type="button"
+            disabled={busy}
+            onClick={openCreateProfile}
+            className="group flex w-36 min-w-0 flex-col items-center gap-4 rounded-md p-2 text-center outline-none transition duration-200 ease-out focus-visible:ring-2 focus-visible:ring-foreground/25 disabled:pointer-events-none disabled:opacity-60 pointer-fine:hover:-translate-y-1 sm:w-44 md:w-48"
+          >
+            <div className="grid size-32 place-items-center rounded-md border border-dashed border-foreground/25 bg-muted/35 text-foreground/45 shadow-[0_18px_48px_-34px_rgba(0,0,0,0.45)] transition duration-200 pointer-fine:group-hover:border-foreground/45 pointer-fine:group-hover:bg-muted/55 pointer-fine:group-hover:text-foreground sm:size-40 md:size-44">
+              <Plus className="size-12 sm:size-14" />
+            </div>
+            <span className="text-base font-medium text-foreground/55 group-hover:text-foreground sm:text-lg">
+              Add profile
+            </span>
+          </button>
+        </div>
+
+        {error && !dialogOpen && (
+          <p className="mt-8 text-sm text-destructive">{error}</p>
+        )}
+      </ViewFade>
+
+      {/* Password / create flows live in a fixed overlay near the top of the
+          viewport instead of expanding the page in place: nothing in the grid
+          moves, and the mobile keyboard opens below the card without panning
+          the layout. No entry animation by design. */}
+      {dialogOpen && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onPointerDown={closeDialog}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") closeDialog()
+          }}
+          className="fixed inset-0 z-50 flex items-start justify-center bg-black/35 px-5 pt-[max(16vh,calc(env(safe-area-inset-top)+3.5rem))] backdrop-blur-[2px]"
+        >
+          <div
+            onPointerDown={(event) => event.stopPropagation()}
+            className="w-full max-w-md rounded-xl border border-border/80 bg-card p-5 text-left shadow-[0_24px_70px_-40px_rgba(0,0,0,0.65)]"
+          >
             {selected && (
               <form
                 className="space-y-4"
@@ -222,11 +261,7 @@ export function ProfilePicker() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setSelected(null)
-                      setPassword("")
-                      setError(null)
-                    }}
+                    onClick={closeDialog}
                     className="h-11 rounded-md border border-border px-4 text-sm"
                   >
                     Cancel
@@ -260,11 +295,7 @@ export function ProfilePicker() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => {
-                      setCreating(false)
-                      setNewName("")
-                      setError(null)
-                    }}
+                    onClick={closeDialog}
                     className="h-11 rounded-md border border-border px-4 text-sm"
                   >
                     Cancel
@@ -275,8 +306,8 @@ export function ProfilePicker() {
 
             {error && <p className="mt-3 text-sm text-destructive">{error}</p>}
           </div>
-        )}
-      </div>
+        </div>
+      )}
     </main>
   )
 }

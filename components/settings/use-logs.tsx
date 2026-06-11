@@ -150,6 +150,17 @@ export function useLogs(): UseLogsResult {
         void fetchPage("reset", null)
     }, [fetchPage])
 
+    // Keep the latest `fetchPage` in a ref so the SSE effect can call it without
+    // listing it as a dependency. `fetchPage` is recreated on every `filters`
+    // change; if the stream effect depended on it, every filter tweak would tear
+    // down and reopen the EventSource — flashing connecting→connected on each
+    // change (and reliably once on mount, when the search debounce churns the
+    // filters reference). The stream's lifecycle should track only `liveTail`.
+    const fetchPageRef = React.useRef(fetchPage)
+    React.useEffect(() => {
+        fetchPageRef.current = fetchPage
+    }, [fetchPage])
+
     const clearAll = React.useCallback(async () => {
         const res = await fetch("/api/logs", { method: "DELETE" })
         if (!res.ok) throw new Error(`Failed to clear (${res.status})`)
@@ -178,7 +189,7 @@ export function useLogs(): UseLogsResult {
             // Coalesce bursts (e.g. start + complete fire close together).
             pendingTimer = window.setTimeout(() => {
                 pendingTimer = null
-                void fetchPage("reset", null, { showLoading: false })
+                void fetchPageRef.current("reset", null, { showLoading: false })
             }, 250)
         }
 
@@ -195,7 +206,7 @@ export function useLogs(): UseLogsResult {
                 if (data.type === "ready") {
                     setLiveTailStatus("connected")
                     // Catch rows inserted while the stream was connecting or reconnecting.
-                    void fetchPage("reset", null, { showLoading: false, skipUnchanged: true })
+                    void fetchPageRef.current("reset", null, { showLoading: false, skipUnchanged: true })
                     return
                 }
                 if (data.type === "request_started" || data.type === "request_completed" || data.type === "logs_cleared") {
@@ -206,13 +217,13 @@ export function useLogs(): UseLogsResult {
 
         fallbackTimer = window.setInterval(() => {
             if (document.visibilityState === "visible") {
-                void fetchPage("reset", null, { showLoading: false, skipUnchanged: true })
+                void fetchPageRef.current("reset", null, { showLoading: false, skipUnchanged: true })
             }
         }, 10_000)
 
         const refreshWhenVisible = () => {
             if (document.visibilityState === "visible") {
-                void fetchPage("reset", null, { showLoading: false, skipUnchanged: true })
+                void fetchPageRef.current("reset", null, { showLoading: false, skipUnchanged: true })
             }
         }
         const onVisibilityChange = () => {
@@ -230,7 +241,9 @@ export function useLogs(): UseLogsResult {
             document.removeEventListener("visibilitychange", onVisibilityChange)
             es.close()
         }
-    }, [liveTail, fetchPage])
+        // Intentionally NOT depending on `fetchPage`: the stream's lifecycle
+        // tracks `liveTail` only, and we call the latest fetch via `fetchPageRef`.
+    }, [liveTail])
 
     return {
         rows,

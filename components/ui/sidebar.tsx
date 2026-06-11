@@ -344,7 +344,13 @@ function Sidebar({
           data-sidebar="sidebar"
           data-slot="sidebar"
           data-mobile="true"
-          className="w-(--sidebar-width) bg-sidebar p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground outline-none [&>button]:hidden"
+          // `fixed inset-y-0` (from the sheet variant) pins the bottom to the
+          // layout viewport, which on iOS Safari sits *behind* the bottom
+          // toolbar — hiding the profile/sign-out footer. Anchor to the top and
+          // size with svh (smallest viewport height, i.e. toolbar shown) so the
+          // footer always clears the toolbar. No effect in standalone PWA
+          // (svh == full height there).
+          className="w-(--sidebar-width) !bottom-auto !h-[100svh] bg-sidebar p-0 pt-[env(safe-area-inset-top)] pb-[env(safe-area-inset-bottom)] text-sidebar-foreground outline-none [&>button]:hidden"
           style={
             {
               "--sidebar-width": SIDEBAR_WIDTH_MOBILE,

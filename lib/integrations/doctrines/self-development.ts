@@ -1,4 +1,11 @@
-export const ORCHESTRATOR_SELF_DEVELOPMENT = `
+// Self-development & project-run doctrine — loaded lazily via
+// ActivateIntegrationTools("self_dev"). This used to ship always-on in the
+// orchestrator base prompt (~2.6k tokens) as ORCHESTRATOR_SELF_DEVELOPMENT,
+// but it only matters when the user actually asks for code work on the
+// Orchestrator itself or another repository/project. The always-on
+// <subsystems> entry carries the activation trigger; this file carries the
+// full operating protocol.
+export const SELF_DEVELOPMENT_DOCTRINE = `
 <project_workspace_policy>
 When the user asks you to work on software projects, treat yourself as the project manager and the coder as the implementation worker. Prepare an isolated project workspace first, then delegate implementation.
 

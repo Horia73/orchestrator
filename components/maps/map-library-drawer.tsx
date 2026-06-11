@@ -6,12 +6,12 @@ import {
   Check,
   Loader2,
   MapPinned,
-  PanelRightClose,
   Pencil,
   Route,
   Save,
   Search,
   Trash2,
+  X,
 } from "lucide-react"
 
 import { Button } from "@/components/ui/button"
@@ -130,49 +130,55 @@ export function MapLibraryDrawer({
         "flex w-[380px] max-w-[100vw] shrink-0 flex-col overflow-hidden border-l border-border/70 bg-background shadow-xl",
         docked
           ? "relative h-full rounded-none border-y-0 border-r-0 shadow-none"
-          : "absolute top-0 right-0 bottom-0 z-[70] max-sm:inset-x-2 max-sm:top-auto max-sm:bottom-[calc(env(safe-area-inset-bottom)_+_3.25rem)] max-sm:h-[min(74dvh,700px)] max-sm:w-auto max-sm:rounded-lg max-sm:border"
+          : "absolute top-0 right-0 bottom-0 z-[70] max-sm:fixed max-sm:inset-0 max-sm:z-[80] max-sm:w-auto max-sm:rounded-none max-sm:border-0"
       )}
     >
-      <header className="relative shrink-0 border-b border-border/70 px-3 py-3">
-        <div className="flex min-w-0 items-center gap-2 pr-[calc(2.5rem_+_0.5rem)]">
-          <div
-            className="grid h-8 min-w-0 flex-1 grid-cols-3 rounded-lg bg-muted p-0.5"
-            aria-label="Map sidebar mode"
-          >
-            <button
-              type="button"
-              onClick={onShowChat}
-              className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Chat
-            </button>
-            <button
-              type="button"
-              onClick={onShowPlaces}
-              className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-            >
-              Places
-            </button>
-            <button
-              type="button"
-              aria-pressed
-              className="rounded-md bg-background px-2 text-[12px] font-medium text-foreground shadow-sm"
-            >
-              Map
-            </button>
+      <header className="shrink-0 border-b border-border/70 px-3 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
+        <div className="flex min-w-0 items-center gap-2">
+          <div className="min-w-0 flex-1 px-1">
+            <div className="truncate text-[13px] font-semibold text-foreground">
+              Maps
+            </div>
+            <div className="text-[11px] text-muted-foreground">
+              {savedPlacesCount} places · {savedAreasCount} areas · {allCount}{" "}
+              maps
+            </div>
           </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close map library"
+            title="Close map library"
+            className="flex size-8 shrink-0 items-center justify-center rounded-md text-foreground/60 transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <X className="size-4" />
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          aria-label="Close map library"
-          title="Close map library"
-          className="absolute top-3 right-3 z-20 flex size-10 items-center justify-center rounded-full border border-border/70 bg-background/95 text-foreground shadow-lg backdrop-blur transition-colors hover:bg-muted"
+        <div
+          className="mt-3 grid h-8 min-w-0 grid-cols-3 rounded-lg bg-muted p-0.5"
+          aria-label="Map sidebar mode"
         >
-          <PanelRightClose className="size-4" />
-        </button>
-        <div className="mt-3 px-1 text-[11px] text-muted-foreground">
-          {savedPlacesCount} places · {savedAreasCount} areas · {allCount} maps
+          <button
+            type="button"
+            onClick={onShowChat}
+            className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Chat
+          </button>
+          <button
+            type="button"
+            onClick={onShowPlaces}
+            className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Places
+          </button>
+          <button
+            type="button"
+            aria-pressed
+            className="rounded-md bg-background px-2 text-[12px] font-medium text-foreground shadow-sm"
+          >
+            Map
+          </button>
         </div>
       </header>
 

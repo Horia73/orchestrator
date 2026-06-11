@@ -15,13 +15,6 @@ import { cn } from "@/lib/utils"
 
 const SUPPRESS: string[] = ["application/vnd.ant.workout"]
 
-const QUICK_PROMPTS = [
-  "Schimbă un exercițiu",
-  "Fă-l mai greu",
-  "Adaugă un finisher",
-  "Verifică-mi forma (atașează o poză)",
-]
-
 interface WorkoutChatPanelProps {
   open: boolean
   mobile: boolean
@@ -51,7 +44,7 @@ export function WorkoutChatPanel({
   onCollapse,
   onWorkoutArtifact,
 }: WorkoutChatPanelProps) {
-  const { newChat, selectConversation, sendMessage, state } = useChatStore()
+  const { newChat, selectConversation, state } = useChatStore()
   const keyboardInset = useMobileKeyboardInset()
   const scrollbarVisible = useRevealOnScroll()
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
@@ -133,12 +126,24 @@ export function WorkoutChatPanel({
     state.streamingReasoning.length,
   ])
 
-  const handleQuickPrompt = React.useCallback(
-    (content: string) => {
-      sendMessage(content, undefined, undefined, buildSendOptions())
-    },
-    [buildSendOptions, sendMessage]
-  )
+  // Track how far the user sits from the bottom so the keyboard toggle can
+  // keep the latest messages in view only when they were already there —
+  // a reader scrolled up in history must not be yanked down.
+  const distanceFromBottomRef = React.useRef(0)
+  const trackScrollDistance = React.useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    distanceFromBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight
+  }, [])
+
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (distanceFromBottomRef.current <= 80) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [keyboardInset])
 
   const handleArtifactExpand = React.useCallback(
     (artifact: ArtifactRow) => {
@@ -193,10 +198,15 @@ export function WorkoutChatPanel({
           ref={scrollRef}
           className="transient-scrollbar min-h-0 flex-1 overflow-y-auto"
           style={{ WebkitOverflowScrolling: "touch", overscrollBehaviorY: "contain" }}
+          onScroll={trackScrollDistance}
         >
           <div
             className="mx-auto flex min-h-full w-full max-w-[700px] flex-col px-4 pt-6"
-            style={{ paddingBottom: keyboardInset > 0 ? 150 : 134 }}
+            style={{
+              // Clearance for the bottom input overlay, plus the keyboard
+              // height while it's up (the input lifts by exactly that much).
+              paddingBottom: keyboardInset + 134,
+            }}
           >
             {activeConversation ? (
               <div className="space-y-6">
@@ -232,22 +242,8 @@ export function WorkoutChatPanel({
               </div>
             ) : (
               <div className="flex flex-1 items-center justify-center py-12">
-                <div className="w-full max-w-[300px] text-center">
-                  <div className="mx-auto flex size-10 items-center justify-center rounded-lg border border-border/70 bg-muted/40">
-                    <Dumbbell className="size-4 text-muted-foreground" />
-                  </div>
-                  <div className="mt-3 flex flex-wrap justify-center gap-2">
-                    {QUICK_PROMPTS.map((prompt) => (
-                      <button
-                        key={prompt}
-                        type="button"
-                        onClick={() => handleQuickPrompt(prompt)}
-                        className="rounded-full border border-border/70 bg-background px-3 py-1.5 text-[12px] font-medium text-foreground shadow-sm transition-colors hover:bg-muted"
-                      >
-                        {prompt}
-                      </button>
-                    ))}
-                  </div>
+                <div className="mx-auto flex size-10 items-center justify-center rounded-lg border border-border/70 bg-muted/40">
+                  <Dumbbell className="size-4 text-muted-foreground" />
                 </div>
               </div>
             )}

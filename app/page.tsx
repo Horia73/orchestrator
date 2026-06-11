@@ -9,10 +9,16 @@ import { HomeView } from "@/components/home-view"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { SidebarInset } from "@/components/ui/sidebar"
 import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
+import { useViewLeaveFade } from "@/hooks/use-view-leave-fade"
 import { appApiPath } from "@/lib/app-path"
 import { publishChatScrollTarget } from "@/lib/chat-scroll-target"
+import {
+  getChatViewSettledConversationId,
+  getServerChatViewSettledConversationId,
+  subscribeChatViewSettled,
+} from "@/lib/chat-view-settled"
 import { cn } from "@/lib/utils"
-import { VIEW_FADE_MS, VIEW_LEAVE_EVENT } from "@/lib/view-fade"
+import { VIEW_FADE_MS } from "@/lib/view-fade"
 import type { Conversation } from "@/lib/types"
 
 function useViewFadeIn(viewKey: string, enabled: boolean) {
@@ -80,7 +86,8 @@ function useFadeGate(target: boolean, minHiddenMs: number) {
 }
 
 export default function Page() {
-  const { state, selectConversation, isSwitchingConversation } = useChatStore()
+  const { state, selectConversation, isSwitchingConversation, pendingViewSwitch } =
+    useChatStore()
   const searchParams = useSearchParams()
   const router = useRouter()
   const lastAppliedChatParamRef = React.useRef<string | null>(null)
@@ -176,11 +183,26 @@ export default function Page() {
     state.activeConversationId != null &&
     (activeConversationStatus === "summary" ||
       activeConversationStatus === "loading")
+  // The conversation ChatView has fully settled for (messages rendered +
+  // scroll restored). Gating the fade-in on it means the view eases in over a
+  // finished layout — nothing shifts mid-fade. Error views bypass it (ChatView
+  // isn't rendered, so it can never settle).
+  const settledChatConversationId = React.useSyncExternalStore(
+    subscribeChatViewSettled,
+    getChatViewSettledConversationId,
+    getServerChatViewSettledConversationId
+  )
+  const chatViewSettled =
+    state.activeConversationId == null ||
+    activeConversationStatus === "error" ||
+    settledChatConversationId === state.activeConversationId
   const rawViewVisible =
     viewReady &&
     viewEntered &&
     !isSwitchingConversation &&
-    !activeConversationPending
+    !pendingViewSwitch &&
+    !activeConversationPending &&
+    chatViewSettled
   // Hold the shell hidden for at least one fade length so a fast switch reads
   // as a clean fade-out → fade-in instead of a mid-flight reversal/jitter.
   const viewVisible = useFadeGate(rawViewVisible, VIEW_FADE_MS)
@@ -188,19 +210,8 @@ export default function Page() {
   // Fade this view out ahead of a route change (e.g. the sidebar Inbox link)
   // so it eases out instead of hard-cutting to the next route's blank loading
   // boundary. The sidebar fires VIEW_LEAVE_EVENT, waits one fade, then
-  // navigates. Self-clears as a safety net if a navigation never lands (so the
-  // page can't get stuck blank).
-  const [leaving, setLeaving] = React.useState(false)
-  React.useEffect(() => {
-    const onLeave = () => setLeaving(true)
-    window.addEventListener(VIEW_LEAVE_EVENT, onLeave)
-    return () => window.removeEventListener(VIEW_LEAVE_EVENT, onLeave)
-  }, [])
-  React.useEffect(() => {
-    if (!leaving) return
-    const timer = window.setTimeout(() => setLeaving(false), VIEW_FADE_MS + 1000)
-    return () => window.clearTimeout(timer)
-  }, [leaving])
+  // navigates. Self-clears as a safety net if a navigation never lands.
+  const leaving = useViewLeaveFade()
 
   const shellVisible = viewVisible && !leaving
 
@@ -210,7 +221,15 @@ export default function Page() {
   // active chat is still populating/settling, and the user watches the text
   // shift into place. Sticky once revealed, so later conversation switches never
   // re-show the splash.
-  const [appRevealed, setAppRevealed] = React.useState(false)
+  //
+  // The splash shows on a genuine cold start only (both platforms). Warm
+  // route→chat navigations (inbox → conversation, etc.) skip it on mobile and
+  // desktop alike: the departing view fades out, the blank shell bridges the
+  // gap, and the chat fades in. The lazy initializer runs once on mount, so
+  // `state.isLoading` here means "the chat store was still hydrating when this
+  // page instance mounted" — true only on a cold start, false on a warm
+  // route→chat nav (the store already hydrated in the layout provider).
+  const [appRevealed, setAppRevealed] = React.useState(() => !state.isLoading)
   React.useEffect(() => {
     if (viewVisible) setAppRevealed(true)
   }, [viewVisible])

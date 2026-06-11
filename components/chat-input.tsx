@@ -15,7 +15,10 @@ import {
     type AttachedFile,
 } from "@/hooks/use-file-attachments"
 import { useMessageDraft } from "@/hooks/use-message-draft"
-import { isMobileKeyboardViewport } from "@/hooks/use-keyboard-inset"
+import {
+    focusWithoutViewportScroll,
+    isMobileKeyboardViewport,
+} from "@/hooks/use-keyboard-inset"
 import {
     computeMarkdownListContinuation,
     computeMarkdownListTabSpacing,
@@ -33,25 +36,6 @@ function voiceRecordingExtension(mimeType: string): string {
     if (baseMime === "audio/aac") return "aac"
     if (baseMime === "audio/mpeg" || baseMime === "audio/mp3") return "mp3"
     return "webm"
-}
-
-function focusWithoutViewportScroll(textarea: HTMLTextAreaElement | null) {
-    if (!textarea) return
-
-    const scrollX = window.scrollX
-    const scrollY = window.scrollY
-
-    try {
-        textarea.focus({ preventScroll: true })
-    } catch {
-        textarea.focus()
-    }
-
-    window.requestAnimationFrame(() => {
-        if (window.scrollX !== scrollX || window.scrollY !== scrollY) {
-            window.scrollTo(scrollX, scrollY)
-        }
-    })
 }
 
 interface ChatInputProps {
@@ -110,18 +94,21 @@ export function ChatInput({
             const file = new File([blob], `voice-message.${extension}`, { type: mimeType })
             const formData = new FormData()
             formData.append("files", file)
+            formData.append("attachmentSource", "voice_recording")
             try {
                 const res = await fetch("/api/upload", { method: "POST", body: formData })
                 const data = await res.json().catch(() => ({}))
                 if (!res.ok) throw new Error(uploadErrorMessage(data, `Upload failed (${res.status})`))
                 const uploaded = uploadedAttachmentFromResponse(data)
                 if (uploaded) {
-                    const options = buildSendOptions?.("")
-                    if (onSend) onSend("", undefined, [uploaded], options)
-                    else sendMessage("", undefined, [uploaded], options)
+                    const text = draft.value.trim()
+                    const options = buildSendOptions?.(text)
+                    if (onSend) onSend(text, undefined, [uploaded], options)
+                    else sendMessage(text, undefined, [uploaded], options)
+                    if (text) draft.setValue("")
                 }
             } catch { /* upload failed silently */ }
-        }, [buildSendOptions, onSend, sendMessage]),
+        }, [buildSendOptions, draft, onSend, sendMessage]),
         onDismiss: React.useCallback(() => {
             setIsRecording(false)
             textareaRef.current?.focus()

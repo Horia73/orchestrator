@@ -105,6 +105,10 @@ Don't artifact: short snippets that explain themselves inline, single sentences,
 - Don't recap what you changed before the artifact — show the artifact, then explain inline if needed.
 </updating_vs_creating>
 
+<reusable_apps>
+When the user wants a reusable internal tool/mini-app they will return to across conversations — any self-contained interactive tool: calculators, planners, trackers, generators, dashboards, configurators, forms, small games, and everything in between — call ActivateIntegrationTools("apps") BEFORE authoring. The doctrine covers the registration flow (AppSave/AppShow), the per-app persistent data store, and the window.AppHost bridge the app code uses; the code itself is a normal \`text/html\` or \`application/vnd.ant.react\` artifact, but its data must live in the data store, never baked into the code. Also activate "apps" whenever the user references an app you built before (open it, add data to it, change it), or when a recurring workflow they describe would be better served by a small app than a one-off answer.
+</reusable_apps>
+
 <rules>
 - Self-contained: an HTML/React artifact must run without external file references the runtime can't fulfill. Inline CSS, inline JS, no \`<script src=local-file>\`.
 - For \`display="inline"\`, keep the artifact visually light in the chat: prefer transparent or host-friendly backgrounds, avoid full-page opaque shells unless the content truly needs them, and keep sizing compact/responsive.
@@ -233,18 +237,40 @@ export function buildSubAgentCollaboration(): string {
 /**
  * Build the tool reference block for an agent prompt.
  *
- * Format: name, description, then named parameters with types + required flag
- * + per-param description. Kept deliberately plain so providers map it well.
+ * Two shapes, keyed off `customToolNamePrefix`:
+ * - Empty prefix (codex / API providers): every custom tool schema is already
+ *   delivered natively in the request (codex `dynamicTools`, Anthropic
+ *   `body.tools`, OpenAI/Google equivalents), so re-listing definitions here
+ *   would duplicate ~6k tokens of schema prose. Emit only the built-ins
+ *   routing note.
+ * - Prefix set (Claude Code's MCP bridge → `mcp__orch-tools__`): custom tool
+ *   schemas are DEFERRED — not in the model's active tool list until loaded
+ *   via ToolSearch — so this menu is the model's only visibility into what
+ *   exists. Render name, description, and named parameters with types +
+ *   required flag, kept deliberately plain so providers map it well.
  */
 export function buildToolsSection(ctx: PromptContext): string {
     const builtins = ctx.availableBuiltins ?? []
     if (ctx.availableTools.length === 0 && builtins.length === 0) return ''
-    // Render each tool by the name the model must actually call. On providers
-    // that namespace custom tools (Claude Code's MCP bridge → `mcp__orch-tools__`),
-    // the bare id is NOT callable; advertising it here makes the model dead-end
-    // with "No such tool available". Empty prefix = bare names (codex / API
-    // providers), so this is a no-op for them.
     const prefix = ctx.customToolNamePrefix ?? ''
+    const builtinDetails = builtins.length > 0
+        ? [
+            'Native provider built-ins enabled:',
+            `- ${builtins.join(', ')}`,
+            builtins.includes('web_search')
+                ? '- web_search: use built-in web search directly for quick/current factual checks; delegate to researcher when the question needs exhaustive, cross-source, cross-language, market, legal/regulatory, medical/scientific, travel, or high-stakes evidence.'
+                : '',
+        ].filter(Boolean).join('\n')
+        : ''
+
+    if (!prefix || ctx.availableTools.length === 0) {
+        if (!builtinDetails) return ''
+        return ['<runtime_tools>', builtinDetails, '</runtime_tools>'].join('\n')
+    }
+
+    // Render each tool by the name the model must actually call: the bare id
+    // is NOT callable on namespaced providers; advertising it makes the model
+    // dead-end with "No such tool available".
     const details = ctx.availableTools.map(t => {
         const properties = t.input_schema.properties ?? {}
         const names = Object.keys(properties)
@@ -257,27 +283,13 @@ export function buildToolsSection(ctx: PromptContext): string {
             }).join('\n')
         return [`- ${prefix}${t.name}: ${t.description}`, params].join('\n')
     }).join('\n')
-    const builtinDetails = builtins.length > 0
-        ? [
-            'Native provider built-ins enabled:',
-            `- ${builtins.join(', ')}`,
-            builtins.includes('web_search')
-                ? '- web_search: use built-in web search directly for quick/current factual checks; delegate to researcher when the question needs exhaustive, cross-source, cross-language, market, legal/regulatory, medical/scientific, travel, or high-stakes evidence.'
-                : '',
-        ].filter(Boolean).join('\n')
-        : ''
 
-    // When custom tools are namespaced, the names elsewhere in this prompt
-    // (briefs, doctrine, prose) use the bare id. State the mapping AND the
-    // on-demand load step once, so a bare reference like `set_task_state` is
-    // both resolved to the prefixed name and actually loaded before the call.
-    // The prefix is set by providers that defer custom-tool schemas (Claude
-    // Code's MCP bridge): the tool is NOT in the active list until loaded via
-    // ToolSearch, so a direct call without loading fails "No such tool available".
+    // The names elsewhere in this prompt (briefs, doctrine, prose) use the
+    // bare id. State the mapping AND the on-demand load step once, so a bare
+    // reference like `set_task_state` is both resolved to the prefixed name
+    // and actually loaded before the call.
     const example = ctx.availableTools[0]?.name ?? 'tool'
-    const namingNote = prefix && ctx.availableTools.length > 0
-        ? `The tools above are exposed under the \`${prefix}\` namespace and load on demand — each may NOT be in your active tool list until you load it. To use one, first call ToolSearch with \`select:${prefix}<name>\` (e.g. \`select:${prefix}${example}\`), then call it by that exact prefixed name. Anywhere else in these instructions a tool is named without the prefix (e.g. \`${example}\`), it means \`${prefix}${example}\`. Native built-ins keep their bare names and need no loading.`
-        : 'Tools available in this runtime:'
+    const namingNote = `The tools above are exposed under the \`${prefix}\` namespace and load on demand — each may NOT be in your active tool list until you load it. To use one, first call ToolSearch with \`select:${prefix}<name>\` (e.g. \`select:${prefix}${example}\`), then call it by that exact prefixed name. Anywhere else in these instructions a tool is named without the prefix (e.g. \`${example}\`), it means \`${prefix}${example}\`. Native built-ins keep their bare names and need no loading.`
 
     return [
         '<runtime_tools>',
@@ -342,17 +354,10 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     if (ctx.userName && ctx.userName.trim()) {
         lines.push(`user_name: ${ctx.userName.trim()}`)
     }
-    const nowDate = new Date()
     const config = getConfig()
     const tz = config.timezone
-    const todayStamp = dateStampInTimezone(nowDate, tz)
-    lines.push(`today: ${todayStamp} (${tz} date — MEMORY_DAY files are named by this)`)
-    lines.push(`datetime_utc: ${nowDate.toISOString()}`)
-    lines.push(`timezone: ${tz}`)
-    lines.push(`local_time: ${formatDateTimeInTimezone(nowDate, tz)} (resolve the user's relative dates/times against this)`)
-    lines.push('time_basis: Use timezone/local_time as the default for relative dates, schedules, reminders, monitors, notifications, and user-facing timestamps. Use UTC only for raw logs, protocol timestamps, or when the user explicitly asks for UTC.')
-    const hostTz = systemTimezone()
-    if (hostTz !== tz) lines.push(`host_timezone: ${hostTz}`)
+    const todayStamp = dateStampInTimezone(new Date(), tz)
+    lines.push(`timezone: ${tz} (current date/time are in the <current_time> block at the end of this prompt)`)
     const appOrigin = cleanOrigin(
         ctx.extra?.appOrigin
         ?? getEnvValue('ORCHESTRATOR_PUBLIC_URL')
@@ -447,8 +452,35 @@ export function buildRuntimeContext(ctx: PromptContext): string {
         // ctx.pendingUpdate is set and instructs at-most-once-per-conversation.
         isOrchestrator ? buildPendingUpdateBlock(ctx) : '',
         buildIntegrationRunbooksContext(),
-        buildWorkspaceContextFiles(ctx.agentId),
+        buildWorkspaceContextFiles(ctx.agentId, ctx.includeMonitorsFile === true),
     ].filter(Boolean).join('\n\n')
+}
+
+/**
+ * Current date/time block. Kept OUT of <runtime_context> and appended as the
+ * LAST block of every agent prompt: `local_time` changes every minute, so any
+ * provider-side prefix caching (codex/OpenAI automatic, Gemini implicit,
+ * Anthropic explicit) would be invalidated from this point on — putting it
+ * last means the per-turn cache miss is just these few lines instead of
+ * everything that used to follow runtime_context (menus, tools, roster).
+ * Recency also helps: the end of the prompt is the best-attended spot for
+ * time awareness.
+ */
+export function buildClockContext(): string {
+    const nowDate = new Date()
+    const tz = getConfig().timezone
+    const lines = [
+        '<current_time>',
+        `today: ${dateStampInTimezone(nowDate, tz)} (${tz} date — MEMORY_DAY files are named by this)`,
+        `datetime_utc: ${nowDate.toISOString()}`,
+        `timezone: ${tz}`,
+        `local_time: ${formatDateTimeInTimezone(nowDate, tz)} (resolve the user's relative dates/times against this)`,
+        'time_basis: Use timezone/local_time as the default for relative dates, schedules, reminders, monitors, notifications, and user-facing timestamps. Use UTC only for raw logs, protocol timestamps, or when the user explicitly asks for UTC.',
+    ]
+    const hostTz = systemTimezone()
+    if (hostTz !== tz) lines.push(`host_timezone: ${hostTz}`)
+    lines.push('</current_time>')
+    return lines.join('\n')
 }
 
 const PENDING_UPDATE_NOTES_MAX = 600
@@ -557,6 +589,20 @@ const CONTEXT_FILE_IDS = new Set([
 export const MAX_CONTEXT_FILE_CHARS = 40_000
 export const MAX_CONTEXT_TOTAL_CHARS = 200_000
 
+/** True when a workspace-relative file exists (path-traversal safe). */
+export function workspaceFileExists(relPath: string): boolean {
+    const workspaceDir = activeRuntimePaths().agentWorkspaceDir
+    const absolutePath = path.resolve(workspaceDir, relPath)
+    if (absolutePath !== workspaceDir && !absolutePath.startsWith(workspaceDir + path.sep)) {
+        return false
+    }
+    try {
+        return fs.statSync(absolutePath).isFile()
+    } catch {
+        return false
+    }
+}
+
 function readWorkspaceFile(relPath: string): string | null {
     const workspaceDir = activeRuntimePaths().agentWorkspaceDir
     const absolutePath = path.resolve(workspaceDir, relPath)
@@ -573,7 +619,7 @@ function readWorkspaceFile(relPath: string): string | null {
     }
 }
 
-function buildWorkspaceContextFiles(agentId: string | undefined): string {
+function buildWorkspaceContextFiles(agentId: string | undefined, includeMonitors = false): string {
     const blocks: string[] = []
     let remaining = MAX_CONTEXT_TOTAL_CHARS
 
@@ -609,12 +655,13 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         // sub-agents (researcher, coder, …) never replay procedures, so keep it
         // out of their prompts alongside the onboarding script.
         if (!isOrchestrator && (file.id === 'boot' || file.id === 'onboarding' || file.id === 'playbooks')) continue
-        // MONITORS.md is documentation/preference memory only the Smart Monitor
-        // wake needs in full every run. The plain orchestrator (and the other
-        // orchestrator-class aliases like the inbox agent / conversation namer)
-        // read it on demand or via semantic recall instead of paying its full
-        // size in context every turn. Inject it only on the Smart Monitor wake.
-        if (file.id === 'monitors' && agentId !== 'smart-monitor-agent') continue
+        // MONITORS.md is documentation/preference memory that monitor-contract
+        // wakes need in full: the Smart Monitor wake (by agent id) and any run
+        // whose caller set includeMonitors (Microscript agent-wakes). The plain
+        // orchestrator (and the other orchestrator-class aliases like the inbox
+        // agent / conversation namer) read it on demand or via semantic recall
+        // instead of paying its full size in context every turn.
+        if (file.id === 'monitors' && agentId !== 'smart-monitor-agent' && !includeMonitors) continue
         if (remaining <= 0) break
 
         if (file.id === 'memory-day') {
@@ -650,7 +697,7 @@ function buildWorkspaceContextFiles(agentId: string | undefined): string {
         '<workspace_context_files>',
         'These user-managed context files are loaded LIVE from the workspace on every turn — they are current state, not a stale snapshot. Treat them as durable user/project context. Do not spend a tool call re-reading one just to confirm what is already shown here; only read from disk when a block is marked [truncated] or you have specific reason to think it changed mid-turn. To change durable state you must write the file with tools (see <safety_core>) — an in-context edit alone does not persist. Higher-priority runtime instructions and the current user message still win on conflict.',
         'Use BOOT.md only while it exists. Use ONBOARDING.md to resume long onboarding across conversations. If onboarding is completed or skipped, consolidate useful durable information into USER.md, MEMORY.md, MONITORS.md, and config.json when app-level display names changed; mark ONBOARDING.md complete/skipped; then remove BOOT.md.',
-        "Daily working memory lives at MEMORY_DAY/<configured-local-date>.md (the date is in runtime_context `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
+        "Daily working memory lives at MEMORY_DAY/<configured-local-date>.md (the date is in the <current_time> block's `today`). Append meaningful actions, design discussions, external/physical actions, and open loops to today's file. Use MEMORY.md only for durable facts worth carrying forward. AGENT_NEEDS.md is the operational backlog for missing capabilities/tool/runtime gaps; prefer ReportAgentNeed over manual edits. MONITORS.md documents recurring monitor specs, watchIds, cadence/check timing, check prompts, notify rules, and silence rules; an active monitor still requires an actual runtime watch/task.",
         '',
         ...blocks,
         '</workspace_context_files>',

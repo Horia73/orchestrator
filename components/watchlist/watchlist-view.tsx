@@ -23,6 +23,7 @@ import {
 
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { ViewFade } from "@/components/route-fade"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { cn } from "@/lib/utils"
 import type {
@@ -838,15 +839,27 @@ function Stat({
   )
 }
 
+// Last fetched snapshot, kept at module scope. The view is remounted per route
+// visit; seeding from here lets revisits fade in already populated while a
+// silent refresh runs, instead of re-flashing the loading state.
+let cachedWatchlist: {
+  items: WatchlistItemWithQuote[]
+  status: WatchlistDataStatus | null
+} | null = null
+
 export function WatchlistView() {
   const router = useRouter()
   const pathname = usePathname()
   const searchParams = useSearchParams()
   const { isMobile } = useSidebar()
-  const [items, setItems] = React.useState<WatchlistItemWithQuote[]>([])
-  const [status, setStatus] = React.useState<WatchlistDataStatus | null>(null)
+  const [items, setItems] = React.useState<WatchlistItemWithQuote[]>(
+    () => cachedWatchlist?.items ?? []
+  )
+  const [status, setStatus] = React.useState<WatchlistDataStatus | null>(
+    () => cachedWatchlist?.status ?? null
+  )
   const [errors, setErrors] = React.useState<string[]>([])
-  const [loading, setLoading] = React.useState(true)
+  const [loading, setLoading] = React.useState(cachedWatchlist === null)
   const [refreshing, setRefreshing] = React.useState(false)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [mobileDetailOpen, setMobileDetailOpen] = React.useState(false)
@@ -886,8 +899,11 @@ export function WatchlistView() {
       )
       if (!res.ok) throw new Error(await responseError(res))
       const data = (await res.json()) as WatchlistResponse
-      setItems(Array.isArray(data.items) ? data.items : [])
-      setStatus(data.status ?? null)
+      const nextItems = Array.isArray(data.items) ? data.items : []
+      const nextStatus = data.status ?? null
+      cachedWatchlist = { items: nextItems, status: nextStatus }
+      setItems(nextItems)
+      setStatus(nextStatus)
       setErrors(Array.isArray(data.errors) ? data.errors : [])
     } catch (error) {
       setErrors([
@@ -1020,7 +1036,7 @@ export function WatchlistView() {
     selectedIsProduct && selected?.url?.startsWith("http") ? selected.url : null
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
+    <ViewFade ready={!loading} className="flex h-full min-h-0 flex-col">
       <header className="flex shrink-0 items-center gap-3 border-b border-border/60 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 md:pt-3">
         <SidebarTrigger className="size-10 text-foreground/55 hover:text-foreground md:hidden" />
         <div className="min-w-0 flex-1">
@@ -1333,6 +1349,6 @@ export function WatchlistView() {
           )}
         </main>
       </div>
-    </div>
+    </ViewFade>
   )
 }

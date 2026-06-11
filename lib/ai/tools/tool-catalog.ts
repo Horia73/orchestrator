@@ -60,10 +60,14 @@ import {
   listExerciseHistoryTool,
   saveBodyMetricsTool,
 } from "./workout-history"
+import { patchWorkoutTool } from "./workout-patch"
+import { APPS_TOOLS } from "./apps"
 import { applyUpdateTool } from "./update-app"
 import { memorySearchTool } from "./memory-search"
 import { librarySearchTool } from "./library-search"
 import { findPastUploadsTool } from "./find-past-uploads"
+import { copyUploadToWorkspaceTool } from "./copy-upload"
+import { transcribeAudioTool } from "./transcribe-audio"
 import { createBackupTool } from "./create-backup"
 import { hostStatusTool } from "./host-status"
 import { skillTools } from "./skills"
@@ -124,10 +128,14 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   getRecentWorkoutsTool,
   getBodyMetricsTool,
   saveBodyMetricsTool,
+  patchWorkoutTool,
+  ...APPS_TOOLS,
   applyUpdateTool,
   memorySearchTool,
   librarySearchTool,
   findPastUploadsTool,
+  copyUploadToWorkspaceTool,
+  transcribeAudioTool,
   createBackupTool,
   hostStatusTool,
   ...skillTools,

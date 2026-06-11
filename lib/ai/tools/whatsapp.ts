@@ -2,12 +2,14 @@ import fs from 'fs'
 import path from 'path'
 
 import type { ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
+import { getConfiguredTimezone } from '@/lib/config'
 import { getConversation } from '@/lib/db'
 import {
     type WhatsAppDownloadedMedia,
     type WhatsAppOutgoingAttachment,
     whatsappDeleteMessageForEveryone,
     whatsappDownloadMedia,
+    whatsappFindMessages,
     getWhatsAppIntegrationStatus,
     startWhatsApp,
     whatsappListChats,
@@ -147,6 +149,69 @@ export const whatsappSearchMessagesTool: ToolDef = {
             },
         },
         required: ['query'],
+    },
+    tags: ['read', 'whatsapp', 'messages'],
+}
+
+export const whatsappFindMessagesTool: ToolDef = {
+    id: 'WhatsAppFindMessages',
+    name: 'WhatsAppFindMessages',
+    description: [
+        'Finds older WhatsApp messages or media inside one chat by progressively loading that chat\'s WhatsApp Web history.',
+        'Use this when WhatsAppReadChat/WhatsAppSearchMessages only see recent history, or when the user asks for older audio/photos/files by date.',
+        'Pass chat_id from WhatsAppListChats, then narrow with query, date_from/date_to, types, media_only, or from_me. Returned ids can be passed to WhatsAppDownloadMedia when hasMedia is true.',
+        'This is read-only and never marks chats read, but it is bounded and not a guaranteed full account export; WhatsApp Web may stop before very old history or expired media.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            chat_id: {
+                type: 'string',
+                description: 'WhatsApp chat ID, usually returned by WhatsAppListChats. Required because deep search is intentionally scoped to one chat.',
+            },
+            query: {
+                type: 'string',
+                description: 'Optional case-insensitive text to search for in message bodies.',
+            },
+            date_from: {
+                type: 'string',
+                description: 'Optional inclusive lower bound. Use YYYY-MM-DD for a whole local day, or ISO date-time with timezone/offset for an exact instant.',
+            },
+            date_to: {
+                type: 'string',
+                description: 'Optional inclusive upper bound. Use YYYY-MM-DD for a whole local day, or ISO date-time with timezone/offset for an exact instant.',
+            },
+            time_zone: {
+                type: 'string',
+                description: 'IANA timezone for YYYY-MM-DD date filters. Defaults to the app-configured timezone.',
+            },
+            types: {
+                type: 'array',
+                items: { type: 'string' },
+                description: 'Optional message/media types to include, e.g. audio, image, video, document, sticker, chat. voice/ptt normalize to audio.',
+            },
+            media_only: {
+                type: 'boolean',
+                description: 'When true, return only messages that look like downloadable media. Useful for finding voice notes, photos, documents, and videos.',
+            },
+            from_me: {
+                type: 'boolean',
+                description: 'Optional sender filter. true = messages sent by the user; false = incoming messages.',
+            },
+            max_results: {
+                type: 'integer',
+                description: 'Maximum matching messages to return. Defaults to 20 and is capped at 75.',
+            },
+            max_messages: {
+                type: 'integer',
+                description: 'Approximate maximum messages to inspect while loading older history. Defaults to 500 and is capped at 2000.',
+            },
+            max_loads: {
+                type: 'integer',
+                description: 'Maximum WhatsApp Web load-earlier batches. Defaults to 12 and is capped at 40.',
+            },
+        },
+        required: ['chat_id'],
     },
     tags: ['read', 'whatsapp', 'messages'],
 }
@@ -336,6 +401,7 @@ export const whatsappTools: ToolDef[] = [
     whatsappUnreadSummaryTool,
     whatsappReadChatTool,
     whatsappSearchMessagesTool,
+    whatsappFindMessagesTool,
     whatsappDownloadMediaTool,
     whatsappSendMessageTool,
     whatsappSendMediaTool,
@@ -409,6 +475,57 @@ export async function executeWhatsAppSearchMessages(args: Record<string, unknown
         perChatLimit,
     })
     return { success: true, data: result }
+}
+
+export async function executeWhatsAppFindMessages(args: Record<string, unknown>): Promise<ToolResult> {
+    const chatId = stringArg(args, ['chat_id', 'chatId'])
+    if (!chatId) return { success: false, error: 'Missing required parameter: chat_id' }
+
+    const query = stringArg(args, ['query', 'q']).trim()
+    const dateFrom = stringArg(args, ['date_from', 'dateFrom', 'from']).trim()
+    const dateTo = stringArg(args, ['date_to', 'dateTo', 'to']).trim()
+    const types = stringArrayArg(args, ['types', 'type', 'message_types', 'messageTypes'])
+    const mediaOnly = booleanArg(args, ['media_only', 'mediaOnly'], false)
+    const fromMe = optionalBooleanArg(args, ['from_me', 'fromMe'])
+
+    if (!query && !dateFrom && !dateTo && types.length === 0 && !mediaOnly && fromMe === undefined) {
+        return {
+            success: false,
+            error: 'WhatsAppFindMessages requires at least one filter: query, date_from/date_to, types, media_only, or from_me.',
+        }
+    }
+
+    const maxResults = clamp(Math.floor(numberArg(args, ['max_results', 'maxResults'], 20)), 1, 75)
+    const maxMessages = clamp(Math.floor(numberArg(args, ['max_messages', 'maxMessages'], 500)), 50, 2_000)
+    const maxLoads = clamp(Math.floor(numberArg(args, ['max_loads', 'maxLoads'], 12)), 1, 40)
+    const timeZone = stringArg(args, ['time_zone', 'timeZone', 'timezone']) || getConfiguredTimezone()
+
+    try {
+        const result = await whatsappFindMessages({
+            chatId,
+            query: query || undefined,
+            dateFrom: dateFrom || undefined,
+            dateTo: dateTo || undefined,
+            timeZone,
+            types,
+            mediaOnly,
+            fromMe,
+            maxResults,
+            maxMessages,
+            maxLoads,
+        })
+        return {
+            success: true,
+            data: {
+                ...result,
+                instruction: result.scanLimitHit
+                    ? 'The scan hit its configured limit before proving the whole requested range was exhausted. If the target is still missing, retry with a narrower date range or higher max_messages/max_loads.'
+                    : 'Use message id values with WhatsAppDownloadMedia to save matching media into the chat when needed.',
+            },
+        }
+    } catch (error) {
+        return { success: false, error: error instanceof Error ? error.message : String(error) }
+    }
 }
 
 export async function executeWhatsAppDownloadMedia(args: Record<string, unknown>): Promise<ToolResult> {
@@ -811,6 +928,27 @@ function firstString(record: Record<string, unknown>, keys: string[]): string {
         if (typeof value === 'string' && value.trim()) return value.trim()
     }
     return ''
+}
+
+function stringArrayArg(args: Record<string, unknown>, keys: string[]): string[] {
+    const out: string[] = []
+    const seen = new Set<string>()
+    const push = (value: unknown) => {
+        if (typeof value !== 'string') return
+        for (const part of value.split(',')) {
+            const trimmed = part.trim()
+            if (trimmed && !seen.has(trimmed)) {
+                seen.add(trimmed)
+                out.push(trimmed)
+            }
+        }
+    }
+    for (const key of keys) {
+        const value = args[key]
+        if (Array.isArray(value)) value.forEach(push)
+        else push(value)
+    }
+    return out
 }
 
 function optionalBooleanArg(args: Record<string, unknown>, keys: string[]): boolean | undefined {

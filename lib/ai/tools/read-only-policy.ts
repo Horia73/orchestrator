@@ -1,7 +1,8 @@
 import type { ToolDef } from '@/lib/ai/agents/types'
 
-// Read-only wake runs may gather context and notify, but they must not mutate
-// local runtime state, user files, or external sources through hidden fallback
+// Read-only wake runs (opt-in via agent_wake.toolSurface='read-only'; full is
+// the default) may gather context and notify, but they must not mutate local
+// runtime state, user files, or external sources through hidden fallback
 // calls. Keep this policy centralized so the advertised tool list and
 // RunActivatedIntegrationTool enforcement cannot drift.
 
@@ -44,6 +45,7 @@ export function isReadOnlyWakeToolAllowed(tool: ToolDef): boolean {
 export function readOnlyWakeToolError(tool: ToolDef): string {
     return [
         `${tool.id} is not available in this read-only wake.`,
-        'Microscript agent.wake runs may activate and read context, then notify Inbox, but they cannot perform source-side writes, setup, scheduling, filesystem changes, delegation, or destructive actions.',
+        "This wake runs with toolSurface 'read-only': it may activate and read context, then notify Inbox, but it cannot perform source-side writes, setup, scheduling, filesystem changes, delegation, or destructive actions.",
+        "If this script's wakes genuinely need to act, the script owner should switch the agent_wake permission to toolSurface 'full' (the default) with the user's approval.",
     ].join(' ')
 }

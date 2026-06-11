@@ -23,6 +23,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import { Switch } from "@/components/ui/switch"
+import { ViewFade } from "@/components/route-fade"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { cn } from "@/lib/utils"
@@ -472,7 +473,7 @@ function SchedulingViewInner() {
   }
 
   return (
-    <div className="flex h-full min-h-0">
+    <ViewFade ready={!loading} className="flex h-full min-h-0">
       {/* List */}
       <div
         className={cn(
@@ -659,7 +660,7 @@ function SchedulingViewInner() {
           </div>
         )}
       </div>
-    </div>
+    </ViewFade>
   )
 }
 

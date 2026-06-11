@@ -17,6 +17,7 @@ import {
   sanitizeReasoningForPersistence,
 } from "@/lib/ai/reasoning-limits"
 import { generateId, generateTitle } from "@/lib/utils-chat"
+import { VIEW_FADE_MS } from "@/lib/view-fade"
 import {
   addConversationMessageRequest,
   createConversationRequest,
@@ -101,6 +102,12 @@ interface ChatContextType {
   // background and the committed UI is still showing the previous chat.
   // page.tsx uses this to fade the committed view while the next one prepares.
   isSwitchingConversation: boolean
+  // True from the moment a chat↔chat / chat↔home switch is requested on the
+  // chat route until the new view is committed. The store holds the actual
+  // SELECT_CONVERSATION / NEW_CHAT dispatch for one fade length so the
+  // departing conversation fades out over its own content — page.tsx keeps the
+  // shell hidden while this is set, then fades the arriving view in.
+  pendingViewSwitch: boolean
   newChat: () => void
   selectConversation: (id: string, conversation?: Conversation) => void
   prefetchConversationMessages: (id: string) => Promise<void>
@@ -135,6 +142,9 @@ interface ChatContextType {
 
 const ChatContext = React.createContext<ChatContextType | null>(null)
 
+// pendingSwitchTarget sentinel for a switch to the home (new chat) view.
+const HOME_SWITCH_TARGET = "__home__"
+
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
   const [state, dispatch] = React.useReducer(chatReducer, {
@@ -158,6 +168,16 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // without blocking. The boolean flips true the instant the user clicks,
   // and clears once the new render commits.
   const [isSwitchingConversation, startSwitchTransition] = React.useTransition()
+  // Target of an in-flight view switch on the chat route (conversation id, or
+  // HOME_SWITCH_TARGET for "new chat"). Set urgently on click so the page
+  // starts fading out immediately, while the store dispatch that actually
+  // swaps the rendered conversation is held for VIEW_FADE_MS — otherwise a
+  // fast-loading chat commits mid-fade-out and visibly replaces the old one
+  // before the fade has finished. Cleared once the swap commits.
+  const [pendingSwitchTarget, setPendingSwitchTarget] = React.useState<
+    string | null
+  >(null)
+  const pendingSwitchTimeoutRef = React.useRef<number | null>(null)
 
   const abortControllerRef = React.useRef<AbortController | null>(null)
   // Start timestamp for the live "Thinking (Ns)" counter. Elapsed seconds are
@@ -198,6 +218,26 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     pathnameRef.current = pathname
   }, [pathname])
+
+  // Release the view-switch hold once the swap has committed (the new view is
+  // in the tree, invisible behind the page's fade gate).
+  React.useEffect(() => {
+    if (pendingSwitchTarget === null) return
+    const arrived =
+      pendingSwitchTarget === HOME_SWITCH_TARGET
+        ? state.activeConversationId === null
+        : state.activeConversationId === pendingSwitchTarget
+    if (arrived) setPendingSwitchTarget(null)
+  }, [pendingSwitchTarget, state.activeConversationId])
+
+  React.useEffect(() => {
+    return () => {
+      if (pendingSwitchTimeoutRef.current !== null) {
+        window.clearTimeout(pendingSwitchTimeoutRef.current)
+        pendingSwitchTimeoutRef.current = null
+      }
+    }
+  }, [])
 
   React.useEffect(() => {
     conversationsRef.current = state.conversations
@@ -1304,13 +1344,36 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const newChat = React.useCallback(() => {
     detachStreaming()
-    dispatch({ type: "NEW_CHAT" })
-    if (typeof window !== "undefined") {
+    const focusInput = () => {
+      if (typeof window === "undefined") return
       setTimeout(
         () => window.dispatchEvent(new CustomEvent("chat-input-focus")),
         0
       )
     }
+    if (pendingSwitchTimeoutRef.current !== null) {
+      window.clearTimeout(pendingSwitchTimeoutRef.current)
+      pendingSwitchTimeoutRef.current = null
+    }
+    // On the chat route with a conversation open, hold the swap for one fade
+    // so the departing chat fades out over its own content (see
+    // selectConversation). Elsewhere (maps/workout panels preparing a blank
+    // chat) there is no fading shell — swap immediately.
+    if (
+      pathnameRef.current === "/" &&
+      activeConversationIdRef.current !== null
+    ) {
+      activeConversationIdRef.current = null
+      setPendingSwitchTarget(HOME_SWITCH_TARGET)
+      pendingSwitchTimeoutRef.current = window.setTimeout(() => {
+        pendingSwitchTimeoutRef.current = null
+        dispatch({ type: "NEW_CHAT" })
+        focusInput()
+      }, VIEW_FADE_MS)
+      return
+    }
+    dispatch({ type: "NEW_CHAT" })
+    focusInput()
   }, [detachStreaming])
 
   const selectConversation = React.useCallback(
@@ -1340,9 +1403,31 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       detachStreaming()
       markConversationRead(id)
       void loadInitialMessages(id)
-      startSwitchTransition(() => {
-        dispatch({ type: "SELECT_CONVERSATION", id })
-      })
+      if (pendingSwitchTimeoutRef.current !== null) {
+        window.clearTimeout(pendingSwitchTimeoutRef.current)
+        pendingSwitchTimeoutRef.current = null
+      }
+      const dispatchSelect = () => {
+        startSwitchTransition(() => {
+          dispatch({ type: "SELECT_CONVERSATION", id })
+        })
+      }
+      // On the chat route, the page fades the current view out the moment
+      // pendingSwitchTarget is set. Hold the swap dispatch for that fade
+      // length: committing earlier replaces the departing chat's content
+      // mid-fade-out (a fast load visibly flashes the new chat before the
+      // animation), while messages keep loading in parallel above. Off the
+      // chat route (maps/workout panels, inbox → chat) there is no fading
+      // shell over this store — swap immediately.
+      if (pathnameRef.current === "/") {
+        setPendingSwitchTarget(id)
+        pendingSwitchTimeoutRef.current = window.setTimeout(() => {
+          pendingSwitchTimeoutRef.current = null
+          dispatchSelect()
+        }, VIEW_FADE_MS)
+        return
+      }
+      dispatchSelect()
     },
     [detachStreaming, loadInitialMessages, markConversationRead]
   )
@@ -2567,6 +2652,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       state,
       unreadConversationIds,
       isSwitchingConversation,
+      pendingViewSwitch: pendingSwitchTarget !== null,
       newChat,
       selectConversation,
       prefetchConversationMessages: loadInitialMessages,
@@ -2584,6 +2670,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       state,
       unreadConversationIds,
       isSwitchingConversation,
+      pendingSwitchTarget,
       newChat,
       selectConversation,
       loadInitialMessages,

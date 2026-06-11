@@ -5,6 +5,8 @@ import { ArrowLeft, Sparkles, X } from "lucide-react"
 
 import { WorkoutCanvas } from "@/components/artifacts/renderers/workout-renderer"
 import { WorkoutErrorCard } from "@/components/artifacts/renderers/workout/workout-error-card"
+import { useAppEvent } from "@/hooks/use-app-events"
+import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
@@ -42,6 +44,9 @@ export function WorkoutSurfaceView({
   onClose: () => void
 }) {
   const [artifact, setArtifact] = React.useState(initialArtifact)
+  // Pin the document so iOS Safari can't pan the page when the coach chat
+  // input focuses — the chat panel's own keyboard inset is the only lift.
+  useDocumentViewportLock()
   const sourceConversationId = React.useMemo(
     () =>
       initialArtifact.conversationOrigin === "inbox" ||
@@ -68,6 +73,26 @@ export function WorkoutSurfaceView({
     window.addEventListener("orch:artifact", handler)
     return () => window.removeEventListener("orch:artifact", handler)
   }, [artifact.identifier, artifact.version])
+
+  // Tool-driven edits (PatchWorkout) insert a new version server-side, which
+  // arrives as an `artifacts.changed` app event rather than the `orch:artifact`
+  // window event. Fetch the changed row and adopt it if it's a newer version
+  // of THIS workout.
+  useAppEvent(["artifacts.changed"], (event) => {
+    if (event.type !== "artifacts.changed") return
+    if (event.conversationId && event.conversationId !== artifact.conversationId) return
+    const changedId = event.artifactId
+    if (!changedId || changedId === artifact.id) return
+    void fetch(`/api/artifacts/${encodeURIComponent(changedId)}`)
+      .then((r) => (r.ok ? r.json() : null))
+      .then((row: ArtifactRow | null) => {
+        if (!row || row.type !== "application/vnd.ant.workout") return
+        if (row.identifier !== artifact.identifier) return
+        if (row.version < artifact.version) return
+        setArtifact(row)
+      })
+      .catch(() => undefined)
+  })
 
   const parsed = React.useMemo(
     () => parseWorkoutArtifact(artifact.content),
@@ -123,8 +148,9 @@ function WorkoutSurfaceInner({
       summarizeWorkoutForPrompt(sessionApi.workout, sessionApi.session, {
         identifier: artifact.identifier,
         title: artifact.title,
+        artifactId: artifact.id,
       }),
-    [sessionApi.workout, sessionApi.session, artifact.identifier, artifact.title]
+    [sessionApi.workout, sessionApi.session, artifact.identifier, artifact.title, artifact.id]
   )
 
   return (
@@ -141,6 +167,7 @@ function WorkoutSurfaceInner({
               sessionApi={sessionApi}
               title={artifact.title}
               artifactId={artifact.id}
+              prefetchImages
             />
           </div>
         </div>

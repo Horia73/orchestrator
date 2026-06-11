@@ -12,7 +12,7 @@ interface AttachmentCardProps {
     onClick?: () => void
 }
 
-function AudioPlayer({ url }: { url: string }) {
+export function AudioPlayer({ url }: { url: string }) {
     const audioRef = React.useRef<HTMLAudioElement>(null)
     const progressRef = React.useRef<HTMLDivElement>(null)
     const seekingRef = React.useRef(false)

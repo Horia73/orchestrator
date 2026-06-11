@@ -85,6 +85,8 @@ export interface ToolExecutionContext {
   preactivatedCapabilities?: readonly string[]
   /** Restrict the run to read-only/context tools plus notification/control primitives. */
   toolSurfaceMode?: "default" | "read-only"
+  /** Inject MONITORS.md in full into the woken agent's prompt (monitor-contract wakes). */
+  injectMonitorsFile?: boolean
 }
 
 // ---------------------------------------------------------------------------
@@ -230,6 +232,12 @@ export interface PromptContext {
   }
   /** Per-run capability ids treated as already activated without mutating the conversation store. */
   preactivatedCapabilities?: readonly string[]
+  /**
+   * Inject MONITORS.md in full into <workspace_context_files>. The Smart
+   * Monitor wake gets it via its agent id; Microscript agent-wakes (and any
+   * other monitor-contract wake) request it explicitly through this flag.
+   */
+  includeMonitorsFile?: boolean
   /** Any extra context the caller wants to inject */
   extra?: Record<string, string>
 }

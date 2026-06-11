@@ -490,100 +490,113 @@ export function ModelsTab() {
             Each agent uses the global default unless an override is set below.
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2 sm:justify-end">
-          {lastRefresh && (
-            <span
-              className={cn(
-                "inline-flex items-center gap-1 text-[11.5px] tabular-nums",
-                lastRefresh.ok
-                  ? "text-emerald-700 dark:text-emerald-500"
-                  : "text-destructive"
-              )}
-              title={lastRefresh.summary}
-            >
-              {lastRefresh.ok && <CheckCircle2 className="size-3" />}
-              {lastRefresh.summary}
-            </span>
-          )}
-          {lastResearch && (
-            <span
-              className={cn(
-                "inline-flex items-center gap-1 text-[11.5px] tabular-nums",
-                lastResearch.ok
-                  ? "text-emerald-700 dark:text-emerald-500"
-                  : "text-destructive"
-              )}
-              title={lastResearch.summary}
-            >
-              {lastResearch.ok && <CheckCircle2 className="size-3" />}
-              {lastResearch.summary}
-            </span>
-          )}
-          <button
-            onClick={handleResearch}
-            disabled={refreshing || researching}
-            className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium whitespace-nowrap text-foreground/70 transition-colors",
-              "hover:bg-muted/60 hover:text-foreground",
-              (researching || !hasUsableProviders || !researcherReady) &&
-                "opacity-60"
-            )}
-            title={
-              !hasUsableProviders || !researcherReady
-                ? (researchUnavailableReason ??
-                  "Connect a model provider before running research")
-                : researchableModelCount > 0
-                  ? researching
-                    ? `Running up to ${liveResearchConcurrency} model researchers at once`
-                    : `Ask the researcher to fill ${researchableModelCount} active incomplete model${researchableModelCount === 1 ? "" : "s"} from official docs`
-                  : "Open current model research status"
-            }
-          >
-            {researching ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <Search className="size-3.5" />
-            )}
-            {researching
-              ? `Researching · max ${liveResearchConcurrency}`
-              : formatResearchButtonLabel(
-                  researchableModelCount,
-                  hasUsableProviders && researcherReady
-                )}
-          </button>
-          {researching && (
+        <div className="flex flex-col gap-1.5 sm:items-end">
+          <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
             <button
-              onClick={stopResearchModels}
+              onClick={handleResearch}
+              disabled={refreshing || researching}
               className={cn(
-                "inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 text-[12.5px] font-medium whitespace-nowrap text-destructive transition-colors",
-                "hover:bg-destructive/10"
+                "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium whitespace-nowrap text-foreground/70 transition-colors",
+                "hover:bg-muted/60 hover:text-foreground",
+                (researching || !hasUsableProviders || !researcherReady) &&
+                  "opacity-60"
               )}
-              title="Stop the current research run"
+              title={
+                !hasUsableProviders || !researcherReady
+                  ? (researchUnavailableReason ??
+                    "Connect a model provider before running research")
+                  : researchableModelCount > 0
+                    ? researching
+                      ? `Running up to ${liveResearchConcurrency} model researchers at once`
+                      : `Ask the researcher to fill ${researchableModelCount} active incomplete model${researchableModelCount === 1 ? "" : "s"} from official docs`
+                    : "Open current model research status"
+              }
             >
-              <Square className="size-3.5 fill-current" />
-              Stop research
+              {researching ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <Search className="size-3.5" />
+              )}
+              {researching
+                ? `Researching · max ${liveResearchConcurrency}`
+                : formatResearchButtonLabel(
+                    researchableModelCount,
+                    hasUsableProviders && researcherReady
+                  )}
             </button>
-          )}
-          <button
-            onClick={handleRefresh}
-            disabled={refreshing || researching}
-            className={cn(
-              "inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium whitespace-nowrap text-foreground/70 transition-colors",
-              "hover:bg-muted/60 hover:text-foreground",
-              refreshing && "opacity-60"
+            {researching && (
+              <button
+                onClick={stopResearchModels}
+                className={cn(
+                  "inline-flex h-8 items-center gap-1.5 rounded-lg border border-destructive/25 bg-destructive/5 px-2.5 text-[12.5px] font-medium whitespace-nowrap text-destructive transition-colors",
+                  "hover:bg-destructive/10"
+                )}
+                title="Stop the current research run"
+              >
+                <Square className="size-3.5 fill-current" />
+                Stop research
+              </button>
             )}
-            title="Re-fetch model lists from provider APIs"
-          >
-            {refreshing ? (
-              <Loader2 className="size-3.5 animate-spin" />
-            ) : (
-              <RefreshCcw className="size-3.5" />
+            <button
+              onClick={handleRefresh}
+              disabled={refreshing || researching}
+              className={cn(
+                // Fixed min-width + centered content so the label swap
+                // (Refresh models ↔ Refreshing…) can't resize the button and
+                // shove its neighbours around.
+                "inline-flex h-8 min-w-[140px] items-center justify-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium whitespace-nowrap text-foreground/70 transition-colors",
+                "hover:bg-muted/60 hover:text-foreground",
+                refreshing && "opacity-60"
+              )}
+              title="Re-fetch model lists from provider APIs"
+            >
+              {refreshing ? (
+                <Loader2 className="size-3.5 animate-spin" />
+              ) : (
+                <RefreshCcw className="size-3.5" />
+              )}
+              {refreshing ? "Refreshing…" : "Refresh models"}
+            </button>
+            <p className="text-[12.5px] text-foreground/50 tabular-nums">
+              {data.agents.length}{" "}
+              {data.agents.length === 1 ? "agent" : "agents"}
+            </p>
+          </div>
+
+          {/* Refresh/research feedback gets its own reserved line so showing or
+              clearing it never reflows — or wraps — the action buttons above.
+              Single line + truncate keeps a long provider summary from growing
+              the header height. */}
+          <div className="flex min-h-[16px] max-w-full items-center justify-end gap-x-3 overflow-hidden">
+            {lastRefresh && (
+              <span
+                className={cn(
+                  "inline-flex min-w-0 items-center gap-1 text-[11.5px] tabular-nums",
+                  lastRefresh.ok
+                    ? "text-emerald-700 dark:text-emerald-500"
+                    : "text-destructive"
+                )}
+                title={lastRefresh.summary}
+              >
+                {lastRefresh.ok && <CheckCircle2 className="size-3 shrink-0" />}
+                <span className="truncate">{lastRefresh.summary}</span>
+              </span>
             )}
-            {refreshing ? "Refreshing…" : "Refresh models"}
-          </button>
-          <p className="text-[12.5px] text-foreground/50 tabular-nums">
-            {data.agents.length} {data.agents.length === 1 ? "agent" : "agents"}
-          </p>
+            {lastResearch && (
+              <span
+                className={cn(
+                  "inline-flex min-w-0 items-center gap-1 text-[11.5px] tabular-nums",
+                  lastResearch.ok
+                    ? "text-emerald-700 dark:text-emerald-500"
+                    : "text-destructive"
+                )}
+                title={lastResearch.summary}
+              >
+                {lastResearch.ok && <CheckCircle2 className="size-3 shrink-0" />}
+                <span className="truncate">{lastResearch.summary}</span>
+              </span>
+            )}
+          </div>
         </div>
       </div>
       {(researchStatusOpen || researching || researchEvents.length > 0) &&

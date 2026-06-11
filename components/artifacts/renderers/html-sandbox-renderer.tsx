@@ -3,6 +3,7 @@
 import * as React from "react"
 import { Loader2 } from "lucide-react"
 import { cn } from "@/lib/utils"
+import { APP_HOST_SCRIPT, useAppBinding, useAppHostBridge } from "./app-host-bridge"
 
 const BOUNDED_LOADING_HEIGHT = 720
 const INITIAL_RESIZE_SETTLE_MS = 260
@@ -237,6 +238,7 @@ export function HtmlSandboxRenderer({
     mode = 'bounded',
     minHeight,
     maxHeight,
+    artifactId,
 }: {
     source: string
     title: string
@@ -246,6 +248,8 @@ export function HtmlSandboxRenderer({
     minHeight?: number
     /** Defaults to 720 (bounded); ignored in unbounded mode. */
     maxHeight?: number
+    /** Stable artifact UUID — enables the AppHost data bridge for registered apps. */
+    artifactId?: string
 }) {
     const effectiveMinHeight = minHeight ?? (mode === 'unbounded' ? 320 : 240)
     const effectiveMaxHeight = mode === 'unbounded'
@@ -275,6 +279,11 @@ export function HtmlSandboxRenderer({
     const maxInitialWaitTimerRef = React.useRef<number | null>(null)
     const cacheKeyRef = React.useRef<string | null>(null)
 
+    // AppHost data bridge — inert (requests rejected) unless this artifact is
+    // the code of a registered app.
+    const appBinding = useAppBinding(artifactId)
+    useAppHostBridge(iframeRef, appBinding)
+
     const clearInitialResizeTimers = React.useCallback(() => {
         if (typeof window === "undefined") return
         if (initialSettleTimerRef.current !== null) {
@@ -297,7 +306,7 @@ export function HtmlSandboxRenderer({
     // to wrapping the raw source if the expected tags are missing.
     const srcDoc = React.useMemo(() => {
         let html = source
-        const headPrefix = SANDBOX_BASE_TAG + STORAGE_SHIM_SCRIPT
+        const headPrefix = SANDBOX_BASE_TAG + STORAGE_SHIM_SCRIPT + APP_HOST_SCRIPT
         const lowerInitial = html.toLowerCase()
         const headOpen = lowerInitial.indexOf('<head>')
         if (headOpen >= 0) {

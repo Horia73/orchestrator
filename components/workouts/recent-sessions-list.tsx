@@ -1,11 +1,14 @@
 "use client"
 
 import * as React from "react"
-import { Calendar, ChevronDown, ChevronUp, Clock, ListChecks, Timer, Trophy, Weight } from "lucide-react"
+import { Calendar, ChevronDown, Clock, ListChecks, Timer, Trophy, Weight } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import { formatDuration } from "@/lib/workout/format"
+import { useIdlePrefetch } from "@/hooks/use-idle-prefetch"
+import { Collapse } from "@/components/ui/collapse"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
+import { SectionEmpty } from "@/components/workouts/section-card"
 
 export interface SessionSummaryRow {
     slug: string
@@ -34,14 +37,23 @@ export interface SessionSummaryRow {
     muscleBreakdown?: Array<{ group: string; sets: number }>
 }
 
+const VISIBLE_DEFAULT = 8
+
 /**
- * List of recent sessions on the /workouts page.
+ * Recent sessions list inside the Workouts tab. Rendered as divided rows
+ * inside the parent SectionCard (no per-row borders — one container, one
+ * border, like the rest of the Library lists).
  *
  * Each row is collapsible: header shows the highlights, click to expand
  * and fetch the full markdown summary from /api/workouts/sessions/:slug.
+ * Long histories collapse to the first few rows with a "Show all" footer.
  *
- * Loading state is per-row (multiple sessions can be open at once). On fetch
- * error, the row shows the error inline and offers a retry.
+ * Expansion is smooth-by-default: each row warms its summary on idle (see
+ * useIdlePrefetch) so the content is already in the DOM, then the panel eases
+ * open with the height-animated Collapse straight to the real height — no
+ * "Loading…" text, no spinner (the sub-100ms local fetch made any spinner a
+ * flicker), and no height jitter. If a row is somehow tapped before prefetch we
+ * reveal once content arrives. On fetch error the row shows it inline + retry.
  */
 export function RecentSessionsList({
     sessions,
@@ -50,36 +62,50 @@ export function RecentSessionsList({
     sessions: SessionSummaryRow[]
     className?: string
 }) {
+    const [showAll, setShowAll] = React.useState(false)
+
     if (sessions.length === 0) {
         return (
-            <div className={cn(
-                "rounded-xl border border-dashed border-border bg-muted/25 p-6 text-center text-sm text-muted-foreground",
-                className,
-            )}>
+            <SectionEmpty>
                 No saved workouts yet. Start a session from chat and tap <span className="font-medium text-foreground">Finish workout</span> to see it here.
-            </div>
+            </SectionEmpty>
         )
     }
+
+    const visible = showAll ? sessions : sessions.slice(0, VISIBLE_DEFAULT)
     return (
-        <ul className={cn("flex flex-col gap-2", className)}>
-            {sessions.map((s) => (
-                <SessionRow key={s.slug} session={s} />
-            ))}
-        </ul>
+        <div className={cn("flex flex-col", className)}>
+            <ul className="divide-y divide-border/45">
+                {visible.map((s) => (
+                    <SessionRow key={s.slug} session={s} />
+                ))}
+            </ul>
+            {sessions.length > VISIBLE_DEFAULT ? (
+                <button
+                    type="button"
+                    onClick={() => setShowAll((v) => !v)}
+                    className="border-t border-border/45 py-2 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted/40 hover:text-foreground"
+                >
+                    {showAll ? "Show fewer" : `Show all ${sessions.length}`}
+                </button>
+            ) : null}
+        </div>
     )
 }
 
 function SessionRow({ session }: { session: SessionSummaryRow }) {
     const [open, setOpen] = React.useState(false)
     const [markdown, setMarkdown] = React.useState<string | null>(null)
-    const [loading, setLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
+    const inflight = React.useRef<Promise<void> | null>(null)
 
-    const onToggle = async () => {
-        const willOpen = !open
-        setOpen(willOpen)
-        if (willOpen && markdown === null && !loading) {
-            setLoading(true)
+    // Fetch the summary once and cache it. Dedupes concurrent calls (idle
+    // prefetch + a fast tap) onto one in-flight promise so a tap never reveals
+    // an empty panel mid-fetch. Never rejects — errors land in `error` state.
+    const load = React.useCallback(() => {
+        if (markdown !== null) return Promise.resolve()
+        if (inflight.current) return inflight.current
+        const run = (async () => {
             setError(null)
             try {
                 const r = await fetch(`/api/workouts/sessions/${encodeURIComponent(session.slug)}`)
@@ -92,18 +118,37 @@ function SessionRow({ session }: { session: SessionSummaryRow }) {
             } catch (e) {
                 setError(e instanceof Error ? e.message : String(e))
             } finally {
-                setLoading(false)
+                inflight.current = null
             }
+        })()
+        inflight.current = run
+        return run
+    }, [markdown, session.slug])
+
+    // Warm the summary on idle so the content is already in the DOM (clipped)
+    // by the time the row is tapped — the panel then just eases open.
+    useIdlePrefetch(load)
+
+    const onToggle = React.useCallback(() => {
+        if (open) {
+            setOpen(false)
+            return
         }
-    }
+        if (markdown !== null || error !== null) {
+            setOpen(true)
+            return
+        }
+        // Tapped before the prefetch landed — reveal once content arrives.
+        void load().then(() => setOpen(true))
+    }, [open, markdown, error, load])
 
     const date = session.startedAt.slice(0, 10)
     return (
-        <li className="overflow-hidden rounded-xl border border-border/60 bg-card shadow-sm transition-colors hover:border-border">
+        <li>
             <button
                 type="button"
                 onClick={() => void onToggle()}
-                className="flex w-full items-start gap-3 px-4 py-3 text-left"
+                className="flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-muted/30"
                 aria-expanded={open}
             >
                 <div className="min-w-0 flex-1">
@@ -145,16 +190,24 @@ function SessionRow({ session }: { session: SessionSummaryRow }) {
                     </div>
                 </div>
                 <span className="mt-1 shrink-0 text-muted-foreground/65">
-                    {open ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+                    <ChevronDown
+                        className={cn(
+                            "size-4 transition-transform duration-300 ease-out motion-reduce:transition-none",
+                            open && "rotate-180",
+                        )}
+                    />
                 </span>
             </button>
-            {open ? (
-                <div className="border-t border-border/45 bg-muted/15 px-4 py-3">
-                    {loading ? (
-                        <div className="text-[12px] text-muted-foreground">Loading…</div>
-                    ) : error ? (
+            <Collapse open={open}>
+                <div
+                    className={cn(
+                        "border-t border-border/45 bg-muted/15 px-4 py-3 transition-opacity duration-200 ease-out motion-reduce:transition-none",
+                        open ? "opacity-100" : "opacity-0",
+                    )}
+                >
+                    {error ? (
                         <div className="text-[12px] text-rose-500">
-                            {error} · <button onClick={() => void onToggle()} className="underline">retry</button>
+                            {error} · <button onClick={() => void load().then(() => setOpen(true))} className="underline">retry</button>
                         </div>
                     ) : markdown ? (
                         <div className="text-[12.5px] text-foreground/90">
@@ -162,7 +215,7 @@ function SessionRow({ session }: { session: SessionSummaryRow }) {
                         </div>
                     ) : null}
                 </div>
-            ) : null}
+            </Collapse>
         </li>
     )
 }

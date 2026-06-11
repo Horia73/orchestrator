@@ -24,6 +24,15 @@ import {
   WEATHER_SHOW_TOOL_ID,
   WEATHER_STATUS_TOOL_ID,
 } from "../weather"
+import {
+  APP_DATA_GET_TOOL_ID,
+  APP_DATA_SET_TOOL_ID,
+  APP_DELETE_TOOL_ID,
+  APP_GET_TOOL_ID,
+  APP_SAVE_TOOL_ID,
+  APP_SHOW_TOOL_ID,
+  APPS_LIST_TOOL_ID,
+} from "../apps"
 
 export const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
   MAP_RENDER_TOOL_ID,
@@ -46,6 +55,13 @@ export const ORCHESTRATOR_ONLY_TOOL_IDS = new Set<string>([
   GET_RECENT_WORKOUTS_TOOL_ID,
   GET_BODY_METRICS_TOOL_ID,
   SAVE_BODY_METRICS_TOOL_ID,
+  APPS_LIST_TOOL_ID,
+  APP_GET_TOOL_ID,
+  APP_SAVE_TOOL_ID,
+  APP_DELETE_TOOL_ID,
+  APP_DATA_GET_TOOL_ID,
+  APP_DATA_SET_TOOL_ID,
+  APP_SHOW_TOOL_ID,
   "search_past_runs",
   "get_past_run",
   "search_agent_logs",

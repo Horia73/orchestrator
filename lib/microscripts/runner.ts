@@ -28,8 +28,11 @@ import {
 } from './schema'
 import {
     computeDefaultNextRun,
+    ensureMicroscriptThreadAnchorConversation,
     finishMicroscriptRun,
+    getMicroscriptWakeThreadId,
     recordMicroscriptEvent,
+    setMicroscriptWakeThreadId,
 } from './store'
 
 // ---------------------------------------------------------------------------
@@ -637,7 +640,7 @@ export async function runMicroscript(
                 if (operationResults[key]) continue
                 newRequests += 1
                 operations += 1
-                const result = await executeOperation(script, request, pendingNotifications, inboxConversationId, counters)
+                const result = await executeOperation(script, request, pendingNotifications, inboxConversationId, counters, state)
                 operationResults[key] = result
                 recordMicroscriptEvent(script.id, result.ok ? 'operation_ok' : 'operation_error', {
                     key,
@@ -944,6 +947,7 @@ async function executeOperation(
     notifications: PendingNotification[],
     conversationId: string,
     counters: RunPolicyCounters,
+    state: Record<string, unknown>,
 ): Promise<OperationResult> {
     try {
         const parsed = MicroscriptOperationSchema.parse(request)
@@ -959,7 +963,7 @@ async function executeOperation(
             case 'agent.wake':
                 return {
                     ok: true,
-                    data: await executeAgentWake(script, parsed, notifications, conversationId),
+                    data: await executeAgentWake(script, parsed, notifications, conversationId, state),
                 }
             case 'home_assistant.get_state':
                 assertHomeAssistantRead(script, [parsed.entity_id], false, false)
@@ -1043,6 +1047,7 @@ async function executeDryRunOperation(
                         wouldWakeAgent: true,
                         agent_id: parsed.agent_id,
                         allowNotifyInbox: permission.allowNotifyInbox,
+                        toolSurface: permission.toolSurface,
                     },
                 }
             }
@@ -1086,6 +1091,7 @@ async function executeAgentWake(
     request: Extract<MicroscriptOperation, { kind: 'agent.wake' }>,
     notifications: PendingNotification[],
     conversationId: string,
+    state: Record<string, unknown>,
 ): Promise<Record<string, unknown>> {
     const permission = assertAgentWake(script, request)
     const { getAgent } = await import('@/lib/ai/agents/registry')
@@ -1094,24 +1100,64 @@ async function executeAgentWake(
     if (!baseAgent) throw new Error(`Unknown agent: ${request.agent_id}`)
     if (baseAgent.kind !== 'text') throw new Error(`Microscript agent.wake only supports text agents; ${request.agent_id} is kind=${baseAgent.kind}.`)
 
-    const target = {
-        ...baseAgent,
-        tools: buildAgentWakeToolGrant(baseAgent.tools, permission.allowNotifyInbox),
-        builtins: [],
-        canCallAgents: [],
-    }
-    const prompt = buildAgentWakePrompt(script, request.prompt, permission.allowNotifyInbox)
+    const readOnly = permission.toolSurface === 'read-only'
+    // Full-surface wakes keep the agent's normal builtins and delegation roster;
+    // read-only wakes stay stripped to context tools + notify.
+    const target = readOnly
+        ? {
+            ...baseAgent,
+            tools: buildAgentWakeToolGrant(baseAgent.tools, permission.allowNotifyInbox),
+            builtins: [],
+            canCallAgents: [],
+        }
+        : {
+            ...baseAgent,
+            tools: buildAgentWakeToolGrant(baseAgent.tools, permission.allowNotifyInbox),
+        }
+    const prompt = buildAgentWakePrompt(script, request.prompt, {
+        allowNotifyInbox: permission.allowNotifyInbox,
+        readOnly,
+        stateSnapshot: clipJsonForPrompt(state, 3_500),
+    })
     const notificationsBefore = notifications.length
+
+    // Wake continuity: one persistent agent thread per script, so this wake sees
+    // the prior wake exchanges (what was observed, what was decided/sent). The
+    // thread anchors to a hidden stable conversation — the per-run inbox
+    // conversation may not exist yet and is user-deletable (FK cascade).
+    const { getAgentThread, createAgentThread, addAgentThreadTurn, pruneAgentThreadMessages } = await import('@/lib/db')
+    let wakeThreadId: string | null = null
+    try {
+        wakeThreadId = getMicroscriptWakeThreadId(script.id)
+        if (wakeThreadId && !getAgentThread(wakeThreadId)) wakeThreadId = null
+        if (!wakeThreadId) {
+            const anchorConversationId = ensureMicroscriptThreadAnchorConversation(script.id, script.title)
+            wakeThreadId = createAgentThread({
+                conversationId: anchorConversationId,
+                agentId: request.agent_id,
+                createdByAgentId: '__microscripts__',
+                title: `Microscript wakes: ${script.title}`.slice(0, 120),
+            }).id
+            setMicroscriptWakeThreadId(script.id, wakeThreadId)
+        }
+    } catch {
+        wakeThreadId = null // continuity is best-effort; the wake still runs
+    }
 
     const parentCtx: ToolExecutionContext = {
         callerAgentId: '__microscripts__',
         depth: 0,
         conversationId,
+        agentThreadId: wakeThreadId ?? undefined,
         parentRequestId: `microscript_${script.id}_${randomUUID()}`,
         appOrigin: resolveAppOrigin(),
-        toolSurfaceMode: 'read-only',
+        ...(readOnly ? { toolSurfaceMode: 'read-only' as const } : {}),
+        // Monitor-contract wake: the woken agent gets MONITORS.md in full so the
+        // durable monitor spec (notify rules, silence rules, standing
+        // authorizations) is visible, not recall-only.
+        injectMonitorsFile: true,
         // notify_inbox is gated into the 'inbox' capability now; warm it up so a
-        // read-only microscript wake can still surface a notification.
+        // microscript wake can surface a notification without an activation hop.
         preactivatedCapabilities: ['inbox'],
         onAgentEvent: (event) => {
             if (event.type !== 'agent_tool_call' || event.toolCall?.name !== 'notify_inbox') return
@@ -1126,7 +1172,12 @@ async function executeAgentWake(
         },
     }
 
-    const result = await runTextSubAgent({ target, prompt, parentCtx })
+    const result = await runTextSubAgent({
+        target,
+        prompt,
+        parentCtx,
+        agentThreadId: wakeThreadId ?? undefined,
+    })
     if (!result.success) {
         throw new Error(result.error ?? `Agent ${request.agent_id} wake failed.`)
     }
@@ -1136,12 +1187,39 @@ async function executeAgentWake(
         const last = notifications[notifications.length - 1]
         if (last) last.body = appendMissingArtifactBlocks(last.body, output)
     }
+    if (wakeThreadId) {
+        try {
+            // Store the script payload (the live facts), not the boilerplate
+            // preamble, so replayed history stays dense. Bound both sides and
+            // prune to the last 24 messages (12 wake exchanges).
+            addAgentThreadTurn(wakeThreadId, {
+                prompt: clipTextForThread(request.prompt, 4_000),
+                output: clipTextForThread(output || '[no text output]', 6_000),
+            })
+            pruneAgentThreadMessages(wakeThreadId, 24)
+        } catch { /* best-effort */ }
+    }
     return {
         agent_id: request.agent_id,
         output,
         notified: notifications.length > notificationsBefore,
         notification_count: notifications.length - notificationsBefore,
     }
+}
+
+function clipJsonForPrompt(value: unknown, maxChars: number): string {
+    let raw: string
+    try {
+        raw = JSON.stringify(value ?? {})
+    } catch {
+        raw = '{}'
+    }
+    if (raw.length <= maxChars) return raw
+    return `${raw.slice(0, Math.max(0, maxChars - 14))}…[truncated]`
+}
+
+function clipTextForThread(value: string, maxChars: number): string {
+    return value.length <= maxChars ? value : `${value.slice(0, Math.max(0, maxChars - 14))}…[truncated]`
 }
 
 async function executeToolCall(
@@ -1267,21 +1345,34 @@ function globPatternMatches(pattern: string, value: string): boolean {
     return new RegExp(`^${escaped}$`).test(value)
 }
 
-function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyInbox: boolean): string {
+function buildAgentWakePrompt(
+    script: Microscript,
+    prompt: string,
+    opts: { allowNotifyInbox: boolean; readOnly: boolean; stateSnapshot: string },
+): string {
     return [
         'You were woken by a Microscript after a deterministic runtime condition matched.',
-        'Use only the context supplied in this prompt plus read-only/context tools exposed to this wake. Do not assume you can perform source-side actions.',
-        'You do not see MONITORS.md, the conversation that created this Microscript, or its code/state — the <microscript_payload> below is your entire task briefing. When it specifies a behavioral contract (notify rules, quiet hours, language, deliverable format), honor it exactly.',
-        'If the payload asks for planning or judgement that depends on user history, durable memory, local subsystems such as workouts, or connected source reads, activate exactly the relevant capability first and use its read-only tools before deciding. Do not activate broad unrelated capabilities.',
+        'Context you DO have on this wake: your durable memory files, MONITORS.md in full (when a monitor entry matches this script, honor its contract — notify rules, silence rules, standing authorizations), this script\'s recent wake exchanges in your agent thread, and the script state snapshot + payload below. You do NOT see the conversation where this script was created; the payload carries the live observed facts and is authoritative for this wake.',
+        'Verify before you act or notify: the script\'s snapshot may be minutes old. When a read tool for the triggering source is available, re-read JUST the entities/items named in the payload to confirm the condition still holds — do not re-scan the whole source. If it no longer holds, stay silent or downgrade the message accordingly.',
+        opts.readOnly
+            ? 'This wake is read-only: gather context, judge, and notify. Do not attempt source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions; notify or return an internal summary instead.'
+            : 'You have your normal tool surface — activate exactly the capabilities you need. Source-side or device actions are allowed ONLY under a standing authorization the user already granted (stated in the payload, MONITORS.md, or MEMORY.md) or when clearly safe and reversible under your action policy. Anything irreversible, costly, message-sending, or account-changing without such authorization: prepare it and notify instead of acting. After any authorized action, read the result back and report the verified outcome.',
+        'If the payload asks for planning or judgement that depends on user history, durable memory, local subsystems such as workouts, or connected source reads, activate exactly the relevant capability first and use its tools before deciding. Do not activate broad unrelated capabilities.',
         'If you intend to notify with a workout/gym/antrenament card, call ActivateIntegrationTools("workout") first, read the loaded workout doctrine, and use GetExerciseHistory/ListExerciseHistory/GetRecentWorkouts as relevant before emitting application/vnd.ant.workout. If the workout doctrine is not loaded, notify with markdown instead of a workout artifact.',
-        'Do not perform source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions from this wake; notify or return an internal summary instead.',
-        allowNotifyInbox
+        opts.allowNotifyInbox
             ? 'If the user should be interrupted, call notify_inbox with a specific title and concise body. If the item is not worth interrupting the user about, do not call notify_inbox; return a short internal summary.'
             : 'Do not notify the user. Return a short internal summary with your judgement.',
         'When a notification asks for a decision, include notify_inbox actions with short labels and exact reply values.',
+        opts.readOnly
+            ? 'If this wake was unnecessary or noisy, say so in your internal summary so the script owner can tune it.'
+            : 'If this wake was unnecessary or noisy, treat that as a script tuning bug: activate the microscripts capability, inspect this script, and apply the narrowest threshold/suppression/cooldown fix (validate with dry_run before a real update). Do not weaken broad monitoring to suppress one false positive.',
         '',
         `Microscript: ${script.title} (${script.id})`,
         `Description: ${script.manifest.description}`,
+        '',
+        '<microscript_state_snapshot>',
+        opts.stateSnapshot,
+        '</microscript_state_snapshot>',
         '',
         '<microscript_payload>',
         prompt,

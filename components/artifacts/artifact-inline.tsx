@@ -4,6 +4,7 @@ import * as React from "react"
 
 import { cn } from "@/lib/utils"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
+import { AppLinkRenderer } from "./renderers/app-link-renderer"
 import { CodeRenderer } from "./renderers/code-renderer"
 import { CsvRenderer } from "./renderers/csv-renderer"
 import { HtmlSandboxRenderer } from "./renderers/html-sandbox-renderer"
@@ -99,9 +100,11 @@ export function ArtifactBody({
         case 'application/vnd.ant.code':
             return <CodeRenderer source={content} language={artifact.language} />
         case 'text/html':
-            return <HtmlSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} />
+            return <HtmlSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} artifactId={artifact.id} />
         case 'application/vnd.ant.react':
-            return <ReactSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} />
+            return <ReactSandboxRenderer source={content} title={artifact.title} mode={sandboxMode} artifactId={artifact.id} />
+        case 'application/vnd.ant.app-link':
+            return <AppLinkRenderer source={content} />
         case 'application/vnd.ant.map':
             return <MapRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/vnd.ant.weather':
@@ -139,6 +142,7 @@ function extensionFor(mime: string, language?: string | null): string {
         case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.recipe': return 'json'
         case 'application/vnd.ant.workout': return 'json'
+        case 'application/vnd.ant.app-link': return 'json'
         case 'application/vnd.ant.code': return language || 'txt'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'

@@ -54,6 +54,7 @@ Rules:
     - approximate / qualitative: "o priză de sare", "după gust", "câteva picături"
   When the body just refers to an ingredient already in the list, prefer naming it ("untul", "parmezanul") over restating the amount.
 - \`imageQuery\` should be set for almost every recipe — it triggers the renderer to fetch attribution-clean photos from Wikimedia Commons and show them above the title. Use English search terms ("penne arrabbiata", "ciorbă de burtă", "ratatouille") rather than full sentences. Skip it only for very abstract dishes a search wouldn't find sensibly.
+- NEVER hand-write the \`images\` array. You have no image-search tool, so any URL you put there is a guess that will 404 and render as a broken-image placeholder. Always rely on \`imageQuery\` and let the renderer fetch live, verified photos.
 - Always include \`identifier\` and \`title\` attributes on the \`<artifact>\` tag. Use \`display="inline"\` unless the recipe is very long.
 - Compose recipes as artifacts whenever the user asks for one — even simple ones. The card is the right surface; plain markdown is the fallback.
 </recipe_schema>

@@ -3,9 +3,8 @@ import { ORCHESTRATOR_CORE } from './core'
 import { ORCHESTRATOR_DELEGATION } from './delegation'
 import { ORCHESTRATOR_EXAMPLES } from './examples'
 import { ORCHESTRATOR_INTEGRATIONS } from './integrations'
-import { ORCHESTRATOR_MEMORY } from './memory'
+import { ORCHESTRATOR_BOOT_PROTOCOL, ORCHESTRATOR_MEMORY } from './memory'
 import { ORCHESTRATOR_OUTPUT_CONTRACT } from './output-contract'
-import { ORCHESTRATOR_SELF_DEVELOPMENT } from './self-development'
 
 // Static orchestrator prompt. Capability doctrines that used to live here
 // (maps, weather, watchlist, monitoring, scheduling) now live in
@@ -14,13 +13,32 @@ import { ORCHESTRATOR_SELF_DEVELOPMENT } from './self-development'
 // activates the capability for the conversation via
 // ActivateIntegrationTools. The always-on capability summary surface is in
 // the <integrations> + <subsystems> blocks built by exposure.ts.
-export const ORCHESTRATOR_PROMPT = [
-    ORCHESTRATOR_CORE,
-    ORCHESTRATOR_MEMORY,
-    ORCHESTRATOR_ACTION_POLICY,
-    ORCHESTRATOR_INTEGRATIONS,
-    ORCHESTRATOR_SELF_DEVELOPMENT,
-    ORCHESTRATOR_DELEGATION,
-    ORCHESTRATOR_OUTPUT_CONTRACT,
-    ORCHESTRATOR_EXAMPLES,
-].filter(Boolean).join('\n\n')
+//
+// The self-development / project-run protocol moved the same way: it lives in
+// lib/integrations/doctrines/self-development.ts behind
+// ActivateIntegrationTools("self_dev") — <coding_product_work> in the action
+// policy points there.
+//
+// The one conditional piece is <boot_protocol>: the onboarding script only
+// matters while BOOT.md exists in the workspace, so it is included only then
+// (it sits right after the memory block, where it used to live inline). Both
+// variants are joined once at module load — the per-call cost is a lookup.
+function joinPrompt(withBootProtocol: boolean): string {
+    return [
+        ORCHESTRATOR_CORE,
+        ORCHESTRATOR_MEMORY,
+        withBootProtocol ? ORCHESTRATOR_BOOT_PROTOCOL : '',
+        ORCHESTRATOR_ACTION_POLICY,
+        ORCHESTRATOR_INTEGRATIONS,
+        ORCHESTRATOR_DELEGATION,
+        ORCHESTRATOR_OUTPUT_CONTRACT,
+        ORCHESTRATOR_EXAMPLES,
+    ].filter(Boolean).join('\n\n')
+}
+
+const PROMPT_WITH_BOOT = joinPrompt(true)
+const PROMPT_WITHOUT_BOOT = joinPrompt(false)
+
+export function buildOrchestratorStaticPrompt(opts: { bootActive: boolean }): string {
+    return opts.bootActive ? PROMPT_WITH_BOOT : PROMPT_WITHOUT_BOOT
+}

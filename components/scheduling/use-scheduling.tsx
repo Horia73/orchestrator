@@ -71,13 +71,20 @@ async function asError(res: Response): Promise<string> {
 
 const SchedulingContext = React.createContext<SchedulingApi | null>(null)
 
+// Last fetched task list, kept at module scope. The provider is remounted per
+// route visit; seeding from here lets revisits fade in already populated while
+// a silent refresh runs, instead of re-flashing the loading state.
+let cachedTasks: ScheduledTask[] | null = null
+
 export function SchedulingProvider({
   children,
 }: {
   children: React.ReactNode
 }) {
-  const [tasks, setTasks] = React.useState<ScheduledTask[]>([])
-  const [loading, setLoading] = React.useState(true)
+  const [tasks, setTasks] = React.useState<ScheduledTask[]>(
+    () => cachedTasks ?? []
+  )
+  const [loading, setLoading] = React.useState(cachedTasks === null)
   const [error, setError] = React.useState<string | null>(null)
 
   const refresh = React.useCallback(async () => {
@@ -85,7 +92,9 @@ export function SchedulingProvider({
       const res = await fetch("/api/scheduled-tasks", { cache: "no-store" })
       if (!res.ok) throw new Error(await asError(res))
       const data = await res.json()
-      setTasks(Array.isArray(data.tasks) ? data.tasks : [])
+      const next = Array.isArray(data.tasks) ? data.tasks : []
+      cachedTasks = next
+      setTasks(next)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load tasks")
@@ -98,7 +107,6 @@ export function SchedulingProvider({
 
   React.useEffect(() => {
     let cancelled = false
-    setLoading(true)
     refresh().finally(() => {
       if (!cancelled) setLoading(false)
     })

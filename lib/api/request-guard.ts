@@ -62,7 +62,12 @@ function getGuardFailureMessage(request: Request): string | null {
         if (fetchSite && fetchSite !== 'same-origin' && fetchSite !== 'none') {
             return 'Cross-origin requests are not allowed.'
         }
-        if (fetchSite !== 'same-origin' && !isLoopbackHost(effectiveHostname) && !validApiToken) {
+        if (
+            fetchSite !== 'same-origin' &&
+            !isLoopbackHost(effectiveHostname) &&
+            !isTrustedDevHost(effectiveHostname) &&
+            !validApiToken
+        ) {
             return 'Direct API requests to non-loopback hosts require ORCHESTRATOR_API_TOKEN.'
         }
         return null
@@ -270,6 +275,37 @@ function isLoopbackHost(hostname: string): boolean {
         || host === '::1'
         || host === '0:0:0:0:0:0:0:1'
         || /^127(?:\.\d{1,3}){3}$/.test(host)
+}
+
+// Development-only trust: when running `next dev` (never in production), allow
+// direct API requests from private LAN hosts without an API token. Safari over
+// plain HTTP to a LAN IP sends neither Origin (normal for same-origin GET) nor
+// Sec-Fetch-Site (omitted in insecure contexts), so the guard cannot otherwise
+// confirm same-origin and would 403 every API call from a phone on the LAN.
+// Production keeps the strict behavior — this returns false there.
+function isTrustedDevHost(hostname: string): boolean {
+    if (process.env.NODE_ENV === 'production') return false
+    const host = normalizeIpAddress(hostname)
+    if (!host) return false
+    if (isPrivateIpv4(host)) return true
+    // Private IPv6: unique-local (fc00::/7) and link-local (fe80::/10).
+    if (host.startsWith('fc') || host.startsWith('fd') || host.startsWith('fe80:')) return true
+    // mDNS / common LAN hostnames a phone may use to reach the dev machine.
+    if (host.endsWith('.local') || host.endsWith('.lan')) return true
+    return false
+}
+
+function isPrivateIpv4(host: string): boolean {
+    const match = host.match(/^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.\d{1,3}$/)
+    if (!match) return false
+    const a = Number.parseInt(match[1] ?? '', 10)
+    const b = Number.parseInt(match[2] ?? '', 10)
+    return (
+        a === 10 ||
+        (a === 172 && b >= 16 && b <= 31) ||
+        (a === 192 && b === 168) ||
+        (a === 169 && b === 254) // link-local
+    )
 }
 
 function normalizeIpAddress(value: string): string {

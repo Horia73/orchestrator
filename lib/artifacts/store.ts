@@ -125,6 +125,7 @@ function extensionFor(type: string, language?: string | null): string {
         case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.recipe': return 'json'
         case 'application/vnd.ant.workout': return 'json'
+        case 'application/vnd.ant.app-link': return 'json'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
         case 'application/vnd.ant.code': return safePathPart(language ?? 'txt')
@@ -326,6 +327,33 @@ export function listLatestArtifactsByType(type: string, limit = 100): ArtifactLi
               LIMIT ?`
         )
         .all(type, type, safeLimit) as RawArtifactListRow[]
+    return rows.map(parseListRow)
+}
+
+/** Latest versions of everything EXCEPT the given MIME types, newest first. Powers the Library "Artifacts" tab. */
+export function listLatestArtifactsExcludingTypes(excludedTypes: string[], limit = 100): ArtifactListItem[] {
+    const safeLimit = Math.max(1, Math.min(Math.trunc(limit), 500))
+    const placeholders = excludedTypes.map(() => '?').join(', ')
+    const innerFilter = excludedTypes.length > 0 ? `WHERE type NOT IN (${placeholders})` : ''
+    const outerFilter = excludedTypes.length > 0 ? `WHERE a.type NOT IN (${placeholders})` : ''
+    const rows = db
+        .prepare(
+            `SELECT a.*, c.title AS conversationTitle, COALESCE(c.origin, 'user') AS conversationOrigin
+               FROM artifacts a
+               JOIN (
+                   SELECT conversationId, identifier, MAX(version) AS v
+                     FROM artifacts
+                    ${innerFilter}
+                    GROUP BY conversationId, identifier
+               ) m ON m.conversationId = a.conversationId
+                  AND m.identifier = a.identifier
+                  AND m.v = a.version
+               LEFT JOIN conversations c ON c.id = a.conversationId
+              ${outerFilter}
+              ORDER BY a.createdAt DESC
+              LIMIT ?`
+        )
+        .all(...excludedTypes, ...excludedTypes, safeLimit) as RawArtifactListRow[]
     return rows.map(parseListRow)
 }
 

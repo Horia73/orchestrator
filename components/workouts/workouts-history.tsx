@@ -1,9 +1,10 @@
 "use client"
 
 import * as React from "react"
-import { Activity, Dumbbell, RefreshCw, Ruler, Scale, Trophy, TrendingUp, Weight } from "lucide-react"
+import { Activity, Dumbbell, History, Pencil, RefreshCw, Ruler, Scale, Trophy, TrendingUp, Weight } from "lucide-react"
 
 import { cn } from "@/lib/utils"
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
 import {
     RecentSessionsList,
     type SessionSummaryRow,
@@ -14,6 +15,7 @@ import {
 } from "@/components/workouts/exercise-leaderboard"
 import { MuscleBalance } from "@/components/workouts/muscle-balance"
 import { TrainingCalendar } from "@/components/workouts/training-calendar"
+import { SectionCard, SectionCount } from "@/components/workouts/section-card"
 import { Sparkline } from "@/components/workouts/sparkline"
 
 /**
@@ -23,15 +25,34 @@ import { Sparkline } from "@/components/workouts/sparkline"
  *
  * Self-contained: owns its own fetch, refresh, and error states. The
  * parent (Library or /workouts redirect target) only needs to render it.
+ *
+ * Layout: overview stat cards up top, calendar + muscle balance side by
+ * side, then sessions + PRs side by side. Every section shares the
+ * SectionCard shell so the tab reads as one system.
  */
+// Last fetched payloads, kept at module scope so revisiting the tab renders
+// the dashboard instantly (a silent refresh still runs) instead of
+// re-flashing the skeletons.
+let cachedWorkouts: {
+    sessions: SessionSummaryRow[]
+    exercises: ExerciseSummary[]
+    bodyMetrics: BodyMetricsPayload
+} | null = null
+
 export function WorkoutsHistory({
     className,
 }: {
     className?: string
 }) {
-    const [sessions, setSessions] = React.useState<SessionSummaryRow[] | null>(null)
-    const [exercises, setExercises] = React.useState<ExerciseSummary[] | null>(null)
-    const [bodyMetrics, setBodyMetrics] = React.useState<BodyMetricsPayload | null>(null)
+    const [sessions, setSessions] = React.useState<SessionSummaryRow[] | null>(
+        () => cachedWorkouts?.sessions ?? null
+    )
+    const [exercises, setExercises] = React.useState<ExerciseSummary[] | null>(
+        () => cachedWorkouts?.exercises ?? null
+    )
+    const [bodyMetrics, setBodyMetrics] = React.useState<BodyMetricsPayload | null>(
+        () => cachedWorkouts?.bodyMetrics ?? null
+    )
     const [error, setError] = React.useState<string | null>(null)
     const [refreshing, setRefreshing] = React.useState(false)
 
@@ -50,6 +71,11 @@ export function WorkoutsHistory({
             const sj = await sessRes.json() as { sessions: SessionSummaryRow[] }
             const ej = await exRes.json() as { exercises: ExerciseSummary[] }
             const bj = await bodyRes.json() as BodyMetricsPayload
+            cachedWorkouts = {
+                sessions: sj.sessions,
+                exercises: ej.exercises,
+                bodyMetrics: bj,
+            }
             setSessions(sj.sessions)
             setExercises(ej.exercises)
             setBodyMetrics(bj)
@@ -65,9 +91,9 @@ export function WorkoutsHistory({
     }, [load])
 
     return (
-        <div className={cn("flex flex-col gap-6", className)}>
-            <div className="flex items-end justify-between gap-3">
-                <p className="text-sm text-muted-foreground">
+        <div className={cn("flex flex-col gap-4", className)}>
+            <div className="flex flex-wrap items-end gap-3">
+                <p className="min-w-0 flex-1 text-sm text-muted-foreground">
                     Your session history and PRs. New sessions appear automatically after you tap <span className="font-medium text-foreground">Finish workout</span>.
                 </p>
                 <button
@@ -91,12 +117,6 @@ export function WorkoutsHistory({
                 </div>
             ) : null}
 
-            {sessions === null ? (
-                <div className="h-32 animate-pulse rounded-xl border border-border/40 bg-muted/30" />
-            ) : (
-                <TrainingCalendar sessions={sessions} />
-            )}
-
             {sessions === null || exercises === null || bodyMetrics === null ? (
                 <OverviewSkeleton />
             ) : (
@@ -108,35 +128,48 @@ export function WorkoutsHistory({
                 />
             )}
 
-            {sessions === null ? (
-                <div className="h-40 animate-pulse rounded-xl border border-border/40 bg-muted/30" />
-            ) : (
-                <MuscleBalance sessions={sessions} />
-            )}
+            <div className="grid grid-cols-1 gap-4 lg:grid-cols-2">
+                {sessions === null ? (
+                    <>
+                        <SectionSkeleton bodyHeight="h-40" />
+                        <SectionSkeleton bodyHeight="h-40" />
+                    </>
+                ) : (
+                    <>
+                        <TrainingCalendar sessions={sessions} />
+                        <MuscleBalance sessions={sessions} />
+                    </>
+                )}
+            </div>
 
-            <div className="grid grid-cols-1 gap-6 lg:grid-cols-[1.4fr_1fr]">
-                <section className="flex min-w-0 flex-col gap-3">
-                    <h2 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/65">
-                        Recent sessions
-                    </h2>
+            <div className="grid grid-cols-1 items-start gap-4 lg:grid-cols-[1.4fr_1fr]">
+                <SectionCard
+                    title="Recent sessions"
+                    icon={<History className="size-3.5" strokeWidth={2} />}
+                    actions={sessions !== null && sessions.length > 0 ? (
+                        <SectionCount>{sessions.length} session{sessions.length === 1 ? '' : 's'}</SectionCount>
+                    ) : undefined}
+                >
                     {sessions === null ? (
                         <SkeletonRows count={4} />
                     ) : (
                         <RecentSessionsList sessions={sessions} />
                     )}
-                </section>
+                </SectionCard>
 
-                <section className="flex min-w-0 flex-col gap-3">
-                    <h2 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/65">
-                        <Trophy className="size-3 text-amber-500" strokeWidth={2} />
-                        Per-exercise PRs
-                    </h2>
+                <SectionCard
+                    title="Per-exercise PRs"
+                    icon={<Trophy className="size-3.5 text-amber-500" strokeWidth={2} />}
+                    actions={exercises !== null && exercises.length > 0 ? (
+                        <SectionCount>{exercises.length} exercise{exercises.length === 1 ? '' : 's'}</SectionCount>
+                    ) : undefined}
+                >
                     {exercises === null ? (
                         <SkeletonRows count={6} />
                     ) : (
                         <ExerciseLeaderboard exercises={exercises} />
                     )}
-                </section>
+                </SectionCard>
             </div>
         </div>
     )
@@ -172,7 +205,7 @@ function ProgressOverview({
 }) {
     const stats = React.useMemo(() => computeProgressStats(sessions, exercises), [sessions, exercises])
     return (
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4" aria-label="Workout progress overview">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4" aria-label="Workout progress overview">
             <ProgressCard
                 icon={<Dumbbell className="size-4" strokeWidth={1.85} />}
                 label="Last 7 days"
@@ -212,18 +245,20 @@ function ProgressCard({
     accent?: boolean
 }) {
     return (
-        <div
-            className={cn(
-                "min-w-0 rounded-lg border border-border/60 bg-card px-3.5 py-3 shadow-sm",
-                accent && "border-amber-500/35 bg-amber-500/[0.05]",
-            )}
-        >
+        <div className="min-w-0 rounded-xl border border-border/60 bg-card px-4 py-3 shadow-sm">
             <div className="mb-1.5 flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
                 <span className={cn("inline-flex", accent && "text-amber-500")}>{icon}</span>
                 {label}
             </div>
             <div className="truncate text-xl font-semibold tabular-nums text-foreground">{value}</div>
-            <div className="mt-0.5 truncate text-[11.5px] tabular-nums text-muted-foreground">{sub}</div>
+            <div
+                className={cn(
+                    "mt-0.5 truncate text-[11.5px] tabular-nums text-muted-foreground",
+                    accent && "font-medium text-amber-700 dark:text-amber-400",
+                )}
+            >
+                {sub}
+            </div>
         </div>
     )
 }
@@ -236,9 +271,6 @@ function BodyMetricsCard({
     onSaved: () => void
 }) {
     const latest = payload.latest
-    const [open, setOpen] = React.useState(false)
-    const [saving, setSaving] = React.useState(false)
-    const [error, setError] = React.useState<string | null>(null)
 
     // Oldest→newest weight series for the trend sparkline. `entries` arrives
     // newest-first from the API.
@@ -252,64 +284,15 @@ function BodyMetricsCard({
     const weightDelta = weightSeries.length >= 2
         ? Math.round((weightSeries[weightSeries.length - 1] - weightSeries[0]) * 10) / 10
         : null
-    const [draft, setDraft] = React.useState(() => ({
-        heightCm: latest?.heightCm?.toString() ?? '',
-        weightKg: latest?.weightKg?.toString() ?? '',
-        bodyFatPct: latest?.bodyFatPct?.toString() ?? '',
-        musclePct: latest?.musclePct?.toString() ?? '',
-    }))
-
-    React.useEffect(() => {
-        setDraft({
-            heightCm: latest?.heightCm?.toString() ?? '',
-            weightKg: latest?.weightKg?.toString() ?? '',
-            bodyFatPct: latest?.bodyFatPct?.toString() ?? '',
-            musclePct: latest?.musclePct?.toString() ?? '',
-        })
-    }, [latest])
-
-    const save = async () => {
-        setSaving(true)
-        setError(null)
-        try {
-            const response = await fetch('/api/workouts/body-metrics', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    recordedAt: new Date().toISOString(),
-                    heightCm: numberOrUndefined(draft.heightCm),
-                    weightKg: numberOrUndefined(draft.weightKg),
-                    bodyFatPct: numberOrUndefined(draft.bodyFatPct),
-                    musclePct: numberOrUndefined(draft.musclePct),
-                }),
-            })
-            if (!response.ok) {
-                const j = await response.json().catch(() => ({})) as { error?: string }
-                throw new Error(j.error ?? `HTTP ${response.status}`)
-            }
-            setOpen(false)
-            onSaved()
-        } catch (e) {
-            setError(e instanceof Error ? e.message : String(e))
-        } finally {
-            setSaving(false)
-        }
-    }
 
     return (
-        <div className="min-w-0 rounded-lg border border-border/60 bg-card px-3.5 py-3 shadow-sm">
+        <div className="min-w-0 rounded-xl border border-border/60 bg-card px-4 py-3 shadow-sm">
             <div className="mb-1.5 flex items-center justify-between gap-2">
                 <div className="flex items-center gap-1.5 text-[10.5px] font-semibold uppercase tracking-wider text-muted-foreground">
                     <Activity className="size-4" strokeWidth={1.85} />
                     Body metrics
                 </div>
-                <button
-                    type="button"
-                    onClick={() => setOpen((v) => !v)}
-                    className="rounded-md border border-border bg-background px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                    {open ? 'Close' : 'Update'}
-                </button>
+                <BodyMetricsEditor latest={latest} onSaved={onSaved} />
             </div>
 
             <div className="grid grid-cols-2 gap-x-3 gap-y-1 text-[11.5px] text-muted-foreground">
@@ -345,28 +328,98 @@ function BodyMetricsCard({
                     ) : null}
                 </div>
             ) : null}
-
-            {open ? (
-                <div className="mt-2 border-t border-border/45 pt-2">
-                    <div className="grid grid-cols-2 gap-2">
-                        <SmallInput label="Height cm" value={draft.heightCm} onChange={(heightCm) => setDraft((d) => ({ ...d, heightCm }))} />
-                        <SmallInput label="Weight kg" value={draft.weightKg} onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))} />
-                        <SmallInput label="Body fat %" value={draft.bodyFatPct} onChange={(bodyFatPct) => setDraft((d) => ({ ...d, bodyFatPct }))} />
-                        <SmallInput label="Muscle %" value={draft.musclePct} onChange={(musclePct) => setDraft((d) => ({ ...d, musclePct }))} />
-                    </div>
-                    {error ? <div className="mt-1.5 text-[11px] text-rose-500">{error}</div> : null}
-                    <button
-                        type="button"
-                        onClick={() => void save()}
-                        disabled={saving}
-                        className="mt-2 h-8 w-full rounded-md bg-primary px-3 text-[12px] font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-default disabled:opacity-50"
-                    >
-                        {saving ? 'Saving…' : 'Save metrics'}
-                    </button>
-                </div>
-            ) : null}
         </div>
     )
+}
+
+/**
+ * "Update" trigger + popover form for logging a new body-metrics entry.
+ * A popover (instead of the old inline expansion) keeps the overview row
+ * height stable — the stat grid never reflows while editing.
+ */
+function BodyMetricsEditor({
+    latest,
+    onSaved,
+}: {
+    latest: BodyMetricEntry | null
+    onSaved: () => void
+}) {
+    const [open, setOpen] = React.useState(false)
+    const [saving, setSaving] = React.useState(false)
+    const [error, setError] = React.useState<string | null>(null)
+    const [draft, setDraft] = React.useState(() => draftFromLatest(latest))
+
+    React.useEffect(() => {
+        setDraft(draftFromLatest(latest))
+    }, [latest])
+
+    const save = async () => {
+        setSaving(true)
+        setError(null)
+        try {
+            const response = await fetch('/api/workouts/body-metrics', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    recordedAt: new Date().toISOString(),
+                    heightCm: numberOrUndefined(draft.heightCm),
+                    weightKg: numberOrUndefined(draft.weightKg),
+                    bodyFatPct: numberOrUndefined(draft.bodyFatPct),
+                    musclePct: numberOrUndefined(draft.musclePct),
+                }),
+            })
+            if (!response.ok) {
+                const j = await response.json().catch(() => ({})) as { error?: string }
+                throw new Error(j.error ?? `HTTP ${response.status}`)
+            }
+            setOpen(false)
+            onSaved()
+        } catch (e) {
+            setError(e instanceof Error ? e.message : String(e))
+        } finally {
+            setSaving(false)
+        }
+    }
+
+    return (
+        <Popover open={open} onOpenChange={setOpen}>
+            <PopoverTrigger asChild>
+                <button
+                    type="button"
+                    className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-0.5 text-[10.5px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                    <Pencil className="size-2.5" />
+                    Update
+                </button>
+            </PopoverTrigger>
+            <PopoverContent align="end" className="w-60 p-3">
+                <div className="grid grid-cols-2 gap-2">
+                    <SmallInput label="Height cm" value={draft.heightCm} onChange={(heightCm) => setDraft((d) => ({ ...d, heightCm }))} />
+                    <SmallInput label="Weight kg" value={draft.weightKg} onChange={(weightKg) => setDraft((d) => ({ ...d, weightKg }))} />
+                    <SmallInput label="Body fat %" value={draft.bodyFatPct} onChange={(bodyFatPct) => setDraft((d) => ({ ...d, bodyFatPct }))} />
+                    <SmallInput label="Muscle %" value={draft.musclePct} onChange={(musclePct) => setDraft((d) => ({ ...d, musclePct }))} />
+                </div>
+                {error ? <div className="mt-1.5 text-[11px] text-rose-500">{error}</div> : null}
+                <button
+                    type="button"
+                    onClick={() => void save()}
+                    disabled={saving}
+                    className="mt-2.5 h-8 w-full rounded-md bg-primary px-3 text-[12px] font-semibold text-primary-foreground transition-colors hover:opacity-90 disabled:cursor-default disabled:opacity-50"
+                >
+                    {saving ? 'Saving…' : 'Save metrics'}
+                </button>
+            </PopoverContent>
+        </Popover>
+    )
+}
+
+function draftFromLatest(latest: BodyMetricEntry | null) {
+    return {
+        heightCm: latest?.heightCm?.toString() ?? '',
+        weightKg: latest?.weightKg?.toString() ?? '',
+        bodyFatPct: latest?.bodyFatPct?.toString() ?? '',
+        musclePct: latest?.musclePct?.toString() ?? '',
+    }
 }
 
 function MetricLine({
@@ -416,11 +469,20 @@ function SmallInput({
 
 function OverviewSkeleton() {
     return (
-        <section className="grid grid-cols-1 gap-3 sm:grid-cols-2 xl:grid-cols-4">
+        <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
             {Array.from({ length: 4 }).map((_, i) => (
-                <div key={i} className="h-24 animate-pulse rounded-lg border border-border/40 bg-muted/30" />
+                <div key={i} className="h-24 animate-pulse rounded-xl border border-border/40 bg-muted/30" />
             ))}
         </section>
+    )
+}
+
+function SectionSkeleton({ bodyHeight }: { bodyHeight: string }) {
+    return (
+        <div className="overflow-hidden rounded-xl border border-border/40 bg-card shadow-sm">
+            <div className="h-9 animate-pulse border-b border-border/45 bg-muted/20" />
+            <div className={cn("animate-pulse bg-muted/30", bodyHeight)} />
+        </div>
     )
 }
 
@@ -462,12 +524,9 @@ function numberOrUndefined(value: string): number | undefined {
 
 function SkeletonRows({ count }: { count: number }) {
     return (
-        <ul className="flex flex-col gap-2">
+        <ul className="divide-y divide-border/45">
             {Array.from({ length: count }).map((_, i) => (
-                <li
-                    key={i}
-                    className="h-16 animate-pulse rounded-xl border border-border/40 bg-muted/30"
-                />
+                <li key={i} className="h-16 animate-pulse bg-muted/20" />
             ))}
         </ul>
     )

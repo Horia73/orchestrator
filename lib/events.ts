@@ -56,6 +56,9 @@ type AppEventBase =
     // Inbound webhooks lifecycle and dispatch history.
     | { type: 'webhooks.changed'; at: number; endpointId?: string; reason?: string }
     | { type: 'webhook_events.changed'; at: number; endpointId?: string; eventId?: string }
+    // Internal apps registry (saved reusable mini-apps) and their data docs.
+    | { type: 'apps.changed'; at: number; appId?: string; action?: 'created' | 'updated' | 'deleted' }
+    | { type: 'app_data.changed'; at: number; appId: string }
 
 export type AppEvent = AppEventBase & { profileId?: string }
 

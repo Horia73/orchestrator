@@ -6,6 +6,7 @@ import { createRequire } from 'module'
 
 import { getEnvValue } from '@/lib/config'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { normalizeTimezone } from '@/lib/timezone'
 
 import {
     attachmentSummary,
@@ -29,6 +30,13 @@ const READY_WAIT_TIMEOUT_MS = 120_000
 const READY_HEALTH_TIMEOUT_MS = 5_000
 const STATUS_READY_WAIT_TIMEOUT_MS = 10_000
 const MEDIA_DOWNLOAD_TIMEOUT_MS = 60_000
+const FIND_MESSAGES_TIMEOUT_MS = 60_000
+const FIND_MESSAGES_DEFAULT_MAX_RESULTS = 20
+const FIND_MESSAGES_MAX_RESULTS = 75
+const FIND_MESSAGES_DEFAULT_MAX_MESSAGES = 500
+const FIND_MESSAGES_MAX_MESSAGES = 2_000
+const FIND_MESSAGES_DEFAULT_MAX_LOADS = 12
+const FIND_MESSAGES_MAX_LOADS = 40
 const AUTO_RESUME_COOLDOWN_MS = 30_000
 const DEFAULT_WHATSAPP_USER_AGENT = 'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/148.0.0.0 Safari/537.36'
 
@@ -133,6 +141,41 @@ export interface WhatsAppSearchResult {
     truncated: boolean
 }
 
+export interface WhatsAppFindMessagesArgs {
+    chatId: string
+    query?: string
+    dateFrom?: string
+    dateTo?: string
+    timeZone?: string
+    types?: string[]
+    mediaOnly?: boolean
+    fromMe?: boolean
+    maxResults?: number
+    maxMessages?: number
+    maxLoads?: number
+}
+
+export interface WhatsAppFindMessagesResult {
+    chat: WhatsAppChatSummary
+    filters: {
+        query: string | null
+        dateFrom: string | null
+        dateTo: string | null
+        timeZone: string
+        types: string[]
+        mediaOnly: boolean
+        fromMe: boolean | null
+    }
+    scannedMessages: number
+    loadedEarlierBatches: number
+    reachedStartOfChat: boolean
+    oldestScannedDate: string | null
+    newestScannedDate: string | null
+    results: WhatsAppMessageSummary[]
+    truncated: boolean
+    scanLimitHit: boolean
+}
+
 export interface WhatsAppOutgoingAttachment {
     filename: string
     mimeType: string
@@ -219,6 +262,37 @@ type WhatsAppPuppeteerPage = {
 
 type WhatsAppClientInternals = Client & {
     pupPage?: WhatsAppPuppeteerPage | null
+}
+
+interface WhatsAppFindDateFilter {
+    raw: string
+    localDate: string | null
+    instantSeconds: number | null
+}
+
+interface WhatsAppFindMessagesPageArgs {
+    query: string | null
+    dateFrom: WhatsAppFindDateFilter | null
+    dateTo: WhatsAppFindDateFilter | null
+    timeZone: string
+    types: string[]
+    mediaOnly: boolean
+    fromMe: boolean | null
+    maxResults: number
+    maxMessages: number
+    maxLoads: number
+    hasDateFilter: boolean
+}
+
+interface WhatsAppFindMessagesPageResult {
+    scannedMessages: number
+    loadedEarlierBatches: number
+    reachedStartOfChat: boolean
+    oldestScannedDate: string | null
+    newestScannedDate: string | null
+    results: WhatsAppMessageSummary[]
+    resultsTruncated: boolean
+    scanLimitHit: boolean
 }
 
 class WhatsAppManager {
@@ -471,6 +545,322 @@ class WhatsAppManager {
                 scannedMessages,
                 results: results.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0)),
                 truncated,
+            }
+        })
+    }
+
+    async findMessages(args: WhatsAppFindMessagesArgs): Promise<WhatsAppFindMessagesResult> {
+        const chatId = args.chatId.trim()
+        if (!chatId) throw new Error('WhatsApp chat_id is required.')
+
+        const query = args.query?.trim() ? args.query.trim().toLowerCase() : null
+        const dateFrom = parseFindDateFilter(args.dateFrom, 'date_from')
+        const dateTo = parseFindDateFilter(args.dateTo, 'date_to')
+        const types = normalizeMessageTypes(args.types ?? [])
+        const mediaOnly = Boolean(args.mediaOnly)
+        const fromMe = typeof args.fromMe === 'boolean' ? args.fromMe : null
+
+        if (!query && !dateFrom && !dateTo && types.length === 0 && !mediaOnly && fromMe === null) {
+            throw new Error('WhatsAppFindMessages requires at least one filter: query, date_from/date_to, types, media_only, or from_me.')
+        }
+
+        const maxResults = clamp(Math.floor(args.maxResults ?? FIND_MESSAGES_DEFAULT_MAX_RESULTS), 1, FIND_MESSAGES_MAX_RESULTS)
+        const maxMessages = clamp(Math.floor(args.maxMessages ?? FIND_MESSAGES_DEFAULT_MAX_MESSAGES), 50, FIND_MESSAGES_MAX_MESSAGES)
+        const maxLoads = clamp(Math.floor(args.maxLoads ?? FIND_MESSAGES_DEFAULT_MAX_LOADS), 1, FIND_MESSAGES_MAX_LOADS)
+        const timeZone = normalizeTimezone(args.timeZone, 'UTC')
+
+        return this.runReadyOperation('find messages', async client => {
+            const chat = await this.getChat(client, chatId)
+            const page = (client as WhatsAppClientInternals).pupPage
+            if (!page) throw new Error('WhatsApp Web browser page is not available for deep message search.')
+
+            let probe = await probeWhatsAppPage(page)
+            if (!probe.hasWWebJS) {
+                await injectWWebJsUtilities(page)
+                probe = await waitForWWebJs(page, 8_000)
+            }
+            if (!probe.hasWWebJS) {
+                throw new Error('WhatsApp Web runtime helpers are not ready; retry after WhatsApp finishes syncing.')
+            }
+
+            const pageArgs: WhatsAppFindMessagesPageArgs = {
+                query,
+                dateFrom,
+                dateTo,
+                timeZone,
+                types,
+                mediaOnly,
+                fromMe,
+                maxResults,
+                maxMessages,
+                maxLoads,
+                hasDateFilter: Boolean(dateFrom || dateTo),
+            }
+
+            const pageResult = await withTimeout(
+                page.evaluate<WhatsAppFindMessagesPageResult>(
+                    async (rawChatId: unknown, rawChatName: unknown, rawArgs: unknown) => {
+                        type AnyRecord = Record<string, unknown>
+                        const asRecord = (value: unknown): AnyRecord => {
+                            return value && typeof value === 'object' ? value as AnyRecord : {}
+                        }
+                        const chatId = String(rawChatId)
+                        const chatName = typeof rawChatName === 'string' && rawChatName.trim() ? rawChatName.trim() : undefined
+                        const args = rawArgs as WhatsAppFindMessagesPageArgs
+                        const waWindow = window as typeof window & {
+                            WWebJS?: {
+                                getChat?: (id: string, options?: AnyRecord) => Promise<AnyRecord>
+                                getMessageModel?: (message: AnyRecord) => AnyRecord
+                            }
+                            require?: (name: string) => AnyRecord
+                        }
+                        if (!waWindow.WWebJS?.getChat) throw new Error('WhatsApp Web chat helper is not available.')
+
+                        const chat = await waWindow.WWebJS.getChat(chatId, { getAsModel: false })
+                        const loadModule = waWindow.require?.('WAWebChatLoadMessages') as {
+                            loadEarlierMsgs?: (input: { chat: AnyRecord }) => Promise<unknown[]>
+                        } | undefined
+                        const loadEarlier = typeof loadModule?.loadEarlierMsgs === 'function'
+                            ? loadModule.loadEarlierMsgs.bind(loadModule)
+                            : null
+
+                        const isNotification = (message: AnyRecord): boolean => Boolean(message.isNotification)
+                        const timestampOf = (message: AnyRecord): number => {
+                            const value = Number(message.t ?? message.timestamp)
+                            return Number.isFinite(value) && value > 0 ? value : 0
+                        }
+                        const sortedMessages = (): AnyRecord[] => {
+                            const msgs = asRecord(chat.msgs)
+                            const getModelsArray = msgs.getModelsArray
+                            const raw = typeof getModelsArray === 'function' ? getModelsArray.call(msgs) : []
+                            return raw.map(asRecord)
+                                .filter((message: AnyRecord) => !isNotification(message))
+                                .sort((a: AnyRecord, b: AnyRecord) => timestampOf(a) - timestampOf(b))
+                        }
+                        const localDateFor = (timestamp: number): string | null => {
+                            if (!timestamp) return null
+                            try {
+                                return new Intl.DateTimeFormat('sv-SE', {
+                                    timeZone: args.timeZone || 'UTC',
+                                    year: 'numeric',
+                                    month: '2-digit',
+                                    day: '2-digit',
+                                }).format(new Date(timestamp * 1000))
+                            } catch {
+                                return new Date(timestamp * 1000).toISOString().slice(0, 10)
+                            }
+                        }
+                        const oldestTimestamp = (messages: AnyRecord[]): number => {
+                            for (const message of messages) {
+                                const timestamp = timestampOf(message)
+                                if (timestamp) return timestamp
+                            }
+                            return 0
+                        }
+                        const shouldLoadMore = (messages: AnyRecord[], loads: number): boolean => {
+                            if (!loadEarlier || loads >= args.maxLoads || messages.length >= args.maxMessages) return false
+                            if (!args.hasDateFilter) return true
+
+                            const oldest = oldestTimestamp(messages)
+                            if (!oldest) return true
+                            if (args.dateFrom?.instantSeconds !== null && args.dateFrom?.instantSeconds !== undefined) {
+                                return oldest > args.dateFrom.instantSeconds
+                            }
+                            if (args.dateFrom?.localDate) {
+                                const oldestLocal = localDateFor(oldest)
+                                return !oldestLocal || oldestLocal > args.dateFrom.localDate
+                            }
+                            if (args.dateTo?.instantSeconds !== null && args.dateTo?.instantSeconds !== undefined) {
+                                return oldest > args.dateTo.instantSeconds
+                            }
+                            if (args.dateTo?.localDate) {
+                                const oldestLocal = localDateFor(oldest)
+                                return !oldestLocal || oldestLocal > args.dateTo.localDate
+                            }
+                            return true
+                        }
+
+                        let messages = sortedMessages()
+                        let loadedEarlierBatches = 0
+                        let reachedStartOfChat = false
+
+                        while (shouldLoadMore(messages, loadedEarlierBatches)) {
+                            const loaded = await loadEarlier?.({ chat })
+                            loadedEarlierBatches += 1
+                            if (!loaded || !loaded.length) {
+                                reachedStartOfChat = true
+                                break
+                            }
+                            messages = sortedMessages()
+                        }
+
+                        const modelFor = (message: AnyRecord): AnyRecord => {
+                            try {
+                                return waWindow.WWebJS?.getMessageModel?.(message) ?? message
+                            } catch {
+                                return message
+                            }
+                        }
+                        const serializedId = (model: AnyRecord, raw: AnyRecord): string => {
+                            const id = model.id ?? raw.id
+                            if (typeof id === 'string') return id
+                            const idRecord = asRecord(id)
+                            if (typeof idRecord._serialized === 'string') return idRecord._serialized
+                            if (typeof idRecord.id === 'string' && typeof idRecord.remote === 'string') {
+                                return `${idRecord.fromMe ? 'true' : 'false'}_${idRecord.remote}_${idRecord.id}`
+                            }
+                            if (typeof idRecord.id === 'string') return idRecord.id
+                            return ''
+                        }
+                        const normalizeType = (value: unknown): string => {
+                            const raw = String(value ?? 'unknown').trim().toLowerCase()
+                            if (raw === 'ptt' || raw === 'voice' || raw === 'voicenote' || raw === 'voice_note') return 'audio'
+                            if (raw === 'photo') return 'image'
+                            if (raw === 'file') return 'document'
+                            return raw || 'unknown'
+                        }
+                        const isMediaType = (type: string): boolean => {
+                            const normalized = normalizeType(type)
+                            return ['audio', 'image', 'video', 'document', 'sticker'].includes(normalized)
+                        }
+                        const matchesType = (type: string): boolean => {
+                            if (args.types.length === 0) return true
+                            const normalized = normalizeType(type)
+                            return args.types.includes(normalized) || args.types.includes(String(type).toLowerCase())
+                        }
+                        const messageBody = (model: AnyRecord, raw: AnyRecord): string => {
+                            for (const value of [model.body, raw.body, model.caption, raw.caption]) {
+                                if (typeof value === 'string') return value
+                            }
+                            return ''
+                        }
+                        const matchesDate = (timestamp: number): boolean => {
+                            if (!timestamp) return !(args.dateFrom || args.dateTo)
+                            if (args.dateFrom?.instantSeconds !== null && args.dateFrom?.instantSeconds !== undefined && timestamp < args.dateFrom.instantSeconds) return false
+                            if (args.dateTo?.instantSeconds !== null && args.dateTo?.instantSeconds !== undefined && timestamp > args.dateTo.instantSeconds) return false
+                            if (args.dateFrom?.localDate || args.dateTo?.localDate) {
+                                const localDate = localDateFor(timestamp)
+                                if (!localDate) return false
+                                if (args.dateFrom?.localDate && localDate < args.dateFrom.localDate) return false
+                                if (args.dateTo?.localDate && localDate > args.dateTo.localDate) return false
+                            }
+                            return true
+                        }
+                        const toSummary = (raw: AnyRecord): WhatsAppMessageSummary => {
+                            const model = modelFor(raw)
+                            const type = normalizeType(model.type ?? raw.type)
+                            const body = messageBody(model, raw)
+                            const timestamp = Number(model.timestamp ?? raw.t ?? raw.timestamp)
+                            const safeTimestamp = Number.isFinite(timestamp) && timestamp > 0 ? timestamp : null
+                            const rawId = asRecord(raw.id)
+                            const fromMe = Boolean(model.fromMe ?? rawId.fromMe ?? raw.fromMe)
+                            const from = String(model.from ?? raw.from ?? rawId.remote ?? '')
+                            const to = String(model.to ?? raw.to ?? '')
+                            const author = typeof model.author === 'string'
+                                ? model.author
+                                : typeof raw.author === 'string'
+                                    ? raw.author
+                                    : null
+                            const forwardingScore = Number(model.forwardingScore ?? raw.forwardingScore)
+                            const hasMedia = Boolean(model.hasMedia ?? raw.hasMedia ?? raw.mediaKey) || isMediaType(type)
+                            return {
+                                id: serializedId(model, raw),
+                                chatId,
+                                chatName,
+                                from,
+                                to,
+                                author,
+                                authorName: null,
+                                fromMe,
+                                type,
+                                body: body.length > 8_000 ? `${body.slice(0, 8_000)}...` : body,
+                                timestamp: safeTimestamp,
+                                date: safeTimestamp ? new Date(safeTimestamp * 1000).toISOString() : null,
+                                hasMedia,
+                                isForwarded: Boolean(model.isForwarded ?? raw.isForwarded),
+                                forwardingScore: Number.isFinite(forwardingScore) ? forwardingScore : 0,
+                            }
+                        }
+
+                        const summaries = messages.map(toSummary)
+                        const timestamps = summaries
+                            .map(summary => summary.timestamp ?? 0)
+                            .filter(timestamp => timestamp > 0)
+                        const oldest = timestamps.length ? Math.min(...timestamps) : 0
+                        const newest = timestamps.length ? Math.max(...timestamps) : 0
+                        const matches: WhatsAppMessageSummary[] = []
+
+                        for (const summary of summaries) {
+                            if (args.fromMe !== null && summary.fromMe !== args.fromMe) continue
+                            if (args.query && !summary.body.toLowerCase().includes(args.query)) continue
+                            if (!matchesDate(summary.timestamp ?? 0)) continue
+                            if (!matchesType(summary.type)) continue
+                            if (args.mediaOnly && !summary.hasMedia) continue
+                            matches.push(summary)
+                        }
+
+                        matches.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0))
+                        const returned = matches.slice(0, args.maxResults)
+                        const needsOlderDate = (() => {
+                            if (!args.hasDateFilter) return false
+                            if (!oldest) return true
+                            if (args.dateFrom?.instantSeconds !== null && args.dateFrom?.instantSeconds !== undefined) return oldest > args.dateFrom.instantSeconds
+                            if (args.dateFrom?.localDate) {
+                                const oldestLocal = localDateFor(oldest)
+                                return !oldestLocal || oldestLocal > args.dateFrom.localDate
+                            }
+                            if (args.dateTo?.instantSeconds !== null && args.dateTo?.instantSeconds !== undefined) return oldest > args.dateTo.instantSeconds
+                            if (args.dateTo?.localDate) {
+                                const oldestLocal = localDateFor(oldest)
+                                return !oldestLocal || oldestLocal > args.dateTo.localDate
+                            }
+                            return false
+                        })()
+                        const hardLimitHit = loadedEarlierBatches >= args.maxLoads || messages.length >= args.maxMessages
+                        const scanLimitHit = !reachedStartOfChat && (
+                            args.hasDateFilter ? needsOlderDate && hardLimitHit : hardLimitHit
+                        )
+
+                        return {
+                            scannedMessages: summaries.length,
+                            loadedEarlierBatches,
+                            reachedStartOfChat,
+                            oldestScannedDate: oldest ? new Date(oldest * 1000).toISOString() : null,
+                            newestScannedDate: newest ? new Date(newest * 1000).toISOString() : null,
+                            results: returned,
+                            resultsTruncated: matches.length > returned.length,
+                            scanLimitHit,
+                        }
+                    },
+                    chat.id._serialized,
+                    chat.name || null,
+                    pageArgs
+                ),
+                FIND_MESSAGES_TIMEOUT_MS,
+                `WhatsApp deep message search timed out for ${chat.name || chat.id._serialized}.`
+            )
+
+            await this.enrichAuthorNames(client, pageResult.results)
+
+            return {
+                chat: chatSummary(chat),
+                filters: {
+                    query,
+                    dateFrom: dateFrom?.raw ?? null,
+                    dateTo: dateTo?.raw ?? null,
+                    timeZone,
+                    types,
+                    mediaOnly,
+                    fromMe,
+                },
+                scannedMessages: pageResult.scannedMessages,
+                loadedEarlierBatches: pageResult.loadedEarlierBatches,
+                reachedStartOfChat: pageResult.reachedStartOfChat,
+                oldestScannedDate: pageResult.oldestScannedDate,
+                newestScannedDate: pageResult.newestScannedDate,
+                results: pageResult.results,
+                truncated: pageResult.resultsTruncated || pageResult.scanLimitHit,
+                scanLimitHit: pageResult.scanLimitHit,
             }
         })
     }
@@ -1053,7 +1443,7 @@ class WhatsAppManager {
             browserExecutablePath,
             missingConfig: browserExecutablePath ? [] : ['WHATSAPP_CHROME_EXECUTABLE_PATH or local Chrome/Chromium'],
             needsReconnect: !connected,
-            capabilities: ['status', 'qr_login', 'list_chats', 'unread_summary', 'read_chat', 'search_recent_messages', 'send_message', 'send_media', 'delete_message_for_everyone', 'mark_chat_read', 'mark_chat_unread'],
+            capabilities: ['status', 'qr_login', 'list_chats', 'unread_summary', 'read_chat', 'search_recent_messages', 'find_messages', 'send_message', 'send_media', 'delete_message_for_everyone', 'mark_chat_read', 'mark_chat_unread'],
         }
     }
 }
@@ -1105,6 +1495,10 @@ export function whatsappSearchMessages(args: {
     return manager().searchMessages(args)
 }
 
+export function whatsappFindMessages(args: WhatsAppFindMessagesArgs): Promise<WhatsAppFindMessagesResult> {
+    return manager().findMessages(args)
+}
+
 export function whatsappSendMessage(chatId: string, body: string, options?: WhatsAppSendOptions): Promise<WhatsAppSendMessageResult> {
     return manager().sendMessage(chatId, body, options)
 }
@@ -1137,6 +1531,51 @@ export function whatsappMarkChatUnread(chatId: string): Promise<WhatsAppMarkChat
 function clamp(value: number, min: number, max: number): number {
     if (!Number.isFinite(value)) return min
     return Math.max(min, Math.min(max, value))
+}
+
+const DATE_ONLY_RE = /^\d{4}-\d{2}-\d{2}$/
+
+function parseFindDateFilter(value: string | undefined, name: string): WhatsAppFindDateFilter | null {
+    const raw = value?.trim()
+    if (!raw) return null
+    if (DATE_ONLY_RE.test(raw)) {
+        return { raw, localDate: raw, instantSeconds: null }
+    }
+    const parsed = Date.parse(raw)
+    if (!Number.isFinite(parsed)) {
+        throw new Error(`${name} must be YYYY-MM-DD or an ISO date-time with timezone/offset.`)
+    }
+    return { raw, localDate: null, instantSeconds: Math.floor(parsed / 1000) }
+}
+
+function normalizeMessageTypes(values: string[]): string[] {
+    const out: string[] = []
+    const seen = new Set<string>()
+    for (const value of values) {
+        const normalized = normalizeMessageType(value)
+        if (!seen.has(normalized)) {
+            seen.add(normalized)
+            out.push(normalized)
+        }
+    }
+    return out
+}
+
+function normalizeMessageType(value: string): string {
+    const raw = value.trim().toLowerCase()
+    switch (raw) {
+        case 'ptt':
+        case 'voice':
+        case 'voicenote':
+        case 'voice_note':
+            return 'audio'
+        case 'photo':
+            return 'image'
+        case 'file':
+            return 'document'
+        default:
+            return raw || 'unknown'
+    }
 }
 
 function sleep(ms: number): Promise<void> {

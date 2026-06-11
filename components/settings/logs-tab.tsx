@@ -150,10 +150,13 @@ function FilterBar({
         setLiveTail(!liveTail)
     }, [liveTail, liveTailStatus, setLiveTail])
 
-    // Debounce free-text search.
+    // Debounce free-text search. Bail out when the normalized query is unchanged
+    // (returning `prev` makes React skip the update) so an empty box on mount
+    // doesn't churn the `filters` reference and reset the page / stream.
     React.useEffect(() => {
         const t = setTimeout(() => {
-            setFilters(prev => ({ ...prev, q: searchValue || undefined }))
+            const next = searchValue || undefined
+            setFilters(prev => (prev.q === next ? prev : { ...prev, q: next }))
         }, 250)
         return () => clearTimeout(t)
         // eslint-disable-next-line react-hooks/exhaustive-deps

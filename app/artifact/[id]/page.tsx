@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { useParams, useRouter } from "next/navigation"
+import { useParams, useRouter, useSearchParams } from "next/navigation"
 import { ArrowLeft, X } from "lucide-react"
 
 import { ArtifactBody } from "@/components/artifacts/artifact-inline"
@@ -18,6 +18,10 @@ type ArtifactPageRow = ArtifactRow & {
 export default function ArtifactFullscreenPage() {
     const params = useParams<{ id: string }>()
     const router = useRouter()
+    const searchParams = useSearchParams()
+    // Entry point that opened this viewer. `from=library` makes back/close
+    // return to the Library tab the user came from instead of the source chat.
+    const from = searchParams?.get("from") ?? null
     const [artifact, setArtifact] = React.useState<ArtifactPageRow | null>(null)
     const [error, setError] = React.useState<string | null>(null)
 
@@ -35,8 +39,8 @@ export default function ArtifactFullscreenPage() {
     }, [params?.id])
 
     const returnHref = React.useMemo(
-        () => artifact ? returnHrefForArtifact(artifact) : "/",
-        [artifact]
+        () => artifact ? returnHrefForArtifact(artifact, from) : "/",
+        [artifact, from]
     )
 
     const handleBack = React.useCallback(() => {
@@ -172,11 +176,25 @@ function FullscreenArtifact({
     )
 }
 
-function returnHrefForArtifact(artifact: ArtifactPageRow): string {
+function returnHrefForArtifact(artifact: ArtifactPageRow, from?: string | null): string {
+    // Opened from the Library grid → go back to the matching Library tab, not
+    // the conversation that originally produced the artifact.
+    if (from === "library") {
+        return `/library?tab=${libraryTabForType(artifact.type)}`
+    }
     const id = encodeURIComponent(artifact.conversationId)
     return artifact.conversationOrigin === "inbox"
         ? `/inbox?item=${id}`
         : `/?chat=${id}`
+}
+
+function libraryTabForType(type: string): string {
+    switch (type) {
+        case "application/vnd.ant.workout": return "workouts"
+        case "application/vnd.ant.map": return "maps"
+        case "application/vnd.ant.recipe": return "recipes"
+        default: return "artifacts"
+    }
 }
 
 function prettyType(mime: string): string {

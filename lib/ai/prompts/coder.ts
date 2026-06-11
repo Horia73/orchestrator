@@ -1,5 +1,6 @@
 import type { PromptContext } from '@/lib/ai/agents/types'
 import {
+    buildClockContext,
     buildRuntimeContext,
     buildSafetyCore,
     buildSubAgentCollaboration,
@@ -26,12 +27,15 @@ Return a compact engineering result to the parent: files changed, validation run
 `.trim()
 
 export function buildCoderPrompt(ctx: PromptContext): string {
+    // Stable blocks first, per-conversation state next, the clock dead last
+    // (cache-prefix friendly — see buildClockContext).
     return [
         CODER_PROMPT,
         buildSafetyCore(),
         buildSubAgentCollaboration(),
-        buildRuntimeContext(ctx),
         buildSkillsIndex(),
         buildToolsSection(ctx),
+        buildRuntimeContext(ctx),
+        buildClockContext(),
     ].filter(Boolean).join('\n\n')
 }

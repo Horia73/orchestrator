@@ -189,9 +189,16 @@ async function fetchSettingsBootstrap(
   return (await res.json()) as SettingsBootstrap
 }
 
+// Last fetched bootstrap, kept at module scope. The provider is remounted per
+// Settings visit; seeding from here lets revisits render instantly (no
+// skeleton flash) while a silent refresh runs.
+let cachedBootstrap: SettingsBootstrap | null = null
+
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
-  const [data, setData] = React.useState<SettingsBootstrap | null>(null)
-  const [loading, setLoading] = React.useState(true)
+  const [data, setData] = React.useState<SettingsBootstrap | null>(
+    () => cachedBootstrap
+  )
+  const [loading, setLoading] = React.useState(cachedBootstrap === null)
   const [error, setError] = React.useState<string | null>(null)
   const [refreshing, setRefreshing] = React.useState(false)
   const [researching, setResearching] = React.useState(false)
@@ -208,6 +215,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     // Keep the same object reference when the payload is unchanged so the
     // context value (and every settings consumer) doesn't re-render on every
     // background refresh.
+    cachedBootstrap = json
     setData((prev) => (prev && deepEqual(prev, json) ? prev : json))
     setError(null)
     return json
@@ -266,7 +274,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     const controller = new AbortController()
-    setLoading(true)
 
     loadBootstrap(controller.signal)
       .catch((err: unknown) => {

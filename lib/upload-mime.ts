@@ -144,4 +144,26 @@ export const UPLOAD_MIME_MAP: Record<string, string> = {
     '.rar': 'application/vnd.rar',
     '.bz2': 'application/x-bzip2',
     '.xz': 'application/x-xz',
+    '.zst': 'application/zstd',
+
+    // Additional media/document types recovered by content sniffing
+    // (lib/file-sniff.ts) when an ingested file has no usable MIME or filename.
+    // Listed here so /api/uploads serves them with a real Content-Type and they
+    // classify into the right viewer bucket (image/audio/video/document).
+    '.opus': 'audio/ogg',
+    '.oga': 'audio/ogg',
+    '.amr': 'audio/amr',
+    '.bmp': 'image/bmp',
+    '.tif': 'image/tiff',
+    '.tiff': 'image/tiff',
+    '.ico': 'image/x-icon',
+    '.avif': 'image/avif',
+    '.mkv': 'video/x-matroska',
+    '.ogv': 'video/ogg',
+    '.m4v': 'video/mp4',
+    '.ps': 'application/postscript',
+    '.epub': 'application/epub+zip',
+    '.odt': 'application/vnd.oasis.opendocument.text',
+    '.ods': 'application/vnd.oasis.opendocument.spreadsheet',
+    '.odp': 'application/vnd.oasis.opendocument.presentation',
 }

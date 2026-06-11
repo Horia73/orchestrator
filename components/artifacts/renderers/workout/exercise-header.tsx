@@ -11,6 +11,7 @@ import {
     formatWeight,
 } from "@/lib/workout/format"
 import { findGlossaryTermsInText, getGlossary } from "@/lib/workout/glossary"
+import { workoutImageRequestPath } from "@/lib/workout/exercise-image-request"
 
 import { GlossaryInfo } from "./glossary-info"
 import { MuscleChips } from "./muscle-chips"
@@ -330,20 +331,12 @@ function ExerciseDemoImage({
     // (keyed by id/name) and only falls back to a keyless web search (`q`)
     // when there is no library match. We send identity (id/name/muscle/
     // equipment) so the match is precise even when the display name is
-    // localized.
-    const requestPath = React.useMemo(() => {
-        const params = new URLSearchParams()
-        if (exerciseId) params.set('id', exerciseId)
-        if (exerciseName) params.set('name', exerciseName)
-        const muscle = (muscleGroups ?? []).slice(0, 4).join(',')
-        if (muscle) params.set('muscle', muscle)
-        const equip = (equipment ?? []).slice(0, 4).join(',')
-        if (equip) params.set('equipment', equip)
-        const explicit = imageQuery?.trim()
-        params.set('q', explicit || `${exerciseName} exercise gym machine`)
-        params.set('limit', '1')
-        return `/api/workout-images?${params.toString()}`
-    }, [exerciseId, exerciseName, muscleGroups, equipment, imageQuery])
+    // localized. Shared builder so the surface prefetcher warms the exact
+    // same URL.
+    const requestPath = React.useMemo(
+        () => workoutImageRequestPath({ id: exerciseId, name: exerciseName, muscleGroups, equipment, imageQuery }),
+        [exerciseId, exerciseName, muscleGroups, equipment, imageQuery],
+    )
 
     const shouldFetch = !imageUrl || directBroken
 

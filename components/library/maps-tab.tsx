@@ -13,8 +13,13 @@ import type { LibraryMapRow } from "@/app/api/library/maps/route"
  * Maps tab content — fetches /api/library/maps and renders a grid with
  * client-side search across title and source conversation.
  */
+// Last fetched list, kept at module scope so revisiting the tab renders the
+// grid instantly (a silent refresh still runs) instead of re-flashing the
+// skeleton cards.
+let cachedMaps: LibraryMapRow[] | null = null
+
 export function MapsTab() {
-    const [data, setData] = React.useState<LibraryMapRow[] | null>(null)
+    const [data, setData] = React.useState<LibraryMapRow[] | null>(() => cachedMaps)
     const [loading, setLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
     const [query, setQuery] = React.useState('')
@@ -26,6 +31,7 @@ export function MapsTab() {
             const r = await fetch('/api/library/maps?limit=100')
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { maps: LibraryMapRow[] }
+            cachedMaps = j.maps
             setData(j.maps)
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))

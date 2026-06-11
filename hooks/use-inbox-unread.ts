@@ -3,12 +3,18 @@
 import * as React from "react"
 import { useAppEvent } from "@/hooks/use-app-events"
 
+// Last count fetched this session, kept at module scope. AppSidebar (and thus
+// this hook) is mounted per-route, so without this seed the badge would reset
+// to 0 on every route change and flash off → on while the refetch lands. Seeding
+// the initial state from here keeps the badge steady across remounts.
+let lastKnownUnread = 0
+
 /**
  * Lightweight unread-count sync for the sidebar Inbox badge. Refetches on app
  * invalidation events and when the tab becomes visible.
  */
 export function useInboxUnread(): number {
-  const [unread, setUnread] = React.useState(0)
+  const [unread, setUnread] = React.useState(lastKnownUnread)
 
   const fetchUnread = React.useCallback(async () => {
     if (document.visibilityState !== "visible") return
@@ -16,7 +22,10 @@ export function useInboxUnread(): number {
       const res = await fetch("/api/inbox/unread", { cache: "no-store" })
       if (!res.ok) return
       const data = await res.json()
-      if (typeof data.unread === "number") setUnread(data.unread)
+      if (typeof data.unread === "number") {
+        lastKnownUnread = data.unread
+        setUnread(data.unread)
+      }
     } catch {
       // transient — keep the last known count
     }

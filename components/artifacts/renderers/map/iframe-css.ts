@@ -18,7 +18,15 @@ export function buildMapIframeCss(heightCss: string): string {
         transition: opacity 280ms ease;
     }
     body.is-earth3d #earth-map { display: block; }
-    body.is-earth3d.earth3d-ready #map { opacity: 0; }
+    /* visibility (not just opacity) so the compositor can skip the 2D map's
+       WebGL surface entirely while 3D owns the screen; the transition delay
+       keeps the crossfade intact. Removing the class flips visibility back
+       instantly because the delay only lives on this rule. */
+    body.is-earth3d.earth3d-ready #map {
+        opacity: 0;
+        visibility: hidden;
+        transition: opacity 280ms ease, visibility 0s linear 320ms;
+    }
     body.is-earth3d.earth3d-ready #earth-map {
         opacity: 1;
         pointer-events: auto;

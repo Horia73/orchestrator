@@ -1259,7 +1259,7 @@ function ShellBody({
     : "relative flex h-full min-h-0 w-full flex-col gap-0 xl:flex-row"
 
   return (
-    <div className={cn(containerCls, className)}>
+    <div data-map-chrome="" className={cn(containerCls, className)}>
       <div
         className={cn(
           "flex min-w-0 flex-col gap-2",
@@ -1355,12 +1355,15 @@ function ShellBody({
             sidePanelInFlow &&
               "xl:relative xl:inset-auto xl:z-[70] xl:h-full xl:shrink-0",
             "duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+            // On mobile the panel is a full-screen tab (Chat/Places/Map switch
+            // in place), so it should snap rather than slide in like a drawer.
+            "max-sm:translate-x-0 max-sm:transition-none max-sm:duration-0",
             sidePanelSlotOpen
-              ? "w-[380px] translate-x-0 opacity-100"
+              ? "w-[380px] max-sm:w-full translate-x-0 opacity-100"
               : "w-0 translate-x-4 opacity-0"
           )}
         >
-          <div className="pointer-events-auto h-full w-[380px] max-w-[100vw] shrink-0 overflow-hidden">
+          <div className="pointer-events-auto h-full w-[380px] max-w-[100vw] shrink-0 overflow-hidden max-sm:w-full">
             {sidePanelOverrideActive ? (
               sidePanelOverride
             ) : (

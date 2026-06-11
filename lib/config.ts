@@ -299,7 +299,6 @@ const PROVIDER_FILE_SUPPORT: Record<string, ProviderFileSupport> = {
         "audio/aac",
         "audio/ogg",
         "audio/flac",
-        "audio/m4a",
         "audio/l16",
         "audio/s16le",
         "audio/opus",

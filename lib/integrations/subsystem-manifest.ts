@@ -7,6 +7,8 @@ import { MEDIA_GENERATION_DOCTRINE } from '@/lib/integrations/doctrines/media-ge
 import { BROWSER_AGENT_DOCTRINE } from '@/lib/integrations/doctrines/browser-agent'
 import { RECIPE_DOCTRINE } from '@/lib/integrations/doctrines/recipe'
 import { WORKOUT_DOCTRINE } from '@/lib/integrations/doctrines/workout'
+import { APPS_DOCTRINE } from '@/lib/integrations/doctrines/apps'
+import { SELF_DEVELOPMENT_DOCTRINE } from '@/lib/integrations/doctrines/self-development'
 
 // ---------------------------------------------------------------------------
 // Subsystem manifest — orchestrator-native capabilities that mirror the
@@ -38,6 +40,8 @@ export type SubsystemId =
     | 'browser'
     | 'recipe'
     | 'workout'
+    | 'apps'
+    | 'self_dev'
     // Tool-only capability groups (no doctrine): rarely-needed-in-main-chat tool
     // schemas pulled out of the always-on surface and loaded on demand.
     | 'observability'
@@ -173,7 +177,29 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'GetRecentWorkouts',
             'GetBodyMetrics',
             'SaveBodyMetrics',
+            'PatchWorkout',
         ],
+    },
+    {
+        id: 'apps',
+        label: 'Internal apps',
+        capability: 'Build reusable internal mini-apps — any self-contained interactive tool (calculators, planners, trackers, generators, dashboards, configurators, games, …) — as html/react artifacts with a persistent per-app JSON data store, then recall, show, and update them in any later conversation. Activate when the user wants a custom tool/app, mentions one you built before, asks to add data to one, or describes a recurring workflow a small app would solve.',
+        doctrine: APPS_DOCTRINE,
+        toolIds: [
+            'AppsList',
+            'AppGet',
+            'AppSave',
+            'AppDelete',
+            'AppDataGet',
+            'AppDataSet',
+            'AppShow',
+        ],
+    },
+    {
+        id: 'self_dev',
+        label: 'Self-development & project runs',
+        capability: 'The full protocol for code work on the Orchestrator itself or any other repository/new project: isolated worktrees under .orchestrator/project-runs, the self-dev:prepare / project-run:prepare helpers, managed dev previews, the coder handoff contract, the git commit/rebase/push gate, and the self-update deploy path. Activate BEFORE preparing any code work, coder delegation, or Orchestrator self-development — the helpers and boundaries live in the doctrine, not in your base prompt.',
+        doctrine: SELF_DEVELOPMENT_DOCTRINE,
     },
     // --- Tool-only capability groups (no doctrine) --------------------------
     {

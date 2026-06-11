@@ -4,6 +4,23 @@ export const INIT_SCRIPT = `
 <script>
 (function () {
     var CHANNEL_TOKEN = __MAP_CHANNEL_TOKEN__;
+    // Touch-first devices (phones/tablets) trade a little visual fidelity for
+    // frame rate: the photorealistic 3D renderer is the heaviest thing mobile
+    // WebKit can run.
+    var IS_TOUCH_DEVICE = (navigator.maxTouchPoints || 0) > 1 ||
+        (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches);
+    // The 3D map sizes its WebGL canvas at element-size × devicePixelRatio and
+    // picks tile LOD from that resolution. iPhone DPR 3 means ~2.25× the
+    // fragment work, triangles, and texture memory of DPR 2 for barely visible
+    // extra detail — cap what the Maps runtime sees before it loads.
+    if (IS_TOUCH_DEVICE && window.devicePixelRatio > 2) {
+        try {
+            Object.defineProperty(window, 'devicePixelRatio', {
+                configurable: true,
+                get: function () { return 2; }
+            });
+        } catch (_) {}
+    }
     var mapEl = document.getElementById('map');
     var earthMapEl = document.getElementById('earth-map');
     var earthLoadingEl = document.getElementById('earth-loading');
@@ -38,6 +55,9 @@ export const INIT_SCRIPT = `
     var earthHasBeenActivatedOnce = false;
     var earthOrbitActive = false;
     var earthOrbitTimer = null;
+    var earthCameraChangeFrame = null;
+    var earthCameraChangePositional = false;
+    var earthAppliedMinAltitude = null;
 	    var earthOrbitFrame = null;
 	    var earthCameraAnimationFrame = null;
 	    var earthCameraLockFrame = null;
@@ -76,7 +96,9 @@ export const INIT_SCRIPT = `
     var suppressMapClickUntil = 0;
     var pageCameraPersistenceInstalled = false;
 		    var DEFAULT_EARTH_TILT = 60;
-		    var MAX_EARTH_TILT = 75;
+		    // Above ~65° the camera starts grazing the horizon and the visible
+		    // tile volume explodes — fine on desktop GPUs, jank on phones.
+		    var MAX_EARTH_TILT = IS_TOUCH_DEVICE ? 65 : 75;
 			    var EARTH_CAMERA_FOV = 45;
 			    var EARTH_RANGE_ZOOM_FIT = 1;
 			    var EARTH_MAX_ZOOM_FOR_RANGE = 22.5;

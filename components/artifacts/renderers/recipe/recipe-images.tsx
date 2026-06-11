@@ -35,9 +35,22 @@ export function RecipeImages({
     const [fetched, setFetched] = React.useState<RecipeImageResult[] | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [failed, setFailed] = React.useState(false)
+    // How many model-provided tiles have failed to load. Model `images[]` URLs
+    // are frozen at generation time and unverified — there's no image-search
+    // tool server-side, so the model hand-authors Wikimedia links that 404 (or
+    // point at files later deleted). When EVERY model image is broken we fall
+    // back to a live `imageQuery` fetch so the card heals itself instead of
+    // showing a row of broken-image placeholders forever.
+    const [modelErrorCount, setModelErrorCount] = React.useState(0)
 
-    // Skip the fetch entirely if the model gave us images directly.
-    const shouldFetch = !images?.length && !!imageQuery
+    const modelImages = images ?? []
+    const allModelImagesBroken =
+        modelImages.length > 0 && modelErrorCount >= modelImages.length
+
+    // Fetch when the model gave us no images, or when the ones it gave us have
+    // all failed. Never refetch once we already hold a fetched result set.
+    const shouldFetch =
+        (!modelImages.length || allModelImagesBroken) && !!imageQuery && fetched === null
 
     React.useEffect(() => {
         if (!shouldFetch || !imageQuery) return
@@ -62,11 +75,13 @@ export function RecipeImages({
         return () => controller.abort()
     }, [imageQuery, shouldFetch])
 
-    // Normalize both shapes (model-provided / fetched) into a single
-    // render-ready array so the JSX below doesn't branch per source.
+    // Prefer live-fetched results once we have them — that covers both the
+    // "model gave no images" path and the "model images all broke" self-heal.
+    // Otherwise render the model's own images.
+    const usingFetched = fetched !== null
     const display: NormalizedImage[] = React.useMemo(() => {
-        if (images?.length) return images.map(modelImageToNormalized)
         if (fetched) return fetched.map(fetchedImageToNormalized)
+        if (images?.length) return images.map(modelImageToNormalized)
         return []
     }, [fetched, images])
 
@@ -80,8 +95,8 @@ export function RecipeImages({
     return (
         <div
             className={cn(
-                "flex gap-2 overflow-x-auto pb-1",
-                "snap-x snap-mandatory scrollbar-thin",
+                "flex gap-2 overflow-x-auto",
+                "snap-x snap-mandatory scrollbar-hide",
                 "-mx-2 px-2",
                 className,
             )}
@@ -89,7 +104,13 @@ export function RecipeImages({
             aria-label="Imagini din rețetă"
         >
             {display.map((img, i) => (
-                <ImageTile key={`${img.url}-${i}`} image={img} />
+                <ImageTile
+                    key={`${img.url}-${i}`}
+                    image={img}
+                    // Only model images feed the self-heal counter; a failed
+                    // live-fetched tile should just drop, not retrigger a fetch.
+                    onError={usingFetched ? undefined : () => setModelErrorCount((n) => n + 1)}
+                />
             ))}
         </div>
     )
@@ -122,8 +143,32 @@ function fetchedImageToNormalized(img: RecipeImageResult): NormalizedImage {
     }
 }
 
-function ImageTile({ image }: { image: NormalizedImage }) {
+const MAX_IMG_RETRIES = 2
+
+function ImageTile({ image, onError }: { image: NormalizedImage; onError?: () => void }) {
     const [errored, setErrored] = React.useState(false)
+    // Wikimedia throttles *uncached* thumbnails with a transient HTTP 429 while
+    // its CDN generates the requested size on-demand, then serves 200 once the
+    // thumb is warm. A recipe card requests several thumbnails at once, so the
+    // first paint commonly eats a 429 or two. Retry the SAME url (no cache-bust
+    // — we want the now-warm cache) a couple of times before giving up, so the
+    // card fills in instead of showing broken-image placeholders.
+    const [attempt, setAttempt] = React.useState(0)
+    const retryTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+    React.useEffect(() => () => {
+        if (retryTimer.current) clearTimeout(retryTimer.current)
+    }, [])
+
+    const handleImgError = () => {
+        if (attempt >= MAX_IMG_RETRIES) {
+            setErrored(true)
+            onError?.()
+            return
+        }
+        // Back off a touch so Wikimedia has time to finish generating the size.
+        const delay = 600 * (attempt + 1)
+        retryTimer.current = setTimeout(() => setAttempt((a) => a + 1), delay)
+    }
 
     // Reserve a 4:3 box by default; if we got real dimensions from Wikimedia,
     // honour the actual aspect so 16:9 landscape shots don't crop awkwardly.
@@ -153,11 +198,14 @@ function ImageTile({ image }: { image: NormalizedImage }) {
         <>
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
+                // Remount on retry so the browser re-issues the request (it does
+                // not cache the failed 429, so the same url is fetched fresh).
+                key={attempt}
                 src={image.url}
                 alt={image.alt}
                 loading="lazy"
                 referrerPolicy="no-referrer"
-                onError={() => setErrored(true)}
+                onError={handleImgError}
                 className="h-full w-full object-cover"
             />
             <div className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/65 via-black/30 to-transparent px-2 py-1.5">

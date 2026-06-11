@@ -13,7 +13,10 @@ import { kickLibrarySync } from '@/lib/memory/library'
 // way to see it. This tool bridges that gap: it searches every user
 // conversation's attachments (via listAllAttachments) by filename, source
 // conversation title, type and recency, resolves the on-disk path, and hands
-// back files still present on disk so a CLI agent can open them with Read.
+// back files still present on disk. CLI-backed agents (claude-code/codex) can
+// open the returned path directly; sandboxed workspace tools cannot (uploads
+// live outside the workspace) — those callers stage a copy with
+// copy_upload_to_workspace first, or pass the upload_id to tools that take it.
 //
 // Intentionally simple: substring/keyword match only. There is no content,
 // OCR, or visual search here (see the embeddings follow-up if that's needed).
@@ -29,7 +32,8 @@ export const findPastUploadsTool: ToolDef = {
         'Find a file the user uploaded in an EARLIER conversation (or earlier in this one).',
         'Attachments on the CURRENT message are already given to you inline — only reach for this when the user refers to a photo/PDF/file they sent before that is NOT in front of you (e.g. "the image I sent last week", "that PDF from yesterday").',
         'Matches on filename, source conversation title, type and recency only — there is no content/OCR/visual search, so a vague query may miss. With no query it returns the most recent uploads.',
-        'Returns matches newest-first, each with a local `path` you can open with Read (only files still present on disk are returned) plus the upload_id.',
+        'Returns matches newest-first (only files still present on disk), each with its upload_id and on-disk `path`.',
+        'Use the upload_id with tools that accept one (TranscribeAudio, delegation attachment_ids, copy_upload_to_workspace). The `path` lies OUTSIDE the agent workspace: open it directly only if you are a CLI-backed agent; the sandboxed Read cannot — call copy_upload_to_workspace to stage an editable copy instead.',
     ].join(' '),
     input_schema: {
         type: 'object',

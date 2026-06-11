@@ -123,6 +123,13 @@ export function resolveSandboxed(inputPath: string | undefined): SandboxResult {
                 return validateSandboxContainment(candidate, root.absolute, raw, 'agent workspace')
             }
         }
+        // Tool results display workspace paths rooted at "/" (displayPath), so
+        // a caller echoing one back sends e.g. "/tmp/x.mp3". Before rejecting,
+        // reinterpret it as workspace-rooted — still containment-checked.
+        const rebased = path.resolve(/* turbopackIgnore: true */ workspaceRoot, stripLeadingSlash(raw))
+        if (isInside(rebased, workspaceRoot)) {
+            return validateSandboxContainment(rebased, workspaceRoot, raw, 'agent workspace')
+        }
         return {
             ok: false,
             error: `Path is outside the agent workspace: ${raw}. Agents can only read files under the workspace directory.`,
@@ -159,6 +166,16 @@ export function resolveSandboxedWritable(inputPath: string | undefined): Sandbox
 
     if (isInside(candidate, workspaceRoot)) {
         return validateSandboxContainment(candidate, workspaceRoot, raw, 'writable agent workspace')
+    }
+
+    // Same displayPath round-trip as resolveSandboxed: "/tmp/x" means
+    // <workspace>/tmp/x in tool output, so retry workspace-rooted before
+    // rejecting an absolute path that fell outside.
+    if (path.isAbsolute(raw)) {
+        const rebased = path.resolve(/* turbopackIgnore: true */ workspaceRoot, stripLeadingSlash(raw))
+        if (isInside(rebased, workspaceRoot)) {
+            return validateSandboxContainment(rebased, workspaceRoot, raw, 'writable agent workspace')
+        }
     }
 
     return {

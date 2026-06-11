@@ -141,6 +141,22 @@ export function deletePushSubscription(endpoint: string): void {
   db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").run(endpoint)
 }
 
+export interface PushSubscriptionSummary {
+  id: string
+  endpoint: string
+  userAgent: string | null
+  createdAt: number
+  updatedAt: number
+}
+
+export function listPushSubscriptions(): PushSubscriptionSummary[] {
+  return db
+    .prepare(
+      "SELECT id, endpoint, userAgent, createdAt, updatedAt FROM push_subscriptions ORDER BY updatedAt DESC"
+    )
+    .all() as PushSubscriptionSummary[]
+}
+
 function compactNotificationBody(value: string): string {
   return value
     .replace(/```[\s\S]*?```/g, "code block")
@@ -180,6 +196,74 @@ async function sendPushPayloadToAll(
           return
         }
         console.warn("Failed to send push notification", error)
+      }
+    })
+  )
+}
+
+export interface PushTestResult {
+  endpoint: string
+  ok: boolean
+  statusCode: number | null
+  removed: boolean
+  error: string | null
+}
+
+/**
+ * Sends a test notification and reports the push service's response per
+ * endpoint, so the settings UI can distinguish "the push service accepted the
+ * message" from "nothing is subscribed" / "the endpoint is dead".
+ */
+export async function sendTestPushNotification(
+  endpoint?: string
+): Promise<PushTestResult[]> {
+  const rows = (
+    endpoint
+      ? db
+          .prepare(
+            "SELECT endpoint, subscription FROM push_subscriptions WHERE endpoint = ?"
+          )
+          .all(endpoint)
+      : db.prepare("SELECT endpoint, subscription FROM push_subscriptions").all()
+  ) as Array<{ endpoint: string; subscription: string }>
+  if (rows.length === 0) return []
+
+  configureWebPush()
+
+  const payload = JSON.stringify({
+    type: "test",
+    title: "Test notification",
+    body: "Push notifications are working on this device.",
+    url: "/settings?tab=notifications",
+    tag: `push-test-${Date.now()}`,
+  })
+
+  return Promise.all(
+    rows.map(async (row): Promise<PushTestResult> => {
+      try {
+        const result = await webpush.sendNotification(
+          JSON.parse(row.subscription),
+          payload,
+          { TTL: 5 * 60, urgency: "high" }
+        )
+        return {
+          endpoint: row.endpoint,
+          ok: true,
+          statusCode: result.statusCode,
+          removed: false,
+          error: null,
+        }
+      } catch (error) {
+        const statusCode = (error as { statusCode?: unknown }).statusCode
+        const removed = statusCode === 404 || statusCode === 410
+        if (removed) deletePushSubscription(row.endpoint)
+        return {
+          endpoint: row.endpoint,
+          ok: false,
+          statusCode: typeof statusCode === "number" ? statusCode : null,
+          removed,
+          error: error instanceof Error ? error.message : "Push send failed",
+        }
       }
     })
   )

@@ -8,6 +8,7 @@ import {
     MAX_UPLOAD_TOTAL_BYTES,
     classifyUploadMime,
     resolveUploadPath,
+    resolveUploadStorageType,
     validateUploadBatch,
     validateUploadFileName,
 } from '@/lib/uploads'
@@ -62,12 +63,23 @@ function baseMime(mimeType: string): string {
 
 function normalizeUploadMimeType(mimeType: string, extension: string): string {
     const clean = baseMime(mimeType)
-    if (extension === '.m4a' && (!clean || clean === 'audio/mp4')) return 'audio/m4a'
+    if (extension === '.m4a' && (!clean || clean === 'audio/mp4' || clean === 'audio/x-m4a')) return 'audio/m4a'
     // For source/text files, trust our mapping over a browser-reported type:
     // browsers may label them text/x-python, text/javascript, etc., which model
     // APIs don't accept — normalizing to text/plain keeps them ingestible.
     if (UPLOAD_MIME_MAP[extension] === 'text/plain') return 'text/plain'
+    // A browser that doesn't recognize the extension reports an empty or generic
+    // octet-stream type (common for .opus, .flac, .oga, …). Trust our extension
+    // map in that case so the file still classifies into the right viewer bucket
+    // (audio/video/image) — it's the same map /api/uploads uses to serve it.
+    const generic = !clean || clean === 'application/octet-stream'
+    if (generic && UPLOAD_MIME_MAP[extension]) return UPLOAD_MIME_MAP[extension]
     return clean || UPLOAD_MIME_MAP[extension] || 'application/octet-stream'
+}
+
+function uploadOriginFromForm(formData: FormData): NonNullable<Attachment['origin']> {
+    const raw = formData.get('attachmentSource') ?? formData.get('source')
+    return raw === 'voice_recording' ? 'voice_recording' : 'file_upload'
 }
 
 function voiceUploadFilename(filename: string, extension: string): string {
@@ -77,15 +89,21 @@ function voiceUploadFilename(filename: string, extension: string): string {
 async function normalizeUploadBytes(args: {
     buffer: Buffer
     filename: string
-    extension: string
     mimeType: string
 }): Promise<{ buffer: Buffer; filename: string; extension: string; mimeType: string }> {
-    const mimeType = normalizeUploadMimeType(args.mimeType, args.extension)
+    // Recover a real stored type when the filename does not pin one down (no
+    // extension, or one we don't know): reverse-map the browser-declared MIME,
+    // else sniff the leading bytes. Without this, an extension-less audio file
+    // lands as .bin / application/octet-stream and nothing downstream (player,
+    // audio pre-pass, TranscribeAudio) recognizes it as audio.
+    const storage = resolveUploadStorageType(args.buffer, args.mimeType, args.filename)
+    const extension = storage.extension
+    const mimeType = normalizeUploadMimeType(storage.mimeType, extension)
     if (mimeType !== 'audio/webm') {
-        return { ...args, mimeType }
+        return { buffer: args.buffer, filename: args.filename, extension, mimeType }
     }
 
-    const wav = await transcodeAudioBufferToWav(args.buffer, args.extension)
+    const wav = await transcodeAudioBufferToWav(args.buffer, extension)
     return {
         buffer: wav,
         filename: voiceUploadFilename(args.filename, '.wav'),
@@ -105,6 +123,7 @@ export async function POST(request: Request) {
             if (files.length !== entries.length) {
                 return jsonResponse({ error: 'Invalid files provided' }, 400)
             }
+            const origin = uploadOriginFromForm(formData)
 
             const batchCheck = validateUploadBatch(files)
             if (!batchCheck.ok) return jsonResponse({ error: batchCheck.error }, batchCheck.status)
@@ -120,7 +139,6 @@ export async function POST(request: Request) {
                 const normalized = await normalizeUploadBytes({
                     buffer,
                     filename: nameCheck.filename,
-                    extension: nameCheck.extension,
                     mimeType: file.type || 'application/octet-stream',
                 })
 
@@ -146,6 +164,7 @@ export async function POST(request: Request) {
                     mimeType: normalized.mimeType,
                     size: normalized.buffer.length,
                     type: classifyUploadMime(normalized.mimeType),
+                    origin,
                 })
             }
 

@@ -11,6 +11,8 @@ export interface Attachment {
   size: number
   /** Category for display/routing */
   type: "image" | "pdf" | "document" | "spreadsheet" | "presentation" | "audio" | "video" | "other"
+  /** How the attachment entered the chat. Drives audio pre-pass behavior. */
+  origin?: "file_upload" | "voice_recording" | "integration" | "workspace"
   /** Optional explicit fetch URL. Uploads resolve to /api/uploads/[id] by
    *  default; set this for files served elsewhere (e.g. workspace files). */
   url?: string

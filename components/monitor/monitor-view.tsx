@@ -16,6 +16,7 @@ import {
   X,
 } from "lucide-react"
 import { Switch } from "@/components/ui/switch"
+import { ViewFade } from "@/components/route-fade"
 import { SidebarTrigger } from "@/components/ui/sidebar"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -940,14 +941,28 @@ function MicroscriptEvents({
 // Main view
 // ---------------------------------------------------------------------------
 
+// Last fetched snapshot, kept at module scope so revisits fade in already
+// populated while a silent refresh runs, instead of re-flashing spinners.
+let cachedMonitor: {
+  watches: WatchRow[]
+  microscripts: MicroscriptRow[]
+  status: HeartbeatStatus | null
+} | null = null
+
 export function MonitorView() {
   const [activeTab, setActiveTab] = React.useState<
     "watches" | "microscripts" | "webhooks"
   >("watches")
-  const [watches, setWatches] = React.useState<WatchRow[]>([])
-  const [microscripts, setMicroscripts] = React.useState<MicroscriptRow[]>([])
-  const [status, setStatus] = React.useState<HeartbeatStatus | null>(null)
-  const [loading, setLoading] = React.useState(true)
+  const [watches, setWatches] = React.useState<WatchRow[]>(
+    () => cachedMonitor?.watches ?? []
+  )
+  const [microscripts, setMicroscripts] = React.useState<MicroscriptRow[]>(
+    () => cachedMonitor?.microscripts ?? []
+  )
+  const [status, setStatus] = React.useState<HeartbeatStatus | null>(
+    () => cachedMonitor?.status ?? null
+  )
+  const [loading, setLoading] = React.useState(cachedMonitor === null)
   const [loadingMicroscripts, setLoadingMicroscripts] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
@@ -968,6 +983,11 @@ export function MonitorView() {
       if (!statusRes.ok) throw new Error(await asError(statusRes))
       const w = (await watchesRes.json()) as { watches: WatchRow[] }
       const s = (await statusRes.json()) as HeartbeatStatus
+      cachedMonitor = {
+        watches: w.watches,
+        microscripts: cachedMonitor?.microscripts ?? [],
+        status: s,
+      }
       setWatches(w.watches)
       setStatus(s)
       setError(null)
@@ -984,6 +1004,11 @@ export function MonitorView() {
       })
       if (!res.ok) throw new Error(await asError(res))
       const data = (await res.json()) as { scripts: MicroscriptRow[] }
+      cachedMonitor = {
+        watches: cachedMonitor?.watches ?? [],
+        microscripts: data.scripts,
+        status: cachedMonitor?.status ?? null,
+      }
       setMicroscripts(data.scripts)
       setError(null)
     } catch (err) {
@@ -1016,7 +1041,6 @@ export function MonitorView() {
 
   React.useEffect(() => {
     let cancelled = false
-    setLoading(true)
     refresh().finally(() => {
       if (!cancelled) setLoading(false)
     })
@@ -1081,9 +1105,16 @@ export function MonitorView() {
     microscriptDetailRefreshRef.current = fn
   }, [])
 
+  // Initial-load only: background refreshes keep the rendered list in place
+  // instead of swapping it for a spinner.
+  const microscriptsPending = loadingMicroscripts && microscripts.length === 0
+
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
-      <header className="flex min-w-0 flex-col gap-3 border-b border-border/60 px-4 py-3 md:px-5 md:py-4">
+    <ViewFade
+      ready={!loading}
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+    >
+      <header className="flex min-w-0 flex-col gap-3 border-b border-border/60 px-4 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-3 md:px-5 md:py-4">
         <div className="flex min-w-0 items-start gap-3 md:items-center">
           <SidebarTrigger className="md:hidden" />
           <Radar className="mt-0.5 size-5 shrink-0 text-foreground/55 md:mt-0" />
@@ -1136,14 +1167,14 @@ export function MonitorView() {
               <span
                 className={cn(
                   "size-2 shrink-0 rounded-full",
-                  loadingMicroscripts ? "bg-foreground/30" : "bg-emerald-500"
+                  microscriptsPending ? "bg-foreground/30" : "bg-emerald-500"
                 )}
               />
               <span className="font-semibold text-foreground">
                 Microscripts
               </span>
               <span>
-                {loadingMicroscripts
+                {microscriptsPending
                   ? "loading..."
                   : `${microscripts.filter((s) => s.enabled).length} active`}
               </span>
@@ -1224,7 +1255,7 @@ export function MonitorView() {
                   "hidden md:block md:max-w-[420px] md:border-r md:border-border/60"
               )}
             >
-              {loadingMicroscripts ? (
+              {microscriptsPending ? (
                 <div className="flex h-32 items-center justify-center">
                   <Loader2 className="size-4 animate-spin text-foreground/40" />
                 </div>
@@ -1271,6 +1302,6 @@ export function MonitorView() {
           <WebhooksTab microscripts={microscripts} />
         )}
       </div>
-    </div>
+    </ViewFade>
   )
 }

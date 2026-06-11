@@ -53,13 +53,17 @@ export function HomeView() {
           window.innerHeight,
           document.documentElement.clientHeight
         )
-        // Center the content within the space above the keyboard — that's
-        // roughly where Safari would scroll the focused field to, so Safari
-        // has no reason to pan the viewport (which is what dragged the top bar
-        // up). offsetTop is unaffected by our transform, so there's no loop.
+        // Lift only when the keyboard would actually cover the input, and only
+        // by the overlap. When there's room, nothing moves — re-centering on
+        // every focus made the greeting + input jump for no reason.
+        // offsetTop/offsetHeight are layout values unaffected by our
+        // transform, so there's no feedback loop.
         const visibleHeight = viewportHeight - keyboardInset
-        const desiredTop = Math.max(0, (visibleHeight - element.offsetHeight) / 2)
-        const nextLift = Math.max(0, Math.round(element.offsetTop - desiredTop))
+        const contentBottom = element.offsetTop + element.offsetHeight
+        const nextLift = Math.max(
+          0,
+          Math.round(contentBottom - (visibleHeight - 12))
+        )
 
         setKeyboardLift((current) =>
           Math.abs(current - nextLift) <= 1 ? current : nextLift

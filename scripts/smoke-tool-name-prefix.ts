@@ -15,8 +15,10 @@
  *     codex / google / anthropic do not (they pass custom tools bare).
  *   - buildToolsSection renders custom tool names WITH the prefix and states
  *     the bare→prefixed mapping when a prefix is set.
- *   - With no prefix, names render bare and the mapping note is absent
- *     (unchanged behaviour for non-MCP providers).
+ *   - With no prefix, the per-tool menu is omitted entirely: those providers
+ *     (codex `dynamicTools`, Anthropic/OpenAI/Google native tool defs) already
+ *     deliver every schema in the request, so a prose copy would duplicate
+ *     ~6k tokens. Only the built-ins routing note renders, when present.
  *
  * Run: npx tsx scripts/smoke-tool-name-prefix.ts
  */
@@ -88,11 +90,16 @@ check(
 )
 
 // --- bare rendering (codex / API providers) ---------------------------------
+// Schemas arrive natively in the request on these providers, so the prompt
+// must NOT re-list tool definitions — only the built-ins note survives.
 
 const bare = buildToolsSection(ctx(undefined))
-check('bare: set_task_state listed by bare id', bare.includes('- set_task_state:'))
-check('bare: no mcp__orch-tools__ prefix anywhere', !bare.includes('mcp__orch-tools__'))
-check('bare: plain header, no ToolSearch note', bare.includes('Tools available in this runtime:') && !bare.includes('ToolSearch'))
+check('bare: no per-tool menu (schemas are native, prose copy would duplicate)', !bare.includes('- set_task_state:'))
+check('bare: empty without builtins', bare === '')
+
+const bareWithBuiltins = buildToolsSection({ ...ctx(undefined), availableBuiltins: ['web_search'] })
+check('bare+builtins: built-ins note renders', bareWithBuiltins.includes('Native provider built-ins enabled:') && bareWithBuiltins.includes('web_search'))
+check('bare+builtins: still no per-tool menu or ToolSearch note', !bareWithBuiltins.includes('- set_task_state:') && !bareWithBuiltins.includes('ToolSearch'))
 
 if (failures) {
     console.error(`\n${failures} check(s) failed`)

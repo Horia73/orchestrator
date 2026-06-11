@@ -342,6 +342,7 @@ const PLACEHOLDER_TYPES = new Set([
     'application/vnd.ant.weather',
     'application/vnd.ant.recipe',
     'application/vnd.ant.workout',
+    'application/vnd.ant.app-link',
 ])
 
 function StreamingPlaceholder({ type, title }: { type: string; title: string }) {
@@ -362,6 +363,7 @@ const STREAMING_KIND_LABEL: Record<string, string> = {
     'application/vnd.ant.weather': 'weather',
     'application/vnd.ant.recipe': 'recipe',
     'application/vnd.ant.workout': 'workout',
+    'application/vnd.ant.app-link': 'app card',
 }
 
 function prettyArtifactType(type: string): string {

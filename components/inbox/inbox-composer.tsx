@@ -10,6 +10,7 @@ import {
 } from "@/hooks/use-file-attachments"
 import { useMessageDraft } from "@/hooks/use-message-draft"
 import {
+    focusWithoutViewportScroll,
     isMobileKeyboardViewport,
     useMobileKeyboardInset,
 } from "@/hooks/use-keyboard-inset"
@@ -49,6 +50,28 @@ export function InboxComposer({ itemId, responding, onSend }: InboxComposerProps
     React.useEffect(() => {
         return draft.restore(textareaRef)
     }, [itemId]) // eslint-disable-line react-hooks/exhaustive-deps
+
+    // Focus on touch without letting iOS Safari scroll/pan the page to reveal
+    // the field — the composer lifts itself by the keyboard inset, so the
+    // browser's auto-reveal would only drag the header up (same pattern as
+    // ChatInput).
+    React.useEffect(() => {
+        const textarea = textareaRef.current
+        if (!textarea) return
+
+        const handleTouchStart = (event: TouchEvent) => {
+            if (document.activeElement === textarea) return
+            if (!isMobileKeyboardViewport()) return
+
+            if (event.cancelable) event.preventDefault()
+            focusWithoutViewportScroll(textarea)
+        }
+
+        textarea.addEventListener("touchstart", handleTouchStart, {
+            passive: false,
+        })
+        return () => textarea.removeEventListener("touchstart", handleTouchStart)
+    }, [])
 
     const resizeTextarea = React.useCallback(() => {
         const textarea = textareaRef.current

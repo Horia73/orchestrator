@@ -53,6 +53,7 @@ export function buildAttachmentContext(
         `The user attached ${lines.length === 1 ? "this file" : "these files"}:`,
         ...lines,
         `Use upload_id when a tool asks for one of these uploaded attachments. Use local paths only when filesystem inspection is available.`,
+        `Uploads are read-only originals stored outside your workspace. To edit, convert, or otherwise process one with filesystem tools (Bash/ffmpeg, Read/Write/Edit), first stage a copy inside the workspace — copy_upload_to_workspace(upload_id) when available — and work on the copy; never modify the original upload file in place.`,
     ].join("\n")
 }
 

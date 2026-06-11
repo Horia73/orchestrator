@@ -4,6 +4,7 @@ import { randomUUID } from 'crypto'
 import type { Attachment } from '@/lib/types'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
+import { sniffContentType } from '@/lib/file-sniff'
 
 export { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
 
@@ -187,6 +188,39 @@ function uploadBaseName(originalName: string | undefined, fallback: string): str
 }
 
 /**
+ * Resolve the on-disk extension + effective MIME for incoming upload bytes.
+ *
+ * Prefers a usable filename extension, then reverse-maps the declared MIME.
+ * When neither pins down a real type, the extension lands on the opaque .bin
+ * fallback (or some unknown extension) and the file would serve as
+ * application/octet-stream with no in-app renderer — the common case for
+ * WhatsApp voice notes and chat uploads of extension-less files. Recover the
+ * real type from the leading bytes so it gets a playable extension and the
+ * right viewer. Shared by the chat upload route and persistUploadBytes so both
+ * ingestion paths type files identically.
+ */
+export function resolveUploadStorageType(
+    data: Buffer,
+    mimeType: string,
+    originalName?: string,
+): { extension: string; mimeType: string } {
+    let extension = uploadExtensionForMime(mimeType, originalName)
+    let effectiveMime = mimeType
+
+    const declared = mimeType.split(';')[0].trim().toLowerCase()
+    const declaredIsGeneric = !declared || declared === 'application/octet-stream'
+    if (!UPLOAD_MIME_MAP[extension] && declaredIsGeneric) {
+        const sniffed = sniffContentType(data)
+        if (sniffed) {
+            extension = sniffed.ext
+            effectiveMime = sniffed.mime
+        }
+    }
+
+    return { extension, mimeType: effectiveMime }
+}
+
+/**
  * Persist raw bytes (e.g. media downloaded from an integration) as an upload
  * addressable at /api/uploads/{id}. Uses the same id/mime conventions as
  * user-uploaded files so the result serves with the correct content type and
@@ -199,7 +233,7 @@ export function persistUploadBytes(
     fallbackBaseName = 'attachment',
 ): PersistedUpload {
     fs.mkdirSync(activeRuntimePaths().uploadsDir, { recursive: true })
-    const extension = uploadExtensionForMime(mimeType, originalName)
+    const { extension, mimeType: effectiveMime } = resolveUploadStorageType(data, mimeType, originalName)
 
     for (let attempt = 0; attempt < 3; attempt++) {
         const id = `${randomUUID()}${extension}`
@@ -215,7 +249,7 @@ export function persistUploadBytes(
             throw error
         }
 
-        const resolvedMime = UPLOAD_MIME_MAP[extension] || mimeType.split(';')[0].trim() || 'application/octet-stream'
+        const resolvedMime = UPLOAD_MIME_MAP[extension] || effectiveMime.split(';')[0].trim() || 'application/octet-stream'
         const attachment: Attachment = {
             id,
             filename: `${uploadBaseName(originalName, fallbackBaseName)}${extension}`,

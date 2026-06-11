@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { FileText, X } from "lucide-react"
+import { AudioPlayer } from "@/components/attachment-card"
 import { PdfThumbnail } from "@/components/pdf-thumbnail"
 import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
@@ -41,6 +42,31 @@ export function AttachmentPreview({
         return (
             <div className="relative shrink-0">
                 <AttachmentSkeleton type={attachment.type} />
+            </div>
+        )
+    }
+
+    // Audio attachments get the same inline player as in the sent message, so the
+    // user can preview/play before sending instead of seeing a bare file chip.
+    if (attachment.uploaded?.type === "audio" && serverUrl) {
+        return (
+            <div
+                className="relative shrink-0 self-center"
+                onMouseEnter={() => setHovered(true)}
+                onMouseLeave={() => setHovered(false)}
+            >
+                <button
+                    type="button"
+                    onClick={(e) => { e.stopPropagation(); onRemove() }}
+                    className={cn(
+                        "absolute -top-1.5 -left-1.5 z-10 flex size-5 items-center justify-center rounded-full bg-background border border-border shadow-sm text-muted-foreground transition-all duration-200 ease-out hover:text-foreground hover:bg-muted",
+                        hovered ? "opacity-100 scale-100" : "opacity-0 scale-75"
+                    )}
+                    aria-label="Remove file"
+                >
+                    <X className="size-3" strokeWidth={2.5} />
+                </button>
+                <AudioPlayer url={serverUrl} />
             </div>
         )
     }

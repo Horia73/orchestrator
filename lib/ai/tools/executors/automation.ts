@@ -63,6 +63,23 @@ import {
   LIST_EXERCISE_HISTORY_TOOL_ID,
   SAVE_BODY_METRICS_TOOL_ID,
 } from "../workout-history"
+import { executePatchWorkout, PATCH_WORKOUT_TOOL_ID } from "../workout-patch"
+import {
+  executeAppDataGet,
+  executeAppDataSet,
+  executeAppDelete,
+  executeAppGet,
+  executeAppSave,
+  executeAppShow,
+  executeAppsList,
+  APP_DATA_GET_TOOL_ID,
+  APP_DATA_SET_TOOL_ID,
+  APP_DELETE_TOOL_ID,
+  APP_GET_TOOL_ID,
+  APP_SAVE_TOOL_ID,
+  APP_SHOW_TOOL_ID,
+  APPS_LIST_TOOL_ID,
+} from "../apps"
 import { executeMonitorWakeFeedback } from "../smart-monitor-feedback"
 import {
   executeMonitorDescribeSources,
@@ -126,6 +143,14 @@ export const automationToolExecutors: Record<string, ToolExecutor> = {
   [GET_RECENT_WORKOUTS_TOOL_ID]: executeGetRecentWorkouts,
   [GET_BODY_METRICS_TOOL_ID]: executeGetBodyMetrics,
   [SAVE_BODY_METRICS_TOOL_ID]: executeSaveBodyMetrics,
+  [PATCH_WORKOUT_TOOL_ID]: executePatchWorkout,
+  [APPS_LIST_TOOL_ID]: executeAppsList,
+  [APP_GET_TOOL_ID]: executeAppGet,
+  [APP_SAVE_TOOL_ID]: executeAppSave,
+  [APP_DELETE_TOOL_ID]: executeAppDelete,
+  [APP_DATA_GET_TOOL_ID]: executeAppDataGet,
+  [APP_DATA_SET_TOOL_ID]: executeAppDataSet,
+  [APP_SHOW_TOOL_ID]: executeAppShow,
   apply_update: executeApplyUpdate,
   memory_search: executeMemorySearch,
   library_search: executeLibrarySearch,

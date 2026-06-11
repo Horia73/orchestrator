@@ -29,6 +29,12 @@ export const EARTH_3D_RUNTIME = `
             try { earthMap.remove(); } catch (_) {}
             earthMap = null;
         }
+        earthAppliedMinAltitude = null;
+        if (earthCameraChangeFrame !== null) {
+            window.cancelAnimationFrame(earthCameraChangeFrame);
+            earthCameraChangeFrame = null;
+        }
+        earthCameraChangePositional = false;
         clearEarthPinMarkers();
         resetEarthRouteOverlays();
         searchMarker3D = null;
@@ -143,6 +149,7 @@ export const EARTH_3D_RUNTIME = `
             getEarthMapLibrary().then(function (maps3d) {
                 if (generation !== earthMapGeneration || !runtimeSettings || !runtimeSettings.earth3d) return;
                 var mode = maps3d.MapMode && maps3d.MapMode.HYBRID ? maps3d.MapMode.HYBRID : 'HYBRID';
+                earthAppliedMinAltitude = null;
                 earthMap = new maps3d.Map3DElement({
                     center: initialCamera.center,
                     range: initialCamera.range,
@@ -705,16 +712,27 @@ export const EARTH_3D_RUNTIME = `
     }
 
 	    function handleEarthCameraChange(invalidateAnchoredFocus) {
-	        if (!runtimeSettings || !runtimeSettings.earth3d || !earthMap) return;
-	        syncEarthTiltBoundsToRange();
-	        if (suppressEarthCameraTracking || earthOrbitActive) {
+	        // gmp-center/range/tilt/heading fire individually — up to 4× per
+	        // rendered frame during a gesture. Coalesce the bookkeeping (bounds
+	        // sync, dataset writes, camera save) into one rAF so the handler
+	        // work doesn't compete with the 3D renderer on slow devices.
+	        if (invalidateAnchoredFocus) earthCameraChangePositional = true;
+	        if (earthCameraChangeFrame !== null) return;
+	        earthCameraChangeFrame = window.requestAnimationFrame(function () {
+	            earthCameraChangeFrame = null;
+	            var positional = earthCameraChangePositional;
+	            earthCameraChangePositional = false;
+	            if (!runtimeSettings || !runtimeSettings.earth3d || !earthMap) return;
+	            syncEarthTiltBoundsToRange();
+	            if (suppressEarthCameraTracking || earthOrbitActive) {
+	                updateCameraDataset();
+	                return;
+	            }
+	            userMovedCamera = true;
+	            if (positional) earthUserMovedCamera = true;
 	            updateCameraDataset();
-	            return;
-	        }
-	        userMovedCamera = true;
-	        if (invalidateAnchoredFocus) earthUserMovedCamera = true;
-	        updateCameraDataset();
-	        saveCameraStateSoon();
+	            saveCameraStateSoon();
+	        });
 	    }
 
         function handleEarthPositionCameraChange() {
@@ -857,15 +875,21 @@ export const EARTH_3D_RUNTIME = `
 
     function setEarthMapTiltBounds(range, zoom, minAltitude) {
         if (!earthMap) return MAX_EARTH_TILT;
-        try { earthMap.minTilt = 0; } catch (_) {}
-        try { earthMap.maxTilt = MAX_EARTH_TILT; } catch (_) {}
         var nextMinAltitude = Number(minAltitude);
         if (!isFinite(nextMinAltitude)) {
             var z = Number(zoom);
             if (!isFinite(z)) z = zoomForEarthRange(range);
             nextMinAltitude = minCameraAltitudeForZoom(z);
         }
-        try { earthMap.minAltitude = nextMinAltitude; } catch (_) {}
+        // This runs on every camera frame and property writes on the
+        // gmp-map-3d element aren't free — only touch it when the computed
+        // bound actually changes (minTilt/maxTilt are constants per session).
+        if (earthAppliedMinAltitude !== nextMinAltitude) {
+            earthAppliedMinAltitude = nextMinAltitude;
+            try { earthMap.minTilt = 0; } catch (_) {}
+            try { earthMap.maxTilt = MAX_EARTH_TILT; } catch (_) {}
+            try { earthMap.minAltitude = nextMinAltitude; } catch (_) {}
+        }
         return MAX_EARTH_TILT;
     }
 

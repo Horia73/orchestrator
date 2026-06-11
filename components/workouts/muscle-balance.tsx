@@ -1,9 +1,11 @@
 "use client"
 
 import * as React from "react"
+import { Scale } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import { MACRO_BAR_CLASS, muscleLabel, muscleMacro } from "@/lib/workout/muscles"
+import { MACRO_BAR_CLASS, MACRO_LABEL, muscleLabel, muscleMacro, type MuscleMacro } from "@/lib/workout/muscles"
+import { SectionCard, SectionEmpty } from "@/components/workouts/section-card"
 
 const DAY_MS = 86_400_000
 
@@ -47,13 +49,18 @@ export function MuscleBalance({
 
     const max = rows.length > 0 ? rows[0].sets : 0
     const totalSets = rows.reduce((sum, r) => sum + r.sets, 0)
+    const macrosPresent = React.useMemo(() => {
+        const seen = new Set<MuscleMacro>()
+        for (const row of rows) seen.add(muscleMacro(row.group))
+        // Stable legend order regardless of which macro tops the list.
+        return (Object.keys(MACRO_LABEL) as MuscleMacro[]).filter((m) => seen.has(m))
+    }, [rows])
 
     return (
-        <section className={cn("flex min-w-0 flex-col gap-3", className)}>
-            <div className="flex items-center justify-between gap-3">
-                <h2 className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-wider text-foreground/65">
-                    Muscle balance
-                </h2>
+        <SectionCard
+            title="Muscle balance"
+            icon={<Scale className="size-3.5" strokeWidth={2} />}
+            actions={
                 <div className="inline-flex rounded-md border border-border bg-background p-0.5">
                     {([7, 30] as const).map((w) => (
                         <button
@@ -71,14 +78,15 @@ export function MuscleBalance({
                         </button>
                     ))}
                 </div>
-            </div>
-
+            }
+            className={className}
+        >
             {rows.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-border bg-muted/25 p-6 text-center text-sm text-muted-foreground">
+                <SectionEmpty>
                     No sets logged in the last {windowDays} days. Finished sessions feed this breakdown.
-                </div>
+                </SectionEmpty>
             ) : (
-                <div className="flex flex-col gap-2 rounded-xl border border-border/60 bg-card px-4 py-3.5 shadow-sm">
+                <div className="flex flex-col gap-2 px-4 py-3.5">
                     <ul className="flex flex-col gap-1.5">
                         {rows.map((row) => {
                             const macro = muscleMacro(row.group)
@@ -100,11 +108,21 @@ export function MuscleBalance({
                             )
                         })}
                     </ul>
-                    <p className="mt-1 text-[10.5px] text-muted-foreground">
-                        {totalSets} working sets across {rows.length} muscle group{rows.length === 1 ? "" : "s"} · counts each targeted muscle
-                    </p>
+                    <div className="mt-1 flex flex-wrap items-center justify-between gap-x-4 gap-y-1.5">
+                        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                            {macrosPresent.map((macro) => (
+                                <span key={macro} className="inline-flex items-center gap-1.5 text-[10.5px] text-muted-foreground">
+                                    <span className={cn("size-2 rounded-full", MACRO_BAR_CLASS[macro])} />
+                                    {MACRO_LABEL[macro]}
+                                </span>
+                            ))}
+                        </div>
+                        <p className="text-[10.5px] tabular-nums text-muted-foreground/75">
+                            {totalSets} working sets · {rows.length} muscle group{rows.length === 1 ? "" : "s"}
+                        </p>
+                    </div>
                 </div>
             )}
-        </section>
+        </SectionCard>
     )
 }

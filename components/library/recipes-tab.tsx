@@ -13,8 +13,13 @@ import type { LibraryRecipeRow } from "@/app/api/library/recipes/route"
  * Recipes tab content — fetches /api/library/recipes and renders a grid
  * with client-side search across title, subtitle, and source conversation.
  */
+// Last fetched list, kept at module scope so revisiting the tab renders the
+// grid instantly (a silent refresh still runs) instead of re-flashing the
+// skeleton cards.
+let cachedRecipes: LibraryRecipeRow[] | null = null
+
 export function RecipesTab() {
-    const [data, setData] = React.useState<LibraryRecipeRow[] | null>(null)
+    const [data, setData] = React.useState<LibraryRecipeRow[] | null>(() => cachedRecipes)
     const [loading, setLoading] = React.useState(true)
     const [error, setError] = React.useState<string | null>(null)
     const [query, setQuery] = React.useState('')
@@ -26,6 +31,7 @@ export function RecipesTab() {
             const r = await fetch('/api/library/recipes?limit=100')
             if (!r.ok) throw new Error(`HTTP ${r.status}`)
             const j = await r.json() as { recipes: LibraryRecipeRow[] }
+            cachedRecipes = j.recipes
             setData(j.recipes)
         } catch (e) {
             setError(e instanceof Error ? e.message : String(e))

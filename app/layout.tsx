@@ -70,7 +70,11 @@ export const metadata: Metadata = {
   appleWebApp: {
     capable: true,
     title: "Orchestrator",
-    statusBarStyle: "default",
+    // Translucent status bar so the installed PWA renders edge-to-edge behind
+    // the clock/battery (immersive map, like Google Maps). Every view already
+    // pads its top chrome by env(safe-area-inset-top), which only takes effect
+    // with this style.
+    statusBarStyle: "black-translucent",
   },
   formatDetection: {
     telephone: false,

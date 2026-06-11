@@ -14,8 +14,10 @@ import {
 import { MapChatPanel } from "@/components/maps/map-chat-panel"
 import { MapLibraryDrawer } from "@/components/maps/map-library-drawer"
 import { SmartMapsSetupState } from "@/components/maps/smart-maps-setup-state"
+import { ViewFade } from "@/components/route-fade"
 import { SmartMapTopControls } from "@/components/maps/smart-maps-controls"
 import { useSidebar } from "@/components/ui/sidebar"
+import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { type MapBBox, type MapRoute } from "@/lib/maps/schema"
 import {
@@ -107,6 +109,11 @@ function sourceConversationIdForMapChat(
   return null
 }
 
+// Last ready Maps config, kept at module scope. The view is remounted per
+// route visit; seeding from here skips the "Loading Smart Maps" gate on
+// revisits while a silent re-check still runs in the background.
+let cachedMapsConfig: MapsConfigState | null = null
+
 export function SmartMapsView({
   homeLocation,
   initialMapId,
@@ -125,14 +132,20 @@ export function SmartMapsView({
   const rendererSidePanelFlowViewport = useMediaQuery(
     RENDERER_SIDE_PANEL_FLOW_QUERY
   )
+  // Pin the document so iOS Safari can't pan the page when the maps chat
+  // input focuses — the chat panel's own keyboard inset is the only lift.
+  useDocumentViewportLock()
   const wideSidePanelDockViewport = useMediaQuery(WIDE_SIDE_PANEL_DOCK_QUERY)
   const requestedMapId = initialMapId ?? searchParams.get("map")
 
-  const [mapsConfig, setMapsConfig] = React.useState<MapsConfigState>({
-    status: "loading",
-    config: null,
-    error: null,
-  })
+  const [mapsConfig, setMapsConfig] = React.useState<MapsConfigState>(
+    () =>
+      cachedMapsConfig ?? {
+        status: "loading",
+        config: null,
+        error: null,
+      }
+  )
   const [maps, setMaps] = React.useState<SmartMapItem[]>([])
   const [savedPlaces, setSavedPlaces] = React.useState<SavedMapPlace[]>([])
   const [savedAreas, setSavedAreas] = React.useState<SavedMapArea[]>([])
@@ -260,7 +273,13 @@ export function SmartMapsView({
           body.error ?? `Failed to load Maps configuration (${res.status})`
         )
       }
-      setMapsConfig({ status: "ready", config: body.maps, error: null })
+      const next: MapsConfigState = {
+        status: "ready",
+        config: body.maps,
+        error: null,
+      }
+      cachedMapsConfig = next
+      setMapsConfig(next)
     } catch (error) {
       setMapsConfig({
         status: "error",
@@ -1490,21 +1509,37 @@ export function SmartMapsView({
   const shouldReserveMapChrome = desktopSidePanelExpanded
 
   if (mapsConfig.status === "loading") {
-    return <SmartMapsSetupState status="loading" />
+    // ready={false}: stays blank (bridging the route fade) while the config
+    // check resolves; the ViewFade cap reveals the loading card only when the
+    // check is genuinely slow.
+    return (
+      <ViewFade
+        ready={false}
+        className="flex min-h-0 flex-1 flex-col overflow-hidden"
+      >
+        <SmartMapsSetupState status="loading" />
+      </ViewFade>
+    )
   }
 
   if (mapsConfig.status === "error") {
     return (
-      <SmartMapsSetupState
-        status="error"
-        message={mapsConfig.error}
-        onRetry={() => void loadMapsConfig()}
-      />
+      <ViewFade className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <SmartMapsSetupState
+          status="error"
+          message={mapsConfig.error}
+          onRetry={() => void loadMapsConfig()}
+        />
+      </ViewFade>
     )
   }
 
   if (!mapsConfig.config.configured) {
-    return <SmartMapsSetupState status="unconfigured" />
+    return (
+      <ViewFade className="flex min-h-0 flex-1 flex-col overflow-hidden">
+        <SmartMapsSetupState status="unconfigured" />
+      </ViewFade>
+    )
   }
 
   const renderMapLibraryDrawer = (docked: boolean) => (
@@ -1582,8 +1617,11 @@ export function SmartMapsView({
         : null
 
   return (
-    <div className="relative flex h-full min-h-0 overflow-hidden bg-background">
-      <div className="relative min-w-0 flex-1 overflow-hidden bg-background">
+    <ViewFade className="relative flex h-full min-h-0 overflow-hidden bg-background">
+      <div
+        data-map-chrome=""
+        className="relative min-w-0 flex-1 overflow-hidden bg-background"
+      >
         <MapRenderer
           source={activeSource}
           title={activeTitle}
@@ -1762,6 +1800,6 @@ export function SmartMapsView({
         {!streetViewVisible && isMobile && renderMapChatPanel(false)}
       </div>
 
-    </div>
+    </ViewFade>
   )
 }

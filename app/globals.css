@@ -660,3 +660,15 @@ html[data-orch-home-page="true"] body {
     overflow: hidden;
   }
 }
+
+/* Map chrome on touch devices: the map (especially photorealistic 3D)
+   repaints every frame during gestures, and mobile WebKit re-blurs every
+   backdrop-filter region above the canvas on each of those frames. The
+   controls sit on ~95%-opaque backgrounds, so dropping the blur is visually
+   negligible but saves real GPU time. */
+@media (pointer: coarse) {
+  [data-map-chrome] [class*="backdrop-blur"] {
+    -webkit-backdrop-filter: none !important;
+    backdrop-filter: none !important;
+  }
+}

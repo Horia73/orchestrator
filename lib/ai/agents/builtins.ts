@@ -157,6 +157,7 @@ export const WHATSAPP_TOOL_IDS: string[] = [
     'WhatsAppUnreadSummary',
     'WhatsAppReadChat',
     'WhatsAppSearchMessages',
+    'WhatsAppFindMessages',
     'WhatsAppDownloadMedia',
     'WhatsAppSendMessage',
     'WhatsAppSendMedia',
@@ -231,12 +232,25 @@ export const MEMORY_TOOL_IDS: string[] = [
     'library_search',
 ]
 
-// Cross-conversation lookup for files the user uploaded in the past. The
-// per-message attachment context only surfaces the CURRENT message's files;
-// this lets the agent find an older upload ("the photo I sent last week") and
-// get a local path to Read.
+// Uploaded-file handling. find_past_uploads is the cross-conversation lookup
+// for files the user uploaded in the past (the per-message attachment context
+// only surfaces the CURRENT message's files). copy_upload_to_workspace stages
+// an upload's bytes inside the agent workspace — uploads live outside the
+// sandbox, so any edit/convert/extract work must happen on a workspace copy.
+// Held by orchestrator + worker + researcher so a sub-agent handed an
+// attachment can stage and process it without delegating back.
 export const UPLOADS_TOOL_IDS: string[] = [
     'find_past_uploads',
+    'copy_upload_to_workspace',
+]
+
+// On-demand audio transcription. Always-on (no connection/OAuth — just needs a
+// Google API key, which the tool self-checks with a graceful error). Powered by
+// the same Audio Context Agent the automatic pre-pass uses, so the Settings →
+// Models override governs both. Held by orchestrator + worker + researcher so a
+// sub-agent that runs into audio can transcribe without delegating back.
+export const TRANSCRIPTION_TOOL_IDS: string[] = [
+    'TranscribeAudio',
 ]
 
 // Self-service backup. Always-on single tool that creates the same portable
@@ -280,6 +294,18 @@ export const WORKOUT_HISTORY_TOOL_IDS: string[] = [
     'GetExerciseHistory',
     'ListExerciseHistory',
     'GetRecentWorkouts',
+]
+
+// Internal apps — reusable mini-apps (html/react artifacts + per-app data
+// store). Registry CRUD, data read/write, and the launch-card emitter.
+export const APPS_TOOL_IDS: string[] = [
+    'AppsList',
+    'AppGet',
+    'AppSave',
+    'AppDelete',
+    'AppDataGet',
+    'AppDataSet',
+    'AppShow',
 ]
 
 // Smart Monitor — watch CRUD + capability discovery + the learning-loop

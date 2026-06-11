@@ -55,8 +55,9 @@ function RecipeCard({ recipe }: { recipe: LibraryRecipeRow }) {
             // the user can cook with the full card (servings stepper, live
             // timers, prep mode) instead of scrolling back to a chat bubble.
             // /artifact/[id] already exists and renders the same renderer
-            // in panel/fullscreen mode.
-            href={`/artifact/${encodeURIComponent(recipe.id)}`}
+            // in panel/fullscreen mode. `from=library` tells the viewer's
+            // back/close to return here instead of the source chat.
+            href={`/artifact/${encodeURIComponent(recipe.id)}?from=library`}
             className={cn(
                 "group/recipe-card flex h-full flex-col overflow-hidden rounded-xl border border-border/55 bg-card shadow-sm transition-all",
                 "hover:-translate-y-0.5 hover:border-border hover:shadow-md",
@@ -99,8 +100,17 @@ function RecipeCard({ recipe }: { recipe: LibraryRecipeRow }) {
     )
 }
 
+// Resolved thumbnail URL per imageQuery, kept at module scope so remounted
+// cards (tab revisits, grid re-renders) reuse the lookup instead of re-hitting
+// /api/recipe-images and re-popping the image in.
+const recipeImageCache = new Map<string, string | null>()
+
 function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
-    const [resolvedSrc, setResolvedSrc] = React.useState<string | null>(recipe.imageUrl ?? null)
+    const [resolvedSrc, setResolvedSrc] = React.useState<string | null>(() => {
+        if (recipe.imageUrl) return recipe.imageUrl
+        if (recipe.imageQuery) return recipeImageCache.get(recipe.imageQuery) ?? null
+        return null
+    })
     const [failed, setFailed] = React.useState(false)
 
     React.useEffect(() => {
@@ -116,13 +126,19 @@ function RecipeImage({ recipe }: { recipe: LibraryRecipeRow }) {
             setResolvedSrc(null)
             return
         }
+        const query = recipe.imageQuery
+        if (recipeImageCache.has(query)) {
+            setResolvedSrc(recipeImageCache.get(query) ?? null)
+            return
+        }
         let cancelled = false
-        const url = `/api/recipe-images?q=${encodeURIComponent(recipe.imageQuery)}&limit=1`
+        const url = `/api/recipe-images?q=${encodeURIComponent(query)}&limit=1`
         fetch(url)
             .then((r) => r.ok ? r.json() : null)
             .then((j: { images?: Array<{ url: string }> } | null) => {
-                if (cancelled) return
-                setResolvedSrc(j?.images?.[0]?.url ?? null)
+                const resolved = j?.images?.[0]?.url ?? null
+                recipeImageCache.set(query, resolved)
+                if (!cancelled) setResolvedSrc(resolved)
             })
             .catch(() => { if (!cancelled) setResolvedSrc(null) })
         return () => { cancelled = true }

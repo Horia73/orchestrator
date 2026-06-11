@@ -115,7 +115,7 @@ function exerciseLine(exercise: Exercise, session: WorkoutSessionState, units: W
 export function summarizeWorkoutForPrompt(
     workout: WorkoutArtifact,
     session: WorkoutSessionState,
-    meta: { identifier: string; title: string },
+    meta: { identifier: string; title: string; artifactId: string },
 ): string {
     const units = workout.units
     const started = !!session.startedAt
@@ -125,7 +125,7 @@ export function summarizeWorkoutForPrompt(
     const lines: string[] = [
         'Surface: Workout session — the user is viewing this workout full-screen with an in-surface chat.',
         'Treat the workout doctrine and tools as active for this turn.',
-        `To CHANGE this workout (add / remove / replace / re-weight exercises or sets), re-emit the FULL workout artifact with the SAME identifier "${meta.identifier}" and the SAME sessionId "${workout.sessionId}". This preserves the user's logged progress. Keep stable exercise ids for exercises that stay. Do NOT remove an exercise that already has logged sets without confirming first.`,
+        `To CHANGE this workout, PREFER the \`PatchWorkout\` tool with artifactId "${meta.artifactId}" and a list of ops (add_exercise / remove_exercise / replace_exercise / set_planned / edit_exercise / reorder) — it edits in place without you reproducing the whole JSON, and the surface updates live. Only re-emit the FULL artifact (same identifier "${meta.identifier}", same sessionId "${workout.sessionId}") for a big restructure or a brand-new workout. Either way the user's logged progress is preserved; keep stable exercise ids for exercises that stay, and do NOT remove an exercise that already has logged sets without confirming first.`,
         `Workout: "${meta.title}"${workout.difficulty ? ` · ${workout.difficulty}` : ''}${workout.estimatedDurationMin ? ` · ~${workout.estimatedDurationMin} min` : ''}. Units: ${units}. Session status: ${status}.`,
         'Plan and live progress (planned sets, then what the user actually logged per set):',
     ]

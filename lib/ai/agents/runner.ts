@@ -293,6 +293,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             declaredToolIds: runtimeTarget.tools,
             declaredTools: getToolsForAgent(runtimeTarget.tools),
             preactivatedCapabilities: parentCtx.preactivatedCapabilities,
+            includeMonitorsFile: parentCtx.injectMonitorsFile,
             delegationDepth: subDepth,
             maxDelegationDepth: MAX_AGENT_DEPTH,
             extra: parentCtx.appOrigin ? { appOrigin: parentCtx.appOrigin } : undefined,

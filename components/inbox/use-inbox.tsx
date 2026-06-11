@@ -52,10 +52,17 @@ interface InboxApi {
 
 const InboxContext = React.createContext<InboxApi | null>(null)
 
+// Last fetched list, kept at module scope. The provider is remounted per
+// route visit; seeding from here lets revisits fade in already populated while
+// a silent refresh runs, instead of waiting on the list fetch again.
+let cachedInbox: { items: InboxListItem[]; unread: number } | null = null
+
 export function InboxProvider({ children }: { children: React.ReactNode }) {
-  const [items, setItems] = React.useState<InboxListItem[]>([])
-  const [unread, setUnread] = React.useState(0)
-  const [loading, setLoading] = React.useState(true)
+  const [items, setItems] = React.useState<InboxListItem[]>(
+    () => cachedInbox?.items ?? []
+  )
+  const [unread, setUnread] = React.useState(() => cachedInbox?.unread ?? 0)
+  const [loading, setLoading] = React.useState(cachedInbox === null)
   const [error, setError] = React.useState<string | null>(null)
   const [selectedId, setSelectedId] = React.useState<string | null>(null)
   const [detail, setDetail] = React.useState<InboxDetail | null>(null)
@@ -71,8 +78,11 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
       const res = await fetch("/api/inbox", { cache: "no-store" })
       if (!res.ok) throw new Error(`Failed to load inbox (${res.status})`)
       const data = await res.json()
-      setItems(Array.isArray(data.items) ? data.items : [])
-      setUnread(typeof data.unread === "number" ? data.unread : 0)
+      const nextItems = Array.isArray(data.items) ? data.items : []
+      const nextUnread = typeof data.unread === "number" ? data.unread : 0
+      cachedInbox = { items: nextItems, unread: nextUnread }
+      setItems(nextItems)
+      setUnread(nextUnread)
       setError(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : "Failed to load inbox")
@@ -150,7 +160,6 @@ export function InboxProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     let cancelled = false
-    setLoading(true)
     refresh().finally(() => {
       if (!cancelled) setLoading(false)
     })

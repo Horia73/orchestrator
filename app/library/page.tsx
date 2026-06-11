@@ -11,10 +11,12 @@ import {
   LocateFixed,
   MapPinned,
   Music,
+  Shapes,
 } from "lucide-react"
 
 import { AppSidebar } from "@/components/app-sidebar"
-import { SidebarInset } from "@/components/ui/sidebar"
+import { RouteFade } from "@/components/route-fade"
+import { SidebarInset, SidebarTrigger } from "@/components/ui/sidebar"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { WorkoutsHistory } from "@/components/workouts/workouts-history"
 import { cn } from "@/lib/utils"
@@ -24,6 +26,7 @@ import { AudioList } from "@/components/library/audio-list"
 import { FilesList } from "@/components/library/files-list"
 import { RecipesTab } from "@/components/library/recipes-tab"
 import { MapsTab } from "@/components/library/maps-tab"
+import { ArtifactsTab } from "@/components/library/artifacts-tab"
 import { PlacesTab } from "@/components/library/places-tab"
 import { prefetchAttachments } from "@/components/library/use-attachments"
 
@@ -46,6 +49,7 @@ type TabKey =
   | "workouts"
   | "recipes"
   | "maps"
+  | "artifacts"
   | "places"
   | "media"
   | "audio"
@@ -59,6 +63,7 @@ const TAB_DEFS: Array<{
   { key: "workouts", label: "Workouts", icon: Dumbbell },
   { key: "recipes", label: "Recipes", icon: ChefHat },
   { key: "maps", label: "Maps", icon: MapPinned },
+  { key: "artifacts", label: "Artifacts", icon: Shapes },
   { key: "places", label: "Places", icon: LocateFixed },
   { key: "media", label: "Media", icon: ImageIcon },
   { key: "audio", label: "Audio", icon: Music },
@@ -66,7 +71,9 @@ const TAB_DEFS: Array<{
 ]
 
 const ALL_TAB_KEYS = TAB_DEFS.map((t) => t.key)
-const TAB_FADE_MS = 140
+// Must match the `duration-150` on the tab content wrapper below, so the
+// outgoing tab finishes fading before the content swaps.
+const TAB_FADE_MS = 150
 
 function tabTriggerId(key: TabKey) {
   return `library-tab-${key}`
@@ -85,9 +92,11 @@ export default function LibraryPage() {
     <>
       <AppSidebar />
       <SidebarInset className="flex h-dvh min-h-0 flex-col overflow-hidden bg-background">
-        <React.Suspense fallback={null}>
-          <LibraryView />
-        </React.Suspense>
+        <RouteFade>
+          <React.Suspense fallback={null}>
+            <LibraryView />
+          </React.Suspense>
+        </RouteFade>
       </SidebarInset>
     </>
   )
@@ -167,16 +176,19 @@ function LibraryView() {
   }, [active, visitedTabs])
 
   return (
-    <div className="library-scroll flex min-h-0 w-full max-w-none flex-1 flex-col gap-2 overflow-y-auto px-3 py-3 sm:p-4 lg:px-8">
+    <div className="library-scroll flex min-h-0 w-full max-w-none flex-1 flex-col gap-2 overflow-y-auto px-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4 lg:px-8">
       <header className="flex flex-wrap items-end justify-between gap-2">
-        <div>
-          <h1 className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
-            <LibraryIcon className="size-5 text-primary" strokeWidth={1.85} />
-            Library
-          </h1>
-          <p className="text-[11.5px] leading-tight text-muted-foreground">
-            Tot ce ai generat — workouts, rețete, hărți — într-un singur loc.
-          </p>
+        <div className="flex min-w-0 items-start gap-1.5">
+          <SidebarTrigger className="-ml-1 size-9 shrink-0 text-foreground/55 hover:text-foreground md:hidden" />
+          <div className="min-w-0">
+            <h1 className="inline-flex items-center gap-2 text-lg font-semibold tracking-tight text-foreground">
+              <LibraryIcon className="size-5 text-primary" strokeWidth={1.85} />
+              Library
+            </h1>
+            <p className="text-[11.5px] leading-tight text-muted-foreground">
+              Tot ce ai generat — workouts, rețete, hărți — într-un singur loc.
+            </p>
+          </div>
         </div>
       </header>
 
@@ -223,6 +235,14 @@ function LibraryView() {
             mounted={mountedTabs.has("maps")}
           >
             <MapsTab />
+          </LibraryTabPanel>
+
+          <LibraryTabPanel
+            value="artifacts"
+            active={displayed}
+            mounted={mountedTabs.has("artifacts")}
+          >
+            <ArtifactsTab />
           </LibraryTabPanel>
 
           <LibraryTabPanel

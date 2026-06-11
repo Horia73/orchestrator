@@ -71,6 +71,13 @@ db.exec(`
         FOREIGN KEY (scriptId) REFERENCES microscripts(id) ON DELETE CASCADE
     );
     CREATE INDEX IF NOT EXISTS idx_microscript_events_script ON microscript_events(scriptId, ts DESC);
+
+    CREATE TABLE IF NOT EXISTS microscript_wake_threads (
+        scriptId TEXT PRIMARY KEY,
+        threadId TEXT NOT NULL,
+        updatedAt INTEGER NOT NULL,
+        FOREIGN KEY (scriptId) REFERENCES microscripts(id) ON DELETE CASCADE
+    );
 `)
 
 const DEFAULT_TEMPORARY_LIFETIME_MS = 24 * 60 * 60_000
@@ -423,7 +430,12 @@ export function updateMicroscript(id: string, patch: UpdateMicroscriptInput): Mi
 export function deleteMicroscript(id: string): boolean {
     const result = db.prepare('DELETE FROM microscripts WHERE id = ?').run(id)
     const deleted = result.changes > 0
-    if (deleted) emitMicroscriptsChanged(id, 'deleted')
+    if (deleted) {
+        // Drop the hidden wake-thread anchor; the agent thread + its messages
+        // cascade from the conversation row.
+        db.prepare('DELETE FROM conversations WHERE id = ?').run(`msanchor_${id}`)
+        emitMicroscriptsChanged(id, 'deleted')
+    }
     return deleted
 }
 
@@ -749,4 +761,46 @@ export function getMicroscriptRun(runId: string): MicroscriptRunRecord | null {
         .prepare('SELECT * FROM microscript_runs WHERE id = ?')
         .get(runId) as MicroscriptRunRow | undefined
     return row ? runFromRow(row) : null
+}
+
+// ---------------------------------------------------------------------------
+// Wake-thread continuity: one persistent agent thread per script, so every
+// agent.wake sees the prior wake exchanges instead of starting amnesiac.
+// ---------------------------------------------------------------------------
+
+export function getMicroscriptWakeThreadId(scriptId: string): string | null {
+    const row = db
+        .prepare('SELECT threadId FROM microscript_wake_threads WHERE scriptId = ?')
+        .get(scriptId) as { threadId: string } | undefined
+    return row?.threadId ?? null
+}
+
+export function setMicroscriptWakeThreadId(scriptId: string, threadId: string): void {
+    db.prepare(
+        `
+        INSERT INTO microscript_wake_threads (scriptId, threadId, updatedAt)
+        VALUES (@scriptId, @threadId, @updatedAt)
+        ON CONFLICT(scriptId) DO UPDATE SET threadId = @threadId, updatedAt = @updatedAt
+        `,
+    ).run({ scriptId, threadId, updatedAt: Date.now() })
+}
+
+/**
+ * Stable, hidden conversation anchoring a script's wake thread. agent_threads
+ * has an FK to conversations, and the per-run inbox conversation (a) may not
+ * exist yet at wake time and (b) can be deleted by the user, which would
+ * cascade-drop the wake history. Origin 'agent-thread' is invisible to both
+ * the chat list (origin IS NULL OR 'user') and the Inbox (origin = 'inbox').
+ */
+export function ensureMicroscriptThreadAnchorConversation(scriptId: string, title: string): string {
+    const id = `msanchor_${scriptId}`
+    const now = Date.now()
+    db.prepare(
+        `
+        INSERT INTO conversations (id, title, createdAt, updatedAt, origin, messageCount)
+        VALUES (@id, @title, @now, @now, 'agent-thread', 0)
+        ON CONFLICT(id) DO NOTHING
+        `,
+    ).run({ id, title: `Microscript wakes: ${title}`.slice(0, 120), now })
+    return id
 }

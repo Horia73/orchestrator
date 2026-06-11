@@ -155,6 +155,30 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
       );
       CREATE INDEX IF NOT EXISTS idx_artifacts_conv ON artifacts(conversationId, identifier, version DESC);
       CREATE INDEX IF NOT EXISTS idx_artifacts_msg ON artifacts(messageId);
+
+      CREATE TABLE IF NOT EXISTS apps (
+          -- Registry of reusable internal mini-apps. The app's code is a normal
+          -- versioned artifact; artifactId points at the current code version.
+          -- Soft reference on purpose: artifacts get deleted directly and via
+          -- conversation cascade, and a hard FK would make those deletes throw.
+          -- Dangling pointers surface as codeMissing in lib/apps/store.ts.
+          id TEXT PRIMARY KEY,
+          slug TEXT NOT NULL UNIQUE,
+          title TEXT NOT NULL,
+          description TEXT,
+          icon TEXT,
+          artifactId TEXT NOT NULL,
+          createdAt INTEGER NOT NULL,
+          updatedAt INTEGER NOT NULL
+      );
+      CREATE INDEX IF NOT EXISTS idx_apps_updated ON apps(updatedAt DESC);
+
+      CREATE TABLE IF NOT EXISTS app_data (
+          appId TEXT PRIMARY KEY,
+          data TEXT NOT NULL,
+          updatedAt INTEGER NOT NULL,
+          FOREIGN KEY (appId) REFERENCES apps (id) ON DELETE CASCADE
+      );
       CREATE INDEX IF NOT EXISTS idx_tool_logs_request ON tool_logs(requestId);
       CREATE INDEX IF NOT EXISTS idx_tool_logs_started ON tool_logs(startedAt DESC);
       CREATE INDEX IF NOT EXISTS idx_tool_logs_name ON tool_logs(toolName);

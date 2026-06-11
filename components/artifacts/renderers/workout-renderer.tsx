@@ -5,6 +5,7 @@ import * as React from "react"
 import { cn } from "@/lib/utils"
 import type { Exercise, ExerciseGroup, WorkoutArtifact } from "@/lib/workout/schema"
 import { parseWorkoutArtifact } from "@/lib/workout/parser"
+import { workoutImageRequestPath } from "@/lib/workout/exercise-image-request"
 import { useWorkoutSession, type WorkoutSessionApi } from "@/lib/workout/use-workout-session"
 
 import { WorkoutErrorCard } from "./workout/workout-error-card"
@@ -17,6 +18,64 @@ import { RestTimerBar } from "./workout/rest-timer-bar"
 import { SetTimerBar } from "./workout/set-timer-bar"
 import { SessionSummary } from "./workout/session-summary"
 import { AddExerciseButton } from "./workout/add-exercise-button"
+
+/**
+ * Warm every exercise's demo image into the browser cache on idle, using the
+ * exact same lookup URL the (i) panel will request — so opening the panel is
+ * instant instead of waiting on a CDN download. Resolution calls hit the
+ * route's HTTP cache; only the image bytes are actually fetched. Runs once per
+ * workout when `enabled` (the full-screen surface passes true).
+ */
+function useExerciseImagePrefetch(workout: WorkoutArtifact, enabled: boolean) {
+    React.useEffect(() => {
+        if (!enabled) return
+        if (typeof window === "undefined") return
+        const exercises = workout.groups.flatMap((group) => group.exercises)
+        if (exercises.length === 0) return
+
+        let cancelled = false
+        const warmed = new Set<string>()
+        const warm = (url: string) => {
+            if (warmed.has(url)) return
+            warmed.add(url)
+            const img = new Image()
+            img.decoding = "async"
+            img.referrerPolicy = "no-referrer"
+            img.src = url
+        }
+        const run = () => {
+            for (const ex of exercises) {
+                if (cancelled) return
+                if (ex.imageUrl) {
+                    warm(ex.imageUrl)
+                    continue
+                }
+                void fetch(workoutImageRequestPath(ex))
+                    .then((r) => (r.ok ? r.json() : null))
+                    .then((data: { images?: Array<{ url?: string }> } | null) => {
+                        if (cancelled) return
+                        const url = data?.images?.[0]?.url
+                        if (url) warm(url)
+                    })
+                    .catch(() => undefined)
+            }
+        }
+
+        const ric = window.requestIdleCallback
+        const handle = typeof ric === "function"
+            ? ric(run, { timeout: 2000 })
+            : window.setTimeout(run, 400)
+        return () => {
+            cancelled = true
+            const cancelRic = window.cancelIdleCallback
+            if (typeof ric === "function" && typeof cancelRic === "function") {
+                cancelRic(handle as number)
+            } else {
+                window.clearTimeout(handle as number)
+            }
+        }
+    }, [workout, enabled])
+}
 
 /**
  * Top-level renderer for `application/vnd.ant.workout` artifacts.
@@ -92,13 +151,19 @@ export function WorkoutCanvas({
     title,
     artifactId,
     className,
+    prefetchImages = false,
 }: {
     sessionApi: WorkoutSessionApi
     title: string
     artifactId?: string
     className?: string
+    /** Warm every exercise's demo image into the browser cache on idle so the
+     *  (i) panel opens instantly. Enabled on the full-screen surface; off for
+     *  inline chat cards (avoids fetching images the user just scrolls past). */
+    prefetchImages?: boolean
 }) {
     const renderedWorkout = sessionApi.workout
+    useExerciseImagePrefetch(renderedWorkout, prefetchImages)
     const interactive = sessionApi.isActive || sessionApi.isFinished
     const hasFloatingTimer = !!sessionApi.session.activeSet || !!sessionApi.session.rest
     const addedExerciseCount = React.useMemo(

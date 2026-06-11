@@ -134,6 +134,30 @@ function toAnthropicMessages(messages: ProviderSendOptions['messages']): AnyObj[
     return out
 }
 
+/**
+ * System prompt as content blocks with a prompt-cache breakpoint.
+ *
+ * Our prompt builders put the per-minute-volatile <current_time> block LAST
+ * (see buildClockContext in lib/ai/prompts/shared.ts). Splitting there and
+ * marking the stable part with cache_control caches tools + the static system
+ * prefix across turns (reads bill at 0.1x); only the few clock lines ride
+ * uncached behind the breakpoint. Without a marker (no clock appended) the
+ * whole system prompt is stable, so the breakpoint goes on the single block.
+ * Usage accounting already understands cache_creation/cache_read tokens
+ * (mergeUsage + observability/usage-mapper).
+ */
+function anthropicSystemBlocks(systemPrompt: string): AnyObj[] {
+    const marker = '<current_time>'
+    const idx = systemPrompt.lastIndexOf(marker)
+    if (idx <= 0) {
+        return [{ type: 'text', text: systemPrompt, cache_control: { type: 'ephemeral' } }]
+    }
+    return [
+        { type: 'text', text: systemPrompt.slice(0, idx).trimEnd(), cache_control: { type: 'ephemeral' } },
+        { type: 'text', text: systemPrompt.slice(idx) },
+    ]
+}
+
 async function streamAnthropicMessage(apiKey: string, args: {
     model: string
     systemPrompt?: string
@@ -151,7 +175,7 @@ async function streamAnthropicMessage(apiKey: string, args: {
         messages: args.messages,
         stream: true,
     }
-    if (args.systemPrompt?.trim()) body.system = args.systemPrompt.trim()
+    if (args.systemPrompt?.trim()) body.system = anthropicSystemBlocks(args.systemPrompt.trim())
     const tools = [
         ...args.tools.map(anthropicTool),
         ...anthropicNativeTools(args.builtins),

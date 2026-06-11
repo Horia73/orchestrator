@@ -1,5 +1,6 @@
 import type { PromptContext } from '@/lib/ai/agents/types'
 import {
+    buildClockContext,
     buildRuntimeContext,
     buildSafetyCore,
     buildSubAgentCollaboration,
@@ -68,11 +69,14 @@ If you cannot find an official source for a field, leave it empty and add the fi
 `.trim()
 
 export function buildModelMetadataResearcherPrompt(ctx: PromptContext): string {
+    // Stable blocks first, per-conversation state next, the clock dead last
+    // (cache-prefix friendly — see buildClockContext).
     return [
         CORE,
         buildSafetyCore(),
         buildSubAgentCollaboration(),
-        buildRuntimeContext(ctx),
         buildToolsSection(ctx),
+        buildRuntimeContext(ctx),
+        buildClockContext(),
     ].filter(Boolean).join('\n\n')
 }

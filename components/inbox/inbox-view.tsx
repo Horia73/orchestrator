@@ -28,6 +28,7 @@ import { useChatStore } from "@/hooks/use-chat-store"
 import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { useInboxPushNotifications } from "@/hooks/use-inbox-push-notifications"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
+import { ViewFade } from "@/components/route-fade"
 import { stripArtifactBlocksForPreview } from "@/lib/artifacts/text"
 import { cn } from "@/lib/utils"
 import type { Attachment, InboxReplyAction, Message } from "@/lib/types"
@@ -639,18 +640,6 @@ function InboxViewInner() {
   >(new Set())
   const keyboardInset = useMobileKeyboardInset()
 
-  // Fade the whole inbox in once the list is ready, instead of flashing a
-  // skeleton. While `loading` the view stays at opacity-0 (a blank bridge after
-  // the previous view faded out); the moment the list resolves we ease it in on
-  // the next frame. Sticky once entered — background refreshes never set
-  // `loading`, so this fires exactly once on first load.
-  const [entered, setEntered] = React.useState(false)
-  React.useEffect(() => {
-    if (loading || entered) return
-    const frame = window.requestAnimationFrame(() => setEntered(true))
-    return () => window.cancelAnimationFrame(frame)
-  }, [loading, entered])
-
   useDocumentViewportLock()
 
   const handledItemParam = React.useRef<string | null>(null)
@@ -805,11 +794,12 @@ function InboxViewInner() {
   }, [selectedId])
 
   return (
-    <div
-      className={cn(
-        "flex h-full min-h-0 overflow-hidden bg-background text-foreground transition-opacity duration-150 ease-out motion-reduce:transition-none",
-        entered ? "opacity-100" : "opacity-0"
-      )}
+    // Fade the whole inbox in once the list is ready: while `loading` the view
+    // stays at opacity-0 (a blank bridge after the previous view faded out),
+    // then eases in fully populated. Background refreshes never set `loading`.
+    <ViewFade
+      ready={!loading}
+      className="flex h-full min-h-0 overflow-hidden bg-background text-foreground"
     >
       {dialog}
       <div
@@ -1116,7 +1106,7 @@ function InboxViewInner() {
           </div>
         )}
       </div>
-    </div>
+    </ViewFade>
   )
 }
 

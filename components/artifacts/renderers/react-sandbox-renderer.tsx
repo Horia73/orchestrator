@@ -129,6 +129,7 @@ export function ReactSandboxRenderer({
     mode = 'bounded',
     minHeight,
     maxHeight,
+    artifactId,
 }: {
     source: string
     title: string
@@ -136,6 +137,8 @@ export function ReactSandboxRenderer({
     mode?: SandboxMode
     minHeight?: number
     maxHeight?: number
+    /** Stable artifact UUID — enables the AppHost data bridge for registered apps. */
+    artifactId?: string
 }) {
     const html = React.useMemo(() => buildShell(source), [source])
     return (
@@ -146,6 +149,7 @@ export function ReactSandboxRenderer({
             mode={mode}
             minHeight={minHeight}
             maxHeight={maxHeight}
+            artifactId={artifactId}
         />
     )
 }

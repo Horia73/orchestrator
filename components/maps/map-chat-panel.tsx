@@ -122,6 +122,25 @@ export function MapChatPanel({
     state.streamingReasoning.length,
   ])
 
+  // Track how far the user sits from the bottom so the keyboard toggle can
+  // keep the latest messages in view only when they were already there —
+  // a reader scrolled up in history must not be yanked down.
+  const distanceFromBottomRef = React.useRef(0)
+  const trackScrollDistance = React.useCallback(() => {
+    const el = scrollRef.current
+    if (!el) return
+    distanceFromBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight
+  }, [])
+
+  React.useLayoutEffect(() => {
+    const el = scrollRef.current
+    if (!el) return
+    if (distanceFromBottomRef.current <= 80) {
+      el.scrollTop = el.scrollHeight
+    }
+  }, [keyboardInset])
+
   const handleQuickPrompt = React.useCallback(
     (content: string) => {
       sendMessage(content, undefined, undefined, buildSendOptions())
@@ -155,31 +174,15 @@ export function MapChatPanel({
       >
         <header className="relative z-10 shrink-0 border-b border-border/60 bg-background px-3 py-3 pt-[calc(0.75rem+env(safe-area-inset-top))]">
           <div className="flex min-w-0 items-center gap-2">
-            <div
-              className="grid h-8 min-w-0 flex-1 grid-cols-3 rounded-lg bg-muted p-0.5"
-              aria-label="Map sidebar mode"
-            >
-              <button
-                type="button"
-                aria-pressed
-                className="rounded-md bg-background px-2 text-[12px] font-medium text-foreground shadow-sm"
-              >
-                Chat
-              </button>
-              <button
-                type="button"
-                onClick={onShowPlaces}
-                className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Places
-              </button>
-              <button
-                type="button"
-                onClick={onShowMap}
-                className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
-              >
-                Map
-              </button>
+            <div className="min-w-0 flex-1 px-1">
+              <div className="truncate text-[13px] font-semibold text-foreground">
+                {activeConversation?.title ?? activeMapTitle}
+              </div>
+              {activeConversation && (
+                <div className="truncate text-[11px] text-muted-foreground">
+                  {activeMapTitle}
+                </div>
+              )}
             </div>
             <button
               type="button"
@@ -191,15 +194,31 @@ export function MapChatPanel({
               <X className="size-4" />
             </button>
           </div>
-          <div className="mt-3 min-w-0 px-1">
-            <div className="truncate text-[13px] font-semibold text-foreground">
-              {activeConversation?.title ?? activeMapTitle}
-            </div>
-            {activeConversation && (
-              <div className="truncate text-[11px] text-muted-foreground">
-                {activeMapTitle}
-              </div>
-            )}
+          <div
+            className="mt-3 grid h-8 min-w-0 grid-cols-3 rounded-lg bg-muted p-0.5"
+            aria-label="Map sidebar mode"
+          >
+            <button
+              type="button"
+              aria-pressed
+              className="rounded-md bg-background px-2 text-[12px] font-medium text-foreground shadow-sm"
+            >
+              Chat
+            </button>
+            <button
+              type="button"
+              onClick={onShowPlaces}
+              className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Places
+            </button>
+            <button
+              type="button"
+              onClick={onShowMap}
+              className="rounded-md px-2 text-[12px] font-medium text-muted-foreground transition-colors hover:text-foreground"
+            >
+              Map
+            </button>
           </div>
         </header>
 
@@ -210,11 +229,14 @@ export function MapChatPanel({
             WebkitOverflowScrolling: "touch",
             overscrollBehaviorY: "contain",
           }}
+          onScroll={trackScrollDistance}
         >
           <div
             className="mx-auto flex min-h-full w-full max-w-[700px] flex-col px-4 pt-6"
             style={{
-              paddingBottom: keyboardInset > 0 ? 150 : 134,
+              // Clearance for the bottom input overlay, plus the keyboard
+              // height while it's up (the input lifts by exactly that much).
+              paddingBottom: keyboardInset + 134,
             }}
           >
             {activeConversation ? (

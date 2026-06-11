@@ -1,6 +1,8 @@
 import { executeListDir } from "../list-dir"
 import { executeReadFile } from "../read-file"
 import { executeFindPastUploads } from "../find-past-uploads"
+import { executeCopyUploadToWorkspace } from "../copy-upload"
+import { executeTranscribeAudio } from "../transcribe-audio"
 import { executeCreateBackup } from "../create-backup"
 import { executeHostStatus } from "../host-status"
 import { executeDelegateParallel, executeDelegateTo } from "../delegate-to"
@@ -30,6 +32,8 @@ export const coreToolExecutors: Record<string, ToolExecutor> = {
   list_dir: executeListDir,
   read_file: executeReadFile,
   find_past_uploads: executeFindPastUploads,
+  copy_upload_to_workspace: executeCopyUploadToWorkspace,
+  TranscribeAudio: executeTranscribeAudio,
   create_backup: executeCreateBackup,
   host_status: executeHostStatus,
   delegate_to: executeDelegateTo,

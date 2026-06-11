@@ -7,6 +7,7 @@ import {
   Cpu,
   Activity,
   BarChart3,
+  BellRing,
   FileText,
   Download,
   Moon,
@@ -25,8 +26,9 @@ import { UpdateTab } from "@/components/settings/update-tab"
 import { AuthTab } from "@/components/settings/auth-tab"
 import { ModelsTab } from "@/components/settings/models-tab"
 import { ProfilesTab } from "@/components/settings/profiles-tab"
+import { NotificationsTab } from "@/components/settings/notifications-tab"
 
-const TAB_IDS = ["models", "auth", "files", "logs", "usage", "profiles", "updates"] as const
+const TAB_IDS = ["models", "auth", "files", "logs", "usage", "notifications", "profiles", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TABS: Array<{
@@ -39,6 +41,7 @@ const TABS: Array<{
   { id: "files", label: "Files", icon: FileText },
   { id: "logs", label: "Logs", icon: Activity },
   { id: "usage", label: "Usage", icon: BarChart3 },
+  { id: "notifications", label: "Notifications", icon: BellRing },
   { id: "profiles", label: "Profiles", icon: UsersRound },
   { id: "updates", label: "Updates", icon: Download },
 ]
@@ -141,7 +144,7 @@ function SettingsViewInner() {
       className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
     >
       <div className="border-b border-border/60 bg-background">
-        <div className="mx-auto w-full max-w-6xl min-w-0 px-3 pt-3 pb-0 sm:px-6">
+        <div className="mx-auto w-full max-w-6xl min-w-0 px-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-0 sm:px-6 sm:pt-3">
           <div className="flex items-start justify-between gap-3">
             <div className="flex min-w-0 items-start gap-2">
               <button
@@ -217,6 +220,9 @@ function SettingsViewInner() {
               </TabsContent>
               <TabsContent value="auth">
                 <AuthTab />
+              </TabsContent>
+              <TabsContent value="notifications">
+                <NotificationsTab />
               </TabsContent>
               <TabsContent value="logs">
                 <LogsTab />

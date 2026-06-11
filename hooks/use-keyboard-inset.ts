@@ -41,6 +41,31 @@ function readMobileKeyboardInset() {
   return inset > MOBILE_KEYBOARD_INSET_THRESHOLD ? Math.round(inset) : 0
 }
 
+// Focus a field without letting the browser scroll/pan the page to reveal it.
+// Each surface positions its own input against the keyboard inset, so the
+// browser's auto-reveal would only fight that (the iOS pan that dragged the
+// header up).
+export function focusWithoutViewportScroll(
+  field: HTMLTextAreaElement | HTMLInputElement | null
+) {
+  if (!field) return
+
+  const scrollX = window.scrollX
+  const scrollY = window.scrollY
+
+  try {
+    field.focus({ preventScroll: true })
+  } catch {
+    field.focus()
+  }
+
+  window.requestAnimationFrame(() => {
+    if (window.scrollX !== scrollX || window.scrollY !== scrollY) {
+      window.scrollTo(scrollX, scrollY)
+    }
+  })
+}
+
 // Last real keyboard height, remembered across focuses (and component mounts)
 // for the whole session. The first focus warms it; every focus after that can
 // act on it before iOS Safari has even started opening the keyboard.

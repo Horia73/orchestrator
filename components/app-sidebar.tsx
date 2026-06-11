@@ -282,7 +282,11 @@ export function AppSidebar() {
   const pathname = usePathname()
   const router = useRouter()
   const searchParams = useSearchParams()
-  const isCollapsed = sidebarState === "collapsed"
+  // `state` tracks the persisted desktop open/closed preference and ignores
+  // the mobile sheet — which always renders at full width. Treat the sheet as
+  // never collapsed so a "collapsed" cookie carried over from desktop/tablet
+  // can't hide the wordmark, search, or conversation list on a phone.
+  const isCollapsed = sidebarState === "collapsed" && !isMobile
   const isOnChatHome = pathname === "/"
   const isOnSettings = pathname?.startsWith("/settings") ?? false
   const isOnScheduling = pathname?.startsWith("/scheduling") ?? false
@@ -693,9 +697,30 @@ export function AppSidebar() {
   // Wrap chat actions so they always land on the chat page —
   // users can fire them from /settings or any other route.
   const navigateHome = React.useCallback(() => {
-    if (pathname === "/" && searchParams.toString().length === 0) return
-    if (isMobile) router.replace("/")
-    else router.push("/")
+    // Already on the chat route: the store's fade gate handles the chat↔chat /
+    // chat↔home crossfade. Just strip any leftover ?chat=/?msg= deep-link params.
+    if (pathname === "/") {
+      if (searchParams.toString().length === 0) return
+      if (isMobile) router.replace("/")
+      else router.push("/")
+      return
+    }
+    // Coming from another route (inbox / monitor / maps / …): ease the
+    // departing view out first (it listens for VIEW_LEAVE_EVENT) so the
+    // conversation fades in over a blank bridge — same choreography on mobile
+    // and desktop, no splash. Reduced-motion navigates immediately.
+    const navigate = () => {
+      if (isMobile) router.replace("/")
+      else router.push("/")
+    }
+    const reduceMotion =
+      window.matchMedia?.("(prefers-reduced-motion: reduce)").matches ?? false
+    if (reduceMotion) {
+      navigate()
+      return
+    }
+    window.dispatchEvent(new Event(VIEW_LEAVE_EVENT))
+    window.setTimeout(navigate, VIEW_FADE_MS)
   }, [isMobile, pathname, router, searchParams])
 
   const handleNewChat = React.useCallback(() => {
@@ -1111,7 +1136,7 @@ export function AppSidebar() {
                                 : undefined
                             }
                             draggable={false}
-                            className={`touch-pan-y select-none text-[15px] text-foreground/75 [-webkit-touch-callout:none] [-webkit-user-select:none] group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${conversationActionMenuId === conv.id ? "bg-[#f0ede6] text-foreground dark:bg-muted" : ""} ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
+                            className={`touch-pan-y select-none text-[15px] text-foreground/75 group-has-data-[sidebar=menu-action]/menu-item:pr-12 [-webkit-touch-callout:none] [-webkit-user-select:none] group-hover/menu-item:bg-[#f0ede6] group-hover/menu-item:text-foreground group-has-[[data-state=open]]/menu-item:bg-[#f0ede6] group-has-[[data-state=open]]/menu-item:text-foreground hover:bg-[#f0ede6] hover:text-foreground data-[active=true]:bg-[#f0ede6] data-[active=true]:text-foreground dark:group-hover/menu-item:bg-muted dark:group-has-[[data-state=open]]/menu-item:bg-muted dark:hover:bg-muted dark:data-[active=true]:bg-muted ${conversationActionMenuId === conv.id ? "bg-[#f0ede6] text-foreground dark:bg-muted" : ""} ${isFiltering ? "h-auto min-h-10 items-start py-1.5" : ""}`}
                           >
                             <span className="min-w-0 flex-1">
                               <span

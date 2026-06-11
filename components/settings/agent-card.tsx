@@ -280,9 +280,9 @@ function AudioContextAgentNote() {
     <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-2.5 py-2.5 text-[12px] text-cyan-900 dark:text-cyan-100">
       <FileAudio className="mt-0.5 size-3.5 shrink-0 text-cyan-700 dark:text-cyan-300" />
       <div className="min-w-0">
-        <p className="font-medium text-foreground">Automatic audio pre-pass</p>
+        <p className="font-medium text-foreground">Audio understanding &amp; transcription</p>
         <p className="mt-0.5 text-foreground/65">
-          Runs for audio uploads when the selected chat model cannot read audio natively. Gemini streams thinking and the audio report live, then Orchestrator receives that context with the original file still attached.
+          Runs automatically for audio uploads when the selected chat model cannot read audio natively, and also powers on-demand transcription (the TranscribeAudio tool) — e.g. when the agent needs a written transcript or you ask it to transcribe a voice note you sent earlier. This model setting governs both.
         </p>
       </div>
     </div>

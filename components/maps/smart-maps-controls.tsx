@@ -172,7 +172,7 @@ export function SmartMapTopControls({
   return (
     <div
       className={cn(
-        "pointer-events-none absolute top-3 right-3 left-3 z-20 flex flex-col items-start gap-2 md:flex-row md:flex-wrap",
+        "pointer-events-none absolute top-[calc(0.75rem+env(safe-area-inset-top))] right-3 left-3 z-20 flex flex-col items-start gap-2 md:top-3 md:flex-row md:flex-wrap",
         reserveDetailSidebar && "xl:right-[calc(380px_+_1.5rem)]"
       )}
     >

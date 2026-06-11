@@ -62,6 +62,7 @@ import {
   readChatScrollTarget,
   type ChatScrollTarget,
 } from "@/lib/chat-scroll-target"
+import { publishChatViewSettled } from "@/lib/chat-view-settled"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
@@ -165,6 +166,21 @@ export function ChatView() {
   const [isScrollbarSuppressed, setIsScrollbarSuppressed] =
     React.useState(false)
   const showScrollBtnRef = React.useRef(false)
+  // Last trustworthy scrollTop: maintained by the scroll listener and the
+  // restore paths. A scrollTop clamp caused by an in-frame layout shrink only
+  // fires its scroll event on the NEXT frame, so inside a ResizeObserver
+  // callback this still holds the pre-clamp position — the tail-spacer
+  // recompute uses it to undo the clamp before paint. Null until this
+  // conversation has an established position (reset on switch).
+  const lastObservedScrollTopRef = React.useRef<number | null>(null)
+  // Pre-burst scrollTop frozen at the start of a tail-spacer recompute burst
+  // (an animated expand/collapse fires one recompute per frame for ~360ms).
+  // Mid-burst clamps are legitimate scroll events, so the listener ref above
+  // decays during the burst; restoring against this frozen value instead
+  // brings the view back to exactly where it was once the spacer can absorb
+  // the change again.
+  const spacerBurstScrollTopRef = React.useRef<number | null>(null)
+  const spacerBurstLastRecomputeAtRef = React.useRef(0)
   const scrollbarVisibleRef = React.useRef(false)
   const scrollbarSuppressedRef = React.useRef(false)
   const scrollbarFadeTimeoutRef = React.useRef<number | null>(null)
@@ -372,6 +388,12 @@ export function ChatView() {
     streamingScrollAnchorRef.current = null
     wasStreamingRef.current = false
     wasStreamingLayoutRef.current = false
+    // The previous conversation's scroll position must never be re-applied by
+    // the tail-spacer clamp-undo; stays null until this conversation's restore
+    // (or a real scroll event) records a trustworthy position.
+    lastObservedScrollTopRef.current = null
+    spacerBurstScrollTopRef.current = null
+    spacerBurstLastRecomputeAtRef.current = 0
   }, [conversationId])
 
   const scrollToBottom = React.useCallback(
@@ -754,6 +776,7 @@ export function ChatView() {
     const element = scrollContainerRef.current
     if (!element) return
 
+    lastObservedScrollTopRef.current = element.scrollTop
     revealScrollbar()
 
     const distanceFromBottom =
@@ -1502,60 +1525,128 @@ export function ChatView() {
     )
       return
 
-    let frame: number | null = null
-    const recompute = () => {
-      frame = null
-      const nextSpacer = getCommittedTailSpacer(previousMsg.id, assistantElement)
-      if (
-        Math.abs(nextSpacer - minHeightRef.current) <=
-        TAIL_SPACER_UPDATE_THRESHOLD_PX
-      )
-        return
-      minHeightActiveRef.current = nextSpacer > 0
-      setMinHeight(nextSpacer)
+    // Commit the DOM-applied spacer to React + storage once the burst settles.
+    // Committing per frame would re-render the whole chat on every frame of
+    // the 360ms collapse animation (jank); the commit only exists so the next
+    // React render keeps the padding the DOM already has.
+    let commitTimeout: number | null = null
+    const commitSpacerState = () => {
+      commitTimeout = null
+      const spacer = minHeightRef.current
+      setMinHeight(spacer)
       localStorage.setItem(
         `chat:minHeight:${conversationId}`,
         JSON.stringify({
-          minHeight: nextSpacer,
+          minHeight: spacer,
           minHeightMsgId: lastMsg.id,
           viewportHeight: window.innerHeight,
         })
       )
-      if (
-        restoredScrollConversationRef.current === conversationId &&
-        isMessageNearTopAnchor(previousMsg.id)
-      ) {
-        scheduleMessageTopAnchor(previousMsg.id)
+    }
+
+    const recompute = () => {
+      // Burst bookkeeping: the observer fires once per frame while a collapse/
+      // expand animation runs. A gap means a fresh burst — freeze the current
+      // stable position as the restore target for the whole burst (mid-burst
+      // clamps are reported to the scroll listener as real scrolls, so the
+      // listener ref decays during the burst and restoring against it drifts).
+      const now = performance.now()
+      if (now - spacerBurstLastRecomputeAtRef.current > 250) {
+        spacerBurstScrollTopRef.current = lastObservedScrollTopRef.current
+      }
+      spacerBurstLastRecomputeAtRef.current = now
+
+      // Fractional spacer: the content animates through fractional heights
+      // while the integer-ceil spacer (getCommittedTailSpacer) can only step
+      // whole pixels, so the total height wobbled up to ±1px around the
+      // target each frame — with the view pinned to it, that painted as 1px
+      // up/down "nano jitter". Deriving the spacer from the raw rect keeps
+      // the total constant to sub-pixel precision, so no clamp ever fires.
+      const nextSpacer = Math.max(
+        0,
+        getTailResponseMinHeight(previousMsg.id, assistantElement) -
+          content.getBoundingClientRect().height
+      )
+      if (Math.abs(nextSpacer - minHeightRef.current) > 0.1) {
+        // Apply the spacer to the DOM right here: ResizeObserver callbacks run
+        // after layout but before paint, so the content resize and this
+        // compensation land in the same painted frame. Deferring (rAF or React
+        // alone) paints a frame with the wrong total height, which the browser
+        // answers by clamping scrollTop — the "collapse a dropdown and the
+        // chat scrolls up" jump. Tracking every change matters: skipping
+        // small deltas (the old 4px threshold) leaves the slow tail of the
+        // eased animation uncompensated for a few frames at a time, which
+        // reads as up/down micro-jitter on the anchored message.
+        assistantElement.style.paddingBottom = `${nextSpacer.toFixed(2)}px`
+        minHeightActiveRef.current = nextSpacer > 0
+        minHeightRef.current = nextSpacer
+        if (commitTimeout !== null) window.clearTimeout(commitTimeout)
+        commitTimeout = window.setTimeout(commitSpacerState, 180)
+      }
+
+      // Undo any clamp the resize caused, restoring toward the position the
+      // view held before this burst started. Pre-paint, so the view appears
+      // perfectly still (a no-op when nothing was clamped). Runs on every
+      // observer fire — not only on spacer writes — so no clamped frame slips
+      // through unconverted. While the content momentarily exceeds what the
+      // spacer can absorb, the restore tracks the reachable maximum and lands
+      // back on the frozen position once the spacer regrows.
+      const scrollElement = scrollContainerRef.current
+      const stableScrollTop = spacerBurstScrollTopRef.current
+      if (scrollElement && stableScrollTop !== null) {
+        const maxScrollTop = Math.max(
+          0,
+          scrollElement.scrollHeight - scrollElement.clientHeight
+        )
+        const target = Math.min(stableScrollTop, maxScrollTop)
+        if (Math.abs(scrollElement.scrollTop - target) > 0.1) {
+          scrollElement.scrollTop = target
+        }
       }
     }
 
-    const scheduleRecompute = () => {
-      if (frame !== null) return
-      frame = window.requestAnimationFrame(recompute)
-    }
     const onVisibilityChange = () => {
-      if (document.visibilityState === "visible") scheduleRecompute()
+      if (document.visibilityState === "visible") recompute()
+    }
+    // Real user scrolling mid-burst must win over the frozen restore target:
+    // drop the freeze so the remaining burst frames leave the wheel/touch
+    // position alone (the next burst re-freezes from the listener ref).
+    const onUserScrollIntent = () => {
+      spacerBurstScrollTopRef.current = null
     }
 
-    const observer = new ResizeObserver(scheduleRecompute)
+    const scrollElement = scrollContainerRef.current
+    const observer = new ResizeObserver(recompute)
     observer.observe(content)
     document.addEventListener("visibilitychange", onVisibilityChange)
-    window.addEventListener("focus", scheduleRecompute)
+    window.addEventListener("focus", recompute)
+    scrollElement?.addEventListener("wheel", onUserScrollIntent, {
+      passive: true,
+    })
+    scrollElement?.addEventListener("touchmove", onUserScrollIntent, {
+      passive: true,
+    })
     return () => {
-      if (frame !== null) window.cancelAnimationFrame(frame)
       observer.disconnect()
       document.removeEventListener("visibilitychange", onVisibilityChange)
-      window.removeEventListener("focus", scheduleRecompute)
+      window.removeEventListener("focus", recompute)
+      scrollElement?.removeEventListener("wheel", onUserScrollIntent)
+      scrollElement?.removeEventListener("touchmove", onUserScrollIntent)
+      if (commitTimeout !== null) {
+        // Flush instead of drop: a re-arm (deps changed mid-burst) would
+        // otherwise let the next React render repaint the wrapper with the
+        // stale pre-burst padding.
+        window.clearTimeout(commitTimeout)
+        commitSpacerState()
+      }
     }
   }, [
     activeConversation?.messages,
     conversationId,
-    getCommittedTailSpacer,
-    isMessageNearTopAnchor,
+    getTailResponseMinHeight,
     isStreamingThisConversation,
     latestAssistantMessageId,
     minHeightMsgId,
-    scheduleMessageTopAnchor,
   ])
 
   // Finishing a resumed stream can resize the tail spacer before the browser's
@@ -1714,6 +1805,7 @@ export function ChatView() {
           0,
           element.scrollHeight - element.clientHeight
         )
+        lastObservedScrollTopRef.current = element.scrollTop
       }
       if (remainingFrames <= 0) {
         bottomSettleFrameIdRef.current = null
@@ -1762,6 +1854,7 @@ export function ChatView() {
               : maxScrollTop
 
       element.scrollTop = targetScrollTop
+      lastObservedScrollTopRef.current = element.scrollTop
       if (shouldRestoreBottom) {
         bottomSettleFrameIdRef.current = window.requestAnimationFrame(() =>
           settleBottom(3)
@@ -2237,6 +2330,15 @@ export function ChatView() {
   const isRestoringInitialFrame =
     isAwaitingInitialScrollRestore || isRestoringScroll
   const isMessageListHidden = isScrollJumpFading || isRestoringInitialFrame
+
+  // Tell the page (lib/chat-view-settled) which conversation has its initial
+  // layout settled (messages rendered + scroll restored), so the route-level
+  // fade-in starts only once nothing will shift. Layout effect: it publishes
+  // before paint on the commit that swaps conversations, so the page never
+  // briefly treats the previous chat's settled state as the new one's.
+  React.useLayoutEffect(() => {
+    publishChatViewSettled(isRestoringInitialFrame ? null : conversationId)
+  }, [conversationId, isRestoringInitialFrame])
 
   React.useEffect(() => {
     conversationIdRef.current = conversationId
