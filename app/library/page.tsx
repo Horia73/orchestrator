@@ -193,13 +193,17 @@ function LibraryView() {
       </header>
 
       <Tabs value={active} onValueChange={handleChange} className="min-w-0">
-        <TabsList className="scrollbar-hide -mb-2 w-full max-w-full justify-start overflow-x-auto">
+        <TabsList
+          aria-label="Library sections"
+          className="mb-0 grid h-auto w-full max-w-full grid-cols-3 items-stretch gap-1 overflow-visible pb-1 min-[380px]:grid-cols-4 sm:-mb-2 sm:inline-flex sm:h-10 sm:snap-x sm:snap-mandatory sm:justify-start sm:overflow-x-auto sm:overscroll-x-contain sm:pb-0 sm:[scroll-padding-inline:0.25rem] sm:[touch-action:pan-x]"
+        >
           {TAB_DEFS.map(({ key, label, icon: Icon }) => (
             <TabsTrigger
               key={key}
               value={key}
               id={tabTriggerId(key)}
               aria-controls={tabPanelId(key)}
+              className="w-full justify-center px-1.5 text-[12.5px] sm:w-auto sm:justify-start sm:px-3 sm:text-[14px]"
             >
               <Icon className="size-4" strokeWidth={1.85} />
               {label}

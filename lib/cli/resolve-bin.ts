@@ -73,8 +73,7 @@ export function resolveBin(name: string): string {
 
 /**
  * Build an env that augments PATH with common user bin dirs. Useful when we
- * pass the resolved binary path but it itself shells out to other tools
- * (e.g. `claude` invoking `node` to run helper scripts).
+ * pass the resolved binary path but it itself shells out to other tools.
  */
 export function augmentedEnv(extra?: Record<string, string | undefined>): NodeJS.ProcessEnv {
     const home = homedir()

@@ -86,10 +86,7 @@ export function formatAgentSidebarSummary(
   data: SettingsBootstrap
 ): string {
   if (agent.id === "browser_agent") {
-    const backend =
-      data.config.browserAgentBackend.effective === "official-display"
-        ? "Chromium"
-        : "Patchright"
+    const backend = "Patchright"
     const light = formatProviderModel(
       data,
       data.config.browserAgent.light.provider,
@@ -160,10 +157,7 @@ export function buildAgentContextDetails(
   const status = agent.status === "planned" ? "Planned" : "Active"
 
   if (agent.id === "browser_agent") {
-    const backend =
-      data.config.browserAgentBackend.effective === "official-display"
-        ? "Chromium display"
-        : "Patchright"
+    const backend = "Patchright"
     const light = formatProviderModel(
       data,
       data.config.browserAgent.light.provider,

@@ -1,14 +1,11 @@
 import type { Page, BrowserContext } from 'patchright';
-import type { BrowserBackend, BrowserProfileMode } from './config';
+import type { BrowserBackend } from './config';
 import type { BrowserLiveViewState } from './display';
 
 export interface BrowserManagerOptions {
     backend?: BrowserBackend;
     userDataDir?: string;
     downloadsDir?: string;
-    profileMode?: BrowserProfileMode;
-    baseProfileDir?: string;
-    chromeExecutablePath?: string;
     headless?: boolean;
     liveView?: boolean;
     viewport?: { width: number; height: number } | null;

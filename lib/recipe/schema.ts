@@ -27,7 +27,7 @@ import { z } from 'zod'
 //     turn without baking a stale URL into the artifact body.
 //   - `notes[]` is a free-form "tips & variations" section, grouped into
 //     bulleted blocks with optional headings (mirrors what the user shared in
-//     the claude.ai screenshot).
+//     the reference screenshot).
 //
 // This module imports nothing but zod — it sits at the bottom of the import
 // graph so both the server-side validator and the client-side renderer can

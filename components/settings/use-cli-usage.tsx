@@ -9,13 +9,12 @@ export interface CliQuotaWindow {
 }
 
 export interface CliQuotaSnapshot {
-    cliId: "claude-code" | "codex"
+    cliId: "codex"
     available: boolean
     error?: string
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
-    weeklySonnet?: CliQuotaWindow
-    source: "api" | "host-bridge" | "log" | "tui" | "none"
+    source: "api" | "none"
     fetchedAt: number
     dataTimestamp?: number
 }

@@ -31,8 +31,9 @@ import { displayPath, isInsideProtectedAgentPath, protectedAgentPathError, resol
 //     the model can hear the audio;
 //   - audio the user sent in an EARLIER message (not in the model's window);
 //   - a sub-agent (worker/researcher) that runs into audio mid-task.
-// It reuses the same Gemini agent, the Settings → Models override for it, and
-// the same on-disk cache — only the per-turn instruction differs by mode.
+// Transcript mode uses a transcript-only Gemini agent, while analysis mode uses
+// the audio-context report agent. They share conversion/cache machinery but not
+// system prompts.
 // ---------------------------------------------------------------------------
 
 const MAX_FILES = 5
@@ -41,12 +42,12 @@ export const transcribeAudioTool: ToolDef = {
     id: 'TranscribeAudio',
     name: 'TranscribeAudio',
     description: [
-        'Transcribe one or more AUDIO files to text (Gemini under the hood; honors the Audio Context Agent model set in Settings → Models).',
+        'Transcribe one or more AUDIO files to text (Gemini under the hood; transcript mode honors the Audio Transcript Agent model set in Settings → Models).',
         'Pass upload_ids (from the current message or find_past_uploads) and/or workspace-relative paths (audio files you created or converted in the workspace, e.g. tmp/voice.mp3).',
         "When NOT to use: if the audio is attached to the CURRENT message AND your own model reads audio natively (e.g. Gemini), just listen to it directly — do not round-trip through this tool.",
         'Use it when you need a written transcript as a deliverable (to save in the Library or quote back), for audio the user sent in an EARLIER message that is not in front of you, or when your model cannot read audio.',
         'Gemini-incompatible audio containers such as m4a/x-m4a are converted to WAV automatically before transcription when ffmpeg can decode them. If automatic conversion fails, copy_upload_to_workspace the upload, convert it yourself with Bash ffmpeg to a Gemini-supported format (prefer 16 kHz mono WAV), then call this tool again with the converted path. Audio-only video containers (e.g. an MP4 "audio message" with no video track) are detected and transcribed directly. For audio inside a real VIDEO or a format this tool rejects: copy_upload_to_workspace the file, extract/convert with Bash ffmpeg (e.g. to mp3), then call this tool with the converted path.',
-        "mode 'transcript' (default) returns a clean verbatim transcript; mode 'analysis' returns a fuller report (language, speakers, music, ambient sounds). Results are cached per file.",
+        "mode 'transcript' (default) uses the transcript-only agent and returns a clean verbatim transcript; mode 'analysis' uses the audio-context report agent and returns language/speaker/music/ambient detail. Results are cached per file.",
     ].join(' '),
     input_schema: {
         type: 'object',

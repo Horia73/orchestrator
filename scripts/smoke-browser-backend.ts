@@ -3,37 +3,26 @@ import assert from 'node:assert/strict'
 import { parseBrowserBackendPreference, resolveBrowserBackend } from '@/lib/browser-agent-backend'
 import { buildActionPrompt, buildSystemPrompt, type ActionHistoryItem } from '@/lib/browser-agent-runtime/prompts'
 
-assert.equal(parseBrowserBackendPreference('auto'), 'auto')
-assert.equal(parseBrowserBackendPreference('official_display'), 'official-display')
+assert.equal(parseBrowserBackendPreference('auto'), null)
+assert.equal(parseBrowserBackendPreference('official_display'), null)
 assert.equal(parseBrowserBackendPreference('patchright'), 'patchright')
 assert.equal(parseBrowserBackendPreference('unknown'), null)
 
-const darwinAuto = resolveBrowserBackend({
-    envValue: '',
-    settingsValue: 'auto',
-    platform: 'darwin',
-})
-assert.equal(darwinAuto.effective, 'patchright')
-assert.equal(darwinAuto.source, 'settings')
-
-const envForcedOfficial = resolveBrowserBackend({
-    envValue: 'official-display',
+const darwinPatchright = resolveBrowserBackend({
     settingsValue: 'patchright',
     platform: 'darwin',
 })
-assert.equal(envForcedOfficial.configured, 'official-display')
-assert.equal(envForcedOfficial.effective, 'official-display')
-assert.equal(envForcedOfficial.source, 'env')
-assert.equal(envForcedOfficial.envOverride, 'official-display')
+assert.equal(darwinPatchright.configured, 'patchright')
+assert.equal(darwinPatchright.effective, 'patchright')
+assert.equal(darwinPatchright.source, 'settings')
 
-const envForcedAuto = resolveBrowserBackend({
-    envValue: 'auto',
-    settingsValue: 'patchright',
+const defaultPatchright = resolveBrowserBackend({
     platform: 'darwin',
 })
-assert.equal(envForcedAuto.configured, 'auto')
-assert.equal(envForcedAuto.effective, 'patchright')
-assert.equal(envForcedAuto.source, 'env')
+assert.equal(defaultPatchright.configured, 'patchright')
+assert.equal(defaultPatchright.effective, 'patchright')
+assert.equal(defaultPatchright.source, 'default')
+assert.match(defaultPatchright.reason, /only browser backend/)
 
 const tabLoopHistory: ActionHistoryItem[] = [
     { action: 'switchTab', tabIndex: 0, success: true, reasoning: 'Check UI tab' },

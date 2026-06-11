@@ -231,11 +231,30 @@
 /* Tailwind v4 preflight drops the browser default `cursor: pointer` on
    buttons. Restore it so every interactive button shows the hand cursor
    on hover without us having to thread `cursor-pointer` through hundreds
-   of class lists. Lives outside @layer base so it always wins over the
-   preflight rules above. Disabled buttons keep the not-allowed cursor. */
+   of class lists. The same block keeps taps immediate on touch browsers.
+   Disabled buttons keep the not-allowed cursor. */
+button:not(:disabled),
+[role="button"]:not([aria-disabled="true"]),
+a[href] {
+  touch-action: manipulation;
+}
+
 button:not(:disabled),
 [role="button"]:not([aria-disabled="true"]) {
   cursor: pointer;
+}
+
+@media (hover: none) and (pointer: coarse) {
+  a,
+  button,
+  label,
+  summary,
+  [role="button"],
+  [role="menuitem"],
+  [role="tab"] {
+    touch-action: manipulation;
+    -webkit-tap-highlight-color: transparent;
+  }
 }
 
 .browser-agent-live-view,

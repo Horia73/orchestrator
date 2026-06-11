@@ -812,7 +812,7 @@ async function getDockerRollbackStatus(): Promise<RollbackInfo | null> {
 }
 
 /**
- * Ask the host bridge to update the CLIs (claude-code, codex) inside the
+ * Ask the host bridge to update the Codex CLI inside the
  * container's bind-mounted npm-global volume, then restart the container.
  * Docker installs only — the CLIs live outside the image, so neither a rebuild
  * nor their headless runs ever refresh them.

@@ -13,7 +13,7 @@ import { kickLibrarySync } from '@/lib/memory/library'
 // way to see it. This tool bridges that gap: it searches every user
 // conversation's attachments (via listAllAttachments) by filename, source
 // conversation title, type and recency, resolves the on-disk path, and hands
-// back files still present on disk. CLI-backed agents (claude-code/codex) can
+// back files still present on disk. CLI-backed agents can
 // open the returned path directly; sandboxed workspace tools cannot (uploads
 // live outside the workspace) — those callers stage a copy with
 // copy_upload_to_workspace first, or pass the upload_id to tools that take it.

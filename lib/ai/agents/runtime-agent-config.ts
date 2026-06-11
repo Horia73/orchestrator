@@ -2,7 +2,7 @@ import type { AgentConfig } from './types'
 import { CLI_WORKSPACE_BUILTINS, SKILL_TOOL_IDS, WORKSPACE_TOOL_IDS } from './builtins'
 import { buildCoderPrompt } from '@/lib/ai/prompts/coder'
 
-const CLI_CODE_PROVIDERS = new Set(['claude-code', 'codex'])
+const CLI_CODE_PROVIDERS = new Set(['codex'])
 
 export const API_CODER_TOOL_IDS: string[] = [
     ...WORKSPACE_TOOL_IDS,

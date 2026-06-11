@@ -143,7 +143,7 @@ const AppConfigFileSchema = z
     agentOrder: z.array(z.string()).optional(),
     browserAgent: z
       .object({
-        backend: z.enum(["auto", "patchright", "official-display"]).optional(),
+        backend: z.literal("patchright").optional(),
         light: z.object({
           provider: z.string().min(1),
           model: z.string().min(1),

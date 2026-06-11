@@ -241,12 +241,9 @@ export function createAgentRuntime(
                 browserManager = await createBrowserManager({
                     backend: config.browser.backend,
                     userDataDir: config.browser.userDataDir,
-                    profileMode: config.browser.profileMode,
-                    baseProfileDir: config.browser.baseProfileDir,
-                    chromeExecutablePath: config.browser.chromeExecutablePath,
                     headless: config.browser.headless,
                     liveView: config.browser.liveView,
-                    launchArgs: config.browser.backend === 'official-display' ? [] : config.browser.launchArgs,
+                    launchArgs: config.browser.launchArgs,
                     viewport: config.browser.headless ? DEFAULT_VIEWPORT : null,
                     onLog: statusHandler,
                 });

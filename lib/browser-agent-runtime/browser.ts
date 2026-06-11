@@ -228,10 +228,6 @@ async function selectAllAndClear(page: Page) {
 
 export async function createBrowserManager(options: BrowserManagerOptions = {}): Promise<BrowserManager> {
     const backend = options.backend ?? 'patchright';
-    if (backend === 'official-display') {
-        const { createOfficialDisplayBrowserManager } = await import('./browser-official-display');
-        return createOfficialDisplayBrowserManager(options);
-    }
 
     let context: BrowserContext | null = null;
     let sessionSequence = 0;

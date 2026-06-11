@@ -42,7 +42,6 @@ export function normalizeUsage(provider: string, raw: unknown): NormalizedUsage 
         case 'google':
             return mapGemini(raw as Record<string, unknown>)
         case 'anthropic':
-        case 'claude-code':
             return mapAnthropic(raw as Record<string, unknown>)
         case 'openai':
             return mapOpenAI(raw as Record<string, unknown>)
@@ -85,7 +84,7 @@ interface AnthropicUsage {
 }
 
 /**
- * Anthropic / Claude Code usage envelope. Their `input_tokens` excludes cache
+ * Anthropic usage envelope. Its `input_tokens` excludes cache
  * creation/read tokens, but the rest of the observability layer treats
  * `cachedTokens` as a subset of `inputTokens` (matching OpenAI/Gemini). Normalize
  * to that invariant here so charts can subtract cached input safely.

@@ -11,8 +11,7 @@ import { formatAssetReference, saveGeneratedAsset } from '@/lib/ai/media-assets'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
-import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type BrowserProfileMode, type MediaResolutionLevel } from '@/lib/browser-agent-runtime/config'
-import { resolveBrowserBackend } from '@/lib/browser-agent-backend'
+import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type MediaResolutionLevel } from '@/lib/browser-agent-runtime/config'
 import { redactBrowserAgentText } from '@/lib/browser-agent-runtime/redaction'
 import { getApiKey, getConfig, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
@@ -175,14 +174,6 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
     const pro = appConfig.browserAgent.pro
     const legacyBrowserOptions = appConfig.agentOverrides.browser_agent?.modelOptions
     const liveView = parseBooleanEnv(process.env.BROWSER_AGENT_LIVE_VIEW, process.platform === 'linux')
-    const backend = resolveBrowserBackend({
-        settingsValue: appConfig.browserAgent.backend,
-        chromeExecutablePath: process.env.BROWSER_AGENT_CHROME_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH || DEFAULT_AGENT_CONFIG.browser.chromeExecutablePath,
-    }).effective
-    const userDataDirName = backend === 'official-display'
-        ? 'user-data-official-display'
-        : 'user-data-patchright'
-
     if (light.provider !== 'google' || pro.provider !== 'google') {
         throw new Error('Browser agent currently supports Google/Gemini models only.')
     }
@@ -190,13 +181,9 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
     return {
         browser: {
             ...DEFAULT_AGENT_CONFIG.browser,
-            backend,
-            userDataDir: path.join(activeRuntimePaths().privateStateDir, 'browser-agent', userDataDirName),
-            profileMode: parseBrowserProfileModeEnv(process.env.BROWSER_AGENT_PROFILE_MODE, DEFAULT_AGENT_CONFIG.browser.profileMode),
-            baseProfileDir: process.env.BROWSER_AGENT_BASE_PROFILE_DIR || DEFAULT_AGENT_CONFIG.browser.baseProfileDir,
-            chromeExecutablePath: process.env.BROWSER_AGENT_CHROME_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH || DEFAULT_AGENT_CONFIG.browser.chromeExecutablePath,
-            maxConcurrent: parsePositiveIntegerEnv(process.env.BROWSER_AGENT_MAX_CONCURRENT, DEFAULT_AGENT_CONFIG.browser.maxConcurrent),
-            launchArgs: backend === 'official-display' ? [] : DEFAULT_AGENT_CONFIG.browser.launchArgs,
+            backend: 'patchright',
+            userDataDir: path.join(activeRuntimePaths().privateStateDir, 'browser-agent', 'user-data-patchright'),
+            launchArgs: DEFAULT_AGENT_CONFIG.browser.launchArgs,
             liveView,
             headless: parseBooleanEnv(
                 process.env.BROWSER_AGENT_HEADLESS,
@@ -236,17 +223,6 @@ function parseBooleanEnv(value: string | undefined, fallback: boolean): boolean 
     if (['1', 'true', 'yes', 'on'].includes(normalized)) return true
     if (['0', 'false', 'no', 'off'].includes(normalized)) return false
     return fallback
-}
-
-function parseBrowserProfileModeEnv(value: string | undefined, fallback: BrowserProfileMode): BrowserProfileMode {
-    const normalized = String(value || '').trim().toLowerCase().replace(/_/g, '-')
-    if (normalized === 'isolated' || normalized === 'clone-base' || normalized === 'shared-serial') return normalized
-    return fallback
-}
-
-function parsePositiveIntegerEnv(value: string | undefined, fallback: number): number {
-    const parsed = Number(value)
-    return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : fallback
 }
 
 function parseOptionalTaskTimeoutMs(value: string | undefined): number | null {

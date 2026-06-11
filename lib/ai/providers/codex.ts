@@ -493,8 +493,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     if (!activeTurnId || params?.turnId === activeTurnId) {
                         // Prefer the cumulative thread total over the last turn's
                         // marginal usage, so multi-round runs are logged/billed for
-                        // the whole run (matches Claude Code's cumulative result.usage
-                        // and the Gemini accumulator). `.last` stays as a fallback for
+                        // the whole run (matching the Gemini accumulator). `.last` stays as a fallback for
                         // protocol versions that omit `.total`.
                         const tokenUsage = params?.tokenUsage as AnyObj | undefined
                         finalUsage = tokenUsage?.total ?? tokenUsage?.last ?? tokenUsage

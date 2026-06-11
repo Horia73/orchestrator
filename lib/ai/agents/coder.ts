@@ -6,8 +6,7 @@ import { CLI_WORKSPACE_BUILTINS } from './builtins'
  *
  * No buildPrompt and no custom tools: the orchestrator hands it a task as the
  * prompt and the selected CLI provider drives itself end to end with its own
- * native system prompt and tooling. Claude Code is the default provider, but
- * Settings can override this agent to Codex or another compatible CLI.
+ * native system prompt and tooling. Codex is the default provider.
  * `builtins`
  * stays set so the provider passes `--allowedTools <native> --permission-mode
  * bypassPermissions` (headless runs have no human to approve tool use); it
@@ -20,14 +19,14 @@ import { CLI_WORKSPACE_BUILTINS } from './builtins'
  * API-backed coder runs are upgraded at runtime by
  * resolveRuntimeAgentConfig(): they receive Orchestrator workspace tools,
  * workflow skill tools, and a small coding prompt. Keeping the registered
- * config CLI-pure preserves Claude Code/Codex native behavior.
+ * config CLI-pure preserves Codex native behavior.
  */
 export const coder: AgentConfig = {
     id: 'coder',
     name: 'Coder',
     description: 'Coding specialist — pure CLI coder by default; API-backed runs receive Orchestrator tools and skills.',
     kind: 'text',
-    provider: 'claude-code',
+    provider: 'codex',
     model: 'default',
     tools: [],
     builtins: CLI_WORKSPACE_BUILTINS,

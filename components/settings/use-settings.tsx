@@ -4,7 +4,6 @@ import * as React from "react"
 import type {
   BrowserAgentModelSettings,
   BrowserAgentModelSlot,
-  BrowserAgentSettings,
   AgentFallback,
   ModelFeatureValue,
   ModelPricing,
@@ -80,10 +79,6 @@ interface SettingsContextValue {
   setBrowserAgentModel: (
     slot: BrowserAgentModelSlot,
     override: BrowserAgentModelSettings
-  ) => Promise<void>
-  /** Set how browser_agent chooses its browser automation backend. */
-  setBrowserAgentBackend: (
-    backend: BrowserAgentSettings["backend"]
   ) => Promise<void>
   /** Toggle the browser agent's pro/escalation model (single vs multi mode). */
   setBrowserAgentProEnabled: (proEnabled: boolean) => Promise<void>
@@ -377,47 +372,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ slot, ...override }),
-      })
-
-      if (!res.ok) {
-        const json = await res.json().catch(() => ({}))
-        const refresh = await fetch("/api/settings/bootstrap")
-        if (refresh.ok) setData(await refresh.json())
-        throw new Error(json.error || `Save failed (${res.status})`)
-      }
-
-      const json = (await res.json()) as { config: RuntimeConfig }
-      setData((prev) =>
-        prev ? { ...prev, config: { ...prev.config, ...json.config } } : prev
-      )
-    },
-    []
-  )
-
-  const setBrowserAgentBackend = React.useCallback(
-    async (backend: BrowserAgentSettings["backend"]) => {
-      setData((prev) => {
-        if (!prev) return prev
-        return {
-          ...prev,
-          config: {
-            ...prev.config,
-            browserAgent: {
-              ...prev.config.browserAgent,
-              backend,
-            },
-            browserAgentBackend: {
-              ...prev.config.browserAgentBackend,
-              configured: backend,
-            },
-          },
-        }
-      })
-
-      const res = await fetch("/api/config/browser-agent/backend", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ backend }),
       })
 
       if (!res.ok) {
@@ -939,7 +893,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       error,
       setAgentOverride,
       setBrowserAgentModel,
-      setBrowserAgentBackend,
       setBrowserAgentProEnabled,
       clearAgentOverride,
       setAgentOrder,
@@ -961,7 +914,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
       error,
       setAgentOverride,
       setBrowserAgentModel,
-      setBrowserAgentBackend,
       setBrowserAgentProEnabled,
       clearAgentOverride,
       setAgentOrder,

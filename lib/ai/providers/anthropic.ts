@@ -406,8 +406,7 @@ function mergeUsage(current: unknown, next: unknown): unknown {
 
 // Anthropic's API is stateless — each tool round is a separate request whose usage
 // covers only that request. Sum per-round usage so the run total reflects the whole
-// agentic loop (matches Claude Code's cumulative result.usage and the Gemini/Codex
-// accumulators). Without this only the last round is logged, undercounting fresh
+// agentic loop (matches the Gemini/Codex accumulators). Without this only the last round is logged, undercounting fresh
 // input + output from earlier rounds.
 const ANTHROPIC_USAGE_SUM_KEYS = [
     'input_tokens',

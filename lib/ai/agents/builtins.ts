@@ -245,10 +245,11 @@ export const UPLOADS_TOOL_IDS: string[] = [
 ]
 
 // On-demand audio transcription. Always-on (no connection/OAuth — just needs a
-// Google API key, which the tool self-checks with a graceful error). Powered by
-// the same Audio Context Agent the automatic pre-pass uses, so the Settings →
-// Models override governs both. Held by orchestrator + worker + researcher so a
-// sub-agent that runs into audio can transcribe without delegating back.
+// Google API key, which the tool self-checks with a graceful error). Transcript
+// mode uses the separate Audio Transcript Agent so report/summary instructions
+// from the pre-pass cannot bleed into verbatim output. Held by orchestrator +
+// worker + researcher so a sub-agent that runs into audio can transcribe without
+// delegating back.
 export const TRANSCRIPTION_TOOL_IDS: string[] = [
     'TranscribeAudio',
 ]

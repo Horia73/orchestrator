@@ -35,7 +35,7 @@ export type ModelKind = z.infer<typeof ModelKindSchema>
 /**
  * Pricing is a discriminated union:
  * - `tokens`: standard per-token billing (with optional large-context tier)
- * - `subscription`: included in a flat-rate plan (e.g. Claude Code via Max)
+ * - `subscription`: included in a flat-rate plan
  *
  * `null` (vs absence of the field) means "we explicitly know we don't know" —
  * surfaces an "incomplete data" indicator and unlocks the Research action.

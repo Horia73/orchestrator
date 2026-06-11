@@ -179,7 +179,7 @@ async function main() {
     assert.ok(!DELEGATING_WORKSPACE_TOOLS.includes(id), `${id} should not be in generic delegating tools`)
   }
 
-  const cliCoder = resolveRuntimeAgentConfig(coder, "claude-code")
+  const cliCoder = resolveRuntimeAgentConfig(coder, "codex")
   assert.strictEqual(cliCoder.buildPrompt, undefined, "CLI coder should remain promptless")
   for (const id of ["SkillSearch", "ActivateSkill", "ReadSkillFile"]) {
     assert.ok(!cliCoder.tools.includes(id), `CLI coder should not expose ${id}`)
@@ -241,8 +241,6 @@ async function main() {
 
 function assertNoProviderNativeSkillLeaks() {
   const forbidden = [
-    /\bClaude\b/,
-    /\bclaude\.ai\b/i,
     /\bAnthropic\b/,
     /\bCODEX_HOME\b/,
     /\.codex\b/,
@@ -261,7 +259,7 @@ function assertNoProviderNativeSkillLeaks() {
   assert.deepStrictEqual(
     offenders,
     [],
-    "Bundled skill runtime instructions should not leak provider-native/Claude-specific wording"
+    "Bundled skill runtime instructions should not leak provider-native wording"
   )
 }
 

@@ -13,7 +13,7 @@ import { useConversationArtifacts } from "@/components/artifacts/use-conversatio
 import { downloadArtifact } from "@/components/artifacts/artifact-inline"
 import { InlineToolCallView, InlineWebSearchGroup, getToolCallDisplayTitle, isWebSearchToolCall, shouldExpandToolCallByDefault } from "@/components/tool-call-view"
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
-import { AUDIO_CONTEXT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
+import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
 import { useMessageSelectionGutter } from "@/components/message-bubble/use-message-selection-gutter"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { appPath } from "@/lib/app-path"
@@ -1071,7 +1071,7 @@ function AgentCallBlock({
     if (entry.agentId === "browser_agent") {
         return <BrowserAgentCallBlock entry={entry} onOpen={onOpen} onAttachmentClick={onAttachmentClick} />
     }
-    if (entry.agentId === AUDIO_CONTEXT_AGENT_ID) {
+    if (entry.agentId === AUDIO_CONTEXT_AGENT_ID || entry.agentId === AUDIO_TRANSCRIPT_AGENT_ID) {
         return <AudioContextAgentCard entry={entry} onOpen={onOpen} />
     }
 

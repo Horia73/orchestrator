@@ -53,11 +53,12 @@ export function buildEffectiveRegistry(
 ): EffectiveRegistry {
     const out: EffectiveRegistry = {}
 
-    // Start from the union of all (providerId, modelId) pairs found in seed + live.
+    // Start from seed-declared providers. Live refreshes may add models under
+    // those providers, but they do not introduce new provider integrations.
     // Curated alone doesn't introduce models.
     const providerIds = new Set<string>([
         ...Object.keys(seed.providers),
-        ...Object.keys(live.providers),
+        ...Object.keys(live.providers).filter(providerId => providerId in seed.providers),
     ])
 
     for (const providerId of providerIds) {

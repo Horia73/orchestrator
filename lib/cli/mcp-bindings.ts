@@ -9,7 +9,7 @@ import { PRIVATE_STATE_DIR } from '@/lib/runtime-paths'
 /**
  * In-memory token → execution context store for the MCP stdio proxy.
  *
- * When a CLI provider (claude-code, codex) is invoked, we spawn a stdio MCP
+ * When an MCP-capable CLI provider is invoked, we spawn a stdio MCP
  * server as a child of the CLI process. That MCP server lives in a separate
  * process and can't share JS state with us, so it talks back via HTTP to
  * /api/cli/mcp-exec. Each invocation gets a short-lived token here; the

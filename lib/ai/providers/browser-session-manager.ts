@@ -139,28 +139,8 @@ function getEffectiveMaxConcurrent(): number {
     // (logged-out) profiles or multiple windows fighting over one virtual
     // display. We keep the shared profile (logins preserved) and serialize:
     // additional runs queue on runSlots and start automatically when the active
-    // one finishes. browser.maxConcurrent is intentionally not honored here.
+    // one finishes.
     return 1
-}
-
-function usesSharedBrowserManager(config: BrowserRuntimeConfig): boolean {
-    return config.browser.backend !== 'official-display'
-}
-
-function usesOfficialSharedSerialProfile(config: BrowserRuntimeConfig): boolean {
-    return config.browser.backend === 'official-display' && config.browser.profileMode === 'shared-serial'
-}
-
-function getOfficialDisplayUserDataDir(config: BrowserRuntimeConfig, sessionId: string): string {
-    if (config.browser.profileMode === 'shared-serial') {
-        return path.resolve(config.browser.baseProfileDir || config.browser.userDataDir)
-    }
-
-    return path.join(path.resolve(config.browser.userDataDir), 'sessions', sessionId, 'profile')
-}
-
-function getLaunchArgsForBackend(config: BrowserRuntimeConfig): string[] {
-    return config.browser.backend === 'official-display' ? [] : config.browser.launchArgs
 }
 
 class BrowserSessionManager {
@@ -179,20 +159,15 @@ class BrowserSessionManager {
         const releaseRunSlot = await this.runSlots.acquire(maxConcurrent)
 
         try {
-            if (usesSharedBrowserManager(options.config)) {
-                await this.ensureBrowserManager(options.config)
-            }
+            await this.ensureBrowserManager(options.config)
             await this.cleanupExpiredSessions()
 
             const previous = options.prevSession?.id
                 ? this.sessions.get(options.prevSession.id)
                 : undefined
-            const sharedSerialSession = !previous && usesOfficialSharedSerialProfile(options.config)
-                ? this.getReusableOfficialDisplaySession()
-                : undefined
-            const resumed = Boolean((previous || sharedSerialSession) && !this.isExpired((previous || sharedSerialSession)!))
+            const resumed = Boolean(previous && !this.isExpired(previous))
             const session = resumed
-                ? (previous || sharedSerialSession)!
+                ? previous!
                 : await this.createSession(options.config)
 
             const releaseLock = await session.lock.acquire()
@@ -433,10 +408,6 @@ class BrowserSessionManager {
     }
 
     private async ensureBrowserManager(config: BrowserRuntimeConfig): Promise<void> {
-        if (!usesSharedBrowserManager(config)) {
-            return
-        }
-
         if (this.browserManager) {
             await this.browserManager.launch()
             return
@@ -446,12 +417,9 @@ class BrowserSessionManager {
             backend: config.browser.backend,
             userDataDir: config.browser.userDataDir,
             downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
-            profileMode: config.browser.profileMode,
-            baseProfileDir: config.browser.baseProfileDir,
-            chromeExecutablePath: config.browser.chromeExecutablePath,
             headless: config.browser.headless,
             liveView: config.browser.liveView,
-            launchArgs: getLaunchArgsForBackend(config),
+            launchArgs: config.browser.launchArgs,
             viewport: config.browser.headless ? DEFAULT_VIEWPORT : null,
             onLog: () => {
                 // Per-run status is emitted by each runtime session; manager-level
@@ -461,52 +429,14 @@ class BrowserSessionManager {
         await this.browserManager.launch()
     }
 
-    private async createBrowserManagerForSession(
-        config: BrowserRuntimeConfig,
-        sessionId: string,
-        onBrowserLog?: (message: string) => void,
-    ): Promise<BrowserManager> {
-        if (usesSharedBrowserManager(config)) {
-            await this.ensureBrowserManager(config)
-            if (!this.browserManager) {
-                throw new Error('Browser manager is not initialized')
-            }
-            return this.browserManager
-        }
-
-        const manager = await createBrowserManager({
-            backend: config.browser.backend,
-            userDataDir: getOfficialDisplayUserDataDir(config, sessionId),
-            downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
-            profileMode: config.browser.profileMode,
-            baseProfileDir: config.browser.baseProfileDir,
-            chromeExecutablePath: config.browser.chromeExecutablePath,
-            headless: false,
-            liveView: true,
-            launchArgs: getLaunchArgsForBackend(config),
-            viewport: DEFAULT_VIEWPORT,
-            onLog: onBrowserLog ?? (() => {
-                // Per-run status is emitted by each runtime session; manager-level
-                // launch logs would otherwise leak into unrelated browser tasks.
-            }),
-        })
-        await manager.launch()
-        return manager
-    }
-
     private async createSession(config: BrowserRuntimeConfig): Promise<ManagedBrowserSession> {
         const id = `browser_${randomUUID()}`
         const pendingStatusMessages: string[] = []
-        let managedRef: ManagedBrowserSession | null = null
-        const browserManager = await this.createBrowserManagerForSession(config, id, (message) => {
-            if (managedRef?.currentStatusHandler) {
-                managedRef.currentStatusHandler(message)
-                return
-            }
-            if (!managedRef || managedRef.status === 'idle' || managedRef.status === 'running') {
-                pendingStatusMessages.push(message)
-            }
-        })
+        await this.ensureBrowserManager(config)
+        if (!this.browserManager) {
+            throw new Error('Browser manager is not initialized')
+        }
+        const browserManager = this.browserManager
         const pageSession = await browserManager.createSession({
             id,
             startupUrl: config.browser.startupUrl || undefined,
@@ -535,7 +465,6 @@ class BrowserSessionManager {
         })
 
         const managed = session as ManagedBrowserSession
-        managedRef = managed
         this.sessions.set(id, managed)
         this.scheduleCleanup()
         return managed
@@ -563,12 +492,6 @@ class BrowserSessionManager {
         return sessions.find(session => session.status === 'running' || session.status === 'awaiting_user')
             ?? sessions[0]
             ?? null
-    }
-
-    private getReusableOfficialDisplaySession(): ManagedBrowserSession | undefined {
-        return [...this.sessions.values()]
-            .sort((a, b) => b.lastUsedAt - a.lastUsedAt)
-            .find(session => session.pageSession.capabilities.backend === 'official-display' && !this.isExpired(session))
     }
 
     private isExpired(session: ManagedBrowserSession): boolean {

@@ -1472,7 +1472,6 @@ export async function POST(request: Request) {
                       if (finalContextUsage) {
                         publishContextUsage(
                           (prepared.settings.provider === "codex" ||
-                            prepared.settings.provider === "claude-code" ||
                             prepared.settings.provider === "google") &&
                             latestContextUsage
                             ? {
@@ -1485,8 +1484,7 @@ export async function POST(request: Request) {
                                   latestContextUsage.contextWindow ??
                                   finalContextUsage.contextWindow,
                                 // Some providers report cumulative whole-run usage at
-                                // turn end (codex's `.total`, claude's cumulative
-                                // result.usage incl. cache reads, Gemini's sum across
+                                // turn end (codex's `.total`, Gemini's sum across
                                 // Interactions tool-loop rounds). That's correct for
                                 // billing/logs, but the context window gauge must show
                                 // the LAST provider request's prompt occupancy. The

@@ -10,8 +10,7 @@ import type { RecipeArtifact } from "@/lib/recipe/schema"
 
 /**
  * Notes / tips & variations section. Rendered as a subtle card at the bottom
- * of the recipe with one or more bullet groups. Mirrors the "NOTES" block in
- * the claude.ai reference screenshot.
+ * of the recipe with one or more bullet groups.
  */
 export function RecipeNotes({
     recipe,

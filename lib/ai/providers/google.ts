@@ -209,8 +209,7 @@ const GEMINI_USAGE_MODALITY_KEYS = [
  * round as its own request and reports per-interaction (marginal) usage, not a
  * running total for the `previous_interaction_id` chain. The tool loop fires one
  * interaction per round, so the run total is the sum of every round's usage —
- * keeping only the last interaction undercounts multi-round runs (and makes
- * Gemini look ~10x cheaper than the equivalent cumulative Claude Code run).
+ * keeping only the last interaction undercounts multi-round runs.
  */
 function accumulateGeminiUsage(acc: unknown, next: unknown): unknown {
     if (!next || typeof next !== 'object') return acc

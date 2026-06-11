@@ -5,7 +5,12 @@ import path from 'path'
 import { appendPromptContext } from '@/lib/ai/attachment-context'
 import { runTextSubAgent } from '@/lib/ai/agents/runner'
 import type { AgentConfig, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
-import { AUDIO_CONTEXT_AGENT_ID, audioContextAgent } from '@/lib/ai/agents/audio-context-agent'
+import {
+    AUDIO_CONTEXT_AGENT_ID,
+    AUDIO_TRANSCRIPT_AGENT_ID,
+    audioContextAgent,
+    audioTranscriptAgent,
+} from '@/lib/ai/agents/audio-context-agent'
 import { getEffectiveAgentSettings, isFileSupportedByProvider } from '@/lib/config'
 import { transcodeAudioBufferToWav } from '@/lib/audio-transcode'
 import {
@@ -17,9 +22,9 @@ import { getEffectiveModel } from '@/lib/models/registry'
 import type { Attachment, Message } from '@/lib/types'
 import { persistUploadBytes, resolveExistingUploadPath } from '@/lib/uploads'
 
-export { AUDIO_CONTEXT_AGENT_ID }
+export { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID }
 
-export const AUDIO_CONTEXT_PROMPT_VERSION = 2
+export const AUDIO_CONTEXT_PROMPT_VERSION = 3
 const AUDIO_CONTEXT_MAX_OUTPUT_CHARS = 24_000
 const GEMINI_DIRECT_AUDIO_MIMES = new Set([
     'audio/wav',
@@ -45,8 +50,8 @@ type AudioContextRuntime = {
 
 // 'analysis' = the full audio report used by the automatic pre-pass.
 // 'transcript' = a clean verbatim transcript used by the on-demand
-// TranscribeAudio tool. Same agent + same Settings model override; only the
-// per-turn instruction and the cache namespace differ.
+// TranscribeAudio tool. The modes deliberately use different agent configs so
+// transcript calls never inherit the report/timeline system prompt.
 export type AudioContextMode = 'analysis' | 'transcript'
 
 export type AudioContextResult =
@@ -89,7 +94,8 @@ export async function prepareAudioContextsForProvider(args: {
     runner?: AudioContextRunner
 }): Promise<Map<string, string>> {
     const runner = args.runner ?? defaultAudioContextRunner
-    const runtime = resolveAudioContextRuntime()
+    const target = audioContextAgent
+    const runtime = resolveAudioRuntime(target)
     const out = new Map<string, string>()
 
     for (const message of args.messages) {
@@ -107,6 +113,7 @@ export async function prepareAudioContextsForProvider(args: {
                 message,
                 parentCtx: args.parentCtx,
                 runner,
+                target,
                 runtime,
                 mode: 'analysis',
             })
@@ -177,10 +184,9 @@ export function buildAudioContextPromptBlock(results: AudioContextResult[]): str
 /**
  * Transcribe (or analyze) a single uploaded audio attachment on demand.
  *
- * Shares the same Gemini agent, Settings model override, and disk cache as the
- * automatic pre-pass — only the per-turn instruction and the cache namespace
- * differ by `mode`. Returns a structured result (never throws for expected
- * conditions) so the TranscribeAudio tool can report per-file outcomes.
+ * Shares the same conversion and disk-cache machinery as the automatic
+ * pre-pass, but `mode: "transcript"` uses a separate transcript-only agent so
+ * report instructions cannot bleed into verbatim transcription.
  *
  * `runner` is injectable for tests; defaults to the real sub-agent runner.
  */
@@ -192,12 +198,14 @@ export async function transcribeAudioAttachment(args: {
     language?: string
     runner?: AudioContextRunner
 }): Promise<AudioContextResult> {
+    const target = targetAgentForMode(args.mode ?? 'transcript')
     return computeAudioContext({
         attachment: args.attachment,
         message: args.message,
         parentCtx: args.parentCtx,
         runner: args.runner ?? defaultAudioContextRunner,
-        runtime: resolveAudioContextRuntime(),
+        target,
+        runtime: resolveAudioRuntime(target),
         mode: args.mode ?? 'transcript',
         language: args.language,
     })
@@ -208,6 +216,7 @@ async function computeAudioContext(args: {
     message?: Message
     parentCtx: ToolExecutionContext
     runner: AudioContextRunner
+    target: AgentConfig
     runtime: AudioContextRuntime
     mode: AudioContextMode
     language?: string
@@ -241,12 +250,10 @@ async function computeAudioContext(args: {
         size: stat.size,
         fileMtimeMs: stat.mtimeMs,
         promptVersion: AUDIO_CONTEXT_PROMPT_VERSION,
+        agentId: args.target.id,
         provider: args.runtime.provider,
         model: args.runtime.model,
-        // 'analysis' omits these so the pre-pass cache keys stay byte-identical
-        // to before this refactor; 'transcript' (and a language hint) gets its
-        // own namespace so the two modes never collide on the same file.
-        ...(mode !== 'analysis' ? { mode } : {}),
+        mode,
         ...(args.language ? { language: args.language } : {}),
     })
     const cached = getAudioContextCache(cacheKey)
@@ -271,7 +278,7 @@ async function computeAudioContext(args: {
     let result: ToolResult
     try {
         result = await args.runner({
-            target: audioContextAgent,
+            target: args.target,
             prompt: mode === 'transcript'
                 ? buildAudioTranscriptPrompt(attachment, args.message, args.language)
                 : buildAudioAnalysisPrompt(attachment, args.message),
@@ -283,7 +290,7 @@ async function computeAudioContext(args: {
             status: 'unavailable',
             attachment,
             errored: true,
-            reason: `Audio Context Agent failed for ${label}: ${err instanceof Error ? err.message : 'unknown error'}`,
+            reason: `${args.target.name} failed for ${label}: ${err instanceof Error ? err.message : 'unknown error'}`,
         }
     }
     if (!result.success) {
@@ -291,7 +298,7 @@ async function computeAudioContext(args: {
             status: 'unavailable',
             attachment,
             errored: true,
-            reason: `Audio Context Agent failed for ${label}: ${result.error ?? 'unknown error'}`,
+            reason: `${args.target.name} failed for ${label}: ${result.error ?? 'unknown error'}`,
         }
     }
 
@@ -301,7 +308,7 @@ async function computeAudioContext(args: {
             status: 'unavailable',
             attachment,
             errored: true,
-            reason: `Audio Context Agent returned no usable output for ${label}.`,
+            reason: `${args.target.name} returned no usable output for ${label}.`,
         }
     }
 
@@ -401,15 +408,19 @@ async function defaultAudioContextRunner(args: {
     return runTextSubAgent(args)
 }
 
-function resolveAudioContextRuntime(): AudioContextRuntime {
-    const effective = getEffectiveAgentSettings(AUDIO_CONTEXT_AGENT_ID)
+function resolveAudioRuntime(target: AgentConfig): AudioContextRuntime {
+    const effective = getEffectiveAgentSettings(target.id)
     if (effective.fromOverride) {
         return { provider: effective.provider, model: effective.model }
     }
     return {
-        provider: audioContextAgent.provider ?? effective.provider,
-        model: audioContextAgent.model ?? effective.model,
+        provider: target.provider ?? effective.provider,
+        model: target.model ?? effective.model,
     }
+}
+
+function targetAgentForMode(mode: AudioContextMode): AgentConfig {
+    return mode === 'transcript' ? audioTranscriptAgent : audioContextAgent
 }
 
 function buildAudioAnalysisPrompt(attachment: Attachment, message?: Message): string {
@@ -486,6 +497,7 @@ function audioContextCacheKey(input: {
     promptVersion: number
     provider: string
     model: string
+    agentId: string
     mode?: string
     language?: string
 }): string {

@@ -34,9 +34,6 @@ export interface SandboxRoot {
 
 const DISCOVERY_HIDDEN_NAMES = new Set([
     '.orchestrator',
-    '.claude',
-    '.claude-memory',
-    'CLAUDE.md',
 ])
 
 const PROTECTED_AGENT_FILE_PATTERNS = [
@@ -85,12 +82,6 @@ export function hiddenDiscoveryRgArgs(): string[] {
     return [
         '--glob', '!.orchestrator/**',
         '--glob', '!**/.orchestrator/**',
-        '--glob', '!.claude/**',
-        '--glob', '!**/.claude/**',
-        '--glob', '!.claude-memory/**',
-        '--glob', '!**/.claude-memory/**',
-        '--glob', '!CLAUDE.md',
-        '--glob', '!**/CLAUDE.md',
         '--glob', '!.env*',
         '--glob', '!**/.env*',
     ]

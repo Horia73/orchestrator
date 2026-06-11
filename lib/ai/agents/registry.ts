@@ -14,7 +14,7 @@ import { browserAgent } from './browser-agent'
 import { modelMetadataResearcher } from './model-metadata-researcher'
 import { inboxAgent } from './inbox-agent'
 import { smartMonitorAgent } from './smart-monitor-agent'
-import { audioContextAgent } from './audio-context-agent'
+import { audioContextAgent, audioTranscriptAgent } from './audio-context-agent'
 import { conversationNamer } from './conversation-namer'
 import { artifactRepairAgent } from './artifact-repair'
 
@@ -37,6 +37,7 @@ register(modelMetadataResearcher)
 register(inboxAgent)
 register(smartMonitorAgent)
 register(audioContextAgent)
+register(audioTranscriptAgent)
 register(conversationNamer)
 register(artifactRepairAgent)
 register(worker)

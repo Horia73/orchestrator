@@ -31,7 +31,7 @@ export const ENV_PRESETS = [
   {
     key: "ANTHROPIC_API_KEY",
     label: "Anthropic",
-    description: "Claude models and Anthropic calls",
+    description: "Anthropic API calls",
     placeholder: "sk-ant-...",
   },
 ] as const

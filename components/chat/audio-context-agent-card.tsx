@@ -16,6 +16,7 @@ import type { AgentCallReasoningEntry, ReasoningEntry } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 export const AUDIO_CONTEXT_AGENT_ID = "audio_context_agent"
+export const AUDIO_TRANSCRIPT_AGENT_ID = "audio_transcript_agent"
 const PANEL_BODY_CLASS =
   "h-[132px] overflow-x-hidden overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] sm:h-[148px]"
 
@@ -29,6 +30,7 @@ export function AudioContextAgentCard({
   const content = agentContent(entry)
   const thinking = collectThoughtText(entry.reasoning)
   const meta = parsePromptMeta(entry.prompt)
+  const transcript = entry.agentId === AUDIO_TRANSCRIPT_AGENT_ID
   const running = entry.status === "running"
   const hasContent = content.trim().length > 0
   const hasThinking = thinking.trim().length > 0
@@ -81,7 +83,7 @@ export function AudioContextAgentCard({
           <div className="min-w-0 flex-1">
             <div className="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
               <span className="min-w-0 truncate text-[14px] font-semibold tracking-tight text-foreground">
-                Gemini Audio Context
+                {transcript ? "Gemini Audio Transcript" : "Gemini Audio Context"}
               </span>
               <span
                 className={cn(
@@ -117,7 +119,7 @@ export function AudioContextAgentCard({
         <div className="border-t border-border/60 px-3 py-2.5 pl-4">
           <div className="mb-1.5 flex items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-muted-foreground">
             <Sparkles className="size-3.5" />
-            Gemini thinking
+            {transcript ? "Transcript processing" : "Gemini thinking"}
           </div>
           <div
             className={cn(

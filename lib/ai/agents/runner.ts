@@ -14,7 +14,7 @@ import type {
 } from './types'
 import { MAX_AGENT_DEPTH } from './types'
 import { getAgent } from './registry'
-import { AUDIO_CONTEXT_AGENT_ID } from './audio-context-agent'
+import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID } from './audio-context-agent'
 import { resolveRuntimeAgentConfig } from './runtime-agent-config'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
@@ -131,7 +131,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     // the user prompt straight through to the subprocess. Pure-LLM agents
     // require a buildPrompt for their system prompt.
     const isProviderBackedWithoutPrompt = runtime.provider === 'browser'
-    const isCliBacked = runtime.provider === 'claude-code' || runtime.provider === 'codex'
+    const isCliBacked = runtime.provider === 'codex'
     if (!runtimeTarget.buildPrompt && !isCliBacked && !isProviderBackedWithoutPrompt) {
         return {
             success: false,
@@ -883,6 +883,7 @@ function supportsModelFallbacks(target: AgentConfig): boolean {
         (target.kind === 'text' || target.kind === 'concierge') &&
         target.provider !== 'browser' &&
         target.id !== AUDIO_CONTEXT_AGENT_ID &&
+        target.id !== AUDIO_TRANSCRIPT_AGENT_ID &&
         target.id !== 'phone_agent' &&
         target.id !== 'android_agent'
     )
@@ -974,7 +975,7 @@ function buildSubAgentMessages(
 ): Array<{ role: string; content: string; attachments?: MessageAttachment[] }> {
     const userAttachments = attachments.length > 0 ? attachments : undefined
 
-    if ((providerId === 'claude-code' || providerId === 'codex') && !hasPrevSession && history.length > 0) {
+    if (providerId === 'codex' && !hasPrevSession && history.length > 0) {
         return [{
             role: 'user',
             content: [

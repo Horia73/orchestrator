@@ -71,6 +71,7 @@ const MOBILE_CONVERSATION_PREFETCH_COUNT = 4
 const CONVERSATION_ACTION_LONG_PRESS_MS = 520
 const CONVERSATION_ACTION_LONG_PRESS_MOVE_TOLERANCE = 12
 const CONVERSATION_ACTION_CLICK_SUPPRESSION_MS = 750
+const MOBILE_NAV_CLICK_SUPPRESSION_MS = 650
 
 type WindowWithIdleCallback = Window & {
   requestIdleCallback?: (
@@ -91,6 +92,19 @@ function truncate(value: string, length = 120): string {
   const singleLine = value.replace(/\s+/g, " ").trim()
   if (singleLine.length <= length) return singleLine
   return `${singleLine.slice(0, length - 1).trimEnd()}...`
+}
+
+function isPlainPrimaryLinkClick(
+  event: React.MouseEvent<HTMLAnchorElement>
+): boolean {
+  return (
+    !event.defaultPrevented &&
+    event.button === 0 &&
+    !event.metaKey &&
+    !event.ctrlKey &&
+    !event.shiftKey &&
+    !event.altKey
+  )
 }
 
 function clearNativeTextSelection() {
@@ -347,6 +361,7 @@ export function AppSidebar() {
   const conversationActionLongPressCompletedRef = React.useRef<string | null>(
     null
   )
+  const mobileNavClickSuppressUntilRef = React.useRef(0)
   const { assistantName } = useRuntimeConfig()
   const normalizedSearchQuery = normalizeSearchText(deferredSearchQuery.trim())
   const isFiltering = normalizedSearchQuery.length > 0
@@ -832,6 +847,47 @@ export function AppSidebar() {
     if (isMobile) setOpenMobile(false)
   }, [isMobile, setOpenMobile])
 
+  const suppressNextMobileNavClick = React.useCallback(() => {
+    mobileNavClickSuppressUntilRef.current =
+      Date.now() + MOBILE_NAV_CLICK_SUPPRESSION_MS
+  }, [])
+
+  const shouldSuppressMobileNavClick = React.useCallback(() => {
+    return isMobile && Date.now() < mobileNavClickSuppressUntilRef.current
+  }, [isMobile])
+
+  const handleSidebarRouteNavigate = React.useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>, href: string) => {
+      if (shouldSuppressMobileNavClick()) {
+        event.preventDefault()
+        return
+      }
+
+      closeMobileSidebar()
+      if (!isMobile) return
+
+      if (!isPlainPrimaryLinkClick(event)) return
+
+      event.preventDefault()
+      router.replace(href)
+    },
+    [closeMobileSidebar, isMobile, router, shouldSuppressMobileNavClick]
+  )
+
+  const handleSidebarRoutePointerUp = React.useCallback(
+    (event: React.PointerEvent<HTMLAnchorElement>, href: string) => {
+      if (!isMobile || event.pointerType === "mouse" || event.button !== 0) {
+        return
+      }
+
+      event.preventDefault()
+      suppressNextMobileNavClick()
+      closeMobileSidebar()
+      router.replace(href)
+    },
+    [closeMobileSidebar, isMobile, router, suppressNextMobileNavClick]
+  )
+
   const handleSwitchProfile = React.useCallback(() => {
     closeMobileSidebar()
     router.push(`/profiles?next=${encodeURIComponent(pathname || "/")}`)
@@ -842,28 +898,64 @@ export function AppSidebar() {
   // routes, so the inbox fades in over a blank background instead of flashing a
   // skeleton. From other routes — or for modified / reduced-motion clicks — we
   // fall through to the plain Link navigation (no artificial delay).
-  const handleInboxNavigate = React.useCallback(
-    (event: React.MouseEvent<HTMLAnchorElement>) => {
-      closeMobileSidebar()
-      if (!isOnChatHome) return
-      if (
-        event.metaKey ||
-        event.ctrlKey ||
-        event.shiftKey ||
-        event.altKey ||
-        event.button !== 0
-      )
-        return
-      if (window.matchMedia?.("(prefers-reduced-motion: reduce)").matches)
-        return
-      event.preventDefault()
+  const navigateInboxFromSidebar = React.useCallback(() => {
+    closeMobileSidebar()
+    if (
+      isOnChatHome &&
+      !window.matchMedia?.("(prefers-reduced-motion: reduce)").matches
+    ) {
       window.dispatchEvent(new Event(VIEW_LEAVE_EVENT))
       window.setTimeout(() => {
         if (isMobile) router.replace("/inbox")
         else router.push("/inbox")
       }, VIEW_FADE_MS)
+      return
+    }
+
+    if (isMobile) router.replace("/inbox")
+    else router.push("/inbox")
+  }, [closeMobileSidebar, isMobile, isOnChatHome, router])
+
+  const handleInboxPointerUp = React.useCallback(
+    (event: React.PointerEvent<HTMLAnchorElement>) => {
+      if (!isMobile || event.pointerType === "mouse" || event.button !== 0) {
+        return
+      }
+
+      event.preventDefault()
+      suppressNextMobileNavClick()
+      navigateInboxFromSidebar()
     },
-    [closeMobileSidebar, isMobile, isOnChatHome, router]
+    [isMobile, navigateInboxFromSidebar, suppressNextMobileNavClick]
+  )
+
+  const handleInboxNavigate = React.useCallback(
+    (event: React.MouseEvent<HTMLAnchorElement>) => {
+      if (shouldSuppressMobileNavClick()) {
+        event.preventDefault()
+        return
+      }
+
+      if (!isPlainPrimaryLinkClick(event)) {
+        closeMobileSidebar()
+        return
+      }
+
+      if (isMobile || isOnChatHome) {
+        event.preventDefault()
+        navigateInboxFromSidebar()
+        return
+      }
+
+      closeMobileSidebar()
+    },
+    [
+      closeMobileSidebar,
+      isMobile,
+      isOnChatHome,
+      navigateInboxFromSidebar,
+      shouldSuppressMobileNavClick,
+    ]
   )
 
   const handleLogoutProfile = React.useCallback(() => {
@@ -950,7 +1042,12 @@ export function AppSidebar() {
                   <Link
                     href="/watchlist"
                     replace={isMobile}
-                    onClick={closeMobileSidebar}
+                    onPointerUp={(event) =>
+                      handleSidebarRoutePointerUp(event, "/watchlist")
+                    }
+                    onClick={(event) =>
+                      handleSidebarRouteNavigate(event, "/watchlist")
+                    }
                   >
                     <LineChart className="size-4" />
                     <span>Watchlist</span>
@@ -967,7 +1064,12 @@ export function AppSidebar() {
                   <Link
                     href="/scheduling"
                     replace={isMobile}
-                    onClick={closeMobileSidebar}
+                    onPointerUp={(event) =>
+                      handleSidebarRoutePointerUp(event, "/scheduling")
+                    }
+                    onClick={(event) =>
+                      handleSidebarRouteNavigate(event, "/scheduling")
+                    }
                   >
                     <CalendarClock className="size-4" />
                     <span>Scheduling</span>
@@ -984,7 +1086,12 @@ export function AppSidebar() {
                   <Link
                     href="/monitor"
                     replace={isMobile}
-                    onClick={closeMobileSidebar}
+                    onPointerUp={(event) =>
+                      handleSidebarRoutePointerUp(event, "/monitor")
+                    }
+                    onClick={(event) =>
+                      handleSidebarRouteNavigate(event, "/monitor")
+                    }
                   >
                     <Telescope className="size-4" />
                     <span>Smart monitor</span>
@@ -1001,7 +1108,12 @@ export function AppSidebar() {
                   <Link
                     href="/maps"
                     replace={isMobile}
-                    onClick={closeMobileSidebar}
+                    onPointerUp={(event) =>
+                      handleSidebarRoutePointerUp(event, "/maps")
+                    }
+                    onClick={(event) =>
+                      handleSidebarRouteNavigate(event, "/maps")
+                    }
                   >
                     <MapPinned className="size-4" />
                     <span>Smart Maps</span>
@@ -1018,6 +1130,7 @@ export function AppSidebar() {
                   <Link
                     href="/inbox"
                     replace={isMobile}
+                    onPointerUp={handleInboxPointerUp}
                     onClick={handleInboxNavigate}
                   >
                     <InboxIcon className="size-4" />
@@ -1327,7 +1440,12 @@ export function AppSidebar() {
               <Link
                 href="/library"
                 replace={isMobile}
-                onClick={closeMobileSidebar}
+                onPointerUp={(event) =>
+                  handleSidebarRoutePointerUp(event, "/library")
+                }
+                onClick={(event) =>
+                  handleSidebarRouteNavigate(event, "/library")
+                }
               >
                 <LibraryIcon className="size-4" />
                 <span>Library</span>
@@ -1345,7 +1463,12 @@ export function AppSidebar() {
                 <Link
                   href="/settings"
                   replace={isMobile}
-                  onClick={closeMobileSidebar}
+                  onPointerUp={(event) =>
+                    handleSidebarRoutePointerUp(event, "/settings")
+                  }
+                  onClick={(event) =>
+                    handleSidebarRouteNavigate(event, "/settings")
+                  }
                 >
                   <Settings className="size-4" />
                   <span>Settings</span>

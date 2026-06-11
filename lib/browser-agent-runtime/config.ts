@@ -12,10 +12,6 @@ export interface BrowserConfig {
     headless: boolean;
     liveView: boolean;
     launchArgs: string[];
-    profileMode: BrowserProfileMode;
-    baseProfileDir: string;
-    chromeExecutablePath: string;
-    maxConcurrent: number;
 }
 
 export interface RuntimeConfig {
@@ -30,9 +26,8 @@ export interface RuntimeConfig {
 export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
 export type AdvancedThinkingLevel = 'low' | 'medium' | 'high';
 export type MediaResolutionLevel = 'low' | 'medium' | 'high';
-export type BrowserBackend = 'patchright' | 'official-display';
-export type BrowserBackendPreference = 'auto' | BrowserBackend;
-export type BrowserProfileMode = 'isolated' | 'clone-base' | 'shared-serial';
+export type BrowserBackend = 'patchright';
+export type BrowserBackendPreference = BrowserBackend;
 
 export interface LlmConfig {
     model: string;
@@ -79,10 +74,6 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
             '--hide-crash-restore-bubble',
             '--disable-session-crashed-bubble',
         ],
-        profileMode: 'isolated',
-        baseProfileDir: '',
-        chromeExecutablePath: '',
-        maxConcurrent: 3,
     },
     runtime: {
         // Per-task action budget. On reaching it without a terminal action the agent
@@ -176,20 +167,7 @@ function parseBrowserBackend(value: string | undefined): BrowserBackend | undefi
     }
 
     const normalized = value.trim().toLowerCase().replace(/_/g, '-');
-    if (normalized === 'patchright' || normalized === 'official-display') {
-        return normalized;
-    }
-
-    return undefined;
-}
-
-function parseBrowserProfileMode(value: string | undefined): BrowserProfileMode | undefined {
-    if (value === undefined) {
-        return undefined;
-    }
-
-    const normalized = value.trim().toLowerCase().replace(/_/g, '-');
-    if (normalized === 'isolated' || normalized === 'clone-base' || normalized === 'shared-serial') {
+    if (normalized === 'patchright') {
         return normalized;
     }
 
@@ -207,31 +185,8 @@ function applyEnvOverrides(config: AgentConfig): AgentConfig {
         overridden.browser.startupUrl = process.env.AGENT_STARTUP_URL;
     }
 
-    const backendFromEnv = parseBrowserBackend(process.env.BROWSER_AGENT_BACKEND);
-    if (backendFromEnv) {
-        overridden.browser.backend = backendFromEnv;
-    }
-
     if (process.env.AGENT_USER_DATA_DIR) {
         overridden.browser.userDataDir = process.env.AGENT_USER_DATA_DIR;
-    }
-
-    if (process.env.BROWSER_AGENT_BASE_PROFILE_DIR) {
-        overridden.browser.baseProfileDir = process.env.BROWSER_AGENT_BASE_PROFILE_DIR;
-    }
-
-    if (process.env.BROWSER_AGENT_CHROME_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH) {
-        overridden.browser.chromeExecutablePath = process.env.BROWSER_AGENT_CHROME_EXECUTABLE_PATH || process.env.CHROME_EXECUTABLE_PATH || '';
-    }
-
-    const profileModeFromEnv = parseBrowserProfileMode(process.env.BROWSER_AGENT_PROFILE_MODE);
-    if (profileModeFromEnv) {
-        overridden.browser.profileMode = profileModeFromEnv;
-    }
-
-    const maxConcurrentFromEnv = parseNumber(process.env.BROWSER_AGENT_MAX_CONCURRENT);
-    if (maxConcurrentFromEnv !== undefined && maxConcurrentFromEnv > 0) {
-        overridden.browser.maxConcurrent = Math.floor(maxConcurrentFromEnv);
     }
 
     const headlessFromEnv = parseBoolean(process.env.AGENT_HEADLESS);
@@ -326,10 +281,6 @@ function sanitizeConfig(config: AgentConfig): AgentConfig {
             launchArgs: Array.isArray(config.browser.launchArgs) && config.browser.launchArgs.length > 0
                 ? config.browser.launchArgs
                 : DEFAULT_AGENT_CONFIG.browser.launchArgs,
-            profileMode: parseBrowserProfileMode(config.browser.profileMode) || DEFAULT_AGENT_CONFIG.browser.profileMode,
-            baseProfileDir: typeof config.browser.baseProfileDir === 'string' ? config.browser.baseProfileDir : DEFAULT_AGENT_CONFIG.browser.baseProfileDir,
-            chromeExecutablePath: typeof config.browser.chromeExecutablePath === 'string' ? config.browser.chromeExecutablePath : DEFAULT_AGENT_CONFIG.browser.chromeExecutablePath,
-            maxConcurrent: config.browser.maxConcurrent > 0 ? Math.floor(config.browser.maxConcurrent) : DEFAULT_AGENT_CONFIG.browser.maxConcurrent,
         },
         runtime: {
             maxIterations: config.runtime.maxIterations > 0 ? Math.floor(config.runtime.maxIterations) : DEFAULT_AGENT_CONFIG.runtime.maxIterations,

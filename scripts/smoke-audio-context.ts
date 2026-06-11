@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
+import type { AgentConfig, PromptContext } from '@/lib/ai/agents/types'
 import type { Attachment } from '@/lib/types'
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestrator-audio-context-'))
@@ -11,6 +12,7 @@ process.env.ORCHESTRATOR_STATE_DIR = root
 try {
   const { persistUploadBytes } = await import('@/lib/uploads')
   const {
+    AUDIO_TRANSCRIPT_AGENT_ID,
     prepareAudioContextsForProvider,
     providerNeedsAudioContext,
   } = await import('@/lib/ai/audio-context')
@@ -116,11 +118,26 @@ try {
   const { executeTranscribeAudio } = await import('@/lib/ai/tools/transcribe-audio')
 
   let transcriptCalls = 0
-  const transcriptRunner = async ({ prompt }: { prompt: string }) => {
+  const promptCtx: PromptContext = {
+    agentId: AUDIO_TRANSCRIPT_AGENT_ID,
+    userName: '',
+    assistantName: 'Audio Transcript Agent',
+    availableTools: [],
+    availableAgents: [],
+  }
+  const transcriptRunner = async ({ target, prompt }: { target: Pick<AgentConfig, 'id' | 'buildPrompt'>, prompt: string }) => {
     transcriptCalls++
+    assert.equal(target.id, AUDIO_TRANSCRIPT_AGENT_ID)
+    const systemPrompt = target.buildPrompt?.(promptCtx) ?? ''
+    assert.doesNotMatch(systemPrompt, /Markdown report/i)
+    assert.doesNotMatch(systemPrompt, /Useful facts/i)
+    assert.doesNotMatch(systemPrompt, /timeline/i)
+    assert.doesNotMatch(systemPrompt, /excerpts?/i)
     // The transcript mode must use the verbatim-transcript instruction, not the
     // analysis report instruction.
     assert.match(prompt, /verbatim TRANSCRIPT/)
+    assert.doesNotMatch(prompt, /audio report/i)
+    assert.doesNotMatch(prompt, /Useful facts/i)
     return { success: true, data: { output: 'Speaker 1: hello from the smoke transcript.' } }
   }
 

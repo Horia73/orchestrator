@@ -11,7 +11,7 @@ import { CliTerminal } from "./cli-terminal"
 interface CliLoginModalProps {
     cliName: string
     cliId: string
-    mode: "install" | "login" | "logout" | "free" | "setup-token"
+    mode: "install" | "login" | "logout" | "free"
     hint: string
     onClose: () => void
 }
@@ -122,9 +122,7 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
                                         ? "Login"
                                         : mode === "logout"
                                             ? "Logout"
-                                            : mode === "setup-token"
-                                                ? "Set up long-lived token"
-                                                : "Session"}
+                                            : "Session"}
                             </h3>
                             <p className="mt-0.5 text-[12.5px] text-foreground/60">{hint}</p>
                         </div>
@@ -196,9 +194,7 @@ export function CliLoginModal({ cliName, cliId, mode, hint, onClose }: CliLoginM
                                 : `Session ended with exit ${exited.code ?? "?"}.`
                             : mode === "install"
                                 ? "Wait for installation to finish, then close this window."
-                                : mode === "setup-token"
-                                    ? "Open the URL, copy the token, paste it here, then press Enter. Claude Code may hide pasted token text."
-                                    : "Type or click a URL to complete the flow."}
+                                : "Type or click a URL to complete the flow."}
                     </span>
                     <button
                         onClick={onClose}

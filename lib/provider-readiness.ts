@@ -17,7 +17,7 @@ export interface ProviderReadiness {
     chatMessage: string | null
 }
 
-const CLI_PROVIDER_IDS = new Set<string>(['claude-code', 'codex'])
+const CLI_PROVIDER_IDS = new Set<string>(['codex'])
 
 export function isCliProviderId(providerId: string): providerId is CliId {
     return CLI_PROVIDER_IDS.has(providerId)
@@ -79,7 +79,7 @@ export async function getProviderReadiness(
                     ? `No model loaded. Install ${spec.name} from Settings > Auth, then log in before sending a chat message.`
                     : !status?.loggedIn
                         ? `No model loaded. Log in to ${spec.name} from Settings > Auth before sending a chat message.`
-                        : `${spec.name} session expired. Open Settings > Auth and click Reconnect — or run \`claude setup-token\` for a long-lived token that won't expire on a headless server.`,
+                        : `${spec.name} session expired. Open Settings > Auth and click Reconnect.`,
         }
     }
 

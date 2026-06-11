@@ -246,7 +246,7 @@ export interface RuntimeConfig extends AppConfig {
   model: ModelDef | null
   /** The active provider definition */
   provider: ProviderDef | null
-  /** Browser backend preference, effective backend, source, and availability diagnostics. */
+  /** Browser backend preference and effective backend. */
   browserAgentBackend: BrowserBackendResolution
 }
 
@@ -353,7 +353,7 @@ export function isFileSupportedByProvider(
 // ---------------------------------------------------------------------------
 
 const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
-  backend: "auto",
+  backend: "patchright",
   light: {
     provider: "google",
     model: "gemini-3-flash-preview",
@@ -454,9 +454,17 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
     (parsed as { timezone?: unknown }).timezone,
     DEFAULT_CONFIG.timezone
   )
+  const active = normalizeModelSelection(
+    parsed.activeProvider,
+    parsed.activeModel,
+    DEFAULT_CONFIG.activeProvider,
+    DEFAULT_CONFIG.activeModel
+  )
   return {
     ...DEFAULT_CONFIG,
     ...parsed,
+    activeProvider: active.provider,
+    activeModel: active.model,
     userName:
       typeof parsed.userName === "string" &&
       parsed.userName.trim() &&
@@ -514,6 +522,7 @@ function normalizeAgentOverrides(value: unknown): Record<string, AgentOverride> 
     const provider = normalizeOptionalString(raw.provider, 96)
     const model = normalizeOptionalString(raw.model, 160)
     if (!provider || !model) continue
+    if (!effectiveModelExists(provider, model)) continue
 
     const override: AgentOverride = { provider, model }
     if (typeof raw.thinkingLevel === "string") {
@@ -540,6 +549,7 @@ function normalizeAgentFallbacks(value: unknown): AgentFallback[] {
     const provider = normalizeOptionalString(raw.provider, 96)
     const model = normalizeOptionalString(raw.model, 160)
     if (!provider || !model) continue
+    if (!effectiveModelExists(provider, model)) continue
     const key = `${provider}:${model}`
     if (seen.has(key)) continue
     seen.add(key)
@@ -551,6 +561,29 @@ function normalizeAgentFallbacks(value: unknown): AgentFallback[] {
     if (out.length >= 2) break
   }
   return out
+}
+
+function normalizeModelSelection(
+  providerValue: unknown,
+  modelValue: unknown,
+  fallbackProvider: string,
+  fallbackModel: string
+): { provider: string; model: string } {
+  const provider = typeof providerValue === "string" ? providerValue : ""
+  const model = typeof modelValue === "string" ? modelValue : ""
+  if (provider && model && effectiveModelExists(provider, model)) {
+    return { provider, model }
+  }
+  if (effectiveModelExists(fallbackProvider, fallbackModel)) {
+    return { provider: fallbackProvider, model: fallbackModel }
+  }
+
+  const registry = getEffectiveRegistry()
+  for (const [providerId, providerDef] of Object.entries(registry)) {
+    const modelId = Object.keys(providerDef.models)[0]
+    if (modelId) return { provider: providerId, model: modelId }
+  }
+  return { provider: fallbackProvider, model: fallbackModel }
 }
 
 function isModelOptionsRecord(
@@ -770,10 +803,6 @@ export function getRuntimeConfig(): RuntimeConfig {
     provider: providerDef,
     browserAgentBackend: resolveBrowserBackend({
       settingsValue: config.browserAgent.backend,
-      chromeExecutablePath:
-        process.env.BROWSER_AGENT_CHROME_EXECUTABLE_PATH ||
-        process.env.CHROME_EXECUTABLE_PATH ||
-        null,
     }),
   }
 }
@@ -1118,18 +1147,6 @@ export function setBrowserAgentModel(
     browserAgent: {
       ...current.browserAgent,
       [slot]: override,
-    },
-  })
-}
-
-export function setBrowserAgentBackend(
-  backend: BrowserBackendPreference
-): AppConfig {
-  const current = getConfig()
-  return updateConfig({
-    browserAgent: {
-      ...current.browserAgent,
-      backend,
     },
   })
 }

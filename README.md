@@ -270,41 +270,26 @@ Important variables:
 - `WHATSAPP_CHROME_EXECUTABLE_PATH`: browser executable override for WhatsApp.
 - `WHATSAPP_USER_AGENT`: optional WhatsApp Web browser user-agent override.
 - `BROWSER_AGENT_LIVE_VIEW`: enables live browser view on Linux/Docker.
-- `BROWSER_AGENT_BACKEND`: optional browser-agent backend override. Leave empty to use the Settings default (`Auto`); set `patchright`, `official-display`, or `auto` only when a deployment should ignore the saved UI setting.
 
 For native installs, runtime workspace state is stored at `~/.orchestrator/state` and exposed to the app through `~/orchestrator/.orchestrator` (a symlink). For Docker installs, persistent app data lives directly at `~/.orchestrator/` on the host (bind-mounted into the container at `/app/.orchestrator`), the container cache lives at `~/.orchestrator-node-home/` (bind-mounted at `/home/node`), and the host git checkout is bind-mounted at `/orchestrator-source` for self-development worktree creation. `/app` is a built image copy and intentionally has no `.git` metadata because `.dockerignore` excludes it from the production image. These paths are owned by your host user (`ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` in `.env`), so backups are a simple `cp -a ~/.orchestrator/ <dest>`.
 
 ## Browser Agent Live View
 
-The browser agent backend is controlled from Settings > Models > Browser Agent. `Auto` selects Patchright on macOS and official Chromium display on Linux/Docker when Chromium, Xvnc/TigerVNC, xdotool, xclip, and ImageMagick are available; otherwise it falls back to Patchright. Set `BROWSER_AGENT_BACKEND=patchright` or `BROWSER_AGENT_BACKEND=official-display` only to force a backend from the deployment environment. The provided Docker image includes Chromium, TigerVNC, Openbox, xdotool, xclip, ImageMagick, ffmpeg, and noVNC client dependencies.
+The browser agent always uses Patchright. Settings > Models > Browser Agent lets you choose the light model and optional pro escalation model, but the backend is fixed to Patchright. The provided Docker image includes the browser/live-view dependencies needed for the managed browser session.
 
 Default Docker live-view settings:
 
 ```text
 ORCHESTRATOR_PUBLIC_URL=
 BROWSER_AGENT_LIVE_VIEW=1
-BROWSER_AGENT_BACKEND=
-BROWSER_AGENT_PROFILE_MODE=isolated
-BROWSER_AGENT_MAX_CONCURRENT=3
 BROWSER_AGENT_ALLOW_NO_SANDBOX=1
 BROWSER_AGENT_VNC_WS_HOST=0.0.0.0
 BROWSER_AGENT_VNC_WS_PORT=6080
 BROWSER_AGENT_VNC_WS_PUBLIC_URL=ws://127.0.0.1:6080
 ```
 
-For the Linux official-display backend, `isolated` creates a fresh profile per
-session, `clone-base` copies `BROWSER_AGENT_BASE_PROFILE_DIR` into each session
-profile, and `shared-serial` reuses one profile but forces browser-agent runs to
-one at a time. In Docker, Chromium may require `BROWSER_AGENT_ALLOW_NO_SANDBOX=1`;
-run that container on an isolated host boundary. The `BROWSER_AGENT_DISPLAY_STABILITY_*`
-settings tune screenshot-diff settling after OS-input actions.
-
-Linux smoke tests:
-
-```bash
-BROWSER_AGENT_ALLOW_NO_SANDBOX=1 npm run smoke:official-display
-BROWSER_AGENT_ALLOW_NO_SANDBOX=1 npm run smoke:official-display-agent
-```
+In Docker, Chromium may require `BROWSER_AGENT_ALLOW_NO_SANDBOX=1`; run that
+container on an isolated host boundary.
 
 Leave `ORCHESTRATOR_PUBLIC_URL` empty for local installs or when a trusted
 reverse proxy sends correct canonical `Host` / `X-Forwarded-*` headers. Do not
@@ -349,7 +334,7 @@ Installer-managed Docker installs use a local host bridge:
 orchestrator update
 ```
 
-The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, and exposes narrow host-only operations. It runs managed updates (`git pull --ff-only`, rebuild, restart) and reads Claude Code subscription usage from the host Claude CLI so Docker installs do not need to scrape Claude's interactive TUI inside the container.
+The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, and exposes narrow host-only operations. It runs managed updates (`git pull --ff-only`, rebuild, restart) and container/CLI maintenance actions.
 
 Managed installs use GitHub Releases as the update source:
 

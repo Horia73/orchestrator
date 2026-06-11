@@ -243,11 +243,10 @@ export function buildSubAgentCollaboration(): string {
  *   `body.tools`, OpenAI/Google equivalents), so re-listing definitions here
  *   would duplicate ~6k tokens of schema prose. Emit only the built-ins
  *   routing note.
- * - Prefix set (Claude Code's MCP bridge → `mcp__orch-tools__`): custom tool
- *   schemas are DEFERRED — not in the model's active tool list until loaded
- *   via ToolSearch — so this menu is the model's only visibility into what
- *   exists. Render name, description, and named parameters with types +
- *   required flag, kept deliberately plain so providers map it well.
+ * - Prefix set: custom tool schemas are deferred or namespaced by the
+ *   provider, so this menu is the model's visibility into what exists. Render
+ *   name, description, and named parameters with types + required flag, kept
+ *   deliberately plain so providers map it well.
  */
 export function buildToolsSection(ctx: PromptContext): string {
     const builtins = ctx.availableBuiltins ?? []

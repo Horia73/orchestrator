@@ -23,9 +23,9 @@ export const BACKUP_FORMAT_VERSION = 1
 const STAGING_DIR = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, '.restore-staging')
 
 /**
- * `private/` subdirectories deliberately left out of backups: live Chromium
+ * `private/` subdirectories deliberately left out of backups: live browser
  * profiles (WhatsApp Web, the browser agent) are not crash-consistent while the
- * app runs and are tied to the Chromium build, and the codex CLI home / map
+ * app runs and are tied to the browser build, and the codex CLI home / map
  * tiles are large, regenerable caches. Re-link those sessions after a restore.
  */
 const PRIVATE_EXCLUDES = new Set([

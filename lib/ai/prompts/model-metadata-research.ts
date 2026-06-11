@@ -145,8 +145,8 @@ const PREFLIGHT = [
 ].join('\n')
 
 function providerSpecificGuidance(providerId: string): string {
-    if (providerId !== 'codex' && providerId !== 'claude-code') return ''
-    const productName = providerId === 'codex' ? 'OpenAI Codex CLI' : 'Anthropic Claude Code CLI'
+    if (providerId !== 'codex') return ''
+    const productName = 'OpenAI Codex CLI'
     return [
         '<cli_provider_guidance>',
         `providerId "${providerId}" is a local CLI/subscription provider for ${productName}.`,

@@ -51,9 +51,9 @@ export function MapsTab() {
     const hasAnyData = (data?.length ?? 0) > 0
 
     return (
-        <div className="flex flex-col gap-4">
-            <div className="flex flex-wrap items-end gap-3">
-                <p className="min-w-0 flex-1 text-sm text-muted-foreground">
+        <div className="flex min-w-0 flex-col gap-4">
+            <div className="flex min-w-0 flex-col items-start gap-3 sm:flex-row sm:flex-wrap sm:items-end">
+                <p className="w-full min-w-0 text-sm leading-relaxed text-muted-foreground sm:flex-1">
                     Hărțile generate în chat, cu preview și click → conversația originală. Pentru hărți live cu interacțiune, vezi <span className="font-medium text-foreground">Smart Maps</span> din sidebar.
                 </p>
                 <button
@@ -61,7 +61,7 @@ export function MapsTab() {
                     onClick={() => void load()}
                     disabled={loading}
                     className={cn(
-                        "inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12.5px] font-medium text-muted-foreground transition-colors",
+                        "inline-flex min-h-10 shrink-0 touch-manipulation items-center gap-1.5 rounded-md border border-border bg-background px-3 py-2 text-[13px] font-medium text-muted-foreground transition-colors sm:min-h-0 sm:px-2.5 sm:py-1.5 sm:text-[12.5px]",
                         "hover:bg-muted hover:text-foreground",
                         "disabled:cursor-default disabled:opacity-50",
                     )}
@@ -75,7 +75,7 @@ export function MapsTab() {
                 <LibrarySearchBar
                     placeholder="Caută hărți după titlu sau conversație…"
                     onDebouncedChange={setQuery}
-                    className="max-w-md"
+                    className="w-full max-w-md"
                 />
             ) : null}
 

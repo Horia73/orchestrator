@@ -6,7 +6,7 @@ import { AlertCircle, Check, CheckCircle2, ChevronDown, FileAudio, FlaskConical,
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card"
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "@/components/ui/dropdown-menu"
 import { cn } from "@/lib/utils"
-import type { AgentFallback, BrowserAgentModelSettings, BrowserAgentModelSlot, BrowserAgentSettings, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
+import type { AgentFallback, BrowserAgentModelSettings, BrowserAgentModelSlot, ModelDef, ModelFeatureValue, ModelPricing, ThinkingLevel } from "@/lib/config"
 import { useSettings, type AgentInfo, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
 import { ModelPicker, type ModelPickerOption } from "./model-picker"
 
@@ -19,6 +19,7 @@ type SaveStatus =
 type ModelFeature = NonNullable<import("@/lib/config").ModelDef["features"]>[number]
 type EnumModelFeature = Extract<ModelFeature, { type: "enum" }>
 const AUDIO_CONTEXT_AGENT_ID = "audio_context_agent"
+const AUDIO_TRANSCRIPT_AGENT_ID = "audio_transcript_agent"
 
 const KNOWN_THINKING_LEVELS = ["minimal", "low", "medium", "high", "xhigh", "max"] as const
 
@@ -41,7 +42,7 @@ export function AgentCard({
   agentId: string
   className?: string
 }) {
-  const { data, setAgentOverride, setBrowserAgentModel, setBrowserAgentBackend, setBrowserAgentProEnabled } = useSettings()
+  const { data, setAgentOverride, setBrowserAgentModel, setBrowserAgentProEnabled } = useSettings()
   const [status, setStatus] = React.useState<SaveStatus>({ kind: "idle" })
   const [fallbacksOpen, setFallbacksOpen] = React.useState(false)
 
@@ -71,7 +72,6 @@ export function AgentCard({
         agent={agent}
         data={data}
         setBrowserAgentModel={setBrowserAgentModel}
-        setBrowserAgentBackend={setBrowserAgentBackend}
         setBrowserAgentProEnabled={setBrowserAgentProEnabled}
         className={className}
       />
@@ -105,8 +105,9 @@ export function AgentCard({
   }
   const effectiveFallbacks = normalizeUiFallbacks(override?.fallbacks)
   const fallbackCapable = supportsAgentFallbacks(agent)
+  const isAudioAgent = agent.id === AUDIO_CONTEXT_AGENT_ID || agent.id === AUDIO_TRANSCRIPT_AGENT_ID
   const modelFilter =
-    agent.id === AUDIO_CONTEXT_AGENT_ID ? isAudioContextCompatibleModel : undefined
+    isAudioAgent ? isAudioContextCompatibleModel : undefined
 
   const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue>; fallbacks?: AgentFallback[] }) => {
     setStatus({ kind: "saving" })
@@ -195,7 +196,7 @@ export function AgentCard({
       </CardHeader>
 
       <CardContent>
-        {agent.id === AUDIO_CONTEXT_AGENT_ID && <AudioContextAgentNote />}
+        {isAudioAgent && <AudioAgentNote agentId={agent.id} />}
 
         {/* Browser agent gets the same picker as every other text agent —
             user chooses which LLM drives the browser-automation script. */}
@@ -275,14 +276,19 @@ export function AgentCard({
   )
 }
 
-function AudioContextAgentNote() {
+function AudioAgentNote({ agentId }: { agentId: string }) {
+  const transcript = agentId === AUDIO_TRANSCRIPT_AGENT_ID
   return (
     <div className="mb-4 flex items-start gap-2.5 rounded-lg border border-cyan-500/25 bg-cyan-500/5 px-2.5 py-2.5 text-[12px] text-cyan-900 dark:text-cyan-100">
       <FileAudio className="mt-0.5 size-3.5 shrink-0 text-cyan-700 dark:text-cyan-300" />
       <div className="min-w-0">
-        <p className="font-medium text-foreground">Audio understanding &amp; transcription</p>
+        <p className="font-medium text-foreground">
+          {transcript ? "Audio transcription" : "Audio understanding"}
+        </p>
         <p className="mt-0.5 text-foreground/65">
-          Runs automatically for audio uploads when the selected chat model cannot read audio natively, and also powers on-demand transcription (the TranscribeAudio tool) — e.g. when the agent needs a written transcript or you ask it to transcribe a voice note you sent earlier. This model setting governs both.
+          {transcript
+            ? "Powers TranscribeAudio in transcript mode. Keep this on a Gemini text model that can receive audio; it is intentionally separate from the audio-summary pre-pass so transcript requests stay verbatim."
+            : "Runs the automatic audio understanding pre-pass for pure app-recorded voice notes when the selected chat model cannot read audio natively. Summary/analysis only; verbatim transcription uses the separate Audio Transcript Agent."}
         </p>
       </div>
     </div>
@@ -421,14 +427,12 @@ function BrowserAgentCard({
   agent,
   data,
   setBrowserAgentModel,
-  setBrowserAgentBackend,
   setBrowserAgentProEnabled,
   className,
 }: {
   agent: AgentInfo
   data: SettingsBootstrap
   setBrowserAgentModel: (slot: BrowserAgentModelSlot, override: BrowserAgentModelSettings) => Promise<void>
-  setBrowserAgentBackend: (backend: BrowserAgentSettings["backend"]) => Promise<void>
   setBrowserAgentProEnabled: (proEnabled: boolean) => Promise<void>
   className?: string
 }) {
@@ -444,17 +448,6 @@ function BrowserAgentCard({
     setStatus({ kind: "saving" })
     try {
       await setBrowserAgentModel(slot, next)
-      setStatus({ kind: "saved", at: Date.now() })
-    } catch (err) {
-      setStatus({ kind: "error", message: err instanceof Error ? err.message : "Save failed" })
-    }
-  }
-
-  const saveBackend = async (backend: BrowserAgentSettings["backend"]) => {
-    if (backend === data.config.browserAgent.backend) return
-    setStatus({ kind: "saving" })
-    try {
-      await setBrowserAgentBackend(backend)
       setStatus({ kind: "saved", at: Date.now() })
     } catch (err) {
       setStatus({ kind: "error", message: err instanceof Error ? err.message : "Save failed" })
@@ -502,9 +495,7 @@ function BrowserAgentCard({
       <CardContent>
         <div className="flex flex-col gap-4">
           <BrowserBackendControls
-            value={data.config.browserAgent.backend}
             status={data.config.browserAgentBackend}
-            onChange={saveBackend}
           />
           <BrowserModelSlotControls
             title="Light model"
@@ -567,81 +558,27 @@ function BrowserAgentCard({
   )
 }
 
-const BROWSER_BACKEND_OPTIONS: Array<{ value: BrowserAgentSettings["backend"]; label: string }> = [
-  { value: "auto", label: "Auto" },
-  { value: "patchright", label: "Patchright" },
-  { value: "official-display", label: "Chromium" },
-]
-
 function BrowserBackendControls({
-  value,
   status,
-  onChange,
 }: {
-  value: BrowserAgentSettings["backend"]
   status: SettingsBootstrap["config"]["browserAgentBackend"]
-  onChange: (backend: BrowserAgentSettings["backend"]) => void
 }) {
-  const envLocked = status.envOverride !== null
-  const effectiveLabel = status.effective === "official-display" ? "Chromium display" : "Patchright"
-  const statusText = backendStatusText(status, envLocked)
-  const showUnavailable = !status.officialDisplay.supported && (
-    value === "official-display" ||
-    (value === "auto" && status.platform === "linux")
-  )
-  const showStatusLine = envLocked || showUnavailable
-
   return (
-    <Field label="Browser backend" hint={`Effective: ${effectiveLabel}`}>
+    <Field label="Browser backend" hint="Patchright">
       <div className="flex flex-col gap-2">
-        <div className="grid grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5" title={statusText}>
-          {BROWSER_BACKEND_OPTIONS.map(option => {
-            const selected = value === option.value
-            return (
-              <button
-                key={option.value}
-                type="button"
-                disabled={envLocked}
-                onClick={() => onChange(option.value)}
-                aria-pressed={selected}
-                className={cn(
-                  "inline-flex h-7 min-w-0 items-center justify-center gap-1 rounded-md px-1.5 text-[11.5px] font-medium transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-60",
-                  selected
-                    ? "bg-background text-foreground shadow-sm"
-                    : "text-foreground/55 hover:bg-background/55 hover:text-foreground"
-                )}
-              >
-                <Check className={cn("size-3 shrink-0", selected ? "opacity-100" : "opacity-0")} />
-                <span className="min-w-0 truncate">{option.label}</span>
-              </button>
-            )
-          })}
+        <div className="rounded-lg bg-muted p-0.5" title={status.reason}>
+          <div className="inline-flex h-7 w-full min-w-0 items-center justify-center gap-1 rounded-md bg-background px-1.5 text-[11.5px] font-medium text-foreground shadow-sm">
+            <Check className="size-3 shrink-0" />
+            <span className="min-w-0 truncate">Patchright</span>
+          </div>
         </div>
 
-        {showStatusLine && (
-          <p className="truncate text-[11.5px] text-foreground/50" title={statusText}>
-            {statusText}
-          </p>
-        )}
-
-        {showUnavailable && (
-          <div className="flex items-start gap-2 rounded-lg border border-amber-500/30 bg-amber-500/5 px-2.5 py-2 text-[12px] text-amber-700 dark:text-amber-400">
-            <AlertCircle className="mt-0.5 size-3.5 shrink-0" />
-            <p className="min-w-0">{status.reason}</p>
-          </div>
-        )}
+        <p className="truncate text-[11.5px] text-foreground/50" title={status.reason}>
+          {status.reason}
+        </p>
       </div>
     </Field>
   )
-}
-
-function backendStatusText(
-  status: SettingsBootstrap["config"]["browserAgentBackend"],
-  envLocked: boolean
-): string {
-  if (envLocked) return `Set by BROWSER_AGENT_BACKEND=${status.envOverride}`
-  if (status.configured === "auto") return status.reason
-  return "Managed in Settings"
 }
 
 function BrowserModelSlotControls({
@@ -764,6 +701,7 @@ function supportsAgentFallbacks(agent: AgentInfo): boolean {
     (agent.kind === "text" || agent.kind === "concierge") &&
     agent.id !== "browser_agent" &&
     agent.id !== AUDIO_CONTEXT_AGENT_ID &&
+    agent.id !== AUDIO_TRANSCRIPT_AGENT_ID &&
     agent.id !== "phone_agent" &&
     agent.id !== "android_agent"
   )

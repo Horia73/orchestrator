@@ -2,9 +2,9 @@ import { NextResponse } from 'next/server'
 import { getAllCliQuotas, getCliQuota, type CliQuotaId } from '@/lib/cli/usage'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
-const CLI_IDS = new Set<CliQuotaId>(['claude-code', 'codex'])
+const CLI_IDS = new Set<CliQuotaId>(['codex'])
 
-/** GET /api/cli/usage — 5-hour and weekly quota snapshots per CLI. */
+/** GET /api/cli/usage — 5-hour and weekly Codex quota snapshot. */
 export async function GET(request: Request) {
   return runWithRequestProfile(request, async () => {
         const url = new URL(request.url)
