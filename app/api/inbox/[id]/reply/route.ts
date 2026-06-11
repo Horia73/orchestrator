@@ -12,6 +12,7 @@ import type {
   ReasoningEntry,
 } from "@/lib/types"
 import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
+import { repairMessageArtifactsWithAgent } from "@/lib/ai/agents/repair-generate"
 import {
   appendMissingArtifactBlocks,
   dedupeArtifactNotifications,
@@ -236,6 +237,18 @@ async function continueInboxReply(args: {
         assistantContent,
         String((result.data as { output?: unknown } | undefined)?.output ?? done?.content ?? "")
       )
+    }
+
+    if (result.success) {
+      // Validate + model-repair any strict-schema artifact BEFORE the message
+      // is stored, so the reply never lands with a card persist would reject.
+      const repair = await repairMessageArtifactsWithAgent({
+        content: assistantContent,
+        conversationId: args.id,
+        surface: "inbox-reply",
+        appOrigin: args.appOrigin,
+      })
+      assistantContent = repair.content
     }
 
     const notificationSurface = result.success && visibleNotifications.length > 0

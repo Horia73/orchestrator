@@ -929,7 +929,9 @@ export async function POST(request: Request) {
                 // only when the original body is present verbatim — it isn't if
                 // the model wrapped it in a fence that got stripped before insert.
                 if (repair.content && accContent.includes(repair.content)) {
-                  accContent = accContent.replace(repair.content, repaired.content)
+                  // Functional replacement: `$`-sequences in the repaired JSON
+                  // must not be expanded as replacement patterns.
+                  accContent = accContent.replace(repair.content, () => repaired.content)
                   persistAssistantProgress({ force: true, status: "ok" })
                 }
                 console.log(

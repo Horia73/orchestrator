@@ -36,7 +36,7 @@
     "smoke:app-path": "tsx scripts/smoke-app-path.ts",
     "smoke:recipe": "tsx scripts/smoke-recipe-parser.ts && tsx scripts/smoke-recipe-images.ts && tsx scripts/smoke-recipe-markdown.ts && tsx scripts/smoke-recipe-interpolate.ts",
     "smoke:workout": "tsx scripts/smoke-workout-parser.ts && tsx scripts/smoke-workout-save.ts && tsx scripts/smoke-workout-storage.ts && tsx scripts/smoke-workout-gifs.ts",
-    "smoke:artifacts": "tsx scripts/smoke-artifact-validation.ts && tsx scripts/smoke-artifact-repair.ts",
+    "smoke:artifacts": "tsx scripts/smoke-artifact-validation.ts && tsx scripts/smoke-artifact-repair.ts && tsx scripts/smoke-repair-message.ts",
     "smoke:observability": "tsx scripts/smoke-observability-tools.ts",
     "smoke:logs-transcript": "tsx scripts/smoke-logs-transcript.ts",
     "smoke:audio-context": "tsx scripts/smoke-audio-context.ts",

@@ -52,6 +52,13 @@ interface ConversationArtifactsValue {
     addArtifact: (row: ArtifactRow) => void
     /** Force a re-fetch from /api/artifacts (e.g. when reopening a conversation). */
     refresh: () => Promise<void>
+    /**
+     * Self-heal hook for the message renderer: a closed artifact block with no
+     * matching row usually means the registry is stale (missed SSE event, app
+     * was backgrounded), not that the content is broken. Triggers one refetch
+     * per identifier per conversation; further calls are no-ops.
+     */
+    reconcileMissingArtifact: (identifier: string) => void
     /** True while the bootstrap fetch is in flight. */
     loading: boolean
     error: string | null
@@ -143,9 +150,41 @@ export function ConversationArtifactsProvider({
     useAppEvent(["artifacts.changed"], (event) => {
         if (event.type !== "artifacts.changed") return
         if (!conversationId || event.conversationId !== conversationId) return
+        // Hidden tab: skip the fetch now — the visibilitychange handler below
+        // reconciles when the app returns to the foreground.
         if (document.visibilityState !== "visible") return
         void refresh()
     })
+
+    // Foreground reconciliation. Mobile PWAs routinely lose the EventSource
+    // while backgrounded (screen lock at the gym is the canonical case), so
+    // `artifacts.changed` events emitted in the meantime never arrive and the
+    // registry silently goes stale — the renderer then shows a "could not
+    // display" notice for artifacts that persisted fine. One cheap refetch on
+    // every return-to-visible keeps the registry honest.
+    React.useEffect(() => {
+        if (typeof document === "undefined" || !conversationId) return
+        const onVisibilityChange = () => {
+            if (document.visibilityState === "visible") void refresh()
+        }
+        document.addEventListener("visibilitychange", onVisibilityChange)
+        return () => document.removeEventListener("visibilitychange", onVisibilityChange)
+    }, [conversationId, refresh])
+
+    // One-shot self-heal refetches requested by the message renderer when a
+    // closed artifact block has no matching row. Guarded per identifier so a
+    // genuinely missing artifact (validation rejected it server-side) settles
+    // into the failure notice instead of refetch-looping.
+    const reconciledIdentifiersRef = React.useRef<Set<string>>(new Set())
+    React.useEffect(() => {
+        reconciledIdentifiersRef.current = new Set()
+    }, [conversationId])
+    const reconcileMissingArtifact = React.useCallback((identifier: string) => {
+        if (!conversationId || !identifier) return
+        if (reconciledIdentifiersRef.current.has(identifier)) return
+        reconciledIdentifiersRef.current.add(identifier)
+        void refresh()
+    }, [conversationId, refresh])
 
     React.useEffect(() => {
         return () => refreshAbortRef.current?.abort()
@@ -269,8 +308,8 @@ export function ConversationArtifactsProvider({
     }, [drafts])
 
     const value = React.useMemo<ConversationArtifactsValue>(
-        () => ({ all, ...indices, addArtifact, refresh, loading, error, drafts, draftsByMessage }),
-        [all, indices, addArtifact, refresh, loading, error, drafts, draftsByMessage]
+        () => ({ all, ...indices, addArtifact, refresh, reconcileMissingArtifact, loading, error, drafts, draftsByMessage }),
+        [all, indices, addArtifact, refresh, reconcileMissingArtifact, loading, error, drafts, draftsByMessage]
     )
 
     return <Ctx.Provider value={value}>{children}</Ctx.Provider>
@@ -289,6 +328,7 @@ export function useConversationArtifacts(): ConversationArtifactsValue {
             versionsByIdentifier: new Map(),
             addArtifact: () => {},
             refresh: async () => {},
+            reconcileMissingArtifact: () => {},
             loading: false,
             error: null,
             drafts: new Map(),

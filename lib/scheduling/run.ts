@@ -554,6 +554,19 @@ export async function runScheduledTask(
     const inboxTitle = notificationSurface
       ? subjectFromNotifications(visibleNotifications, task.title)
       : task.title
+    // Validate + model-repair any strict-schema artifact BEFORE the message is
+    // stored, so a scheduled run never delivers a card persist would reject.
+    // Dynamic import for the same agent-runner cycle reasons as above.
+    const { repairMessageArtifactsWithAgent } = await import(
+      "@/lib/ai/agents/repair-generate"
+    )
+    const repair = await repairMessageArtifactsWithAgent({
+      content: inboxBody,
+      conversationId,
+      surface: "scheduled-run",
+      scheduledTaskId: task.id,
+    })
+    inboxBody = repair.content
     const assistantMsg: Message = {
       id: `msg_${randomUUID()}`,
       role: "assistant",

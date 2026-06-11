@@ -649,7 +649,7 @@ export async function runMicroscript(
         }
 
         if (pendingNotifications.length > 0) {
-            conversationId = postMicroscriptInbox(script, pendingNotifications, inboxConversationId)
+            conversationId = await postMicroscriptInbox(script, pendingNotifications, inboxConversationId)
             surfaced = true
         }
 
@@ -1271,6 +1271,7 @@ function buildAgentWakePrompt(script: Microscript, prompt: string, allowNotifyIn
     return [
         'You were woken by a Microscript after a deterministic runtime condition matched.',
         'Use only the context supplied in this prompt plus read-only/context tools exposed to this wake. Do not assume you can perform source-side actions.',
+        'You do not see MONITORS.md, the conversation that created this Microscript, or its code/state — the <microscript_payload> below is your entire task briefing. When it specifies a behavioral contract (notify rules, quiet hours, language, deliverable format), honor it exactly.',
         'If the payload asks for planning or judgement that depends on user history, durable memory, local subsystems such as workouts, or connected source reads, activate exactly the relevant capability first and use its read-only tools before deciding. Do not activate broad unrelated capabilities.',
         'If you intend to notify with a workout/gym/antrenament card, call ActivateIntegrationTools("workout") first, read the loaded workout doctrine, and use GetExerciseHistory/ListExerciseHistory/GetRecentWorkouts as relevant before emitting application/vnd.ant.workout. If the workout doctrine is not loaded, notify with markdown instead of a workout artifact.',
         'Do not perform source-side writes, setup, scheduling, filesystem edits, delegation, or destructive actions from this wake; notify or return an internal summary instead.',
@@ -1344,7 +1345,7 @@ function summaryForRun(
     ].join('\n')
 }
 
-function postMicroscriptInbox(script: Microscript, notifications: PendingNotification[], conversationId: string): string {
+async function postMicroscriptInbox(script: Microscript, notifications: PendingNotification[], conversationId: string): Promise<string> {
     const now = Date.now()
     const visibleNotifications = dedupeArtifactNotifications(notifications)
     if (visibleNotifications.length < notifications.length) {
@@ -1352,9 +1353,21 @@ function postMicroscriptInbox(script: Microscript, notifications: PendingNotific
             `Deduplicated ${notifications.length - visibleNotifications.length} duplicate microscript notification(s)`,
         )
     }
-    const body = visibleNotifications
+    const composed = visibleNotifications
         .map((n) => n.title ? `**${n.title}**\n\n${n.body}` : n.body)
         .join('\n\n---\n\n')
+    // Validate + model-repair any strict-schema artifact BEFORE the message is
+    // stored, so the user never receives a card that persist would reject.
+    // Dynamic import: the agent runner statically reaches the microscripts
+    // tool, which imports this module — same cycle-avoidance pattern as
+    // executeAgentWake above.
+    const { repairMessageArtifactsWithAgent } = await import('@/lib/ai/agents/repair-generate')
+    const repair = await repairMessageArtifactsWithAgent({
+        content: composed,
+        conversationId,
+        surface: 'microscript',
+    })
+    const body = repair.content
     const actions = visibleNotifications.flatMap((n) => n.actions ?? [])
     const title = visibleNotifications.length === 1 && visibleNotifications[0]?.title
         ? visibleNotifications[0].title

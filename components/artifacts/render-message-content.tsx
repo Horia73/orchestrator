@@ -147,6 +147,7 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                     return (
                         <UnavailableArtifactNotice
                             key={`u-${i}-${seg.attrs.identifier}`}
+                            identifier={seg.attrs.identifier}
                             type={seg.attrs.type}
                             title={seg.attrs.title}
                         />
@@ -177,14 +178,31 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
     )
 }
 
-function UnavailableArtifactNotice({ title, type }: { title: string; type: string }) {
+function UnavailableArtifactNotice({
+    identifier,
+    title,
+    type,
+}: {
+    identifier: string
+    title: string
+    type: string
+}) {
+    const { reconcileMissingArtifact } = useConversationArtifacts()
+    // Self-heal before blaming the content: a missing row is more often a
+    // stale client registry (missed SSE event while backgrounded) than a
+    // validation failure. The provider refetches once per identifier; if the
+    // row lands, this notice unmounts and the real card renders. Only a row
+    // that is STILL missing after the refetch keeps this notice on screen.
+    React.useEffect(() => {
+        reconcileMissingArtifact(identifier)
+    }, [identifier, reconcileMissingArtifact])
     return (
         <div className="my-2 flex items-start gap-3 rounded-lg border border-amber-500/35 bg-amber-500/10 px-3.5 py-3 text-sm text-amber-950 dark:text-amber-100">
             <AlertTriangle className="mt-0.5 size-4 shrink-0" />
             <div className="min-w-0 flex-1">
                 <div className="truncate font-medium">{title || "Artifact"}</div>
                 <div className="mt-1 text-[12px] leading-5 opacity-85">
-                    Artifactul nu a putut fi afișat. Conținutul generat nu a trecut validarea pentru {prettyArtifactType(type)}.
+                    Artifactul nu a putut fi afișat — conținutul de {prettyArtifactType(type)} lipsește sau nu a trecut validarea. Dacă rămâne așa, cere-i agentului să regenereze cardul complet, fără să renunțe la conținut.
                 </div>
             </div>
         </div>
