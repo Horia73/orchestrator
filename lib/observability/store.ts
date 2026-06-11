@@ -15,8 +15,11 @@ import {
     type UsageByModel,
     type UsageByAgent,
     type UsageByTool,
+    type RequestLogInput,
+    type RequestLogInputMessage,
     LOG_TEXT_MAX_CHARS,
     LOG_REASONING_MAX_CHARS,
+    LOG_INPUT_MAX_CHARS,
 } from './schema'
 import type { ContentSegment, ReasoningEntry } from '@/lib/types'
 import { normalizeUsage } from './usage-mapper'
@@ -112,10 +115,14 @@ export function logRequestStart(args: StartArgs): void {
 }
 
 function truncate(s: string | null | undefined): string | null {
+    return truncateTo(s, LOG_TEXT_MAX_CHARS)
+}
+
+function truncateTo(s: string | null | undefined, max: number): string | null {
     if (s == null) return null
-    if (s.length <= LOG_TEXT_MAX_CHARS) return s
+    if (s.length <= max) return s
     // Suffix marker so a UI rendering this knows it was cut.
-    return s.slice(0, LOG_TEXT_MAX_CHARS) + `\n…[truncated, original was ${s.length} chars]`
+    return s.slice(0, max) + `\n…[truncated, original was ${s.length} chars]`
 }
 
 // Heavy transcript reasoning lives in its own row so the Logs list query never
@@ -156,6 +163,79 @@ function persistRequestReasoning(requestId: string, extra?: LogReasoningExtra): 
     const contentSegments = serializeBoundedJson(extra.contentSegments)
     if (reasoning === null && contentSegments === null) return
     upsertReasoningStmt.run({ requestId, reasoning, contentSegments })
+}
+
+// ---------------------------------------------------------------------------
+// Full per-request input snapshot (system prompt + resolved messages + exposed
+// tools). Stored exactly as sent to the provider so the Logs detail can show
+// "what the model actually received" — memories, runtime/attachment context and
+// all. Kept in its own table so the list query never reads it; one row per
+// request, overwritten if a fallback attempt rebuilds the input, cleared with
+// the logs.
+// ---------------------------------------------------------------------------
+
+const upsertInputStmt = db.prepare(`
+    INSERT INTO request_log_input (requestId, systemPrompt, messages, tools, createdAt)
+    VALUES (@requestId, @systemPrompt, @messages, @tools, @createdAt)
+    ON CONFLICT(requestId) DO UPDATE SET
+        systemPrompt = excluded.systemPrompt,
+        messages = excluded.messages,
+        tools = excluded.tools,
+        createdAt = excluded.createdAt
+`)
+
+interface RequestInputArgs {
+    requestId: string
+    systemPrompt?: string | null
+    messages: RequestLogInputMessage[]
+    tools?: string[]
+    now?: number
+}
+
+export function logRequestInput(args: RequestInputArgs): void {
+    safe(() => {
+        const bounded = boundInputForStorage(args.messages)
+        upsertInputStmt.run({
+            requestId: args.requestId,
+            systemPrompt: truncateTo(args.systemPrompt ?? null, LOG_INPUT_MAX_CHARS),
+            messages: bounded,
+            tools: args.tools && args.tools.length ? JSON.stringify(args.tools) : null,
+            createdAt: args.now ?? Date.now(),
+        })
+    })
+}
+
+/** Bound each message individually, then keep the NEWEST messages whose
+ *  serialized array fits the cap — older messages beyond the budget are dropped
+ *  with a visible marker so the truncation is never silent. Returns the JSON to
+ *  store in the `messages` column. */
+function boundInputForStorage(messages: RequestLogInputMessage[]): string {
+    const trimmed: RequestLogInputMessage[] = messages.map((m) => ({
+        role: m.role,
+        content: truncateTo(m.content, LOG_INPUT_MAX_CHARS) ?? '',
+        ...(m.attachments?.length ? { attachments: m.attachments } : {}),
+    }))
+
+    const kept: RequestLogInputMessage[] = []
+    let size = 2 // the enclosing [] of the JSON array
+    let dropped = 0
+    for (let i = trimmed.length - 1; i >= 0; i--) {
+        const entry = trimmed[i]
+        const entrySize = JSON.stringify(entry).length + 1
+        if (kept.length > 0 && size + entrySize > LOG_INPUT_MAX_CHARS) {
+            dropped = i + 1
+            break
+        }
+        kept.unshift(entry)
+        size += entrySize
+    }
+    if (dropped > 0) {
+        kept.unshift({
+            role: 'system',
+            content: `…[${dropped} older message(s) omitted to fit the ${LOG_INPUT_MAX_CHARS.toLocaleString()}-char input cap]`,
+        })
+    }
+    return JSON.stringify(kept)
 }
 
 const incToolCountStmt = db.prepare(`UPDATE request_logs SET toolCallCount = toolCallCount + 1 WHERE id = ?`)
@@ -477,6 +557,18 @@ export function getRequestLogReasoning(requestId: string): RequestLogReasoning |
     return { reasoning, contentSegments }
 }
 
+/** Full input snapshot for a request, read only when a Logs row is expanded. */
+export function getRequestLogInput(requestId: string): RequestLogInput | null {
+    const row = db
+        .prepare(`SELECT systemPrompt, messages, tools FROM request_log_input WHERE requestId = ?`)
+        .get(requestId) as { systemPrompt: string | null; messages: string | null; tools: string | null } | undefined
+    if (!row) return null
+    const messages = parseJsonArray<RequestLogInputMessage>(row.messages) ?? []
+    const tools = parseJsonArray<string>(row.tools) ?? []
+    if (!row.systemPrompt && messages.length === 0) return null
+    return { systemPrompt: row.systemPrompt, messages, tools }
+}
+
 function parseJsonArray<T>(value: string | null): T[] | null {
     if (!value) return null
     try {
@@ -491,6 +583,7 @@ export function clearAllLogs(): { deletedRequests: number; deletedTools: number 
     const tx = db.transaction(() => {
         const t = db.prepare(`DELETE FROM tool_logs`).run()
         db.prepare(`DELETE FROM request_log_reasoning`).run()
+        db.prepare(`DELETE FROM request_log_input`).run()
         const r = db.prepare(`DELETE FROM request_logs`).run()
         return { deletedRequests: r.changes, deletedTools: t.changes }
     })

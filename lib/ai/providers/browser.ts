@@ -11,9 +11,10 @@ import { formatAssetReference, saveGeneratedAsset } from '@/lib/ai/media-assets'
 import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-manager'
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
-import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type MediaResolutionLevel } from '@/lib/browser-agent-runtime/config'
+import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type MediaResolutionLevel, type VisionProvider } from '@/lib/browser-agent-runtime/config'
 import { redactBrowserAgentText } from '@/lib/browser-agent-runtime/redaction'
-import { getApiKey, getConfig, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
+import { codexAuthFileExists, prepareCodexRuntimeHome } from '@/lib/cli/codex-env'
+import { getApiKey, getConfig, type BrowserAgentModelSettings, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { latestUserPromptWithPortableHistory } from './history'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
@@ -21,8 +22,8 @@ import { BROWSER_CAPABILITIES } from './browser-capabilities'
 const TASK_POLL_INTERVAL_MS = 500
 const TASK_TIMEOUT_MS = parseOptionalTaskTimeoutMs(process.env.BROWSER_AGENT_TASK_TIMEOUT_MS)
 
-type BrowserThinkingLevel = 'minimal' | 'low' | 'medium' | 'high'
-type BrowserAdvancedThinkingLevel = 'low' | 'medium' | 'high'
+type BrowserThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh'
+type BrowserAdvancedThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh'
 
 export class BrowserProvider implements AIProvider {
     readonly id = 'browser'
@@ -39,14 +40,6 @@ export class BrowserProvider implements AIProvider {
             callbacks.onError('Browser agent requires a non-empty task prompt.')
             throw new Error('Browser agent requires a non-empty task prompt.')
         }
-
-        const googleApiKey = getApiKey('google')
-        if (!googleApiKey) {
-            const message = 'Browser agent requires GEMINI_API_KEY because its vision loop currently uses Gemini.'
-            callbacks.onError(message)
-            throw new Error(message)
-        }
-        process.env.GEMINI_API_KEY = googleApiKey
 
         const startedAt = Date.now()
         let lastStatusMessage = ''
@@ -73,7 +66,14 @@ export class BrowserProvider implements AIProvider {
             return asset
         }
         const sessionManager = getBrowserSessionManager()
-        const runtimeConfig = buildBrowserRuntimeConfig()
+        let runtimeConfig: BrowserRuntimeConfig
+        try {
+            runtimeConfig = buildBrowserRuntimeConfig()
+        } catch (error) {
+            const message = error instanceof Error ? error.message : 'Browser agent configuration error.'
+            callbacks.onError(message)
+            throw error
+        }
         const lease = await sessionManager.acquire({
             config: runtimeConfig,
             prevSession: options.prevSession,
@@ -110,6 +110,7 @@ export class BrowserProvider implements AIProvider {
             await runtime.submitTask(goal, {
                 cleanContext: !lease.resumed,
                 preserveContext: lease.resumed,
+                provider: runtimeConfig.llm.provider,
                 model: runtimeConfig.llm.model,
                 thinkingLevel: runtimeConfig.llm.thinkingLevel,
                 mediaResolution: runtimeConfig.llm.mediaResolution,
@@ -168,15 +169,44 @@ export class BrowserProvider implements AIProvider {
     }
 }
 
+function visionProviderForSlot(slot: BrowserAgentModelSettings, slotLabel: string): VisionProvider {
+    if (slot.provider === 'google' || slot.provider === 'codex') {
+        return slot.provider
+    }
+    throw new Error(`Browser agent ${slotLabel} model must use the Google (Gemini API) or Codex CLI provider; got "${slot.provider}".`)
+}
+
+/** Validates credentials for exactly the providers the active slots use. */
+function ensureVisionCredentials(providers: VisionProvider[]) {
+    if (providers.includes('google')) {
+        const googleApiKey = getApiKey('google')
+        if (!googleApiKey) {
+            throw new Error('Browser agent requires GEMINI_API_KEY because a configured vision slot uses Gemini.')
+        }
+        process.env.GEMINI_API_KEY = googleApiKey
+    }
+
+    if (providers.includes('codex')) {
+        prepareCodexRuntimeHome()
+        if (!codexAuthFileExists()) {
+            throw new Error('Browser agent requires a logged-in Codex CLI because a configured vision slot uses Codex. Sign in via Settings → CLI auth or run `codex login`.')
+        }
+    }
+}
+
 function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
     const appConfig = getConfig()
     const light = appConfig.browserAgent.light
     const pro = appConfig.browserAgent.pro
+    const proEnabled = appConfig.browserAgent.proEnabled
     const legacyBrowserOptions = appConfig.agentOverrides.browser_agent?.modelOptions
     const liveView = parseBooleanEnv(process.env.BROWSER_AGENT_LIVE_VIEW, process.platform === 'linux')
-    if (light.provider !== 'google' || pro.provider !== 'google') {
-        throw new Error('Browser agent currently supports Google/Gemini models only.')
-    }
+
+    const lightProvider = visionProviderForSlot(light, 'light')
+    // The pro slot only runs when escalation is enabled; don't block tasks on a
+    // misconfigured/unauthenticated provider that will never be used.
+    const proProvider = proEnabled ? visionProviderForSlot(pro, 'pro') : lightProvider
+    ensureVisionCredentials(proEnabled ? [lightProvider, proProvider] : [lightProvider])
 
     return {
         browser: {
@@ -195,24 +225,29 @@ function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
             actionSettleDelayMs: 1000,
         },
         llm: {
+            provider: lightProvider,
             model: light.model,
-            thinkingLevel: mapThinkingLevel(light.thinkingLevel),
+            thinkingLevel: mapThinkingLevel(light.thinkingLevel, lightProvider),
             mediaResolution: mapMediaResolution(light.modelOptions?.media_resolution ?? legacyBrowserOptions?.media_resolution),
+            advancedProvider: proProvider,
             advancedModel: pro.model,
-            advancedThinkingLevel: mapAdvancedThinkingLevel(pro.thinkingLevel),
+            advancedThinkingLevel: mapAdvancedThinkingLevel(pro.thinkingLevel, proProvider),
             advancedMediaResolution: mapMediaResolution(pro.modelOptions?.media_resolution ?? legacyBrowserOptions?.media_resolution),
-            escalationEnabled: appConfig.browserAgent.proEnabled,
+            escalationEnabled: proEnabled,
         },
     }
 }
 
-function mapThinkingLevel(level: ThinkingLevel | undefined): BrowserThinkingLevel {
+function mapThinkingLevel(level: ThinkingLevel | undefined, provider: VisionProvider): BrowserThinkingLevel {
     if (level === 'minimal' || level === 'low' || level === 'medium' || level === 'high') return level
+    // xhigh only exists on codex models; Gemini degrades to high.
+    if (level === 'xhigh') return provider === 'codex' ? 'xhigh' : 'high'
     return 'high'
 }
 
-function mapAdvancedThinkingLevel(level: ThinkingLevel | undefined): BrowserAdvancedThinkingLevel {
+function mapAdvancedThinkingLevel(level: ThinkingLevel | undefined, provider: VisionProvider): BrowserAdvancedThinkingLevel {
     if (level === 'low' || level === 'medium' || level === 'high') return level
+    if (level === 'xhigh') return provider === 'codex' ? 'xhigh' : 'high'
     if (level === 'minimal') return 'low'
     return 'high'
 }

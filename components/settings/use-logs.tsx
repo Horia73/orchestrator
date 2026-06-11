@@ -5,6 +5,7 @@ import type {
     RequestLogRow,
     ToolLogRow,
     LogsQuery,
+    RequestLogInput,
 } from "@/lib/observability/schema"
 import type { Message } from "@/lib/types"
 
@@ -308,6 +309,7 @@ export interface RequestDetail {
     log: RequestLogRow
     toolLogs: ToolLogRow[]
     transcript: RequestLogTranscript | null
+    input: RequestLogInput | null
 }
 
 export type RequestLogTranscript =
@@ -316,33 +318,79 @@ export type RequestLogTranscript =
         assistantMessage: Message
     }
 
-/** Lazy-load a single request's detail (tool calls). */
-export function useRequestDetail(requestId: string | null): {
+const DETAIL_POLL_MS = 1200
+
+/**
+ * Lazy-load a single request's detail (tool calls, transcript, full input).
+ *
+ * While the row is still streaming (`live`), poll the detail in the background
+ * so tool calls — written to the DB as each tool finishes — show up in the
+ * expanded panel without the user having to collapse and re-expand it. The
+ * very first load (per request) shows the spinner; every subsequent refresh
+ * (live polls + the one final pull after the stream ends, when the output text
+ * and reasoning are persisted) updates silently so the panel never flashes.
+ */
+export function useRequestDetail(requestId: string | null, options?: { live?: boolean }): {
     data: RequestDetail | null
     loading: boolean
     error: string | null
 } {
+    const live = options?.live ?? false
     const [data, setData] = React.useState<RequestDetail | null>(null)
     const [loading, setLoading] = React.useState(false)
     const [error, setError] = React.useState<string | null>(null)
 
+    // Whether we already hold data for the CURRENT request. Survives the effect
+    // re-run triggered by `live` flipping (so the post-stream refresh stays
+    // background) while resetting when the request id changes.
+    const loadedForRef = React.useRef<string | null>(null)
+
     React.useEffect(() => {
-        if (!requestId) { setData(null); return }
+        if (!requestId) { setData(null); loadedForRef.current = null; return }
         let cancelled = false
-        setLoading(true)
-        fetch(`/api/logs/${encodeURIComponent(requestId)}`)
-            .then(async res => {
-                if (!res.ok) throw new Error(`Failed (${res.status})`)
-                return res.json() as Promise<RequestDetail>
-            })
-            .then(json => { if (!cancelled) { setData(json); setError(null) } })
-            .catch((err: unknown) => {
-                if (cancelled) return
-                setError(err instanceof Error ? err.message : "Unknown error")
-            })
-            .finally(() => { if (!cancelled) setLoading(false) })
-        return () => { cancelled = true }
-    }, [requestId])
+        let timer: number | null = null
+
+        const fetchDetail = (foreground: boolean) => {
+            if (foreground) setLoading(true)
+            fetch(`/api/logs/${encodeURIComponent(requestId)}`)
+                .then(async res => {
+                    if (!res.ok) throw new Error(`Failed (${res.status})`)
+                    return res.json() as Promise<RequestDetail>
+                })
+                .then(json => {
+                    if (cancelled) return
+                    loadedForRef.current = requestId
+                    setData(json)
+                    setError(null)
+                    // Self-stop once the run is no longer streaming, even if the
+                    // parent hasn't yet flipped `live` from its list refresh.
+                    if (json.log.status !== "streaming" && timer !== null) {
+                        window.clearInterval(timer)
+                        timer = null
+                    }
+                })
+                .catch((err: unknown) => {
+                    // A background refresh that fails must not replace good data
+                    // with an error banner — only the first load surfaces errors.
+                    if (cancelled || !foreground) return
+                    setError(err instanceof Error ? err.message : "Unknown error")
+                })
+                .finally(() => { if (!cancelled && foreground) setLoading(false) })
+        }
+
+        // Spinner only the first time we load this request; the live polls and
+        // the final post-stream pull are silent background refreshes.
+        fetchDetail(loadedForRef.current !== requestId)
+
+        if (live) {
+            timer = window.setInterval(() => fetchDetail(false), DETAIL_POLL_MS)
+        }
+
+        return () => {
+            cancelled = true
+            if (timer !== null) window.clearInterval(timer)
+        }
+    }, [requestId, live])
 
     return { data, loading, error }
 }

@@ -6,7 +6,7 @@ import { CalendarDays, Flame } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { SectionCard } from "@/components/workouts/section-card"
 
-const WEEKS = 16
+const WEEKS = 26
 const DAY_MS = 86_400_000
 const WEEKDAY_LABELS = ["M", "T", "W", "T", "F", "S", "S"]
 const MONTH_LABELS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"]
@@ -45,34 +45,40 @@ export function TrainingCalendar({
                 </div>
             }
             className={className}
-            contentClassName="flex flex-col gap-2 px-4 py-3.5"
+            contentClassName="flex flex-col justify-center gap-3 px-4 py-4"
         >
-            <div className="flex gap-1.5 overflow-x-auto">
-                <div className="flex flex-col gap-[3px] pr-0.5">
-                    <span className="h-[12px]" aria-hidden />
-                    {WEEKDAY_LABELS.map((label, i) => (
-                        <span
-                            key={i}
-                            className="flex h-[13px] items-center text-[8.5px] leading-none text-muted-foreground/55"
-                        >
-                            {i % 2 === 1 ? label : ""}
-                        </span>
-                    ))}
+            {/* Cells stretch to fill the panel width (flex-1 columns + square
+                cells), so the heatmap grows with the available space instead of
+                sitting in a fixed-size block. The weekday rail mirrors the row
+                structure with flex-1 rows so its labels stay aligned at any size. */}
+            <div className="flex gap-2">
+                <div className="flex flex-col gap-1 pr-0.5">
+                    <span className="h-3" aria-hidden />
+                    <div className="flex flex-1 flex-col gap-1">
+                        {WEEKDAY_LABELS.map((label, i) => (
+                            <span
+                                key={i}
+                                className="flex flex-1 items-center text-[10px] leading-none text-muted-foreground/55"
+                            >
+                                {i % 2 === 1 ? label : ""}
+                            </span>
+                        ))}
+                    </div>
                 </div>
-                <div className="flex flex-col gap-[3px]">
-                    <div className="flex gap-[3px]" aria-hidden>
+                <div className="flex min-w-0 flex-1 flex-col gap-1">
+                    <div className="flex h-3 gap-1" aria-hidden>
                         {model.monthLabels.map((label, ci) => (
                             <span
                                 key={ci}
-                                className="h-[12px] w-[13px] overflow-visible whitespace-nowrap text-[8.5px] leading-none text-muted-foreground/55"
+                                className="min-w-0 flex-1 overflow-visible whitespace-nowrap text-[10px] leading-none text-muted-foreground/55"
                             >
                                 {label}
                             </span>
                         ))}
                     </div>
-                    <div className="flex gap-[3px]">
+                    <div className="flex gap-1">
                         {model.columns.map((col, ci) => (
-                            <div key={ci} className="flex flex-col gap-[3px]">
+                            <div key={ci} className="flex min-w-0 flex-1 flex-col gap-1">
                                 {col.map((cell, ri) => (
                                     <Cell key={ri} cell={cell} />
                                 ))}
@@ -82,10 +88,10 @@ export function TrainingCalendar({
                 </div>
             </div>
 
-            <div className="flex items-center justify-end gap-1.5 text-[9.5px] text-muted-foreground/65">
+            <div className="flex items-center justify-end gap-1.5 text-[10px] text-muted-foreground/65">
                 <span>less</span>
                 {[0, 1, 2, 3].map((level) => (
-                    <span key={level} className={cn("size-[11px] rounded-[3px]", LEVEL_CLASS[level])} />
+                    <span key={level} className={cn("size-3 rounded-[4px]", LEVEL_CLASS[level])} />
                 ))}
                 <span>more</span>
             </div>
@@ -137,7 +143,7 @@ const LEVEL_CLASS: Record<number, string> = {
 
 function Cell({ cell }: { cell: DayCell }) {
     if (cell.date === null || cell.isFuture) {
-        return <span className="size-[13px] rounded-[3px] bg-transparent" aria-hidden />
+        return <span className="aspect-square w-full rounded-[4px] bg-transparent" aria-hidden />
     }
     const level = cell.count === 0 ? 0 : cell.count === 1 ? 1 : cell.count === 2 ? 2 : 3
     const title = `${cell.date} · ${cell.count} session${cell.count === 1 ? "" : "s"}`
@@ -145,7 +151,7 @@ function Cell({ cell }: { cell: DayCell }) {
         <span
             title={title}
             className={cn(
-                "size-[13px] rounded-[3px] transition-colors",
+                "aspect-square w-full rounded-[4px] transition-colors",
                 LEVEL_CLASS[level],
                 cell.isToday && "ring-1 ring-foreground/40 ring-offset-1 ring-offset-card",
             )}

@@ -2,9 +2,11 @@
  * One-time (and repeatable) backfill of the semantic memory index.
  *
  * Embeds every memory source (USER/MEMORY/MONITORS/PLAYBOOKS + the full
- * MEMORY_DAY history + prior conversation messages) that is new or whose
- * content changed since the last run, using the configured embedding model
- * (Gemini Embedding 2 @ 768 by default).
+ * MEMORY_DAY history + prior conversation user→assistant exchanges) that is
+ * new or whose content changed since the last run, using the configured
+ * embedding model (Gemini Embedding 2 @ 768 by default). After the switch to
+ * exchange-granularity indexing, the first run prunes the legacy per-message
+ * sources and embeds the exchange sources in their place.
  * Safe to re-run: unchanged files are skipped via content-hash diffing.
  *
  * Requires a Google/Gemini API key in the environment or workspace .env.local.

@@ -4,7 +4,7 @@
  */
 
 import { ActionTrace, BrowserDiagnosticsSnapshot, BrowserFetchResult, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
-import { VisionService, AgentAction, VisionConfig } from './vision';
+import { VisionService, AgentAction, VisionConfig, VisionCoordinateMode } from './vision';
 import { ActionHistoryItem, IterationLimitReview } from './prompts';
 import { initializeDefaultLearnings, addLearning } from './memory';
 import { recordAgentNeed } from '@/lib/agent-needs';
@@ -37,8 +37,9 @@ export interface AgentControllerOptions {
     stepDelayMs?: number;
     actionSettleDelayMs?: number;
     waitActionDelayMs?: number;
+    advancedProvider?: VisionConfig['provider'];
     advancedModel?: string;
-    advancedThinkingLevel?: 'low' | 'medium' | 'high';
+    advancedThinkingLevel?: 'low' | 'medium' | 'high' | 'xhigh';
     advancedMediaResolution?: VisionConfig['mediaResolution'];
     maxEscalationIterations?: number;
     /** When false, the base model runs solo: no escalate action, no advanced model. */
@@ -117,6 +118,7 @@ export function createAgentController(
     const stepDelayMs = options.stepDelayMs ?? 500;
     const actionSettleDelayMs = options.actionSettleDelayMs ?? 1000;
     const waitActionDelayMs = options.waitActionDelayMs ?? 3000;
+    const advancedProvider = options.advancedProvider ?? 'google';
     const advancedModel = options.advancedModel ?? 'gemini-3.1-pro-preview';
     const advancedThinkingLevel = options.advancedThinkingLevel ?? 'low';
     const advancedMediaResolution = options.advancedMediaResolution ?? 'medium';
@@ -140,6 +142,7 @@ export function createAgentController(
         active: boolean;
         previousGoal: string;
         subObjective: string;
+        baseProvider: VisionConfig['provider'];
         baseModel: string;
         baseThinkingLevel: VisionConfig['thinkingLevel'];
         baseMediaResolution: VisionConfig['mediaResolution'];
@@ -161,6 +164,7 @@ export function createAgentController(
         }
 
         vision.updateConfig({
+            provider: escalationState.baseProvider,
             model: escalationState.baseModel,
             thinkingLevel: escalationState.baseThinkingLevel,
             mediaResolution: escalationState.baseMediaResolution
@@ -443,6 +447,7 @@ export function createAgentController(
                                 active: true,
                                 previousGoal: currentGoal!,
                                 subObjective: subObj,
+                                baseProvider: currentConfig.provider,
                                 baseModel: currentConfig.model,
                                 baseThinkingLevel: currentConfig.thinkingLevel,
                                 baseMediaResolution: currentConfig.mediaResolution,
@@ -450,6 +455,7 @@ export function createAgentController(
                             };
 
                             vision.updateConfig({
+                                provider: advancedProvider,
                                 model: advancedModel,
                                 thinkingLevel: advancedThinkingLevel,
                                 mediaResolution: advancedMediaResolution
@@ -504,6 +510,7 @@ export function createAgentController(
                             actionSettleDelayMs,
                             waitActionDelayMs,
                             onEvidence,
+                            coordinateMode: vision.getCoordinateMode(),
                         });
                         const success = execution.success;
                         pendingTrace = execution.trace;
@@ -757,14 +764,34 @@ function denormalize(coordinate: [number, number], width: number, height: number
     return [pixelX, pixelY];
 }
 
-async function resolveCoordinate(browser: BrowserPageSession, coordinate: [number, number]): Promise<[number, number]> {
+function clampToViewport(coordinate: [number, number], width: number, height: number): [number, number] {
+    const [x, y] = coordinate;
+    const pixelX = Math.min(Math.max(Math.round(x), 0), Math.max(0, width - 1));
+    const pixelY = Math.min(Math.max(Math.round(y), 0), Math.max(0, height - 1));
+    return [pixelX, pixelY];
+}
+
+async function resolveCoordinate(
+    browser: BrowserPageSession,
+    coordinate: [number, number],
+    mode: VisionCoordinateMode = 'normalized'
+): Promise<[number, number]> {
     const viewport = await browser.getViewport();
-    return denormalize(coordinate, viewport.width, viewport.height);
+    // 'pixel' backends (Codex/GPT-5.5) emit coordinates already in viewport
+    // pixels — only clamp; 'normalized' backends (Gemini) emit 0-1000.
+    return mode === 'pixel'
+        ? clampToViewport(coordinate, viewport.width, viewport.height)
+        : denormalize(coordinate, viewport.width, viewport.height);
 }
 
 function sleep(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
 }
+
+export const browserAgentCoordinateTestHooks = {
+    denormalize,
+    clampToViewport,
+};
 
 function recordBrowserIterationLimitNeed(
     review: IterationLimitReview,
@@ -1005,13 +1032,14 @@ async function executeAction(
         actionSettleDelayMs: number;
         waitActionDelayMs: number;
         onEvidence?: (capture: BrowserEvidenceCapture) => void | Promise<void>;
+        coordinateMode?: VisionCoordinateMode;
     }
 ): Promise<ActionExecutionResult> {
     try {
         switch (action.action) {
             case 'click':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const count = action.clickCount || 1;
                     const countStr = count > 1 ? ` (x${count})` : '';
                     onStatusUpdate(`🖱️  Clicking at [${x}, ${y}]${countStr} (from ${action.coordinate})`);
@@ -1023,7 +1051,7 @@ async function executeAction(
 
             case 'hover':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     onStatusUpdate(`🖱️  Hovering at [${x}, ${y}]`);
                     await browser.hoverCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
@@ -1126,7 +1154,7 @@ async function executeAction(
 
             case 'hold':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const holdDuration = action.durationMs || 10000;
                     onStatusUpdate(`🖱️  Holding at [${x}, ${y}] for ${holdDuration}ms`);
                     const result = await browser.holdCoordinate(x, y, holdDuration);
@@ -1141,8 +1169,8 @@ async function executeAction(
 
             case 'drag':
                 if (action.coordinate && action.coordinateEnd) {
-                    const [startX, startY] = await resolveCoordinate(browser, action.coordinate);
-                    const [endX, endY] = await resolveCoordinate(browser, action.coordinateEnd);
+                    const [startX, startY] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
+                    const [endX, endY] = await resolveCoordinate(browser, action.coordinateEnd, timing.coordinateMode);
                     const dragDuration = action.durationMs || 900;
                     onStatusUpdate(`🖱️  Dragging from [${startX}, ${startY}] to [${endX}, ${endY}] over ${dragDuration}ms`);
                     const result = await browser.dragCoordinate(startX, startY, endX, endY, dragDuration);
@@ -1157,7 +1185,7 @@ async function executeAction(
 
             case 'clear':
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     onStatusUpdate(`🖱️  Clicking [${x}, ${y}] to focus before clearing`);
                     await browser.clickCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);
@@ -1169,7 +1197,7 @@ async function executeAction(
             case 'type':
                 if (action.text) {
                     if (action.coordinate) {
-                        const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                        const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                         onStatusUpdate(`🖱️  Clicking [${x}, ${y}] to focus`);
                         await browser.clickCoordinate(x, y);
                         await sleep(timing.actionSettleDelayMs);
@@ -1212,7 +1240,7 @@ async function executeAction(
             case 'scroll': {
                 const amountText = action.scrollAmount ? ` by ${action.scrollAmount}px` : '';
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     onStatusUpdate(`🖱️  Hovering at [${x}, ${y}] before scroll (from ${action.coordinate})`);
                     await browser.hoverCoordinate(x, y);
                     await sleep(300);
@@ -1354,7 +1382,7 @@ async function executeAction(
             case 'getLink': {
                 let linkToCopy: string | null = null;
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     linkToCopy = await browser.getHrefAt(x, y);
                     onStatusUpdate(`🔗 Checked link at [${x}, ${y}]`);
                 }
@@ -1389,7 +1417,7 @@ async function executeAction(
                 }
 
                 if (action.coordinate) {
-                    const [x, y] = await resolveCoordinate(browser, action.coordinate);
+                    const [x, y] = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     onStatusUpdate(`🖱️ Clicking to focus for paste at [${x}, ${y}]`);
                     await browser.clickCoordinate(x, y);
                     await sleep(timing.actionSettleDelayMs);

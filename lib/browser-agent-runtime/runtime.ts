@@ -5,7 +5,7 @@
 import { AgentController, ResetContextOptions, createAgentController } from './agent';
 import type { AgentTerminalAction, BrowserEvidenceCapture } from './agent';
 import { BrowserManager, BrowserPageSession, createBrowserManager } from './browser';
-import { AgentConfig, type MediaResolutionLevel } from './config';
+import { AgentConfig, type MediaResolutionLevel, type ThinkingLevel, type VisionProvider } from './config';
 import { clearLearnings } from './memory';
 import { DEFAULT_VIEWPORT } from './viewport';
 import { VisionService, VisionUsage, createVisionService } from './vision';
@@ -13,8 +13,9 @@ import { VisionService, VisionUsage, createVisionService } from './vision';
 export interface SubmitTaskOptions {
     cleanContext?: boolean;
     preserveContext?: boolean;
+    provider?: VisionProvider;
     model?: string;
-    thinkingLevel?: 'minimal' | 'low' | 'medium' | 'high';
+    thinkingLevel?: ThinkingLevel;
     mediaResolution?: MediaResolutionLevel;
 }
 
@@ -39,7 +40,7 @@ export interface TaskUsageSummary {
     finishedAt: string | null;
     status: 'running' | 'completed' | 'awaiting_user' | 'interrupted' | 'stopped' | 'error';
     model: string;
-    thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
+    thinkingLevel: ThinkingLevel;
     totals: UsageTotals;
     byModel: Record<string, UsageTotals>;
 }
@@ -56,8 +57,9 @@ export interface AgentRuntimeStatus {
     lastStatusMessage: string | null;
     lastTerminalAction: AgentTerminalAction | null;
     llm: {
+        provider: VisionProvider;
         model: string;
-        thinkingLevel: 'minimal' | 'low' | 'medium' | 'high';
+        thinkingLevel: ThinkingLevel;
         mediaResolution: MediaResolutionLevel;
     };
     usage: {
@@ -250,6 +252,7 @@ export function createAgentRuntime(
             }
 
             vision = createVisionService({
+                provider: config.llm.provider,
                 model: config.llm.model,
                 thinkingLevel: config.llm.thinkingLevel,
                 mediaResolution: config.llm.mediaResolution,
@@ -264,6 +267,7 @@ export function createAgentRuntime(
                 stepDelayMs: config.runtime.stepDelayMs,
                 actionSettleDelayMs: config.runtime.actionSettleDelayMs,
                 waitActionDelayMs: config.runtime.waitActionDelayMs,
+                advancedProvider: config.llm.advancedProvider,
                 advancedModel: config.llm.advancedModel,
                 advancedThinkingLevel: config.llm.advancedThinkingLevel,
                 advancedMediaResolution: config.llm.advancedMediaResolution,
@@ -301,6 +305,9 @@ export function createAgentRuntime(
                 finalizeActiveTask(agent.isRunning() ? 'interrupted' : 'completed');
             }
 
+            if (typeof options.provider === 'string' && options.provider.trim()) {
+                vision.updateConfig({ provider: options.provider });
+            }
             if (typeof options.model === 'string' && options.model.trim()) {
                 vision.updateConfig({ model: options.model.trim() });
             }
@@ -351,6 +358,9 @@ export function createAgentRuntime(
             if (activeTaskUsage) {
                 finalizeActiveTask('stopped');
             }
+            // Interrupt any in-flight model turn (e.g. a long xhigh codex turn)
+            // so the loop notices the stop without waiting for the response.
+            vision?.cancelActive?.();
             agent?.stop();
         },
 
@@ -443,6 +453,7 @@ export function createAgentRuntime(
                     lastStatusMessage,
                     lastTerminalAction,
                     llm: {
+                        provider: config.llm.provider,
                         model: config.llm.model,
                         thinkingLevel: config.llm.thinkingLevel,
                         mediaResolution: config.llm.mediaResolution,
@@ -483,6 +494,7 @@ export function createAgentRuntime(
                 lastStatusMessage,
                 lastTerminalAction,
                 llm: {
+                    provider: llmConfig.provider,
                     model: llmConfig.model,
                     thinkingLevel: llmConfig.thinkingLevel,
                     mediaResolution: llmConfig.mediaResolution,
@@ -515,6 +527,13 @@ export function createAgentRuntime(
             if (closeBrowserOnShutdown) {
                 browserManager = null;
                 browser = null;
+            }
+            // Release backend resources (kills the codex app-server process and
+            // removes its temp frame files; no-op for Gemini).
+            try {
+                await vision?.dispose?.();
+            } catch (error) {
+                console.warn('[browser-agent] vision dispose failed:', error);
             }
             vision = null;
             agent = null;

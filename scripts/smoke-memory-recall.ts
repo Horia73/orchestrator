@@ -89,7 +89,7 @@ async function main(): Promise<void> {
     hugeChunks[0]?.text.length
   )
 
-  // --- conversation sources ------------------------------------------------
+  // --- conversation sources: EXCHANGE granularity ---------------------------
   const { createConversation } = await import("@/lib/db")
   createConversation({
     id: "conv_memory_smoke",
@@ -112,33 +112,81 @@ async function main(): Promise<void> {
         ],
         timestamp: 1_735_689_600_000,
       },
+      {
+        id: "msg_memory_smoke_reply",
+        role: "assistant",
+        content: "Saved the green tile photo to the kitchen moodboard notes.",
+        timestamp: 1_735_689_660_000,
+      },
     ],
   })
+  // One source per user→assistant exchange, anchored on the FIRST message id.
   const conversationSource = "conversation:conv_memory_smoke:msg_memory_smoke_user"
+  const allSources = recall.listMemorySources()
   check(
-    "listMemorySources includes user conversation messages",
-    recall.listMemorySources().includes(conversationSource),
-    recall.listMemorySources()
+    "conversation history indexes ONE exchange source (user+assistant paired)",
+    allSources.includes(conversationSource) &&
+      !allSources.some((s) => s.includes("msg_memory_smoke_reply")),
+    allSources.filter((s) => s.startsWith("conversation:"))
   )
+  const exchangeContent = [
+    "Conversation: Kitchen moodboard",
+    "Conversation ID: conv_memory_smoke",
+    "Message ID: msg_memory_smoke_user",
+    "Date: 2025-01-01T00:00:00.000Z",
+    "Attachments: tile.png",
+    "",
+    "User: Remember the green tile photo for the kitchen moodboard.",
+    "",
+    "Assistant: Saved the green tile photo to the kitchen moodboard notes.",
+  ].join("\n")
   const conversationChunks = recall.chunkConversationContent(
     conversationSource,
+    exchangeContent
+  )
+  check(
+    "short exchange chunks question + answer TOGETHER in one chunk",
+    conversationChunks.length === 1 &&
+      conversationChunks[0].text.includes("Remember the green tile") &&
+      conversationChunks[0].text.includes("Saved the green tile"),
+    conversationChunks
+  )
+  check(
+    "exchange chunk keeps conversation title + date + attachment context, no role title",
+    conversationChunks[0]?.title.includes("Kitchen moodboard") &&
+      /· 2025-01-01$/.test(conversationChunks[0]?.title ?? "") &&
+      !(conversationChunks[0]?.title ?? "").includes("Assistant") &&
+      conversationChunks[0]?.text.includes("tile.png"),
+    conversationChunks[0]
+  )
+  // A long exchange splits, but every answer fragment is re-anchored with the
+  // user's question.
+  const longAnswer = Array.from(
+    { length: 4 },
+    (_, i) => `Paragraph ${i} about panel layout. ${"detail ".repeat(250)}`
+  ).join("\n\n")
+  const longChunks = recall.chunkConversationContent(
+    "conversation:conv_memory_smoke:msg_long",
     [
-      "Conversation: Kitchen moodboard",
+      "Conversation: Solar planning",
       "Conversation ID: conv_memory_smoke",
-      "Message ID: msg_memory_smoke_user",
-      "Date: 2025-01-01T00:00:00.000Z",
-      "Role: User",
-      "Attachments: tile.png",
+      "Message ID: msg_long",
+      "Date: 2025-01-02T00:00:00.000Z",
       "",
-      "Remember the green tile photo for the kitchen moodboard.",
+      "User: What is the final plan for the solar install?",
+      "",
+      `Assistant: ${longAnswer}`,
     ].join("\n")
   )
   check(
-    "chunkConversationContent keeps conversation title + attachment context",
-    conversationChunks.length === 1 &&
-      conversationChunks[0].title.includes("Kitchen moodboard") &&
-      conversationChunks[0].text.includes("tile.png"),
-    conversationChunks
+    "long exchange splits into multiple chunks",
+    longChunks.length > 1,
+    longChunks.length
+  )
+  check(
+    "every fragment of a long answer carries the user-question anchor",
+    longChunks.every((c) => c.text.includes("final plan for the solar install")),
+    longChunks.map((c) => c.text.slice(0, 80))
   )
 
   // --- hot/cold tier: inContextSources exclusion + indexing ----------------
@@ -324,6 +372,110 @@ async function main(): Promise<void> {
   check(
     "selectDiverse passes through vectorless hits",
     recall.selectDiverse(cand, new Map(), 4).length === 3
+  )
+
+  // --- resolveVersionClusters: authority tiers + version folding -----------
+  check(
+    "chunkDateStamp reads daily filenames and conversation chunk titles",
+    recall.chunkDateStamp("MEMORY_DAY/2026-06-08.md", "t") === "2026-06-08" &&
+      recall.chunkDateStamp("conversation:c:m", "Conversation › T · 2026-06-07") ===
+        "2026-06-07" &&
+      recall.chunkDateStamp("MEMORY.md", "MEMORY.md › X") === null
+  )
+
+  // 1. Curated beats raw: a daily-ledger line wins its cluster over a raw
+  //    conversation exchange about the same topic; unrelated hits survive.
+  const vSolarRaw = unit([1, 0.05, 0, 0])
+  const vSolarCurated = unit([1, 0, 0.05, 0]) // ~0.995 to vSolarRaw -> clusters
+  const vPool = unit([0, 0, 1, 0]) // orthogonal -> own cluster
+  const tierCand = [
+    {
+      id: "raw",
+      source: "conversation:c9:m1",
+      title: "Conversation › Solar · 2026-06-07",
+      text: "User: go 10kW Assistant: noted 10kW",
+      score: 0.85,
+    },
+    {
+      id: "curated",
+      source: "MEMORY_DAY/2026-06-05.md",
+      title: "t",
+      text: "Solar: final decision 8kW after installer call",
+      score: 0.8,
+    },
+    {
+      id: "pool",
+      source: "conversation:c9:m9",
+      title: "Conversation › Pool · 2026-06-01",
+      text: "pool heater notes",
+      score: 0.7,
+    },
+  ]
+  const tierVecs = new Map<string, Float32Array>([
+    ["raw", vSolarRaw],
+    ["curated", vSolarCurated],
+    ["pool", vPool],
+  ])
+  const tierResolved = recall.resolveVersionClusters(tierCand, tierVecs, 4)
+  check(
+    "version clusters: curated daily note beats raw exchange, unrelated survives",
+    tierResolved.some((h) => h.id === "curated") &&
+      tierResolved.every((h) => h.id !== "raw") &&
+      tierResolved.some((h) => h.id === "pool"),
+    tierResolved.map((h) => h.id)
+  )
+
+  // 2. Raw-only cluster: the NEWEST version represents it (even at a lower
+  //    score), and the older version folds into the same hit, date visible.
+  //    Similarity ~0.84: above the same-conversation bar (0.80), below the
+  //    cross-source bar (0.90).
+  const vNew = unit([1, 0, 0, 0])
+  const vOld = unit([0.85, 0.55, 0, 0]) // cosine ~0.84 to vNew
+  const rawVersions = [
+    {
+      id: "older",
+      source: "conversation:c9:m1",
+      title: "Conversation › Solar · 2026-06-03",
+      text: "User: 10kW please Assistant: noted 10kW",
+      score: 0.84,
+    },
+    {
+      id: "newer",
+      source: "conversation:c9:m5",
+      title: "Conversation › Solar · 2026-06-07",
+      text: "User: actually make it 12kW Assistant: switched the plan to 12kW",
+      score: 0.8,
+    },
+  ]
+  const rawVecs = new Map<string, Float32Array>([
+    ["older", vOld],
+    ["newer", vNew],
+  ])
+  const rawResolved = recall.resolveVersionClusters(rawVersions, rawVecs, 4)
+  check(
+    "raw versions: newest wins despite lower score, older folds in with date",
+    rawResolved.length === 1 &&
+      rawResolved[0].id === "newer" &&
+      rawResolved[0].text.includes("12kW") &&
+      rawResolved[0].text.includes("2026-06-03") &&
+      rawResolved[0].text.includes("10kW"),
+    rawResolved
+  )
+
+  // 3. The same ~0.84 similarity across DIFFERENT conversations stays below the
+  //    strict cross-source bar: no cluster, both hits survive.
+  const crossVersions = rawVersions.map((h, i) =>
+    i === 0 ? { ...h, source: "conversation:c8:m1" } : h
+  )
+  check(
+    "cross-conversation clustering bar is stricter (~0.84 does not merge)",
+    recall.resolveVersionClusters(crossVersions, rawVecs, 4).length === 2
+  )
+
+  // Vectorless hits pass through as their own clusters.
+  check(
+    "resolveVersionClusters passes through vectorless hits",
+    recall.resolveVersionClusters(rawVersions, new Map(), 4).length === 2
   )
 
   // --- silent-pass precision filters: assistant turns, age penalty, top gap ---

@@ -23,16 +23,19 @@ export interface RuntimeConfig {
     cleanContextBeforeTask: boolean;
 }
 
-export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high';
-export type AdvancedThinkingLevel = 'low' | 'medium' | 'high';
+export type ThinkingLevel = 'minimal' | 'low' | 'medium' | 'high' | 'xhigh';
+export type AdvancedThinkingLevel = 'low' | 'medium' | 'high' | 'xhigh';
 export type MediaResolutionLevel = 'low' | 'medium' | 'high';
 export type BrowserBackend = 'patchright';
 export type BrowserBackendPreference = BrowserBackend;
+export type VisionProvider = 'google' | 'codex';
 
 export interface LlmConfig {
+    provider: VisionProvider;
     model: string;
     thinkingLevel: ThinkingLevel;
     mediaResolution: MediaResolutionLevel;
+    advancedProvider: VisionProvider;
     advancedModel: string;
     advancedThinkingLevel: AdvancedThinkingLevel;
     advancedMediaResolution: MediaResolutionLevel;
@@ -87,9 +90,11 @@ export const DEFAULT_AGENT_CONFIG: AgentConfig = {
         cleanContextBeforeTask: false,
     },
     llm: {
+        provider: 'google',
         model: 'gemini-3-flash-preview',
         thinkingLevel: 'low',
         mediaResolution: 'high',
+        advancedProvider: 'google',
         advancedModel: 'gemini-3.1-pro-preview',
         advancedThinkingLevel: 'low',
         advancedMediaResolution: 'high',
@@ -132,7 +137,7 @@ function parseThinkingLevel(value: string | undefined): ThinkingLevel | undefine
     }
 
     const normalized = value.trim().toLowerCase();
-    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high') {
+    if (normalized === 'minimal' || normalized === 'low' || normalized === 'medium' || normalized === 'high' || normalized === 'xhigh') {
         return normalized;
     }
 
@@ -141,8 +146,21 @@ function parseThinkingLevel(value: string | undefined): ThinkingLevel | undefine
 
 function parseAdvancedThinkingLevel(value: string | undefined): AdvancedThinkingLevel | undefined {
     const parsed = parseThinkingLevel(value);
-    if (parsed === 'low' || parsed === 'medium' || parsed === 'high') {
+    if (parsed === 'low' || parsed === 'medium' || parsed === 'high' || parsed === 'xhigh') {
         return parsed;
+    }
+
+    return undefined;
+}
+
+function parseVisionProvider(value: string | undefined): VisionProvider | undefined {
+    if (value === undefined) {
+        return undefined;
+    }
+
+    const normalized = value.trim().toLowerCase();
+    if (normalized === 'google' || normalized === 'codex') {
+        return normalized;
     }
 
     return undefined;
@@ -291,9 +309,11 @@ function sanitizeConfig(config: AgentConfig): AgentConfig {
             cleanContextBeforeTask: Boolean(config.runtime.cleanContextBeforeTask),
         },
         llm: {
+            provider: parseVisionProvider(config.llm.provider) || DEFAULT_AGENT_CONFIG.llm.provider,
             model: config.llm.model || DEFAULT_AGENT_CONFIG.llm.model,
             thinkingLevel: parseThinkingLevel(config.llm.thinkingLevel) || DEFAULT_AGENT_CONFIG.llm.thinkingLevel,
             mediaResolution: parseMediaResolutionLevel(config.llm.mediaResolution) || DEFAULT_AGENT_CONFIG.llm.mediaResolution,
+            advancedProvider: parseVisionProvider(config.llm.advancedProvider) || DEFAULT_AGENT_CONFIG.llm.advancedProvider,
             advancedModel: config.llm.advancedModel || DEFAULT_AGENT_CONFIG.llm.advancedModel,
             advancedThinkingLevel: parseAdvancedThinkingLevel(config.llm.advancedThinkingLevel) || DEFAULT_AGENT_CONFIG.llm.advancedThinkingLevel,
             advancedMediaResolution: parseMediaResolutionLevel(config.llm.advancedMediaResolution) || DEFAULT_AGENT_CONFIG.llm.advancedMediaResolution,

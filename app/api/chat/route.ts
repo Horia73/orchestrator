@@ -46,6 +46,7 @@ import {
   logRequestComplete,
   logRequestFail,
   logRequestAbort,
+  logRequestInput,
   logToolCall,
 } from "@/lib/observability/store"
 import { insertArtifact } from "@/lib/artifacts/store"
@@ -1150,6 +1151,28 @@ export async function POST(request: Request) {
 
               try {
                 const resolvedMessages = await buildResolvedMessages()
+                // Snapshot the EXACT input handed to the provider — the full
+                // system prompt and every resolved message with injected
+                // memories / runtime / attachment context already inlined — so
+                // the Logs detail can show what the model actually received,
+                // not just the bare user turn. Best-effort; never blocks the
+                // request (logRequestInput swallows its own failures).
+                logRequestInput({
+                  requestId: messageId,
+                  systemPrompt: prepared.systemPrompt,
+                  messages: resolvedMessages.map((m) => ({
+                    role: m.role,
+                    content: m.content,
+                    attachments: m.attachments?.map((a) => ({
+                      filePath: a.filePath,
+                      mimeType: a.mimeType,
+                    })),
+                  })),
+                  tools: [
+                    ...prepared.agentTools.map((t) => t.name),
+                    ...prepared.agentBuiltins,
+                  ],
+                })
                 await prepared.providerStream.call(
                   prepared.provider,
                   {

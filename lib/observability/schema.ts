@@ -81,6 +81,28 @@ export const LOG_TEXT_MAX_CHARS = 64_000
  *  exceeds this, we skip persisting it rather than store a giant/partial row. */
 export const LOG_REASONING_MAX_CHARS = 200_000
 
+/** Cap each captured full-input field (system prompt, the resolved-messages
+ *  JSON). Big enough to hold a real system prompt + recent history, bounded so
+ *  the per-request input snapshot can't run away on the DB. */
+export const LOG_INPUT_MAX_CHARS = 512_000
+
+/** One resolved message exactly as sent to the provider — content has the
+ *  injected memories / runtime / attachment context already inlined. */
+export interface RequestLogInputMessage {
+    role: string
+    content: string
+    /** Native file attachments handed to the provider (descriptor only). */
+    attachments?: Array<{ filePath?: string; mimeType?: string }>
+}
+
+/** The full input the model received for a request: the exact system prompt,
+ *  the resolved messages, and the tool/builtin names exposed for the turn. */
+export interface RequestLogInput {
+    systemPrompt: string | null
+    messages: RequestLogInputMessage[]
+    tools: string[]
+}
+
 export interface ToolLogRow {
     id: number
     requestId: string

@@ -98,6 +98,20 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           contentSegments TEXT
       );
 
+      -- The full, exact input sent to the provider for a request: the complete
+      -- system prompt and the resolved messages (with injected memories /
+      -- runtime / attachment context already inlined), plus the exposed tool
+      -- names. Kept OUT of request_logs so the list query stays slim; written
+      -- once right before the provider call, read only when a row is expanded
+      -- in the Logs detail. One row per request; cleared with the logs.
+      CREATE TABLE IF NOT EXISTS request_log_input (
+          requestId TEXT PRIMARY KEY,
+          systemPrompt TEXT,
+          messages TEXT,
+          tools TEXT,
+          createdAt INTEGER
+      );
+
       CREATE TABLE IF NOT EXISTS agent_threads (
           id TEXT PRIMARY KEY,
           conversationId TEXT NOT NULL,

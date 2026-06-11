@@ -16,7 +16,7 @@ import {
 } from "lucide-react"
 
 import { cn } from "@/lib/utils"
-import type { RequestLogRow, RequestStatus, ToolLogRow } from "@/lib/observability/schema"
+import type { RequestLogRow, RequestStatus, ToolLogRow, RequestLogInput } from "@/lib/observability/schema"
 import type { Message, ToolCallReasoningEntry } from "@/lib/types"
 import { MessageBubble } from "@/components/message-bubble"
 import { Select as UiSelect } from "@/components/ui/select"
@@ -526,7 +526,7 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
     row: RequestLogRow
     onMeasure: (node: HTMLElement | null) => void
 }) {
-    const { data, loading, error } = useRequestDetail(requestId)
+    const { data, loading, error } = useRequestDetail(requestId, { live: row.status === "streaming" })
     const rootRef = React.useRef<HTMLDivElement>(null)
     // Render nothing heavy until the detail request settles, then fade the whole
     // panel in at once. Showing the transcript/tool-calls as they trickle in is
@@ -643,9 +643,78 @@ function ExpandedDetail({ requestId, row, onMeasure }: {
                     )}
                 </div>
             </div>
+
+            <LogFullInput input={data?.input ?? null} />
             </div>
             </div>
             )}
+        </div>
+    )
+}
+
+function LogFullInput({ input }: { input: RequestLogInput | null }) {
+    const [open, setOpen] = React.useState(false)
+    if (!input || (!input.systemPrompt && input.messages.length === 0)) return null
+
+    const count = (input.systemPrompt ? 1 : 0) + input.messages.length
+    return (
+        <div className="flex flex-col gap-2">
+            <button
+                onClick={() => setOpen(o => !o)}
+                className="flex w-fit items-center gap-1.5 text-[11px] font-medium uppercase tracking-wider text-foreground/50 transition-colors hover:text-foreground/75"
+            >
+                <ChevronRight className={cn("size-3.5 transition-transform", open && "rotate-90")} />
+                Exact model input {count > 0 ? `(${count})` : ""}
+            </button>
+            {open && (
+                <div className="flex flex-col gap-3 rounded-lg border border-border/60 bg-background/50 p-3 animate-in fade-in-0 duration-200">
+                    <p className="text-[11.5px] leading-relaxed text-foreground/45">
+                        The full payload sent to the provider — system prompt and every message with recalled
+                        memories, runtime and attachment context already inlined.
+                    </p>
+                    {input.tools.length > 0 && (
+                        <div>
+                            <div className="mb-1 text-[10.5px] uppercase tracking-wider text-foreground/45">
+                                Tools exposed ({input.tools.length})
+                            </div>
+                            <div className="flex flex-wrap gap-1">
+                                {input.tools.map(t => (
+                                    <code key={t} className="rounded bg-muted px-1.5 py-0.5 text-[10.5px]">{t}</code>
+                                ))}
+                            </div>
+                        </div>
+                    )}
+                    {input.systemPrompt && <InputBlock label="System prompt" content={input.systemPrompt} />}
+                    {input.messages.map((m, i) => (
+                        <InputBlock key={i} label={m.role} content={m.content} attachments={m.attachments} />
+                    ))}
+                </div>
+            )}
+        </div>
+    )
+}
+
+function InputBlock({ label, content, attachments }: {
+    label: string
+    content: string
+    attachments?: Array<{ filePath?: string; mimeType?: string }>
+}) {
+    return (
+        <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-[10.5px] uppercase tracking-wider text-foreground/45">
+                <span>{label}</span>
+                {attachments?.length ? (
+                    <span className="normal-case text-foreground/35">· {attachments.length} attachment{attachments.length === 1 ? "" : "s"}</span>
+                ) : null}
+            </div>
+            <pre className="max-h-72 overflow-auto whitespace-pre-wrap break-words rounded-md bg-muted/50 p-2.5 text-[11.5px] leading-relaxed text-foreground/80">{content || "—"}</pre>
+            {attachments?.length ? (
+                <div className="flex flex-col gap-0.5 text-[10.5px] text-foreground/40">
+                    {attachments.map((a, i) => (
+                        <span key={i} className="truncate">{a.mimeType ?? "file"}{a.filePath ? ` · ${a.filePath}` : ""}</span>
+                    ))}
+                </div>
+            ) : null}
         </div>
     )
 }

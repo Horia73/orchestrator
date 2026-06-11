@@ -6,6 +6,7 @@ import {
   clearAllLogs,
   getFilterOptions,
   getRequestLog,
+  getRequestLogInput,
   getRequestLogReasoning,
   getToolLogsForRequest,
   queryLogs,
@@ -13,7 +14,7 @@ import {
   type LogsPage,
   type RequestLogReasoning,
 } from "./store"
-import type { ToolLogRow } from "./schema"
+import type { RequestLogInput, ToolLogRow } from "./schema"
 
 export interface ProfiledRequestLogRow extends RequestLogRow {
   profileId: string
@@ -25,6 +26,7 @@ export interface ProfiledRequestLogDetail {
   row: ProfiledRequestLogRow
   reasoning: RequestLogReasoning | null
   toolLogs: ToolLogRow[]
+  input: RequestLogInput | null
 }
 
 export function queryLogsAcrossProfiles(q: LogsQuery): LogsPage {
@@ -97,6 +99,7 @@ export function getRequestLogDetailAcrossProfiles(
           row: withProfile(row, profile),
           reasoning: getRequestLogReasoning(requestId),
           toolLogs: getToolLogsForRequest(requestId),
+          input: getRequestLogInput(requestId),
         }
       }
     )

@@ -26,7 +26,7 @@ export async function GET(_request: Request, { params }: { params: Promise<{ id:
                 getRequestTranscript(detail.row)
             )
         )
-        return NextResponse.json({ log: detail.row, toolLogs: detail.toolLogs, transcript })
+        return NextResponse.json({ log: detail.row, toolLogs: detail.toolLogs, transcript, input: detail.input })
   })
 }
 

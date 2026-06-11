@@ -598,7 +598,7 @@ function BrowserModelSlotControls({
   const modelDef = providerDef?.models[value.model]
   const availableThinkingLevels = availableBrowserThinkingLevelsForModel(modelDef)
   const hasThinkingSettings = availableThinkingLevels.length > 0
-  const visibleFeatures = browserVisibleFeatures(modelDef?.features ?? [], hasThinkingSettings)
+  const visibleFeatures = browserVisibleFeatures(value.provider, modelDef?.features ?? [], hasThinkingSettings)
   const effectiveModelOptions = {
     ...defaultBrowserModelOptions(visibleFeatures),
     ...modelOptionsForFeatures(visibleFeatures, value.modelOptions),
@@ -615,7 +615,7 @@ function BrowserModelSlotControls({
       ? effectiveThinkingLevel
       : browserThinkingFallback(nextThinkingLevels)
     const nextHasThinkingSettings = nextThinkingLevels.length > 0
-    const nextVisibleFeatures = browserVisibleFeatures(nextModelDef?.features ?? [], nextHasThinkingSettings)
+    const nextVisibleFeatures = browserVisibleFeatures(providerId, nextModelDef?.features ?? [], nextHasThinkingSettings)
     onChange(slot, {
       provider: providerId,
       model: modelId,
@@ -685,7 +685,8 @@ function BrowserModelSlotControls({
 }
 
 function isBrowserCompatibleModel(option: ModelPickerOption): boolean {
-  return option.providerId === "google" && (option.model.kinds.includes("text") || option.model.capabilities.includes("text"))
+  return (option.providerId === "google" || option.providerId === "codex")
+    && (option.model.kinds.includes("text") || option.model.capabilities.includes("text"))
 }
 
 function isAudioContextCompatibleModel(option: ModelPickerOption): boolean {
@@ -744,7 +745,7 @@ function availableBrowserThinkingLevelsForModel(modelDef: ModelDef | undefined):
 }
 
 function isBrowserRuntimeThinkingLevel(level: ThinkingLevel): boolean {
-  return level === "minimal" || level === "low" || level === "medium" || level === "high"
+  return level === "minimal" || level === "low" || level === "medium" || level === "high" || level === "xhigh"
 }
 
 function browserThinkingFallback(levels: ThinkingLevel[]): ThinkingLevel {
@@ -764,10 +765,12 @@ function defaultBrowserModelOptions(features: NonNullable<ModelDef["features"]>)
 }
 
 function browserVisibleFeatures(
+  providerId: string,
   features: NonNullable<ModelDef["features"]>,
   hasThinkingSettings: boolean
 ): NonNullable<ModelDef["features"]> {
   return visibleModelFeatures(features, hasThinkingSettings)
+    .filter(feature => providerId === "google" || feature.id !== "media_resolution")
     .map(feature => {
       if (feature.id !== "media_resolution" || feature.type !== "enum") return feature
       return {

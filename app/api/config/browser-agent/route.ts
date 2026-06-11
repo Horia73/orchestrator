@@ -43,8 +43,8 @@ export async function PUT(request: Request) {
         if (!isSlot(slot)) {
             return NextResponse.json({ error: 'slot must be "light" or "pro"' }, { status: 400 })
         }
-        if (provider !== 'google') {
-            return NextResponse.json({ error: 'Browser agent currently supports Google/Gemini models only' }, { status: 400 })
+        if (provider !== 'google' && provider !== 'codex') {
+            return NextResponse.json({ error: 'Browser agent supports the Google (Gemini API) and Codex CLI providers only' }, { status: 400 })
         }
         if (typeof model !== 'string') {
             return NextResponse.json({ error: 'model is required' }, { status: 400 })

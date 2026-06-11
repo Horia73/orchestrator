@@ -31,10 +31,18 @@ export function buildMemoryContext(memories: RetrievedMemory): string {
    return blocks.length > 0 ? `\n${blocks.join('\n')}\n` : '';
 }
 
+/**
+ * Coordinate space the model is prompted in. Frames only ever carry the
+ * normalized spaces; 'pixel-viewport' is a prompt-level concept used by
+ * backends whose models ground natively in screenshot pixels (Codex/GPT-5.5).
+ */
+export type PromptCoordinateSpace = BrowserCoordinateSpace | 'pixel-viewport';
+
 export function buildSystemPrompt(
    isAdvancedMode: boolean = false,
-   coordinateSpace: BrowserCoordinateSpace = 'normalized-viewport',
+   coordinateSpace: PromptCoordinateSpace = 'normalized-viewport',
    escalationEnabled: boolean = true,
+   viewport?: { width: number; height: number },
 ): string {
    const now = new Date();
    const timezone = getConfiguredTimezone();
@@ -76,7 +84,15 @@ export function buildSystemPrompt(
       ? '1. **Loop Detection**: If you repeat the same actions with no progress, stop. Escalate to the advanced agent if you feel stuck.'
       : '1. **Loop Detection**: If you repeat the same actions with no progress, stop. Re-evaluate and try a materially different approach — a different element, a refresh, or a new navigation path.';
    const usesFullDisplayBackend = coordinateSpace === 'normalized-display';
-   const coordinateInstructions = usesFullDisplayBackend
+   const usesPixelSpace = coordinateSpace === 'pixel-viewport';
+   const viewportHint = viewport ? `${viewport.width}x${viewport.height}` : 'stated in each frame\'s metadata';
+   const coordinateInstructions = usesPixelSpace
+      ? `2. You output the PIXEL COORDINATES of the element you want to interact with, measured on the screenshot itself.
+   - (0, 0) is the top-left corner of the screenshot.
+   - The bottom-right corner is (width, height) of the viewport (currently ${viewportHint}; each frame's metadata states its exact Viewport dimensions).
+   - Output integer pixel values and aim for the CENTER of the target element.
+   - IMPORTANT: output coordinates ONLY for the final viewport frame, never for an overview frame.`
+      : usesFullDisplayBackend
          ? `2. You estimate the NORMALIZED COORDINATES (0-1000 range) of the element you want to interact with.
    - The screenshot shows the full browser display, including tabs, address bar, toolbar, page content, popups, and context menus.
    - (0, 0) is the top-left corner of the screenshot.
@@ -88,9 +104,11 @@ export function buildSystemPrompt(
    - (1000, 1000) is the Bottom-Right corner.
    - Example directly in the middle: [500, 500].
    - IMPORTANT: output coordinates ONLY for the final viewport frame, never for an overview frame.`;
-   const coordinateAccuracyRule = '1. **Coordinate Accuracy**: Use the 1000x1000 grid system. Be precise.';
-   const coordinateLabel = 'normalized';
-   const coordinateComment = 'Normalized 0-1000';
+   const coordinateAccuracyRule = usesPixelSpace
+      ? '1. **Coordinate Accuracy**: Use exact pixel positions on the final viewport frame; click the center of the target element.'
+      : '1. **Coordinate Accuracy**: Use the 1000x1000 grid system. Be precise.';
+   const coordinateLabel = usesPixelSpace ? 'pixel' : 'normalized';
+   const coordinateComment = usesPixelSpace ? 'Viewport pixels' : 'Normalized 0-1000';
    const inspectPageDoc = usesFullDisplayBackend
       ? '- **inspectPage**: Capture another full display frame for orientation. On this backend it is NOT a DOM full-page screenshot; prefer `findInPage` for exact text and visual scrolling for long pages.'
       : '- **inspectPage**: Request an extra full-page overview screenshot for orientation. Use this when the page is long/wide and the current viewport is not enough to decide where to scroll next, or you just need to get information about the page. This does NOT interact with the page. After using it, you will receive an overview frame plus the normal viewport frame.';
@@ -464,7 +482,8 @@ export function buildActionPrompt(
    actionHistory: ActionHistoryItem[],
    openTabs?: TabInfo[],
    downloads?: BrowserDownloadFile[],
-   escalationEnabled: boolean = true
+   escalationEnabled: boolean = true,
+   coordinateSpace: PromptCoordinateSpace = 'normalized-viewport'
 ): string {
    const recentActions = actionHistory.slice(-ACTION_HISTORY_PROMPT_LIMIT);
    const earlierActions = actionHistory.slice(0, Math.max(0, actionHistory.length - ACTION_HISTORY_PROMPT_LIMIT));
@@ -504,12 +523,16 @@ export function buildActionPrompt(
 
    const downloadContext = formatDownloadContext(downloads);
 
+   const coordinateStep = coordinateSpace === 'pixel-viewport'
+      ? '2. Output PIXEL COORDINATES based only on the final viewport frame (its Viewport WxH is stated in the frame metadata).'
+      : '2. Estimate NORMALIZED COORDINATES (0-1000) based only on the final viewport frame.';
+
    return `## 🎯 GOAL: ${goal}
 ${loopWarning}${unsafeScrollFocusWarning}${tabContext}${downloadContext}${earlierSummary}${historyText}
 
 ## ⚠️ BEFORE YOU ACT:
 1. Review history.
-2. Estimate NORMALIZED COORDINATES (0-1000) based only on the final viewport frame.
+${coordinateStep}
 3. If multiple frames are present, use earlier frames only as orientation/context. Never output coordinates from an overview frame.
 
 Choose one or more actions. Respond with JSON only:`;

@@ -8,21 +8,28 @@
 //  - The index self-heals via content-hash diffing (syncMemoryIndex): whoever
 //    writes a memory file — the agent's Write/Edit tools, the settings UI, a
 //    manual edit — is picked up on the next sync. No write-path hooks needed.
+//  - Conversation history is indexed at EXCHANGE granularity: one source per
+//    user turn + the assistant reply that follows it. A question without its
+//    answer (and vice versa) is semantic noise in isolation; paired, each side
+//    anchors the other. Long exchanges split into paragraph chunks, each
+//    re-anchored with a capped copy of the user's question.
 //  - The automatic per-turn pass (buildRecalledMemoryContext) embeds the user's
 //    message and surfaces older memories that are NOT already in the prompt
 //    (it excludes the durable files + the last 3 daily files, which the prompt
 //    builder already injects). That targets exactly the "months later, similar
 //    thing comes up" case.
 //  - Precision filters keep that pass honest (all silent-pass-only; the explicit
-//    memory_search tool stays wide): assistant-authored conversation chunks are
-//    skipped (long, multi-topic, they paraphrase everything — the dominant
-//    false-positive source), old daily/conversation chunks pay a small age
-//    penalty, candidates far below the turn's best score are dropped
+//    memory_search tool stays wide): old daily/conversation chunks pay a small
+//    age penalty, candidates far below the turn's best score are dropped
 //    (applyTopGap — cosine scores are uncalibrated globally but comparable
-//    within one query), near-duplicate suppression (selectDiverse) collapses
-//    the same fact re-logged across days, and a coverage gate
+//    within one query), same-topic version clusters are resolved
+//    (resolveVersionClusters — curated notes beat raw conversation exchanges;
+//    among raw-only versions the newest is shown with the older folded into the
+//    same hit, dates visible, so the model judges validity), and a coverage gate
 //    (shouldSuppressByCoverage) drops the whole block when a broad,
 //    multi-intent message is matched only by a small tangential slice of memory.
+//    Legacy per-message assistant chunks (pre-exchange index rows) are skipped
+//    outright until the reindex replaces them.
 //  - When the model is multimodal (Gemini) and the turn carries an image/PDF, the
 //    attachment ALSO drives recall (recallByAsset): it embeds into the shared
 //    text+image space to surface (a) older text notes it resembles cross-modally
@@ -177,6 +184,34 @@ const AGE_PENALTY_HORIZON_DAYS = 365
 // the model considers near-identical — e.g. the SAME fact re-logged across
 // several daily files — while distinct same-topic notes survive.
 const DEDUP_SIM = clampNumber(process.env.ORCHESTRATOR_MEMORY_RECALL_DEDUP, 0.92, 0.5, 1)
+
+// Version-cluster thresholds (SILENT pass only, see resolveVersionClusters).
+// Two hits at/above the bar are treated as versions of the same topic. Chunks
+// from the SAME conversation get a lower bar: a correction three turns later
+// ("actually, make it Y") is phrased differently enough that the global bar
+// would miss it, while cross-source clustering must stay strict to avoid
+// merging merely-related notes.
+const CLUSTER_SIM = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_CLUSTER_SIM,
+  0.9,
+  0.5,
+  1
+)
+const CLUSTER_SIM_SAME_CONVERSATION = clampNumber(
+  process.env.ORCHESTRATOR_MEMORY_RECALL_CLUSTER_SIM_LOCAL,
+  0.8,
+  0.5,
+  1
+)
+// O(n²) pairwise dots stay trivial at this size (vectors are already in RAM).
+const CLUSTER_MAX_CANDIDATES = 64
+// Budget for the folded-in older version inside a merged hit, sized so both
+// versions survive formatRecallBlock's MAX_HIT_CHARS clip.
+const CLUSTER_OLDER_VERSION_CHARS = 140
+
+// When a long exchange splits into multiple chunks, every fragment of the
+// answer is re-anchored with this much of the user's question.
+const EXCHANGE_ANCHOR_CHARS = 240
 
 // Coverage gate (SILENT per-turn pass only). A broad, multi-intent message whose
 // recalled hits address only a small tangential slice of it (the classic case:
@@ -414,27 +449,91 @@ function listConversationMemoryRows(): ConversationMemoryRow[] {
   }
 }
 
-function formatConversationSource(row: ConversationMemoryRow): string {
-  const role = row.role === "assistant" ? "Assistant" : "User"
-  const title = row.conversationTitle?.trim() || "Untitled conversation"
-  const date = new Date(row.timestamp).toISOString()
-  const attachments = parseAttachmentNames(row.attachments)
-  const body = stripArtifactBlocksForPreview(row.content ?? "")
+// Conversation history is indexed at EXCHANGE granularity: consecutive user
+// messages + the assistant replies that follow them form ONE source. Isolated
+// messages retrieve badly (a question without its answer, an answer without
+// its question), and isolated assistant prose is the dominant false-positive
+// source. The source id is keyed to the exchange's FIRST message id, so it is
+// stable while the exchange grows: when the assistant reply lands, only that
+// source's content hash changes and it re-embeds in place.
+interface ConversationExchange {
+  conversationId: string
+  conversationTitle: string
+  anchorMessageId: string
+  userParts: string[]
+  assistantParts: string[]
+  attachments: string[]
+  lastTimestamp: number
+}
+
+function groupConversationExchanges(
+  rows: ConversationMemoryRow[]
+): ConversationExchange[] {
+  const byConversation = new Map<string, ConversationMemoryRow[]>()
+  for (const row of rows) {
+    const list = byConversation.get(row.conversationId)
+    if (list) list.push(row)
+    else byConversation.set(row.conversationId, [row])
+  }
+
+  const out: ConversationExchange[] = []
+  for (const list of byConversation.values()) {
+    let current: ConversationExchange | null = null
+    for (const row of list) {
+      // A user message arriving after assistant replies starts a new exchange.
+      if (!current || (row.role === "user" && current.assistantParts.length > 0)) {
+        if (current) out.push(current)
+        current = {
+          conversationId: row.conversationId,
+          conversationTitle: row.conversationTitle,
+          anchorMessageId: row.messageId,
+          userParts: [],
+          assistantParts: [],
+          attachments: [],
+          lastTimestamp: row.timestamp,
+        }
+      }
+      const body = stripArtifactBlocksForPreview(row.content ?? "").trim()
+      if (body) {
+        if (row.role === "assistant") current.assistantParts.push(body)
+        else current.userParts.push(body)
+      }
+      for (const name of parseAttachmentNames(row.attachments)) {
+        if (current.attachments.length >= MAX_CONVERSATION_ATTACHMENT_NAMES) break
+        if (!current.attachments.includes(name)) current.attachments.push(name)
+      }
+      current.lastTimestamp = row.timestamp
+    }
+    if (current) out.push(current)
+  }
+  return out
+}
+
+function formatConversationSource(exchange: ConversationExchange): string {
+  const title = exchange.conversationTitle?.trim() || "Untitled conversation"
+  const date = new Date(exchange.lastTimestamp).toISOString()
   const metaLines = [
     `Conversation: ${title}`,
-    `Conversation ID: ${row.conversationId}`,
-    `Message ID: ${row.messageId}`,
+    `Conversation ID: ${exchange.conversationId}`,
+    `Message ID: ${exchange.anchorMessageId}`,
     `Date: ${date}`,
-    `Role: ${role}`,
-    attachments.length ? `Attachments: ${attachments.join(", ")}` : "",
+    exchange.attachments.length
+      ? `Attachments: ${exchange.attachments.join(", ")}`
+      : "",
   ].filter(Boolean)
-  return [...metaLines, "", body].join("\n").trim()
+  const sections = [
+    exchange.userParts.length ? `User: ${exchange.userParts.join("\n\n")}` : "",
+    exchange.assistantParts.length
+      ? `Assistant: ${exchange.assistantParts.join("\n\n")}`
+      : "",
+  ].filter(Boolean)
+  return [metaLines.join("\n"), "", sections.join("\n\n")].join("\n").trim()
 }
 
 function listConversationMemorySources(): MemorySourceSnapshot[] {
-  return listConversationMemoryRows().map((row) => ({
-    source: conversationSourceId(row.conversationId, row.messageId),
-    content: formatConversationSource(row),
+  return groupConversationExchanges(listConversationMemoryRows()).map((exchange) => ({
+    source: conversationSourceId(exchange.conversationId, exchange.anchorMessageId),
+    content: formatConversationSource(exchange),
   }))
 }
 
@@ -598,28 +697,78 @@ function splitPlainTextForChunks(text: string): string[] {
   return parts
 }
 
+// Exchange-source chunking. A short exchange becomes ONE chunk holding both
+// sides — the question anchors the answer semantically. A long exchange splits
+// into paragraph chunks, but every fragment of the answer is re-anchored with
+// a capped copy of the user's question so no piece floats free of its context
+// (the original per-message indexing failure mode).
 export function chunkConversationContent(source: string, content: string): Chunk[] {
   const title = conversationMeta(content, "Conversation") || source
   const date = conversationMeta(content, "Date")
-  const role = conversationMeta(content, "Role") || "Message"
   const attachments = conversationMeta(content, "Attachments")
   const body = content.split(/\n\n/).slice(1).join("\n\n").trim()
-  const textParts = splitPlainTextForChunks(body || attachments)
-  const chunkTitle = `Conversation › ${title}${date ? ` › ${role} · ${date.slice(0, 10)}` : ` › ${role}`}`
-  const prefix = [
-    `${role}${date ? ` on ${date}` : ""}`,
+
+  let userText = ""
+  let assistantText = ""
+  if (body.startsWith("User: ")) {
+    const split = body.indexOf("\n\nAssistant: ")
+    if (split >= 0) {
+      userText = body.slice("User: ".length, split).trim()
+      assistantText = body.slice(split + "\n\nAssistant: ".length).trim()
+    } else {
+      userText = body.slice("User: ".length).trim()
+    }
+  } else if (body.startsWith("Assistant: ")) {
+    assistantText = body.slice("Assistant: ".length).trim()
+  } else {
+    userText = body
+  }
+
+  const chunkTitle = `Conversation › ${title}${date ? ` · ${date.slice(0, 10)}` : ""}`
+  const head = [
+    `Exchange${date ? ` on ${date}` : ""}`,
     attachments ? `attachments: ${attachments}` : "",
   ]
     .filter(Boolean)
     .join("; ")
 
-  return textParts
+  const flatUser = userText.replace(/\s+/g, " ").trim()
+  const flatAssistant = assistantText.replace(/\s+/g, " ").trim()
+  const wholeBody =
+    [
+      flatUser ? `User: ${flatUser}` : "",
+      flatAssistant ? `Assistant: ${flatAssistant}` : "",
+    ]
+      .filter(Boolean)
+      .join(" ") || attachments
+  if (!wholeBody) return []
+
+  const whole = `${head}: ${wholeBody}`
+  const texts: string[] = []
+  if (whole.length <= MAX_CHUNK_CHARS) {
+    texts.push(whole)
+  } else {
+    const anchor =
+      flatUser.length > EXCHANGE_ANCHOR_CHARS
+        ? `${flatUser.slice(0, EXCHANGE_ANCHOR_CHARS).trimEnd()}…`
+        : flatUser
+    for (const part of splitPlainTextForChunks(userText)) {
+      texts.push(capChunk(`${head}: User: ${part}`))
+    }
+    for (const part of splitPlainTextForChunks(assistantText)) {
+      texts.push(
+        capChunk(
+          anchor
+            ? `${head}: User: ${anchor} › Assistant: ${part}`
+            : `${head}: Assistant: ${part}`
+        )
+      )
+    }
+  }
+
+  return texts
     .filter((text) => text.length >= MIN_CHUNK_CHARS && !isTemplateNoise(text))
-    .map((text, index) => ({
-      chunkIndex: index,
-      title: chunkTitle,
-      text: capChunk(prefix ? `${prefix}: ${text}` : text),
-    }))
+    .map((text, index) => ({ chunkIndex: index, title: chunkTitle, text }))
 }
 
 function chunkMemorySource(source: string, content: string): Chunk[] {
@@ -781,13 +930,20 @@ export interface SearchOptions {
   /** Silent per-turn pass only: suppress entirely when a broad, multi-intent
    *  message is matched only by a small tangential slice of memory (default false). */
   coverageGate?: boolean
-  /** Silent pass only: skip assistant-authored conversation chunks (default false). */
+  /** Silent pass only: skip assistant-authored conversation chunks. Only
+   *  LEGACY per-message index rows carry the role marker — exchange chunks are
+   *  anchored by the user's text and never match — so this is a transitional
+   *  no-op once the exchange reindex completes (default false). */
   excludeAssistantTurns?: boolean
   /** Silent pass only: drop semantic candidates more than this far below the
    *  turn's best score (0/undefined = off). */
   topGap?: number
   /** Silent pass only: penalize old dated chunks slightly (default false). */
   agePenalty?: boolean
+  /** Silent pass only: resolve same-topic version clusters — curated sources
+   *  beat raw conversation exchanges, raw-only clusters show the newest with
+   *  the older version folded in (default false; subsumes dedup). */
+  versionClusters?: boolean
 }
 
 function isSourceExcluded(
@@ -813,6 +969,20 @@ const DAY_SOURCE_RE = /^MEMORY_DAY\/(\d{4}-\d{2}-\d{2})\.md$/
 const CONVERSATION_TITLE_DATE_RE = /·\s*(\d{4}-\d{2}-\d{2})\s*$/
 
 /**
+ * YYYY-MM-DD stamp for dated chunks (daily ledger files by filename,
+ * conversation chunks by the date in their title); null for the undated
+ * curated durable files. Exported for tests.
+ */
+export function chunkDateStamp(source: string, title: string): string | null {
+  return (
+    DAY_SOURCE_RE.exec(source)?.[1] ??
+    (source.startsWith(CONVERSATION_SOURCE_PREFIX)
+      ? (CONVERSATION_TITLE_DATE_RE.exec(title)?.[1] ?? null)
+      : null)
+  )
+}
+
+/**
  * Score penalty in [0, AGE_PENALTY_MAX] for dated chunks (daily ledger files by
  * filename, conversation chunks by the date in their title). Undated sources
  * (the curated durable files) pay nothing. Exported for tests.
@@ -823,11 +993,7 @@ export function recallAgePenalty(
   now: number = Date.now()
 ): number {
   if (AGE_PENALTY_MAX <= 0) return 0
-  const stamp =
-    DAY_SOURCE_RE.exec(source)?.[1] ??
-    (source.startsWith(CONVERSATION_SOURCE_PREFIX)
-      ? CONVERSATION_TITLE_DATE_RE.exec(title)?.[1]
-      : undefined)
+  const stamp = chunkDateStamp(source, title)
   if (!stamp) return 0
   const ageMs = now - Date.parse(stamp)
   if (!Number.isFinite(ageMs) || ageMs <= 0) return 0
@@ -878,6 +1044,119 @@ export function selectDiverse(
     picked.push(cand)
   }
   return picked
+}
+
+// ---------------------------------------------------------------------------
+// Version-cluster resolution (SILENT pass only)
+// ---------------------------------------------------------------------------
+// Same-topic memories accumulate versions over time: the user decides X in one
+// exchange and revises it to Y three turns (or three weeks) later; a daily note
+// supersedes an older one. Cosine similarity can DETECT that two hits are
+// versions of the same topic, but cannot judge which one still holds — newest
+// is not always rightest. So the resolution never destroys information:
+//  1. Curated beats raw. Durable files and daily-ledger lines are rewritten in
+//     place by the agent when the user changes their mind, so a curated member
+//     IS the resolved state of the topic — raw conversation versions of it are
+//     redundant and drop. Durable (undated) > daily > conversation.
+//  2. Among raw-only versions nothing is judged: the newest is shown and the
+//     best older version is folded INTO the same hit with its date visible,
+//     so the model reading the block resolves validity itself.
+//  3. The explicit memory_search tool never goes through this — it stays wide
+//     and returns every version with ids and dates.
+
+type SourceTier = 0 | 1 | 2
+
+/** 2 = curated durable file, 1 = daily ledger line, 0 = raw conversation exchange. */
+function sourceTier(source: string): SourceTier {
+  if (source.startsWith(CONVERSATION_SOURCE_PREFIX)) return 0
+  if (DAY_SOURCE_RE.test(source)) return 1
+  return 2
+}
+
+function sameConversationSource(a: string, b: string): boolean {
+  if (
+    !a.startsWith(CONVERSATION_SOURCE_PREFIX) ||
+    !b.startsWith(CONVERSATION_SOURCE_PREFIX)
+  ) {
+    return false
+  }
+  return a.split(":")[1] === b.split(":")[1]
+}
+
+// Undated curated chunks sort as "current" — they are maintained in place.
+function newestFirst(a: MemoryHit, b: MemoryHit): number {
+  const da = chunkDateStamp(a.source, a.title) ?? "9999-12-31"
+  const db = chunkDateStamp(b.source, b.title) ?? "9999-12-31"
+  if (da !== db) return db.localeCompare(da)
+  return b.score - a.score
+}
+
+function resolveCluster(members: MemoryHit[]): MemoryHit {
+  if (members.length === 1) return members[0]
+
+  const bestTier = Math.max(...members.map((m) => sourceTier(m.source)))
+  const top = [...members.filter((m) => sourceTier(m.source) === bestTier)].sort(
+    newestFirst
+  )
+  const rep = top[0]
+  if (bestTier > 0) return rep
+
+  // Raw-only cluster: fold the strongest genuinely-older version into the
+  // newest hit instead of picking a winner. Same-day restatements are plain
+  // near-duplicates and just collapse.
+  const repDate = chunkDateStamp(rep.source, rep.title)
+  const older = top.find((m) => chunkDateStamp(m.source, m.title) !== repDate)
+  if (!older) return rep
+  const olderDate = chunkDateStamp(older.source, older.title)
+  return {
+    ...rep,
+    text: `${clip(rep.text, MAX_HIT_CHARS - CLUSTER_OLDER_VERSION_CHARS - 40)} 〔older version, ${olderDate}: ${clip(older.text, CLUSTER_OLDER_VERSION_CHARS)}〕`,
+  }
+}
+
+/**
+ * Cluster same-topic candidates and resolve each cluster to one hit (see the
+ * section comment above for the rules). Subsumes near-duplicate suppression:
+ * the cluster bars sit below DEDUP_SIM, so anything selectDiverse would
+ * collapse, this collapses too. Vectorless (FTS-only) hits pass through as
+ * their own clusters. Exported for tests.
+ */
+export function resolveVersionClusters(
+  candidates: MemoryHit[],
+  vectorById: Map<string, Float32Array>,
+  topK: number
+): MemoryHit[] {
+  const ranked = [...candidates]
+    .sort((a, b) => b.score - a.score)
+    .slice(0, CLUSTER_MAX_CANDIDATES)
+
+  const clusters: MemoryHit[][] = []
+  for (const cand of ranked) {
+    const v = vectorById.get(cand.id)
+    let joined = false
+    if (v) {
+      outer: for (const cluster of clusters) {
+        for (const member of cluster) {
+          const mv = vectorById.get(member.id)
+          if (!mv || mv.length !== v.length) continue
+          const bar = sameConversationSource(cand.source, member.source)
+            ? CLUSTER_SIM_SAME_CONVERSATION
+            : CLUSTER_SIM
+          if (dot(v, mv) >= bar) {
+            cluster.push(cand)
+            joined = true
+            break outer
+          }
+        }
+      }
+    }
+    if (!joined) clusters.push([cand])
+  }
+
+  return clusters
+    .map(resolveCluster)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, topK)
 }
 
 // Split a user message into substantive segments for the coverage gate.
@@ -987,9 +1266,11 @@ export async function searchMemory(
     }
   }
 
-  const selected = dedup
-    ? selectDiverse(candidates, vectorById, topK)
-    : [...candidates].sort((a, b) => b.score - a.score).slice(0, topK)
+  const selected = opts.versionClusters
+    ? resolveVersionClusters(candidates, vectorById, topK)
+    : dedup
+      ? selectDiverse(candidates, vectorById, topK)
+      : [...candidates].sort((a, b) => b.score - a.score).slice(0, topK)
 
   if (
     opts.coverageGate &&
@@ -1209,7 +1490,8 @@ async function recallByAsset(
     const vectorById = new Map<string, Float32Array>()
     for (const r of rows) {
       if (isSourceExcluded(r.source, exclude, excludeSourcePrefixes)) continue
-      // Same precision rule as the text pass: assistant turns are too broad.
+      // Legacy per-message assistant chunks are too broad; exchange chunks are
+      // user-anchored and never match this (transitional, like the text pass).
       if (isAssistantConversationChunk(r.source, r.title)) continue
       if (r.vector.length !== vec.length) continue
       const score = dot(vec, r.vector)
@@ -1316,6 +1598,7 @@ export async function getRecalledMemory(
             excludeAssistantTurns: true,
             topGap: RECALL_TOP_GAP,
             agePenalty: true,
+            versionClusters: true,
           })
         : Promise.resolve([])
     const assetPromise = asset
@@ -1486,8 +1769,9 @@ export interface RecallSearchPreview {
 /**
  * Settings calibration view: show both the raw score distribution and the exact
  * automatic text-recall result. The latter applies the full production filter
- * chain: threshold, in-context source exclusion, assistant-turn exclusion, age
- * penalty, top-gap cutoff, dedup, and the coverage gate.
+ * chain: threshold, in-context source exclusion, legacy assistant-turn
+ * exclusion, age penalty, top-gap cutoff, version-cluster resolution, and the
+ * coverage gate.
  */
 export async function previewRecallSearch(
   query: string,
@@ -1515,6 +1799,7 @@ export async function previewRecallSearch(
       excludeAssistantTurns: true,
       topGap: RECALL_TOP_GAP,
       agePenalty: true,
+      versionClusters: true,
     }),
   ])
   return { rawHits, automaticHits, threshold, topK: RECALL_TOP_K }
