@@ -58,6 +58,7 @@ Required attributes:
   - \`text/markdown\` — formatted prose (guides, explanations, simple notes). Use this when the content is just text. For RECIPES, prefer \`application/vnd.ant.recipe\` instead (richer card with scalable ingredients and live timers).
   - \`application/vnd.ant.recipe\` — a structured recipe rendered as a card with header, ingredient list (with live servings stepper + scaling), numbered steps with optional live timer chips, and notes. Body MUST be JSON — call ActivateIntegrationTools("recipe") to load the exact schema before emitting.
   - \`application/vnd.ant.workout\` — a structured gym/fitness workout rendered as an interactive card with header, equipment chips, per-exercise cards (with last-session + PB context, set rows with planned weight × reps + checkable status, rest timer affordances). Body MUST be JSON — call ActivateIntegrationTools("workout") to load the exact schema before emitting. Use this for any strength, bodyweight, cardio, HIIT, mobility, or program-day workout the user asks for.
+  - \`application/vnd.ant.cad\` — an interactive 3D model viewer (orbit/zoom/pan) for CAD parts and assemblies, backed by a GLB file generated in the workspace, with download chips for STEP/STL/3MF. Body MUST be JSON — call ActivateIntegrationTools("cad") to load the exact schema + generation workflow before emitting. Use this whenever you design or modify a mechanical part / 3D-printable model for the user.
   - \`application/vnd.ant.mermaid\` — Mermaid diagrams
   - \`image/svg+xml\` — inline SVG markup
   - \`text/csv\` — comma-separated tables
@@ -117,7 +118,7 @@ When the user wants a reusable internal tool/mini-app they will return to across
 - HTML artifacts: include your own styles inline. If you need utility classes, add the Tailwind Play CDN yourself (\`<script src="https://cdn.tailwindcss.com"></script>\`) — it isn't auto-injected for HTML.
 - SVG: inline markup, no external image refs. The runtime sanitises with DOMPurify.
 - Don't nest artifact tags. Don't wrap an artifact in a code fence (see <critical_body_rules>).
-- Recipe and workout artifacts use strict JSON schemas loaded lazily: before emitting one, call ActivateIntegrationTools("recipe") or ActivateIntegrationTools("workout"); the exact schema arrives in <active_capability_doctrines> next turn. Emitting without the loaded schema risks a parser rejection.
+- Recipe, workout, and CAD artifacts use strict JSON schemas loaded lazily: before emitting one, call ActivateIntegrationTools("recipe"), ActivateIntegrationTools("workout"), or ActivateIntegrationTools("cad"); the exact schema arrives in <active_capability_doctrines> next turn. Emitting without the loaded schema risks a parser rejection.
 </rules>
 
 <must_render_as_card>

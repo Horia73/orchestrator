@@ -68,3 +68,37 @@ check(
     dedupedNotifications.length === 1 && dedupedNotifications[0]?.title === 'Workout v2',
     dedupedNotifications,
 )
+
+// --- application/vnd.ant.cad -------------------------------------------------
+
+const validCad = JSON.stringify({
+    name: 'ST3215 mounting adapter',
+    description: 'Adapter plate for the Feetech ST3215 servo.',
+    model: { glb: 'files/cad/st3215-adapter/st3215-adapter.glb' },
+    files: [
+        { path: 'files/cad/st3215-adapter/st3215-adapter.step', kind: 'step' },
+        { path: 'files/cad/st3215-adapter/st3215-adapter.stl', label: 'STL' },
+    ],
+    boundingBoxMm: { x: 40, y: 28.5, z: 6 },
+    notes: ['M3 clearance holes at 3.4 mm'],
+})
+const cadOk = validateArtifactContent('application/vnd.ant.cad', validCad)
+check('strict cad artifact validates', cadOk.ok, cadOk)
+
+const cadAbsolute = validateArtifactContent(
+    'application/vnd.ant.cad',
+    JSON.stringify({ name: 'Bad', model: { glb: '/etc/passwd.glb' } }),
+)
+check('cad artifact rejects absolute model path', !cadAbsolute.ok && cadAbsolute.error.includes('model.glb'), cadAbsolute)
+
+const cadTraversal = validateArtifactContent(
+    'application/vnd.ant.cad',
+    JSON.stringify({ name: 'Bad', model: { glb: 'files/../../secrets.glb' } }),
+)
+check('cad artifact rejects ".." path segments', !cadTraversal.ok, cadTraversal)
+
+const cadNotGlb = validateArtifactContent(
+    'application/vnd.ant.cad',
+    JSON.stringify({ name: 'Bad', model: { glb: 'files/cad/part/part.stl' } }),
+)
+check('cad artifact requires a .glb viewer model', !cadNotGlb.ok, cadNotGlb)

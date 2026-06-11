@@ -15,6 +15,9 @@ const eslintConfig = defineConfig([
     ".orchestrator/private/**",
     // Bundled third-party worker file (minified vendor asset).
     "public/pdf.worker.min.mjs",
+    // Vendored agent skills (earthtojake/text-to-cad) — not app code; the
+    // snapshot runtime ships a minified three.js bundle.
+    "skills/**",
   ]),
 ]);
 

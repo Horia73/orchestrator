@@ -65,6 +65,15 @@ export function extToShikiLang(filename: string): string {
     return EXT_LANG[e] ?? "text"
 }
 
+/** 3D model files the in-app three.js viewer can render (CAD outputs,
+ *  printables). STEP stays download-only — no client-side B-rep tessellation. */
+export function is3DModelFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
+    const e = ext(att.filename)
+    if (e === "glb" || e === "stl" || e === "3mf") return true
+    const m = att.mimeType.toLowerCase()
+    return m === "model/gltf-binary" || m === "model/stl" || m === "model/3mf"
+}
+
 /** Whether a file should open in the syntax-highlighted code/text viewer.
  *  True for text/* and json/xml MIME, or any known source extension. */
 export function isCodeOrTextFile(att: Pick<Attachment, "filename" | "mimeType">): boolean {
@@ -85,6 +94,7 @@ export function isInAppPreviewable(att: Pick<Attachment, "filename" | "mimeType"
         isPresentationFile(att) ||
         isDocxFile(att) ||
         isSvgFile(att) ||
+        is3DModelFile(att) ||
         isCodeOrTextFile(att)
     )
 }

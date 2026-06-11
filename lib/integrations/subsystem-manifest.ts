@@ -7,6 +7,7 @@ import { MEDIA_GENERATION_DOCTRINE } from '@/lib/integrations/doctrines/media-ge
 import { BROWSER_AGENT_DOCTRINE } from '@/lib/integrations/doctrines/browser-agent'
 import { RECIPE_DOCTRINE } from '@/lib/integrations/doctrines/recipe'
 import { WORKOUT_DOCTRINE } from '@/lib/integrations/doctrines/workout'
+import { CAD_DOCTRINE } from '@/lib/integrations/doctrines/cad'
 import { APPS_DOCTRINE } from '@/lib/integrations/doctrines/apps'
 import { SELF_DEVELOPMENT_DOCTRINE } from '@/lib/integrations/doctrines/self-development'
 
@@ -40,6 +41,7 @@ export type SubsystemId =
     | 'browser'
     | 'recipe'
     | 'workout'
+    | 'cad'
     | 'apps'
     | 'self_dev'
     // Tool-only capability groups (no doctrine): rarely-needed-in-main-chat tool
@@ -179,6 +181,12 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'SaveBodyMetrics',
             'PatchWorkout',
         ],
+    },
+    {
+        id: 'cad',
+        label: 'CAD artifact schema',
+        capability: 'The exact JSON schema for application/vnd.ant.cad artifacts (interactive in-chat 3D model viewer backed by a workspace GLB) plus the CAD generation workflow: the bundled `cad` skill (build123d → STEP → GLB/STL/3MF exports) and the `step-parts` catalog for real models of named purchasable components. Activate whenever the user asks to design/modify a mechanical part, adapter, bracket, enclosure, or wants files for 3D printing.',
+        doctrine: CAD_DOCTRINE,
     },
     {
         id: 'apps',

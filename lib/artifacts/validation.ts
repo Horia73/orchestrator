@@ -1,3 +1,4 @@
+import { parseCadArtifact } from '@/lib/cad/schema'
 import { parseMapArtifact } from '@/lib/maps/schema'
 import { parseRecipeArtifact } from '@/lib/recipe/parser'
 import { parseWeatherArtifact } from '@/lib/weather/schema'
@@ -18,6 +19,7 @@ export const STRICT_ARTIFACT_TYPES = new Set<string>([
     'application/vnd.ant.weather',
     'application/vnd.ant.recipe',
     'application/vnd.ant.workout',
+    'application/vnd.ant.cad',
 ])
 
 export function isStrictArtifactType(type: string): boolean {
@@ -40,6 +42,8 @@ export function validateArtifactContent(type: string, content: string): Artifact
             return parseResult(type, parseRecipeArtifact(content))
         case 'application/vnd.ant.workout':
             return parseResult(type, parseWorkoutArtifact(content))
+        case 'application/vnd.ant.cad':
+            return parseResult(type, parseCadArtifact(content))
         default:
             return { ok: true }
     }

@@ -36,6 +36,16 @@ export const UPLOAD_MIME_MAP: Record<string, string> = {
     '.wmv': 'video/x-ms-wmv',
     '.3gp': 'video/3gpp',
 
+    // 3D models / CAD outputs. glb/stl/3mf render in the in-app viewer;
+    // STEP is the primary CAD interchange format (download-only). G-code is
+    // plain text so the code viewer can open it.
+    '.glb': 'model/gltf-binary',
+    '.stl': 'model/stl',
+    '.3mf': 'model/3mf',
+    '.step': 'application/step',
+    '.stp': 'application/step',
+    '.gcode': 'text/plain',
+
     // Source code, config, and markup. All served as text/plain so they are
     // safe to serve inline (browsers display them as text, never execute them —
     // this is why .html/.svg map to text/plain rather than their renderable

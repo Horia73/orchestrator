@@ -40,7 +40,9 @@ ENV NODE_ENV=production \
     PATCHRIGHT_BROWSERS_PATH=/ms-playwright \
     PLAYWRIGHT_BROWSERS_PATH=/ms-playwright \
     WHATSAPP_CHROME_EXECUTABLE_PATH=/usr/bin/chromium \
-    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium
+    PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
+    CAD_PYTHON=/usr/bin/python3 \
+    CAD_SNAPSHOT_CHROMIUM=/usr/bin/chromium
 
 RUN groupmod --gid 1002 node \
   && usermod --uid 1002 --gid 1002 node \
@@ -110,6 +112,15 @@ RUN pip3 install --break-system-packages --no-cache-dir \
     pypdf
 
 COPY --from=builder --chown=node:node /app /app
+
+# CAD runtime for the bundled skills/cad skill: cadpy (pulls build123d +
+# cadquery-ocp OpenCascade wheels — manylinux aarch64/amd64 both published)
+# plus python playwright for snapshot rendering. The snapshot renderer reuses
+# the system chromium via CAD_SNAPSHOT_CHROMIUM, so no playwright-managed
+# browser download is needed (keeps ~400 MB off the eMMC root filesystem).
+RUN pip3 install --break-system-packages --no-cache-dir \
+    /app/skills/cad/scripts/packages/cadpy \
+    playwright
 
 # Bake build metadata into a file the running app can read directly. We
 # can't rely on `git rev-parse HEAD` inside the container (.git is

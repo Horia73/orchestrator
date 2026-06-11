@@ -69,3 +69,8 @@ next-env.d.ts
 .claude/
 AGENTS.md
 CLAUDE.md
+
+# Python packaging artifacts from installing the vendored CAD skill locally
+skills/**/build/
+skills/**/*.egg-info/
+skills/**/__pycache__/

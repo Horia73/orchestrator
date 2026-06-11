@@ -264,7 +264,7 @@ const INLINE_URL_RE = /^https?:\/\/[^\s]+$/i
 
 const WORKSPACE_PATH_MARKER = "/.orchestrator/workspace/"
 const DOWNLOADABLE_WORKSPACE_EXT_RE =
-  /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp)(?:[?#].*)?$/i
+  /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp|glb|stl|3mf|step|stp|gcode)(?:[?#].*)?$/i
 
 // iOS standalone PWAs frequently swallow the *first* tap on a `target="_blank"`
 // link — the user has to tap twice for it to open. Driving the open from the

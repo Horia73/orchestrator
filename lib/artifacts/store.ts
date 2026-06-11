@@ -125,6 +125,7 @@ function extensionFor(type: string, language?: string | null): string {
         case 'application/vnd.ant.weather': return 'json'
         case 'application/vnd.ant.recipe': return 'json'
         case 'application/vnd.ant.workout': return 'json'
+        case 'application/vnd.ant.cad': return 'json'
         case 'application/vnd.ant.app-link': return 'json'
         case 'application/xml': return 'xml'
         case 'text/vnd.graphviz': return 'dot'
