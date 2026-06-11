@@ -7,9 +7,12 @@ name = "cadpy"
 version = "0.3.0"
 description = "Shared STEP/GLB topology artifact generation runtime for CAD skills."
 requires-python = ">=3.11"
+# Orchestrator: depend on build123d only — it pulls the right OpenCascade
+# distribution per platform (cadquery-ocp on stable releases, the novtk
+# variant on the dev branch we use for linux aarch64). Pinning cadquery-ocp
+# here too would install a second, conflicting OCP next to novtk.
 dependencies = [
   "build123d",
-  "cadquery-ocp",
 ]
 
 [project.scripts]

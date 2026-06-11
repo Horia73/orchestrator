@@ -113,12 +113,19 @@ RUN pip3 install --break-system-packages --no-cache-dir \
 
 COPY --from=builder --chown=node:node /app /app
 
-# CAD runtime for the bundled skills/cad skill: cadpy (pulls build123d +
-# cadquery-ocp OpenCascade wheels — manylinux aarch64/amd64 both published)
-# plus python playwright for snapshot rendering. The snapshot renderer reuses
-# the system chromium via CAD_SNAPSHOT_CHROMIUM, so no playwright-managed
-# browser download is needed (keeps ~400 MB off the eMMC root filesystem).
+# CAD runtime for the bundled skills/cad skill, plus python playwright for
+# snapshot rendering (reuses system chromium via CAD_SNAPSHOT_CHROMIUM — no
+# playwright-managed browser download, keeps ~400 MB off the eMMC).
+#
+# build123d comes from a pinned dev-branch commit, NOT PyPI: linux aarch64
+# has OpenCascade wheels only for OCP 7.9 (cadquery-ocp[-novtk] 7.9.3+),
+# which every stable build123d release (<=0.10) rejects (<7.9) — pip then
+# backtracks to build123d 0.8.0, which crashes on OCP 7.9 (TopoDS_Shape
+# .HashCode was removed in OCCT 7.9). The dev branch requires novtk>=7.9 and
+# handles the aarch64 lib3mf split. Drop the pin for plain
+# "/app/skills/cad/scripts/packages/cadpy" once build123d >=0.11 is on PyPI.
 RUN pip3 install --break-system-packages --no-cache-dir \
+    "build123d @ git+https://github.com/gumyr/build123d@dd35508482ed9e22352290a7366b4b36b0f37438" \
     /app/skills/cad/scripts/packages/cadpy \
     playwright
 
