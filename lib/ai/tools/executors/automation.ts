@@ -15,7 +15,10 @@ import { executeNotifyInbox } from "../notify"
 import { executeInboxActionHistory } from "../inbox-history"
 import { executeSetTaskState } from "../task-state"
 import { executeApplyUpdate } from "../update-app"
-import { executeMemorySearch } from "../memory-search"
+import {
+  executeMemoryRecentActivity,
+  executeMemorySearch,
+} from "../memory-search"
 import { executeLibrarySearch } from "../library-search"
 import {
   executeMapsCurrentLocation,
@@ -153,6 +156,7 @@ export const automationToolExecutors: Record<string, ToolExecutor> = {
   [APP_SHOW_TOOL_ID]: executeAppShow,
   apply_update: executeApplyUpdate,
   memory_search: executeMemorySearch,
+  memory_recent_activity: executeMemoryRecentActivity,
   library_search: executeLibrarySearch,
   WatchlistAddFinancialInstrument: executeWatchlistAddFinancialInstrument,
   WatchlistAddProduct: executeWatchlistAddProduct,

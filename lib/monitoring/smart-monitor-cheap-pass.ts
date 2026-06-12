@@ -33,9 +33,10 @@
 //     re-attaches it after the wake so the agent's set_task_state cannot clobber
 //     the gate bookkeeping.
 
-import { evaluateRule } from '../monitor/rules'
+import { evaluateRule, findAdapterEvaluatedKind } from '../monitor/rules'
 import { getSourceAdapter } from '../monitor/sources'
 import {
+    completeWatchFollowUp,
     incrementSuppressPatternMatch,
     listMonitorWatches,
     recordWatchEvent,
@@ -281,6 +282,33 @@ export async function runSmartMonitorCheapPass(args: {
 
     for (const watch of watches) {
         try {
+            // --- closed-loop follow-up: deadline check runs FIRST and does not
+            // depend on the integration being reachable. Past the deadline with
+            // no observed effect, the lifecycle completes (one-shot disable) and
+            // 'escalate' buffers a deadline item so the wake can tell the user.
+            const followUp = watch.followUp
+            if (followUp && followUp.resolvedAt == null && followUp.deadlineFiredAt == null && now >= followUp.deadlineAt) {
+                completeWatchFollowUp(watch.id, 'deadline', now)
+                if (followUp.onDeadline === 'escalate') {
+                    fresh.push({
+                        watchId: watch.id,
+                        watchTitle: watch.title,
+                        source: watch.source,
+                        summary: `FOLLOW-UP DEADLINE PASSED with no observed effect — expected: ${followUp.expectation}`,
+                        externalId: `followup_deadline:${watch.id}`,
+                        ts: now,
+                        details: {
+                            followUp: {
+                                expectation: followUp.expectation,
+                                deadlineAt: followUp.deadlineAt,
+                                outcome: 'deadline_passed',
+                            },
+                        },
+                    })
+                }
+                continue
+            }
+
             // --- custom (model-owned) watches: cadence-gated, no connector ---
             if (watch.source === 'custom') {
                 if (customWatchDue(watch, now)) {
@@ -344,9 +372,13 @@ export async function runSmartMonitorCheapPass(args: {
                 lastError: null,
             })
 
-            // Apply learned suppress patterns over the matches.
+            // Apply learned suppress patterns over the matches. Patterns with
+            // adapter-evaluated leaves (gmail_query & co.) are skipped: the
+            // local evaluator would degenerate them to match-everything and
+            // silence the watch (authoring rejects them too; this guards
+            // patterns persisted before that check existed).
             const activePatterns = watch.suppressPatterns.filter(
-                (p) => p.expiresAt === null || p.expiresAt > now,
+                (p) => (p.expiresAt === null || p.expiresAt > now) && findAdapterEvaluatedKind(p.rule) === null,
             )
             let watchMatches = 0
             for (const m of result.matches) {
@@ -369,7 +401,12 @@ export async function runSmartMonitorCheapPass(args: {
                     summary: m.summary,
                     externalId: m.externalId,
                     ts: now,
-                    details: m.details,
+                    details: followUp
+                        ? {
+                            ...(m.details ?? {}),
+                            followUp: { expectation: followUp.expectation, outcome: 'resolved' },
+                        }
+                        : m.details,
                 })
             }
             if (watchMatches === 0) {
@@ -377,6 +414,13 @@ export async function runSmartMonitorCheapPass(args: {
                     matches: 0,
                     candidatesSeen: result.candidatesSeen,
                 }, result.fetchedAt)
+            }
+            // Closed-loop follow-up resolved: the expected effect was observed.
+            // One-shot semantics — complete + disable now; the wake judges the
+            // buffered item (and can re-arm via monitor_wake_feedback if the
+            // match was not actually the expected effect).
+            if (followUp && watchMatches > 0) {
+                completeWatchFollowUp(watch.id, 'resolved', now)
             }
         } catch (err) {
             // One bad watch must never abort the consolidated pass.

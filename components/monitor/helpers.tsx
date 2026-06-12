@@ -103,6 +103,10 @@ export function eventKindBadgeClass(kind: WatchEvent["kind"]): string {
       return "bg-red-100 text-red-900 dark:bg-red-950/40 dark:text-red-300"
     case "cadence_change":
       return "bg-emerald-100 text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-300"
+    case "followup":
+      return "bg-sky-100 text-sky-900 dark:bg-sky-950/40 dark:text-sky-300"
+    case "user_signal":
+      return "bg-teal-100 text-teal-900 dark:bg-teal-950/40 dark:text-teal-300"
     case "check":
     default:
       return "bg-foreground/5 text-foreground/55"

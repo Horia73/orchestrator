@@ -35,6 +35,9 @@ async function main(): Promise<void> {
         listMonitorWatches,
         listWatchEvents,
         recordWatchEvent,
+        completeWatchFollowUp,
+        removeCompletedFollowUpWatches,
+        reopenWatchFollowUp,
         removeSuppressPattern,
         setWatchCadenceCurrent,
         setWatchCheckpoint,
@@ -303,6 +306,79 @@ async function main(): Promise<void> {
     })
     const sources = listMonitorWatches().map((w) => w.source).sort()
     check('multi-source coexistence', JSON.stringify(sources) === JSON.stringify(['google_calendar', 'home_assistant', 'web']))
+
+    // ---- 13. Follow-up lifecycle (closed-loop actions) -----------------------
+    const mainGmail = createMonitorWatch({
+        title: 'Gmail triage',
+        source: 'gmail',
+        target: 'inbox',
+        rule: { kind: 'gmail_query', q: 'in:inbox is:unread' },
+    })
+    const fuDeadline = Date.now() + 2 * 86_400_000
+    const followUp = createMonitorWatch({
+        title: 'Reply from Dan (offer thread)',
+        source: 'gmail',
+        target: 'dan@example.com',
+        rule: { kind: 'gmail_from', senders: ['dan@example.com'] },
+        followUp: { expectation: 'a reply from Dan about the Q3 offer', deadlineAt: fuDeadline, onDeadline: 'escalate' },
+    })
+    check('follow-up coexists with the main gmail watch', followUp.id.startsWith('mw_') && followUp.followUp?.expectation.includes('Dan'))
+    check('follow-up starts uncompleted', followUp.followUp?.resolvedAt === null && followUp.followUp?.deadlineFiredAt === null)
+
+    // Exemption is two-way: a second MAIN gmail watch is still rejected…
+    expectThrow('second main gmail watch still rejected with follow-up present', () =>
+        createMonitorWatch({
+            title: 'Another gmail main',
+            source: 'gmail',
+            target: 'inbox',
+            rule: { kind: 'gmail_query', q: 'in:inbox' },
+        }),
+    )
+    // …and a lingering follow-up does not block a fresh main watch.
+    deleteMonitorWatch(mainGmail.id)
+    const mainAgain = createMonitorWatch({
+        title: 'Gmail triage again',
+        source: 'gmail',
+        target: 'inbox',
+        rule: { kind: 'gmail_query', q: 'in:inbox is:unread' },
+    })
+    check('follow-up does not count as the main gmail watch', mainAgain.id.startsWith('mw_'))
+
+    expectThrow('follow-up with past deadline rejected', () =>
+        createMonitorWatch({
+            title: 'stale follow-up',
+            source: 'gmail',
+            target: 'x',
+            rule: { kind: 'gmail_from', senders: ['x@y.com'] },
+            followUp: { expectation: 'never', deadlineAt: Date.now() - 1000 },
+        }),
+    )
+
+    // resolve → disabled + stamped; sweep removes it.
+    const resolved = completeWatchFollowUp(followUp.id, 'resolved')
+    check('completeWatchFollowUp stamps resolvedAt + disables', resolved?.followUp?.resolvedAt !== null && resolved?.enabled === false)
+    check('completeWatchFollowUp is idempotent', completeWatchFollowUp(followUp.id, 'deadline')?.followUp?.deadlineFiredAt === null)
+    const fuEvents = listWatchEvents(followUp.id, { kinds: ['followup'] })
+    check('followup event recorded', fuEvents.length === 1 && fuEvents[0].payload?.outcome === 'resolved')
+
+    // re-arm → enabled, stamps cleared, deadline extendable, survives the sweep.
+    const reopened = reopenWatchFollowUp(followUp.id, { extendDeadlineToMs: fuDeadline + 86_400_000 })
+    check('reopenWatchFollowUp re-arms', reopened?.enabled === true && reopened?.followUp?.resolvedAt === null)
+    check('reopenWatchFollowUp extends deadline', reopened?.followUp?.deadlineAt === fuDeadline + 86_400_000)
+    check('sweep skips re-armed follow-up', removeCompletedFollowUpWatches().length === 0 && getMonitorWatch(followUp.id) !== null)
+
+    // deadline → completed; sweep removes exactly it.
+    completeWatchFollowUp(followUp.id, 'deadline')
+    const swept = removeCompletedFollowUpWatches()
+    check('sweep removes completed follow-up', swept.length === 1 && swept[0] === followUp.id && getMonitorWatch(followUp.id) === null)
+    check('sweep leaves ordinary watches alone', getMonitorWatch(mainAgain.id) !== null)
+
+    // user_signal events (behavioral learning feed) are recordable + filterable.
+    recordWatchEvent(mainAgain.id, 'user_signal', { signal: 'dismissed_unread', conversationId: 'inbox_x' })
+    recordWatchEvent(mainAgain.id, 'user_signal', { signal: 'quick_action', tool: 'gmail.archive', conversationId: 'inbox_x' })
+    const signals = listWatchEvents(mainAgain.id, { kinds: ['user_signal'] })
+    check('user_signal events recorded + filtered', signals.length === 2 && signals.every((e) => e.kind === 'user_signal'))
+    deleteMonitorWatch(mainAgain.id)
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)

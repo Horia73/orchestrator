@@ -97,36 +97,128 @@ const SURFACE_META: Record<
   ProfileSurface,
   { label: string; description: string; icon: IconType }
 > = {
-  chat: { label: "Chat", description: "Main conversation workspace", icon: MessageSquare },
-  inbox: { label: "Inbox", description: "Incoming messages and triage", icon: Inbox },
-  library: { label: "Library", description: "Saved files and artifacts", icon: Library },
-  scheduling: { label: "Scheduling", description: "Scheduled tasks and routines", icon: CalendarClock },
-  watchlist: { label: "Watchlist", description: "Tracked topics and feeds", icon: Telescope },
-  monitor: { label: "Smart Monitor", description: "Background monitoring engine", icon: Activity },
-  maps: { label: "Smart Maps", description: "Maps and location surface", icon: MapPin },
-  workouts: { label: "Workouts", description: "Fitness tracking surface", icon: Dumbbell },
-  settings: { label: "Settings", description: "Admin configuration pages", icon: Settings },
+  chat: {
+    label: "Chat",
+    description: "Main conversation workspace",
+    icon: MessageSquare,
+  },
+  inbox: {
+    label: "Inbox",
+    description: "Incoming messages and triage",
+    icon: Inbox,
+  },
+  library: {
+    label: "Library",
+    description: "Saved files and artifacts",
+    icon: Library,
+  },
+  scheduling: {
+    label: "Scheduling",
+    description: "Scheduled tasks and routines",
+    icon: CalendarClock,
+  },
+  watchlist: {
+    label: "Watchlist",
+    description: "Tracked topics and feeds",
+    icon: Telescope,
+  },
+  monitor: {
+    label: "Smart Monitor",
+    description: "Background monitoring engine",
+    icon: Activity,
+  },
+  maps: {
+    label: "Smart Maps",
+    description: "Maps and location surface",
+    icon: MapPin,
+  },
+  workouts: {
+    label: "Workouts",
+    description: "Fitness tracking surface",
+    icon: Dumbbell,
+  },
+  settings: {
+    label: "Settings",
+    description: "Admin configuration pages",
+    icon: Settings,
+  },
 }
 
 const TOOL_META: Record<
   ToolPermissionId,
   { label: string; description: string; icon: IconType }
 > = {
-  read_files: { label: "Read files", description: "Read workspace files", icon: FileText },
-  write_files: { label: "Write files", description: "Create and edit files", icon: FilePen },
+  read_files: {
+    label: "Read files",
+    description: "Read workspace files",
+    icon: FileText,
+  },
+  write_files: {
+    label: "Write files",
+    description: "Create and edit files",
+    icon: FilePen,
+  },
   shell: { label: "Shell", description: "Run shell commands", icon: Terminal },
-  browser_agent: { label: "Browser agent", description: "Drive a headless browser", icon: AppWindow },
-  delegate_agents: { label: "Delegate agents", description: "Spawn sub-agents", icon: Bot },
-  web_access: { label: "Web access", description: "Search and fetch the web", icon: Globe },
-  memory: { label: "Memory", description: "Read and write long-term memory", icon: Brain },
-  skills: { label: "Skills", description: "Use installed workflow skills", icon: Braces },
-  scheduling: { label: "Scheduling", description: "Create scheduled tasks", icon: CalendarClock },
-  monitoring: { label: "Monitoring", description: "Configure Smart Monitor", icon: Activity },
-  microscripts: { label: "Microscripts", description: "Run saved microscripts", icon: Braces },
-  backups: { label: "Backups", description: "Create and restore backups", icon: Archive },
-  updates: { label: "Updates", description: "Apply app updates", icon: Download },
-  models: { label: "Models", description: "Manage model configuration", icon: Cpu },
-  settings_files: { label: "Settings files", description: "Edit raw settings files", icon: FileCog },
+  browser_agent: {
+    label: "Browser agent",
+    description: "Drive a headless browser",
+    icon: AppWindow,
+  },
+  delegate_agents: {
+    label: "Delegate agents",
+    description: "Spawn sub-agents",
+    icon: Bot,
+  },
+  web_access: {
+    label: "Web access",
+    description: "Search and fetch the web",
+    icon: Globe,
+  },
+  memory: {
+    label: "Memory",
+    description: "Read and write long-term memory",
+    icon: Brain,
+  },
+  skills: {
+    label: "Skills",
+    description: "Use installed workflow skills",
+    icon: Braces,
+  },
+  scheduling: {
+    label: "Scheduling",
+    description: "Create scheduled tasks",
+    icon: CalendarClock,
+  },
+  monitoring: {
+    label: "Monitoring",
+    description: "Configure Smart Monitor",
+    icon: Activity,
+  },
+  microscripts: {
+    label: "Microscripts",
+    description: "Run saved microscripts",
+    icon: Braces,
+  },
+  backups: {
+    label: "Backups",
+    description: "Create and restore backups",
+    icon: Archive,
+  },
+  updates: {
+    label: "Updates",
+    description: "Apply app updates",
+    icon: Download,
+  },
+  models: {
+    label: "Models",
+    description: "Manage model configuration",
+    icon: Cpu,
+  },
+  settings_files: {
+    label: "Settings files",
+    description: "Edit raw settings files",
+    icon: FileCog,
+  },
 }
 
 const INTEGRATION_META: Record<
@@ -140,7 +232,6 @@ const INTEGRATION_META: Record<
   home_assistant: { label: "Home Assistant", icon: House },
   maps: { label: "Maps", icon: MapPin },
   weather: { label: "Weather", icon: CloudSun },
-  watchlist: { label: "Watchlist", icon: Telescope },
 }
 
 const ACCESS_OPTIONS: { value: IntegrationAccess; label: string }[] = [
@@ -155,7 +246,14 @@ const ROLE_OPTIONS = [
   { value: "admin", label: "Admin" },
 ]
 
-const SWATCHES = ["#2f6f73", "#7c3f58", "#556b2f", "#7b5d2a", "#385f8f", "#6f4d8f"]
+const SWATCHES = [
+  "#2f6f73",
+  "#7c3f58",
+  "#556b2f",
+  "#7b5d2a",
+  "#385f8f",
+  "#6f4d8f",
+]
 
 function timeAgo(ts: number): string {
   const diff = Math.max(0, Date.now() - ts)
@@ -183,7 +281,9 @@ export function ProfilesTab() {
   const [showProfilePassword, setShowProfilePassword] = React.useState(false)
   const [clearProfilePassword, setClearProfilePassword] = React.useState(false)
   const [audit, setAudit] = React.useState<ProfileAuditEvent[]>([])
-  const [connections, setConnections] = React.useState<IntegrationConnectionView[]>([])
+  const [connections, setConnections] = React.useState<
+    IntegrationConnectionView[]
+  >([])
   const [connectionGrants, setConnectionGrants] = React.useState<
     IntegrationConnectionGrantView[]
   >([])
@@ -228,12 +328,15 @@ export function ProfilesTab() {
     const rows = (profilesData.profiles ?? []) as AdminProfileView[]
     setProfiles(rows)
     setAudit((auditData.events ?? []) as ProfileAuditEvent[])
-    setConnections((connectionsData.connections ?? []) as IntegrationConnectionView[])
+    setConnections(
+      (connectionsData.connections ?? []) as IntegrationConnectionView[]
+    )
     setConnectionGrants(
       (connectionsData.grants ?? []) as IntegrationConnectionGrantView[]
     )
     setConnectionPreferences(
-      (connectionsData.preferences ?? []) as IntegrationConnectionPreferenceView[]
+      (connectionsData.preferences ??
+        []) as IntegrationConnectionPreferenceView[]
     )
     setSelectedId((current) => current ?? rows[0]?.id ?? null)
   }, [])
@@ -296,7 +399,10 @@ export function ProfilesTab() {
           role: draft.role,
           color: draft.color,
           avatar: draft.avatar,
-          permissions: normalizeProfilePermissions(draft.permissions, draft.role),
+          permissions: normalizeProfilePermissions(
+            draft.permissions,
+            draft.role
+          ),
           ...(password ? { password } : {}),
           ...(clearProfilePassword && !password ? { clearPassword: true } : {}),
         }),
@@ -324,11 +430,14 @@ export function ProfilesTab() {
     setSaving(true)
     setError(null)
     try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(profile.id)}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ disabledAt }),
-      })
+      const res = await fetch(
+        `/api/profiles/${encodeURIComponent(profile.id)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ disabledAt }),
+        }
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok) throw new Error(data.error ?? failureMessage)
       await load()
@@ -348,7 +457,11 @@ export function ProfilesTab() {
       destructive: true,
     })
     if (!ok) return
-    await patchProfileStatus(profile, Date.now(), "Failed to deactivate profile")
+    await patchProfileStatus(
+      profile,
+      Date.now(),
+      "Failed to deactivate profile"
+    )
   }
 
   async function restoreProfile(profile: AdminProfileView) {
@@ -372,14 +485,17 @@ export function ProfilesTab() {
     setSaving(true)
     setError(null)
     try {
-      const res = await fetch(`/api/profiles/${encodeURIComponent(profile.id)}`, {
-        method: "DELETE",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          confirmName: deleteConfirmName.trim(),
-          deleteState: deleteProfileData,
-        }),
-      })
+      const res = await fetch(
+        `/api/profiles/${encodeURIComponent(profile.id)}`,
+        {
+          method: "DELETE",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            confirmName: deleteConfirmName.trim(),
+            deleteState: deleteProfileData,
+          }),
+        }
+      )
       const data = await res.json().catch(() => ({}))
       if (!res.ok)
         throw new Error(data.error ?? "Failed to permanently delete profile")
@@ -389,7 +505,9 @@ export function ProfilesTab() {
       await load()
     } catch (err) {
       setError(
-        err instanceof Error ? err.message : "Failed to permanently delete profile"
+        err instanceof Error
+          ? err.message
+          : "Failed to permanently delete profile"
       )
     } finally {
       setSaving(false)
@@ -473,545 +591,567 @@ export function ProfilesTab() {
 
   return (
     <>
-    <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
-      {/* Left column — roster */}
-      <div className="space-y-3">
-        <div className="flex items-center justify-between px-1">
-          <div className="text-[13px] font-semibold text-foreground/70">
-            Profiles{" "}
-            <span className="font-normal text-foreground/40">· {profiles.length}</span>
-          </div>
-          <Button
-            size="sm"
-            variant={creating ? "secondary" : "outline"}
-            onClick={() => setCreating((value) => !value)}
-          >
-            {creating ? <X className="size-3.5" /> : <Plus className="size-3.5" />}
-            {creating ? "Cancel" : "New"}
-          </Button>
-        </div>
-
-        {creating && (
-          <form
-            onSubmit={createProfile}
-            className="space-y-2 rounded-2xl border border-border/70 bg-card p-3 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]"
-          >
-            <Input
-              autoFocus
-              value={newName}
-              onChange={(event) => setNewName(event.target.value)}
-              placeholder="Name"
-              className="h-9"
-            />
-            <PasswordInput
-              value={newPassword}
-              onChange={setNewPassword}
-              placeholder="Optional password"
-              show={showNewPassword}
-              onToggleShow={() => setShowNewPassword((value) => !value)}
-            />
-            <Button
-              type="submit"
-              size="lg"
-              disabled={saving || !newName.trim()}
-              className="w-full"
-            >
-              <UserPlus className="size-4" />
-              Create profile
-            </Button>
-          </form>
-        )}
-
-        <div className="space-y-0.5 rounded-2xl border border-border/70 bg-card p-1.5 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
-          {profiles.map((profile) => (
-            <button
-              key={profile.id}
-              type="button"
-              onClick={() => setSelectedId(profile.id)}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
-                profile.id === selectedId
-                  ? "bg-[#f0ede6] dark:bg-muted"
-                  : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/50",
-                profile.disabledAt && "opacity-60"
-              )}
-            >
-              <span
-                className="grid size-9 shrink-0 place-items-center rounded-xl text-[12px] font-semibold text-white"
-                style={{ backgroundColor: profile.color }}
-              >
-                {profileInitials(profile.name)}
+      <div className="grid gap-5 lg:grid-cols-[300px_minmax(0,1fr)]">
+        {/* Left column — roster */}
+        <div className="space-y-3">
+          <div className="flex items-center justify-between px-1">
+            <div className="text-[13px] font-semibold text-foreground/70">
+              Profiles{" "}
+              <span className="font-normal text-foreground/40">
+                · {profiles.length}
               </span>
-              <span className="min-w-0 flex-1">
-                <span className="flex items-center gap-1.5">
-                  <span className="truncate text-[14px] font-medium text-foreground">
-                    {profile.name}
-                  </span>
-                  {profile.locked && (
-                    <Lock className="size-3 shrink-0 text-foreground/40" />
-                  )}
-                  {profile.disabledAt && (
-                    <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-normal text-foreground/45">
-                      Disabled
-                    </span>
-                  )}
-                </span>
-                <span className="block truncate text-[12px] capitalize text-foreground/45">
-                  {profile.disabledAt ? "inactive" : profile.role}
-                </span>
-              </span>
-            </button>
-          ))}
-          {profiles.length === 0 && (
-            <div className="px-3 py-6 text-center text-[13px] text-foreground/45">
-              No profiles yet.
             </div>
-          )}
-        </div>
-      </div>
-
-      {/* Right column — editor */}
-      <div className="min-w-0 space-y-4">
-        {error && (
-          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive">
-            {error}
+            <Button
+              size="sm"
+              variant={creating ? "secondary" : "outline"}
+              onClick={() => setCreating((value) => !value)}
+            >
+              {creating ? (
+                <X className="size-3.5" />
+              ) : (
+                <Plus className="size-3.5" />
+              )}
+              {creating ? "Cancel" : "New"}
+            </Button>
           </div>
-        )}
 
-        {selected ? (
-          <>
-            {/* Header */}
-            <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border/70 bg-card px-5 py-4 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
-              <div className="flex min-w-0 items-center gap-3.5">
+          {creating && (
+            <form
+              onSubmit={createProfile}
+              className="space-y-2 rounded-2xl border border-border/70 bg-card p-3 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]"
+            >
+              <Input
+                autoFocus
+                value={newName}
+                onChange={(event) => setNewName(event.target.value)}
+                placeholder="Name"
+                className="h-9"
+              />
+              <PasswordInput
+                value={newPassword}
+                onChange={setNewPassword}
+                placeholder="Optional password"
+                show={showNewPassword}
+                onToggleShow={() => setShowNewPassword((value) => !value)}
+              />
+              <Button
+                type="submit"
+                size="lg"
+                disabled={saving || !newName.trim()}
+                className="w-full"
+              >
+                <UserPlus className="size-4" />
+                Create profile
+              </Button>
+            </form>
+          )}
+
+          <div className="space-y-0.5 rounded-2xl border border-border/70 bg-card p-1.5 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
+            {profiles.map((profile) => (
+              <button
+                key={profile.id}
+                type="button"
+                onClick={() => setSelectedId(profile.id)}
+                className={cn(
+                  "flex w-full items-center gap-3 rounded-xl px-2.5 py-2 text-left transition-colors",
+                  profile.id === selectedId
+                    ? "bg-[#f0ede6] dark:bg-muted"
+                    : "hover:bg-[#f0ede6]/60 dark:hover:bg-muted/50",
+                  profile.disabledAt && "opacity-60"
+                )}
+              >
                 <span
-                  className="grid size-12 shrink-0 place-items-center rounded-2xl text-[16px] font-semibold text-white"
-                  style={{ backgroundColor: selected.color }}
+                  className="grid size-9 shrink-0 place-items-center rounded-xl text-[12px] font-semibold text-white"
+                  style={{ backgroundColor: profile.color }}
                 >
-                  {profileInitials(selected.name || "?")}
+                  {profileInitials(profile.name)}
                 </span>
-                <div className="min-w-0">
-                  <div className="flex items-center gap-2">
-                    <h2 className="truncate text-[17px] font-semibold tracking-tight text-foreground">
-                      {selected.name || "Untitled profile"}
-                    </h2>
-                    <RoleBadge role={selected.role} />
-                    {selected.disabledAt && (
-                      <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5">
+                    <span className="truncate text-[14px] font-medium text-foreground">
+                      {profile.name}
+                    </span>
+                    {profile.locked && (
+                      <Lock className="size-3 shrink-0 text-foreground/40" />
+                    )}
+                    {profile.disabledAt && (
+                      <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tracking-normal text-foreground/45 uppercase">
                         Disabled
                       </span>
                     )}
-                    {selected.locked && (
-                      <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
-                        <Lock className="size-3" />
-                        Password
-                      </span>
-                    )}
-                  </div>
-                  <p className="mt-0.5 text-[12px] text-foreground/45">
-                    Updated {timeAgo(selected.updatedAt)}
-                  </p>
-                </div>
+                  </span>
+                  <span className="block truncate text-[12px] text-foreground/45 capitalize">
+                    {profile.disabledAt ? "inactive" : profile.role}
+                  </span>
+                </span>
+              </button>
+            ))}
+            {profiles.length === 0 && (
+              <div className="px-3 py-6 text-center text-[13px] text-foreground/45">
+                No profiles yet.
               </div>
-              <div className="flex items-center gap-2">
-                {selected.role !== "admin" && selected.disabledAt ? (
-                  <>
-                    <Button
-                      variant="outline"
-                      size="lg"
-                      onClick={() => void restoreProfile(selected)}
-                      disabled={saving}
-                    >
-                      <RotateCcw className="size-4" />
-                      Restore
-                    </Button>
+            )}
+          </div>
+        </div>
+
+        {/* Right column — editor */}
+        <div className="min-w-0 space-y-4">
+          {error && (
+            <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3.5 py-2.5 text-[13px] text-destructive">
+              {error}
+            </div>
+          )}
+
+          {selected ? (
+            <>
+              {/* Header */}
+              <div className="flex flex-wrap items-center justify-between gap-4 rounded-2xl border border-border/70 bg-card px-5 py-4 shadow-[0_1px_0_0_rgba(0,0,0,0.02)]">
+                <div className="flex min-w-0 items-center gap-3.5">
+                  <span
+                    className="grid size-12 shrink-0 place-items-center rounded-2xl text-[16px] font-semibold text-white"
+                    style={{ backgroundColor: selected.color }}
+                  >
+                    {profileInitials(selected.name || "?")}
+                  </span>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2">
+                      <h2 className="truncate text-[17px] font-semibold tracking-tight text-foreground">
+                        {selected.name || "Untitled profile"}
+                      </h2>
+                      <RoleBadge role={selected.role} />
+                      {selected.disabledAt && (
+                        <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
+                          Disabled
+                        </span>
+                      )}
+                      {selected.locked && (
+                        <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-foreground/55">
+                          <Lock className="size-3" />
+                          Password
+                        </span>
+                      )}
+                    </div>
+                    <p className="mt-0.5 text-[12px] text-foreground/45">
+                      Updated {timeAgo(selected.updatedAt)}
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  {selected.role !== "admin" && selected.disabledAt ? (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="lg"
+                        onClick={() => void restoreProfile(selected)}
+                        disabled={saving}
+                      >
+                        <RotateCcw className="size-4" />
+                        Restore
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="lg"
+                        onClick={() => openPermanentDelete(selected)}
+                        disabled={saving}
+                        className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2 className="size-4" />
+                        Delete permanently
+                      </Button>
+                    </>
+                  ) : selected.role !== "admin" ? (
                     <Button
                       variant="ghost"
                       size="lg"
-                      onClick={() => openPermanentDelete(selected)}
+                      onClick={() => void deactivateProfile(selected)}
                       disabled={saving}
                       className="text-destructive hover:bg-destructive/10 hover:text-destructive"
                     >
-                      <Trash2 className="size-4" />
-                      Delete permanently
+                      <UserX className="size-4" />
+                      Deactivate
                     </Button>
-                  </>
-                ) : selected.role !== "admin" ? (
+                  ) : null}
                   <Button
-                    variant="ghost"
                     size="lg"
-                    onClick={() => void deactivateProfile(selected)}
-                    disabled={saving}
-                    className="text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    onClick={() => void saveProfile()}
+                    disabled={saving || !dirty || Boolean(passwordError)}
                   >
-                    <UserX className="size-4" />
-                    Deactivate
+                    <Save className="size-4" />
+                    {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
                   </Button>
-                ) : null}
-                <Button
-                  size="lg"
-                  onClick={() => void saveProfile()}
-                  disabled={saving || !dirty || Boolean(passwordError)}
-                >
-                  <Save className="size-4" />
-                  {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
-                </Button>
-              </div>
-            </div>
-
-            {/* Identity */}
-            <SectionCard
-              icon={Users}
-              title="Identity"
-              description="How this profile shows up across the app."
-            >
-              <div className="grid gap-4 sm:grid-cols-2">
-                <Field label="Name">
-                  <Input
-                    value={selected.name}
-                    onChange={(event) =>
-                      updateDraft((p) => {
-                        p.name = event.target.value
-                      })
-                    }
-                    className="h-9"
-                  />
-                </Field>
-                <Field
-                  label="Role"
-                  hint={lockRole ? "Built-in owner — role can't be changed." : undefined}
-                >
-                  <Select
-                    value={selected.role}
-                    disabled={lockRole}
-                    options={ROLE_OPTIONS}
-                    onValueChange={(value) =>
-                      updateDraft((p) => {
-                        p.role = value as ProfileRole
-                      })
-                    }
-                    className="[&>button]:h-9"
-                  />
-                </Field>
+                </div>
               </div>
 
-              <Field label="Color">
-                <div className="flex flex-wrap items-center gap-2">
-                  {SWATCHES.map((color) => (
-                    <button
-                      key={color}
-                      type="button"
-                      aria-label={`Use ${color}`}
-                      onClick={() =>
+              {/* Identity */}
+              <SectionCard
+                icon={Users}
+                title="Identity"
+                description="How this profile shows up across the app."
+              >
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <Field label="Name">
+                    <Input
+                      value={selected.name}
+                      onChange={(event) =>
                         updateDraft((p) => {
-                          p.color = color
+                          p.name = event.target.value
                         })
                       }
-                      className={cn(
-                        "size-7 rounded-full ring-offset-2 ring-offset-card transition-shadow",
-                        selected.color.toLowerCase() === color.toLowerCase()
-                          ? "ring-2 ring-foreground"
-                          : "ring-1 ring-border/60 hover:ring-foreground/40"
-                      )}
-                      style={{ backgroundColor: color }}
+                      className="h-9"
                     />
-                  ))}
-                  <span className="mx-1 h-6 w-px bg-border/60" />
-                  <input
-                    type="color"
-                    aria-label="Custom color"
-                    value={selected.color}
-                    onChange={(event) =>
-                      updateDraft((p) => {
-                        p.color = event.target.value
-                      })
+                  </Field>
+                  <Field
+                    label="Role"
+                    hint={
+                      lockRole
+                        ? "Built-in owner — role can't be changed."
+                        : undefined
                     }
-                    className="size-7 cursor-pointer rounded-md border border-border/60 bg-transparent p-0.5 [&::-webkit-color-swatch]:rounded-[3px] [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
-                  />
-                  <Input
-                    value={selected.color}
-                    onChange={(event) =>
-                      updateDraft((p) => {
-                        p.color = event.target.value
-                      })
-                    }
-                    className="h-7 w-24 font-mono text-[12px] uppercase"
-                  />
+                  >
+                    <Select
+                      value={selected.role}
+                      disabled={lockRole}
+                      options={ROLE_OPTIONS}
+                      onValueChange={(value) =>
+                        updateDraft((p) => {
+                          p.role = value as ProfileRole
+                        })
+                      }
+                      className="[&>button]:h-9"
+                    />
+                  </Field>
                 </div>
-              </Field>
-            </SectionCard>
 
-            {/* Password */}
-            <SectionCard
-              icon={KeyRound}
-              title="Password"
-              description="Profiles stay open by default. Add a password only when you need one."
-            >
-              <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-3">
-                <div className="min-w-0">
-                  <div className="text-[13.5px] font-medium text-foreground">
-                    {selected.locked ? "Password protected" : "No password"}
-                  </div>
-                  <div className="text-[12px] text-foreground/50">
-                    {selected.locked
-                      ? "This profile asks for a password to sign in."
-                      : "Anyone on this device can open this profile."}
-                  </div>
-                </div>
-                {selected.locked &&
-                  (clearProfilePassword ? (
-                    <span className="flex shrink-0 items-center gap-2 text-[12px] font-medium text-destructive">
-                      Will be removed on save
+                <Field label="Color">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {SWATCHES.map((color) => (
                       <button
+                        key={color}
                         type="button"
-                        onClick={() => setClearProfilePassword(false)}
-                        className="rounded-md px-1.5 py-0.5 text-foreground/55 underline-offset-2 hover:text-foreground hover:underline"
-                      >
-                        Undo
-                      </button>
-                    </span>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
-                        setClearProfilePassword(true)
-                        setProfilePassword("")
-                        setProfilePasswordConfirm("")
-                      }}
-                      className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
-                    >
-                      <Trash2 className="size-3.5" />
-                      Remove
-                    </Button>
-                  ))}
-              </div>
+                        aria-label={`Use ${color}`}
+                        onClick={() =>
+                          updateDraft((p) => {
+                            p.color = color
+                          })
+                        }
+                        className={cn(
+                          "size-7 rounded-full ring-offset-2 ring-offset-card transition-shadow",
+                          selected.color.toLowerCase() === color.toLowerCase()
+                            ? "ring-2 ring-foreground"
+                            : "ring-1 ring-border/60 hover:ring-foreground/40"
+                        )}
+                        style={{ backgroundColor: color }}
+                      />
+                    ))}
+                    <span className="mx-1 h-6 w-px bg-border/60" />
+                    <input
+                      type="color"
+                      aria-label="Custom color"
+                      value={selected.color}
+                      onChange={(event) =>
+                        updateDraft((p) => {
+                          p.color = event.target.value
+                        })
+                      }
+                      className="size-7 cursor-pointer rounded-md border border-border/60 bg-transparent p-0.5 [&::-webkit-color-swatch]:rounded-[3px] [&::-webkit-color-swatch]:border-0 [&::-webkit-color-swatch-wrapper]:p-0"
+                    />
+                    <Input
+                      value={selected.color}
+                      onChange={(event) =>
+                        updateDraft((p) => {
+                          p.color = event.target.value
+                        })
+                      }
+                      className="h-7 w-24 font-mono text-[12px] uppercase"
+                    />
+                  </div>
+                </Field>
+              </SectionCard>
 
-              {!clearProfilePassword && (
-                <div className="space-y-2">
-                  <PasswordInput
-                    value={profilePassword}
-                    onChange={setProfilePassword}
-                    show={showProfilePassword}
-                    onToggleShow={() => setShowProfilePassword((value) => !value)}
-                    placeholder={
-                      selected.locked
-                        ? "New password (leave blank to keep current)"
-                        : "Set a password"
-                    }
-                  />
-                  {profilePassword && (
+              {/* Password */}
+              <SectionCard
+                icon={KeyRound}
+                title="Password"
+                description="Profiles stay open by default. Add a password only when you need one."
+              >
+                <div className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-3">
+                  <div className="min-w-0">
+                    <div className="text-[13.5px] font-medium text-foreground">
+                      {selected.locked ? "Password protected" : "No password"}
+                    </div>
+                    <div className="text-[12px] text-foreground/50">
+                      {selected.locked
+                        ? "This profile asks for a password to sign in."
+                        : "Anyone on this device can open this profile."}
+                    </div>
+                  </div>
+                  {selected.locked &&
+                    (clearProfilePassword ? (
+                      <span className="flex shrink-0 items-center gap-2 text-[12px] font-medium text-destructive">
+                        Will be removed on save
+                        <button
+                          type="button"
+                          onClick={() => setClearProfilePassword(false)}
+                          className="rounded-md px-1.5 py-0.5 text-foreground/55 underline-offset-2 hover:text-foreground hover:underline"
+                        >
+                          Undo
+                        </button>
+                      </span>
+                    ) : (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        onClick={() => {
+                          setClearProfilePassword(true)
+                          setProfilePassword("")
+                          setProfilePasswordConfirm("")
+                        }}
+                        className="shrink-0 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                      >
+                        <Trash2 className="size-3.5" />
+                        Remove
+                      </Button>
+                    ))}
+                </div>
+
+                {!clearProfilePassword && (
+                  <div className="space-y-2">
                     <PasswordInput
-                      value={profilePasswordConfirm}
-                      onChange={setProfilePasswordConfirm}
+                      value={profilePassword}
+                      onChange={setProfilePassword}
                       show={showProfilePassword}
                       onToggleShow={() =>
                         setShowProfilePassword((value) => !value)
                       }
-                      placeholder="Confirm password"
-                    />
-                  )}
-                  {passwordError && (
-                    <p className="text-[12px] text-destructive">{passwordError}</p>
-                  )}
-                </div>
-              )}
-            </SectionCard>
-
-            {isAdmin ? (
-              <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-muted/40 px-4 py-3">
-                <ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground/60" />
-                <div className="text-[13px] leading-relaxed text-foreground/70">
-                  <span className="font-medium text-foreground">Full access.</span>{" "}
-                  Admins bypass every permission check, so surface, tool, and
-                  integration limits don&apos;t apply. Switch this profile to{" "}
-                  <span className="font-medium text-foreground">Member</span> to
-                  set per-area access.
-                </div>
-              </div>
-            ) : (
-              <>
-                {/* Surfaces */}
-                <SectionCard
-                  icon={AppWindow}
-                  title="Surfaces"
-                  description="Pages and workspaces this profile can open."
-                >
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {PROFILE_SURFACES.map((surface) => {
-                      const meta = SURFACE_META[surface]
-                      return (
-                        <ToggleRow
-                          key={surface}
-                          icon={meta.icon}
-                          label={meta.label}
-                          description={meta.description}
-                          checked={selected.permissions.surfaces[surface]}
-                          onChange={(checked) =>
-                            updateDraft((p) => {
-                              p.permissions.surfaces[surface] = checked
-                            })
-                          }
-                        />
-                      )
-                    })}
-                  </div>
-                </SectionCard>
-
-                {/* Tools */}
-                <SectionCard
-                  icon={Terminal}
-                  title="Tools"
-                  description="Capabilities the assistant may use on this profile's behalf."
-                >
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {TOOL_PERMISSION_IDS.map((tool) => {
-                      const meta = TOOL_META[tool]
-                      return (
-                        <ToggleRow
-                          key={tool}
-                          icon={meta.icon}
-                          label={meta.label}
-                          description={meta.description}
-                          checked={selected.permissions.tools[tool]}
-                          onChange={(checked) =>
-                            updateDraft((p) => {
-                              p.permissions.tools[tool] = checked
-                            })
-                          }
-                        />
-                      )
-                    })}
-                  </div>
-                </SectionCard>
-
-                {/* Integrations */}
-                <SectionCard
-                  icon={Globe}
-                  title="Integrations"
-                  description="Per-connection access level for external services."
-                >
-                  <div className="grid gap-2 sm:grid-cols-2">
-                    {INTEGRATION_PERMISSION_IDS.map((integration) => {
-                      const meta = INTEGRATION_META[integration]
-                      const Icon = meta.icon
-                      return (
-                        <div
-                          key={integration}
-                          className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5"
-                        >
-                          <div className="flex min-w-0 items-center gap-3">
-                            <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
-                              <Icon className="size-4" />
-                            </span>
-                            <span className="truncate text-[13.5px] font-medium text-foreground">
-                              {meta.label}
-                            </span>
-                          </div>
-                          <Select
-                            value={selected.permissions.integrations[integration]}
-                            options={ACCESS_OPTIONS}
-                            onValueChange={(value) =>
-                              updateDraft((p) => {
-                                p.permissions.integrations[integration] =
-                                  value as IntegrationAccess
-                              })
-                            }
-                            className="w-[140px] shrink-0 [&>button]:h-8 [&>button]:text-[13px]"
-                          />
-                        </div>
-                      )
-                    })}
-                  </div>
-
-                  <div className="mt-1 border-t border-border/50 pt-3">
-                    <ToggleRow
-                      icon={KeyRound}
-                      label="Inherit admin API keys"
-                      description="Use the owner's provider keys for model calls."
-                      checked={selected.permissions.inheritAdminApiKeys}
-                      onChange={(checked) =>
-                        updateDraft((p) => {
-                          p.permissions.inheritAdminApiKeys = checked
-                        })
+                      placeholder={
+                        selected.locked
+                          ? "New password (leave blank to keep current)"
+                          : "Set a password"
                       }
                     />
+                    {profilePassword && (
+                      <PasswordInput
+                        value={profilePasswordConfirm}
+                        onChange={setProfilePasswordConfirm}
+                        show={showProfilePassword}
+                        onToggleShow={() =>
+                          setShowProfilePassword((value) => !value)
+                        }
+                        placeholder="Confirm password"
+                      />
+                    )}
+                    {passwordError && (
+                      <p className="text-[12px] text-destructive">
+                        {passwordError}
+                      </p>
+                    )}
                   </div>
+                )}
+              </SectionCard>
 
-                  <HomeAssistantSharingPanel
-                    profile={selected}
-                    profiles={profiles}
-                    connections={connections}
-                    grants={connectionGrants}
-                    preferences={connectionPreferences}
-                    saving={saving}
-                    onAccessChange={(connectionId, access) =>
-                      void updateHomeAssistantGrant(selected, connectionId, access)
-                    }
-                    onSetDefault={(connectionId) =>
-                      void setHomeAssistantDefault(selected, connectionId)
-                    }
-                  />
-                </SectionCard>
-              </>
-            )}
-          </>
-        ) : (
-          <div className="grid place-items-center rounded-2xl border border-dashed border-border/70 bg-card/50 px-6 py-16 text-center">
-            <Users className="size-6 text-foreground/30" />
-            <p className="mt-3 text-[14px] font-medium text-foreground/70">
-              No profile selected
-            </p>
-            <p className="mt-1 text-[13px] text-foreground/45">
-              Pick a profile from the list, or create a new one.
-            </p>
-          </div>
-        )}
-
-        {/* Activity */}
-        <SectionCard
-          icon={Activity}
-          title="Recent activity"
-          description="Latest profile changes across the workspace."
-        >
-          {audit.length === 0 ? (
-            <div className="py-2 text-[13px] text-foreground/45">
-              No profile activity yet.
-            </div>
-          ) : (
-            <div className="max-h-72 overflow-y-auto pr-1 [scrollbar-width:thin]">
-              <ol className="-mt-1">
-                {audit.map((event) => (
-                  <li
-                    key={event.id}
-                    className="flex gap-3 border-b border-border/40 py-2.5 last:border-0"
+              {isAdmin ? (
+                <div className="flex items-start gap-3 rounded-2xl border border-border/60 bg-muted/40 px-4 py-3">
+                  <ShieldCheck className="mt-0.5 size-4 shrink-0 text-foreground/60" />
+                  <div className="text-[13px] leading-relaxed text-foreground/70">
+                    <span className="font-medium text-foreground">
+                      Full access.
+                    </span>{" "}
+                    Admins bypass every permission check, so surface, tool, and
+                    integration limits don&apos;t apply. Switch this profile to{" "}
+                    <span className="font-medium text-foreground">Member</span>{" "}
+                    to set per-area access.
+                  </div>
+                </div>
+              ) : (
+                <>
+                  {/* Surfaces */}
+                  <SectionCard
+                    icon={AppWindow}
+                    title="Surfaces"
+                    description="Pages and workspaces this profile can open."
                   >
-                    <span className="w-20 shrink-0 pt-px text-[12px] text-foreground/40">
-                      {timeAgo(event.createdAt)}
-                    </span>
-                    <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/75">
-                      {event.summary}
-                    </span>
-                  </li>
-                ))}
-              </ol>
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {PROFILE_SURFACES.map((surface) => {
+                        const meta = SURFACE_META[surface]
+                        return (
+                          <ToggleRow
+                            key={surface}
+                            icon={meta.icon}
+                            label={meta.label}
+                            description={meta.description}
+                            checked={selected.permissions.surfaces[surface]}
+                            onChange={(checked) =>
+                              updateDraft((p) => {
+                                p.permissions.surfaces[surface] = checked
+                              })
+                            }
+                          />
+                        )
+                      })}
+                    </div>
+                  </SectionCard>
+
+                  {/* Tools */}
+                  <SectionCard
+                    icon={Terminal}
+                    title="Tools"
+                    description="Capabilities the assistant may use on this profile's behalf."
+                  >
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {TOOL_PERMISSION_IDS.map((tool) => {
+                        const meta = TOOL_META[tool]
+                        return (
+                          <ToggleRow
+                            key={tool}
+                            icon={meta.icon}
+                            label={meta.label}
+                            description={meta.description}
+                            checked={selected.permissions.tools[tool]}
+                            onChange={(checked) =>
+                              updateDraft((p) => {
+                                p.permissions.tools[tool] = checked
+                              })
+                            }
+                          />
+                        )
+                      })}
+                    </div>
+                  </SectionCard>
+
+                  {/* Integrations */}
+                  <SectionCard
+                    icon={Globe}
+                    title="Integrations"
+                    description="Per-connection access level for external services."
+                  >
+                    <div className="grid gap-2 sm:grid-cols-2">
+                      {INTEGRATION_PERMISSION_IDS.map((integration) => {
+                        const meta = INTEGRATION_META[integration]
+                        const Icon = meta.icon
+                        return (
+                          <div
+                            key={integration}
+                            className="flex items-center justify-between gap-3 rounded-xl border border-border/60 bg-background/60 px-3.5 py-2.5"
+                          >
+                            <div className="flex min-w-0 items-center gap-3">
+                              <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-muted/70 text-foreground/70">
+                                <Icon className="size-4" />
+                              </span>
+                              <span className="truncate text-[13.5px] font-medium text-foreground">
+                                {meta.label}
+                              </span>
+                            </div>
+                            <Select
+                              value={
+                                selected.permissions.integrations[integration]
+                              }
+                              options={ACCESS_OPTIONS}
+                              onValueChange={(value) =>
+                                updateDraft((p) => {
+                                  p.permissions.integrations[integration] =
+                                    value as IntegrationAccess
+                                })
+                              }
+                              className="w-[140px] shrink-0 [&>button]:h-8 [&>button]:text-[13px]"
+                            />
+                          </div>
+                        )
+                      })}
+                    </div>
+
+                    <div className="mt-1 border-t border-border/50 pt-3">
+                      <ToggleRow
+                        icon={KeyRound}
+                        label="Inherit admin API keys"
+                        description="Use the owner's provider keys for model calls."
+                        checked={selected.permissions.inheritAdminApiKeys}
+                        onChange={(checked) =>
+                          updateDraft((p) => {
+                            p.permissions.inheritAdminApiKeys = checked
+                          })
+                        }
+                      />
+                    </div>
+
+                    <HomeAssistantSharingPanel
+                      profile={selected}
+                      profiles={profiles}
+                      connections={connections}
+                      grants={connectionGrants}
+                      preferences={connectionPreferences}
+                      saving={saving}
+                      onAccessChange={(connectionId, access) =>
+                        void updateHomeAssistantGrant(
+                          selected,
+                          connectionId,
+                          access
+                        )
+                      }
+                      onSetDefault={(connectionId) =>
+                        void setHomeAssistantDefault(selected, connectionId)
+                      }
+                    />
+                  </SectionCard>
+                </>
+              )}
+            </>
+          ) : (
+            <div className="grid place-items-center rounded-2xl border border-dashed border-border/70 bg-card/50 px-6 py-16 text-center">
+              <Users className="size-6 text-foreground/30" />
+              <p className="mt-3 text-[14px] font-medium text-foreground/70">
+                No profile selected
+              </p>
+              <p className="mt-1 text-[13px] text-foreground/45">
+                Pick a profile from the list, or create a new one.
+              </p>
             </div>
           )}
-        </SectionCard>
+
+          {/* Activity */}
+          <SectionCard
+            icon={Activity}
+            title="Recent activity"
+            description="Latest profile changes across the workspace."
+          >
+            {audit.length === 0 ? (
+              <div className="py-2 text-[13px] text-foreground/45">
+                No profile activity yet.
+              </div>
+            ) : (
+              <div className="max-h-72 overflow-y-auto pr-1 [scrollbar-width:thin]">
+                <ol className="-mt-1">
+                  {audit.map((event) => (
+                    <li
+                      key={event.id}
+                      className="flex gap-3 border-b border-border/40 py-2.5 last:border-0"
+                    >
+                      <span className="w-20 shrink-0 pt-px text-[12px] text-foreground/40">
+                        {timeAgo(event.createdAt)}
+                      </span>
+                      <span className="min-w-0 flex-1 text-[13px] leading-relaxed text-foreground/75">
+                        {event.summary}
+                      </span>
+                    </li>
+                  ))}
+                </ol>
+              </div>
+            )}
+          </SectionCard>
+        </div>
       </div>
-    </div>
-    {dialog}
-    <PermanentProfileDeleteDialog
-      profile={deleteTarget}
-      confirmName={deleteConfirmName}
-      deleteProfileData={deleteProfileData}
-      saving={saving}
-      onConfirmNameChange={setDeleteConfirmName}
-      onDeleteProfileDataChange={setDeleteProfileData}
-      onCancel={() => setDeleteTarget(null)}
-      onConfirm={() => {
-        if (deleteTarget) void deleteProfilePermanently(deleteTarget)
-      }}
-    />
+      {dialog}
+      <PermanentProfileDeleteDialog
+        profile={deleteTarget}
+        confirmName={deleteConfirmName}
+        deleteProfileData={deleteProfileData}
+        saving={saving}
+        onConfirmNameChange={setDeleteConfirmName}
+        onDeleteProfileDataChange={setDeleteProfileData}
+        onCancel={() => setDeleteTarget(null)}
+        onConfirm={() => {
+          if (deleteTarget) void deleteProfilePermanently(deleteTarget)
+        }}
+      />
     </>
   )
 }
@@ -1079,8 +1219,8 @@ function PermanentProfileDeleteDialog({
               className="mt-0.5"
             />
             <span>
-              Delete this profile&apos;s local workspace, private tokens, uploads,
-              artifacts, and browser state.
+              Delete this profile&apos;s local workspace, private tokens,
+              uploads, artifacts, and browser state.
             </span>
           </label>
         </div>
@@ -1177,7 +1317,7 @@ function HomeAssistantSharingPanel({
             const grant = grantsByConnection.get(connection.id)
             const access: IntegrationAccess = owned
               ? "setup"
-              : grant?.access ?? "none"
+              : (grant?.access ?? "none")
             const canUse = owned || access !== "none"
             const isDefault =
               preferredConnectionId === connection.id ||
@@ -1337,7 +1477,7 @@ function PasswordInput({
         type="button"
         onClick={onToggleShow}
         aria-label={show ? "Hide password" : "Show password"}
-        className="absolute right-0 top-0 grid h-9 w-9 place-items-center rounded-r-md text-foreground/40 outline-none transition-colors hover:text-foreground/70 focus-visible:text-foreground/70"
+        className="absolute top-0 right-0 grid h-9 w-9 place-items-center rounded-r-md text-foreground/40 transition-colors outline-none hover:text-foreground/70 focus-visible:text-foreground/70"
       >
         {show ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
       </button>

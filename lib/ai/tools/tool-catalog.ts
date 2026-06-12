@@ -63,7 +63,7 @@ import {
 import { patchWorkoutTool } from "./workout-patch"
 import { APPS_TOOLS } from "./apps"
 import { applyUpdateTool } from "./update-app"
-import { memorySearchTool } from "./memory-search"
+import { memoryRecentActivityTool, memorySearchTool } from "./memory-search"
 import { librarySearchTool } from "./library-search"
 import { findPastUploadsTool } from "./find-past-uploads"
 import { copyUploadToWorkspaceTool } from "./copy-upload"
@@ -132,6 +132,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   ...APPS_TOOLS,
   applyUpdateTool,
   memorySearchTool,
+  memoryRecentActivityTool,
   librarySearchTool,
   findPastUploadsTool,
   copyUploadToWorkspaceTool,

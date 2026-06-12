@@ -25,6 +25,7 @@ __pycache__/
 /blob-report/
 /.playwright-cli/
 /.playwright-mcp/
+/voice-poc/
 browser-agent-*.png
 monitor-refactor-check.png
 

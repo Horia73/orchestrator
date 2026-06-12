@@ -22,7 +22,10 @@ import {
   setTaskState,
 } from "./store"
 import { sendInboxPushNotification } from "@/lib/push-notifications"
-import { normalizeInboxReplyActions } from "@/lib/ai/tools/notify"
+import {
+  normalizeInboxReplyActions,
+  normalizeNotifyWatchIds,
+} from "@/lib/ai/tools/notify"
 import { persistArtifactsFromMessage } from "@/lib/artifacts/persist-message"
 import {
   appendMissingArtifactBlocks,
@@ -86,6 +89,8 @@ interface NotifyRequest {
   title?: string
   body: string
   actions?: InboxReplyAction[]
+  /** Smart Monitor watch ids this notification is about (engagement learning). */
+  watchIds?: string[]
 }
 
 function normalizeInboxSubject(value: unknown): string | undefined {
@@ -182,6 +187,10 @@ export async function runScheduledTask(
   let attachments: Message["attachments"]
   let error: string | undefined
   const notifications: NotifyRequest[] = []
+  // Watches that contributed buffered items to a Smart Monitor wake — the
+  // unambiguous-attribution fallback when the agent omitted notify_inbox
+  // watch_ids (engagement learning still works for single-watch wakes).
+  let monitorContributingWatchIds: string[] = []
   let repairSourceAgent: AgentConfig | null = null
 
   try {
@@ -246,6 +255,9 @@ export async function runScheduledTask(
         }
         summary = smartPass.summary
         briefPrompt = smartPass.noteworthy ? smartPass.briefPrompt : undefined
+        monitorContributingWatchIds = Array.from(
+          new Set(smartPass.gate.pending.map((p) => p.watchId))
+        )
       } else if (task.action.monitorKind === "microscripts") {
         const { runMicroscriptsHeartbeat } =
           await import("@/lib/microscripts/heartbeat")
@@ -321,6 +333,7 @@ export async function runScheduledTask(
                   title?: unknown
                   body?: unknown
                   actions?: unknown
+                  watch_ids?: unknown
                 }
                 const body = typeof a?.body === "string" ? a.body.trim() : ""
                 if (body)
@@ -328,6 +341,7 @@ export async function runScheduledTask(
                     title: normalizeInboxSubject(a?.title),
                     body,
                     actions: normalizeInboxReplyActions(a.actions),
+                    watchIds: normalizeNotifyWatchIds(a.watch_ids),
                   })
               }
               if (
@@ -387,6 +401,22 @@ export async function runScheduledTask(
             } catch {
               /* best-effort */
             }
+            // Closed-loop follow-ups the wake just handled (resolved or
+            // deadline-fired, engine-disabled) are one-shot — sweep them now
+            // so they never accumulate in /monitor. Only after a SUCCESSFUL
+            // wake: on failure the pending buffer survives and the next wake
+            // still needs the watch record. A follow-up the wake re-armed via
+            // monitor_wake_feedback was re-enabled, so the sweep skips it.
+            if (ok) {
+              try {
+                const { removeCompletedFollowUpWatches } = await import(
+                  "@/lib/monitor/store"
+                )
+                removeCompletedFollowUpWatches()
+              } catch {
+                /* best-effort */
+              }
+            }
           } else if (capturedState !== undefined) {
             try {
               setTaskState(task.id, capturedState)
@@ -436,6 +466,7 @@ export async function runScheduledTask(
                 title?: unknown
                 body?: unknown
                 actions?: unknown
+                watch_ids?: unknown
               }
               const body = typeof a?.body === "string" ? a.body.trim() : ""
               if (body)
@@ -443,6 +474,7 @@ export async function runScheduledTask(
                   title: normalizeInboxSubject(a?.title),
                   body,
                   actions: normalizeInboxReplyActions(a.actions),
+                  watchIds: normalizeNotifyWatchIds(a.watch_ids),
                 })
             }
             // The agent's private per-task memory write (last wins).
@@ -592,11 +624,25 @@ export async function runScheduledTask(
         : undefined,
       timestamp: Date.now(),
     }
+    // Link the Inbox item back to its monitor watches so user behavior on it
+    // (open / reply / dismiss / quick action) records user_signal events for
+    // engagement learning. Explicit notify_inbox watch_ids win; a single-watch
+    // smart wake is unambiguous enough to attribute without them.
+    const explicitWatchIds = Array.from(
+      new Set(visibleNotifications.flatMap((n) => n.watchIds ?? []))
+    )
+    const watchIds =
+      explicitWatchIds.length > 0
+        ? explicitWatchIds
+        : monitorContributingWatchIds.length === 1
+          ? monitorContributingWatchIds
+          : []
     createInboxConversation({
       id: conversationId,
       taskId: task.id,
       title: inboxTitle,
       messages: notificationSurface ? [assistantMsg] : [userMsg, assistantMsg],
+      watchIds: watchIds.length > 0 ? watchIds : undefined,
     })
     const persisted = persistArtifactsFromMessage({
       conversationId,

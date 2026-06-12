@@ -3,7 +3,7 @@
 
 import { describeAction, describeRule } from '../monitor/describe'
 import type { MonitorWatch, SuppressPattern, WatchEvent } from '../monitor/schema'
-import { listMonitorWatches, listWatchEvents } from '../monitor/store'
+import { getMonitorWatch, listMonitorWatches, listWatchEvents } from '../monitor/store'
 import { listTaskRuns, type TaskRunRecord } from '../scheduling/store'
 import { getConfig } from '../config'
 import { isValidTimezone } from '../timezone'
@@ -170,6 +170,20 @@ export function buildSmartMonitorAgentPrompt(options: {
 }): string {
     const { now, taskId, taskState, detected = [], wakeReason, gate } = options
     const watches = listMonitorWatches({ enabled: true })
+    // A completed follow-up watch is already disabled by the engine, but the
+    // wake still needs its record (id, expectation, deadline) to judge the
+    // buffered item and call monitor_wake_feedback on it — pull in any watch a
+    // detected item references that the enabled list no longer contains.
+    const listed = new Set(watches.map((w) => w.id))
+    for (const d of detected) {
+        if (listed.has(d.watchId)) continue
+        const w = getMonitorWatch(d.watchId)
+        if (w) {
+            watches.push(w)
+            listed.add(w.id)
+        }
+    }
+    const hasFollowUps = watches.some((w) => w.followUp)
     const preactivated = getSmartMonitorWakePreactivatedCapabilities(watches)
     const lines: string[] = []
     const minMinutes = gate ? Math.round(gate.minWakeGapMs / 60_000) : 15
@@ -200,6 +214,9 @@ export function buildSmartMonitorAgentPrompt(options: {
     lines.push('- Never perform source-side write actions unless the watch allowed action explicitly permits it AND the user already approved the exact rule/action boundary. Notify-only remains the default.')
     lines.push('- When a surfaced item leaves the user with an obvious decision, include notify_inbox `actions` with short quick-reply labels. Use actions for archive/keep, mark read/unread, approve/skip, reply/dismiss, summarize now/later, or review-first choices; do not make the user type the same command manually.')
     lines.push('- For triage/digest messages, especially Gmail or WhatsApp routine cleanup, include 2-4 actions when you mention candidates. Example labels: "Archive candidates", "Keep all", "Review first". Each action value must state the exact scope and tell the agent to skip ambiguous items.')
+    if (hasFollowUps) {
+        lines.push('- FOLLOW-UP watches (marked below) are closed-loop verifiers for an outward action: they wait for an expected effect until a deadline. When one resolved (its detected item says so), verify the matched item really IS the expected effect: if yes, notify the user briefly that the loop closed (e.g. "Dan replied to the offer") and call monitor_wake_feedback with follow_up_outcome="confirmed"; if the match was something else (your own message, unrelated mail), call monitor_wake_feedback with follow_up_outcome="not_yet" (optionally extend_deadline_days) to re-arm it and stay silent. When a follow-up DEADLINE PASSED item appears, escalate via notify_inbox: say what was expected, that it did not happen, and offer next steps (nudge/resend, wait longer, drop it) as quick actions. Confirmed/expired follow-up watches are auto-removed after this wake — do not recreate or manually clean them.')
+    }
     lines.push('')
     if (detected.length > 0) {
         lines.push(...buildDetectedBlock(detected))
@@ -239,6 +256,14 @@ export function buildSmartMonitorAgentPrompt(options: {
         lines.push(`Source: ${w.source}`)
         lines.push(`Target: ${w.target}`)
         lines.push(`Intent/check instruction: ${describeRule(w.rule)}`)
+        if (w.followUp) {
+            const status = w.followUp.resolvedAt
+                ? `RESOLVED at ${new Date(w.followUp.resolvedAt).toISOString()} — verify the match, then follow_up_outcome confirmed/not_yet`
+                : w.followUp.deadlineFiredAt
+                    ? `DEADLINE PASSED at ${new Date(w.followUp.deadlineFiredAt).toISOString()} with no observed effect — escalate per the follow-up protocol`
+                    : `waiting (deadline ${new Date(w.followUp.deadlineAt).toISOString()})`
+            lines.push(`FOLLOW-UP watch: expecting "${w.followUp.expectation}". Status: ${status}.`)
+        }
         lines.push(`Cadence hint: current=${w.cadence.current}s, min=${w.cadence.min}s, max=${w.cadence.max}s, adaptive=${w.cadence.adaptive}`)
         const allowed = w.allowedActions.length === 0
             ? 'notify_inbox only'
@@ -248,6 +273,9 @@ export function buildSmartMonitorAgentPrompt(options: {
             lines.push(`Quiet preference: ${w.notify.quietHours.from}-${w.notify.quietHours.to} ${w.notify.quietHours.timezone}`)
         }
         lines.push(`Per-watch counters: quietRuns=${w.state.quietRuns}, activeRuns=${w.state.activeRuns}, lastCheckedAt=${w.lastCheckedAt ? new Date(w.lastCheckedAt).toISOString() : 'never'}, lastFiredAt=${w.lastFiredAt ? new Date(w.lastFiredAt).toISOString() : 'never'}`)
+
+        const engagement = renderEngagementLine(w.id)
+        if (engagement) lines.push(engagement)
 
         const recent = listWatchEvents(w.id, {
             limit: 8,
@@ -284,6 +312,29 @@ export function buildSmartMonitorAgentPrompt(options: {
     return lines.join('\n')
 }
 
+/** Aggregate the user's behavior on this watch's Inbox notifications into one
+ *  compact line. Raw `user_signal` events are recorded by the Inbox surface
+ *  (opened / replied / dismissed read|unread / quick actions); the wake and the
+ *  nightly reflection read this aggregate to learn what to keep quiet — the
+ *  interpretation is entirely model-owned, no thresholds live in code. */
+function renderEngagementLine(watchId: string, limit = 40): string | null {
+    const signals = listWatchEvents(watchId, { limit, kinds: ['user_signal'] })
+    if (signals.length === 0) return null
+    const counts = new Map<string, number>()
+    for (const ev of signals) {
+        const raw = ev.payload?.signal
+        const tool = ev.payload?.tool
+        const key = typeof raw === 'string'
+            ? (raw === 'quick_action' && typeof tool === 'string' ? `quick_action:${tool}` : raw)
+            : 'unknown'
+        counts.set(key, (counts.get(key) ?? 0) + 1)
+    }
+    const parts = [...counts.entries()]
+        .sort((a, b) => b[1] - a[1])
+        .map(([key, n]) => `${key.replace(/_/g, ' ')} ${n}`)
+    return `User engagement with this watch's notifications (last ${signals.length} signal(s)): ${parts.join(', ')}. Repeated "dismissed unread" for a recognizable shape means those notifications are noise to this user — author a suppress pattern via monitor_wake_feedback (prefer expires_in_days while confidence builds) or stop surfacing that shape; repeated opens/replies mean the shape matters.`
+}
+
 function renderHistoryLine(ev: WatchEvent): string {
     const ts = new Date(ev.ts).toISOString()
     const payload = ev.payload ?? {}
@@ -312,6 +363,10 @@ function renderHistoryLine(ev: WatchEvent): string {
             return `[${ts}] ERROR - ${typeof payload.message === 'string' ? payload.message : ''}`
         case 'cadence_change':
             return `[${ts}] cadence ${payload.from}s -> ${payload.to}s`
+        case 'followup':
+            return `[${ts}] FOLLOW-UP ${typeof payload.outcome === 'string' ? payload.outcome : 'transition'} - "${typeof payload.expectation === 'string' ? payload.expectation : ''}"`
+        case 'user_signal':
+            return `[${ts}] USER ${typeof payload.signal === 'string' ? payload.signal : 'signal'}${typeof payload.tool === 'string' ? ` (${payload.tool})` : ''}`
         case 'check':
             return `[${ts}] check`
     }

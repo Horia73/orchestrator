@@ -34,9 +34,24 @@ function compactRow(w: MonitorWatch) {
         active_runs: w.state.activeRuns,
         quiet_runs: w.state.quietRuns,
         notify_quiet_hours: w.notify.quietHours ?? null,
+        follow_up: followUpView(w),
         created_by: w.createdBy,
         created_at: w.createdAt,
         updated_at: w.updatedAt,
+    }
+}
+
+function followUpView(w: MonitorWatch) {
+    if (!w.followUp) return null
+    return {
+        expectation: w.followUp.expectation,
+        deadline_at: w.followUp.deadlineAt,
+        on_deadline: w.followUp.onDeadline,
+        status: w.followUp.resolvedAt
+            ? ('resolved' as const)
+            : w.followUp.deadlineFiredAt
+                ? ('deadline_passed' as const)
+                : ('waiting' as const),
     }
 }
 

@@ -446,6 +446,33 @@ export const SuppressPatternSchema = z.object({
 })
 export type SuppressPattern = z.infer<typeof SuppressPatternSchema>
 
+// --- follow-up (closed-loop action) lifecycle -------------------------------
+
+/** Optional one-shot lifecycle attached to a watch that exists to verify the
+ *  EFFECT of an outward action (a sent email, a created event, a WhatsApp
+ *  message): "expect <expectation> by <deadlineAt>". Engine-owned semantics:
+ *  the first rule match marks it resolved and disables the watch; a deadline
+ *  with no match marks deadlineFiredAt, disables it, and (onDeadline =
+ *  'escalate') buffers a deadline item so the wake can escalate to the Inbox.
+ *  Completed follow-up watches are auto-removed after the wake that handled
+ *  them — they never accumulate. Follow-up watches are exempt from the
+ *  one-watch-per-connector-source rule. */
+export const WatchFollowUpSchema = z.object({
+    /** The expected effect, in plain language ("a reply from Dan on the offer
+     *  thread"). Shown in the wake brief and the escalation message. */
+    expectation: z.string().min(1).max(500),
+    /** Epoch ms deadline by which the effect should have been observed. */
+    deadlineAt: z.number().int().positive(),
+    /** What happens when the deadline passes with no match: 'escalate' buffers
+     *  a deadline-passed item for the wake (default); 'silent' just completes. */
+    onDeadline: z.enum(['escalate', 'silent']).default('escalate'),
+    /** Engine-stamped: the expected effect was observed (first rule match). */
+    resolvedAt: z.number().int().positive().nullable().default(null),
+    /** Engine-stamped: deadline passed with no observed effect. */
+    deadlineFiredAt: z.number().int().positive().nullable().default(null),
+})
+export type WatchFollowUp = z.infer<typeof WatchFollowUpSchema>
+
 // --- per-watch private state ----------------------------------------------
 
 /** Bag of bookkeeping the engine reads/writes each tick. Source adapters may
@@ -487,6 +514,8 @@ export const MonitorWatchSchema = z.object({
     allowedActions: z.array(MonitorActionSchema).max(16).default([]),
     cadence: CadencePolicySchema,
     notify: NotifyPolicySchema,
+    /** Present only on closed-loop follow-up watches (one-shot, auto-cleaned). */
+    followUp: WatchFollowUpSchema.nullable().default(null),
     enabled: z.boolean(),
     state: WatchStateSchema,
     suppressPatterns: z.array(SuppressPatternSchema).max(64).default([]),
@@ -516,6 +545,7 @@ export const CreateMonitorWatchInputSchema = z.object({
     allowedActions: z.array(MonitorActionSchema).max(16).default([]),
     cadence: CadencePolicySchema.optional(),
     notify: NotifyPolicySchema.optional(),
+    followUp: WatchFollowUpSchema.nullable().default(null),
     enabled: z.boolean().default(true),
     createdBy: WatchCreatedBySchema.default('orchestrator'),
 })
@@ -550,6 +580,10 @@ export const WatchEventKindSchema = z.enum([
     'feedback',       // model recorded was_worth_it judgment after a wake
     'cadence_change', // engine widened/tightened current cadence
     'error',          // cheap tick failed (network, integration, parse, …)
+    'followup',       // follow-up lifecycle transition (resolved / deadline / re-armed)
+    'user_signal',    // user behavior on an Inbox item this watch produced
+                      // (opened / replied / dismissed_unread / dismissed_read /
+                      // quick_action) — the raw signal for behavioral learning
 ])
 export type WatchEventKind = z.infer<typeof WatchEventKindSchema>
 

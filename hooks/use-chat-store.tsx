@@ -1612,16 +1612,6 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       let conversationId = targetConversationId
       let allMessages: Message[]
 
-      // Set when a file-only turn creates a conversation: it carries the
-      // material the auto-namer needs, and is fired from the stream's "done"
-      // handler once the assistant reply gives us something to summarize.
-      let autoNameAfterStream: {
-        conversationId: string
-        currentTitle: string
-        userText: string
-        attachmentNames: string[]
-      } | null = null
-
       if (!conversationId) {
         conversationId = generateId()
         const createdAt = Date.now()
@@ -1648,8 +1638,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         })
         allMessages = [userMessage]
 
-        // Auto-name the new conversation. With text, name immediately and in
-        // parallel with the model turn; with only files, defer to the reply.
+        // Auto-name text-started conversations immediately and in parallel with
+        // the model turn. Attachment-only starts are named server-side after
+        // the first assistant reply, so stream recovery cannot lose the title.
         const attachmentNames = (finalAttachments ?? [])
           .map((att) => att.filename)
           .filter((name): name is string => Boolean(name && name.trim()))
@@ -1663,8 +1654,6 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           // Wait for the create round-trip so the row exists when the title
           // endpoint reads it and applies its overwrite guard.
           void createPromise.then(() => autoNameConversation(nameSeed))
-        } else {
-          autoNameAfterStream = nameSeed
         }
       } else {
         addConversationMessageRequest(conversationId, userMessage).catch(
@@ -2448,15 +2437,6 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     message: finalMsg,
                   })
                   handleAssistantFinished(finalConvId, finalMsg)
-                  // File-only first turn: now that the assistant replied, name
-                  // the conversation from the exchange.
-                  if (autoNameAfterStream) {
-                    autoNameConversation({
-                      ...autoNameAfterStream,
-                      assistantText: accContent,
-                    })
-                    autoNameAfterStream = null
-                  }
                 } else if (data.type === "stopped") {
                   streamDoneRef.current = true
                   const finalMsg: Message = assistantMessageFromStreamEvent(

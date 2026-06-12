@@ -27,7 +27,9 @@ type BrowserTranscriptPart =
   | { kind: "attachment"; id: string; attachment: Attachment; label: string }
 
 const UPLOAD_MARKDOWN_RE =
-  /!?\[([^\]]*)\]\([^)]*?\/api\/uploads\/([A-Za-z0-9._%-]+)[^)]*\)/g
+  /(!?)\[([^\]]*)\]\([^)]*?\/api\/uploads\/([A-Za-z0-9._%-]+)[^)]*\)/g
+
+const SAVED_BROWSER_EVIDENCE_RE = /^Saved browser (screenshot|video)\b/i
 
 type SelectedAgentTool = {
   runId: string
@@ -390,12 +392,15 @@ function BrowserAgentInlineAttachment({
     attachment.url ??
     appPath(`/api/uploads/${encodeURIComponent(attachment.id)}`)
   const displayLabel = label || attachment.filename
+  const attachmentGallery = gallery.some((item) => item.id === attachment.id)
+    ? gallery
+    : [...gallery, attachment]
 
   if (attachment.type === "image") {
     return (
       <button
         type="button"
-        onClick={() => onAttachmentClick?.(attachment, gallery)}
+        onClick={() => onAttachmentClick?.(attachment, attachmentGallery)}
         className="my-2 block w-full max-w-[360px] overflow-hidden rounded-md border border-white/15 bg-black/45 text-left transition-colors hover:border-white/35"
       >
         {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -422,7 +427,7 @@ function BrowserAgentInlineAttachment({
         />
         <button
           type="button"
-          onClick={() => onAttachmentClick?.(attachment, gallery)}
+          onClick={() => onAttachmentClick?.(attachment, attachmentGallery)}
           className="block w-full truncate border-t border-white/10 px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-white/5"
         >
           {displayLabel}
@@ -434,7 +439,7 @@ function BrowserAgentInlineAttachment({
   return (
     <button
       type="button"
-      onClick={() => onAttachmentClick?.(attachment, gallery)}
+      onClick={() => onAttachmentClick?.(attachment, attachmentGallery)}
       className="my-2 block max-w-full rounded-md border border-white/15 bg-white/5 px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-white/10"
     >
       {displayLabel}
@@ -461,12 +466,36 @@ function browserAgentTranscriptParts(
     const media = uploadReferencesInLine(line)
     if (media.length === 0) {
       textBuffer += `${line}\n`
+      const savedEvidence = savedBrowserEvidenceLine(line)
+      if (savedEvidence) {
+        const attachment = nextUnseenEvidenceAttachment(
+          attachments,
+          seenAttachmentIds,
+          savedEvidence.kind,
+          savedEvidence.filename
+        )
+        if (attachment) {
+          seenAttachmentIds.add(attachment.id)
+          pushText()
+          parts.push({
+            kind: "attachment",
+            id: `attachment-${attachment.id}`,
+            attachment,
+            label: attachment.filename,
+          })
+        }
+      }
       continue
     }
 
-    const renderableMedia = media.filter((item) => {
+    const renderableMedia = media.flatMap((item) => {
       const attachment = attachmentsById.get(item.id)
-      return attachment && !seenAttachmentIds.has(attachment.id)
+      const inlineAttachment =
+        attachment ?? attachmentFromUploadReference(item)
+      if (!inlineAttachment || seenAttachmentIds.has(inlineAttachment.id)) {
+        return []
+      }
+      return [{ reference: item, attachment: inlineAttachment }]
     })
     UPLOAD_MARKDOWN_RE.lastIndex = 0
     const cleaned = line.replace(UPLOAD_MARKDOWN_RE, "").trim()
@@ -476,14 +505,13 @@ function browserAgentTranscriptParts(
     pushText()
 
     for (const item of renderableMedia) {
-      const attachment = attachmentsById.get(item.id)
-      if (!attachment) continue
+      const attachment = item.attachment
       seenAttachmentIds.add(attachment.id)
       parts.push({
         kind: "attachment",
         id: `attachment-${attachment.id}`,
         attachment,
-        label: item.label || attachment.filename,
+        label: item.reference.label || attachment.filename,
       })
     }
   }
@@ -515,13 +543,15 @@ function browserAgentTranscriptParts(
 
 function uploadReferencesInLine(
   line: string
-): Array<{ id: string; label: string }> {
-  const out: Array<{ id: string; label: string }> = []
+): Array<{ id: string; label: string; kind: Attachment["type"] }> {
+  const out: Array<{ id: string; label: string; kind: Attachment["type"] }> = []
   UPLOAD_MARKDOWN_RE.lastIndex = 0
   for (const match of line.matchAll(UPLOAD_MARKDOWN_RE)) {
+    const id = safeDecodeURIComponent(match[3] ?? "")
     out.push({
-      label: match[1]?.replace(/\\([\\\]])/g, "$1").trim() ?? "",
-      id: safeDecodeURIComponent(match[2] ?? ""),
+      label: match[2]?.replace(/\\([\\\]])/g, "$1").trim() ?? "",
+      id,
+      kind: match[1] === "!" ? "image" : attachmentTypeFromFilename(id),
     })
   }
   return out
@@ -529,6 +559,82 @@ function uploadReferencesInLine(
 
 function isEvidenceOnlyLine(value: string): boolean {
   return /^Browser (screenshot|video)(?:\s*\([^)]*\))?:?$/i.test(value)
+}
+
+function savedBrowserEvidenceLine(
+  line: string
+): { kind: "image" | "video"; filename?: string } | null {
+  const trimmed = line.trim()
+  const match = trimmed.match(SAVED_BROWSER_EVIDENCE_RE)
+  if (!match) return null
+  return {
+    kind: match[1]?.toLowerCase() === "video" ? "video" : "image",
+    filename: trimmed.match(/\(([^()]+)\)\.\s*$/)?.[1],
+  }
+}
+
+function nextUnseenEvidenceAttachment(
+  attachments: Attachment[],
+  seenAttachmentIds: Set<string>,
+  kind: "image" | "video",
+  filename?: string
+): Attachment | null {
+  const candidates = attachments.filter(
+    (attachment) =>
+      !seenAttachmentIds.has(attachment.id) &&
+      (kind === "image"
+        ? attachment.type === "image"
+        : attachment.type === "video")
+  )
+  if (candidates.length === 0) return null
+  if (!filename) return candidates[0] ?? null
+  return (
+    candidates.find((attachment) => attachment.filename === filename) ??
+    candidates[0] ??
+    null
+  )
+}
+
+function attachmentFromUploadReference(reference: {
+  id: string
+  label: string
+  kind: Attachment["type"]
+}): Attachment | null {
+  if (!reference.id) return null
+  const mimeType = mimeTypeFromFilename(reference.id, reference.kind)
+  return {
+    id: reference.id,
+    filename: reference.label || reference.id,
+    mimeType,
+    size: 0,
+    type: reference.kind,
+    url: appPath(`/api/uploads/${encodeURIComponent(reference.id)}`),
+  }
+}
+
+function attachmentTypeFromFilename(filename: string): Attachment["type"] {
+  const ext = filename.toLowerCase().split(".").pop()
+  if (["jpg", "jpeg", "png", "webp", "gif"].includes(ext ?? "")) {
+    return "image"
+  }
+  if (["webm", "mp4", "mov"].includes(ext ?? "")) return "video"
+  return "other"
+}
+
+function mimeTypeFromFilename(
+  filename: string,
+  fallbackType: Attachment["type"]
+): string {
+  const ext = filename.toLowerCase().split(".").pop()
+  if (ext === "jpg" || ext === "jpeg") return "image/jpeg"
+  if (ext === "png") return "image/png"
+  if (ext === "webp") return "image/webp"
+  if (ext === "gif") return "image/gif"
+  if (ext === "webm") return "video/webm"
+  if (ext === "mp4") return "video/mp4"
+  if (fallbackType === "image") return "image/jpeg"
+  if (fallbackType === "video") return "video/webm"
+  return "application/octet-stream"
 }
 
 function safeDecodeURIComponent(value: string): string {
@@ -591,12 +697,12 @@ function reasoningEntryTerminalText(entry: ReasoningEntry): string {
 
 function stripBrowserAgentTerminalTranscript(content: string): string {
   return content
-    .replace(/\nTerminal output:\n```text\n[\s\S]*?\n```\n?/g, "\n")
+    .replace(/(?:^|\n)Terminal output:\n```text\n[\s\S]*?\n```\n?/g, "\n")
     .trimEnd()
 }
 
 function extractBrowserAgentTerminalTranscript(content: string): string {
-  const match = content.match(/\nTerminal output:\n```text\n([\s\S]*?)\n```\n?/)
+  const match = content.match(/(?:^|\n)Terminal output:\n```text\n([\s\S]*?)\n```\n?/)
   return match?.[1]?.trimEnd() ?? ""
 }
 

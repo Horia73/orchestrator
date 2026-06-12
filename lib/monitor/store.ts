@@ -30,8 +30,10 @@ import {
     type UpdateMonitorWatchInput,
     type WatchEvent,
     type WatchEventKind,
+    type WatchFollowUp,
     type WatchSource,
     type WatchState,
+    WatchFollowUpSchema,
 } from './schema'
 import { snapCadenceSeconds } from './cadence'
 import { RULE_KINDS_BY_SOURCE, ruleMatchesSource } from './rules'
@@ -104,6 +106,13 @@ db.exec(`
     CREATE INDEX IF NOT EXISTS idx_monitor_watch_events_kind ON monitor_watch_events(watchId, kind, ts DESC);
 `)
 
+// Migration: closed-loop follow-up lifecycle column (JSON WatchFollowUp or NULL).
+try {
+    db.exec(`ALTER TABLE monitor_watches ADD COLUMN followUp TEXT`)
+} catch {
+    /* column already exists */
+}
+
 // Per-watch event ring cap. Beyond this we prune the oldest events on insert
 // so a noisy watch does not grow the table indefinitely. Generous enough that
 // the detail panel can still show a meaningful history (hundreds of ticks).
@@ -122,6 +131,7 @@ interface MonitorWatchRow {
     allowedActions: string
     cadence: string
     notify: string
+    followUp: string | null
     enabled: number
     state: string
     suppressPatterns: string
@@ -200,6 +210,7 @@ function watchFromRow(row: MonitorWatchRow): MonitorWatch {
         allowedActions: parseActionsJson(row.allowedActions),
         cadence: normalizeStoredCadence(row.cadence),
         notify: NotifyPolicySchema.parse(JSON.parse(row.notify)),
+        followUp: row.followUp ? WatchFollowUpSchema.parse(JSON.parse(row.followUp)) : null,
         enabled: row.enabled === 1,
         state: WatchStateSchema.parse(JSON.parse(row.state)),
         suppressPatterns: parseSuppressJson(row.suppressPatterns),
@@ -334,10 +345,13 @@ function assertRuleSourceCompat(rule: MonitorRule, source: WatchSource): void {
     }
 }
 
+/** Follow-up watches are exempt on BOTH sides: a follow-up never counts as the
+ *  integration's main watch (so it does not block creating one), and creating a
+ *  follow-up is allowed alongside the existing main watch. */
 function assertSingleIntegrationWatch(source: WatchSource): void {
     if (!SINGLE_WATCH_SOURCES.has(source)) return
     const existing = db
-        .prepare('SELECT id, title FROM monitor_watches WHERE source = ? ORDER BY createdAt DESC LIMIT 1')
+        .prepare('SELECT id, title FROM monitor_watches WHERE source = ? AND followUp IS NULL ORDER BY createdAt DESC LIMIT 1')
         .get(source) as { id: string; title: string } | undefined
     if (existing) {
         throw new DuplicateMonitorSourceError(source, existing.id, existing.title)
@@ -348,7 +362,10 @@ export function createMonitorWatch(input: CreateMonitorWatchInput): MonitorWatch
     const validated = CreateMonitorWatchInputSchema.parse(input)
     assertRuleDepth(validated.rule)
     assertRuleSourceCompat(validated.rule, validated.source)
-    assertSingleIntegrationWatch(validated.source)
+    if (!validated.followUp) assertSingleIntegrationWatch(validated.source)
+    if (validated.followUp && validated.followUp.deadlineAt <= Date.now()) {
+        throw new Error('followUp.deadlineAt must be in the future.')
+    }
 
     const now = Date.now()
     const id = `mw_${randomUUID()}`
@@ -365,6 +382,7 @@ export function createMonitorWatch(input: CreateMonitorWatchInput): MonitorWatch
         allowedActions: JSON.stringify(validated.allowedActions),
         cadence: JSON.stringify(cadence),
         notify: JSON.stringify(notify),
+        followUp: validated.followUp ? JSON.stringify(validated.followUp) : null,
         enabled: validated.enabled ? 1 : 0,
         state: JSON.stringify(state),
         suppressPatterns: JSON.stringify([]),
@@ -382,11 +400,11 @@ export function createMonitorWatch(input: CreateMonitorWatchInput): MonitorWatch
 
     const insert = db.prepare(`
         INSERT INTO monitor_watches (
-            id, title, source, target, rule, allowedActions, cadence, notify, enabled,
+            id, title, source, target, rule, allowedActions, cadence, notify, followUp, enabled,
             state, suppressPatterns, lastCheckedAt, nextCheckAt, lastFiredAt,
             consecutiveErrors, lastError, createdBy, createdAt, updatedAt
         ) VALUES (
-            @id, @title, @source, @target, @rule, @allowedActions, @cadence, @notify, @enabled,
+            @id, @title, @source, @target, @rule, @allowedActions, @cadence, @notify, @followUp, @enabled,
             @state, @suppressPatterns, @lastCheckedAt, @nextCheckAt, @lastFiredAt,
             @consecutiveErrors, @lastError, @createdBy, @createdAt, @updatedAt
         )
@@ -685,6 +703,94 @@ export function incrementSuppressPatternMatch(id: string, patternId: string): vo
 }
 
 // ---------------------------------------------------------------------------
+// Follow-up lifecycle (closed-loop actions)
+// ---------------------------------------------------------------------------
+
+function writeFollowUp(id: string, followUp: WatchFollowUp, enabled: boolean): void {
+    db.prepare(
+        `UPDATE monitor_watches SET followUp = @fu, enabled = @enabled, updatedAt = @updatedAt WHERE id = @id`,
+    ).run({
+        id,
+        fu: JSON.stringify(WatchFollowUpSchema.parse(followUp)),
+        enabled: enabled ? 1 : 0,
+        updatedAt: Date.now(),
+    })
+}
+
+/** Engine-side: a follow-up watch reached a terminal outcome — the expected
+ *  effect was observed ('resolved') or the deadline passed without it
+ *  ('deadline'). One-shot semantics: the watch is disabled in the same write
+ *  so it never fires again; the wake that handles the buffered item is
+ *  followed by removeCompletedFollowUpWatches() cleanup. */
+export function completeWatchFollowUp(
+    id: string,
+    outcome: 'resolved' | 'deadline',
+    ts: number = Date.now(),
+): MonitorWatch | null {
+    const existing = getMonitorWatch(id)
+    if (!existing?.followUp) return null
+    if (existing.followUp.resolvedAt != null || existing.followUp.deadlineFiredAt != null) return existing
+    const next: WatchFollowUp = {
+        ...existing.followUp,
+        resolvedAt: outcome === 'resolved' ? ts : null,
+        deadlineFiredAt: outcome === 'deadline' ? ts : null,
+    }
+    writeFollowUp(id, next, false)
+    recordWatchEvent(id, 'followup', { outcome, expectation: existing.followUp.expectation }, ts)
+    emitWatchesChanged(id, 'followup_completed')
+    return getMonitorWatch(id)
+}
+
+/** Model-side (via monitor_wake_feedback): the match that auto-resolved a
+ *  follow-up was NOT actually the expected effect — re-arm the watch and keep
+ *  waiting, optionally pushing the deadline out. Clearing the completion
+ *  stamps also exempts the watch from post-wake cleanup. */
+export function reopenWatchFollowUp(
+    id: string,
+    opts: { extendDeadlineToMs?: number } = {},
+): MonitorWatch | null {
+    const existing = getMonitorWatch(id)
+    if (!existing?.followUp) return null
+    const next: WatchFollowUp = {
+        ...existing.followUp,
+        deadlineAt: opts.extendDeadlineToMs && opts.extendDeadlineToMs > existing.followUp.deadlineAt
+            ? opts.extendDeadlineToMs
+            : existing.followUp.deadlineAt,
+        resolvedAt: null,
+        deadlineFiredAt: null,
+    }
+    writeFollowUp(id, next, true)
+    recordWatchEvent(id, 'followup', {
+        outcome: 're-armed',
+        expectation: existing.followUp.expectation,
+        deadline_at: next.deadlineAt,
+    })
+    emitWatchesChanged(id, 'followup_rearmed')
+    return getMonitorWatch(id)
+}
+
+/** Remove follow-up watches whose lifecycle is complete (resolved or
+ *  deadline-fired, and disabled). Called by the scheduler after a successful
+ *  Smart Monitor wake — the wake had the buffered item plus the watch record;
+ *  the Inbox message is the durable user-facing trace, so the one-shot watch
+ *  row does not linger in /monitor. A 're-armed' follow-up was re-enabled and
+ *  its stamps cleared, so it survives this sweep by construction. */
+export function removeCompletedFollowUpWatches(): string[] {
+    const rows = db
+        .prepare(`SELECT id FROM monitor_watches WHERE followUp IS NOT NULL AND enabled = 0`)
+        .all() as Array<{ id: string }>
+    const removed: string[] = []
+    for (const { id } of rows) {
+        const watch = getMonitorWatch(id)
+        const fu = watch?.followUp
+        if (!fu) continue
+        if (fu.resolvedAt == null && fu.deadlineFiredAt == null) continue // user-paused, not completed
+        if (deleteMonitorWatch(id)) removed.push(id)
+    }
+    return removed
+}
+
+// ---------------------------------------------------------------------------
 // Delete
 // ---------------------------------------------------------------------------
 
@@ -805,6 +911,7 @@ export type {
     UpdateMonitorWatchInput,
     WatchEvent,
     WatchEventKind,
+    WatchFollowUp,
     WatchSource,
     WatchState,
 } from './schema'

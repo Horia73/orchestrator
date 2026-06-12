@@ -179,7 +179,8 @@ export function matchingCalendarStartWindows(rule: MonitorRule, minutesUntilStar
 
 /** Distinct WhatsApp contact tokens referenced by wa_from leaves. The
  *  WhatsApp adapter does its own substring matching client-side, but the
- *  preview UI can show "this watch is waiting on: …". */
+ *  preview UI can show "this watch is waiting on: …". NOT a sound chat
+ *  prefilter — use extractWaChatPrefilterFromRule for that. */
 export function extractWaContactsFromRule(rule: MonitorRule): string[] {
     const seen = new Set<string>()
     walk(rule, (leaf) => {
@@ -188,6 +189,32 @@ export function extractWaContactsFromRule(rule: MonitorRule): string[] {
         }
     })
     return [...seen]
+}
+
+/** Contact tokens forming a SOUND chat prefilter for the WhatsApp cheap
+ *  check: non-empty only when every possible match of the rule requires a
+ *  wa_from hit. An any_of branch without a wa_from constraint (wa_unread /
+ *  wa_text_contains / wa_mention) can match messages from any chat, so the
+ *  listing must not be narrowed ([] = consider all unread chats). Using the
+ *  loose extractor above as a prefilter silenced every non-listed chat while
+ *  an any_of(wa_unread, wa_from…) rule was active. */
+export function extractWaChatPrefilterFromRule(rule: MonitorRule): string[] {
+    if (rule.kind === 'wa_from') return [...new Set(rule.contacts)]
+    if (rule.kind === 'any_of') {
+        // Sound only if EVERY branch is contact-constrained; union them.
+        const sets = rule.rules.map(extractWaChatPrefilterFromRule)
+        if (sets.length === 0 || sets.some((s) => s.length === 0)) return []
+        return [...new Set(sets.flat())]
+    }
+    if (rule.kind === 'all_of') {
+        // A conjunction is at least as narrow as any contact-constrained child.
+        for (const r of rule.rules) {
+            const s = extractWaChatPrefilterFromRule(r)
+            if (s.length > 0) return s
+        }
+        return []
+    }
+    return []
 }
 
 /** Distinct weather locations referenced by weather_* leaves. Empty means

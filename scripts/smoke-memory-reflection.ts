@@ -91,8 +91,83 @@ async function main(): Promise<void> {
       parsed.data.action.kind === "agent" ? parsed.data.action.prompt.slice(0, 200) : undefined
     )
     check(
+      "reflection prompt drives playbook synthesis from repeated workflows",
+      parsed.data.action.kind === "agent" &&
+        parsed.data.action.prompt.includes("memory_recent_activity") &&
+        parsed.data.action.prompt.includes("PLAYBOOKS.md") &&
+        /playbook/i.test(parsed.data.action.prompt)
+    )
+    check(
+      "reflection prompt allows the single new-playbook notification only",
+      parsed.data.action.kind === "agent" &&
+        parsed.data.action.prompt.includes("ONE exception") &&
+        parsed.data.action.prompt.includes("notify_inbox")
+    )
+    check(
+      "reflection prompt reviews watch engagement signals",
+      parsed.data.action.kind === "agent" &&
+        parsed.data.action.prompt.includes("user_signal")
+    )
+    check(
       "reflection is created as an always-on system task",
       parsed.data.enabled === true && parsed.data.createdBy === "system"
+    )
+  }
+
+  // 2b. memory_recent_activity tool + enumeration plumbing ------------------
+  {
+    const { ALL_TOOL_DEFS } = await import("@/lib/ai/tools/tool-catalog")
+    const recentTool = ALL_TOOL_DEFS.find((t) => t.id === "memory_recent_activity")
+    check("memory_recent_activity registered in the tool catalog", Boolean(recentTool))
+    check(
+      "memory_recent_activity tagged like memory_search (read + memory)",
+      recentTool?.tags?.includes("memory") === true && recentTool?.tags?.includes("read") === true,
+      recentTool?.tags
+    )
+
+    // Seed two conversations: one inside the window, one ancient.
+    const { default: db } = await import("@/lib/db")
+    const now = Date.now()
+    const seedConversation = (id: string, title: string, ts: number, asks: string[]) => {
+      db.prepare(
+        `INSERT INTO conversations (id, title, createdAt, updatedAt) VALUES (?, ?, ?, ?)`
+      ).run(id, title, ts, ts)
+      asks.forEach((ask, i) => {
+        const at = ts + i * 60_000
+        db.prepare(
+          `INSERT INTO messages (id, conversationId, role, content, timestamp) VALUES (?, ?, 'user', ?, ?)`
+        ).run(`${id}_u${i}`, id, ask, at)
+        db.prepare(
+          `INSERT INTO messages (id, conversationId, role, content, timestamp) VALUES (?, ?, 'assistant', 'done', ?)`
+        ).run(`${id}_a${i}`, id, at + 1000)
+      })
+    }
+    seedConversation("conv_recent", "Weekly invoice run", now - 2 * 86_400_000, [
+      "generate the invoice for client X and email it",
+      "now do the same for client Y",
+    ])
+    seedConversation("conv_old", "Ancient chat", now - 40 * 86_400_000, [
+      "an old request that must not appear",
+    ])
+
+    const { executeMemoryRecentActivity } = await import("@/lib/ai/tools/memory-search")
+    const r = await executeMemoryRecentActivity({ days: 14 })
+    check("memory_recent_activity succeeds", r.success === true, r.error)
+    const data = r.data as {
+      conversation_count: number
+      conversations: Array<{ conversation_id: string; title: string; exchange_count: number; user_requests: string[] }>
+    }
+    const recent = data.conversations.find((c) => c.conversation_id === "conv_recent")
+    check(
+      "recent conversation enumerated with its user requests",
+      recent?.title === "Weekly invoice run" &&
+        recent?.exchange_count === 2 &&
+        recent?.user_requests[0]?.includes("generate the invoice"),
+      recent
+    )
+    check(
+      "out-of-window conversation excluded",
+      data.conversations.every((c) => c.conversation_id !== "conv_old")
     )
   }
 

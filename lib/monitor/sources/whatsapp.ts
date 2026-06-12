@@ -1,6 +1,6 @@
 import { evaluateRule, type WhatsAppCandidate } from '../rules'
 import type { WatchState } from '../schema'
-import { extractWaContactsFromRule } from './rule-targets'
+import { extractWaChatPrefilterFromRule } from './rule-targets'
 import {
     safeAdapterCall,
     withTimeout,
@@ -17,9 +17,11 @@ import {
 // The cheap-check has two phases per tick:
 //   A. List recent chats with unreadCount (cheap, in-process via wwebjs).
 //      Filter to chats that:
-//        - match a wa_from contact target in the rule, when the rule has any;
-//          otherwise consider ALL chats with unreadCount > 0 (text-only rules
-//          like `wa_text_contains` apply across all chats).
+//        - match the SOUND contact prefilter (extractWaChatPrefilterFromRule):
+//          non-empty only when every possible match requires a wa_from hit.
+//          A rule like any_of(wa_unread, wa_from…) yields no prefilter — ALL
+//          chats with unread are considered (narrowing to the wa_from
+//          contacts once silenced every other chat for weeks).
 //        - have unreadCount > 0 (no new messages = nothing to evaluate).
 //   B. For each candidate chat, read the chat's recent messages, drop
 //      messages we've already processed (per-chat lastSeenAt + LRU ring),
@@ -27,7 +29,13 @@ import {
 //
 // Primes on first tick like Gmail — we never blast historical messages on
 // watch creation; the watermark is set to "now" and only mail/messages
-// arriving AFTER are surfaced.
+// arriving AFTER are surfaced. A chat first seen AFTER priming (no per-chat
+// state yet) gets a 24h lookback floor instead, so fresh messages surface
+// but a months-old unread backlog does not.
+//
+// Units: WhatsApp Web message timestamps (`message.t`) are unix SECONDS;
+// watermarks are stored in epoch MILLISECONDS. toWaMs() normalizes both ways
+// (legacy seconds watermarks written by older builds migrate on read).
 // ---------------------------------------------------------------------------
 
 const WA_KEY = 'whatsapp'
@@ -35,6 +43,17 @@ const MAX_CHATS_LISTED = 30
 const MAX_MESSAGES_PER_CHAT = 25
 const READ_CHAT_MAX_CHARS = 12_000
 const PER_CHAT_RING_CAP = 50
+// Watermark floor for chats with no per-chat state yet (first seen after the
+// watch primed): surface only messages from the last 24h, not the whole
+// unread backlog.
+const NEW_CHAT_LOOKBACK_MS = 24 * 60 * 60_000
+
+/** Normalize a WhatsApp timestamp to epoch ms. WhatsApp Web reports unix
+ *  seconds; older builds also persisted per-chat watermarks in seconds. */
+function toWaMs(value: number | null | undefined): number {
+    if (!value || !Number.isFinite(value) || value <= 0) return 0
+    return value < 1e12 ? value * 1000 : value
+}
 
 interface WaChatState {
     /** Last message timestamp we processed for this chat (epoch ms). */
@@ -127,7 +146,7 @@ export const whatsappSourceAdapter: SourceAdapter = {
                 'whatsapp listChats',
             )
 
-            const contactTargets = extractWaContactsFromRule(watch.rule)
+            const contactTargets = extractWaChatPrefilterFromRule(watch.rule)
             const relevant = chatList.chats.filter(
                 (c) => c.unreadCount > 0 && chatMatchesContactTarget(c, contactTargets),
             )
@@ -179,15 +198,19 @@ export const whatsappSourceAdapter: SourceAdapter = {
 
                     const seenIds = new Set(chatPrev.lastSeenIds ?? [])
                     const newlySeenIds: string[] = []
-                    let watermark = chatPrev.lastSeenAt ?? 0
+                    const prevSeenMs = toWaMs(chatPrev.lastSeenAt)
+                    // Known chats cut at their watermark; never-seen chats cut
+                    // at a 24h lookback so we don't blast an old unread backlog.
+                    const floorMs = prevSeenMs || now - NEW_CHAT_LOOKBACK_MS
+                    let watermark = prevSeenMs
 
                     for (const m of result.messages) {
                         // Skip outgoing messages — monitor is for things the
                         // user receives, not what they send.
                         if (m.fromMe) continue
                         if (seenIds.has(m.id)) continue
-                        const ts = m.timestamp ?? (m.date ? Date.parse(m.date) : 0)
-                        if (chatPrev.lastSeenAt && ts !== 0 && ts <= chatPrev.lastSeenAt) continue
+                        const ts = toWaMs(m.timestamp) || (m.date ? Date.parse(m.date) : 0)
+                        if (ts !== 0 && ts <= floorMs) continue
 
                         candidatesSeen += 1
                         newlySeenIds.push(m.id)

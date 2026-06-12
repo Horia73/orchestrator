@@ -320,7 +320,9 @@ export function evaluateRule(rule: MonitorRule, candidate: EvalCandidate): boole
         case 'gmail_query':
             // gmail_query is server-evaluated by Gmail itself (the adapter runs the
             // query and only delivers matching messages). At eval time it's always
-            // true — the cheap-check already filtered.
+            // true — the cheap-check already filtered. NEVER use it in a suppress
+            // pattern: there it would match every candidate (see
+            // ADAPTER_EVALUATED_RULE_KINDS).
             return candidate.source === 'gmail'
 
         // --- google calendar ---
@@ -529,4 +531,29 @@ export function ruleMatchesSource(rule: MonitorRule, source: keyof typeof RULE_K
     }
     const allowed = RULE_KINDS_BY_SOURCE[source] as readonly MonitorRule['kind'][]
     return allowed.includes(rule.kind)
+}
+
+/** Leaf kinds the local evaluator cannot decide on its own: the adapter (or
+ *  the upstream service) applies them during fetch, so `evaluateRule`
+ *  degenerates to "true for any candidate of the right source". Fine as WATCH
+ *  rules (the fetch already filtered) but forbidden as SUPPRESS patterns — a
+ *  pattern containing one matches EVERY candidate and silences the watch
+ *  entirely (a `gmail_query` LinkedIn filter once swallowed all Gmail wakes). */
+export const ADAPTER_EVALUATED_RULE_KINDS: ReadonlyArray<MonitorRule['kind']> = [
+    'gmail_query',
+    'wa_unread',
+    'custom_prompt',
+]
+
+/** Walk a (possibly composed) rule and return the first adapter-evaluated leaf
+ *  kind found, or null when every leaf is locally evaluable (suppress-safe). */
+export function findAdapterEvaluatedKind(rule: MonitorRule): MonitorRule['kind'] | null {
+    if (rule.kind === 'any_of' || rule.kind === 'all_of') {
+        for (const r of rule.rules) {
+            const hit = findAdapterEvaluatedKind(r)
+            if (hit) return hit
+        }
+        return null
+    }
+    return ADAPTER_EVALUATED_RULE_KINDS.includes(rule.kind) ? rule.kind : null
 }

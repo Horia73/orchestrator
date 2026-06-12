@@ -143,6 +143,55 @@ async function main(): Promise<void> {
     check('quiet past the ceiling → noteworthy', ceiling.noteworthy === true, ceiling.summary)
     check('ceiling wake summary says "safety wake"', ceiling.summary.toLowerCase().includes('safety wake'), ceiling.summary)
 
+    // --- follow-up deadline escalation --------------------------------------
+    // A closed-loop follow-up whose deadline passes with no observed effect
+    // must complete (one-shot disable) and buffer an escalation item, even
+    // though the watch's own cadence/connector never matched anything.
+    const followUp = createMonitorWatch({
+        title: 'Reply from Dan',
+        source: 'custom',
+        target: 'dan reply',
+        rule: { kind: 'custom_prompt', prompt: 'Watch for a reply from Dan.' },
+        followUp: { expectation: 'a reply from Dan about the offer', deadlineAt: NOW + 1 * MINUTE },
+        createdBy: 'orchestrator',
+    })
+    // Park it so the custom-due path stays quiet; only the deadline should fire.
+    setWatchCheckpoint(followUp.id, { lastFiredAt: NOW })
+    const FUTURE = NOW + 5 * MINUTE
+    const deadlineWake = await runSmartMonitorCheapPass({
+        priorState: {
+            minWakeGapMs: 15 * MINUTE,
+            maxWakeGapMs: 6 * HOUR,
+            _smartGate: { lastWakeAt: FUTURE - 20 * MINUTE, pending: [], lastCheapRunAt: FUTURE - 5 * MINUTE },
+        },
+        now: FUTURE,
+        taskId: 't_followup_deadline',
+    })
+    check('passed deadline → noteworthy wake', deadlineWake.noteworthy === true, deadlineWake.summary)
+    check(
+        'deadline item carries the expectation',
+        deadlineWake.briefPrompt?.includes('FOLLOW-UP DEADLINE PASSED') === true &&
+            deadlineWake.briefPrompt?.includes('a reply from Dan about the offer') === true,
+    )
+    check('brief carries the follow-up handling protocol', deadlineWake.briefPrompt?.includes('follow_up_outcome') === true)
+    const completedFu = getMonitorWatch(followUp.id)
+    check(
+        'follow-up completed: disabled + deadlineFiredAt stamped',
+        completedFu?.enabled === false && completedFu?.followUp?.deadlineFiredAt === FUTURE,
+        completedFu?.followUp,
+    )
+    // A later pass must NOT re-buffer the same deadline (watch is disabled).
+    const quietAfter = await runSmartMonitorCheapPass({
+        priorState: {
+            minWakeGapMs: 15 * MINUTE,
+            maxWakeGapMs: 6 * HOUR,
+            _smartGate: { lastWakeAt: FUTURE, pending: [], lastCheapRunAt: FUTURE },
+        },
+        now: FUTURE + 5 * MINUTE,
+        taskId: 't_followup_after',
+    })
+    check('completed follow-up does not re-fire', quietAfter.noteworthy === false, quietAfter.summary)
+
     // --- finalizeSmartMonitorWake ------------------------------------------
     const gate = {
         minWakeGapMs: 15 * MINUTE,

@@ -9,10 +9,7 @@ import {
   runtimePathsForProfile,
 } from "@/lib/runtime-paths"
 
-import {
-  ADMIN_PROFILE_ID,
-  PROFILE_SESSION_MAX_AGE_SECONDS,
-} from "./constants"
+import { ADMIN_PROFILE_ID, PROFILE_SESSION_MAX_AGE_SECONDS } from "./constants"
 import {
   adminPermissions,
   normalizeProfilePermissions,
@@ -116,6 +113,7 @@ export function getControlDb(): Database.Database {
   db.pragma("journal_mode = WAL")
   initializeControlSchema(db)
   ensureDefaultAdminProfile(db)
+  migrateLegacyMemberProfileDefaults(db)
   return db
 }
 
@@ -196,7 +194,11 @@ export function updateProfile(
 ): ProfileRecord | null {
   const existing = getProfile(profileId)
   if (!existing) return null
-  if (existing.id === ADMIN_PROFILE_ID && input.role && input.role !== "admin") {
+  if (
+    existing.id === ADMIN_PROFILE_ID &&
+    input.role &&
+    input.role !== "admin"
+  ) {
     throw new Error("The built-in admin profile cannot be demoted.")
   }
 
@@ -211,7 +213,10 @@ export function updateProfile(
   const permissions =
     nextRole === "admin"
       ? adminPermissions()
-      : normalizeProfilePermissions(input.permissions ?? existing.permissions, nextRole)
+      : normalizeProfilePermissions(
+          input.permissions ?? existing.permissions,
+          nextRole
+        )
 
   getControlDb()
     .prepare(
@@ -298,7 +303,10 @@ export function verifyProfilePin(
   if (!normalized) return false
   const expected = Buffer.from(profile.pinHash, "hex")
   const actual = Buffer.from(hashPin(normalized, profile.pinSalt).hash, "hex")
-  return expected.length === actual.length && crypto.timingSafeEqual(expected, actual)
+  return (
+    expected.length === actual.length &&
+    crypto.timingSafeEqual(expected, actual)
+  )
 }
 
 export function setProfilePinIfUnset(
@@ -453,7 +461,9 @@ export function assertProfileWebhookSlugAvailable(
     (existing.profileId !== normalizeStoredProfileId(profileId) ||
       existing.endpointId !== endpointId)
   ) {
-    throw new Error(`Webhook slug "${slug}" is already owned by another profile.`)
+    throw new Error(
+      `Webhook slug "${slug}" is already owned by another profile.`
+    )
   }
 }
 
@@ -468,9 +478,12 @@ export function registerProfileWebhookSlugOwner(input: {
   const existing = getProfileWebhookSlugOwner(slug)
   if (
     existing &&
-    (existing.profileId !== profileId || existing.endpointId !== input.endpointId)
+    (existing.profileId !== profileId ||
+      existing.endpointId !== input.endpointId)
   ) {
-    throw new Error(`Webhook slug "${slug}" is already owned by another profile.`)
+    throw new Error(
+      `Webhook slug "${slug}" is already owned by another profile.`
+    )
   }
   if (existing) {
     getControlDb()
@@ -608,6 +621,70 @@ function ensureDefaultAdminProfile(database: Database.Database): void {
     )
 }
 
+function migrateLegacyMemberProfileDefaults(database: Database.Database): void {
+  const rows = database
+    .prepare(`SELECT * FROM profiles WHERE role = 'member'`)
+    .all() as ProfileRow[]
+  if (rows.length === 0) return
+
+  const update = database.prepare(
+    `UPDATE profiles SET permissions = ?, updatedAt = ? WHERE id = ?`
+  )
+  for (const row of rows) {
+    let raw: Record<string, unknown>
+    try {
+      const parsed = row.permissions ? JSON.parse(row.permissions) : null
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        continue
+      }
+      raw = parsed as Record<string, unknown>
+    } catch {
+      continue
+    }
+
+    if (!isLegacyMemberDefaultPermissionShape(raw)) continue
+
+    const permissions = normalizeProfilePermissions(raw, "member")
+    permissions.surfaces.monitor = true
+    permissions.tools.monitoring = true
+    permissions.inheritAdminApiKeys = true
+    permissions.allowedProviderApiKeys = ["*"]
+
+    update.run(JSON.stringify(permissions), Date.now(), row.id)
+  }
+}
+
+function isLegacyMemberDefaultPermissionShape(
+  raw: Record<string, unknown>
+): boolean {
+  const surfaces =
+    raw.surfaces &&
+    typeof raw.surfaces === "object" &&
+    !Array.isArray(raw.surfaces)
+      ? (raw.surfaces as Record<string, unknown>)
+      : {}
+  const tools =
+    raw.tools && typeof raw.tools === "object" && !Array.isArray(raw.tools)
+      ? (raw.tools as Record<string, unknown>)
+      : {}
+  const integrations =
+    raw.integrations &&
+    typeof raw.integrations === "object" &&
+    !Array.isArray(raw.integrations)
+      ? (raw.integrations as Record<string, unknown>)
+      : {}
+  const allowedProviderApiKeys = raw.allowedProviderApiKeys
+
+  return (
+    surfaces.monitor === false &&
+    tools.monitoring === false &&
+    raw.inheritAdminApiKeys === false &&
+    Array.isArray(allowedProviderApiKeys) &&
+    allowedProviderApiKeys.length === 0 &&
+    integrations.watchlist === "write"
+  )
+}
+
 function profileFromRow(row: ProfileRow): ProfileRecord {
   let parsed: unknown = null
   try {
@@ -697,7 +774,10 @@ function deleteProfileStateDirectory(profileId: string): void {
     "profiles"
   )
   const target = path.resolve(runtimePathsForProfile(profileId).stateDir)
-  if (target === profileRoot || !target.startsWith(`${profileRoot}${path.sep}`)) {
+  if (
+    target === profileRoot ||
+    !target.startsWith(`${profileRoot}${path.sep}`)
+  ) {
     throw new Error(`Refusing to delete unsafe profile state path: ${target}`)
   }
   fs.rmSync(target, { recursive: true, force: true })
@@ -714,7 +794,9 @@ function uniqueProfileId(name: string): string {
       .get(id)
     if (!existing) return id
   }
-  return normalizeStoredProfileId(`${base}_${crypto.randomBytes(4).toString("hex")}`)
+  return normalizeStoredProfileId(
+    `${base}_${crypto.randomBytes(4).toString("hex")}`
+  )
 }
 
 function slugifyProfileName(name: string): string {
@@ -753,7 +835,10 @@ function normalizePin(pin: string | null | undefined): string | null {
   return clean
 }
 
-function hashPin(pin: string, salt = crypto.randomBytes(16).toString("hex")): {
+function hashPin(
+  pin: string,
+  salt = crypto.randomBytes(16).toString("hex")
+): {
   hash: string
   salt: string
 } {

@@ -32,7 +32,6 @@ const INTEGRATION_TAGS: Record<string, IntegrationPermissionId> = {
   "home-assistant": "home_assistant",
   maps: "maps",
   weather: "weather",
-  watchlist: "watchlist",
 }
 
 const TOOL_TAGS: Record<string, ToolPermissionId> = {
@@ -81,6 +80,10 @@ export function deniedToolReason(
       return "Admin profile required for profile administration."
     }
 
+    if (tag === "watchlist" && !permissions.surfaces.watchlist) {
+      return "Profile is not allowed to use Watchlist."
+    }
+
     const toolPermission = TOOL_TAGS[tag]
     if (toolPermission && !permissions.tools[toolPermission]) {
       return denied(toolPermission)
@@ -125,7 +128,10 @@ export function hasIntegrationAccess(
   integration: IntegrationPermissionId,
   needed: IntegrationAccess
 ): boolean {
-  return ACCESS_RANK[permissions.integrations[integration] ?? "none"] >= ACCESS_RANK[needed]
+  return (
+    ACCESS_RANK[permissions.integrations[integration] ?? "none"] >=
+    ACCESS_RANK[needed]
+  )
 }
 
 function neededIntegrationAccess(tool: ToolDef): IntegrationAccess {

@@ -111,6 +111,42 @@ async function main(): Promise<void> {
     }
 
     {
+        // gmail_query is applied by the adapter during fetch; as a suppress
+        // pattern the local evaluator degenerates it to match-everything and
+        // the watch goes silent. Authoring must reject it, including nested.
+        const fb = await executeMonitorWakeFeedback({
+            watch_id: w.id,
+            was_worth_it: false,
+            reason: 'gmail_query suppress pattern - should be rejected',
+            add_suppress_pattern: {
+                reason: 'LinkedIn noise',
+                rule: { kind: 'gmail_query', q: 'from:messages-noreply@linkedin.com subject:(add)' },
+            },
+        })
+        check('adapter-evaluated (gmail_query) suppress pattern is rejected', fb.success === false)
+        check('error names the offending kind', typeof fb.error === 'string' && fb.error.includes('gmail_query'))
+        check('error explains match-everything danger', typeof fb.error === 'string' && fb.error.includes('EVERY candidate'))
+
+        const fbNested = await executeMonitorWakeFeedback({
+            watch_id: w.id,
+            was_worth_it: false,
+            reason: 'nested gmail_query suppress pattern - should be rejected',
+            add_suppress_pattern: {
+                reason: 'nested query',
+                rule: {
+                    kind: 'any_of',
+                    rules: [
+                        { kind: 'gmail_from', senders: ['noreply@linkedin.com'] },
+                        { kind: 'gmail_query', q: 'subject:(add)' },
+                    ],
+                },
+            },
+        })
+        check('nested adapter-evaluated kind is rejected', fbNested.success === false)
+        check('watch still has exactly 1 suppress pattern after rejections', getMonitorWatch(w.id)!.suppressPatterns.length === 1)
+    }
+
+    {
         const w3 = getMonitorWatch(w.id)!
         const patId = w3.suppressPatterns[0].id
         const fb = await executeMonitorWakeFeedback({
@@ -154,6 +190,54 @@ async function main(): Promise<void> {
             },
         })
         check('rejects malformed rule in add_suppress_pattern', r6.success === false)
+    }
+
+    {
+        // Follow-up resolution verdicts. Simulate the engine auto-resolving a
+        // follow-up on a match, then the wake disagreeing ("not_yet").
+        const { completeWatchFollowUp } = await import('@/lib/monitor/store')
+        const deadline = Date.now() + 2 * 86_400_000
+        const fu = createMonitorWatch({
+            title: 'Reply from Dan',
+            source: 'gmail',
+            target: 'dan@example.com',
+            rule: { kind: 'gmail_from', senders: ['dan@example.com'] },
+            followUp: { expectation: 'a reply from Dan', deadlineAt: deadline },
+        })
+        completeWatchFollowUp(fu.id, 'resolved')
+
+        const notYet = await executeMonitorWakeFeedback({
+            watch_id: fu.id,
+            was_worth_it: false,
+            reason: 'match was my own message in the thread, not the reply',
+            follow_up_outcome: 'not_yet',
+            extend_deadline_days: 1,
+        })
+        check('follow_up_outcome=not_yet succeeds', notYet.success === true, notYet.error)
+        const reArmed = getMonitorWatch(fu.id)!
+        check('not_yet re-arms the watch', reArmed.enabled === true && reArmed.followUp?.resolvedAt === null)
+        check('not_yet extends the deadline', reArmed.followUp?.deadlineAt === deadline + 86_400_000)
+        const fuFeedback = listWatchEvents(fu.id, { kinds: ['feedback'] })
+        check('follow_up_outcome recorded in feedback audit', fuFeedback.some((e) => e.payload?.follow_up_outcome === 'not_yet'))
+
+        completeWatchFollowUp(fu.id, 'resolved')
+        const confirmed = await executeMonitorWakeFeedback({
+            watch_id: fu.id,
+            was_worth_it: true,
+            reason: 'Dan replied; loop closed',
+            follow_up_outcome: 'confirmed',
+        })
+        check('follow_up_outcome=confirmed succeeds', confirmed.success === true)
+        const stillDone = getMonitorWatch(fu.id)!
+        check('confirmed leaves completion intact for the sweep', stillDone.enabled === false && stillDone.followUp?.resolvedAt !== null)
+
+        const onPlain = await executeMonitorWakeFeedback({
+            watch_id: w.id,
+            was_worth_it: true,
+            reason: 'plain watch',
+            follow_up_outcome: 'confirmed',
+        })
+        check('follow_up_outcome rejected on non-follow-up watch', onPlain.success === false)
     }
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)

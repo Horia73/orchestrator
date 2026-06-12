@@ -25,6 +25,7 @@ export const monitorWakeFeedbackTool: ToolDef = {
         'Call this once per watch that produced matches in the wake — even if you also called notify_inbox for it — so the engine can learn what is worth waking you for.',
         'Set was_worth_it=true when the matches deserved attention. Set was_worth_it=false when they were noise/routine; in that case also pass add_suppress_pattern with a structured MonitorRule that captures the noise signature so future ticks drop similar candidates BEFORE waking you.',
         'Use remove_suppress_pattern_id to retract a previously-added pattern that is now over-suppressing.',
+        'For a closed-loop FOLLOW-UP watch whose match the engine auto-resolved: pass follow_up_outcome="confirmed" when the matched item really was the expected effect (the engine then removes the watch after this wake), or follow_up_outcome="not_yet" when it was something else (your own message, an unrelated mail) — that re-arms the watch to keep waiting, optionally with extend_deadline_days.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -43,6 +44,8 @@ export const monitorWakeFeedbackTool: ToolDef = {
                 required: ['reason', 'rule'],
             },
             remove_suppress_pattern_id: { type: 'string', description: 'Optional. Remove a previously-added suppress pattern (use the id shown in <wake_reason>).' },
+            follow_up_outcome: { type: 'string', enum: ['confirmed', 'not_yet'], description: 'Only for follow-up watches. "confirmed" = the auto-resolving match was the expected effect. "not_yet" = false resolution; re-arm the watch and keep waiting for the real effect.' },
+            extend_deadline_days: { type: 'number', description: 'Optional, with follow_up_outcome="not_yet": push the follow-up deadline this many days past the original.' },
         },
         required: ['watch_id', 'was_worth_it', 'reason'],
     },
@@ -63,7 +66,7 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
 
     const store = await import('@/lib/monitor/store')
     const { MonitorRuleSchema, assertRuleDepth } = await import('@/lib/monitor/schema')
-    const { ruleMatchesSource } = await import('@/lib/monitor/rules')
+    const { ruleMatchesSource, findAdapterEvaluatedKind } = await import('@/lib/monitor/rules')
 
     const watch = store.getMonitorWatch(watchId)
     if (!watch) return { success: false, error: `No watch with id ${watchId}.` }
@@ -72,6 +75,9 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
     store.recordWatchEvent(watchId, 'feedback', {
         was_worth_it: wasWorthIt,
         reason,
+        ...(args.follow_up_outcome === 'confirmed' || args.follow_up_outcome === 'not_yet'
+            ? { follow_up_outcome: args.follow_up_outcome }
+            : {}),
     })
 
     // 2. Optional: remove an over-suppressing pattern.
@@ -108,6 +114,10 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
         if (watch.source !== 'custom' && !ruleMatchesSource(parsed.data, watch.source)) {
             return { success: false, error: `add_suppress_pattern.rule contains predicate(s) not supported by source "${watch.source}". Use predicates compatible with the watch's own rule.` }
         }
+        const adapterKind = findAdapterEvaluatedKind(parsed.data)
+        if (adapterKind) {
+            return { success: false, error: `add_suppress_pattern.rule contains "${adapterKind}", which is applied by the ${watch.source} adapter during fetch — as a suppress pattern it would match EVERY candidate and silence the watch entirely. Re-express the noise signature with locally-evaluable predicates (e.g. gmail_from / gmail_subject_contains / wa_from / wa_text_contains), composed with any_of/all_of if needed.` }
+        }
 
         const expiresInDays = typeof addSuppressArg.expires_in_days === 'number' && addSuppressArg.expires_in_days > 0
             ? addSuppressArg.expires_in_days
@@ -123,6 +133,38 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
         added = { patternId: pattern.id, reason: pattern.reason }
     }
 
+    // 4. Optional: follow-up resolution verdict (closed-loop watches only).
+    let followUpResult: { outcome: string; deadline_at?: string } | null = null
+    const followUpOutcomeArg = args.follow_up_outcome
+    if (followUpOutcomeArg !== undefined) {
+        if (followUpOutcomeArg !== 'confirmed' && followUpOutcomeArg !== 'not_yet') {
+            return { success: false, error: 'follow_up_outcome must be "confirmed" or "not_yet".' }
+        }
+        if (!watch.followUp) {
+            return { success: false, error: `Watch ${watchId} is not a follow-up watch; follow_up_outcome does not apply.` }
+        }
+        if (followUpOutcomeArg === 'not_yet') {
+            const extendDays = typeof args.extend_deadline_days === 'number' && args.extend_deadline_days > 0
+                ? Math.min(args.extend_deadline_days, 180)
+                : null
+            const reopened = store.reopenWatchFollowUp(watchId, {
+                extendDeadlineToMs: extendDays
+                    ? watch.followUp.deadlineAt + extendDays * 86_400_000
+                    : undefined,
+            })
+            if (!reopened?.followUp) return { success: false, error: 'Failed to re-arm follow-up watch.' }
+            followUpResult = {
+                outcome: 're-armed',
+                deadline_at: new Date(reopened.followUp.deadlineAt).toISOString(),
+            }
+        } else {
+            // Confirmed: nothing to mutate — the engine already completed the
+            // lifecycle and the post-wake sweep removes the watch. Recording the
+            // verdict in the feedback event (step 1) is the audit trail.
+            followUpResult = { outcome: 'confirmed' }
+        }
+    }
+
     return {
         success: true,
         data: {
@@ -131,6 +173,7 @@ export async function executeMonitorWakeFeedback(args: Record<string, unknown>):
             recorded: true,
             added_suppress_pattern: added,
             removed_suppress_pattern: removed,
+            follow_up: followUpResult,
         },
     }
 }

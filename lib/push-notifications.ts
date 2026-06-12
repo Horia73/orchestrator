@@ -5,6 +5,11 @@ import webpush from "web-push"
 
 import db from "@/lib/db"
 import { getEnvValue, PRIVATE_STATE_DIR } from "@/lib/config"
+import {
+  getActiveProfileId,
+  runWithProfileContext,
+} from "@/lib/profiles/context"
+import { listProfiles } from "@/lib/profiles/store"
 
 interface VapidKeys {
   publicKey: string
@@ -115,6 +120,7 @@ export function savePushSubscription(
   userAgent: string | null
 ): void {
   const subscription = assertPushSubscription(subscriptionValue)
+  const activeProfileId = getActiveProfileId()
   const now = Date.now()
 
   db.prepare(
@@ -134,11 +140,34 @@ export function savePushSubscription(
     createdAt: now,
     updatedAt: now,
   })
+  deletePushSubscriptionFromOtherProfiles(
+    subscription.endpoint,
+    activeProfileId
+  )
 }
 
 export function deletePushSubscription(endpoint: string): void {
   if (!endpoint) return
   db.prepare("DELETE FROM push_subscriptions WHERE endpoint = ?").run(endpoint)
+}
+
+function deletePushSubscriptionFromOtherProfiles(
+  endpoint: string,
+  activeProfileId: string
+): void {
+  for (const profile of listProfiles()) {
+    if (profile.id === activeProfileId) continue
+    try {
+      runWithProfileContext({ profileId: profile.id, role: profile.role }, () =>
+        deletePushSubscription(endpoint)
+      )
+    } catch (error) {
+      console.warn(
+        `Failed to clear push subscription from profile ${profile.id}`,
+        error
+      )
+    }
+  }
 }
 
 export interface PushSubscriptionSummary {
@@ -224,7 +253,9 @@ export async function sendTestPushNotification(
             "SELECT endpoint, subscription FROM push_subscriptions WHERE endpoint = ?"
           )
           .all(endpoint)
-      : db.prepare("SELECT endpoint, subscription FROM push_subscriptions").all()
+      : db
+          .prepare("SELECT endpoint, subscription FROM push_subscriptions")
+          .all()
   ) as Array<{ endpoint: string; subscription: string }>
   if (rows.length === 0) return []
 

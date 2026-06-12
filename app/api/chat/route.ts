@@ -65,6 +65,7 @@ import { activateIntegrations } from "@/lib/integrations/activation-store"
 import { resolveExistingUploadPath } from "@/lib/uploads"
 import { getEffectiveRegistry } from "@/lib/models/registry"
 import { generateTitle } from "@/lib/utils-chat"
+import { maybeAutoNameAttachmentOnlyConversation } from "@/lib/ai/conversation-auto-title"
 import { getProviderReadiness } from "@/lib/provider-readiness"
 import { resolveRequestOrigin } from "@/lib/app-origin"
 import { sendChatCompletionPushNotification } from "@/lib/push-notifications"
@@ -1576,6 +1577,17 @@ export async function POST(request: Request) {
                         interactionId: meta.sessionId,
                         attachments: accAttachments,
                         message: persisted ?? undefined,
+                      })
+
+                      void maybeAutoNameAttachmentOnlyConversation({
+                        conversationId,
+                        assistantMessageId: messageId,
+                        assistantText: persisted?.content ?? accContent,
+                      }).catch((error) => {
+                        console.warn(
+                          "Failed to auto-name attachment-only conversation",
+                          error
+                        )
                       })
 
                       const completedConversation = getConversation(conversationId)

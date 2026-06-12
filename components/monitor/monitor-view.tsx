@@ -304,6 +304,14 @@ function WatchDetailPanel({
             <span className="min-w-0 truncate text-[16px] font-semibold">
               {watch.title}
             </span>
+            {watch.follow_up && (
+              <span
+                className="shrink-0 rounded-full bg-sky-100 px-1.5 py-0.5 text-[10px] font-semibold text-sky-900 dark:bg-sky-950/40 dark:text-sky-300"
+                title={watch.follow_up.expectation}
+              >
+                follow-up
+              </span>
+            )}
             {watch.consecutive_errors > 0 && (
               <span
                 className="shrink-0 rounded-full bg-red-100 px-1.5 py-0.5 text-[10px] font-semibold text-[#802020] dark:bg-red-950/30 dark:text-red-300"
@@ -362,6 +370,20 @@ function WatchDetailPanel({
             </div>
           </div>
         </Section>
+
+        {watch.follow_up && (
+          <Section title="Follow-up">
+            <div className="min-w-0 rounded-md border border-border/60 bg-background px-3 py-2 text-[13px] break-words text-foreground/80">
+              <div>Expecting: {watch.follow_up.expectation}</div>
+              <div className="mt-1 text-[12px] text-foreground/55">
+                Deadline{" "}
+                {new Date(watch.follow_up.deadline_at).toLocaleString()} ·
+                status {watch.follow_up.status.replace(/_/g, " ")} · one-shot
+                (auto-removed once handled)
+              </div>
+            </div>
+          </Section>
+        )}
 
         <Section title="Agent wake">
           <div className="space-y-1 text-[13px] break-words text-foreground/70">
@@ -559,7 +581,11 @@ function scheduleSummary(schedule: unknown): string {
   if (!schedule || typeof schedule !== "object" || Array.isArray(schedule)) {
     return "manual"
   }
-  const spec = schedule as { kind?: unknown; everyMs?: unknown; startAt?: unknown }
+  const spec = schedule as {
+    kind?: unknown
+    everyMs?: unknown
+    startAt?: unknown
+  }
   if (spec.kind === "manual") return "manual"
   if (spec.kind === "interval") {
     const everyMs = typeof spec.everyMs === "number" ? spec.everyMs : null
@@ -649,8 +675,14 @@ function MicroscriptRowCard({
           <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-foreground/45">
             <span>{script.permission_count} permission(s)</span>
             <span>{script.run_count} run(s)</span>
-            {script.next_run_at && <span>next {formatRelative(script.next_run_at, now)}</span>}
-            {script.expires_at && <span>expires {new Date(script.expires_at).toLocaleDateString()}</span>}
+            {script.next_run_at && (
+              <span>next {formatRelative(script.next_run_at, now)}</span>
+            )}
+            {script.expires_at && (
+              <span>
+                expires {new Date(script.expires_at).toLocaleDateString()}
+              </span>
+            )}
           </div>
         </div>
       </div>
@@ -684,7 +716,9 @@ function MicroscriptDetailPanel({
       setScript(data.script)
       setError(null)
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Failed to load microscript")
+      setError(
+        err instanceof Error ? err.message : "Failed to load microscript"
+      )
     }
   }, [scriptId])
 
@@ -795,11 +829,23 @@ function MicroscriptDetailPanel({
         <Section title="Runtime">
           <div className="grid gap-2 text-[12px] text-foreground/65 sm:grid-cols-2">
             <KeyValue label="Status" value={script.status} />
-            <KeyValue label="Schedule" value={scheduleSummary(script.schedule)} />
-            <KeyValue label="Next run" value={formatRelative(script.next_run_at, now)} />
-            <KeyValue label="Last run" value={formatPast(script.last_run_at, now)} />
+            <KeyValue
+              label="Schedule"
+              value={scheduleSummary(script.schedule)}
+            />
+            <KeyValue
+              label="Next run"
+              value={formatRelative(script.next_run_at, now)}
+            />
+            <KeyValue
+              label="Last run"
+              value={formatPast(script.last_run_at, now)}
+            />
             <KeyValue label="Runs" value={String(script.run_count)} />
-            <KeyValue label="Permissions" value={String(script.permission_count)} />
+            <KeyValue
+              label="Permissions"
+              value={String(script.permission_count)}
+            />
           </div>
         </Section>
 
@@ -809,20 +855,20 @@ function MicroscriptDetailPanel({
               <Code2 className="size-3.5" />
               View Python code
             </summary>
-            <pre className="max-h-[460px] overflow-auto border-t border-border/60 bg-foreground/[0.03] p-3 text-[12px] leading-5">
+            <pre className="max-h-[460px] max-w-full overflow-auto border-t border-border/60 bg-foreground/[0.03] p-3 text-[12px] leading-5">
               <code>{script.code}</code>
             </pre>
           </details>
         </Section>
 
         <Section title="Manifest">
-          <pre className="max-h-[300px] overflow-auto rounded-md border border-border/60 bg-background p-3 text-[12px] leading-5">
+          <pre className="max-h-[300px] max-w-full overflow-auto rounded-md border border-border/60 bg-background p-3 text-[12px] leading-5">
             <code>{codeJson(script.manifest)}</code>
           </pre>
         </Section>
 
         <Section title="State">
-          <pre className="max-h-[220px] overflow-auto rounded-md border border-border/60 bg-background p-3 text-[12px] leading-5">
+          <pre className="max-h-[220px] max-w-full overflow-auto rounded-md border border-border/60 bg-background p-3 text-[12px] leading-5">
             <code>{codeJson(script.state)}</code>
           </pre>
         </Section>
@@ -841,7 +887,7 @@ function MicroscriptDetailPanel({
 
 function KeyValue({ label, value }: { label: string; value: string }) {
   return (
-    <div className="rounded-md border border-border/60 bg-background px-3 py-2">
+    <div className="min-w-0 rounded-md border border-border/60 bg-background px-3 py-2">
       <div className="text-[11px] font-semibold tracking-wider text-foreground/40 uppercase">
         {label}
       </div>
@@ -859,9 +905,7 @@ function MicroscriptRuns({
 }) {
   if (runs.length === 0) {
     return (
-      <p className="text-[12px] text-foreground/55">
-        No runs recorded yet.
-      </p>
+      <p className="text-[12px] text-foreground/55">No runs recorded yet.</p>
     )
   }
   return (
@@ -882,10 +926,14 @@ function MicroscriptRuns({
             >
               {run.status}
             </span>
-            <span>{run.trigger}</span>
-            <span>{formatPast(run.startedAt, now)}</span>
-            <span>{run.phases} phase(s)</span>
-            <span>{run.operations} operation(s)</span>
+            <span className="min-w-0 break-words">{run.trigger}</span>
+            <span className="min-w-0 break-words">
+              {formatPast(run.startedAt, now)}
+            </span>
+            <span className="min-w-0 break-words">{run.phases} phase(s)</span>
+            <span className="min-w-0 break-words">
+              {run.operations} operation(s)
+            </span>
             {run.surfaced && <span>Inbox</span>}
           </div>
           <div className="mt-1 text-[12px] break-words text-foreground/65">
@@ -906,9 +954,7 @@ function MicroscriptEvents({
 }) {
   if (events.length === 0) {
     return (
-      <p className="text-[12px] text-foreground/55">
-        No events recorded yet.
-      </p>
+      <p className="text-[12px] text-foreground/55">No events recorded yet.</p>
     )
   }
   return (
@@ -923,10 +969,11 @@ function MicroscriptEvents({
           </span>
           <div className="min-w-0 flex-1">
             <div className="text-[12px] text-foreground/55">
-              {new Date(event.ts).toLocaleString()} · {formatPast(event.ts, now)}
+              {new Date(event.ts).toLocaleString()} ·{" "}
+              {formatPast(event.ts, now)}
             </div>
             {event.payload && (
-              <pre className="mt-0.5 max-h-28 overflow-auto rounded bg-foreground/[0.03] p-2 text-[11px] leading-4 text-foreground/65">
+              <pre className="mt-0.5 max-h-28 max-w-full overflow-auto rounded bg-foreground/[0.03] p-2 text-[11px] leading-4 text-foreground/65">
                 <code>{codeJson(event.payload)}</code>
               </pre>
             )}
@@ -1097,13 +1144,18 @@ export function MonitorView() {
     [watches, selectedId]
   )
   const selectedMicroscript = React.useMemo(
-    () => microscripts.find((script) => script.id === selectedMicroscriptId) ?? null,
+    () =>
+      microscripts.find((script) => script.id === selectedMicroscriptId) ??
+      null,
     [microscripts, selectedMicroscriptId]
   )
 
-  const registerMicroscriptDetailRefresh = React.useCallback((fn: () => void) => {
-    microscriptDetailRefreshRef.current = fn
-  }, [])
+  const registerMicroscriptDetailRefresh = React.useCallback(
+    (fn: () => void) => {
+      microscriptDetailRefreshRef.current = fn
+    },
+    []
+  )
 
   // Initial-load only: background refreshes keep the rendered list in place
   // instead of swapping it for a spinner.
@@ -1122,8 +1174,8 @@ export function MonitorView() {
             <div className="text-[16px] font-semibold">Smart monitor</div>
             <div className="mt-0.5 text-[12px] leading-5 break-words text-foreground/55">
               Model-led watches and deterministic microscripts share this
-              monitoring surface. Use watches for judgement-heavy recurring
-              work and microscripts for cheap runtime gates.
+              monitoring surface. Use watches for judgement-heavy recurring work
+              and microscripts for cheap runtime gates.
             </div>
           </div>
         </div>

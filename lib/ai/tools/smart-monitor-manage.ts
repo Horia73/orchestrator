@@ -138,6 +138,18 @@ async function compactWatchRow(watchId: string): Promise<Record<string, unknown>
         target: w.target,
         rule: describeRule(w.rule),
         enabled: w.enabled,
+        follow_up: w.followUp
+            ? {
+                expectation: w.followUp.expectation,
+                deadline_at: new Date(w.followUp.deadlineAt).toISOString(),
+                on_deadline: w.followUp.onDeadline,
+                status: w.followUp.resolvedAt
+                    ? 'resolved'
+                    : w.followUp.deadlineFiredAt
+                        ? 'deadline_passed'
+                        : 'waiting',
+            }
+            : null,
         cadence_seconds: w.cadence.current,
         cadence_adaptive: w.cadence.adaptive,
         allowed_actions: w.allowedActions.map(describeAction),
@@ -296,7 +308,8 @@ export const monitorWatchAddTool: ToolDef = {
         'Do not create canned preset rules or fixed keyword tiers. Use source predicates as broad candidate hints, and let the Smart Monitor wake decide what deserves notification, silence, digesting, or a cadence change.',
         'Confirm only the source/scope, what the user cares about, desired cadence/check timing, and any non-notify actions they explicitly authorize. Digest timing and quiet/active windows are decided by the Smart Monitor agent at wake time using task_state.',
         'For connector integrations, use at most one watch per source by default. If a watch already exists for that integration, update it instead of adding another unless the user wants separate behavior. Custom model-owned watches may be separate when they represent distinct recurring instructions.',
-        'After creating or updating a watch, document the durable spec in MONITORS.md: watchId, status, cadence, source/scope, check prompt, notify rule, and silence rule.',
+        'EXCEPTION — closed-loop follow-ups: pass `follow_up` to create a short-lived one-shot watch that verifies the EFFECT of an outward action you just performed (a sent email, a created event, a WhatsApp message). Follow-up watches are exempt from the one-per-source rule, auto-disable on the first match (effect observed) or at the deadline (escalated to the Inbox unless on_deadline="silent"), and are auto-removed after the wake that handles them — no manual cleanup. Scope the rule tightly to the expected effect (e.g. gmail_from on the counterparty, optionally composed with gmail_subject_contains on the subject stem; wa_from on the chat). Do NOT use follow_up for ongoing monitoring.',
+        'After creating or updating a watch, document the durable spec in MONITORS.md: watchId, status, cadence, source/scope, check prompt, notify rule, and silence rule. Follow-up watches are transient — skip MONITORS.md for them.',
         'Watches start ENABLED unless the user explicitly asks to pause. The single Smart Monitor scheduled agent task defaults to the consolidated heartbeat and self-paces with reschedule_task.',
         'Returns the new watch id. The Smart Monitor agent-wake system task auto-arms on first enabled watch.',
     ].join(' '),
@@ -325,11 +338,56 @@ export const monitorWatchAddTool: ToolDef = {
                     onMatch: { type: 'boolean', description: 'Legacy flag; defaults true. The agent still decides whether to notify at wake time.' },
                 },
             },
+            follow_up: {
+                type: 'object',
+                description: 'Optional closed-loop lifecycle: makes this a one-shot follow-up watch verifying the effect of an outward action. Auto-disables on first match or at the deadline; auto-removed after the wake that handles it.',
+                properties: {
+                    expectation: { type: 'string', description: 'The expected effect in plain language, e.g. "a reply from dan@x.com on the Q3 offer thread". Shown in the wake brief and any escalation.' },
+                    deadline: { type: 'string', description: 'When the effect should have happened: a duration from now ("2d", "36h", "45m") or an ISO datetime. If it passes with no match, the wake escalates to the Inbox (unless on_deadline="silent").' },
+                    on_deadline: { type: 'string', enum: ['escalate', 'silent'], description: 'Default "escalate": surface "no effect happened by the deadline" to the user. Use "silent" only when the user explicitly does not want to hear about the no-reply case.' },
+                },
+                required: ['expectation', 'deadline'],
+            },
             enabled: { type: 'boolean', description: 'Start enabled? Default true.' },
         },
         required: ['title', 'source', 'target', 'rule'],
     },
     tags: ['monitoring'],
+}
+
+/** Parse follow_up tool input → WatchFollowUp create shape. Deadline accepts a
+ *  duration from now ("2d", "36h") or an ISO datetime; must land in the future
+ *  within a sane horizon. */
+function normalizeFollowUpInput(raw: unknown, now: number):
+    | { expectation: string; deadlineAt: number; onDeadline: 'escalate' | 'silent' }
+    | undefined {
+    if (raw === undefined || raw === null) return undefined
+    if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error('follow_up must be an object.')
+    const input = raw as Record<string, unknown>
+    const expectation = typeof input.expectation === 'string' ? input.expectation.trim() : ''
+    if (!expectation) throw new Error('follow_up.expectation is required.')
+    if (expectation.length > 500) throw new Error('follow_up.expectation must be ≤500 characters.')
+
+    const deadlineRaw = input.deadline
+    let deadlineAt: number | null = null
+    if (typeof deadlineRaw === 'string' && DURATION_RE.test(deadlineRaw)) {
+        deadlineAt = now + (parseDurationSeconds(deadlineRaw) ?? 0) * 1000
+    } else if (typeof deadlineRaw === 'string' && deadlineRaw.trim()) {
+        const parsed = Date.parse(deadlineRaw)
+        deadlineAt = Number.isFinite(parsed) ? parsed : null
+    } else if (typeof deadlineRaw === 'number' && Number.isFinite(deadlineRaw)) {
+        deadlineAt = Math.round(deadlineRaw)
+    }
+    if (deadlineAt === null) throw new Error('follow_up.deadline must be a duration ("2d", "36h") or an ISO datetime.')
+    if (deadlineAt <= now) throw new Error('follow_up.deadline must be in the future.')
+    const MAX_HORIZON_MS = 180 * 86_400_000
+    if (deadlineAt > now + MAX_HORIZON_MS) throw new Error('follow_up.deadline must be within 180 days.')
+
+    const onDeadline = input.on_deadline === 'silent' ? 'silent' as const : 'escalate' as const
+    if (input.on_deadline !== undefined && input.on_deadline !== 'escalate' && input.on_deadline !== 'silent') {
+        throw new Error('follow_up.on_deadline must be "escalate" or "silent".')
+    }
+    return { expectation, deadlineAt, onDeadline }
 }
 
 export async function executeMonitorWatchAdd(args: Record<string, unknown>): Promise<ToolResult> {
@@ -386,6 +444,19 @@ export async function executeMonitorWatchAdd(args: Record<string, unknown>): Pro
         notify = parsedNotify.data as unknown as Record<string, unknown>
     }
 
+    let followUp: ReturnType<typeof normalizeFollowUpInput>
+    try {
+        followUp = normalizeFollowUpInput(args.follow_up, Date.now())
+    } catch (err) {
+        return { success: false, error: err instanceof Error ? err.message : 'Invalid follow_up.' }
+    }
+    // Follow-ups are deadline-bound: unless the caller chose a pacing, keep the
+    // adaptive ceiling at 1h so a reply is noticed promptly instead of widening
+    // toward the 12h default during the quiet wait.
+    if (followUp && cadence === undefined) {
+        cadence = { current: 900, min: 900, max: 3600 }
+    }
+
     const enabled = typeof args.enabled === 'boolean' ? args.enabled : true
 
     try {
@@ -399,6 +470,7 @@ export async function executeMonitorWatchAdd(args: Record<string, unknown>): Pro
             allowedActions: allowedActions as never,
             cadence: cadence as never,
             notify: notify as never,
+            followUp: followUp ?? null,
             enabled,
             createdBy: 'orchestrator',
         })

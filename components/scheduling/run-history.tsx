@@ -335,7 +335,7 @@ function RunDetailPane({
   }
 
   return (
-    <div className="flex min-h-0 flex-1 flex-col">
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col">
       <div className="flex shrink-0 items-center gap-3 border-b border-border/60 px-4 py-3">
         <button
           type="button"
@@ -392,7 +392,9 @@ function RunDetailPane({
             </dd>
           </div>
         </dl>
-        <ConversationArtifactsProvider conversationId={run.conversationId ?? ""}>
+        <ConversationArtifactsProvider
+          conversationId={run.conversationId ?? ""}
+        >
           <div
             className={cn(
               "rounded-md border p-3",
@@ -574,13 +576,13 @@ export function PastRuns({ taskId }: { taskId: string }) {
     content = (
       <div
         className={cn(
-          "flex min-h-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-background md:grid md:h-[calc(100dvh-260px)] md:max-h-[680px] md:min-h-[440px] md:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]",
+          "flex min-h-0 min-w-0 flex-1 overflow-hidden rounded-lg border border-border/60 bg-background md:grid md:h-[calc(100dvh-260px)] md:max-h-[680px] md:min-h-[440px] md:grid-cols-[minmax(240px,320px)_minmax(0,1fr)]",
           selectedRunId ? "h-full" : "h-[calc(100dvh-260px)] min-h-[360px]"
         )}
       >
         <div
           className={cn(
-            "min-h-0 flex-col border-border/60 md:flex md:border-r",
+            "min-h-0 min-w-0 flex-1 flex-col border-border/60 md:flex md:border-r",
             selectedRunId ? "hidden md:flex" : "flex"
           )}
         >
@@ -619,7 +621,7 @@ export function PastRuns({ taskId }: { taskId: string }) {
         </div>
         <div
           className={cn(
-            "min-h-0",
+            "min-h-0 min-w-0 flex-1",
             selectedRunId || isWideRunsViewport ? "flex" : "hidden md:flex"
           )}
         >
@@ -633,7 +635,7 @@ export function PastRuns({ taskId }: { taskId: string }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 min-w-0 flex-col">
+    <div className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden">
       <div className="mb-3 flex shrink-0 items-center justify-between gap-3 px-1 text-[12px] text-foreground/45">
         <span>
           {history.loadingInitial && history.total == null

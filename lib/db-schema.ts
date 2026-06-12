@@ -370,6 +370,14 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
   } catch {
     /* column already exists */
   }
+  // Migration: Inbox item → Smart Monitor watch linkage (JSON string[] of
+  // watch ids). Set when a monitor wake's notify_inbox surfaces; read by the
+  // inbox surface to record user_signal events for behavioral learning.
+  try {
+    db.exec(`ALTER TABLE conversations ADD COLUMN monitorWatchIds TEXT`)
+  } catch {
+    /* column already exists */
+  }
   try {
     db.exec(
       `CREATE INDEX IF NOT EXISTS idx_conversations_origin ON conversations(origin, createdAt DESC)`

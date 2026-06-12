@@ -537,6 +537,64 @@ function listConversationMemorySources(): MemorySourceSnapshot[] {
   }))
 }
 
+// ---------------------------------------------------------------------------
+// Recent-activity enumeration (non-semantic).
+//
+// Semantic recall answers "have we seen something LIKE this?"; this answers
+// "what did the user actually ask for lately?" — a cheap, date-bounded sweep
+// over the same exchange grouping, no embeddings involved. Primary consumer is
+// the nightly memory reflection's playbook synthesis (spotting the same
+// multi-step request recurring across days), exposed to the model as the
+// memory_recent_activity tool.
+// ---------------------------------------------------------------------------
+
+export interface RecentConversationActivity {
+  conversationId: string
+  title: string
+  lastTimestamp: number
+  exchangeCount: number
+  /** First user message of each exchange, compacted — the "what was asked"
+   *  signal, without assistant prose. */
+  userRequests: string[]
+}
+
+export function listRecentConversationActivity(opts: {
+  sinceMs: number
+  maxConversations?: number
+  maxRequestsPerConversation?: number
+}): RecentConversationActivity[] {
+  const maxConversations = Math.max(1, Math.min(opts.maxConversations ?? 60, 200))
+  const maxRequests = Math.max(1, Math.min(opts.maxRequestsPerConversation ?? 12, 50))
+  // Filtering rows before grouping can split an exchange straddling the window
+  // edge — harmless here, since only the user-request lines are consumed.
+  const rows = listConversationMemoryRows().filter((r) => r.timestamp >= opts.sinceMs)
+  const byConversation = new Map<string, RecentConversationActivity>()
+  for (const exchange of groupConversationExchanges(rows)) {
+    let entry = byConversation.get(exchange.conversationId)
+    if (!entry) {
+      entry = {
+        conversationId: exchange.conversationId,
+        title: exchange.conversationTitle?.trim() || "Untitled conversation",
+        lastTimestamp: exchange.lastTimestamp,
+        exchangeCount: 0,
+        userRequests: [],
+      }
+      byConversation.set(exchange.conversationId, entry)
+    }
+    entry.exchangeCount++
+    entry.lastTimestamp = Math.max(entry.lastTimestamp, exchange.lastTimestamp)
+    const firstUser = exchange.userParts[0]?.replace(/\s+/g, " ").trim()
+    if (firstUser && entry.userRequests.length < maxRequests) {
+      entry.userRequests.push(
+        firstUser.length > 200 ? `${firstUser.slice(0, 200)}…` : firstUser
+      )
+    }
+  }
+  return [...byConversation.values()]
+    .sort((a, b) => b.lastTimestamp - a.lastTimestamp)
+    .slice(0, maxConversations)
+}
+
 function listMemorySourceSnapshots(): MemorySourceSnapshot[] {
   const out: MemorySourceSnapshot[] = []
   for (const source of listMemorySourceFiles()) {

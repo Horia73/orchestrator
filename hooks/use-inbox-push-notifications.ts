@@ -107,7 +107,11 @@ function buffersMatch(left: ArrayBuffer | null, right: ArrayBuffer): boolean {
   return true
 }
 
-function readSyncRecord(): { endpoint: string; syncedAt: number } | null {
+function readSyncRecord(): {
+  endpoint: string
+  profileId: string | null
+  syncedAt: number
+} | null {
   try {
     const parsed = JSON.parse(localStorage.getItem(SYNC_RECORD_KEY) ?? "null")
     if (
@@ -115,7 +119,12 @@ function readSyncRecord(): { endpoint: string; syncedAt: number } | null {
       typeof parsed.endpoint === "string" &&
       typeof parsed.syncedAt === "number"
     ) {
-      return parsed
+      return {
+        endpoint: parsed.endpoint,
+        profileId:
+          typeof parsed.profileId === "string" ? parsed.profileId : null,
+        syncedAt: parsed.syncedAt,
+      }
     }
   } catch {
     // Private browsing or malformed state: re-sync below.
@@ -123,25 +132,43 @@ function readSyncRecord(): { endpoint: string; syncedAt: number } | null {
   return null
 }
 
-function writeSyncRecord(endpoint: string) {
+function writeSyncRecord(endpoint: string, profileId: string | null) {
   try {
     localStorage.setItem(
       SYNC_RECORD_KEY,
-      JSON.stringify({ endpoint, syncedAt: Date.now() })
+      JSON.stringify({ endpoint, profileId, syncedAt: Date.now() })
     )
   } catch {
     // Browser storage is best-effort; server sync already succeeded.
   }
 }
 
-async function saveSubscription(subscription: PushSubscription): Promise<void> {
+async function fetchCurrentProfileId(): Promise<string | null> {
+  const res = await fetch("/api/profiles/current", { cache: "no-store" })
+  if (!res.ok) return null
+  const data = (await res.json().catch(() => ({}))) as {
+    profile?: { id?: unknown }
+  }
+  return typeof data.profile?.id === "string" ? data.profile.id : null
+}
+
+async function saveSubscription(
+  subscription: PushSubscription,
+  fallbackProfileId: string | null
+): Promise<void> {
   const saveRes = await fetch("/api/push/subscriptions", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ subscription: subscription.toJSON() }),
   })
   if (!saveRes.ok) throw new Error("Push subscription could not be saved")
-  writeSyncRecord(subscription.endpoint)
+  const data = (await saveRes.json().catch(() => ({}))) as {
+    profileId?: unknown
+  }
+  writeSyncRecord(
+    subscription.endpoint,
+    typeof data.profileId === "string" ? data.profileId : fallbackProfileId
+  )
 }
 
 async function deleteSubscription(endpoint: string): Promise<void> {
@@ -151,19 +178,27 @@ async function deleteSubscription(endpoint: string): Promise<void> {
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ endpoint }),
   }).catch(() => undefined)
+  try {
+    const record = readSyncRecord()
+    if (record?.endpoint === endpoint) localStorage.removeItem(SYNC_RECORD_KEY)
+  } catch {
+    // Best-effort local cache cleanup.
+  }
 }
 
 async function syncSubscriptionIfNeeded(
   subscription: PushSubscription
 ): Promise<void> {
+  const profileId = await fetchCurrentProfileId()
   const record = readSyncRecord()
   if (
     record?.endpoint === subscription.endpoint &&
+    record.profileId === profileId &&
     Date.now() - record.syncedAt < SYNC_TTL_MS
   ) {
     return
   }
-  await saveSubscription(subscription)
+  await saveSubscription(subscription, profileId)
 }
 
 async function getOrCreatePushSubscription(): Promise<PushSubscription> {
@@ -208,8 +243,9 @@ async function ensurePushSubscription(options?: {
   forceSave?: boolean
 }): Promise<PushSubscription> {
   const subscription = await getOrCreatePushSubscription()
-  if (options?.forceSave) await saveSubscription(subscription)
-  else await syncSubscriptionIfNeeded(subscription)
+  if (options?.forceSave) {
+    await saveSubscription(subscription, await fetchCurrentProfileId())
+  } else await syncSubscriptionIfNeeded(subscription)
   return subscription
 }
 

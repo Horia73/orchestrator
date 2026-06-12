@@ -213,6 +213,135 @@ async function main(): Promise<void> {
         pruned.includes(errOld.id),
       pruned
     )
+
+    // ---- Inbox → watch user_signal plumbing (behavioral learning feed) ----
+    {
+      const {
+        createInboxConversation,
+        markInboxRead,
+        deleteInboxConversation,
+        forkInboxToConversation,
+        logInboxDirectAction,
+      } = await import("@/lib/scheduling/store")
+      const { createMonitorWatch, listWatchEvents } = await import(
+        "@/lib/monitor/store"
+      )
+
+      const watch = createMonitorWatch({
+        title: "Gmail triage",
+        source: "gmail",
+        target: "inbox",
+        rule: { kind: "gmail_query", q: "in:inbox is:unread" },
+      })
+      const signalsFor = (kind: string) =>
+        listWatchEvents(watch.id, { kinds: ["user_signal"] }).filter(
+          (e) => e.payload?.signal === kind
+        )
+
+      const sigTask = createScheduledTask({
+        title: "Smart monitor smoke task",
+        action: { kind: "tool", toolId: "noop", args: {}, summary: "noop" },
+        schedule: { kind: "every", everyMs: hourMs },
+        enabled: true,
+        createdBy: "system",
+      })
+      const mkItem = (suffix: string, watchIds?: string[]) =>
+        createInboxConversation({
+          taskId: sigTask.id,
+          title: `Notification ${suffix}`,
+          watchIds,
+          messages: [
+            {
+              id: `msg_sig_${suffix}`,
+              role: "assistant",
+              content: "Something happened.",
+              timestamp: Date.now(),
+            },
+          ],
+        })
+
+      // Linked item: open → opened; delete after read → dismissed_read.
+      const linked = mkItem("a", [watch.id])
+      markInboxRead(linked)
+      check("open records user_signal opened", signalsFor("opened").length === 1)
+      markInboxRead(linked)
+      check(
+        "second open of already-read item records nothing",
+        signalsFor("opened").length === 1
+      )
+      deleteInboxConversation(linked)
+      check(
+        "delete-after-read records dismissed_read",
+        signalsFor("dismissed_read").length === 1 &&
+          signalsFor("dismissed_unread").length === 0
+      )
+
+      // Delete WITHOUT opening → dismissed_unread (strongest noise signal).
+      const unreadItem = mkItem("b", [watch.id])
+      deleteInboxConversation(unreadItem)
+      check(
+        "delete-unread records dismissed_unread",
+        signalsFor("dismissed_unread").length === 1
+      )
+
+      // Reply (fork) → replied; quick action → quick_action with the tool.
+      const replyItem = mkItem("c", [watch.id])
+      forkInboxToConversation(replyItem)
+      check("reply records replied", signalsFor("replied").length === 1)
+      logInboxDirectAction({
+        conversationId: replyItem,
+        messageId: "msg_sig_c",
+        actionId: "archive",
+        tool: "gmail.archive",
+        params: { messageId: "g1" },
+        result: "ok",
+        sourceKind: "gmail",
+        sourceTarget: "g1",
+      })
+      const quick = signalsFor("quick_action")
+      check(
+        "quick action records quick_action with tool",
+        quick.length === 1 && quick[0].payload?.tool === "gmail.archive"
+      )
+      logInboxDirectAction({
+        conversationId: replyItem,
+        messageId: "msg_sig_c",
+        actionId: "archive",
+        tool: "gmail.archive",
+        params: { messageId: "g1" },
+        result: "error",
+        errorMessage: "boom",
+        sourceKind: "gmail",
+        sourceTarget: "g1",
+      })
+      check(
+        "failed quick action records no signal",
+        signalsFor("quick_action").length === 1
+      )
+
+      // Unlinked item (no watchIds) → interactions record nothing.
+      const before = listWatchEvents(watch.id, { kinds: ["user_signal"] }).length
+      const unlinked = mkItem("d")
+      markInboxRead(unlinked)
+      deleteInboxConversation(unlinked)
+      check(
+        "unlinked inbox item records no signals",
+        listWatchEvents(watch.id, { kinds: ["user_signal"] }).length === before
+      )
+
+      // Engagement aggregate reaches the wake briefing.
+      const sigPrompt = buildSmartMonitorAgentPrompt({
+        now: Date.now(),
+        taskId: sigTask.id,
+        taskState: {},
+      })
+      check(
+        "wake briefing aggregates engagement signals",
+        sigPrompt.includes("User engagement with this watch's notifications") &&
+          sigPrompt.includes("dismissed unread"),
+        sigPrompt.split("\n").find((l) => l.includes("User engagement"))
+      )
+    }
   } finally {
     Date.now = realDateNow
     if (originalStateDir === undefined) delete process.env.ORCHESTRATOR_STATE_DIR

@@ -28,6 +28,7 @@ import {
   type ProfilePermissions,
   type ProfileRecord,
   type ProfileRole,
+  type ProfileSurface,
 } from "./types"
 import { hasIntegrationAccess } from "./permissions"
 
@@ -64,7 +65,9 @@ export function getCurrentProfileFromRequest(
   return currentProfileFromToken(readCookie(request, PROFILE_SESSION_COOKIE))
 }
 
-export async function requireAdminProfile(): Promise<CurrentProfile | NextResponse> {
+export async function requireAdminProfile(): Promise<
+  CurrentProfile | NextResponse
+> {
   const current = await getCurrentProfileFromCookies()
   if (!current) {
     return NextResponse.json(
@@ -109,10 +112,9 @@ export function runWithRequestProfile<T extends Response | Promise<Response>>(
   )
 }
 
-export function requireAdminRequestProfile<T extends Response | Promise<Response>>(
-  request: Request,
-  fn: (current: CurrentProfile) => T
-): T | NextResponse {
+export function requireAdminRequestProfile<
+  T extends Response | Promise<Response>,
+>(request: Request, fn: (current: CurrentProfile) => T): T | NextResponse {
   const current = getCurrentProfileFromRequest(request)
   if (!current) {
     return NextResponse.json(
@@ -132,9 +134,9 @@ export function requireAdminRequestProfile<T extends Response | Promise<Response
   )
 }
 
-export async function runWithCookieProfile<T extends Response | Promise<Response>>(
-  fn: (current: CurrentProfile) => T
-): Promise<Response> {
+export async function runWithCookieProfile<
+  T extends Response | Promise<Response>,
+>(fn: (current: CurrentProfile) => T): Promise<Response> {
   const current = await getCurrentProfileFromCookies()
   if (!current) {
     return NextResponse.json(
@@ -372,7 +374,9 @@ export const profileStore = {
   deleteProfile,
 }
 
-function currentProfileFromToken(token: string | null | undefined): CurrentProfile | null {
+function currentProfileFromToken(
+  token: string | null | undefined
+): CurrentProfile | null {
   const session = getProfileSessionByToken(token)
   if (!session || !token) return null
   const profile = getProfile(session.profileId)
@@ -402,10 +406,20 @@ function guardProfileApiPermission(
   current: CurrentProfile
 ): NextResponse | null {
   if (current.isAdmin) return null
-  const needed = integrationAccessForApiPath(
-    new URL(request.url).pathname,
-    request.method
-  )
+  const pathname = new URL(request.url).pathname
+  const surface = surfaceForApiPath(pathname)
+  if (surface && !current.profile.permissions.surfaces[surface]) {
+    return NextResponse.json(
+      {
+        error: "Profile is not allowed to access this surface.",
+        code: "profile_surface_denied",
+        surface,
+      },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    )
+  }
+
+  const needed = integrationAccessForApiPath(pathname, request.method)
   if (!needed) return null
   if (
     hasIntegrationAccess(
@@ -427,6 +441,11 @@ function guardProfileApiPermission(
   )
 }
 
+function surfaceForApiPath(pathname: string): ProfileSurface | null {
+  if (pathname.startsWith("/api/watchlist")) return "watchlist"
+  return null
+}
+
 function integrationAccessForApiPath(
   pathname: string,
   method: string
@@ -436,27 +455,45 @@ function integrationAccessForApiPath(
   const setupAccess: IntegrationAccess = "setup"
 
   if (pathname.startsWith("/api/integrations/gmail")) {
-    return { integration: "gmail", access: setupOrRead(pathname, writeAccess, setupAccess) }
+    return {
+      integration: "gmail",
+      access: setupOrRead(pathname, writeAccess, setupAccess),
+    }
   }
   if (pathname.startsWith("/api/integrations/google-calendar")) {
-    return { integration: "google_calendar", access: setupOrRead(pathname, writeAccess, setupAccess) }
+    return {
+      integration: "google_calendar",
+      access: setupOrRead(pathname, writeAccess, setupAccess),
+    }
   }
   if (pathname.startsWith("/api/integrations/google-drive")) {
-    return { integration: "google_drive", access: setupOrRead(pathname, writeAccess, setupAccess) }
+    return {
+      integration: "google_drive",
+      access: setupOrRead(pathname, writeAccess, setupAccess),
+    }
   }
   if (pathname.startsWith("/api/integrations/whatsapp")) {
-    return { integration: "whatsapp", access: setupOrRead(pathname, writeAccess, setupAccess) }
+    return {
+      integration: "whatsapp",
+      access: setupOrRead(pathname, writeAccess, setupAccess),
+    }
   }
   if (pathname.startsWith("/api/integrations/home-assistant")) {
-    return { integration: "home_assistant", access: setupOrRead(pathname, writeAccess, setupAccess) }
+    return {
+      integration: "home_assistant",
+      access: setupOrRead(pathname, writeAccess, setupAccess),
+    }
   }
-  if (pathname.startsWith("/api/integrations/maps") || pathname.startsWith("/api/maps")) {
+  if (
+    pathname.startsWith("/api/integrations/maps") ||
+    pathname.startsWith("/api/maps")
+  ) {
     return { integration: "maps", access: writeAccess }
   }
-  if (pathname.startsWith("/api/watchlist")) {
-    return { integration: "watchlist", access: writeAccess }
-  }
-  if (pathname.startsWith("/api/library/maps") || pathname.startsWith("/api/library/places")) {
+  if (
+    pathname.startsWith("/api/library/maps") ||
+    pathname.startsWith("/api/library/places")
+  ) {
     return { integration: "maps", access: "read" }
   }
   return null

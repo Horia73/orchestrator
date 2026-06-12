@@ -27,6 +27,12 @@ export interface WatchRow {
   active_runs: number
   quiet_runs: number
   notify_quiet_hours: { from: string; to: string; timezone: string } | null
+  follow_up: {
+    expectation: string
+    deadline_at: number
+    on_deadline: "escalate" | "silent"
+    status: "waiting" | "resolved" | "deadline_passed"
+  } | null
   created_by: string
   created_at: number
   updated_at: number
@@ -91,6 +97,8 @@ export interface WatchEvent {
     | "feedback"
     | "cadence_change"
     | "error"
+    | "followup"
+    | "user_signal"
   payload: Record<string, unknown> | null
 }
 

@@ -18,6 +18,7 @@
  */
 import {
     evaluateRule,
+    findAdapterEvaluatedKind,
     jsonEquals,
     jsonPathGet,
     ruleMatchesSource,
@@ -39,6 +40,7 @@ import {
     extractEntityIdsFromRule,
     matchingCalendarStartWindows,
     extractUrlsFromRule,
+    extractWaChatPrefilterFromRule,
     extractWaContactsFromRule,
     extractWeatherLocationsFromRule,
 } from '@/lib/monitor/sources/rule-targets'
@@ -203,6 +205,18 @@ check('gmail_query is true for gmail candidates (server-filtered)', evaluateRule
     { kind: 'gmail_query', q: 'from:boss' },
     gmail({}),
 ))
+check('findAdapterEvaluatedKind flags gmail_query', findAdapterEvaluatedKind(
+    { kind: 'gmail_query', q: 'from:boss' },
+) === 'gmail_query')
+check('findAdapterEvaluatedKind flags wa_unread', findAdapterEvaluatedKind(
+    { kind: 'wa_unread' },
+) === 'wa_unread')
+check('findAdapterEvaluatedKind flags nested adapter-evaluated leaf', findAdapterEvaluatedKind(
+    { kind: 'any_of', rules: [{ kind: 'gmail_from', senders: ['a@b.c'] }, { kind: 'gmail_query', q: 'subject:(add)' }] },
+) === 'gmail_query')
+check('findAdapterEvaluatedKind null for locally-evaluable rule', findAdapterEvaluatedKind(
+    { kind: 'all_of', rules: [{ kind: 'gmail_from', senders: ['a@b.c'] }, { kind: 'gmail_subject_contains', substrings: ['add'] }] },
+) === null)
 
 // ============================================================================
 // 2. Google Calendar predicates
@@ -465,6 +479,23 @@ const waRule: MonitorRule = {
     ],
 }
 check('extractWaContactsFromRule', JSON.stringify(extractWaContactsFromRule(waRule).sort()) === JSON.stringify(['Dad', 'Mom']))
+
+// Sound chat prefilter: any_of with a non-contact branch must NOT narrow the
+// chat listing (the loose extractor used as prefilter once silenced every
+// chat outside the wa_from list).
+check('extractWaChatPrefilterFromRule: any_of with text branch → no narrowing', extractWaChatPrefilterFromRule(waRule).length === 0)
+check('extractWaChatPrefilterFromRule: any_of with wa_unread branch → no narrowing', extractWaChatPrefilterFromRule(
+    { kind: 'any_of', rules: [{ kind: 'wa_unread' }, { kind: 'wa_from', contacts: ['Mom'] }] },
+).length === 0)
+check('extractWaChatPrefilterFromRule: bare wa_from narrows', JSON.stringify(extractWaChatPrefilterFromRule(
+    { kind: 'wa_from', contacts: ['Mom', 'Dad'] },
+).sort()) === JSON.stringify(['Dad', 'Mom']))
+check('extractWaChatPrefilterFromRule: any_of of wa_from unions', JSON.stringify(extractWaChatPrefilterFromRule(
+    { kind: 'any_of', rules: [{ kind: 'wa_from', contacts: ['Mom'] }, { kind: 'wa_from', contacts: ['Dad'] }] },
+).sort()) === JSON.stringify(['Dad', 'Mom']))
+check('extractWaChatPrefilterFromRule: all_of keeps contact narrowing', JSON.stringify(extractWaChatPrefilterFromRule(
+    { kind: 'all_of', rules: [{ kind: 'wa_text_contains', substrings: ['urgent'] }, { kind: 'wa_from', contacts: ['Mom'] }] },
+)) === JSON.stringify(['Mom']))
 
 const calendarRule: MonitorRule = {
     kind: 'any_of', rules: [

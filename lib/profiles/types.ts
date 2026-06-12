@@ -21,7 +21,6 @@ export type IntegrationPermissionId =
   | "home_assistant"
   | "maps"
   | "weather"
-  | "watchlist"
 
 export type ToolPermissionId =
   | "read_files"
@@ -120,7 +119,6 @@ export const INTEGRATION_PERMISSION_IDS: IntegrationPermissionId[] = [
   "home_assistant",
   "maps",
   "weather",
-  "watchlist",
 ]
 
 const MEMBER_SURFACE_DEFAULTS: Record<ProfileSurface, boolean> = {
@@ -129,7 +127,7 @@ const MEMBER_SURFACE_DEFAULTS: Record<ProfileSurface, boolean> = {
   library: true,
   scheduling: true,
   watchlist: true,
-  monitor: false,
+  monitor: true,
   maps: true,
   workouts: true,
   settings: false,
@@ -145,7 +143,7 @@ const MEMBER_TOOL_DEFAULTS: Record<ToolPermissionId, boolean> = {
   memory: true,
   skills: true,
   scheduling: true,
-  monitoring: false,
+  monitoring: true,
   microscripts: true,
   backups: false,
   updates: false,
@@ -164,7 +162,6 @@ const MEMBER_INTEGRATION_DEFAULTS: Record<
   home_assistant: "none",
   maps: "read",
   weather: "read",
-  watchlist: "write",
 }
 
 export function defaultMemberPermissions(): ProfilePermissions {
@@ -172,8 +169,8 @@ export function defaultMemberPermissions(): ProfilePermissions {
     surfaces: { ...MEMBER_SURFACE_DEFAULTS },
     tools: { ...MEMBER_TOOL_DEFAULTS },
     integrations: { ...MEMBER_INTEGRATION_DEFAULTS },
-    inheritAdminApiKeys: false,
-    allowedProviderApiKeys: [],
+    inheritAdminApiKeys: true,
+    allowedProviderApiKeys: ["*"],
   }
 }
 
@@ -245,8 +242,8 @@ export function normalizeProfilePermissions(
         ? raw.inheritAdminApiKeys
         : defaults.inheritAdminApiKeys,
     allowedProviderApiKeys: Array.isArray(raw.allowedProviderApiKeys)
-      ? raw.allowedProviderApiKeys.filter((value): value is string =>
-          typeof value === "string"
+      ? raw.allowedProviderApiKeys.filter(
+          (value): value is string => typeof value === "string"
         )
       : [...defaults.allowedProviderApiKeys],
   }

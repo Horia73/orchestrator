@@ -156,6 +156,23 @@ export function ModelsTab() {
     [setAgentOrder]
   )
 
+  // Single commit point for a finished drag. The live preview (built up during
+  // dragover) is the source of truth — it's exactly what the user sees — so on
+  // drop we persist that order rather than recomputing from the drop target.
+  // The drop event frequently lands on the dragged row itself (the preview
+  // slides it under the cursor); recomputing against that target used to bail
+  // out as a no-op and snap the list back, so the reorder never saved.
+  const commitDragPreview = React.useCallback(() => {
+    const previewOrder = dragPreviewOrderRef.current
+    setDraggingAgentId(null)
+    setDragPreviewOrder(null)
+    draggingAgentIdRef.current = null
+    dragPreviewOrderRef.current = null
+    if (previewOrder && !sameStringArray(previewOrder, savedAgentIds)) {
+      void persistAgentOrder(previewOrder)
+    }
+  }, [persistAgentOrder, savedAgentIds])
+
   const handleAgentDragStart = React.useCallback(
     (event: React.DragEvent, agentId: string) => {
       event.dataTransfer.effectAllowed = "move"
@@ -197,45 +214,11 @@ export function ModelsTab() {
   )
 
   const handleAgentDrop = React.useCallback(
-    (event: React.DragEvent, targetAgentId: string) => {
+    (event: React.DragEvent) => {
       event.preventDefault()
-      const draggedId =
-        event.dataTransfer.getData("text/plain") ||
-        draggingAgentIdRef.current ||
-        draggingAgentId
-      if (
-        !draggedId ||
-        draggedId === targetAgentId ||
-        !isSameTier(draggedId, targetAgentId)
-      ) {
-        setDraggingAgentId(null)
-        setDragPreviewOrder(null)
-        draggingAgentIdRef.current = null
-        dragPreviewOrderRef.current = null
-        return
-      }
-      const rect = event.currentTarget.getBoundingClientRect()
-      const placeAfterTarget = event.clientY > rect.top + rect.height / 2
-      const previewOrder = dragPreviewOrderRef.current ?? savedAgentIds
-      const nextOrder =
-        dragPreviewOrderRef.current &&
-        !sameStringArray(dragPreviewOrderRef.current, savedAgentIds)
-          ? previewOrder
-          : moveIdAround(
-              previewOrder,
-              draggedId,
-              targetAgentId,
-              placeAfterTarget
-            )
-      setDraggingAgentId(null)
-      setDragPreviewOrder(null)
-      draggingAgentIdRef.current = null
-      dragPreviewOrderRef.current = null
-      if (!sameStringArray(nextOrder, savedAgentIds)) {
-        void persistAgentOrder(nextOrder)
-      }
+      commitDragPreview()
     },
-    [draggingAgentId, isSameTier, persistAgentOrder, savedAgentIds]
+    [commitDragPreview]
   )
 
   const handleAgentDragOverEnd = React.useCallback(
@@ -261,33 +244,9 @@ export function ModelsTab() {
   const handleAgentDropEnd = React.useCallback(
     (event: React.DragEvent) => {
       event.preventDefault()
-      const draggedId =
-        event.dataTransfer.getData("text/plain") ||
-        draggingAgentIdRef.current ||
-        draggingAgentId
-      if (!draggedId) {
-        setDraggingAgentId(null)
-        setDragPreviewOrder(null)
-        draggingAgentIdRef.current = null
-        dragPreviewOrderRef.current = null
-        return
-      }
-
-      const previewOrder = dragPreviewOrderRef.current ?? savedAgentIds
-      const nextOrder =
-        dragPreviewOrderRef.current &&
-        !sameStringArray(dragPreviewOrderRef.current, savedAgentIds)
-          ? previewOrder
-          : moveIdToEnd(previewOrder, draggedId)
-      setDraggingAgentId(null)
-      setDragPreviewOrder(null)
-      draggingAgentIdRef.current = null
-      dragPreviewOrderRef.current = null
-      if (!sameStringArray(nextOrder, savedAgentIds)) {
-        void persistAgentOrder(nextOrder)
-      }
+      commitDragPreview()
     },
-    [draggingAgentId, persistAgentOrder, savedAgentIds]
+    [commitDragPreview]
   )
 
   const handleRefresh = async () => {

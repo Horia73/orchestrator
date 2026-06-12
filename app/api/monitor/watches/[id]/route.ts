@@ -41,6 +41,18 @@ function fullView(w: MonitorWatch) {
         last_fired_at: w.lastFiredAt,
         consecutive_errors: w.consecutiveErrors,
         last_error: w.lastError,
+        follow_up: w.followUp
+            ? {
+                expectation: w.followUp.expectation,
+                deadline_at: w.followUp.deadlineAt,
+                on_deadline: w.followUp.onDeadline,
+                status: w.followUp.resolvedAt
+                    ? ('resolved' as const)
+                    : w.followUp.deadlineFiredAt
+                        ? ('deadline_passed' as const)
+                        : ('waiting' as const),
+            }
+            : null,
         created_by: w.createdBy,
         created_at: w.createdAt,
         updated_at: w.updatedAt,

@@ -2,6 +2,7 @@ import { randomUUID } from "crypto"
 
 import db, { createConversation, deleteConversation } from "@/lib/db"
 import { emitAppEvent } from "@/lib/events"
+import { recordWatchEvent } from "@/lib/monitor/store"
 import { appendRuntimeRunIndex } from "@/lib/runtime-index"
 import type { InboxReplyAction, Message } from "@/lib/types"
 import { copyArtifactsForMessageMap } from "@/lib/artifacts/store"
@@ -934,6 +935,9 @@ export function createInboxConversation(args: {
   messages: Message[]
   /** Pre-generated id so callers can log an agent run against it. */
   id?: string
+  /** Smart Monitor watch ids this item is about — enables user_signal
+   *  engagement learning on the linked watches. */
+  watchIds?: string[]
 }): string {
   const now = Date.now()
   const conversationId = args.id ?? `inbox_${randomUUID()}`
@@ -947,11 +951,11 @@ export function createInboxConversation(args: {
       `
             INSERT INTO conversations (
               id, title, createdAt, updatedAt, origin, scheduledTaskId, readAt,
-              messageCount, lastMessagePreview, lastMessageAt
+              messageCount, lastMessagePreview, lastMessageAt, monitorWatchIds
             )
             VALUES (
               @id, @title, @createdAt, @updatedAt, 'inbox', @taskId, NULL,
-              @messageCount, @lastMessagePreview, @lastMessageAt
+              @messageCount, @lastMessagePreview, @lastMessageAt, @monitorWatchIds
             )
         `
     ).run({
@@ -965,6 +969,10 @@ export function createInboxConversation(args: {
         ? stripArtifactBlocksForPreview(latestMessage.content).slice(0, 240)
         : null,
       lastMessageAt: latestMessage?.timestamp ?? null,
+      monitorWatchIds:
+        args.watchIds && args.watchIds.length > 0
+          ? JSON.stringify(args.watchIds.slice(0, 8))
+          : null,
     })
 
     for (const msg of args.messages) {
@@ -1339,6 +1347,11 @@ export function logInboxDirectAction(args: {
     sourceTarget: args.sourceTarget,
     createdAt: Date.now(),
   })
+  if (args.result === "ok") {
+    recordInboxUserSignal(args.conversationId, "quick_action", {
+      tool: args.tool,
+    })
+  }
 }
 
 export function listInboxDirectActions(args: {
@@ -1395,6 +1408,43 @@ export function listInboxDirectActions(args: {
   }))
 }
 
+/** Record the user's behavior on an Inbox item back onto the Smart Monitor
+ *  watches that produced it, as `user_signal` audit events. This is the raw
+ *  feed for behavioral suppress-pattern learning: the wake briefing aggregates
+ *  these per watch, and the model decides what repeated dismissals mean — no
+ *  thresholds live in code. Best-effort by design: a missing linkage or a
+ *  deleted watch must never break the inbox interaction itself. */
+function recordInboxUserSignal(
+  conversationId: string,
+  signal:
+    | "opened"
+    | "replied"
+    | "dismissed_unread"
+    | "dismissed_read"
+    | "quick_action",
+  extra?: Record<string, unknown>
+): void {
+  try {
+    const row = db
+      .prepare(
+        "SELECT monitorWatchIds FROM conversations WHERE id = ? AND origin = 'inbox'"
+      )
+      .get(conversationId) as { monitorWatchIds: string | null } | undefined
+    const ids = parseJson<unknown>(row?.monitorWatchIds ?? null)
+    if (!Array.isArray(ids)) return
+    for (const watchId of ids.slice(0, 8)) {
+      if (typeof watchId !== "string" || !watchId) continue
+      recordWatchEvent(watchId, "user_signal", {
+        signal,
+        conversationId,
+        ...extra,
+      })
+    }
+  } catch {
+    /* learning signal is best-effort; never break the inbox action */
+  }
+}
+
 export function markInboxRead(id: string): number | null {
   const current = db
     .prepare(
@@ -1434,15 +1484,30 @@ export function markInboxRead(id: string): number | null {
     .get(id) as { readAt: number | null } | undefined
   const nextReadAt = row?.readAt ?? null
 
-  if (res.changes > 0) emitInboxChanged(id, "read")
+  if (res.changes > 0) {
+    emitInboxChanged(id, "read")
+    // Only on the unread→read transition, so re-fetching an already-read item
+    // does not inflate the engagement history.
+    recordInboxUserSignal(id, "opened")
+  }
   return nextReadAt
 }
 
 export function deleteInboxConversation(id: string): boolean {
   const row = db
-    .prepare("SELECT id FROM conversations WHERE id = ? AND origin = 'inbox'")
-    .get(id)
+    .prepare(
+      "SELECT id, readAt, lastMessageAt FROM conversations WHERE id = ? AND origin = 'inbox'"
+    )
+    .get(id) as
+    | { id: string; readAt: number | null; lastMessageAt: number | null }
+    | undefined
   if (!row) return false
+  // Dismissing without ever opening is the strongest "this was noise" signal;
+  // record it before the row (and its watch linkage) is gone.
+  const wasUnread =
+    row.readAt === null ||
+    (row.lastMessageAt !== null && row.readAt < row.lastMessageAt)
+  recordInboxUserSignal(id, wasUnread ? "dismissed_unread" : "dismissed_read")
   deleteConversation(id) // FK-cascades messages; emits a harmless delete event
   emitInboxChanged(id, "deleted")
   return true
@@ -1456,6 +1521,10 @@ export function deleteInboxConversation(id: string): boolean {
 export function forkInboxToConversation(id: string): string | null {
   const inbox = getInboxConversation(id)
   if (!inbox) return null
+
+  // Replying is the strongest positive engagement signal for the watches that
+  // produced this item. Record before the fork mutates read state.
+  recordInboxUserSignal(id, "replied")
 
   const now = Date.now()
   const newId = `conv_${randomUUID()}`

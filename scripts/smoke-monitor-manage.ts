@@ -258,7 +258,65 @@ async function main(): Promise<void> {
     }
 
     // ============================================================================
-    // 7. monitor_watch_remove
+    // 7. monitor_watch_add — closed-loop follow_up
+    // ============================================================================
+    {
+        // Duration deadline, coexists with the main Gmail watch (momWatchId).
+        const r1 = await executeMonitorWatchAdd({
+            title: 'Reply from Dan',
+            source: 'gmail',
+            target: 'dan@example.com',
+            rule: { kind: 'gmail_from', senders: ['dan@example.com'] },
+            follow_up: { expectation: 'a reply from Dan about the Q3 offer', deadline: '2d' },
+        })
+        check('follow-up add succeeds alongside main gmail watch', r1.success === true, r1.error)
+        const fuData = r1.data as { watch_id: string; watch: Record<string, unknown> } | undefined
+        const fuId = fuData?.watch_id ?? ''
+        const fuRow = fuData?.watch?.follow_up as Record<string, unknown> | null | undefined
+        check('compact row exposes follow_up', fuRow?.status === 'waiting' && typeof fuRow?.deadline_at === 'string')
+        const fuWatch = getMonitorWatch(fuId)
+        check('duration deadline ≈ now+2d', Math.abs((fuWatch?.followUp?.deadlineAt ?? 0) - (Date.now() + 2 * 86_400_000)) < 60_000)
+        check('on_deadline defaults to escalate', fuWatch?.followUp?.onDeadline === 'escalate')
+        check('follow-up default cadence ceiling tightened to 1h', fuWatch?.cadence.max === 3600)
+        await executeMonitorWatchRemove({ watch_id: fuId })
+
+        // ISO deadline form.
+        const iso = new Date(Date.now() + 36 * 3_600_000).toISOString()
+        const r2 = await executeMonitorWatchAdd({
+            title: 'RSVP check',
+            source: 'gmail',
+            target: 'eve@example.com',
+            rule: { kind: 'gmail_from', senders: ['eve@example.com'] },
+            follow_up: { expectation: 'an RSVP from Eve', deadline: iso, on_deadline: 'silent' },
+        })
+        check('ISO deadline accepted', r2.success === true, r2.error)
+        const r2Id = (r2.data as { watch_id: string } | undefined)?.watch_id ?? ''
+        check('on_deadline silent honored', getMonitorWatch(r2Id)?.followUp?.onDeadline === 'silent')
+        await executeMonitorWatchRemove({ watch_id: r2Id })
+
+        // Rejections: missing expectation, bad/past deadline.
+        const bad1 = await executeMonitorWatchAdd({
+            title: 'x', source: 'gmail', target: 't',
+            rule: { kind: 'gmail_from', senders: ['x@y'] },
+            follow_up: { deadline: '2d' },
+        })
+        check('follow_up without expectation rejected', bad1.success === false)
+        const bad2 = await executeMonitorWatchAdd({
+            title: 'x', source: 'gmail', target: 't',
+            rule: { kind: 'gmail_from', senders: ['x@y'] },
+            follow_up: { expectation: 'e', deadline: 'soonish' },
+        })
+        check('unparseable deadline rejected', bad2.success === false && typeof bad2.error === 'string' && bad2.error.includes('deadline'))
+        const bad3 = await executeMonitorWatchAdd({
+            title: 'x', source: 'gmail', target: 't',
+            rule: { kind: 'gmail_from', senders: ['x@y'] },
+            follow_up: { expectation: 'e', deadline: new Date(Date.now() - 60_000).toISOString() },
+        })
+        check('past deadline rejected', bad3.success === false)
+    }
+
+    // ============================================================================
+    // 8. monitor_watch_remove
     // ============================================================================
     {
         const r1 = await executeMonitorWatchRemove({ watch_id: momWatchId })

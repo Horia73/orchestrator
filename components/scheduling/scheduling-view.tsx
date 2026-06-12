@@ -203,10 +203,10 @@ function TaskDetail({
 
       <div
         className={cn(
-          "min-h-0 flex-1",
+          "min-h-0 min-w-0 flex-1",
           tab === "edit"
             ? "overflow-y-auto px-5 py-5"
-            : "overflow-hidden px-3 py-3 sm:px-5 sm:py-5"
+            : "overflow-hidden px-0 py-3 sm:px-5 sm:py-5"
         )}
       >
         {tab === "edit" ? (

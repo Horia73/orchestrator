@@ -22,11 +22,13 @@ import {
 import type { BrowserBackendPreference } from "@/lib/browser-agent-runtime/config"
 import { emitAppEvent } from "@/lib/events"
 import { getActiveProfileId, isAdminProfileId } from "@/lib/profiles/context"
+import { ADMIN_PROFILE_ID } from "@/lib/profiles/constants"
 import { getProfile } from "@/lib/profiles/store"
 import {
   activeRuntimePaths,
   ORCHESTRATOR_STATE_DIR,
   PROJECT_DIR,
+  runtimePathsForProfile,
 } from "@/lib/runtime-paths"
 import { normalizeTimezone, systemTimezone } from "@/lib/timezone"
 
@@ -49,8 +51,12 @@ function legacyConfigPath(): string {
 }
 
 function activeConfigPath(): string {
+  return configPathForProfile(getActiveProfileId())
+}
+
+function configPathForProfile(profileId: string): string {
   return path.join(
-    /* turbopackIgnore: true */ activeRuntimePaths().workspaceDir,
+    /* turbopackIgnore: true */ runtimePathsForProfile(profileId).workspaceDir,
     "config.json"
   )
 }
@@ -373,9 +379,12 @@ const DEFAULT_BROWSER_AGENT_SETTINGS: BrowserAgentSettings = {
   proEnabled: false,
 }
 
+const ADMIN_DEFAULT_USER_NAME = "Horia"
+const MEMBER_DEFAULT_USER_NAME = "User"
+
 const DEFAULT_CONFIG: AppConfig = {
   assistantName: "Orchestrator",
-  userName: "Horia",
+  userName: ADMIN_DEFAULT_USER_NAME,
   timezone: systemTimezone(),
   activeProvider: "google",
   activeModel: "gemini-3-flash-preview",
@@ -387,6 +396,16 @@ const DEFAULT_CONFIG: AppConfig = {
   // smartMonitor stays undefined by default — users opt into quiet hours;
   // we never invent them on their behalf.
   updatedAt: Date.now(),
+}
+
+function defaultConfigForProfile(profileId = getActiveProfileId()): AppConfig {
+  return {
+    ...DEFAULT_CONFIG,
+    userName: isAdminProfileId(profileId)
+      ? ADMIN_DEFAULT_USER_NAME
+      : MEMBER_DEFAULT_USER_NAME,
+    updatedAt: Date.now(),
+  }
 }
 
 function ensureRuntimeFiles(): void {
@@ -418,7 +437,7 @@ function ensureRuntimeFiles(): void {
   const configPath = activeConfigPath()
   const legacy = legacyConfigPath()
   if (
-    paths.profileId === "admin_horia" &&
+    paths.profileId === ADMIN_PROFILE_ID &&
     !fs.existsSync(/* turbopackIgnore: true */ configPath) &&
     fs.existsSync(/* turbopackIgnore: true */ legacy)
   ) {
@@ -428,9 +447,11 @@ function ensureRuntimeFiles(): void {
   if (!fs.existsSync(/* turbopackIgnore: true */ configPath)) {
     fs.writeFileSync(
       /* turbopackIgnore: true */ configPath,
-      JSON.stringify(DEFAULT_CONFIG, null, 2),
+      JSON.stringify(seedConfigForProfile(paths.profileId), null, 2),
       "utf-8"
     )
+  } else {
+    migrateLegacyMemberConfigFile(paths.profileId, configPath)
   }
 }
 
@@ -445,32 +466,35 @@ export function getConfig(): AppConfig {
     return normalizeAppConfig(parsed)
   } catch (e) {
     console.error("Failed to read config, returning default", e)
-    return DEFAULT_CONFIG
+    return defaultConfigForProfile()
   }
 }
 
 function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
+  return normalizeAppConfigForProfile(parsed, getActiveProfileId())
+}
+
+function normalizeAppConfigForProfile(
+  parsed: Partial<AppConfig>,
+  profileId: string
+): AppConfig {
+  const defaults = defaultConfigForProfile(profileId)
   const timezone = normalizeTimezone(
     (parsed as { timezone?: unknown }).timezone,
-    DEFAULT_CONFIG.timezone
+    defaults.timezone
   )
   const active = normalizeModelSelection(
     parsed.activeProvider,
     parsed.activeModel,
-    DEFAULT_CONFIG.activeProvider,
-    DEFAULT_CONFIG.activeModel
+    defaults.activeProvider,
+    defaults.activeModel
   )
   return {
-    ...DEFAULT_CONFIG,
+    ...defaults,
     ...parsed,
     activeProvider: active.provider,
     activeModel: active.model,
-    userName:
-      typeof parsed.userName === "string" &&
-      parsed.userName.trim() &&
-      parsed.userName !== "User"
-        ? parsed.userName
-        : DEFAULT_CONFIG.userName,
+    userName: normalizeUserName(parsed.userName, defaults.userName, profileId),
     timezone,
     agentOverrides: normalizeAgentOverrides(parsed.agentOverrides),
     agentOrder: normalizeStringList(
@@ -487,6 +511,121 @@ function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
   }
 }
 
+function seedConfigForProfile(profileId: string): AppConfig {
+  const defaults = defaultConfigForProfile(profileId)
+  if (isAdminProfileId(profileId)) return defaults
+
+  const adminConfig = readRawConfigForProfile(ADMIN_PROFILE_ID)
+  if (!adminConfig) return defaults
+  const admin = normalizeAppConfigForProfile(adminConfig, ADMIN_PROFILE_ID)
+
+  return normalizeAppConfigForProfile(
+    {
+      ...defaults,
+      assistantName: admin.assistantName,
+      timezone: admin.timezone,
+      activeProvider: admin.activeProvider,
+      activeModel: admin.activeModel,
+      thinkingLevel: admin.thinkingLevel,
+      agentOverrides: admin.agentOverrides,
+      agentOrder: admin.agentOrder,
+      browserAgent: admin.browserAgent,
+      favorites: admin.favorites,
+      memoryEmbedding: admin.memoryEmbedding,
+      updatedAt: Date.now(),
+    },
+    profileId
+  )
+}
+
+function readRawConfigForProfile(profileId: string): Partial<AppConfig> | null {
+  const candidates = [configPathForProfile(profileId)]
+  if (isAdminProfileId(profileId)) candidates.push(legacyConfigPath())
+  for (const candidate of candidates) {
+    try {
+      if (!fs.existsSync(/* turbopackIgnore: true */ candidate)) continue
+      const parsed = JSON.parse(
+        fs.readFileSync(/* turbopackIgnore: true */ candidate, "utf-8")
+      )
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        return parsed as Partial<AppConfig>
+      }
+    } catch {
+      continue
+    }
+  }
+  return null
+}
+
+function migrateLegacyMemberConfigFile(
+  profileId: string,
+  configPath: string
+): void {
+  if (isAdminProfileId(profileId)) return
+  let parsed: Partial<AppConfig>
+  try {
+    parsed = JSON.parse(
+      fs.readFileSync(/* turbopackIgnore: true */ configPath, "utf-8")
+    ) as Partial<AppConfig>
+  } catch {
+    return
+  }
+  if (!isLegacyMemberDefaultConfig(parsed)) return
+
+  const seed = seedConfigForProfile(profileId)
+  const next = normalizeAppConfigForProfile(
+    {
+      ...parsed,
+      userName: MEMBER_DEFAULT_USER_NAME,
+      assistantName: seed.assistantName,
+      timezone: seed.timezone,
+      activeProvider: seed.activeProvider,
+      activeModel: seed.activeModel,
+      thinkingLevel: seed.thinkingLevel,
+      agentOverrides: seed.agentOverrides,
+      agentOrder: seed.agentOrder,
+      browserAgent: seed.browserAgent,
+      favorites: seed.favorites,
+      memoryEmbedding: seed.memoryEmbedding,
+      updatedAt: Date.now(),
+    },
+    profileId
+  )
+  try {
+    fs.writeFileSync(
+      /* turbopackIgnore: true */ configPath,
+      JSON.stringify(next, null, 2),
+      "utf-8"
+    )
+  } catch {
+    // Config read still normalizes safely even if this best-effort migration
+    // cannot persist (permissions, read-only filesystem, etc.).
+  }
+}
+
+function isLegacyMemberDefaultConfig(parsed: Partial<AppConfig>): boolean {
+  return (
+    parsed.userName === ADMIN_DEFAULT_USER_NAME &&
+    (parsed.activeProvider === undefined ||
+      parsed.activeProvider === DEFAULT_CONFIG.activeProvider) &&
+    (parsed.activeModel === undefined ||
+      parsed.activeModel === DEFAULT_CONFIG.activeModel)
+  )
+}
+
+function normalizeUserName(
+  value: unknown,
+  fallback: string,
+  profileId: string
+): string {
+  const trimmed = typeof value === "string" ? value.trim() : ""
+  if (!trimmed || trimmed === MEMBER_DEFAULT_USER_NAME) return fallback
+  if (!isAdminProfileId(profileId) && trimmed === ADMIN_DEFAULT_USER_NAME) {
+    return fallback
+  }
+  return trimmed
+}
+
 function normalizeStringList(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   const seen = new Set<string>()
@@ -501,7 +640,9 @@ function normalizeStringList(value: unknown): string[] {
   return out
 }
 
-function normalizeAgentOverrides(value: unknown): Record<string, AgentOverride> {
+function normalizeAgentOverrides(
+  value: unknown
+): Record<string, AgentOverride> {
   if (!value || typeof value !== "object" || Array.isArray(value)) {
     return DEFAULT_CONFIG.agentOverrides
   }
@@ -682,7 +823,9 @@ function normalizeLocationIntelligenceSettings(
       ? "forever"
       : undefined
   const retentionDays =
-    retention === "forever" ? undefined : normalizeRetentionDays(raw.retentionDays)
+    retention === "forever"
+      ? undefined
+      : normalizeRetentionDays(raw.retentionDays)
   const mapsMode = normalizeLocationIntelligenceMapsMode(raw.mapsMode)
 
   return {
@@ -809,9 +952,17 @@ export function getRuntimeConfig(): RuntimeConfig {
 
 export function updateConfig(newConfig: Partial<AppConfig>): AppConfig {
   const current = getConfig()
-  const updated = normalizeAppConfig({ ...current, ...newConfig, updatedAt: Date.now() })
+  const updated = normalizeAppConfig({
+    ...current,
+    ...newConfig,
+    updatedAt: Date.now(),
+  })
   ensureRuntimeFiles()
-  fs.writeFileSync(activeConfigPath(), JSON.stringify(updated, null, 2), "utf-8")
+  fs.writeFileSync(
+    activeConfigPath(),
+    JSON.stringify(updated, null, 2),
+    "utf-8"
+  )
   emitAppEvent({ type: "config.updated" })
   emitAppEvent({ type: "settings.changed", reason: "config" })
   return updated
@@ -863,9 +1014,7 @@ export const EMBEDDING_MODEL_OPTIONS: ReadonlyArray<EmbeddingModelOption> = [
 
 /** Supported dims for a model id (Matryoshka). Falls back to [768]. */
 export function embeddingDimsForModel(model: string): number[] {
-  return (
-    EMBEDDING_MODEL_OPTIONS.find((o) => o.model === model)?.dims ?? [768]
-  )
+  return EMBEDDING_MODEL_OPTIONS.find((o) => o.model === model)?.dims ?? [768]
 }
 
 const MEMORY_EMBEDDING_DEFAULTS: MemoryEmbeddingSettings = {
@@ -919,10 +1068,15 @@ function memoryEmbeddingFromEnv(): MemoryEmbeddingSettings {
     ? Math.min(1, Math.max(0, thrRaw))
     : MEMORY_EMBEDDING_DEFAULTS.threshold
   return {
-    enabled: (process.env.ORCHESTRATOR_MEMORY_RECALL ?? "on").toLowerCase() !== "off",
+    enabled:
+      (process.env.ORCHESTRATOR_MEMORY_RECALL ?? "on").toLowerCase() !== "off",
     provider: coerceProvider(process.env.ORCHESTRATOR_MEMORY_EMBED_PROVIDER),
     model,
-    dim: coerceDim(model, process.env.ORCHESTRATOR_MEMORY_EMBED_DIM, MEMORY_EMBEDDING_DEFAULTS.dim),
+    dim: coerceDim(
+      model,
+      process.env.ORCHESTRATOR_MEMORY_EMBED_DIM,
+      MEMORY_EMBEDDING_DEFAULTS.dim
+    ),
     threshold,
   }
 }
@@ -934,7 +1088,8 @@ function memoryEmbeddingFromEnv(): MemoryEmbeddingSettings {
  */
 export function getMemoryEmbeddingSettings(): MemoryEmbeddingSettings {
   const base = getConfig().memoryEmbedding ?? memoryEmbeddingFromEnv()
-  const killed = (process.env.ORCHESTRATOR_MEMORY_RECALL ?? "").toLowerCase() === "off"
+  const killed =
+    (process.env.ORCHESTRATOR_MEMORY_RECALL ?? "").toLowerCase() === "off"
   return { ...base, enabled: base.enabled && !killed }
 }
 
