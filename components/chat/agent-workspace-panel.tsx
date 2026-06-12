@@ -6,10 +6,9 @@ import { AttachmentCard } from "@/components/attachment-card"
 import type { ArtifactPayload } from "@/components/artifact-panel"
 import { StreamingBubble } from "@/components/message-bubble"
 import { TodoBar } from "@/components/todo-bar"
-import { TerminalOutput } from "@/components/tool-call-view"
-import { FULL_HISTORY_SCROLLBACK } from "@/components/tool-call-terminal"
 import { useTrapWheel } from "@/components/use-trap-wheel"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
+import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -18,9 +17,17 @@ import type {
 } from "@/lib/types"
 
 const BROWSER_AGENT_TERMINAL_STYLE: React.CSSProperties = {
-  height: "min(460px, calc(100vh - 260px))",
-  minHeight: "320px",
+  height: "min(560px, max(320px, calc(100dvh - 220px)))",
+  minHeight: "300px",
+  overscrollBehavior: "contain",
 }
+
+type BrowserTranscriptPart =
+  | { kind: "text"; id: string; text: string }
+  | { kind: "attachment"; id: string; attachment: Attachment; label: string }
+
+const UPLOAD_MARKDOWN_RE =
+  /!?\[([^\]]*)\]\([^)]*?\/api\/uploads\/([A-Za-z0-9._%-]+)[^)]*\)/g
 
 type SelectedAgentTool = {
   runId: string
@@ -228,7 +235,7 @@ function AgentRunPane({
           {run.prompt}
         </div>
       </div>
-      {!!run.attachments?.length && (
+      {!!run.attachments?.length && !isBrowserAgent && (
         <div className="mb-4 flex flex-wrap gap-2">
           {run.attachments.map((att) => (
             <AttachmentCard
@@ -250,7 +257,10 @@ function AgentRunPane({
         hideCompleted={run.status !== "running"}
       />
       {isBrowserAgent ? (
-        <BrowserAgentOutputTerminal run={run} />
+        <BrowserAgentOutputTerminal
+          run={run}
+          onAttachmentClick={onAttachmentClick}
+        />
       ) : (
         <StreamingBubble
           reasoning={run.reasoning ?? []}
@@ -278,21 +288,255 @@ function AgentRunPane({
   )
 }
 
-function BrowserAgentOutputTerminal({ run }: { run: AgentCallReasoningEntry }) {
+function BrowserAgentOutputTerminal({
+  run,
+  onAttachmentClick,
+}: {
+  run: AgentCallReasoningEntry
+  onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+}) {
+  const text = browserAgentTerminalText(run)
+  const attachments = run.attachments ?? []
+  const scrollerRef = React.useRef<HTMLDivElement>(null)
+  const stickToBottomRef = React.useRef(true)
+
+  React.useEffect(() => {
+    const scroller = scrollerRef.current
+    if (!scroller || !stickToBottomRef.current) return
+    const frame = requestAnimationFrame(() => {
+      scroller.scrollTop = scroller.scrollHeight
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [text, attachments.length])
+
+  const handleScroll = React.useCallback(() => {
+    const scroller = scrollerRef.current
+    if (!scroller) return
+    const distanceFromBottom =
+      scroller.scrollHeight - scroller.clientHeight - scroller.scrollTop
+    stickToBottomRef.current = distanceFromBottom < 12
+  }, [])
+
   return (
     <div
       className="flex flex-col overflow-hidden rounded-md border border-[#24242a] bg-[#0c0c0e] text-left shadow-sm"
       style={BROWSER_AGENT_TERMINAL_STYLE}
     >
-      <TerminalOutput
-        text={browserAgentTerminalText(run)}
-        cursorBlink={run.status === "running"}
-        resetKey={run.runId}
-        autoScroll
-        scrollback={FULL_HISTORY_SCROLLBACK}
-      />
+      <div
+        ref={scrollerRef}
+        onScroll={handleScroll}
+        className="agent-scroll min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3 font-mono text-[12px] leading-[1.45] text-zinc-100 [overflow-wrap:anywhere] [touch-action:pan-y] [-webkit-overflow-scrolling:touch]"
+      >
+        <BrowserAgentTranscript
+          text={text}
+          attachments={attachments}
+          onAttachmentClick={onAttachmentClick}
+        />
+        {run.status === "running" && (
+          <span className="inline-block h-[1em] w-[7px] translate-y-[2px] animate-pulse bg-zinc-100" />
+        )}
+      </div>
     </div>
   )
+}
+
+function BrowserAgentTranscript({
+  text,
+  attachments,
+  onAttachmentClick,
+}: {
+  text: string
+  attachments: Attachment[]
+  onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+}) {
+  const parts = React.useMemo(
+    () => browserAgentTranscriptParts(text, attachments),
+    [text, attachments]
+  )
+
+  return (
+    <div className="min-w-0">
+      {parts.map((part) =>
+        part.kind === "text" ? (
+          <pre key={part.id} className="m-0 whitespace-pre-wrap break-words">
+            {part.text}
+          </pre>
+        ) : (
+          <BrowserAgentInlineAttachment
+            key={part.id}
+            attachment={part.attachment}
+            label={part.label}
+            gallery={attachments}
+            onAttachmentClick={onAttachmentClick}
+          />
+        )
+      )}
+    </div>
+  )
+}
+
+function BrowserAgentInlineAttachment({
+  attachment,
+  label,
+  gallery,
+  onAttachmentClick,
+}: {
+  attachment: Attachment
+  label: string
+  gallery: Attachment[]
+  onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
+}) {
+  const url =
+    attachment.url ??
+    appPath(`/api/uploads/${encodeURIComponent(attachment.id)}`)
+  const displayLabel = label || attachment.filename
+
+  if (attachment.type === "image") {
+    return (
+      <button
+        type="button"
+        onClick={() => onAttachmentClick?.(attachment, gallery)}
+        className="my-2 block w-full max-w-[360px] overflow-hidden rounded-md border border-white/15 bg-black/45 text-left transition-colors hover:border-white/35"
+      >
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={url}
+          alt={displayLabel}
+          className="block max-h-[240px] w-full bg-black object-contain"
+        />
+        <span className="block truncate border-t border-white/10 px-2 py-1.5 text-[11px] text-zinc-300">
+          {displayLabel}
+        </span>
+      </button>
+    )
+  }
+
+  if (attachment.type === "video") {
+    return (
+      <div className="my-2 w-full max-w-[420px] overflow-hidden rounded-md border border-white/15 bg-black/45">
+        <video
+          src={url}
+          controls
+          preload="metadata"
+          className="block aspect-video w-full bg-black object-contain"
+        />
+        <button
+          type="button"
+          onClick={() => onAttachmentClick?.(attachment, gallery)}
+          className="block w-full truncate border-t border-white/10 px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-white/5"
+        >
+          {displayLabel}
+        </button>
+      </div>
+    )
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => onAttachmentClick?.(attachment, gallery)}
+      className="my-2 block max-w-full rounded-md border border-white/15 bg-white/5 px-2 py-1.5 text-left text-[11px] text-zinc-300 hover:bg-white/10"
+    >
+      {displayLabel}
+    </button>
+  )
+}
+
+function browserAgentTranscriptParts(
+  text: string,
+  attachments: Attachment[]
+): BrowserTranscriptPart[] {
+  const attachmentsById = new Map(attachments.map((att) => [att.id, att]))
+  const seenAttachmentIds = new Set<string>()
+  const parts: BrowserTranscriptPart[] = []
+  let textBuffer = ""
+
+  const pushText = () => {
+    if (!textBuffer) return
+    parts.push({ kind: "text", id: `text-${parts.length}`, text: textBuffer })
+    textBuffer = ""
+  }
+
+  for (const line of text.split("\n")) {
+    const media = uploadReferencesInLine(line)
+    if (media.length === 0) {
+      textBuffer += `${line}\n`
+      continue
+    }
+
+    const renderableMedia = media.filter((item) => {
+      const attachment = attachmentsById.get(item.id)
+      return attachment && !seenAttachmentIds.has(attachment.id)
+    })
+    UPLOAD_MARKDOWN_RE.lastIndex = 0
+    const cleaned = line.replace(UPLOAD_MARKDOWN_RE, "").trim()
+    if (cleaned && (renderableMedia.length > 0 || !isEvidenceOnlyLine(cleaned))) {
+      textBuffer += `${cleaned}\n`
+    }
+    pushText()
+
+    for (const item of renderableMedia) {
+      const attachment = attachmentsById.get(item.id)
+      if (!attachment) continue
+      seenAttachmentIds.add(attachment.id)
+      parts.push({
+        kind: "attachment",
+        id: `attachment-${attachment.id}`,
+        attachment,
+        label: item.label || attachment.filename,
+      })
+    }
+  }
+
+  const missingEvidence = attachments.filter(
+    (att) => !seenAttachmentIds.has(att.id)
+  )
+  if (missingEvidence.length > 0) {
+    if (textBuffer && !textBuffer.endsWith("\n\n")) textBuffer += "\n"
+    textBuffer += "Captured evidence:\n"
+    pushText()
+    for (const attachment of missingEvidence) {
+      seenAttachmentIds.add(attachment.id)
+      parts.push({
+        kind: "attachment",
+        id: `attachment-${attachment.id}`,
+        attachment,
+        label: attachment.filename,
+      })
+    }
+  } else {
+    pushText()
+  }
+
+  return parts.length > 0
+    ? parts
+    : [{ kind: "text", id: "text-empty", text: "No output yet.\n" }]
+}
+
+function uploadReferencesInLine(
+  line: string
+): Array<{ id: string; label: string }> {
+  const out: Array<{ id: string; label: string }> = []
+  UPLOAD_MARKDOWN_RE.lastIndex = 0
+  for (const match of line.matchAll(UPLOAD_MARKDOWN_RE)) {
+    out.push({
+      label: match[1]?.replace(/\\([\\\]])/g, "$1").trim() ?? "",
+      id: safeDecodeURIComponent(match[2] ?? ""),
+    })
+  }
+  return out
+}
+
+function isEvidenceOnlyLine(value: string): boolean {
+  return /^Browser (screenshot|video)(?:\s*\([^)]*\))?:?$/i.test(value)
+}
+
+function safeDecodeURIComponent(value: string): string {
+  try {
+    return decodeURIComponent(value)
+  } catch {
+    return value
+  }
 }
 
 function browserAgentTerminalText(run: AgentCallReasoningEntry): string {

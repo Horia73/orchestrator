@@ -534,6 +534,7 @@ export function createAgentController(
                                 : 0,
                             onEvidence,
                             coordinateMode,
+                            currentFrame: frame,
                         });
                         const success = execution.success;
                         pendingTrace = execution.trace;
@@ -1105,6 +1106,7 @@ async function executeAction(
         waitElapsedMs?: number;
         onEvidence?: (capture: BrowserEvidenceCapture) => void | Promise<void>;
         coordinateMode?: VisionCoordinateMode;
+        currentFrame?: BrowserFrameSnapshot;
     }
 ): Promise<ActionExecutionResult> {
     try {
@@ -1186,8 +1188,10 @@ async function executeAction(
             }
 
             case 'screenshot': {
-                onStatusUpdate('📸 Saving browser screenshot...');
-                const frame = await browser.captureAgentFrame();
+                onStatusUpdate('📸 Saving current browser screenshot...');
+                const frame = timing.currentFrame
+                    ?? browser.getLatestAgentFrame()
+                    ?? await browser.captureAgentFrame();
                 if (timing.onEvidence) {
                     await timing.onEvidence({
                         kind: 'screenshot',

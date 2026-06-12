@@ -136,11 +136,6 @@ export class BrowserProvider implements AIProvider {
 
             const managedStatus = sessionManager.markFromRuntimeStatus(lease.id, finalStatus)
             statusMarked = true
-            const finalCapture = await sessionManager.captureSessionScreenshot(lease.id)
-                .catch(() => null)
-            if (finalCapture) {
-                saveEvidenceCapture(finalCapture, 'Browser final screen')
-            }
             const downloads = await sessionManager.collectSessionDownloads(lease.id)
                 .catch(() => [] as BrowserDownloadFile[])
             const finalMessage = formatBrowserRunOutput(

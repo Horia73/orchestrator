@@ -41,6 +41,8 @@ const systemPrompt = buildSystemPrompt()
 assert.match(systemPrompt, /Safe Container Scrolling/)
 assert.match(systemPrompt, /Do not click a row\/card\/link\/button just to focus scrolling/)
 assert.match(systemPrompt, /coordinate.*hover.*inert panel point/i)
+assert.match(systemPrompt, /If the form or page is scrollable/)
+assert.match(systemPrompt, /confirmation\/result screen/)
 
 const normalizedDisplayPrompt = buildSystemPrompt(false, 'normalized-display')
 assert.match(normalizedDisplayPrompt, /NORMALIZED COORDINATES \(0-1000 range\)/)
