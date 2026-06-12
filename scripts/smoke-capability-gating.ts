@@ -19,22 +19,47 @@
  * Run: npx tsx scripts/smoke-capability-gating.ts
  */
 import fs from 'fs'
+import os from 'os'
 import path from 'path'
 import { randomUUID } from 'crypto'
 
-import { orchestrator } from '@/lib/ai/agents/orchestrator'
-import { researcher } from '@/lib/ai/agents/researcher'
-import { worker } from '@/lib/ai/agents/worker'
-import { conciergeAgent } from '@/lib/ai/agents/concierge-agent'
-import { MAX_AGENT_DEPTH, type ToolDef } from '@/lib/ai/agents/types'
-import { AGENT_WORKSPACE_DIR } from '@/lib/config'
-import { activateIntegrations } from '@/lib/integrations/activation-store'
-import { executeTool } from '@/lib/ai/tools/executor'
-import { activateIntegrationToolsTool, runActivatedIntegrationTool } from '@/lib/ai/tools/integrations'
-import { getToolsForAgent, resolveProviderToolSurface } from '@/lib/ai/tools/registry'
-import { ALL_CAPABILITY_IDS, ALL_INTEGRATION_IDS, isSubsystemId, filterIntegrationToolExposure } from '@/lib/integrations/exposure'
-import { ALL_SUBSYSTEM_IDS } from '@/lib/integrations/subsystem-manifest'
-import { GOOGLE_CAPABILITIES } from '@/lib/ai/providers/google'
+import type { AgentConfig, ToolDef } from '@/lib/ai/agents/types'
+
+const smokeStateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orchestrator-smoke-capability-'))
+process.env.ORCHESTRATOR_STATE_DIR = smokeStateDir
+process.on('exit', () => {
+    fs.rmSync(smokeStateDir, { recursive: true, force: true })
+})
+
+const [
+    { orchestrator },
+    { researcher },
+    { worker },
+    { conciergeAgent },
+    { MAX_AGENT_DEPTH },
+    { AGENT_WORKSPACE_DIR },
+    { activateIntegrations },
+    { executeTool },
+    { activateIntegrationToolsTool, runActivatedIntegrationTool },
+    { getToolsForAgent, resolveProviderToolSurface },
+    { ALL_CAPABILITY_IDS, ALL_INTEGRATION_IDS, isSubsystemId, filterIntegrationToolExposure },
+    { ALL_SUBSYSTEM_IDS },
+    { GOOGLE_CAPABILITIES },
+] = await Promise.all([
+    import('@/lib/ai/agents/orchestrator'),
+    import('@/lib/ai/agents/researcher'),
+    import('@/lib/ai/agents/worker'),
+    import('@/lib/ai/agents/concierge-agent'),
+    import('@/lib/ai/agents/types'),
+    import('@/lib/config'),
+    import('@/lib/integrations/activation-store'),
+    import('@/lib/ai/tools/executor'),
+    import('@/lib/ai/tools/integrations'),
+    import('@/lib/ai/tools/registry'),
+    import('@/lib/integrations/exposure'),
+    import('@/lib/integrations/subsystem-manifest'),
+    import('@/lib/ai/providers/google'),
+])
 
 let failures = 0
 function check(label: string, cond: unknown, detail?: unknown) {
@@ -53,7 +78,7 @@ const DOCTRINE_MARKERS: Record<string, string> = {
 }
 
 interface BuildOpts {
-    agent: typeof orchestrator
+    agent: AgentConfig
     conversationId: string
 }
 
@@ -351,6 +376,7 @@ check(
 
 const baselineTokensApprox = Math.round(baselinePrompt.length / 4)
 const activatedTokensApprox = Math.round(activatedPrompt.length / 4)
+const BASELINE_PROMPT_TOKEN_CEILING = 39_000
 console.log(`\nApprox token budget (4 chars/token):`)
 console.log(`  baseline (zero activations): ${baselineTokensApprox} tokens`)
 console.log(`  after maps + scheduling activated: ${activatedTokensApprox} tokens`)
@@ -358,15 +384,12 @@ console.log(`  delta from activation: +${activatedTokensApprox - baselineTokensA
 
 // Keep the baseline prompt under a broad ceiling while allowing core policy
 // text to grow independently from lazily loaded capability doctrines. The
-// ceiling moved up slightly when the gated-tool menus (the "Tools when active"
-// lines in <integrations>/<subsystems>) landed: those cheap menus live in the
-// baseline text but let us gate ~6k tokens of always-on operational tool
-// schemas out of the runtime tools section — a large net reduction the
-// no-tools baseline here does not capture.
-  check(
-    `Baseline orchestrator prompt stays under 35.5k tokens (got ~${baselineTokensApprox})`,
-    baselineTokensApprox < 35_500
-  )
+// smoke runs against a fresh-install workspace where BOOT.md is active, so this
+// guard tracks first-run prompt size without depending on real profile memory.
+check(
+    `Baseline orchestrator prompt stays under ${BASELINE_PROMPT_TOKEN_CEILING / 1000}k tokens (got ~${baselineTokensApprox})`,
+    baselineTokensApprox < BASELINE_PROMPT_TOKEN_CEILING
+)
 
 // --- round-2 gating: whatsapp / inbox / observability / setup -------------
 // Main chat gates these out; aliases (default activation) and background runs
