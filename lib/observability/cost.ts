@@ -32,40 +32,50 @@ export interface CostInputs {
 export type PricingState = 'priced' | 'subscription' | 'unknown'
 
 export interface CostResult {
-    /** USD. Always 0 for subscription/unknown — check `state` to interpret. */
+    /** Real USD charged. Always 0 for subscription/unknown — check `state`. */
     usd: number
+    /**
+     * Metered-equivalent USD: what this request WOULD cost on à-la-carte API
+     * pricing. Equals `usd` for `priced`; for `subscription` it's computed from
+     * the model's `equivalent*` rates (0 when none are known); 0 for `unknown`.
+     * Lets the UI show the cost avoided by being on a subscription plan.
+     */
+    notionalUsd: number
     state: PricingState
 }
 
-const ZERO_UNKNOWN: CostResult = { usd: 0, state: 'unknown' }
-const ZERO_SUBSCRIPTION: CostResult = { usd: 0, state: 'subscription' }
+/** Per-token rate inputs for the shared cost math. */
+interface TokenRates {
+    inputPerMillion: number
+    outputPerMillion: number
+    cachedInputPerMillion?: number
+    largeContextThreshold?: number
+    inputPerMillionLarge?: number
+    outputPerMillionLarge?: number
+}
 
 /**
- * Compute USD cost for a single request given its token counts and the model's
- * pricing definition. Returns `usd: 0` with `state: 'unknown' | 'subscription'`
- * when we can't compute a real number — UI uses `state` to render "—" or "incl."
+ * Compute USD from token counts and per-token rates. Shared by real `tokens`
+ * pricing and by the `subscription` notional estimate (which reuses the same
+ * math against the model's documented à-la-carte rates).
  */
-export function estimateCost(pricing: ModelPricing | null, inputs: CostInputs): CostResult {
-    if (pricing === null) return ZERO_UNKNOWN
-    if (pricing.kind === 'subscription') return ZERO_SUBSCRIPTION
-    if (pricing.kind === 'unit') return ZERO_UNKNOWN
-
+function computeTokenCost(rates: TokenRates, inputs: CostInputs): number {
     const totalInput = inputs.inputTokens ?? 0
     const useLargeContextRates =
-        typeof pricing.largeContextThreshold === 'number' &&
-        totalInput > pricing.largeContextThreshold
+        typeof rates.largeContextThreshold === 'number' &&
+        totalInput > rates.largeContextThreshold
 
-    const inputRate = useLargeContextRates && typeof pricing.inputPerMillionLarge === 'number'
-        ? pricing.inputPerMillionLarge
-        : pricing.inputPerMillion
-    const outputRate = useLargeContextRates && typeof pricing.outputPerMillionLarge === 'number'
-        ? pricing.outputPerMillionLarge
-        : pricing.outputPerMillion
+    const inputRate = useLargeContextRates && typeof rates.inputPerMillionLarge === 'number'
+        ? rates.inputPerMillionLarge
+        : rates.inputPerMillion
+    const outputRate = useLargeContextRates && typeof rates.outputPerMillionLarge === 'number'
+        ? rates.outputPerMillionLarge
+        : rates.outputPerMillion
 
     const cachedDiscount = CACHED_TOKEN_DISCOUNT[inputs.provider] ?? 1.0
     const cached = inputs.cachedTokens ?? 0
-    const cachedRate = typeof pricing.cachedInputPerMillion === 'number'
-        ? pricing.cachedInputPerMillion
+    const cachedRate = typeof rates.cachedInputPerMillion === 'number'
+        ? rates.cachedInputPerMillion
         : inputRate * cachedDiscount
 
     // Real input = total input minus the cached portion (cached is counted in
@@ -84,7 +94,36 @@ export function estimateCost(pricing: ModelPricing | null, inputs: CostInputs): 
     const cachedPortion = cached * cachedRate
     const outputPortion = (output + thinking) * outputRate
 
-    const usd = (inputPortion + cachedPortion + outputPortion) / 1_000_000
+    return (inputPortion + cachedPortion + outputPortion) / 1_000_000
+}
 
-    return { usd, state: 'priced' }
+/**
+ * Compute USD cost for a single request given its token counts and the model's
+ * pricing definition. Returns `usd: 0` with `state: 'unknown' | 'subscription'`
+ * when there's no real charge — UI uses `state` to render "—" or "incl." and
+ * `notionalUsd` to show the metered-equivalent it would otherwise have cost.
+ */
+export function estimateCost(pricing: ModelPricing | null, inputs: CostInputs): CostResult {
+    if (pricing === null) return { usd: 0, notionalUsd: 0, state: 'unknown' }
+
+    if (pricing.kind === 'subscription') {
+        // Subscription is free to the user; surface the à-la-carte cost it would
+        // have incurred when the model carries documented equivalent rates.
+        const hasEquivalent =
+            typeof pricing.equivalentInputPerMillion === 'number' &&
+            typeof pricing.equivalentOutputPerMillion === 'number'
+        const notionalUsd = hasEquivalent
+            ? computeTokenCost({
+                inputPerMillion: pricing.equivalentInputPerMillion!,
+                outputPerMillion: pricing.equivalentOutputPerMillion!,
+                cachedInputPerMillion: pricing.equivalentCachedInputPerMillion,
+            }, inputs)
+            : 0
+        return { usd: 0, notionalUsd, state: 'subscription' }
+    }
+
+    if (pricing.kind === 'unit') return { usd: 0, notionalUsd: 0, state: 'unknown' }
+
+    const usd = computeTokenCost(pricing, inputs)
+    return { usd, notionalUsd: usd, state: 'priced' }
 }

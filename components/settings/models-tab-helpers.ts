@@ -447,7 +447,12 @@ export function formatPricingStatus(
   notes?: string
 ): string {
   if (pricing === null) return "Missing"
-  if (pricing.kind === "subscription") return "Subscription"
+  if (pricing.kind === "subscription") {
+    if (typeof pricing.equivalentInputPerMillion === "number" && typeof pricing.equivalentOutputPerMillion === "number") {
+      return `Included (≈ $${formatPrice(pricing.equivalentInputPerMillion)}/$${formatPrice(pricing.equivalentOutputPerMillion)} per M)`
+    }
+    return "Subscription"
+  }
   if (pricing.kind === "unit") {
     const currency = pricing.currency ?? "$"
     if (typeof pricing.pricePerUnit === "number")

@@ -157,7 +157,7 @@ Every AI request (model call) with full detail. Admin sees an aggregate across a
 
 <settings_usage>
 Token/cost analytics plus live CLI subscription quotas.
-- Range: 24h / 7d / 30d / 90d / All. KPI cards: Requests; Total tokens (NOTE: intentionally EXCLUDES cache reads — it is input+output+thinking minus cached, so cache-heavy numbers look lower here than the per-request "total" in Logs); Estimated cost (USD, from registry pricing — verify against provider billing for ground truth; subscription-priced models count as $0, unknown-pricing models are excluded); Error rate. Each KPI shows a delta vs the previous window.
+- Range: 24h / 7d / 30d / 90d / All. KPI cards: Requests; Total tokens (NOTE: intentionally EXCLUDES cache reads — it is input+output+thinking minus cached, so cache-heavy numbers look lower here than the per-request "total" in Logs); Estimated cost (USD, from registry pricing — verify against provider billing for ground truth; subscription-priced models count as $0, but when the registry knows the wrapped model's à-la-carte API rates — e.g. the Codex CLI models, which mirror OpenAI API models — the card also shows the notional cost the subscription covered as "+ $X incl. via subscription", and the by-model table shows "incl. (≈ $X)"; unknown-pricing models are excluded); Error rate. Each KPI shows a delta vs the previous window.
 - Charts: tokens per day, cost per day. Tables: by model, by agent, by tool (calls, failures, avg duration).
 - CLI subscription quotas: the Codex card shows live 5-hour and 7-day windows from Codex's usage endpoint, each with % used, a reset countdown, and a "pace" line (ahead-of-pace = projected to run out early; behind-pace = banked headroom).
 </settings_usage>

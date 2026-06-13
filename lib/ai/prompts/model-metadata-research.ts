@@ -53,6 +53,7 @@ const FIELD_CONTRACT = [
     '- Use cachedInputPerMillion and/or token pricing tiers when official docs publish extra token-price dimensions such as cached input or multiple context thresholds.',
     '- Use unit pricing for images, videos, audio, speech, songs, jobs, requests, or provider-specific units.',
     '- Use subscription only when official docs say access is included in a flat plan/subscription and no per-unit price applies through this route.',
+    '- For a subscription/CLI route that wraps a model ALSO sold per-token via the provider\'s public API, additionally fill equivalentInputPerMillion/equivalentOutputPerMillion (and equivalentCachedInputPerMillion when published) with that underlying model\'s official à-la-carte API rates. Keep kind "subscription" — these are reference rates so the app can show the cost the plan covers, not a billing change. Only set them when you can identify the exact underlying API model and read its official price; otherwise leave them out.',
     '- If the provider has more than one pricing tier, encode tiers and explain selection rules in pricingNotes.',
     '',
     'contextWindow, maxOutputTokens, and knowledgeCutoff:',
@@ -110,7 +111,7 @@ const FIELD_CONTRACT = [
 
 const FIELDS_OBJECT_SCHEMA = [
     '"fields"?: {',
-    '  "pricing"?: { "kind": "tokens", "inputPerMillion": number, "outputPerMillion": number, "largeContextThreshold"?: number, "inputPerMillionLarge"?: number, "outputPerMillionLarge"?: number, "cachedInputPerMillion"?: number, "tiers"?: [{ "name": string, "threshold"?: number, "inputPerMillion"?: number, "outputPerMillion"?: number, "cachedInputPerMillion"?: number, "notes"?: string }] } | { "kind": "unit", "unit": string, "pricePerUnit"?: number, "currency"?: "$", "tiers"?: [{ "name": string, "unit"?: string, "pricePerUnit"?: number, "inputPerMillion"?: number, "outputPerMillion"?: number, "threshold"?: number, "notes"?: string }], "notes"?: string } | { "kind": "subscription" } | null,',
+    '  "pricing"?: { "kind": "tokens", "inputPerMillion": number, "outputPerMillion": number, "largeContextThreshold"?: number, "inputPerMillionLarge"?: number, "outputPerMillionLarge"?: number, "cachedInputPerMillion"?: number, "tiers"?: [{ "name": string, "threshold"?: number, "inputPerMillion"?: number, "outputPerMillion"?: number, "cachedInputPerMillion"?: number, "notes"?: string }] } | { "kind": "unit", "unit": string, "pricePerUnit"?: number, "currency"?: "$", "tiers"?: [{ "name": string, "unit"?: string, "pricePerUnit"?: number, "inputPerMillion"?: number, "outputPerMillion"?: number, "threshold"?: number, "notes"?: string }], "notes"?: string } | { "kind": "subscription", "equivalentInputPerMillion"?: number, "equivalentOutputPerMillion"?: number, "equivalentCachedInputPerMillion"?: number } | null,',
     '  "pricingNotes"?: string,',
     '  "contextWindow"?: number,',
     '  "maxOutputTokens"?: number,',
@@ -152,7 +153,7 @@ function providerSpecificGuidance(providerId: string): string {
         `providerId "${providerId}" is a local CLI/subscription provider for ${productName}.`,
         'Do not treat this as a normal REST API model endpoint.',
         'Search official web docs for the CLI/product, official subscription/pricing pages, official changelogs/release notes, and official underlying model docs when the CLI documentation delegates model facts to the underlying model.',
-        'For pricing, distinguish clearly between subscription access, included usage, and any extra metered usage. Do not copy API pricing unless official CLI docs say the CLI route is API-token billed.',
+        'For pricing the route is subscription-billed: set "kind": "subscription". Codex CLI model ids mirror OpenAI API models of the same or closest name (for example "gpt-5.5" corresponds to the gpt-5.5 API model). When you can identify and verify the matching API model on OpenAI\'s official API pricing page, also fill equivalentInputPerMillion/equivalentOutputPerMillion (and equivalentCachedInputPerMillion when published) from that model\'s à-la-carte rates, so the app can show the metered cost the subscription covers. These are reference rates only: do NOT change kind away from "subscription", and if you cannot confidently map the CLI id to exactly one official API model, leave the equivalent fields out and say so in unresolved.',
         'For context window and thinking levels, use official CLI docs first; if they are silent, use official underlying model docs and state that dependency in notes.',
         '</cli_provider_guidance>',
     ].join('\n')

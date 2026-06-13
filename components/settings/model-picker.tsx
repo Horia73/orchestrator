@@ -702,7 +702,12 @@ function formatPrice(n: number): string {
 
 function formatPricingShort(pricing: ModelPricing | null): string {
   if (pricing === null) return "price ?"
-  if (pricing.kind === "subscription") return "subscription"
+  if (pricing.kind === "subscription") {
+    if (typeof pricing.equivalentInputPerMillion === "number" && typeof pricing.equivalentOutputPerMillion === "number") {
+      return `included (≈ $${formatPrice(pricing.equivalentInputPerMillion)} / $${formatPrice(pricing.equivalentOutputPerMillion)} per M)`
+    }
+    return "subscription"
+  }
   if (pricing.kind === "unit") {
     const currency = pricing.currency ?? "$"
     if (typeof pricing.pricePerUnit === "number") return `${currency}${formatPrice(pricing.pricePerUnit)} / ${pricing.unit}`

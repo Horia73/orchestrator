@@ -35,7 +35,11 @@ export type ModelKind = z.infer<typeof ModelKindSchema>
 /**
  * Pricing is a discriminated union:
  * - `tokens`: standard per-token billing (with optional large-context tier)
- * - `subscription`: included in a flat-rate plan
+ * - `unit`: per-image/video/second/request billing
+ * - `subscription`: included in a flat-rate plan. May carry `equivalent*` token
+ *   rates — the à-la-carte API price of the SAME underlying model the
+ *   subscription/CLI route wraps — so we can show "included (≈ $X/$Y per M)" and
+ *   compute the notional cost the user avoided by being on the plan.
  *
  * `null` (vs absence of the field) means "we explicitly know we don't know" —
  * surfaces an "incomplete data" indicator and unlocks the Research action.
@@ -76,6 +80,14 @@ export const ModelPricingSchema = z.discriminatedUnion('kind', [
     }),
     z.object({
         kind: z.literal('subscription'),
+        // Equivalent à-la-carte API token rates for the SAME underlying model the
+        // subscription/CLI route wraps. Billing stays subscription (real cost = 0);
+        // these only drive the "included (≈ $X/$Y per M)" label and the notional
+        // "you'd have paid" estimate. Populated by the model-metadata researcher
+        // from the provider's official API pricing page — never hardcoded in seed.
+        equivalentInputPerMillion: z.number().nonnegative().optional(),
+        equivalentOutputPerMillion: z.number().nonnegative().optional(),
+        equivalentCachedInputPerMillion: z.number().nonnegative().optional(),
     }),
 ])
 export type ModelPricing = z.infer<typeof ModelPricingSchema>

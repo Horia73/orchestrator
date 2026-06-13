@@ -152,6 +152,12 @@ export interface UsageTotals {
     toolUseTokens: number
     totalTokens: number
     estimatedCostUsd: number
+    /**
+     * Metered-equivalent USD for subscription-covered usage — what the user
+     * would have paid on à-la-carte API pricing. 0 when no subscription model
+     * carries documented equivalent rates. NOT added to estimatedCostUsd.
+     */
+    subscriptionNotionalUsd: number
     /** Number of requests whose model has unknown pricing (cost contribution = 0). */
     uncostedRequests: number
     /** Number of requests on subscription-priced models (cost contribution = 0). */
@@ -180,6 +186,12 @@ export interface UsageByModel {
     thinkingTokens: number
     cachedTokens: number
     estimatedCostUsd: number
+    /**
+     * Metered-equivalent USD this model would cost on à-la-carte API pricing.
+     * Equals estimatedCostUsd for priced models; for subscription models it's
+     * the notional cost the plan covered (0 when no equivalent rates are known).
+     */
+    notionalUsd: number
     avgThinkingMs: number
     lastUsedAt: number
     pricingState: 'priced' | 'subscription' | 'unknown'

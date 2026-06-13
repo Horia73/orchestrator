@@ -297,7 +297,7 @@ function UsageContent({ data }: { data: UsageReport }) {
                     <> {data.totals.uncostedRequests} request{data.totals.uncostedRequests === 1 ? "" : "s"} use models with unknown pricing and aren&apos;t included in the cost total.</>
                 )}
                 {data.totals.subscriptionRequests > 0 && (
-                    <> {data.totals.subscriptionRequests} request{data.totals.subscriptionRequests === 1 ? "" : "s"} use subscription-priced models (counted as $0).</>
+                    <> {data.totals.subscriptionRequests} request{data.totals.subscriptionRequests === 1 ? "" : "s"} use subscription-priced models (counted as $0{data.totals.subscriptionNotionalUsd > 0 ? <> — ≈ {formatUsd(data.totals.subscriptionNotionalUsd)} at metered API rates</> : null}).</>
                 )}
             </p>
         </>
@@ -331,7 +331,13 @@ function KpiCards({ totals, previous }: { totals: UsageTotals; previous: UsageTo
             <Kpi
                 label="Estimated cost"
                 value={formatUsd(totals.estimatedCostUsd)}
-                hint={totals.cachedTokens > 0 ? `${formatTokensCompact(totals.cachedTokens)} cached` : undefined}
+                hint={
+                    totals.subscriptionNotionalUsd > 0
+                        ? `+ ${formatUsd(totals.subscriptionNotionalUsd)} incl. via subscription`
+                        : totals.cachedTokens > 0
+                            ? `${formatTokensCompact(totals.cachedTokens)} cached`
+                            : undefined
+                }
                 delta={previous ? pctDelta(totals.estimatedCostUsd, previous.estimatedCostUsd) : null}
             />
             <Kpi
@@ -524,7 +530,7 @@ function ByModelTable({ rows }: { rows: UsageByModel[] }) {
                                     {r.pricingState === "priced"
                                         ? formatUsd(r.estimatedCostUsd)
                                         : r.pricingState === "subscription"
-                                            ? <span className="text-foreground/45">incl.</span>
+                                            ? <span className="text-foreground/45">{r.notionalUsd > 0 ? `incl. (≈ ${formatUsd(r.notionalUsd)})` : "incl."}</span>
                                             : <span className="text-amber-600 dark:text-amber-400">—</span>}
                                 </td>
                             </tr>

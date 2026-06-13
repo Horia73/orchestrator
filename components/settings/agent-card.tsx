@@ -1170,7 +1170,12 @@ function formatModelHint(model: { contextWindow: number; pricing: ModelPricing |
   const ctxPart = ctxK ? `${ctxK} ctx · ` : ""
 
   if (model.pricing === null) return `${ctxPart}pricing TBD`
-  if (model.pricing.kind === "subscription") return `${ctxPart}subscription`
+  if (model.pricing.kind === "subscription") {
+    if (typeof model.pricing.equivalentInputPerMillion === "number" && typeof model.pricing.equivalentOutputPerMillion === "number") {
+      return `${ctxPart}included (≈ $${formatPrice(model.pricing.equivalentInputPerMillion)}/$${formatPrice(model.pricing.equivalentOutputPerMillion)} per M)`
+    }
+    return `${ctxPart}subscription`
+  }
   if (model.pricing.kind === "unit") {
     const currency = model.pricing.currency ?? "$"
     if (typeof model.pricing.pricePerUnit === "number") return `${ctxPart}${currency}${formatPrice(model.pricing.pricePerUnit)}/${model.pricing.unit}`

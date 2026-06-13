@@ -652,6 +652,8 @@ type EffectiveRegistrySnapshot = ReturnType<typeof getEffectiveRegistry>
 
 interface RowCostSummary {
     usd: number
+    /** Metered-equivalent USD covered by subscription pricing (not in `usd`). */
+    subscriptionNotionalUsd: number
     hasUnknown: boolean
     hasSubscription: boolean
 }
@@ -667,6 +669,7 @@ type ModelUsageEntry = BillingUsageEntry & {
 function estimateRowCost(row: RequestLogRow, registry: EffectiveRegistrySnapshot): RowCostSummary {
     const entries = modelUsageEntries(row)
     let usd = 0
+    let subscriptionNotionalUsd = 0
     let hasUnknown = false
     let hasSubscription = false
 
@@ -675,10 +678,13 @@ function estimateRowCost(row: RequestLogRow, registry: EffectiveRegistrySnapshot
         const cost = estimateCost(pricing, entry)
         usd += cost.usd
         if (cost.state === 'unknown') hasUnknown = true
-        if (cost.state === 'subscription') hasSubscription = true
+        if (cost.state === 'subscription') {
+            hasSubscription = true
+            subscriptionNotionalUsd += cost.notionalUsd
+        }
     }
 
-    return { usd, hasUnknown, hasSubscription }
+    return { usd, subscriptionNotionalUsd, hasUnknown, hasSubscription }
 }
 
 function modelUsageEntries(row: RequestLogRow): ModelUsageEntry[] {
@@ -723,6 +729,7 @@ function mergePricingState(a: PricingState, b: PricingState): PricingState {
 function computeTotals(rows: RequestLogRow[]): UsageTotals {
     const registry = getEffectiveRegistry()
     let estimatedCostUsd = 0
+    let subscriptionNotionalUsd = 0
     let uncostedRequests = 0
     let subscriptionRequests = 0
 
@@ -748,6 +755,7 @@ function computeTotals(rows: RequestLogRow[]): UsageTotals {
 
         const cost = estimateRowCost(row, registry)
         estimatedCostUsd += cost.usd
+        subscriptionNotionalUsd += cost.subscriptionNotionalUsd
         if (cost.hasUnknown) uncostedRequests++
         if (cost.hasSubscription) subscriptionRequests++
     }
@@ -763,6 +771,7 @@ function computeTotals(rows: RequestLogRow[]): UsageTotals {
         toolUseTokens,
         totalTokens,
         estimatedCostUsd,
+        subscriptionNotionalUsd,
         uncostedRequests,
         subscriptionRequests,
     }
@@ -842,6 +851,7 @@ function computeByModel(rows: RequestLogRow[]): UsageByModel[] {
                     thinkingTokens: usage.thinkingTokens ?? 0,
                     cachedTokens: usage.cachedTokens ?? 0,
                     estimatedCostUsd: cost.usd,
+                    notionalUsd: cost.notionalUsd,
                     avgThinkingMs: 0,
                     lastUsedAt: row.startedAt,
                     pricingState: cost.state,
@@ -856,6 +866,7 @@ function computeByModel(rows: RequestLogRow[]): UsageByModel[] {
                 existing.thinkingTokens += usage.thinkingTokens ?? 0
                 existing.cachedTokens += usage.cachedTokens ?? 0
                 existing.estimatedCostUsd += cost.usd
+                existing.notionalUsd += cost.notionalUsd
                 existing.pricingState = mergePricingState(existing.pricingState, cost.state)
                 existing.lastUsedAt = Math.max(existing.lastUsedAt, row.startedAt)
                 if (row.thinkingMs !== null) {
