@@ -10,6 +10,7 @@ import {
   refreshIntegrationStatusSnapshot,
 } from "@/lib/integrations/status-snapshot"
 import type { ToolDef } from "@/lib/ai/agents/types"
+import { compactToolSchema } from "./tool-schema-compact"
 import {
   isReadOnlyWakeToolAllowed,
   readOnlyWakeToolError,
@@ -132,19 +133,9 @@ export function createRunActivatedIntegrationToolExecutor(
     if (!result.success && result.error && toolDef) {
       return {
         ...result,
-        error: `${result.error}\nExpected ${toolId} arguments schema: ${compactTargetToolSchema(toolDef)}`,
+        error: `${result.error}\nExpected ${toolId} arguments schema: ${compactToolSchema(toolDef)}`,
       }
     }
     return result
   }
-}
-
-function compactTargetToolSchema(tool: ToolDef): string {
-  const payload = {
-    description: tool.description,
-    input_schema: tool.input_schema,
-  }
-  const text = JSON.stringify(payload)
-  const max = 4000
-  return text.length > max ? `${text.slice(0, max)}...` : text
 }

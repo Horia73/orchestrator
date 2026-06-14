@@ -299,6 +299,27 @@ check(
     toolPrompt.includes('<doctrine for="watchlist">') && toolPrompt.includes(DOCTRINE_MARKERS.watchlist)
 )
 
+// --- Activation delivers the gated tools' real input_schema SAME-TURN --------
+// Regression guard for the activate-then-call-in-one-turn failure: doctrines
+// only load from the next turn onward, so the activation result message itself
+// must carry each gated tool's authoritative schema. Resolved from the live
+// registry, so it can never drift from the actual tool contract.
+const schedConvId = `smoke-cap-sched-${randomUUID()}`
+const schedActivation = await executeTool(
+    activateIntegrationToolsTool,
+    { integrations: ['scheduling'] },
+    { callerAgentId: 'orchestrator', depth: 0, conversationId: schedConvId, parentRequestId: 'smoke' }
+)
+const schedMsg =
+    schedActivation.success && schedActivation.data && typeof schedActivation.data === 'object'
+        ? String((schedActivation.data as { message?: string }).message ?? '')
+        : ''
+check(
+    'Activating "scheduling" emits schedule_task input_schema in the result (incl. required "when")',
+    schedMsg.includes('schedule_task') && schedMsg.includes('input_schema') && /"required":\[[^\]]*"when"/.test(schedMsg),
+    schedMsg.slice(0, 300)
+)
+
 // --- RunActivatedIntegrationTool resolves subsystem + activationOnly tools --
 // Regression guard: gated subsystem tools and activationOnly integration tools
 // (maps/weather) must be dispatchable via RunActivatedIntegrationTool, since on

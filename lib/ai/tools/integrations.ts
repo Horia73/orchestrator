@@ -9,6 +9,36 @@ import { getSubsystemManifest } from '@/lib/integrations/subsystem-manifest'
 import { refreshIntegrationStatusSnapshot } from '@/lib/integrations/status-snapshot'
 import { activateIntegrations, getActivatedIntegrations } from '@/lib/integrations/activation-store'
 import { isAdminProfileId } from '@/lib/profiles/context'
+import { compactToolSchema } from './executors/tool-schema-compact'
+
+/** The gated operational tool ids a capability unlocks (integration or subsystem). */
+function gatedToolIdsFor(id: string): string[] {
+    if (isSubsystemId(id)) return getSubsystemManifest(id)?.toolIds ?? []
+    return getIntegrationManifest(id)?.operationalToolIds ?? []
+}
+
+/**
+ * Same-turn schema delivery: render the authoritative input_schema for each
+ * gated tool a just-activated capability unlocks, so the model can call them
+ * correctly in the SAME turn it activates — before the doctrine block (which
+ * only loads from the next turn onward) is in context. Resolved from the live
+ * tool registry, so it never goes stale relative to the actual tool contract.
+ */
+function activatedToolSchemasBlock(
+    id: string,
+    resolveTool?: (toolId: string) => ToolDef | undefined,
+): string {
+    if (!resolveTool) return ''
+    const toolIds = gatedToolIdsFor(id)
+    if (toolIds.length === 0) return ''
+    const lines: string[] = []
+    for (const toolId of toolIds) {
+        const def = resolveTool(toolId)
+        if (def) lines.push(`- ${toolId}: ${compactToolSchema(def, 2200)}`)
+    }
+    if (lines.length === 0) return ''
+    return ` Call these via RunActivatedIntegrationTool as {tool_id, arguments}; the schemas below are authoritative — match required fields exactly, do not guess or search for them:\n${lines.join('\n')}`
+}
 
 // ---------------------------------------------------------------------------
 // ActivateIntegrationTools
@@ -72,10 +102,13 @@ function parseIds(args: Record<string, unknown>): string[] {
     return list.map(s => s.trim()).filter(Boolean)
 }
 
-export async function executeActivateIntegrationTools(
+export function createActivateIntegrationToolsExecutor(
+    resolveTool?: (toolId: string) => ToolDef | undefined,
+) {
+  return async function executeActivateIntegrationTools(
     args: Record<string, unknown>,
     ctx?: ToolExecutionContext
-): Promise<ToolResult> {
+  ): Promise<ToolResult> {
     const conversationId = ctx?.conversationId
     if (!conversationId) {
         return { success: false, error: 'No conversation context — cannot activate integration tools.' }
@@ -130,7 +163,7 @@ export async function executeActivateIntegrationTools(
                 continue
             }
             activatedNow.push(id)
-            report.push(describeActivatedIntegration(id))
+            report.push(describeActivatedIntegration(id) + activatedToolSchemasBlock(id, resolveTool))
             continue
         }
 
@@ -140,13 +173,13 @@ export async function executeActivateIntegrationTools(
         // the schemas just become available; a missing key surfaces per-call.
         if (entry.activationOnly) {
             activatedNow.push(id)
-            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.`)
+            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
             continue
         }
         const state = snapshot?.[entry.statusKind]?.state
         if (state === 'connected') {
             activatedNow.push(id)
-            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.`)
+            report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
         } else {
             skipped.push(id)
             const stateText =
@@ -172,4 +205,13 @@ export async function executeActivateIntegrationTools(
             message: report.join(' '),
         },
     }
+  }
 }
+
+/**
+ * Default executor with no schema resolver — registry.ts overrides this with a
+ * resolver wired to the live tool catalog so activation results carry gated
+ * tool schemas. The bare version (used anywhere the catalog is not wired) still
+ * works; it just omits the inline schema block.
+ */
+export const executeActivateIntegrationTools = createActivateIntegrationToolsExecutor()
