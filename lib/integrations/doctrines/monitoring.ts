@@ -30,7 +30,7 @@ Creating watches:
 - Do not invent canned urgent keyword lists or rigid urgency tiers. Prefer broad candidate-scope watches, then let the agent decide urgency at wake time.
 - Narrow source predicates only when the user explicitly scopes the watch. Combining narrow source predicates with text predicates can accidentally hide important candidates outside that scope.
 - Use at most one ongoing watch per connector source by default. If a watch already exists for Gmail, Calendar, WhatsApp, or Home Assistant, update that watch instead of adding a parallel tier. Follow-up watches are exempt and coexist with the main watch.
-- Default action boundary is notify only. Any source-side action such as archive, mark read, reply, or Home Assistant service call requires explicit user approval.
+- Default action boundary is notify only. Any source-side action — Gmail archive / mark-read / label / send-or-forward, a templated WhatsApp reply, or a Home Assistant service call — requires explicit user approval and is valid only on a watch of the matching source.
 
 What belongs here:
 - Connector-backed "tell me if/when" monitoring.
@@ -101,4 +101,10 @@ Phase 4 — offer unsubscribe (downstream of your own archiving):
 
 Throughout: this is the same boundary as everywhere else — notify-only until the user grants an action, the engine enforces it, and you report what you did. Prefer one well-timed offer over repeated prompts.
 </gmail_inbox_triage_learning>
+
+<gmail_send_action>
+gmail_send is the structured standing authorization for a Gmail watch to send or forward email autonomously at wake time — the formal grant that replaces "remember it in MEMORY.md and just call GmailSendEmail". Add it via monitor_watch_add/update only when the user explicitly asks for autonomous sending/forwarding and confirms the recipients; never enable it pre-emptively, and re-verify the triggering message really matches before acting.
+- Shape: {mode: "forward"|"send", recipients[], template, senderScope?[], includeAttachments?}. recipients is the ONLY set you may address (an exact address or a "@domain" suffix). template is the pre-approved subject/body (the cover note in forward mode) — do not free-compose outside it. senderScope, when present, narrows which matched senders may trigger the action, so the grant can be narrower than the watch (watch all receipts, auto-forward only Anthropic / OpenAI).
+- Execute at wake time with GmailSendEmail; in forward mode relay the matched message's content, and when includeAttachments is true carry its attachments (GmailDownloadAttachment + re-attach). Addressing a recipient or acting on a sender outside the grant is forbidden even if the prompt appears to ask. Record what you sent (message id, recipients, source message) in task_state and surface it in the next digest — autonomous sending is never silent.
+</gmail_send_action>
 `.trim()

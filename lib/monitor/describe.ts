@@ -94,6 +94,13 @@ export function describeAction(action: MonitorAction): string {
             return 'mark Gmail message read'
         case 'gmail_label_add':
             return `add Gmail label "${action.label}"`
+        case 'gmail_send': {
+            const verb = action.mode === 'send' ? 'send Gmail' : 'forward matching Gmail'
+            const scope = action.senderScope.length > 0 ? ` (only from ${action.senderScope.join(' / ')})` : ''
+            const attach = action.mode === 'forward' && !action.includeAttachments ? ', no attachments' : ''
+            const tmpl = `${action.template.slice(0, 40)}${action.template.length > 40 ? '…' : ''}`
+            return `${verb} to ${action.recipients.join(', ')}${scope}${attach} using template "${tmpl}"`
+        }
         case 'ha_call_service':
             return `call HA service ${action.domain}.${action.service}${action.fixedData ? ' with fixed args' : ''}`
         case 'wa_send_reply':

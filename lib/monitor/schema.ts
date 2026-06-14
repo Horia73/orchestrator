@@ -407,6 +407,31 @@ export const MonitorActionSchema = z.discriminatedUnion('kind', [
     z.object({ kind: z.literal('gmail_mark_read') }),
     z.object({ kind: z.literal('gmail_label_add'), label: z.string().min(1).max(120) }),
     z.object({
+        kind: z.literal('gmail_send'),
+        /** 'forward' relays the matched message (its attachments too, unless
+         *  includeAttachments is false) to `recipients`; 'send' composes a fresh
+         *  email to them. Default 'forward' — the motivating case is auto-
+         *  forwarding receipts to an archive/accountant. */
+        mode: z.enum(['send', 'forward']).default('forward'),
+        /** Recipient allow-list — the standing authorization's recipient scope.
+         *  The wake may only address mail to an entry here (an exact address or
+         *  a "@domain" suffix). At least one; capped so the grant stays legible
+         *  and a runaway prompt cannot fan a send out to many addresses. */
+        recipients: z.array(z.string().min(3).max(254)).min(1).max(10),
+        /** Pre-approved subject/body template (string-interpolated). Free-form
+         *  composition is NOT allowed without a user-authored template — same
+         *  guard as wa_send_reply. In 'forward' mode this is the cover note. */
+        template: z.string().min(1).max(2000),
+        /** Optional sender/source narrowing: only act on matched messages whose
+         *  From matches one of these (an address or "@domain"). Empty = rely on
+         *  the watch rule's own scope. Lets the grant be NARROWER than the watch
+         *  (watch all receipts, auto-forward only Anthropic / OpenAI). */
+        senderScope: z.array(z.string().min(1).max(254)).max(10).default([]),
+        /** Forward attachments through (forward mode only; ignored for 'send').
+         *  Default true — a forwarded receipt should carry its PDF. */
+        includeAttachments: z.boolean().default(true),
+    }),
+    z.object({
         kind: z.literal('ha_call_service'),
         domain: z.string().min(1).max(64),
         service: z.string().min(1).max(64),

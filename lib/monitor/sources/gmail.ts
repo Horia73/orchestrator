@@ -91,7 +91,7 @@ function pickWindowHours(cadenceSeconds: number, lastSeenAt: number | undefined,
 export const gmailSourceAdapter: SourceAdapter = {
     source: 'gmail',
     supportedRuleKinds: ['gmail_from', 'gmail_subject_contains', 'gmail_label', 'gmail_query'],
-    supportedActionKinds: ['notify_inbox', 'gmail_archive', 'gmail_mark_read', 'gmail_label_add'],
+    supportedActionKinds: ['notify_inbox', 'gmail_archive', 'gmail_mark_read', 'gmail_label_add', 'gmail_send'],
 
     async isAvailable(): Promise<AvailabilityResult> {
         try {

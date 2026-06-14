@@ -320,7 +320,7 @@ export const monitorWatchAddTool: ToolDef = {
             source: { type: 'string', description: 'One of: gmail, google_calendar, whatsapp, home_assistant, web, weather, custom. Use custom for model-owned recurring instructions.' },
             target: { type: 'string', description: 'Human-readable scope of the thing being watched. Format is source-specific; for custom, describe the recurring responsibility.' },
             rule: { type: 'object', description: 'Structured MonitorRule: an object with a `kind` plus kind-specific fields. Field names are exact — e.g. gmail: {kind:"gmail_query", q:"in:inbox is:unread -in:spam"} (the field is `q`, NOT `query`); whatsapp: {kind:"wa_unread"}; calendar: {kind:"calendar_event_needs_response"}; custom: {kind:"custom_prompt", prompt:"…"}. Predicate kinds must match the source; use any_of / all_of for composition. Call monitor_describe_sources for the supported kinds per source.' },
-            allowed_actions: { type: 'array', description: 'MonitorAction objects the model may execute when matches survive. Each entry is an OBJECT, not a string — e.g. {kind:"gmail_archive"} or {kind:"gmail_label_add", label:"…"}. Do NOT include notify_inbox (it is always implicitly allowed). Everything else requires explicit user consent (gmail_archive, gmail_mark_read, gmail_label_add, ha_call_service, wa_send_reply).' },
+            allowed_actions: { type: 'array', description: 'MonitorAction objects the model may execute when matches survive. Each entry is an OBJECT, not a string — e.g. {kind:"gmail_archive"} or {kind:"gmail_label_add", label:"…"}. Do NOT include notify_inbox (it is always implicitly allowed). Everything else requires explicit user consent and must be valid for the watch source (gmail: gmail_archive, gmail_mark_read, gmail_label_add, gmail_send; home_assistant: ha_call_service; whatsapp: wa_send_reply). gmail_send is the standing authorization to auto send/forward email — {kind:"gmail_send", mode:"forward"|"send", recipients:["addr"|"@domain"], template:"…", senderScope?:["…"], includeAttachments?:bool}; grant it only when the user explicitly asks for autonomous sending/forwarding and confirms the recipients.' },
             cadence: {
                 type: 'object',
                 description: 'Cadence policy. Accepts {current, min, max} as numbers (seconds) OR duration strings, plus {adaptive: bool}.',
@@ -415,10 +415,14 @@ export async function executeMonitorWatchAdd(args: Record<string, unknown>): Pro
     if (!ruleParsed.success) return { success: false, error: `rule is invalid: ${ruleParsed.error.message}` }
 
     const allowedActions: Array<Record<string, unknown>> = []
-    if (Array.isArray(args.allowed_actions)) {
+    if (Array.isArray(args.allowed_actions) && args.allowed_actions.length > 0) {
+        const { actionKindAllowedForSource } = await import('@/lib/monitor/sources')
         for (const raw of args.allowed_actions) {
             const parsed = MonitorActionSchema.safeParse(raw)
             if (!parsed.success) return { success: false, error: `allowed_actions contains invalid entry: ${parsed.error.message}` }
+            if (!actionKindAllowedForSource(parsed.data.kind, sourceParsed.data)) {
+                return { success: false, error: `allowed_actions contains "${parsed.data.kind}", which source "${sourceParsed.data}" does not support. Call monitor_describe_sources for the action kinds valid on this source.` }
+            }
             allowedActions.push(parsed.data as unknown as Record<string, unknown>)
         }
     }
@@ -531,10 +535,17 @@ export async function executeMonitorWatchUpdate(args: Record<string, unknown>): 
     }
     if (args.allowed_actions !== undefined) {
         if (!Array.isArray(args.allowed_actions)) return { success: false, error: 'allowed_actions must be an array.' }
+        const { getMonitorWatch } = await import('@/lib/monitor/store')
+        const existing = getMonitorWatch(id)
+        if (!existing) return { success: false, error: `No watch with id ${id}.` }
+        const { actionKindAllowedForSource } = await import('@/lib/monitor/sources')
         const list: Array<unknown> = []
         for (const raw of args.allowed_actions) {
             const parsed = MonitorActionSchema.safeParse(raw)
             if (!parsed.success) return { success: false, error: `allowed_actions contains invalid entry: ${parsed.error.message}` }
+            if (!actionKindAllowedForSource(parsed.data.kind, existing.source)) {
+                return { success: false, error: `allowed_actions contains "${parsed.data.kind}", which source "${existing.source}" does not support. Call monitor_describe_sources for the action kinds valid on this source.` }
+            }
             list.push(parsed.data)
         }
         patch.allowedActions = list

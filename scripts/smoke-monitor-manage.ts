@@ -56,6 +56,7 @@ async function main(): Promise<void> {
         check('gmail source has rule kinds', (gmail?.supported_rule_kinds.length ?? 0) >= 4)
         check('gmail source advertises any_of/all_of', gmail?.supported_rule_kinds.includes('any_of') && gmail?.supported_rule_kinds.includes('all_of'))
         check('gmail source has notify_inbox + archive actions', gmail?.supported_action_kinds.includes('notify_inbox') && gmail?.supported_action_kinds.includes('gmail_archive'))
+        check('gmail source advertises gmail_send action', gmail?.supported_action_kinds.includes('gmail_send') === true)
         check('calendar source has calendar rules', calendar?.supported_rule_kinds.includes('calendar_event_query') === true)
         check('weather source has weather rules', weather?.supported_rule_kinds.includes('weather_temperature') === true)
         check('custom source has custom_prompt', custom?.supported_rule_kinds.includes('custom_prompt') === true)
@@ -134,6 +135,17 @@ async function main(): Promise<void> {
         })
         check('add rejects second Gmail integration watch', r5.success === false)
         check('duplicate error says update existing watch', typeof r5.error === 'string' && r5.error.includes('Update that watch'))
+
+        // A Gmail-only action cannot be granted on a non-Gmail source.
+        const r6 = await executeMonitorWatchAdd({
+            title: 'gmail_send on web',
+            source: 'web',
+            target: 'https://example.com',
+            rule: { kind: 'web_status', url: 'https://example.com', op: 'equals', value: 200 },
+            allowed_actions: [{ kind: 'gmail_send', mode: 'send', recipients: ['x@example.com'], template: 'hi' }],
+        })
+        check('add rejects gmail_send on non-gmail source', r6.success === false)
+        check('wrong-source action error explains the mismatch', typeof r6.error === 'string' && r6.error.includes('does not support'))
     }
 
     // ============================================================================
@@ -241,6 +253,29 @@ async function main(): Promise<void> {
         const w5 = getMonitorWatch(momWatchId)!
         check('allowed_actions list has 2 entries', w5.allowedActions.length === 2)
         check('allowed_actions includes gmail_archive', w5.allowedActions.some((a) => a.kind === 'gmail_archive'))
+
+        // gmail_send (need #2): the structured send/forward grant is accepted on
+        // a Gmail watch, and schema defaults (mode/includeAttachments) apply.
+        const r5b = await executeMonitorWatchUpdate({
+            watch_id: momWatchId,
+            allowed_actions: [
+                { kind: 'notify_inbox' },
+                { kind: 'gmail_send', recipients: ['accountant@example.com'], template: 'Forwarding this receipt.', senderScope: ['@anthropic.com'] },
+            ],
+        })
+        check('update accepts gmail_send on gmail watch', r5b.success === true, r5b.error)
+        const sendAction = getMonitorWatch(momWatchId)!.allowedActions.find((a) => a.kind === 'gmail_send') as
+            | { kind: 'gmail_send'; mode: string; includeAttachments: boolean; recipients: string[] }
+            | undefined
+        check('gmail_send persisted with defaults applied', sendAction?.mode === 'forward' && sendAction?.includeAttachments === true && sendAction?.recipients[0] === 'accountant@example.com')
+
+        // Wrong-source action: a WhatsApp reply cannot land on a Gmail watch.
+        const r5c = await executeMonitorWatchUpdate({
+            watch_id: momWatchId,
+            allowed_actions: [{ kind: 'wa_send_reply', template: 'hi' }],
+        })
+        check('update rejects wa_send_reply on gmail watch', r5c.success === false && typeof r5c.error === 'string' && r5c.error.includes('does not support'))
+        check('rejected update left gmail_send grant intact', getMonitorWatch(momWatchId)!.allowedActions.some((a) => a.kind === 'gmail_send'))
 
         // Enabled toggle.
         const r6 = await executeMonitorWatchUpdate({ watch_id: momWatchId, enabled: false })

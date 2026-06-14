@@ -1,4 +1,4 @@
-import type { MonitorRule, WatchSource } from '../schema'
+import type { MonitorAction, MonitorRule, WatchSource } from '../schema'
 import { ruleMatchesSource } from '../rules'
 
 import { customSourceAdapter } from './custom'
@@ -62,6 +62,16 @@ export function assertRuleMatchesSource(rule: MonitorRule, source: WatchSource):
             `Rule contains predicate(s) not supported by source "${source}". Allowed kinds: ${getSourceAdapter(source).supportedRuleKinds.join(', ')}.`,
         )
     }
+}
+
+/** Whether a MonitorAction kind may be granted on a watch of `source`.
+ *  notify_inbox is implicitly allowed on every source; every other action must
+ *  be in the source adapter's supportedActionKinds. This keeps a high-stakes
+ *  grant like gmail_send (auto send/forward email) off a watch whose source
+ *  cannot perform it — and the wrong-source archive/reply too. */
+export function actionKindAllowedForSource(kind: MonitorAction['kind'], source: WatchSource): boolean {
+    if (kind === 'notify_inbox') return true
+    return getSourceAdapter(source).supportedActionKinds.includes(kind)
 }
 
 export type { SourceAdapter, AvailabilityResult, CheapCheckInput, CheapCheckResult, MatchedCandidate } from './types'
