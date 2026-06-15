@@ -2,11 +2,26 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { PRIVATE_STATE_DIR } from '@/lib/runtime-paths'
 import { augmentedEnv } from './resolve-bin'
 
+/**
+ * Codex runtime home is SHARED across all profiles, not per-profile.
+ *
+ * Codex authenticates with a single OAuth account (one device login), so every
+ * profile should run against the same credentials. We deliberately anchor on the
+ * admin/root private dir ({@link PRIVATE_STATE_DIR}) rather than the active
+ * profile's `privateStateDir`. The old per-profile layout broke non-admin
+ * profiles: each profile got its own isolated runtime home seeded once from the
+ * shared `~/.codex/auth.json`, but OAuth token refresh writes back only into the
+ * home that refreshed it. Once one profile (admin) refreshed — rotating the
+ * shared refresh token server-side — every other profile was stranded on an
+ * expired, now-unrefreshable copy, so codex failed there and the orchestrator
+ * fell through to its (unconfigured) provider fallback. One shared home means a
+ * refresh by any profile keeps codex alive for all of them.
+ */
 export function codexRuntimeHome(): string {
-    return path.join(activeRuntimePaths().privateStateDir, 'codex-runtime-home')
+    return path.join(PRIVATE_STATE_DIR, 'codex-runtime-home')
 }
 
 export function codexRuntimeCodexHome(): string {

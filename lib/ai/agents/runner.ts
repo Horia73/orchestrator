@@ -99,19 +99,52 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
     const runtimes = resolveAgentRuntimeCandidates(args.target)
     let lastResult: ToolResult | null = null
+    const attempts: Array<{ provider: string; model: string; error: string }> = []
 
     for (let index = 0; index < runtimes.length; index++) {
-        const result = await runTextSubAgentAttempt(args, runtimes[index])
+        const runtime = runtimes[index]
+        const result = await runTextSubAgentAttempt(args, runtime)
         if (result.success) return result
         lastResult = result
+        attempts.push({
+            provider: runtime.provider,
+            model: runtime.model,
+            error: result.error ?? 'Unknown error',
+        })
         if (index >= runtimes.length - 1) break
         if (!isFallbackSafeToolResult(result)) break
     }
 
-    return lastResult ?? {
-        success: false,
-        error: `Sub-agent ${args.target.id} failed before a model attempt could start.`,
+    if (!lastResult) {
+        return {
+            success: false,
+            error: `Sub-agent ${args.target.id} failed before a model attempt could start.`,
+        }
     }
+
+    // When the orchestrator tried a primary provider AND one or more fallbacks,
+    // returning only the last attempt's error is misleading: a codex auth
+    // failure that fell through to an unconfigured google fallback would surface
+    // just "API key missing for provider google", hiding the real cause. Surface
+    // the whole chain so the primary failure is visible in the Inbox and in the
+    // scheduled task's lastRunError. Single-attempt failures pass through as-is.
+    if (attempts.length > 1) {
+        const chain = attempts
+            .map((a) => `${a.provider}/${a.model}: ${stripSubAgentPrefix(a.error, args.target.id)}`)
+            .join(' → ')
+        return { ...lastResult, error: `Sub-agent ${args.target.id} failed on all providers — ${chain}` }
+    }
+
+    return lastResult
+}
+
+/** Drop the redundant "Sub-agent <id>:" prefix from a per-attempt error so the
+ *  combined multi-provider chain message stays readable. */
+function stripSubAgentPrefix(error: string, agentId: string): string {
+    const prefix = `Sub-agent ${agentId}`
+    return error.startsWith(prefix)
+        ? error.slice(prefix.length).replace(/^[:\s]+/, '')
+        : error
 }
 
 async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings): Promise<ToolResult> {
