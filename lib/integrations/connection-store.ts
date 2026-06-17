@@ -1,8 +1,13 @@
 import { getProfile, getControlDb, listProfiles, recordProfileAudit } from "@/lib/profiles/store"
 import { getActiveProfileId, normalizeProfileId } from "@/lib/profiles/context"
 import type { IntegrationAccess } from "@/lib/profiles/types"
+import { createHash } from "crypto"
 
-export type IntegrationConnectionProvider = "home_assistant"
+export type IntegrationConnectionProvider =
+  | "gmail"
+  | "google_calendar"
+  | "google_drive"
+  | "home_assistant"
 export type GrantableIntegrationAccess = Exclude<IntegrationAccess, "none">
 
 export interface IntegrationConnectionRecord {
@@ -106,6 +111,34 @@ export function ensureIntegrationConnectionSchema(): void {
 
 export function homeAssistantConnectionId(ownerProfileId: string): string {
   return `home_assistant_${normalizeProfileId(ownerProfileId)}`
+}
+
+export function oauthConnectionId(
+  provider: Exclude<IntegrationConnectionProvider, "home_assistant">,
+  ownerProfileId: string,
+  accountEmail: string
+): string {
+  return `${provider}_${normalizeProfileId(ownerProfileId)}_${slugPart(accountEmail)}_${shortHash(accountEmail)}`
+}
+
+export function ensureOAuthConnectionForProfile(input: {
+  provider: Exclude<IntegrationConnectionProvider, "home_assistant">
+  ownerProfileId?: string
+  accountEmail: string
+  displayName?: string
+}): IntegrationConnectionRecord {
+  const profileId = normalizeProfileId(input.ownerProfileId ?? getActiveProfileId())
+  const accountEmail = input.accountEmail.trim().toLowerCase()
+  if (!accountEmail) throw new Error("Google account email is required.")
+  const profile = getProfile(profileId)
+  if (!profile) throw new Error(`Profile not found: ${profileId}`)
+  const label = providerDisplayName(input.provider)
+  return ensureIntegrationConnection({
+    provider: input.provider,
+    ownerProfileId: profileId,
+    id: oauthConnectionId(input.provider, profileId, accountEmail),
+    displayName: input.displayName?.trim() || `${accountEmail} (${label})`,
+  })
 }
 
 export function ensureHomeAssistantConnectionForProfile(
@@ -515,6 +548,28 @@ function grantFromRow(row: GrantRow): IntegrationConnectionGrantRecord {
 
 function profileName(profileId: string): string {
   return getProfile(profileId)?.name ?? profileId
+}
+
+function providerDisplayName(provider: IntegrationConnectionProvider): string {
+  if (provider === "gmail") return "Gmail"
+  if (provider === "google_calendar") return "Google Calendar"
+  if (provider === "google_drive") return "Google Workspace"
+  return "Home Assistant"
+}
+
+function slugPart(value: string): string {
+  const slug = value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_+|_+$/g, "")
+    .slice(0, 64)
+  if (slug) return slug
+  return "account"
+}
+
+function shortHash(value: string): string {
+  return createHash("sha256").update(value.trim().toLowerCase()).digest("hex").slice(0, 12)
 }
 
 export function listConnectionProfiles(): Array<{

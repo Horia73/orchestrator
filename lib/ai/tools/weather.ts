@@ -64,8 +64,8 @@ export const weatherShowTool: ToolDef = {
         'Render a live weather forecast as an inline artifact (current conditions + next 24 hours + up to 10-day outlook + UV/wind/sunrise/sunset detail tiles + optional air quality, styled like iOS Weather).',
         'Accepts a place name (geocoded server-side) OR a "lat,lng" pair; coordinate inputs are reverse-geocoded for a city label when Google Geocoding is available.',
         'Provider chain: tries Google Weather first (when GOOGLE_MAPS_API_KEY + Weather API are configured), falls back to Open-Meteo (keyless, ECMWF-backed, excellent for Europe). The returned `providerUsed` field tells you which one answered.',
-        'In normal chat turns, success stages the card invisibly and returns { pendingArtifact, identifier, title, modelContext, providerUsed, googleAvailable, suggestGoogleUpgrade }; do not emit an artifact tag.',
-        'Use `modelContext` to generate WeatherSetWhy and WeatherSetOutfit. Once both are present, the second tool mounts the complete card automatically.',
+        'In normal chat turns success mounts the card INSTANTLY (the chat route injects the artifact tag for you) with the live forecast already visible, and returns { directEmitted, identifier, title, modelContext, providerUsed, googleAvailable, suggestGoogleUpgrade }. The Outfit and "Why it feels this way" tiles render a "Working…" placeholder until you fill them. Do not emit an artifact tag yourself.',
+        'Use `modelContext` to call WeatherSetWhy and WeatherSetOutfit with the returned `identifier`; each one slots its content into the already-visible card in place (no second card, no flicker). No closing chat message is required — finishing the card is the deliverable.',
         'When `suggestGoogleUpgrade: true`, the orchestrator should ONCE per conversation (and only if the user has not already declined) suggest enabling the Google Weather API for richer condition descriptions and local air quality. Respect prior declines persisted in MEMORY.md.',
     ].join(' '),
     input_schema: {
@@ -95,7 +95,7 @@ export const weatherShowTool: ToolDef = {
             includeHistorical: { type: 'boolean', description: 'Defaults to true. Adds same-date comparison from Open-Meteo archive when available.' },
             includePollen: { type: 'boolean', description: 'Defaults to true. Adds Open-Meteo pollen signal when available (Europe/seasonal).' },
             includeRadar: { type: 'boolean', description: 'Defaults to true. Adds latest RainViewer radar widget URL when available.' },
-            deferDisplay: { type: 'boolean', description: 'Defaults to true in chat turns: stage the weather card invisibly until WeatherSetWhy and WeatherSetOutfit both complete. Set false only when the user explicitly does not want smart guidance/outfit.' },
+            smartGuidance: { type: 'boolean', description: 'Defaults to true in chat turns: mount the card instantly with the live forecast AND reserve "Working…" placeholders for the model-authored Outfit + Why tiles, which you then fill via WeatherSetOutfit / WeatherSetWhy. Set false only when the user explicitly does not want clothing/why guidance — then the base card mounts with no placeholders and you should not call the setters. (Legacy alias: deferDisplay:false has the same effect.)' },
             refresh: { type: 'boolean', description: 'Bypass the 10-minute cache.' },
             preferProvider: {
                 type: 'string',
@@ -151,9 +151,9 @@ export const weatherSetOutfitTool: ToolDef = {
     id: WEATHER_SET_OUTFIT_TOOL_ID,
     name: WEATHER_SET_OUTFIT_TOOL_ID,
     description: [
-        'Attach model-generated outfit guidance to the latest WeatherShow artifact in this conversation.',
-        'Call this after WeatherShow returns `modelContext` and before final prose when a weather card should include clothing guidance.',
-        'If WeatherShow staged a hidden card, this writes `outfit` into that staged data; when `why` is also present, it mounts the complete card once. For existing visible cards, it updates the same card. Do not emit an artifact tag yourself.',
+        'Fill the Outfit tile of the already-visible WeatherShow card with model-generated clothing guidance.',
+        'WeatherShow mounts the card instantly with the Outfit tile showing "Working…"; call this with the returned `identifier` to slot your guidance into that tile in place (no second card, no flicker). Ground it in WeatherShow `modelContext`.',
+        'Do not emit an artifact tag yourself, and no closing chat message is required afterwards.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -185,10 +185,10 @@ export const weatherSetWhyTool: ToolDef = {
     id: WEATHER_SET_WHY_TOOL_ID,
     name: WEATHER_SET_WHY_TOOL_ID,
     description: [
-        'Attach model-generated "Why it feels this way" rows to the latest WeatherShow artifact in this conversation.',
-        'Call this after WeatherShow returns `modelContext` when the card should explain comfort drivers.',
+        'Fill the "Why it feels this way" tile of the already-visible WeatherShow card with model-generated explanation rows.',
+        'WeatherShow mounts the card instantly with this tile showing "Working…"; call this with the returned `identifier` to slot your rows into that tile in place. Ground every row in WeatherShow `modelContext`.',
         'Use localTime from modelContext: at night, explain current comfort and only mention UV as a later daytime factor if useful.',
-        'If WeatherShow staged a hidden card, this writes `why` into that staged data; when `outfit` is also present, it mounts the complete card once. For existing visible cards, it updates the same card. Do not emit an artifact tag yourself.',
+        'Do not emit an artifact tag yourself, and no closing chat message is required afterwards.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -534,7 +534,7 @@ export async function executeWeatherShow(
                     identifierArg, titleArg, attribution,
                     enrichmentOptions,
                     conversationId: ctx?.conversationId,
-                    deferDisplay: shouldDeferWeatherDisplay(args, ctx),
+                    smartGuidance: wantsSmartGuidance(args, ctx),
                     targetDate: target.targetDate,
                 })
             }
@@ -594,7 +594,7 @@ export async function executeWeatherShow(
         identifierArg, titleArg, attribution,
         enrichmentOptions,
         conversationId: ctx?.conversationId,
-        deferDisplay: shouldDeferWeatherDisplay(args, ctx),
+        smartGuidance: wantsSmartGuidance(args, ctx),
         targetDate: target.targetDate,
     })
 }
@@ -616,7 +616,9 @@ interface AssembleArgs {
     attribution?: string
     enrichmentOptions: WeatherEnrichmentOptions
     conversationId?: string
-    deferDisplay?: boolean
+    /** Mount with model-authored Outfit/Why placeholders and stage the card
+     *  for in-turn setter merges. False = base card, no placeholders. */
+    smartGuidance?: boolean
     targetDate?: string
 }
 
@@ -635,10 +637,26 @@ interface PendingWeatherArtifact {
 const pendingWeatherArtifacts = new Map<string, PendingWeatherArtifact>()
 const PENDING_WEATHER_TTL_MS = 10 * 60 * 1000
 
-function shouldDeferWeatherDisplay(args: Record<string, unknown>, ctx?: ToolExecutionContext): boolean {
+/** Smart guidance (instant card + Outfit/Why "Working…" placeholders the
+ *  orchestrator fills via the setters) is the default in chat turns. It needs
+ *  a conversation so the staged copy can be merged in-turn; the user can opt
+ *  out with `smartGuidance:false` (legacy: `deferDisplay:false`), which mounts
+ *  a plain card and expects no setter calls. */
+function wantsSmartGuidance(args: Record<string, unknown>, ctx?: ToolExecutionContext): boolean {
     if (!ctx?.conversationId) return false
+    if (args.smartGuidance === false) return false
     if (args.deferDisplay === false) return false
     return true
+}
+
+/** Remove a filled smart field from the pending list, returning undefined when
+ *  nothing is left so the key drops out of the serialized body entirely. */
+function clearPendingField(
+    pending: WeatherArtifact['pending'],
+    field: 'outfit' | 'why',
+): WeatherArtifact['pending'] {
+    const next = (pending ?? []).filter((entry) => entry !== field)
+    return next.length ? next : undefined
 }
 
 function pendingWeatherKey(conversationId: string, identifier: string): string {
@@ -674,50 +692,93 @@ function clearPendingWeatherArtifact(entry: PendingWeatherArtifact): void {
     pendingWeatherArtifacts.delete(pendingWeatherKey(entry.conversationId, entry.identifier))
 }
 
-function hasRequiredSmartWeather(entry: PendingWeatherArtifact): boolean {
-    return Boolean(entry.artifact.outfit && entry.artifact.why?.length)
-}
-
-function pendingWeatherWaitingFor(entry: PendingWeatherArtifact): string[] {
-    const waiting: string[] = []
-    if (!entry.artifact.why?.length) waiting.push('WeatherSetWhy')
-    if (!entry.artifact.outfit) waiting.push('WeatherSetOutfit')
-    return waiting
-}
-
-function weatherDirectEmitData(entry: PendingWeatherArtifact): Record<string, unknown> {
-    clearPendingWeatherArtifact(entry)
+/** Build the `artifactUpdate` result a setter returns to patch the visible
+ *  card in place. The chat route persists `body` as a new version and pushes
+ *  it to the client, which re-renders the same card with the merged field —
+ *  prop change, not a remount. */
+function weatherArtifactUpdateData(args: {
+    identifier: string
+    title: string
+    display: 'inline' | 'panel' | 'fullscreen'
+    artifact: WeatherArtifact
+    field: 'outfit' | 'why' | 'calendarContext'
+}): Record<string, unknown> {
+    const label = args.field === 'calendarContext' ? 'Calendar context' : args.field === 'why' ? 'Why rows' : 'Outfit'
     return {
-        directEmit: true,
-        identifier: entry.identifier,
-        title: entry.title,
+        artifactUpdate: true,
+        identifier: args.identifier,
+        title: args.title,
         type: 'application/vnd.ant.weather',
-        display: entry.display,
-        body: JSON.stringify(entry.artifact),
-        modelContext: buildWeatherModelContext(entry.artifact, entry.targetDate),
-        providerUsed: entry.providerUsed,
-        googleAvailable: entry.googleAvailable,
-        suggestGoogleUpgrade: entry.providerUsed === 'open-meteo' && !entry.googleAvailable,
-        note: 'Weather artifact is complete and mounted once. Do not emit an artifact tag.',
+        display: args.display,
+        body: JSON.stringify(args.artifact),
+        [args.field]: args.artifact[args.field],
+        note: `${label} written into the visible weather card in place. Do not emit an artifact tag.`,
     }
 }
 
-function pendingWeatherResult(entry: PendingWeatherArtifact, updated: string, extra: Record<string, unknown> = {}): ToolResult {
-    const waitingFor = pendingWeatherWaitingFor(entry)
+function normalizeWeatherDisplay(value: unknown): 'inline' | 'panel' | 'fullscreen' {
+    return value === 'panel' || value === 'fullscreen' ? value : 'inline'
+}
+
+/** Shared merge-and-patch path for the WeatherSet* setters. Prefers the staged
+ *  in-turn copy (so a card mounted this same turn can be patched without
+ *  depending on DB persistence timing); otherwise reads the latest persisted
+ *  version. Either way it returns an `artifactUpdate` so the visible card is
+ *  patched in place. `merge` must set its field and, for the smart fields,
+ *  clear its own `pending` entry. */
+function applyWeatherFieldUpdate(opts: {
+    conversationId: string
+    identifier: string
+    toolLabel: string
+    field: 'outfit' | 'why' | 'calendarContext'
+    merge: (base: WeatherArtifact) => WeatherArtifact
+}): ToolResult {
+    const { conversationId, identifier, toolLabel, field, merge } = opts
+
+    const validate = (enriched: WeatherArtifact) => {
+        const parsed = WeatherArtifactSchema.safeParse(enriched)
+        if (!parsed.success) {
+            const first = parsed.error.issues[0]
+            const path = first.path.length ? first.path.join('.') : '(root)'
+            return { ok: false as const, error: `${toolLabel} validation failed at ${path}: ${first.message}` }
+        }
+        return { ok: true as const, value: parsed.data }
+    }
+
+    const staged = readPendingWeatherArtifact(conversationId, identifier)
+    if (staged) {
+        const result = validate(merge(staged.artifact))
+        if (!result.ok) return { success: false, error: result.error }
+        const nextEntry: PendingWeatherArtifact = { ...staged, artifact: result.value, createdAt: Date.now() }
+        // Keep the staged copy alive for further in-turn merges until both
+        // smart fields have landed; drop it once nothing is pending.
+        if (result.value.pending?.length) updatePendingWeatherArtifact(nextEntry, result.value)
+        else clearPendingWeatherArtifact(staged)
+        return {
+            success: true,
+            data: weatherArtifactUpdateData({
+                identifier,
+                title: staged.title,
+                display: staged.display,
+                artifact: result.value,
+                field,
+            }),
+        }
+    }
+
+    const read = readLatestWeatherArtifact(conversationId, identifier)
+    if (!read.ok) return { success: false, error: read.error }
+    const result = validate(merge(read.artifact))
+    if (!result.ok) return { success: false, error: result.error }
     return {
         success: true,
-        data: {
-            pendingArtifact: true,
-            mounted: false,
-            identifier: entry.identifier,
-            title: entry.title,
-            updated,
-            waitingFor,
-            ...extra,
-            note: waitingFor.length
-                ? `Weather artifact is still hidden until ${waitingFor.join(' and ')} completes.`
-                : 'Weather artifact is ready to mount.',
-        },
+        data: weatherArtifactUpdateData({
+            identifier,
+            title: read.latest.title,
+            display: normalizeWeatherDisplay(read.latest.display),
+            artifact: result.value,
+            field,
+        }),
     }
 }
 
@@ -751,15 +812,22 @@ async function assembleSuccess(args: AssembleArgs): Promise<ToolResult> {
 
     const identifier = args.identifierArg || `${slugifyLocation(args.resolved.name)}-weather`
     const title = args.titleArg || `Weather in ${args.resolved.name}`
-    const body = JSON.stringify(parsed.data)
 
-    if (args.deferDisplay && args.conversationId) {
+    // Smart path: mount the live forecast INSTANTLY via `directEmit` with the
+    // Outfit + Why tiles flagged `pending` so the renderer shows a "Working…"
+    // placeholder at the final tile footprint. We also stage the card in-memory
+    // so the in-turn WeatherSetWhy/WeatherSetOutfit calls can merge their field
+    // and patch the already-visible card in place (no second card, no reflow).
+    if (args.smartGuidance && args.conversationId) {
+        const stagedCandidate: WeatherArtifact = { ...parsed.data, pending: ['why', 'outfit'] }
+        const stagedParsed = WeatherArtifactSchema.safeParse(stagedCandidate)
+        const stagedArtifact = stagedParsed.success ? stagedParsed.data : stagedCandidate
         stagePendingWeatherArtifact({
             conversationId: args.conversationId,
             identifier,
             title,
             display: 'inline',
-            artifact: parsed.data,
+            artifact: stagedArtifact,
             providerUsed: args.providerUsed,
             googleAvailable: args.googleAvailable,
             createdAt: Date.now(),
@@ -768,31 +836,29 @@ async function assembleSuccess(args: AssembleArgs): Promise<ToolResult> {
         return {
             success: true,
             data: {
-                pendingArtifact: true,
-                mounted: false,
+                directEmit: true,
                 identifier,
                 title,
                 type: 'application/vnd.ant.weather',
                 display: 'inline',
-                modelContext: buildWeatherModelContext(parsed.data, args.targetDate),
+                body: JSON.stringify(stagedArtifact),
+                modelContext: buildWeatherModelContext(stagedArtifact, args.targetDate),
                 providerUsed: args.providerUsed,
                 googleAvailable: args.googleAvailable,
                 suggestGoogleUpgrade: args.providerUsed === 'open-meteo' && !args.googleAvailable,
-                waitingFor: ['WeatherSetWhy', 'WeatherSetOutfit'],
                 nextStepUsage: weatherRefinementUsage(identifier),
-                note: 'Weather data is staged but not mounted yet. Call WeatherSetWhy and WeatherSetOutfit with the schemas in nextStepUsage; the card mounts once both are present.',
+                usage: `Card is ALREADY visible — do NOT emit an <artifact> tag. Its Outfit and "Why it feels this way" tiles show a "Working…" placeholder. Fill them by calling WeatherSetWhy then WeatherSetOutfit with identifier "${identifier}"; each one slots into the live card in place. ${weatherRefinementUsage(identifier)} No closing chat message is required — completing the two tiles is the deliverable.`,
             },
         }
     }
 
+    // Base path: smart guidance disabled (or no conversation context, e.g. the
+    // refresh route) — mount the live forecast with no placeholders. The
+    // `directEmit` body is also what the refresh route reads back directly.
+    const body = JSON.stringify(parsed.data)
     return {
         success: true,
         data: {
-            // `directEmit: true` tells the chat route to inject the
-            // <artifact>BODY</artifact> tag into the assistant message
-            // body itself. The parser then mounts the card exactly as if
-            // the model wrote the tag — but instantly, and without burning
-            // model tokens on JSON.
             directEmit: true,
             identifier,
             title,
@@ -803,7 +869,7 @@ async function assembleSuccess(args: AssembleArgs): Promise<ToolResult> {
             providerUsed: args.providerUsed,
             googleAvailable: args.googleAvailable,
             suggestGoogleUpgrade: args.providerUsed === 'open-meteo' && !args.googleAvailable,
-            usage: `Card mounted automatically — do NOT emit an <artifact> tag. ${weatherRefinementUsage(identifier)} Then write 1-2 sentences of framing prose.`,
+            usage: `Card mounted automatically — do NOT emit an <artifact> tag. Smart guidance is off, so no WeatherSetWhy/WeatherSetOutfit calls are needed. No closing message is required.`,
         },
     }
 }
@@ -1011,10 +1077,13 @@ export async function executeWeatherSetOutfit(
         return { success: false, error: 'WeatherSetOutfit requires non-empty headline and summary.' }
     }
 
-    const pending = readPendingWeatherArtifact(conversationId, identifier)
-    if (pending) {
-        const enriched: WeatherArtifact = {
-            ...pending.artifact,
+    return applyWeatherFieldUpdate({
+        conversationId,
+        identifier,
+        toolLabel: 'WeatherSetOutfit',
+        field: 'outfit',
+        merge: (base) => ({
+            ...base,
             outfit: {
                 source: 'model',
                 generatedAt: new Date().toISOString(),
@@ -1022,64 +1091,9 @@ export async function executeWeatherSetOutfit(
                 summary,
                 ...(items.length > 0 ? { items } : {}),
             },
-        }
-
-        const parsed = WeatherArtifactSchema.safeParse(enriched)
-        if (!parsed.success) {
-            const first = parsed.error.issues[0]
-            const path = first.path.length ? first.path.join('.') : '(root)'
-            return { success: false, error: `WeatherSetOutfit validation failed at ${path}: ${first.message}` }
-        }
-
-        const nextPending: PendingWeatherArtifact = {
-            ...pending,
-            artifact: parsed.data,
-            createdAt: Date.now(),
-        }
-        updatePendingWeatherArtifact(nextPending, parsed.data)
-        if (hasRequiredSmartWeather(nextPending)) {
-            return {
-                success: true,
-                data: weatherDirectEmitData(nextPending),
-            }
-        }
-        return pendingWeatherResult(nextPending, 'outfit', { outfit: parsed.data.outfit })
-    }
-
-    const read = readLatestWeatherArtifact(conversationId, identifier)
-    if (!read.ok) return { success: false, error: read.error }
-
-    const enriched: WeatherArtifact = {
-        ...read.artifact,
-        outfit: {
-            source: 'model',
-            generatedAt: new Date().toISOString(),
-            headline,
-            summary,
-            ...(items.length > 0 ? { items } : {}),
-        },
-    }
-
-    const parsed = WeatherArtifactSchema.safeParse(enriched)
-    if (!parsed.success) {
-        const first = parsed.error.issues[0]
-        const path = first.path.length ? first.path.join('.') : '(root)'
-        return { success: false, error: `WeatherSetOutfit validation failed at ${path}: ${first.message}` }
-    }
-
-    return {
-        success: true,
-        data: {
-            artifactUpdate: true,
-            identifier,
-            title: read.latest.title,
-            type: 'application/vnd.ant.weather',
-            display: read.latest.display ?? 'inline',
-            body: JSON.stringify(parsed.data),
-            outfit: parsed.data.outfit,
-            note: 'Outfit written into weather artifact data. Do not emit another artifact tag.',
-        },
-    }
+            pending: clearPendingField(base.pending, 'outfit'),
+        }),
+    })
 }
 
 export async function executeWeatherSetWhy(
@@ -1104,63 +1118,17 @@ export async function executeWeatherSetWhy(
         return { success: false, error: 'WeatherSetWhy requires at least one valid row.' }
     }
 
-    const pending = readPendingWeatherArtifact(conversationId, identifier)
-    if (pending) {
-        const enriched: WeatherArtifact = {
-            ...pending.artifact,
+    return applyWeatherFieldUpdate({
+        conversationId,
+        identifier,
+        toolLabel: 'WeatherSetWhy',
+        field: 'why',
+        merge: (base) => ({
+            ...base,
             why: rows,
-        }
-
-        const parsed = WeatherArtifactSchema.safeParse(enriched)
-        if (!parsed.success) {
-            const first = parsed.error.issues[0]
-            const path = first.path.length ? first.path.join('.') : '(root)'
-            return { success: false, error: `WeatherSetWhy validation failed at ${path}: ${first.message}` }
-        }
-
-        const nextPending: PendingWeatherArtifact = {
-            ...pending,
-            artifact: parsed.data,
-            createdAt: Date.now(),
-        }
-        updatePendingWeatherArtifact(nextPending, parsed.data)
-        if (hasRequiredSmartWeather(nextPending)) {
-            return {
-                success: true,
-                data: weatherDirectEmitData(nextPending),
-            }
-        }
-        return pendingWeatherResult(nextPending, 'why', { why: parsed.data.why })
-    }
-
-    const read = readLatestWeatherArtifact(conversationId, identifier)
-    if (!read.ok) return { success: false, error: read.error }
-
-    const enriched: WeatherArtifact = {
-        ...read.artifact,
-        why: rows,
-    }
-
-    const parsed = WeatherArtifactSchema.safeParse(enriched)
-    if (!parsed.success) {
-        const first = parsed.error.issues[0]
-        const path = first.path.length ? first.path.join('.') : '(root)'
-        return { success: false, error: `WeatherSetWhy validation failed at ${path}: ${first.message}` }
-    }
-
-    return {
-        success: true,
-        data: {
-            artifactUpdate: true,
-            identifier,
-            title: read.latest.title,
-            type: 'application/vnd.ant.weather',
-            display: read.latest.display ?? 'inline',
-            body: JSON.stringify(parsed.data),
-            why: parsed.data.why,
-            note: 'Why rows written into weather artifact data. Do not emit another artifact tag.',
-        },
-    }
+            pending: clearPendingField(base.pending, 'why'),
+        }),
+    })
 }
 
 export async function executeWeatherSetCalendarContext(
@@ -1185,63 +1153,16 @@ export async function executeWeatherSetCalendarContext(
         return { success: false, error: 'WeatherSetCalendarContext requires at least one valid event with title and startTime.' }
     }
 
-    const pending = readPendingWeatherArtifact(conversationId, identifier)
-    if (pending) {
-        const enriched: WeatherArtifact = {
-            ...pending.artifact,
-            calendarContext: events,
-        }
-
-        const parsed = WeatherArtifactSchema.safeParse(enriched)
-        if (!parsed.success) {
-            const first = parsed.error.issues[0]
-            const path = first.path.length ? first.path.join('.') : '(root)'
-            return { success: false, error: `WeatherSetCalendarContext validation failed at ${path}: ${first.message}` }
-        }
-
-        const nextPending: PendingWeatherArtifact = {
-            ...pending,
-            artifact: parsed.data,
-            createdAt: Date.now(),
-        }
-        updatePendingWeatherArtifact(nextPending, parsed.data)
-        if (hasRequiredSmartWeather(nextPending)) {
-            return {
-                success: true,
-                data: weatherDirectEmitData(nextPending),
-            }
-        }
-        return pendingWeatherResult(nextPending, 'calendarContext', { calendarContext: parsed.data.calendarContext })
-    }
-
-    const read = readLatestWeatherArtifact(conversationId, identifier)
-    if (!read.ok) return { success: false, error: read.error }
-
-    const enriched: WeatherArtifact = {
-        ...read.artifact,
-        calendarContext: events,
-    }
-
-    const parsed = WeatherArtifactSchema.safeParse(enriched)
-    if (!parsed.success) {
-        const first = parsed.error.issues[0]
-        const path = first.path.length ? first.path.join('.') : '(root)'
-        return { success: false, error: `WeatherSetCalendarContext validation failed at ${path}: ${first.message}` }
-    }
-
-    return {
-        success: true,
-        data: {
-            artifactUpdate: true,
-            identifier,
-            title: read.latest.title,
-            type: 'application/vnd.ant.weather',
-            display: read.latest.display ?? 'inline',
-            body: JSON.stringify(parsed.data),
-            calendarContext: parsed.data.calendarContext,
-            note: 'Calendar context written into weather artifact data. Do not emit another artifact tag.',
-        },
-    }
+    // Calendar context is not a smart-guidance placeholder, so it leaves
+    // `pending` untouched — it simply patches the visible card with the
+    // event-weather row.
+    return applyWeatherFieldUpdate({
+        conversationId,
+        identifier,
+        toolLabel: 'WeatherSetCalendarContext',
+        field: 'calendarContext',
+        merge: (base) => ({ ...base, calendarContext: events }),
+    })
 }
 
 function cleanOutfitText(value: unknown, maxLength: number): string {

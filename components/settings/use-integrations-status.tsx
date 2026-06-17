@@ -9,6 +9,8 @@ export interface GmailIntegrationStatusEntry {
     configured: boolean
     connected: boolean
     accountEmail: string | null
+    connection: GoogleAccountConnectionStatusEntry | null
+    availableConnections: GoogleAccountConnectionStatusEntry[]
     scopes: string[]
     requestedScopes: string[]
     missingConfig: string[]
@@ -25,6 +27,8 @@ export interface GoogleCalendarIntegrationStatusEntry {
     configured: boolean
     connected: boolean
     accountEmail: string | null
+    connection: GoogleAccountConnectionStatusEntry | null
+    availableConnections: GoogleAccountConnectionStatusEntry[]
     scopes: string[]
     requestedScopes: string[]
     missingConfig: string[]
@@ -48,6 +52,8 @@ export interface GoogleDriveIntegrationStatusEntry {
     connected: boolean
     accountEmail: string | null
     accountName: string | null
+    connection: GoogleAccountConnectionStatusEntry | null
+    availableConnections: GoogleAccountConnectionStatusEntry[]
     scopes: string[]
     requestedScopes: string[]
     missingConfig: string[]
@@ -66,6 +72,21 @@ export interface GoogleDriveIntegrationStatusEntry {
     error?: string
 }
 
+export interface GoogleAccountConnectionStatusEntry {
+    id: string
+    provider: "gmail" | "google_calendar" | "google_drive"
+    displayName: string
+    ownerProfileId: string
+    ownerName: string
+    access: "read" | "write" | "setup"
+    source: "owned" | "shared"
+    selected: boolean
+    accountEmail: string | null
+    connected: boolean
+    expiresAt: number | null
+    needsReconnect: boolean
+}
+
 export type WhatsAppPhase =
     | "idle"
     | "starting"
@@ -80,6 +101,7 @@ export interface WhatsAppIntegrationStatusEntry {
     id: "whatsapp"
     name: string
     description: string
+    provider: "baileys" | "wwebjs" | "disabled"
     configured: boolean
     connected: boolean
     accountName: string | null

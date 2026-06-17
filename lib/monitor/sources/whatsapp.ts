@@ -14,8 +14,9 @@ import {
 // ---------------------------------------------------------------------------
 // WhatsApp source adapter.
 //
-// The cheap-check has two phases per tick:
-//   A. List recent chats with unreadCount (cheap, in-process via wwebjs).
+// The cheap-check has two phases when its per-watch window is due:
+//   A. List recent chats with unreadCount (cheap, in-process via the active
+//      WhatsApp provider).
 //      Filter to chats that:
 //        - match the SOUND contact prefilter (extractWaChatPrefilterFromRule):
 //          non-empty only when every possible match requires a wa_from hit.
@@ -33,23 +34,28 @@ import {
 // state yet) gets a 24h lookback floor instead, so fresh messages surface
 // but a months-old unread backlog does not.
 //
-// Units: WhatsApp Web message timestamps (`message.t`) are unix SECONDS;
+// Units: WhatsApp message timestamps are unix SECONDS;
 // watermarks are stored in epoch MILLISECONDS. toWaMs() normalizes both ways
 // (legacy seconds watermarks written by older builds migrate on read).
 // ---------------------------------------------------------------------------
 
 const WA_KEY = 'whatsapp'
+const MIN_CHATS_LISTED = 18
 const MAX_CHATS_LISTED = 30
+const MIN_MESSAGES_PER_CHAT = 12
 const MAX_MESSAGES_PER_CHAT = 25
-const READ_CHAT_MAX_CHARS = 12_000
+const MIN_READ_CHAT_MAX_CHARS = 8_000
+const MAX_READ_CHAT_MAX_CHARS = 14_000
 const PER_CHAT_RING_CAP = 50
+const BASE_CHECK_INTERVAL_MS = 15 * 60_000
+const MAX_CHECK_INTERVAL_MS = 2 * 60 * 60_000
 // Watermark floor for chats with no per-chat state yet (first seen after the
 // watch primed): surface only messages from the last 24h, not the whole
 // unread backlog.
 const NEW_CHAT_LOOKBACK_MS = 24 * 60 * 60_000
 
-/** Normalize a WhatsApp timestamp to epoch ms. WhatsApp Web reports unix
- *  seconds; older builds also persisted per-chat watermarks in seconds. */
+/** Normalize a WhatsApp timestamp to epoch ms. Providers report unix seconds;
+ *  older builds also persisted per-chat watermarks in seconds. */
 function toWaMs(value: number | null | undefined): number {
     if (!value || !Number.isFinite(value) || value <= 0) return 0
     return value < 1e12 ? value * 1000 : value
@@ -65,6 +71,8 @@ interface WaChatState {
 interface WaExtra {
     primed?: boolean
     chats?: Record<string, WaChatState>
+    nextCheckAfter?: number
+    quietStreak?: number
 }
 
 function readWaExtra(state: WatchState): WaExtra {
@@ -76,15 +84,38 @@ function readWaExtra(state: WatchState): WaExtra {
 
 function mergeWaExtra(
     state: WatchState,
-    patch: { primed?: boolean; chats?: Record<string, WaChatState> },
+    patch: { primed?: boolean; chats?: Record<string, WaChatState>; nextCheckAfter?: number; quietStreak?: number },
 ): Record<string, unknown> {
     const next = { ...(state.extra ?? {}) } as Record<string, unknown>
     const prev = readWaExtra(state)
     next[WA_KEY] = {
         primed: patch.primed ?? prev.primed ?? false,
         chats: { ...(prev.chats ?? {}), ...(patch.chats ?? {}) },
+        nextCheckAfter: patch.nextCheckAfter ?? prev.nextCheckAfter,
+        quietStreak: patch.quietStreak ?? prev.quietStreak ?? 0,
     }
     return next
+}
+
+function deterministicUnit(seed: string): number {
+    let hash = 2166136261
+    for (let i = 0; i < seed.length; i += 1) {
+        hash ^= seed.charCodeAt(i)
+        hash = Math.imul(hash, 16777619)
+    }
+    return (hash >>> 0) / 0xffffffff
+}
+
+function jitteredInt(watchId: string, now: number, salt: string, min: number, max: number): number {
+    const bucket = Math.floor(now / 60_000)
+    return Math.round(min + deterministicUnit(`${watchId}:${bucket}:${salt}`) * (max - min))
+}
+
+function nextCheckAfter(watchId: string, now: number, quietStreak: number, hadError: boolean): number {
+    const quietMultiplier = hadError ? 4 : 1 + Math.min(Math.max(quietStreak, 0), 6) * 0.5
+    const jitter = 0.75 + deterministicUnit(`${watchId}:${Math.floor(now / 60_000)}:next`) * 0.6
+    const interval = Math.min(MAX_CHECK_INTERVAL_MS, Math.round(BASE_CHECK_INTERVAL_MS * quietMultiplier * jitter))
+    return now + interval
 }
 
 function chatMatchesContactTarget(chat: { id: string; name: string }, targets: string[]): boolean {
@@ -98,12 +129,32 @@ function chatMatchesContactTarget(chat: { id: string; name: string }, targets: s
 }
 
 function extractMentions(message: { body: string }): string[] {
-    // Best-effort: WhatsApp Web mentions render as "@<digits>" in body. The
-    // wwebjs MessageSummary doesn't surface a structured mentions array, so
-    // we approximate. False positives here cost the user one extra notify;
-    // wa_mention rules are pre-filtered by chat anyway in practice.
+    // Best-effort: mentions render as "@<digits>" in the text body. The shared
+    // MessageSummary doesn't surface structured mentions yet, so we approximate.
+    // False positives here cost the user one extra notify; wa_mention rules are
+    // pre-filtered by chat anyway in practice.
     const matches = message.body.match(/@\d{6,}/g)
     return matches ? [...new Set(matches.map((m) => m.slice(1)))] : []
+}
+
+async function guardedWhatsAppRead<T>(
+    guard: typeof import('@/lib/integrations/whatsapp-tool-guard').withWhatsAppToolGuard,
+    fingerprint: string,
+    timeoutMs: number,
+    label: string,
+    action: () => Promise<T>,
+): Promise<T> {
+    const controller = new AbortController()
+    const startedAt = Date.now()
+    return withTimeout(
+        guard('read', fingerprint, () => {
+            const remainingMs = Math.max(1, timeoutMs - (Date.now() - startedAt))
+            return withTimeout(action(), remainingMs, label)
+        }, { signal: controller.signal }),
+        timeoutMs,
+        label,
+        () => controller.abort(),
+    )
 }
 
 export const whatsappSourceAdapter: SourceAdapter = {
@@ -116,6 +167,9 @@ export const whatsappSourceAdapter: SourceAdapter = {
             const { getWhatsAppIntegrationStatus } = await import('@/lib/integrations/whatsapp')
             const status = await getWhatsAppIntegrationStatus()
             if (!status.connected) {
+                if (status.provider === 'baileys' && status.sessionStored && !status.qrAvailable && !status.needsReconnect) {
+                    return { available: true }
+                }
                 return {
                     available: false,
                     reason: status.phase === 'qr'
@@ -134,17 +188,53 @@ export const whatsappSourceAdapter: SourceAdapter = {
             const { watch, now, timeoutMs } = input
             const extra = readWaExtra(watch.state)
             const isPriming = !extra.primed
+            if (extra.nextCheckAfter && now < extra.nextCheckAfter) {
+                return {
+                    ok: true,
+                    matches: [],
+                    candidatesSeen: 0,
+                    stateUpdate: { lastFetchedAt: watch.state.lastFetchedAt ?? now },
+                    fetchedAt: now,
+                }
+            }
 
             const { whatsappListChats, whatsappReadChat } = await import('@/lib/integrations/whatsapp')
+            const { withWhatsAppToolGuard } = await import('@/lib/integrations/whatsapp-tool-guard')
+            const chatLimit = jitteredInt(watch.id, now, 'chats', MIN_CHATS_LISTED, MAX_CHATS_LISTED)
+            const messagesPerChat = jitteredInt(watch.id, now, 'messages', MIN_MESSAGES_PER_CHAT, MAX_MESSAGES_PER_CHAT)
+            const readMaxChars = jitteredInt(watch.id, now, 'chars', MIN_READ_CHAT_MAX_CHARS, MAX_READ_CHAT_MAX_CHARS)
 
             // Use a slice of the budget for the listChats step; the rest is
-            // split per-chat across the readChat calls.
+            // split per-chat across the readChat calls. The outer timeout
+            // aborts queued guard work, so a timed-out monitor read cannot run
+            // later as stale work.
             const listBudget = Math.max(2000, Math.floor(timeoutMs * 0.25))
-            const chatList = await withTimeout(
-                whatsappListChats(MAX_CHATS_LISTED),
-                listBudget,
-                'whatsapp listChats',
-            )
+            let chatList: Awaited<ReturnType<typeof whatsappListChats>>
+            try {
+                chatList = await guardedWhatsAppRead(
+                    withWhatsAppToolGuard,
+                    `monitor:${watch.id}:list:${chatLimit}`,
+                    listBudget,
+                    'whatsapp listChats',
+                    () => whatsappListChats(chatLimit),
+                )
+            } catch (err) {
+                const quietStreak = (extra.quietStreak ?? 0) + 1
+                return {
+                    ok: false,
+                    error: err instanceof Error ? err.message : String(err),
+                    matches: [],
+                    candidatesSeen: 0,
+                    stateUpdate: {
+                        lastFetchedAt: now,
+                        extra: mergeWaExtra(watch.state, {
+                            quietStreak,
+                            nextCheckAfter: nextCheckAfter(watch.id, now, quietStreak, true),
+                        }),
+                    },
+                    fetchedAt: now,
+                }
+            }
 
             const contactTargets = extractWaChatPrefilterFromRule(watch.rule)
             const relevant = chatList.chats.filter(
@@ -163,7 +253,12 @@ export const whatsappSourceAdapter: SourceAdapter = {
                     candidatesSeen: 0,
                     stateUpdate: {
                         lastFetchedAt: now,
-                        extra: mergeWaExtra(watch.state, { primed: true, chats }),
+                        extra: mergeWaExtra(watch.state, {
+                            primed: true,
+                            chats,
+                            quietStreak: 1,
+                            nextCheckAfter: nextCheckAfter(watch.id, now, 1, false),
+                        }),
                     },
                     fetchedAt: now,
                 }
@@ -174,7 +269,13 @@ export const whatsappSourceAdapter: SourceAdapter = {
                     ok: true,
                     matches: [],
                     candidatesSeen: 0,
-                    stateUpdate: { lastFetchedAt: now },
+                    stateUpdate: {
+                        lastFetchedAt: now,
+                        extra: mergeWaExtra(watch.state, {
+                            quietStreak: (extra.quietStreak ?? 0) + 1,
+                            nextCheckAfter: nextCheckAfter(watch.id, now, (extra.quietStreak ?? 0) + 1, false),
+                        }),
+                    },
                     fetchedAt: now,
                 }
             }
@@ -190,10 +291,12 @@ export const whatsappSourceAdapter: SourceAdapter = {
             for (const chatSummary of relevant) {
                 const chatPrev = extra.chats?.[chatSummary.id] ?? {}
                 try {
-                    const result = await withTimeout(
-                        whatsappReadChat(chatSummary.id, MAX_MESSAGES_PER_CHAT, READ_CHAT_MAX_CHARS),
+                    const result = await guardedWhatsAppRead(
+                        withWhatsAppToolGuard,
+                        `monitor:${watch.id}:read:${chatSummary.id}:${messagesPerChat}:${readMaxChars}`,
                         perChatBudget,
                         `whatsapp readChat ${chatSummary.id}`,
+                        () => whatsappReadChat(chatSummary.id, messagesPerChat, readMaxChars),
                     )
 
                     const seenIds = new Set(chatPrev.lastSeenIds ?? [])
@@ -258,6 +361,7 @@ export const whatsappSourceAdapter: SourceAdapter = {
                     )
                 }
             }
+            const quietStreak = matches.length > 0 || candidatesSeen > 0 ? 0 : (extra.quietStreak ?? 0) + 1
 
             return {
                 ok: errors.length === 0,
@@ -266,7 +370,11 @@ export const whatsappSourceAdapter: SourceAdapter = {
                 candidatesSeen,
                 stateUpdate: {
                     lastFetchedAt: now,
-                    extra: mergeWaExtra(watch.state, { chats: newChatStates }),
+                    extra: mergeWaExtra(watch.state, {
+                        chats: newChatStates,
+                        quietStreak,
+                        nextCheckAfter: nextCheckAfter(watch.id, now, quietStreak, errors.length > 0),
+                    }),
                 },
                 fetchedAt: now,
             }

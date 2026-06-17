@@ -48,6 +48,7 @@ import type {
   GoogleMapsConfigInput,
 } from "@/components/settings/auth-types"
 import { Button } from "@/components/ui/button"
+import { Select } from "@/components/ui/select"
 import {
   Card,
   CardContent,
@@ -70,6 +71,7 @@ import {
 } from "@/components/settings/auth-tab-helpers"
 import type {
   GmailIntegrationStatusEntry,
+  GoogleAccountConnectionStatusEntry,
   GoogleCalendarIntegrationStatusEntry,
   GoogleDriveIntegrationStatusEntry,
   LocationIntelligenceIntegrationStatusEntry,
@@ -333,6 +335,77 @@ export function StatusRow({ label, value }: { label: string; value: string }) {
   )
 }
 
+function GoogleAccountSelector({
+  connections,
+  selectedConnectionId,
+  busy,
+  onSelectConnection,
+}: {
+  connections: GoogleAccountConnectionStatusEntry[]
+  selectedConnectionId: string
+  busy: BusyAction
+  onSelectConnection: (connectionId: string) => void
+}) {
+  if (connections.length === 0) return null
+
+  const selected = connections.find(
+    (connection) => connection.id === selectedConnectionId
+  )
+  const selectedReady = Boolean(selected?.connected && !selected.needsReconnect)
+  const options = connections.map((connection) => ({
+    value: connection.id,
+    label: googleConnectionLabel(connection),
+  }))
+
+  return (
+    <div className="grid gap-2 rounded-xl border border-border/70 bg-background/60 px-3 py-3 text-[12.5px]">
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-medium text-foreground/75">Default account</div>
+          <div className="truncate text-[12px] text-foreground/50">
+            {selected
+              ? selected.source === "shared"
+                ? `Shared by ${selected.ownerName}`
+                : "Owned by this profile"
+              : "Choose which local account this profile uses"}
+          </div>
+        </div>
+        <Badge
+          tone={selectedReady ? "success" : "warn"}
+          icon={
+            selectedReady ? (
+              <CheckCircle2 className="size-3" />
+            ) : (
+              <AlertCircle className="size-3" />
+            )
+          }
+        >
+          {selectedReady ? "Ready" : "Reconnect"}
+        </Badge>
+      </div>
+      <Select
+        value={selectedConnectionId}
+        options={options}
+        disabled={busy !== null || connections.length <= 1}
+        placeholder="Choose account"
+        onValueChange={(connectionId) => {
+          if (connectionId && connectionId !== selectedConnectionId) {
+            onSelectConnection(connectionId)
+          }
+        }}
+      />
+    </div>
+  )
+}
+
+function googleConnectionLabel(
+  connection: GoogleAccountConnectionStatusEntry
+): string {
+  const account = connection.accountEmail ?? connection.displayName
+  const suffix = connection.source === "shared" ? ` · ${connection.ownerName}` : ""
+  return `${account}${suffix}`
+}
+
 export function GmailCard({
   entry,
   runtime,
@@ -340,6 +413,7 @@ export function GmailCard({
   onConnect,
   onDisconnect,
   onSaveConfig,
+  onSelectConnection,
 }: {
   entry: GmailIntegrationStatusEntry
   runtime?: RuntimeAccessInfo
@@ -347,6 +421,7 @@ export function GmailCard({
   onConnect: () => void
   onDisconnect: () => void
   onSaveConfig: (input: GmailConfigInput) => Promise<boolean>
+  onSelectConnection: (connectionId: string) => void
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const badge = !entry.configured ? (
@@ -417,6 +492,13 @@ export function GmailCard({
           )}
         </div>
 
+        <GoogleAccountSelector
+          connections={entry.availableConnections}
+          selectedConnectionId={entry.connection?.id ?? ""}
+          busy={busy}
+          onSelectConnection={onSelectConnection}
+        />
+
         {!entry.configured && (
           <GmailConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />
         )}
@@ -465,6 +547,7 @@ export function GoogleCalendarCard({
   onConnect,
   onDisconnect,
   onSaveConfig,
+  onSelectConnection,
 }: {
   entry: GoogleCalendarIntegrationStatusEntry
   runtime?: RuntimeAccessInfo
@@ -472,6 +555,7 @@ export function GoogleCalendarCard({
   onConnect: () => void
   onDisconnect: () => void
   onSaveConfig: (input: GoogleCalendarConfigInput) => Promise<boolean>
+  onSelectConnection: (connectionId: string) => void
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const badge = !entry.configured ? (
@@ -564,6 +648,13 @@ export function GoogleCalendarCard({
           )}
         </div>
 
+        <GoogleAccountSelector
+          connections={entry.availableConnections}
+          selectedConnectionId={entry.connection?.id ?? ""}
+          busy={busy}
+          onSelectConnection={onSelectConnection}
+        />
+
         {!entry.configured && (
           <GoogleWorkspaceConfigForm
             entry={entry}
@@ -619,6 +710,7 @@ export function GoogleWorkspaceCard({
   onConnect,
   onDisconnect,
   onSaveConfig,
+  onSelectConnection,
 }: {
   entry: GoogleDriveIntegrationStatusEntry
   runtime?: RuntimeAccessInfo
@@ -626,6 +718,7 @@ export function GoogleWorkspaceCard({
   onConnect: () => void
   onDisconnect: () => void
   onSaveConfig: (input: GoogleDriveConfigInput) => Promise<boolean>
+  onSelectConnection: (connectionId: string) => void
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const badge = !entry.configured ? (
@@ -706,6 +799,13 @@ export function GoogleWorkspaceCard({
           )}
         </div>
 
+        <GoogleAccountSelector
+          connections={entry.availableConnections}
+          selectedConnectionId={entry.connection?.id ?? ""}
+          busy={busy}
+          onSelectConnection={onSelectConnection}
+        />
+
         {!entry.configured && (
           <GoogleWorkspaceConfigForm
             entry={entry}
@@ -766,13 +866,24 @@ export function WhatsAppCard({
   onDisconnect: () => void
 }) {
   const connected = entry.connected && !entry.needsReconnect
+  const providerLabel =
+    entry.provider === "baileys"
+      ? "Baileys"
+      : entry.provider === "wwebjs"
+        ? "Legacy browser"
+        : "Disabled"
   const savedSessionIdle =
     entry.sessionStored &&
+    !entry.needsReconnect &&
     !connected &&
     entry.phase !== "qr" &&
     entry.phase !== "starting" &&
     entry.phase !== "authenticated"
-  const badge = !entry.configured ? (
+  const badge = entry.provider === "disabled" ? (
+    <Badge tone="muted" icon={<AlertCircle className="size-3" />}>
+      Disabled
+    </Badge>
+  ) : !entry.configured ? (
     <Badge tone="warn" icon={<AlertCircle className="size-3" />}>
       Browser needed
     </Badge>
@@ -787,6 +898,10 @@ export function WhatsAppCard({
   ) : entry.phase === "starting" || entry.phase === "authenticated" ? (
     <Badge tone="warn" icon={<Loader2 className="size-3 animate-spin" />}>
       Linking
+    </Badge>
+  ) : entry.needsReconnect ? (
+    <Badge tone="warn" icon={<AlertCircle className="size-3" />}>
+      Reconnect
     </Badge>
   ) : savedSessionIdle ? (
     <Badge tone="warn" icon={<Smartphone className="size-3" />}>
@@ -830,19 +945,27 @@ export function WhatsAppCard({
           <span className="text-foreground/75">
             {connected
               ? "Running from local session"
+              : entry.sessionStored && entry.needsReconnect
+                ? "Stored locally; scan again to verify"
               : entry.sessionStored
                 ? "Stored locally; reconnect to start"
                 : "No local session"}
           </span>
-          <span className="text-foreground/55">Browser</span>
-          <span
-            className="truncate text-foreground/75"
-            title={entry.browserExecutablePath ?? undefined}
-          >
-            {entry.browserExecutablePath
-              ? shortPath(entry.browserExecutablePath)
-              : "Chrome/Chromium not found"}
-          </span>
+          <span className="text-foreground/55">Provider</span>
+          <span className="text-foreground/75">{providerLabel}</span>
+          {entry.provider === "wwebjs" && (
+            <>
+              <span className="text-foreground/55">Browser</span>
+              <span
+                className="truncate text-foreground/75"
+                title={entry.browserExecutablePath ?? undefined}
+              >
+                {entry.browserExecutablePath
+                  ? shortPath(entry.browserExecutablePath)
+                  : "Chrome/Chromium not found"}
+              </span>
+            </>
+          )}
           <span className="text-foreground/55">Mode</span>
           <span className="text-foreground/75">
             Reads plus confirmed writes
@@ -878,7 +1001,11 @@ export function WhatsAppCard({
         {!entry.configured && (
           <InlineNotice
             tone="error"
-            text={`Missing local browser: ${entry.missingConfig.join(", ")}.`}
+            text={
+              entry.provider === "disabled"
+                ? "WhatsApp is disabled by WHATSAPP_PROVIDER=disabled."
+                : `Missing local browser: ${entry.missingConfig.join(", ")}.`
+            }
           />
         )}
         {entry.lastError && (
@@ -1402,17 +1529,17 @@ export function WhatsAppSetupGuide() {
         <ChevronDown className="size-3.5 text-foreground/45 transition-transform group-open:rotate-180" />
       </summary>
       <div className="mt-2 grid gap-2 border-t border-border/60 pt-2 text-[12px] leading-relaxed text-foreground/60">
-        <p>
-          Use Connect to start a local WhatsApp Web session. A QR code appears
-          in this card.
+	        <p>
+	          Use Connect to start a local WhatsApp companion session. A QR code
+	          appears in this card.
         </p>
         <p>
           On your phone, open WhatsApp, go to Settings or Menu, choose Linked
           devices, then Link a device.
         </p>
-        <p>
-          Scan the QR code. Orchestrator stores the browser session locally and
-          exposes WhatsApp tools to the main agent.
+	        <p>
+	          Scan the QR code. Orchestrator stores the companion session locally
+	          and exposes WhatsApp tools to the main agent.
         </p>
         <p>
           Messages, photos, files, and delete-for-everyone actions require

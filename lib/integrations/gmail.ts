@@ -4,6 +4,13 @@ import { randomBytes } from 'crypto'
 
 import { resolveOAuthRedirectUri } from '@/lib/app-origin'
 import { getEnvValue } from '@/lib/config'
+import {
+    clearGoogleAccountToken,
+    resolveGoogleAccountToken,
+    saveGoogleAccountTokenForActiveProfile,
+    type GoogleAccountConnectionStatus,
+} from '@/lib/integrations/oauth-connections'
+import type { GoogleOAuthTokenRecord } from '@/lib/integrations/google-oauth'
 import { runIdBatch, type BatchItemResult, type BatchResult } from '@/lib/integrations/batch'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
@@ -36,6 +43,7 @@ const ACCESS_TOKEN_REFRESH_SKEW_MS = 60_000
 const CLIENT_ID_ENV_KEYS = ['GOOGLE_OAUTH_CLIENT_ID', 'GMAIL_OAUTH_CLIENT_ID']
 const CLIENT_SECRET_ENV_KEYS = ['GOOGLE_OAUTH_CLIENT_SECRET', 'GMAIL_OAUTH_CLIENT_SECRET']
 const REDIRECT_URI_ENV_KEYS = ['GMAIL_OAUTH_REDIRECT_URI', 'GOOGLE_OAUTH_REDIRECT_URI']
+const GMAIL_CONNECTION_PROVIDER = 'gmail'
 
 export const GMAIL_SCOPES = [
     'https://www.googleapis.com/auth/gmail.readonly',
@@ -70,20 +78,7 @@ interface OAuthConfig {
     }
 }
 
-interface GmailTokenRecord {
-    version: 1
-    provider: 'gmail'
-    clientId: string
-    accountEmail?: string
-    accessToken: string
-    refreshToken?: string
-    tokenType?: string
-    scope: string[]
-    scopesRequested: string[]
-    expiresAt: number
-    obtainedAt: number
-    updatedAt: number
-}
+type GmailTokenRecord = GoogleOAuthTokenRecord
 
 interface OAuthStateRecord {
     state: string
@@ -142,6 +137,8 @@ export interface GmailIntegrationStatus {
     configured: boolean
     connected: boolean
     accountEmail: string | null
+    connection: GoogleAccountConnectionStatus | null
+    availableConnections: GoogleAccountConnectionStatus[]
     scopes: string[]
     requestedScopes: string[]
     missingConfig: string[]
@@ -261,14 +258,16 @@ export function getGmailOAuthConfig(origin: string): OAuthConfig {
 
 export async function getGmailIntegrationStatus(origin: string, refresh = false): Promise<GmailIntegrationStatus> {
     const config = getGmailOAuthConfig(origin)
-    let token = readTokenRecord()
+    let resolved = resolveGmailToken()
+    let token = resolved.token
     let error: string | undefined
     let refreshFailed = false
 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
-            token = await refreshGmailToken(token, config)
+            token = await refreshGmailToken(token, config, resolved.tokenPath)
+            resolved = resolveGmailToken()
         } catch (err) {
             refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Gmail token'
@@ -286,6 +285,8 @@ export async function getGmailIntegrationStatus(origin: string, refresh = false)
         configured: config.missing.length === 0,
         connected: Boolean(token?.accessToken || token?.refreshToken),
         accountEmail: token?.accountEmail ?? null,
+        connection: resolved.connection,
+        availableConnections: resolved.availableConnections,
         scopes,
         requestedScopes: [...GMAIL_SCOPES],
         missingConfig: config.missing,
@@ -375,10 +376,7 @@ export async function completeGmailOAuth(args: {
     }
 
     const token = await exchangeAuthorizationCode(args.code, config)
-    const existing = readTokenRecord()
-    const refreshToken = token.refresh_token || existing?.refreshToken
     if (!token.access_token) throw new Error('Google did not return an access token.')
-    if (!refreshToken) throw new Error('Google did not return a refresh token. Reconnect and approve offline access.')
 
     const grantedScopes = parseScopeList(token.scope)
     const missingScopes = missingRequiredGmailScopes(grantedScopes)
@@ -387,27 +385,43 @@ export async function completeGmailOAuth(args: {
     }
 
     const profile = await fetchGmailProfile(token.access_token)
+    const existing = resolveGmailToken().token
+    const sameExistingAccount =
+        existing?.accountEmail?.toLowerCase() === profile.emailAddress?.toLowerCase()
+    const refreshToken = token.refresh_token || (sameExistingAccount ? existing?.refreshToken : undefined)
+    if (!refreshToken) throw new Error('Google did not return a refresh token. Reconnect and approve offline access.')
     const now = Date.now()
-    writeTokenRecord({
-        version: 1,
-        provider: 'gmail',
-        clientId: config.clientId,
-        accountEmail: profile.emailAddress,
-        accessToken: token.access_token,
-        refreshToken,
-        tokenType: token.token_type,
-        scope: grantedScopes,
-        scopesRequested: [...GMAIL_SCOPES],
-        expiresAt: now + Math.max(0, token.expires_in ?? 3600) * 1000,
-        obtainedAt: existing?.obtainedAt ?? now,
-        updatedAt: now,
+    saveGoogleAccountTokenForActiveProfile({
+        provider: GMAIL_CONNECTION_PROVIDER,
+        tokenProvider: 'gmail',
+        legacyTokenPath: gmailTokenPath(),
+        token: {
+            version: 1,
+            provider: 'gmail',
+            clientId: config.clientId,
+            accountEmail: profile.emailAddress,
+            accessToken: token.access_token,
+            refreshToken,
+            tokenType: token.token_type,
+            scope: grantedScopes,
+            scopesRequested: [...GMAIL_SCOPES],
+            expiresAt: now + Math.max(0, token.expires_in ?? 3600) * 1000,
+            obtainedAt: sameExistingAccount ? existing?.obtainedAt ?? now : now,
+            updatedAt: now,
+        },
     })
 
     return { accountEmail: profile.emailAddress ?? null }
 }
 
-export async function disconnectGmail(origin: string): Promise<void> {
-    const token = readTokenRecord()
+export async function disconnectGmail(origin: string, connectionId?: string): Promise<void> {
+    const resolved = clearGoogleAccountToken({
+        provider: GMAIL_CONNECTION_PROVIDER,
+        tokenProvider: 'gmail',
+        legacyTokenPath: gmailTokenPath(),
+        connectionId,
+    })
+    const token = resolved.token
     if (!token) return
 
     const config = getGmailOAuthConfig(origin)
@@ -420,7 +434,6 @@ export async function disconnectGmail(origin: string): Promise<void> {
         }).catch(() => undefined)
     }
 
-    clearTokenRecord()
 }
 
 export async function gmailSearchMessages(query: string, maxResults: number): Promise<{
@@ -470,7 +483,7 @@ export async function gmailReadThread(threadId: string, maxChars: number): Promi
 }
 
 export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<GmailDraftResult> {
-    const token = await getValidTokenRecord()
+    const { token } = await getValidTokenRecord()
     const to = cleanAddressList(input.to)
     const cc = cleanAddressList(input.cc ?? [])
     const bcc = cleanAddressList(input.bcc ?? [])
@@ -535,7 +548,7 @@ export async function gmailSendDraft(draftId: string): Promise<GmailSendResult> 
 }
 
 export async function gmailSendMessage(input: GmailCreateDraftInput): Promise<GmailSendResult> {
-    const token = await getValidTokenRecord()
+    const { token } = await getValidTokenRecord()
     const to = cleanAddressList(input.to)
     const cc = cleanAddressList(input.cc ?? [])
     const bcc = cleanAddressList(input.bcc ?? [])
@@ -980,7 +993,8 @@ async function getReplyHeaders(threadId: string): Promise<{ inReplyTo?: string; 
 }
 
 async function gmailApi<T>(pathAndQuery: string, init: RequestInit = {}, retry = true): Promise<T> {
-    const token = await getValidTokenRecord()
+    const session = await getValidTokenRecord()
+    const token = session.token
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${token.accessToken}`)
     headers.set('Accept', 'application/json')
@@ -991,7 +1005,7 @@ async function gmailApi<T>(pathAndQuery: string, init: RequestInit = {}, retry =
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGmailToken(token, getGmailOAuthConfig('http://localhost:3000'))
+        await refreshGmailToken(token, getGmailOAuthConfig('http://localhost:3000'), session.tokenPath)
         return gmailApi<T>(pathAndQuery, init, false)
     }
 
@@ -1005,14 +1019,44 @@ async function gmailApi<T>(pathAndQuery: string, init: RequestInit = {}, retry =
     return JSON.parse(text) as T
 }
 
-async function getValidTokenRecord(): Promise<GmailTokenRecord> {
-    const token = readTokenRecord()
+async function getValidTokenRecord(): Promise<{ token: GmailTokenRecord; tokenPath: string }> {
+    const resolved = resolveGmailToken()
+    const token = resolved.token
     if (!token) throw new Error('Gmail is not connected. Connect it from Settings > Auth.')
-    if (token.expiresAt > Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS) return token
+    if (token.expiresAt > Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS) {
+        return { token, tokenPath: resolved.tokenPath }
+    }
     if (!token.refreshToken) throw new Error('Gmail session expired. Reconnect Gmail from Settings > Auth.')
 
-    const refreshed = await refreshGmailToken(token, getGmailOAuthConfig('http://localhost:3000'))
-    return refreshed
+    const refreshed = await refreshGmailToken(
+        token,
+        getGmailOAuthConfig('http://localhost:3000'),
+        resolved.tokenPath
+    )
+    return { token: refreshed, tokenPath: resolved.tokenPath }
+}
+
+type ResolvedGmailToken = Omit<ReturnType<typeof resolveGoogleAccountToken>, 'token'> & {
+    token: GmailTokenRecord | null
+}
+
+function resolveGmailToken(): ResolvedGmailToken {
+    const resolved = resolveGoogleAccountToken({
+        provider: GMAIL_CONNECTION_PROVIDER,
+        tokenProvider: 'gmail',
+        legacyTokenPath: gmailTokenPath(),
+    })
+    return {
+        ...resolved,
+        token: asGmailTokenRecord(resolved.token),
+    }
+}
+
+function asGmailTokenRecord(
+    token: ReturnType<typeof resolveGoogleAccountToken>['token']
+): GmailTokenRecord | null {
+    if (!token || token.provider !== 'gmail') return null
+    return { ...token, provider: 'gmail' }
 }
 
 async function exchangeAuthorizationCode(code: string, config: OAuthConfig): Promise<OAuthTokenResponse> {
@@ -1036,7 +1080,11 @@ async function exchangeAuthorizationCode(code: string, config: OAuthConfig): Pro
     return json
 }
 
-async function refreshGmailToken(token: GmailTokenRecord, config: OAuthConfig): Promise<GmailTokenRecord> {
+async function refreshGmailToken(
+    token: GmailTokenRecord,
+    config: OAuthConfig,
+    tokenPath: string
+): Promise<GmailTokenRecord> {
     if (!token.refreshToken) throw new Error('No Gmail refresh token is available.')
     if (!config.clientId || !config.clientSecret) {
         throw new Error(`Missing Google OAuth config: ${config.missing.join(', ')}`)
@@ -1067,7 +1115,7 @@ async function refreshGmailToken(token: GmailTokenRecord, config: OAuthConfig): 
         expiresAt: now + Math.max(0, json.expires_in ?? 3600) * 1000,
         updatedAt: now,
     }
-    writeTokenRecord(updated)
+    writeTokenRecord(updated, tokenPath)
     return updated
 }
 
@@ -1097,40 +1145,8 @@ async function responseErrorText(response: Response): Promise<string> {
     return text.slice(0, 1000)
 }
 
-function readTokenRecord(): GmailTokenRecord | null {
-    try {
-        if (!fs.existsSync(gmailTokenPath())) return null
-        const parsed = JSON.parse(fs.readFileSync(gmailTokenPath(), 'utf-8')) as Partial<GmailTokenRecord>
-        if (parsed.provider !== 'gmail' || typeof parsed.accessToken !== 'string') return null
-        return {
-            version: 1,
-            provider: 'gmail',
-            clientId: String(parsed.clientId ?? ''),
-            accountEmail: typeof parsed.accountEmail === 'string' ? parsed.accountEmail : undefined,
-            accessToken: parsed.accessToken,
-            refreshToken: typeof parsed.refreshToken === 'string' ? parsed.refreshToken : undefined,
-            tokenType: typeof parsed.tokenType === 'string' ? parsed.tokenType : undefined,
-            scope: Array.isArray(parsed.scope) ? parsed.scope.filter(isString) : [],
-            scopesRequested: Array.isArray(parsed.scopesRequested) ? parsed.scopesRequested.filter(isString) : [],
-            expiresAt: typeof parsed.expiresAt === 'number' ? parsed.expiresAt : 0,
-            obtainedAt: typeof parsed.obtainedAt === 'number' ? parsed.obtainedAt : 0,
-            updatedAt: typeof parsed.updatedAt === 'number' ? parsed.updatedAt : 0,
-        }
-    } catch {
-        return null
-    }
-}
-
-function writeTokenRecord(record: GmailTokenRecord): void {
-    writePrivateJson(gmailTokenPath(), record)
-}
-
-function clearTokenRecord(): void {
-    try {
-        fs.unlinkSync(gmailTokenPath())
-    } catch {
-        // Already disconnected.
-    }
+function writeTokenRecord(record: GmailTokenRecord, tokenPath: string): void {
+    writePrivateJson(tokenPath, record)
 }
 
 function readOAuthStates(): OAuthStateRecord[] {
@@ -1321,10 +1337,6 @@ function parseScopeList(scope: string | undefined): string[] {
 function missingRequiredGmailScopes(scopes: string[]): string[] {
     if (scopes.includes(GMAIL_FULL_ACCESS_SCOPE)) return []
     return GMAIL_SCOPES.filter(scope => !scopes.includes(scope))
-}
-
-function isString(value: unknown): value is string {
-    return typeof value === 'string'
 }
 
 function gmailTargetPath(targetType: GmailModifyTargetType): 'messages' | 'threads' {

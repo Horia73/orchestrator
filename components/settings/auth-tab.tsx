@@ -55,6 +55,8 @@ type OAuthMessage = {
   message?: string
 }
 
+type GoogleConnectionProvider = "gmail" | "google_calendar" | "google_drive"
+
 export function AuthTab() {
   return (
     <div className="flex flex-col gap-6">
@@ -200,6 +202,10 @@ function ConnectedServicesSection() {
     try {
       const res = await fetch("/api/integrations/gmail/disconnect", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId: data?.gmail.connection?.id,
+        }),
       })
       const json = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok)
@@ -240,6 +246,36 @@ function ConnectedServicesSection() {
             : "Could not save Gmail OAuth config.",
       })
       return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const selectGoogleConnection = async (
+    provider: GoogleConnectionProvider,
+    connectionId: string
+  ) => {
+    setBusy("google-account-select")
+    setFeedback(null)
+    try {
+      const res = await fetch("/api/integrations/google/connections", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, connectionId }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok)
+        throw new Error(json.error || `Selection failed (${res.status})`)
+      setFeedback({ tone: "success", text: "Default Google account updated." })
+      await refresh()
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Could not update the default Google account.",
+      })
     } finally {
       setBusy(null)
     }
@@ -299,6 +335,10 @@ function ConnectedServicesSection() {
     try {
       const res = await fetch("/api/integrations/google-calendar/disconnect", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId: data?.googleCalendar.connection?.id,
+        }),
       })
       const json = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok)
@@ -405,6 +445,10 @@ function ConnectedServicesSection() {
     try {
       const res = await fetch("/api/integrations/google-drive/disconnect", {
         method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          connectionId: data?.googleDrive.connection?.id,
+        }),
       })
       const json = (await res.json().catch(() => ({}))) as { error?: string }
       if (!res.ok)
@@ -476,11 +520,11 @@ function ConnectedServicesSection() {
         text: json.status.connected
           ? "WhatsApp connected."
           : json.status.qrAvailable
-            ? "Scan the WhatsApp QR code with your phone."
-            : json.status.phase === "authenticated" ||
-                json.status.phase === "starting"
-              ? "WhatsApp is linking. It will switch to Connected as soon as WhatsApp Web is ready."
-              : "WhatsApp is starting. The QR code will appear here when ready.",
+	            ? "Scan the WhatsApp QR code with your phone."
+	            : json.status.phase === "authenticated" ||
+	                json.status.phase === "starting"
+	              ? "WhatsApp is linking. It will switch to Connected as soon as the companion session is ready."
+	              : "WhatsApp is starting. The QR code will appear here when ready.",
       })
       await refresh()
     } catch (err) {
@@ -493,10 +537,10 @@ function ConnectedServicesSection() {
     }
   }
 
-  const disconnectWhatsApp = async () => {
-    const confirmed = window.confirm(
-      "Disconnect WhatsApp from Orchestrator? Stored local WhatsApp Web session files will be removed."
-    )
+	  const disconnectWhatsApp = async () => {
+	    const confirmed = window.confirm(
+	      "Disconnect WhatsApp from Orchestrator? Stored local WhatsApp companion session files will be removed."
+	    )
     if (!confirmed) return
     setBusy("whatsapp-disconnect")
     setFeedback(null)
@@ -714,6 +758,9 @@ function ConnectedServicesSection() {
             onConnect={connectGmail}
             onDisconnect={disconnectGmail}
             onSaveConfig={saveGmailConfig}
+            onSelectConnection={(connectionId) =>
+              selectGoogleConnection("gmail", connectionId)
+            }
           />
         )
       case "whatsapp":
@@ -734,6 +781,9 @@ function ConnectedServicesSection() {
             onConnect={connectGoogleCalendar}
             onDisconnect={disconnectGoogleCalendar}
             onSaveConfig={saveGoogleCalendarConfig}
+            onSelectConnection={(connectionId) =>
+              selectGoogleConnection("google_calendar", connectionId)
+            }
           />
         )
       case "googleDrive":
@@ -745,6 +795,9 @@ function ConnectedServicesSection() {
             onConnect={connectGoogleDrive}
             onDisconnect={disconnectGoogleDrive}
             onSaveConfig={saveGoogleDriveConfig}
+            onSelectConnection={(connectionId) =>
+              selectGoogleConnection("google_drive", connectionId)
+            }
           />
         )
       case "homeAssistant":

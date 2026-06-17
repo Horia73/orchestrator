@@ -93,8 +93,8 @@ function homeAssistantFingerprint(status: HomeAssistantIntegrationStatus | null)
 
 function whatsappFingerprint(status: WhatsAppIntegrationStatus | null): string | null {
     if (!status?.connected) return null
-    // lastReadyAt updates on every fresh wwebjs "ready" event — exactly the
-    // signal we want. Fall back to phoneNumber/accountName when missing.
+    // lastReadyAt updates on fresh companion-session readiness events — exactly
+    // the signal we want. Fall back to phoneNumber/accountName when missing.
     return `${status.phoneNumber ?? status.accountName ?? "-"}:${status.lastReadyAt ?? "0"}`
 }
 

@@ -1,23 +1,26 @@
 import path from 'path'
 
+import {
+    clearGoogleAccountToken,
+    resolveGoogleAccountToken,
+    saveGoogleAccountTokenForActiveProfile,
+    type GoogleAccountConnectionStatus,
+} from '@/lib/integrations/oauth-connections'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS,
     type GoogleOAuthConfigInput,
     type GoogleOAuthProviderConfig,
     type GoogleOAuthTokenRecord,
-    clearGoogleOAuthToken,
     exchangeGoogleOAuthCode,
     getGoogleOAuthConfig,
     missingGoogleScopes,
     parseScopeList,
-    readGoogleOAuthToken,
     refreshGoogleOAuthToken,
     responseErrorText,
     revokeGoogleOAuthToken,
     saveGoogleOAuthClientConfig,
     startGoogleOAuth,
-    writeGoogleOAuthToken,
 } from './google-oauth'
 import {
     assignOptional,
@@ -52,6 +55,7 @@ export type {
 
 const GOOGLE_DRIVE_API_BASE = 'https://www.googleapis.com/drive/v3'
 const GOOGLE_DRIVE_UPLOAD_BASE = 'https://www.googleapis.com/upload/drive/v3'
+const GOOGLE_DRIVE_CONNECTION_PROVIDER = 'google_drive'
 function googleDriveTokenPath(): string {
     return path.join(activeRuntimePaths().privateStateDir, 'auth', 'google-drive.json')
 }
@@ -127,6 +131,8 @@ export interface GoogleDriveIntegrationStatus {
     connected: boolean
     accountEmail: string | null
     accountName: string | null
+    connection: GoogleAccountConnectionStatus | null
+    availableConnections: GoogleAccountConnectionStatus[]
     scopes: string[]
     requestedScopes: string[]
     missingConfig: string[]
@@ -256,14 +262,16 @@ interface DrivePermissionsResponse {
 
 export async function getGoogleDriveIntegrationStatus(origin: string, refresh = true): Promise<GoogleDriveIntegrationStatus> {
     const config = getGoogleOAuthConfig(origin, GOOGLE_DRIVE_PROVIDER)
-    let token = readDriveToken()
+    let resolved = resolveDriveToken()
+    let token = resolved.token
     let error: string | undefined
     let refreshFailed = false
 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
-            token = await refreshGoogleOAuthToken(token, config, googleDriveTokenPath())
+            token = await refreshGoogleOAuthToken(token, config, resolved.tokenPath)
+            resolved = resolveDriveToken()
         } catch (err) {
             refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Google Workspace token'
@@ -291,6 +299,8 @@ export async function getGoogleDriveIntegrationStatus(origin: string, refresh = 
         connected: Boolean(token?.accessToken || token?.refreshToken),
         accountEmail: token?.accountEmail || about?.user?.emailAddress || null,
         accountName: about?.user?.displayName ?? null,
+        connection: resolved.connection,
+        availableConnections: resolved.availableConnections,
         scopes,
         requestedScopes: [...GOOGLE_DRIVE_SCOPES],
         missingConfig: config.missing,
@@ -361,10 +371,7 @@ export async function completeGoogleDriveOAuth(args: {
         state: args.state,
         code: args.code,
     })
-    const existing = readDriveToken()
-    const refreshToken = token.refresh_token || existing?.refreshToken
     if (!token.access_token) throw new Error('Google did not return an access token.')
-    if (!refreshToken) throw new Error('Google did not return a refresh token. Reconnect and approve offline access.')
 
     const grantedScopes = parseScopeList(token.scope)
     const missingScopes = missingGoogleScopes(grantedScopes, GOOGLE_DRIVE_SCOPES)
@@ -373,29 +380,43 @@ export async function completeGoogleDriveOAuth(args: {
     }
 
     const profile = await fetchDriveProfile(token.access_token)
+    const existing = resolveDriveToken().token
+    const sameExistingAccount =
+        existing?.accountEmail?.toLowerCase() === profile.accountEmail?.toLowerCase()
+    const refreshToken = token.refresh_token || (sameExistingAccount ? existing?.refreshToken : undefined)
+    if (!refreshToken) throw new Error('Google did not return a refresh token. Reconnect and approve offline access.')
     const now = Date.now()
-    writeGoogleOAuthToken(googleDriveTokenPath(), {
-        version: 1,
-        provider: GOOGLE_DRIVE_PROVIDER.provider,
-        clientId: config.clientId,
-        accountEmail: profile.accountEmail ?? undefined,
-        accessToken: token.access_token,
-        refreshToken,
-        tokenType: token.token_type,
-        scope: grantedScopes,
-        scopesRequested: [...GOOGLE_DRIVE_SCOPES],
-        expiresAt: now + Math.max(0, token.expires_in ?? 3600) * 1000,
-        obtainedAt: existing?.obtainedAt ?? now,
-        updatedAt: now,
+    saveGoogleAccountTokenForActiveProfile({
+        provider: GOOGLE_DRIVE_CONNECTION_PROVIDER,
+        tokenProvider: GOOGLE_DRIVE_PROVIDER.provider,
+        legacyTokenPath: googleDriveTokenPath(),
+        token: {
+            version: 1,
+            provider: GOOGLE_DRIVE_PROVIDER.provider,
+            clientId: config.clientId,
+            accountEmail: profile.accountEmail ?? undefined,
+            accessToken: token.access_token,
+            refreshToken,
+            tokenType: token.token_type,
+            scope: grantedScopes,
+            scopesRequested: [...GOOGLE_DRIVE_SCOPES],
+            expiresAt: now + Math.max(0, token.expires_in ?? 3600) * 1000,
+            obtainedAt: sameExistingAccount ? existing?.obtainedAt ?? now : now,
+            updatedAt: now,
+        },
     })
 
     return { accountEmail: profile.accountEmail }
 }
 
-export async function disconnectGoogleDrive(): Promise<GoogleDriveIntegrationStatus> {
-    const token = readDriveToken()
-    await revokeGoogleOAuthToken(token)
-    clearGoogleOAuthToken(googleDriveTokenPath())
+export async function disconnectGoogleDrive(connectionId?: string): Promise<GoogleDriveIntegrationStatus> {
+    const resolved = clearGoogleAccountToken({
+        provider: GOOGLE_DRIVE_CONNECTION_PROVIDER,
+        tokenProvider: GOOGLE_DRIVE_PROVIDER.provider,
+        legacyTokenPath: googleDriveTokenPath(),
+        connectionId,
+    })
+    await revokeGoogleOAuthToken(resolved.token)
     return getGoogleDriveIntegrationStatus(DEFAULT_ORIGIN, false)
 }
 
@@ -754,7 +775,8 @@ async function fetchDriveProfile(accessToken: string): Promise<{ accountEmail: s
 }
 
 async function driveApi<T>(pathAndQuery: string, init: RequestInit = {}, retry = true): Promise<T> {
-    const token = await getValidDriveToken()
+    const session = await getValidDriveToken()
+    const token = session.token
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${token.accessToken}`)
     headers.set('Accept', 'application/json')
@@ -766,7 +788,11 @@ async function driveApi<T>(pathAndQuery: string, init: RequestInit = {}, retry =
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
+        await refreshGoogleOAuthToken(
+            token,
+            getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER),
+            session.tokenPath
+        )
         return driveApi<T>(pathAndQuery, init, false)
     }
 
@@ -786,7 +812,8 @@ export async function googleWorkspaceJson<T>(
     init: RequestInit = {},
     retry = true
 ): Promise<T> {
-    const token = await getValidDriveToken()
+    const session = await getValidDriveToken()
+    const token = session.token
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${token.accessToken}`)
     headers.set('Accept', 'application/json')
@@ -798,7 +825,11 @@ export async function googleWorkspaceJson<T>(
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
+        await refreshGoogleOAuthToken(
+            token,
+            getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER),
+            session.tokenPath
+        )
         return googleWorkspaceJson<T>(baseUrl, pathAndQuery, init, false)
     }
 
@@ -813,7 +844,8 @@ export async function googleWorkspaceJson<T>(
 }
 
 async function driveBytes(pathAndQuery: string, maxBytes: number, retry = true): Promise<Buffer> {
-    const token = await getValidDriveToken()
+    const session = await getValidDriveToken()
+    const token = session.token
     const response = await fetch(`${GOOGLE_DRIVE_API_BASE}${pathAndQuery}`, {
         headers: {
             Authorization: `Bearer ${token.accessToken}`,
@@ -822,7 +854,11 @@ async function driveBytes(pathAndQuery: string, maxBytes: number, retry = true):
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
+        await refreshGoogleOAuthToken(
+            token,
+            getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER),
+            session.tokenPath
+        )
         return driveBytes(pathAndQuery, maxBytes, false)
     }
 
@@ -845,7 +881,8 @@ async function driveMultipart<T>(
     mimeType: string,
     retry = true
 ): Promise<T> {
-    const token = await getValidDriveToken()
+    const session = await getValidDriveToken()
+    const token = session.token
     const boundary = `orchestrator_${Math.random().toString(16).slice(2)}`
     const body = Buffer.concat([
         Buffer.from(`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(metadata)}\r\n`),
@@ -865,7 +902,11 @@ async function driveMultipart<T>(
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
+        await refreshGoogleOAuthToken(
+            token,
+            getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER),
+            session.tokenPath
+        )
         return driveMultipart<T>(pathAndQuery, method, metadata, bytes, mimeType, false)
     }
 
@@ -877,16 +918,28 @@ async function driveMultipart<T>(
     return (text ? JSON.parse(text) : undefined) as T
 }
 
-async function getValidDriveToken(): Promise<GoogleOAuthTokenRecord> {
-    const token = readDriveToken()
+async function getValidDriveToken(): Promise<{ token: GoogleOAuthTokenRecord; tokenPath: string }> {
+    const resolved = resolveDriveToken()
+    const token = resolved.token
     if (!token) throw new Error('Google Workspace is not connected. Connect it from Settings > Auth.')
-    if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) return token
+    if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) {
+        return { token, tokenPath: resolved.tokenPath }
+    }
     if (!token.refreshToken) throw new Error('Google Workspace session expired. Reconnect Google Workspace from Settings > Auth.')
-    return refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER), googleDriveTokenPath())
+    const refreshed = await refreshGoogleOAuthToken(
+        token,
+        getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER),
+        resolved.tokenPath
+    )
+    return { token: refreshed, tokenPath: resolved.tokenPath }
 }
 
-function readDriveToken(): GoogleOAuthTokenRecord | null {
-    return readGoogleOAuthToken(googleDriveTokenPath(), GOOGLE_DRIVE_PROVIDER.provider)
+function resolveDriveToken() {
+    return resolveGoogleAccountToken({
+        provider: GOOGLE_DRIVE_CONNECTION_PROVIDER,
+        tokenProvider: GOOGLE_DRIVE_PROVIDER.provider,
+        legacyTokenPath: googleDriveTokenPath(),
+    })
 }
 
 function fileQueryParams(): URLSearchParams {

@@ -5,6 +5,8 @@ import { execFileSync } from 'child_process'
 import { createRequire } from 'module'
 
 import { getEnvValue } from '@/lib/config'
+import { appEventEmitter } from '@/lib/events'
+import { runWithProfileContext } from '@/lib/profiles/context'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { normalizeTimezone } from '@/lib/timezone'
 
@@ -18,6 +20,7 @@ import {
     sendOptions,
     unreadChatSummary,
 } from './whatsapp-formatting'
+import { BaileysWhatsAppManager } from './whatsapp-baileys'
 
 import type { Chat, Client, Message, MessageSendOptions } from 'whatsapp-web.js'
 
@@ -58,6 +61,7 @@ export interface WhatsAppIntegrationStatus {
     id: 'whatsapp'
     name: string
     description: string
+    provider: WhatsAppProviderKind
     configured: boolean
     connected: boolean
     accountName: string | null
@@ -76,6 +80,33 @@ export interface WhatsAppIntegrationStatus {
     missingConfig: string[]
     needsReconnect: boolean
     capabilities: string[]
+}
+
+export type WhatsAppProviderKind = 'baileys' | 'wwebjs' | 'disabled'
+
+interface WhatsAppRuntime {
+    getStatus(origin?: string): Promise<WhatsAppIntegrationStatus>
+    start(origin?: string): Promise<WhatsAppStartResult>
+    disconnect(): Promise<void>
+    stopRuntime?(): Promise<void>
+    getQrPng(): Promise<Buffer | null>
+    listChats(maxResults: number): Promise<{ chats: WhatsAppChatSummary[] }>
+    unreadSummary(maxResults: number): Promise<WhatsAppUnreadSummary>
+    readChat(chatId: string, maxMessages: number, maxChars: number): Promise<WhatsAppReadChatResult>
+    searchMessages(args: {
+        query: string
+        chatId?: string
+        maxResults: number
+        maxChats: number
+        perChatLimit: number
+    }): Promise<WhatsAppSearchResult>
+    findMessages(args: WhatsAppFindMessagesArgs): Promise<WhatsAppFindMessagesResult>
+    sendMessage(chatId: string, body: string, options?: WhatsAppSendOptions): Promise<WhatsAppSendMessageResult>
+    sendMedia(chatId: string, attachments: WhatsAppOutgoingAttachment[], caption?: string, options?: WhatsAppSendOptions): Promise<WhatsAppSendMediaResult>
+    markChatRead(chatId: string): Promise<WhatsAppMarkChatResult>
+    markChatUnread(chatId: string): Promise<WhatsAppMarkChatResult>
+    deleteMessageForEveryone(messageId: string): Promise<WhatsAppDeleteMessageResult>
+    downloadMessageMedia(messageId: string): Promise<WhatsAppDownloadedMedia>
 }
 
 export interface WhatsAppStartResult {
@@ -315,7 +346,6 @@ class WhatsAppManager {
     }
 
     async getStatus(origin?: string): Promise<WhatsAppIntegrationStatus> {
-        this.resumeStoredSessionForStatus()
         return this.status(origin, { checkHealth: false })
     }
 
@@ -355,6 +385,22 @@ class WhatsAppManager {
         fs.rmSync(/* turbopackIgnore: true */ authBaseDir(), { recursive: true, force: true })
         this.state.accountName = null
         this.state.phoneNumber = null
+        this.state.lastSyncAt = Date.now()
+    }
+
+    async stopRuntime(): Promise<void> {
+        const client = this.client
+        this.client = null
+        this.initializePromise = null
+        this.state.phase = 'disconnected'
+        this.clearQr()
+        if (client) {
+            try {
+                await client.destroy()
+            } catch {
+                // Runtime stop is best-effort; it intentionally preserves local auth.
+            }
+        }
         this.state.lastSyncAt = Date.now()
     }
 
@@ -1224,7 +1270,7 @@ class WhatsAppManager {
         const startedAt = Date.now()
         while (Date.now() - startedAt < timeoutMs) {
             if (this.state.phase === 'qr' || this.state.phase === 'ready') return
-            if (this.state.phase === 'error' || this.state.phase === 'auth_failure') return
+            if (this.state.phase === 'error' || this.state.phase === 'auth_failure' || this.state.phase === 'disconnected') return
             await sleep(250)
         }
     }
@@ -1287,7 +1333,7 @@ class WhatsAppManager {
         const startedAt = Date.now()
         while (Date.now() - startedAt < timeoutMs) {
             if (this.state.phase === 'ready') return
-            if (this.state.phase === 'qr' || this.state.phase === 'error' || this.state.phase === 'auth_failure') return
+            if (this.state.phase === 'qr' || this.state.phase === 'error' || this.state.phase === 'auth_failure' || this.state.phase === 'disconnected') return
             await sleep(250)
         }
     }
@@ -1426,6 +1472,7 @@ class WhatsAppManager {
             id: 'whatsapp',
             name: 'WhatsApp',
             description: 'Local WhatsApp Web session using your own linked device. Read tools are available; sending media/messages and deleting messages for everyone require explicit confirmation.',
+            provider: 'wwebjs',
             configured: Boolean(browserExecutablePath),
             connected,
             accountName: this.state.accountName,
@@ -1448,13 +1495,117 @@ class WhatsAppManager {
     }
 }
 
-declare global {
-    var __orchestratorWhatsAppManager: WhatsAppManager | undefined
+class DisabledWhatsAppManager implements WhatsAppRuntime {
+    async getStatus(): Promise<WhatsAppIntegrationStatus> {
+        return {
+            id: 'whatsapp',
+            name: 'WhatsApp',
+            description: 'WhatsApp integration is disabled by WHATSAPP_PROVIDER=disabled.',
+            provider: 'disabled',
+            configured: false,
+            connected: false,
+            accountName: null,
+            phoneNumber: null,
+            phase: 'idle',
+            sessionStored: false,
+            qrAvailable: false,
+            qrDataUrl: null,
+            qrImageUrl: null,
+            qrUpdatedAt: null,
+            qrExpiresAt: null,
+            lastReadyAt: null,
+            lastSyncAt: null,
+            lastError: 'WhatsApp integration is disabled.',
+            browserExecutablePath: null,
+            missingConfig: ['WHATSAPP_PROVIDER is disabled'],
+            needsReconnect: true,
+            capabilities: ['status'],
+        }
+    }
+
+    async start(): Promise<WhatsAppStartResult> {
+        throw disabledError()
+    }
+    async disconnect(): Promise<void> { }
+    async getQrPng(): Promise<Buffer | null> { return null }
+    async listChats(): Promise<{ chats: WhatsAppChatSummary[] }> { throw disabledError() }
+    async unreadSummary(): Promise<WhatsAppUnreadSummary> { throw disabledError() }
+    async readChat(): Promise<WhatsAppReadChatResult> { throw disabledError() }
+    async searchMessages(): Promise<WhatsAppSearchResult> { throw disabledError() }
+    async findMessages(): Promise<WhatsAppFindMessagesResult> { throw disabledError() }
+    async sendMessage(): Promise<WhatsAppSendMessageResult> { throw disabledError() }
+    async sendMedia(): Promise<WhatsAppSendMediaResult> { throw disabledError() }
+    async markChatRead(): Promise<WhatsAppMarkChatResult> { throw disabledError() }
+    async markChatUnread(): Promise<WhatsAppMarkChatResult> { throw disabledError() }
+    async deleteMessageForEveryone(): Promise<WhatsAppDeleteMessageResult> { throw disabledError() }
+    async downloadMessageMedia(): Promise<WhatsAppDownloadedMedia> { throw disabledError() }
 }
 
-function manager(): WhatsAppManager {
-    globalThis.__orchestratorWhatsAppManager ??= new WhatsAppManager()
-    return globalThis.__orchestratorWhatsAppManager
+declare global {
+    var __orchestratorWhatsAppManagers: Record<string, WhatsAppRuntime> | undefined
+    var __orchestratorWhatsAppEnvListenerInstalled: boolean | undefined
+}
+
+function manager(): WhatsAppRuntime {
+    installWhatsAppEnvListener()
+    const provider = resolveWhatsAppProvider()
+    const profileId = activeRuntimePaths().profileId
+    const key = `${profileId}:${provider}`
+    globalThis.__orchestratorWhatsAppManagers ??= {}
+    stopInactiveProfileManagers(profileId, provider)
+    const existing = globalThis.__orchestratorWhatsAppManagers[key]
+    if (existing) return existing
+
+    const created: WhatsAppRuntime = provider === 'baileys'
+        ? new BaileysWhatsAppManager()
+        : provider === 'disabled'
+            ? new DisabledWhatsAppManager()
+            : new WhatsAppManager()
+    globalThis.__orchestratorWhatsAppManagers[key] = created
+    return created
+}
+
+function stopInactiveProfileManagers(profileId: string, activeProvider: WhatsAppProviderKind): void {
+    const prefix = `${profileId}:`
+    const managers = globalThis.__orchestratorWhatsAppManagers
+    if (!managers) return
+    for (const [key, runtime] of Object.entries(managers)) {
+        if (!key.startsWith(prefix) || key === `${profileId}:${activeProvider}`) continue
+        delete managers[key]
+        void (runtime.stopRuntime?.() ?? runtime.disconnect()).catch(err => {
+            console.warn('[whatsapp] failed to stop inactive provider runtime', err)
+        })
+    }
+}
+
+function installWhatsAppEnvListener(): void {
+    if (globalThis.__orchestratorWhatsAppEnvListenerInstalled) return
+    globalThis.__orchestratorWhatsAppEnvListenerInstalled = true
+    appEventEmitter.on('app:update', event => {
+        if (event?.type !== 'settings.changed' || event.reason !== 'env') return
+        const profileId = event.profileId
+        if (!profileId) return
+        try {
+            runWithProfileContext({ profileId }, () => {
+                const provider = resolveWhatsAppProvider()
+                stopInactiveProfileManagers(activeRuntimePaths().profileId, provider)
+            })
+        } catch (err) {
+            console.warn('[whatsapp] failed to reconcile provider after env change', err)
+        }
+    })
+}
+
+function resolveWhatsAppProvider(): WhatsAppProviderKind {
+    const raw = (getEnvValue('WHATSAPP_PROVIDER') || 'baileys').trim().toLowerCase()
+    if (raw === 'baileys') return 'baileys'
+    if (raw === 'wwebjs' || raw === 'whatsapp-web.js' || raw === 'whatsapp_web_js') return 'wwebjs'
+    if (raw === 'disabled' || raw === 'off' || raw === 'false' || raw === '0') return 'disabled'
+    return 'baileys'
+}
+
+function disabledError(): Error {
+    return new Error('WhatsApp integration is disabled by WHATSAPP_PROVIDER=disabled.')
 }
 
 export function getWhatsAppIntegrationStatus(origin?: string): Promise<WhatsAppIntegrationStatus> {

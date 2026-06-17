@@ -187,7 +187,7 @@ export interface BrowserPageSession {
     readClipboard(): Promise<string | null>;
     clear(): Promise<void>;
     pressKey(key: string): Promise<void>;
-    findInPage(query: string, next?: boolean): Promise<void>;
+    findInPage(query: string, next?: boolean): Promise<{ found: boolean; count: number }>;
     scroll(direction: 'up' | 'down' | 'left' | 'right', amount?: number): Promise<void>;
     scrollToBottom(): Promise<void>;
     undo(): Promise<void>;

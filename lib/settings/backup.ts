@@ -23,13 +23,15 @@ export const BACKUP_FORMAT_VERSION = 1
 const STAGING_DIR = path.join(/* turbopackIgnore: true */ ORCHESTRATOR_STATE_DIR, '.restore-staging')
 
 /**
- * `private/` subdirectories deliberately left out of backups: live browser
- * profiles (WhatsApp Web, the browser agent) are not crash-consistent while the
- * app runs and are tied to the browser build, and the codex CLI home / map
- * tiles are large, regenerable caches. Re-link those sessions after a restore.
+ * `private/` subdirectories deliberately left out of backups: live companion
+ * session state (Baileys WhatsApp auth files, legacy WhatsApp Web browser
+ * profile, browser-agent profile) is not a portable crash-consistent credential
+ * backup, and the codex CLI home / map tiles are large, regenerable caches.
+ * Re-link those sessions after a restore.
  */
 const PRIVATE_EXCLUDES = new Set([
     'whatsapp-web',
+    'whatsapp-baileys',
     'browser-agent',
     'codex-runtime-home',
     'maps-static-cache',
@@ -37,10 +39,12 @@ const PRIVATE_EXCLUDES = new Set([
 
 const EXCLUDED_FOR_MANIFEST = [
     'private/whatsapp-web',
+    'private/whatsapp-baileys',
     'private/browser-agent',
     'private/codex-runtime-home',
     'private/maps-static-cache',
     'profiles/*/private/whatsapp-web',
+    'profiles/*/private/whatsapp-baileys',
     'profiles/*/private/browser-agent',
     'profiles/*/private/codex-runtime-home',
     'profiles/*/private/maps-static-cache',

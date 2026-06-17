@@ -34,6 +34,7 @@ const nextConfig = {
   serverExternalPackages: [
     "better-sqlite3",
     "node-pty",
+    "baileys",
     "whatsapp-web.js",
     "puppeteer",
     "patchright",

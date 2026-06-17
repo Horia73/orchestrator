@@ -99,6 +99,17 @@ export function ChatView() {
     streamMessageId: string | null
     anchor: SavedScrollRestore
   } | null>(null)
+  // Last-known on-screen position of the streaming answer's bottom, captured each
+  // streaming frame. At finalize the working trace ("Worked for …") folds shut; if
+  // it was scrolled above the fold the collapse silently yanks the answer up. This
+  // lets the finalize effect measure that shift and undo it — a message-level anchor
+  // can't, because the collapse is *internal* (the message top never moves).
+  const finalizeAnchorRef = React.useRef<{
+    conversationId: string
+    contentBottomOffset: number
+    distanceFromBottom: number
+  } | null>(null)
+  const latestAssistantIdRef = React.useRef<string | null>(null)
   const pendingLocalSubmitAnchorRef =
     React.useRef<LocalSubmitAnchor | null>(null)
   // Deep-link "scroll to this message" target (Library → "View in chat").
@@ -242,7 +253,8 @@ export function ChatView() {
   React.useLayoutEffect(() => {
     isStreamingThisConversationRef.current = isStreamingThisConversation
     activeStreamingMessageIdRef.current = activeStreamingMessageId
-  }, [activeStreamingMessageId, isStreamingThisConversation])
+    latestAssistantIdRef.current = latestAssistantMessageId
+  }, [activeStreamingMessageId, isStreamingThisConversation, latestAssistantMessageId])
 
   const hasStreamingPayload = React.useMemo(
     () =>
@@ -386,6 +398,7 @@ export function ChatView() {
     olderLoadAnchorRef.current = null
     olderLoadRequestedRef.current = false
     streamingScrollAnchorRef.current = null
+    finalizeAnchorRef.current = null
     wasStreamingRef.current = false
     wasStreamingLayoutRef.current = false
     // The previous conversation's scroll position must never be re-applied by
@@ -1649,6 +1662,32 @@ export function ChatView() {
     minHeightMsgId,
   ])
 
+  // Track where the streaming answer's bottom sits on screen, refreshed every
+  // streaming frame. The committed bubble that replaces the streaming one at
+  // finalize folds its working trace shut in the same commit it mounts (no
+  // animation a ResizeObserver could follow), so this captured "before" is the
+  // only way the finalize effect can tell how far the answer moved.
+  React.useLayoutEffect(() => {
+    if (!isStreamingThisConversation || !conversationId) return
+    const container = scrollContainerRef.current
+    const streamChild = streamingBubbleContainerRef.current?.firstElementChild
+    if (!container || !(streamChild instanceof HTMLElement)) return
+    const containerTop = container.getBoundingClientRect().top
+    finalizeAnchorRef.current = {
+      conversationId,
+      contentBottomOffset:
+        streamChild.getBoundingClientRect().bottom - containerTop,
+      distanceFromBottom:
+        container.scrollHeight - container.scrollTop - container.clientHeight,
+    }
+  }, [
+    conversationId,
+    isStreamingThisConversation,
+    state.streamingContent,
+    state.streamingContentSegments,
+    state.streamingReasoning,
+  ])
+
   // Finishing a resumed stream can resize the tail spacer before the browser's
   // own scroll anchoring settles. If the user was reading above bottom, keep
   // that message anchored instead of letting the final row pull the view down.
@@ -1658,13 +1697,81 @@ export function ChatView() {
     wasStreamingLayoutRef.current = isStreamingThisConversation
 
     if (!streamingFinished || !conversationId) return
+    const fin = finalizeAnchorRef.current
+    finalizeAnchorRef.current = null
     const saved = streamingScrollAnchorRef.current
     streamingScrollAnchorRef.current = null
+
+    if (followStreamingRef.current) return
+
+    const container = scrollContainerRef.current
+    if (!container) return
+
+    // Preferred path: keep the just-finalized answer pinned in place. When the
+    // working trace was scrolled above the fold, the committed bubble mounts it
+    // collapsed and the answer below jumps up by the folded height — measure
+    // that and undo it. A message-level anchor can't fix this: the message top
+    // (above the fold) never moves, only the content between it and the answer.
+    if (
+      fin &&
+      fin.conversationId === conversationId &&
+      fin.distanceFromBottom > STICKY_BOTTOM_THRESHOLD
+    ) {
+      const lastMsg = (activeConversation?.messages ?? []).at(-1)
+      const wrapper =
+        lastMsg?.role === "assistant" &&
+        lastMsg.id === latestAssistantIdRef.current
+          ? document.getElementById(`message-${lastMsg.id}`)
+          : null
+      const content = wrapper?.firstElementChild
+      if (wrapper instanceof HTMLElement && content instanceof HTMLElement) {
+        const containerTop = container.getBoundingClientRect().top
+        const wrapperTop = wrapper.getBoundingClientRect().top - containerTop
+        // Only when the working trace sat above the viewport top. If the block
+        // was on screen the user watched it fold and an in-place collapse reads
+        // as expected, so leave it to the message-anchor fallback below.
+        if (wrapperTop < 0) {
+          // Discount the committed bubble's trailing meta row (timestamp/actions)
+          // — the streaming bubble has no equivalent, so the answer bottoms line
+          // up exactly instead of ~a row apart.
+          const meta = content.lastElementChild
+          const metaH =
+            meta instanceof HTMLElement
+              ? meta.getBoundingClientRect().height + 6 /* column gap */
+              : 0
+          const answerBottom =
+            content.getBoundingClientRect().bottom - containerTop - metaH
+          const delta = answerBottom - fin.contentBottomOffset
+          if (delta < -1) {
+            ignoreSyncRef.current = true
+            const maxScrollTop = Math.max(
+              0,
+              container.scrollHeight - container.clientHeight
+            )
+            container.scrollTop = Math.min(
+              Math.max(0, container.scrollTop + delta),
+              maxScrollTop
+            )
+            const frame = window.requestAnimationFrame(() => {
+              ignoreSyncRef.current = false
+              saveScrollAnchor()
+              syncScrollState()
+            })
+            return () => {
+              window.cancelAnimationFrame(frame)
+              ignoreSyncRef.current = false
+            }
+          }
+        }
+      }
+    }
+
+    // Fallback: pin the topmost message the user was reading (covers the case
+    // where they had scrolled up past the finalized turn entirely).
     if (
       !saved ||
       saved.conversationId !== conversationId ||
-      saved.anchor.distanceFromBottom <= STICKY_BOTTOM_THRESHOLD ||
-      followStreamingRef.current
+      saved.anchor.distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
     ) {
       return
     }
@@ -1687,6 +1794,7 @@ export function ChatView() {
       ignoreSyncRef.current = false
     }
   }, [
+    activeConversation?.messages,
     conversationId,
     isStreamingThisConversation,
     restoreScrollAnchor,

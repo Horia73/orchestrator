@@ -23,9 +23,11 @@ import { getActiveProfileId } from '@/lib/profiles/context'
 
 export type IntegrationConnState =
     | 'connected'
+    | 'resumable'
     | 'needs_reconnect'
     | 'configured'
     | 'not_configured'
+    | 'disabled'
     | 'unknown'
 
 export interface IntegrationStateEntry {
@@ -76,7 +78,12 @@ function entry(s: StatusLike | null | undefined, detail?: string | null): Integr
 type Gmailish = StatusLike & { accountEmail?: string | null }
 type Calendarish = StatusLike & { accountEmail?: string | null }
 type Driveish = StatusLike & { accountEmail?: string | null; accountName?: string | null }
-type WhatsAppish = StatusLike & { phoneNumber?: string | null; accountName?: string | null }
+type WhatsAppish = StatusLike & {
+    provider?: string | null
+    sessionStored?: boolean
+    phoneNumber?: string | null
+    accountName?: string | null
+}
 type HomeAssistantish = StatusLike & { locationName?: string | null; baseUrl?: string | null }
 type Mapsish = StatusLike & { error?: string | null }
 type Weatherish = StatusLike & {
@@ -89,6 +96,15 @@ type LocationIntelligenceish = StatusLike & {
     enabled?: boolean
     source?: { label?: string | null; entityId?: string | null }
     journal?: { lastDate?: string | null; dayCount?: number | null }
+}
+
+function whatsappEntry(s: WhatsAppish | null | undefined): IntegrationStateEntry {
+    if (s?.provider === 'disabled') return { state: 'disabled' }
+    if (s?.provider === 'baileys' && !s.connected && s.sessionStored && !s.needsReconnect) {
+        const detail = s.phoneNumber ?? s.accountName
+        return detail ? { state: 'resumable', detail } : { state: 'resumable' }
+    }
+    return entry(s, s?.phoneNumber ?? s?.accountName)
 }
 
 export interface RawStatuses {
@@ -108,7 +124,7 @@ export function snapshotFromStatuses(raw: RawStatuses): IntegrationStatusSnapsho
         'gmail': entry(raw.gmail, raw.gmail?.accountEmail),
         'google-calendar': entry(raw.googleCalendar, raw.googleCalendar?.accountEmail),
         'google-drive': entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName),
-        'whatsapp': entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName),
+        'whatsapp': whatsappEntry(raw.whatsapp),
         'home-assistant': entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl),
         // Maps doesn't have an account identity to surface as a detail —
         // when needsReconnect we forward the Google error so the
@@ -213,7 +229,7 @@ export function recordIntegrationStatuses(raw: RawStatuses): void {
         'gmail': hasOwn(raw, 'gmail') ? entry(raw.gmail, raw.gmail?.accountEmail) : previous.gmail,
         'google-calendar': hasOwn(raw, 'googleCalendar') ? entry(raw.googleCalendar, raw.googleCalendar?.accountEmail) : previous['google-calendar'],
         'google-drive': hasOwn(raw, 'googleDrive') ? entry(raw.googleDrive, raw.googleDrive?.accountEmail ?? raw.googleDrive?.accountName) : previous['google-drive'],
-        'whatsapp': hasOwn(raw, 'whatsapp') ? entry(raw.whatsapp, raw.whatsapp?.phoneNumber ?? raw.whatsapp?.accountName) : previous.whatsapp,
+        'whatsapp': hasOwn(raw, 'whatsapp') ? whatsappEntry(raw.whatsapp) : previous.whatsapp,
         'home-assistant': hasOwn(raw, 'homeAssistant') ? entry(raw.homeAssistant, raw.homeAssistant?.locationName ?? raw.homeAssistant?.baseUrl) : previous['home-assistant'],
         'maps': hasOwn(raw, 'maps') ? entry(raw.maps, raw.maps?.error ?? null) : previous.maps,
         'weather': hasOwn(raw, 'weather') ? entry(raw.weather, weatherDetail(raw.weather)) : previous.weather,

@@ -104,7 +104,13 @@ export function createRunActivatedIntegrationToolExecutor(
           entry.statusKind
         ]?.state
       }
-      if (state !== "connected") {
+      if (state !== "connected" && state !== "resumable") {
+        if (state === "disabled") {
+          return {
+            success: false,
+            error: `${entry.label} is disabled; re-enable it via its setup runbook before using ${toolId}.`,
+          }
+        }
         return {
           success: false,
           error: `${entry.label} is not connected; current state is ${state ?? "unknown"}. Connect it first via its setup runbook.`,

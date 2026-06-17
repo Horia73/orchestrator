@@ -675,6 +675,10 @@ function partsToCodexItems(parts: VisionRequestPart[], callDir: string): AnyObj[
         if (typeof part.text === 'string' && part.text) {
             items.push({ type: 'text', text: part.text, text_elements: [] });
         } else if (part.inlineData?.data) {
+            // Images arrive in oldest→newest order, one per frame, so frame-N.jpg
+            // lines up with the "Frame N/M (image file: frame-N.jpg)" text label
+            // buildVisionParts emits right before it — the model can rely on the
+            // number to order the attachments regardless of how codex surfaces them.
             const filePath = path.join(callDir, `frame-${++frameIndex}.jpg`);
             fs.writeFileSync(filePath, Buffer.from(part.inlineData.data, 'base64'));
             items.push({ type: 'localImage', path: filePath });

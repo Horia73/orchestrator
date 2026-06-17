@@ -26,7 +26,9 @@ import {
     windCompass,
 } from '@/lib/weather/weather-codes'
 import { executeTool } from '@/lib/ai/tools/executor'
-import { effectiveWeatherDays, effectiveWeatherHours, executeWeatherSetWhy, executeWeatherShow, weatherShowTool } from '@/lib/ai/tools/weather'
+import { effectiveWeatherDays, effectiveWeatherHours, executeWeatherSetOutfit, executeWeatherSetWhy, executeWeatherShow, weatherShowTool } from '@/lib/ai/tools/weather'
+import { insertArtifact } from '@/lib/artifacts/store'
+import { createConversation } from '@/lib/db'
 import {
     readCachedWeather,
     weatherCacheSize,
@@ -339,6 +341,86 @@ for (const [label, raw, pathRe] of badCases) {
     const strippedUpdate = stripArtifactUpdatePayload(updatePayload)
     check('artifact-update: strips body from displayed result', !('body' in strippedUpdate))
     check('artifact-update: marks artifact as updated', strippedUpdate.artifactUpdated === true)
+}
+
+// --- pending (Working… placeholder) marker --------------------------------
+
+{
+    const withPending = parseWeatherArtifact(JSON.stringify({ ...minimalArtifact, pending: ['why', 'outfit'] }))
+    check('pending: artifact with placeholders parses', withPending.ok)
+    check(
+        'pending: keeps both placeholder entries',
+        withPending.ok && JSON.stringify(withPending.value.pending) === JSON.stringify(['why', 'outfit']),
+    )
+
+    const badPending = WeatherArtifactSchema.safeParse({ ...minimalArtifact, pending: ['nope'] })
+    check('pending: rejects unknown pending field', !badPending.success)
+
+    const emptyPending = WeatherArtifactSchema.safeParse({ ...minimalArtifact, pending: [] })
+    check('pending: empty placeholder list is allowed', emptyPending.success)
+}
+
+// --- setter flow: fill placeholders in place, clearing pending one by one --
+
+{
+    const conversationId = 'smoke-weather-pending-flow'
+    const messageId = 'smoke-msg-1'
+    const identifier = 'smoke-pending-weather'
+    const ctx = { callerAgentId: 'orchestrator', depth: 0, conversationId, parentRequestId: 'p' } as const
+
+    // Artifacts FK to a real conversation + message, so seed those first.
+    const now = Date.now()
+    createConversation({
+        id: conversationId,
+        title: 'Smoke weather pending flow',
+        createdAt: now,
+        messages: [{ id: messageId, role: 'assistant', content: '', timestamp: now }],
+    })
+
+    // Seed the card exactly as WeatherShow now mounts it: instant, both smart
+    // tiles still pending.
+    insertArtifact({
+        conversationId,
+        messageId,
+        identifier,
+        type: 'application/vnd.ant.weather',
+        title: 'Weather in Smoke City',
+        display: 'inline',
+        content: JSON.stringify({ ...minimalArtifact, pending: ['why', 'outfit'] }),
+    })
+
+    const whyRes = await executeWeatherSetWhy(
+        { identifier, rows: [{ kind: 'precipitation', title: 'Rain', value: '45%', explanation: 'Showers likely this afternoon.' }] },
+        ctx,
+    )
+    const whyData = whyRes.success ? (whyRes.data as Record<string, unknown>) : null
+    const whyBody = whyData && typeof whyData.body === 'string' ? JSON.parse(whyData.body as string) : null
+    check('SetWhy: patches via artifactUpdate', whyData?.artifactUpdate === true, whyRes.error)
+    check('SetWhy: fills the why rows', Array.isArray(whyBody?.why) && whyBody.why.length === 1)
+    check('SetWhy: clears only its own pending entry', JSON.stringify(whyBody?.pending) === JSON.stringify(['outfit']))
+
+    // The chat route persists each update as a new version; mirror that so the
+    // next setter reads the latest body from the DB path.
+    insertArtifact({
+        conversationId,
+        messageId,
+        identifier,
+        type: 'application/vnd.ant.weather',
+        title: 'Weather in Smoke City',
+        display: 'inline',
+        content: whyData!.body as string,
+    })
+
+    const outfitRes = await executeWeatherSetOutfit(
+        { identifier, headline: 'Light jacket', summary: 'Cool with a chance of showers.' },
+        ctx,
+    )
+    const outfitData = outfitRes.success ? (outfitRes.data as Record<string, unknown>) : null
+    const outfitBody = outfitData && typeof outfitData.body === 'string' ? JSON.parse(outfitData.body as string) : null
+    check('SetOutfit: patches via artifactUpdate', outfitData?.artifactUpdate === true, outfitRes.error)
+    check('SetOutfit: fills the outfit headline', outfitBody?.outfit?.headline === 'Light jacket')
+    check('SetOutfit: keeps the already-filled why rows', Array.isArray(outfitBody?.why) && outfitBody.why.length === 1)
+    check('SetOutfit: drops pending once nothing remains', outfitBody?.pending === undefined)
 }
 
 // --- weather-codes: mapping coverage --------------------------------------

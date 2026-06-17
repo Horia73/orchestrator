@@ -10,6 +10,7 @@ import {
     Gauge,
     Info,
     Leaf,
+    Loader2,
     Radio,
     Shirt,
     Sparkle,
@@ -53,7 +54,15 @@ export function WeatherDetails({
     const distSymbol = artifact.units === 'metric' ? 'km' : 'mi'
     const windSymbol = artifact.units === 'metric' ? 'm/s' : 'mph'
     const captions = buildCaptions(artifact)
-    const showSmartGuidance = Boolean(artifact.outfit && artifact.why?.length)
+    // Smart-guidance tiles reserve their final footprint from the first render:
+    // when WeatherShow mounts the card it flags `outfit`/`why` as `pending`, so
+    // the tile shows a "Working…" skeleton at the right size and the later
+    // WeatherSetOutfit/WeatherSetWhy update slots its content in with no reflow.
+    const pendingFields = artifact.pending ?? []
+    const outfitPending = pendingFields.includes('outfit') && !artifact.outfit
+    const whyPending = pendingFields.includes('why') && !artifact.why?.length
+    const showOutfit = Boolean(artifact.outfit) || outfitPending
+    const showWhy = Boolean(artifact.why?.length) || whyPending
 
     return (
         <div className={cn("w-full min-w-0 rounded-xl border border-border/40 px-3 py-3 shadow-sm", tint)}>
@@ -92,11 +101,15 @@ export function WeatherDetails({
                     tomorrow={tomorrow ? { sum: tomorrow.precipitationSum, prob: tomorrow.precipitationProbability } : null}
                 />
 
-                {showSmartGuidance && artifact.outfit && (
-                    <OutfitTile
-                        outfit={artifact.outfit}
-                        spanFull={!artifact.airQuality}
-                    />
+                {showOutfit && (
+                    artifact.outfit ? (
+                        <OutfitTile
+                            outfit={artifact.outfit}
+                            spanFull={!artifact.airQuality}
+                        />
+                    ) : (
+                        <OutfitSkeletonTile spanFull={!artifact.airQuality} />
+                    )
                 )}
                 {artifact.airQuality && (
                     <NumberTile
@@ -106,12 +119,16 @@ export function WeatherDetails({
                         valueUnit={artifact.airQuality.aqiLabel}
                         caption={captions.airQuality}
                         accent={aqiAccent(artifact.airQuality.aqi)}
-                        spanFull={!showSmartGuidance}
+                        spanFull={!showOutfit}
                     />
                 )}
 
-                {showSmartGuidance && artifact.why?.length ? (
-                    <WhyTile rows={artifact.why} />
+                {showWhy ? (
+                    artifact.why?.length ? (
+                        <WhyTile rows={artifact.why} />
+                    ) : (
+                        <WhySkeletonTile />
+                    )
                 ) : null}
 
                 {artifact.historical && (
@@ -179,6 +196,62 @@ function WhyTile({ rows }: { rows: NonNullable<WeatherArtifact['why']> }) {
                     </div>
                 ))}
             </div>
+        </div>
+    )
+}
+
+// ---------------------------------------------------------------------------
+// "Working…" skeletons for the model-authored Outfit/Why tiles. They mirror
+// the real tiles' header + footprint (min-h-[124px] / min-h-[128px]) so the
+// later WeatherSetOutfit/WeatherSetWhy update swaps in content without any
+// reflow — only the body of the tile changes.
+// ---------------------------------------------------------------------------
+
+function WorkingPlaceholder({ lines }: { lines: number }) {
+    return (
+        <div className="mt-2 flex flex-1 flex-col">
+            <div className="flex items-center gap-1.5 text-[12px] font-medium text-foreground/45">
+                <Loader2 className="size-3.5 animate-spin text-foreground/40" strokeWidth={2} />
+                <span>Working…</span>
+            </div>
+            <div className="mt-auto flex flex-col gap-1.5 pt-3">
+                {Array.from({ length: lines }).map((_, i) => (
+                    <div
+                        key={i}
+                        className="h-2.5 animate-pulse rounded-full bg-foreground/[0.07]"
+                        style={{ width: `${88 - i * 16}%` }}
+                    />
+                ))}
+            </div>
+        </div>
+    )
+}
+
+function OutfitSkeletonTile({ spanFull }: { spanFull?: boolean }) {
+    return (
+        <div
+            className={cn(
+                "relative flex min-h-[124px] flex-col rounded-xl bg-background/60 px-4 py-3",
+                spanFull && "col-span-2",
+            )}
+        >
+            <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-wider text-foreground/55">
+                <Shirt className="size-3.5 text-emerald-500" strokeWidth={1.75} />
+                <span className="truncate">Outfit</span>
+            </div>
+            <WorkingPlaceholder lines={2} />
+        </div>
+    )
+}
+
+function WhySkeletonTile() {
+    return (
+        <div className="col-span-2 relative flex min-h-[128px] flex-col rounded-xl bg-background/60 px-4 py-3">
+            <div className="flex items-center gap-1.5 text-[10.5px] font-medium uppercase tracking-wider text-foreground/55">
+                <Info className="size-3.5 text-blue-500" strokeWidth={1.75} />
+                <span className="truncate">Why It Feels This Way</span>
+            </div>
+            <WorkingPlaceholder lines={3} />
         </div>
     )
 }

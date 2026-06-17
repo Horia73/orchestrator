@@ -2072,19 +2072,70 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
 
             async findInPage(query: string, next: boolean = false) {
                 const activePage = await ensureActivePage(session);
-                const modifier = process.platform === 'darwin' ? 'Meta' : 'Control';
+                // The native Ctrl+F find bar is browser chrome, not page content, so
+                // CDP key events (page.keyboard) never open it — the old approach just
+                // sent Ctrl+A to the page (selecting everything) and typed into the void.
+                // Run the search in the page context instead so it works in every mode.
+                const result = await activePage.evaluate(({ q, goNext }) => {
+                    const empty = { found: false, count: 0 };
+                    if (!q) return empty;
+                    const selection = window.getSelection();
+                    // Starting a fresh search: drop any stray selection (e.g. a leftover
+                    // select-all) so window.find scans from the top of the document.
+                    if (!goNext && selection) {
+                        selection.removeAllRanges();
+                    }
 
-                await activePage.keyboard.down(modifier);
-                await activePage.keyboard.press('f');
-                await activePage.keyboard.up(modifier);
-                await sleep(80);
-                await activePage.keyboard.down(modifier);
-                await activePage.keyboard.press('a');
-                await activePage.keyboard.up(modifier);
-                await activePage.keyboard.type(query);
-                if (next) {
-                    await activePage.keyboard.press('Enter');
-                }
+                    // Count occurrences in visible text for a useful observation.
+                    let count = 0;
+                    try {
+                        const haystack = ((document.body && document.body.innerText) || '').toLowerCase();
+                        const needle = q.toLowerCase();
+                        if (needle) {
+                            let idx = haystack.indexOf(needle);
+                            while (idx !== -1) {
+                                count++;
+                                idx = haystack.indexOf(needle, idx + needle.length);
+                            }
+                        }
+                    } catch {
+                        // innerText can throw on detached/odd documents; ignore.
+                    }
+
+                    // window.find(string, caseSensitive, backwards, wrapAround, wholeWord, searchInFrames, showDialog)
+                    // window.find is non-standard (no DOM lib type) but supported in Chromium.
+                    const finder = (window as unknown as {
+                        find?: (
+                            text: string,
+                            caseSensitive?: boolean,
+                            backwards?: boolean,
+                            wrapAround?: boolean,
+                            wholeWord?: boolean,
+                            searchInFrames?: boolean,
+                            showDialog?: boolean,
+                        ) => boolean;
+                    }).find;
+                    let found = false;
+                    try {
+                        found = typeof finder === 'function'
+                            ? finder.call(window, q, false, false, true, false, true, false)
+                            : false;
+                    } catch {
+                        found = false;
+                    }
+
+                    // Center the active match in the viewport for the next screenshot.
+                    if (found && selection && selection.rangeCount > 0) {
+                        const node = selection.getRangeAt(0).startContainer;
+                        const el = node.nodeType === Node.ELEMENT_NODE ? (node as Element) : node.parentElement;
+                        if (el && typeof el.scrollIntoView === 'function') {
+                            el.scrollIntoView({ block: 'center', inline: 'center' });
+                        }
+                    }
+
+                    return { found, count };
+                }, { q: query, goNext: next });
+                return result;
             },
 
             async scroll(direction: 'up' | 'down' | 'left' | 'right', amount: number = 500) {

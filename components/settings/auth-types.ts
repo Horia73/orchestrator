@@ -37,6 +37,7 @@ export type BusyAction =
   | "google-drive-connect"
   | "google-drive-disconnect"
   | "google-drive-save"
+  | "google-account-select"
   | "whatsapp-connect"
   | "whatsapp-disconnect"
   | "homeassistant-save"

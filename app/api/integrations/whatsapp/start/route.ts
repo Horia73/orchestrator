@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 
+import { resolveRequestOrigin } from '@/lib/app-origin'
 import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { startWhatsApp } from '@/lib/integrations/whatsapp'
 import { runWithRequestProfile } from "@/lib/profiles/server"
@@ -13,7 +14,7 @@ export async function POST(request: Request) {
         if (guard) return guard
 
         try {
-            const origin = new URL(request.url).origin
+            const origin = resolveRequestOrigin(request)
             const result = await startWhatsApp(origin)
             return NextResponse.json(result)
         } catch (err) {

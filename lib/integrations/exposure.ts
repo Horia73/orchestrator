@@ -82,8 +82,9 @@ function effectiveActivated(opts: ExposureOptions): Set<string> {
 
 /**
  * Drop operational capability tool schemas the agent hasn't earned this turn:
- * - integration operational tools: dropped unless connected AND activated
- *   (activationOnly integrations like maps/weather skip the connection gate);
+ * - integration operational tools: dropped unless connected/resumable AND
+ *   activated (activationOnly integrations like maps/weather skip the
+ *   connection gate);
  * - native subsystem tools (watchlist/monitoring/scheduling/microscripts):
  *   dropped unless the subsystem is activated.
  * Non-gated tools, setup/lifecycle tools, and the safe-subset tools left out of
@@ -104,7 +105,7 @@ export function filterIntegrationToolExposure(
             // alone — there is no connection handshake to wait on.
             if (entry.activationOnly) return activated.has(integrationId)
             const state = snapshot[entry.statusKind]?.state
-            return state === 'connected' && activated.has(integrationId)
+            return (state === 'connected' || state === 'resumable') && activated.has(integrationId)
         }
         const subsystemId = subsystemForGatedTool(tool.id)
         if (subsystemId) return activated.has(subsystemId)
@@ -135,12 +136,16 @@ function stateLabel(snapshot: IntegrationStatusSnapshot, entry: IntegrationManif
     switch (s?.state) {
         case 'connected':
             return s.detail ? `connected (${s.detail})` : 'connected'
+        case 'resumable':
+            return s.detail ? `saved session, resumes on use (${s.detail})` : 'saved session, resumes on use'
         case 'needs_reconnect':
             return s.detail ? `needs reconnect (${s.detail})` : 'needs reconnect'
         case 'configured':
             return 'configured but not connected'
         case 'not_configured':
             return 'not configured'
+        case 'disabled':
+            return 'disabled'
         default:
             return 'unknown — verify before relying on it'
     }
@@ -154,13 +159,17 @@ function toolsLabel(
     if (entry.operationalToolIds.length === 0) {
         return entry.setupToolIds.length > 0 ? 'setup/lifecycle only' : 'status/runbook only'
     }
-    if (activated.has(entry.id)) return `loaded (${entry.operationalToolIds.length} tools)`
     // activationOnly (maps, weather): no connection gate — activatable anytime.
     if (entry.activationOnly) {
+        if (activated.has(entry.id)) return `loaded (${entry.operationalToolIds.length} tools)`
         return `inactive — call ActivateIntegrationTools("${entry.id}") to load the ${entry.operationalToolIds.length} tool schemas`
     }
-    const connected = snapshot[entry.statusKind]?.state === 'connected'
-    if (!connected) return 'unavailable until connected'
+    const state = snapshot[entry.statusKind]?.state
+    const available = state === 'connected' || state === 'resumable'
+    if (!available) {
+        return state === 'disabled' ? 'unavailable while disabled' : 'unavailable until connected'
+    }
+    if (activated.has(entry.id)) return `loaded (${entry.operationalToolIds.length} tools)`
     return `inactive — call ActivateIntegrationTools("${entry.id}") to load the tool details`
 }
 

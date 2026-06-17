@@ -334,6 +334,14 @@ export const WeatherArtifactSchema = z.object({
     radar: WeatherRadarSchema.optional(),
     /** Event-weather overlay written by the orchestrator after Calendar lookup. */
     calendarContext: z.array(WeatherCalendarContextSchema).max(5).optional(),
+    /** Model-authored fields the card is still waiting on. WeatherShow mounts
+     *  the card instantly with the live forecast and lists here the smart
+     *  fields it expects the orchestrator to fill (`outfit`, `why`); the
+     *  renderer reserves their tile footprint and shows a "Working…" skeleton
+     *  so the later WeatherSetOutfit/WeatherSetWhy updates slot in without any
+     *  reflow. Each setter removes its own entry; an empty/absent list means
+     *  nothing is pending. */
+    pending: z.array(z.enum(['outfit', 'why'])).max(2).optional(),
     /** Free-form attribution suffix. The renderer always appends the
      *  provider's default attribution; use this for "Updated by Orchestrator"
      *  tag or similar. */

@@ -2,27 +2,31 @@ import path from 'path'
 import { randomBytes } from 'crypto'
 
 import { getConfiguredTimezone } from '@/lib/config'
+import {
+    clearGoogleAccountToken,
+    resolveGoogleAccountToken,
+    saveGoogleAccountTokenForActiveProfile,
+    type GoogleAccountConnectionStatus,
+} from '@/lib/integrations/oauth-connections'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import {
     GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS,
     type GoogleOAuthConfigInput,
     type GoogleOAuthProviderConfig,
     type GoogleOAuthTokenRecord,
-    clearGoogleOAuthToken,
     exchangeGoogleOAuthCode,
     getGoogleOAuthConfig,
     missingGoogleScopes,
     parseScopeList,
-    readGoogleOAuthToken,
     refreshGoogleOAuthToken,
     responseErrorText,
     revokeGoogleOAuthToken,
     saveGoogleOAuthClientConfig,
     startGoogleOAuth,
-    writeGoogleOAuthToken,
 } from './google-oauth'
 
 const GOOGLE_CALENDAR_API_BASE = 'https://www.googleapis.com/calendar/v3'
+const GOOGLE_CALENDAR_CONNECTION_PROVIDER = 'google_calendar'
 function googleCalendarTokenPath(): string {
     return path.join(activeRuntimePaths().privateStateDir, 'auth', 'google-calendar.json')
 }
@@ -63,6 +67,8 @@ export interface GoogleCalendarIntegrationStatus {
     configured: boolean
     connected: boolean
     accountEmail: string | null
+    connection: GoogleAccountConnectionStatus | null
+    availableConnections: GoogleAccountConnectionStatus[]
     scopes: string[]
     requestedScopes: string[]
     missingConfig: string[]
@@ -298,14 +304,16 @@ interface FreeBusyResponse {
 
 export async function getGoogleCalendarIntegrationStatus(origin: string, refresh = true): Promise<GoogleCalendarIntegrationStatus> {
     const config = getGoogleOAuthConfig(origin, GOOGLE_CALENDAR_PROVIDER)
-    let token = readCalendarToken()
+    let resolved = resolveCalendarToken()
+    let token = resolved.token
     let error: string | undefined
     let refreshFailed = false
 
     const shouldRefresh = token ? token.expiresAt <= Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS : false
     if (refresh && shouldRefresh && token?.refreshToken && config.clientId && config.clientSecret) {
         try {
-            token = await refreshGoogleOAuthToken(token, config, googleCalendarTokenPath())
+            token = await refreshGoogleOAuthToken(token, config, resolved.tokenPath)
+            resolved = resolveCalendarToken()
         } catch (err) {
             refreshFailed = true
             error = err instanceof Error ? err.message : 'Failed to refresh Google Calendar token'
@@ -335,6 +343,8 @@ export async function getGoogleCalendarIntegrationStatus(origin: string, refresh
         configured: config.missing.length === 0,
         connected: Boolean(token?.accessToken || token?.refreshToken),
         accountEmail,
+        connection: resolved.connection,
+        availableConnections: resolved.availableConnections,
         scopes,
         requestedScopes: [...GOOGLE_CALENDAR_SCOPES],
         missingConfig: config.missing,
@@ -391,10 +401,7 @@ export async function completeGoogleCalendarOAuth(args: {
         state: args.state,
         code: args.code,
     })
-    const existing = readCalendarToken()
-    const refreshToken = token.refresh_token || existing?.refreshToken
     if (!token.access_token) throw new Error('Google did not return an access token.')
-    if (!refreshToken) throw new Error('Google did not return a refresh token. Reconnect and approve offline access.')
 
     const grantedScopes = parseScopeList(token.scope)
     const missingScopes = missingGoogleScopes(grantedScopes, GOOGLE_CALENDAR_SCOPES)
@@ -403,29 +410,43 @@ export async function completeGoogleCalendarOAuth(args: {
     }
 
     const profile = await fetchCalendarProfile(token.access_token)
+    const existing = resolveCalendarToken().token
+    const sameExistingAccount =
+        existing?.accountEmail?.toLowerCase() === profile.accountEmail?.toLowerCase()
+    const refreshToken = token.refresh_token || (sameExistingAccount ? existing?.refreshToken : undefined)
+    if (!refreshToken) throw new Error('Google did not return a refresh token. Reconnect and approve offline access.')
     const now = Date.now()
-    writeGoogleOAuthToken(googleCalendarTokenPath(), {
-        version: 1,
-        provider: GOOGLE_CALENDAR_PROVIDER.provider,
-        clientId: config.clientId,
-        accountEmail: profile.accountEmail ?? undefined,
-        accessToken: token.access_token,
-        refreshToken,
-        tokenType: token.token_type,
-        scope: grantedScopes,
-        scopesRequested: [...GOOGLE_CALENDAR_SCOPES],
-        expiresAt: now + Math.max(0, token.expires_in ?? 3600) * 1000,
-        obtainedAt: existing?.obtainedAt ?? now,
-        updatedAt: now,
+    saveGoogleAccountTokenForActiveProfile({
+        provider: GOOGLE_CALENDAR_CONNECTION_PROVIDER,
+        tokenProvider: GOOGLE_CALENDAR_PROVIDER.provider,
+        legacyTokenPath: googleCalendarTokenPath(),
+        token: {
+            version: 1,
+            provider: GOOGLE_CALENDAR_PROVIDER.provider,
+            clientId: config.clientId,
+            accountEmail: profile.accountEmail ?? undefined,
+            accessToken: token.access_token,
+            refreshToken,
+            tokenType: token.token_type,
+            scope: grantedScopes,
+            scopesRequested: [...GOOGLE_CALENDAR_SCOPES],
+            expiresAt: now + Math.max(0, token.expires_in ?? 3600) * 1000,
+            obtainedAt: sameExistingAccount ? existing?.obtainedAt ?? now : now,
+            updatedAt: now,
+        },
     })
 
     return { accountEmail: profile.accountEmail }
 }
 
-export async function disconnectGoogleCalendar(): Promise<GoogleCalendarIntegrationStatus> {
-    const token = readCalendarToken()
-    await revokeGoogleOAuthToken(token)
-    clearGoogleOAuthToken(googleCalendarTokenPath())
+export async function disconnectGoogleCalendar(connectionId?: string): Promise<GoogleCalendarIntegrationStatus> {
+    const resolved = clearGoogleAccountToken({
+        provider: GOOGLE_CALENDAR_CONNECTION_PROVIDER,
+        tokenProvider: GOOGLE_CALENDAR_PROVIDER.provider,
+        legacyTokenPath: googleCalendarTokenPath(),
+        connectionId,
+    })
+    await revokeGoogleOAuthToken(resolved.token)
     return getGoogleCalendarIntegrationStatus(DEFAULT_ORIGIN, false)
 }
 
@@ -662,7 +683,7 @@ export async function googleCalendarRespondToEvent(
 ): Promise<GoogleCalendarEventSummary> {
     const cleanCalendar = cleanCalendarId(calendarId)
     const cleanEvent = cleanRequired(eventId, 'event_id')
-    const token = await getValidCalendarToken()
+    const { token } = await getValidCalendarToken()
     const event = await calendarApi<CalendarEvent>(
         `/calendars/${encodeURIComponent(cleanCalendar)}/events/${encodeURIComponent(cleanEvent)}`
     )
@@ -719,7 +740,8 @@ async function fetchCalendarProfile(accessToken: string): Promise<{ accountEmail
 }
 
 async function calendarApi<T>(pathAndQuery: string, init: RequestInit = {}, retry = true): Promise<T> {
-    const token = await getValidCalendarToken()
+    const session = await getValidCalendarToken()
+    const token = session.token
     const headers = new Headers(init.headers)
     headers.set('Authorization', `Bearer ${token.accessToken}`)
     headers.set('Accept', 'application/json')
@@ -731,7 +753,11 @@ async function calendarApi<T>(pathAndQuery: string, init: RequestInit = {}, retr
     })
 
     if (response.status === 401 && retry && token.refreshToken) {
-        await refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER), googleCalendarTokenPath())
+        await refreshGoogleOAuthToken(
+            token,
+            getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER),
+            session.tokenPath
+        )
         return calendarApi<T>(pathAndQuery, init, false)
     }
 
@@ -745,16 +771,28 @@ async function calendarApi<T>(pathAndQuery: string, init: RequestInit = {}, retr
     return JSON.parse(text) as T
 }
 
-async function getValidCalendarToken(): Promise<GoogleOAuthTokenRecord> {
-    const token = readCalendarToken()
+async function getValidCalendarToken(): Promise<{ token: GoogleOAuthTokenRecord; tokenPath: string }> {
+    const resolved = resolveCalendarToken()
+    const token = resolved.token
     if (!token) throw new Error('Google Calendar is not connected. Connect it from Settings > Auth.')
-    if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) return token
+    if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) {
+        return { token, tokenPath: resolved.tokenPath }
+    }
     if (!token.refreshToken) throw new Error('Google Calendar session expired. Reconnect Google Calendar from Settings > Auth.')
-    return refreshGoogleOAuthToken(token, getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER), googleCalendarTokenPath())
+    const refreshed = await refreshGoogleOAuthToken(
+        token,
+        getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER),
+        resolved.tokenPath
+    )
+    return { token: refreshed, tokenPath: resolved.tokenPath }
 }
 
-function readCalendarToken(): GoogleOAuthTokenRecord | null {
-    return readGoogleOAuthToken(googleCalendarTokenPath(), GOOGLE_CALENDAR_PROVIDER.provider)
+function resolveCalendarToken() {
+    return resolveGoogleAccountToken({
+        provider: GOOGLE_CALENDAR_CONNECTION_PROVIDER,
+        tokenProvider: GOOGLE_CALENDAR_PROVIDER.provider,
+        legacyTokenPath: googleCalendarTokenPath(),
+    })
 }
 
 function summarizeCalendar(item: CalendarListEntry): GoogleCalendarInfo {

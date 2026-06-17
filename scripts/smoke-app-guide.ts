@@ -20,6 +20,10 @@ import assert from 'assert'
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { Readable } from 'stream'
+import zlib from 'zlib'
+
+import { extract as tarExtract } from 'tar-stream'
 
 async function main() {
     const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), 'orch-smoke-appguide-'))
@@ -33,7 +37,7 @@ async function main() {
         const { ALL_SUBSYSTEM_IDS, getSubsystemManifest, subsystemForGatedTool } = await import('@/lib/integrations/subsystem-manifest')
         const { ALL_CAPABILITY_IDS, filterIntegrationToolExposure } = await import('@/lib/integrations/exposure')
         const { activateIntegrations } = await import('@/lib/integrations/activation-store')
-        const { AGENT_WORKSPACE_DIR } = await import('@/lib/config')
+        const { AGENT_WORKSPACE_DIR, PRIVATE_STATE_DIR } = await import('@/lib/config')
 
         // --- host_status -----------------------------------------------------
         const host = await executeHostStatus()
@@ -59,6 +63,12 @@ async function main() {
         fs.writeFileSync(userFile, 'user content')
         const staleBackup = path.join(filesDir, 'orchestrator-backup-2000-01-01-00-00-00.tar.gz')
         fs.writeFileSync(staleBackup, 'stale')
+        const legacyWhatsAppDir = path.join(PRIVATE_STATE_DIR, 'whatsapp-web')
+        const baileysWhatsAppDir = path.join(PRIVATE_STATE_DIR, 'whatsapp-baileys')
+        fs.mkdirSync(legacyWhatsAppDir, { recursive: true })
+        fs.mkdirSync(baileysWhatsAppDir, { recursive: true })
+        fs.writeFileSync(path.join(legacyWhatsAppDir, 'session.json'), 'legacy-whatsapp-secret')
+        fs.writeFileSync(path.join(baileysWhatsAppDir, 'creds.json'), 'baileys-whatsapp-secret')
 
         const backup = await executeCreateBackup()
         assert.strictEqual(backup.success, true, `create_backup should succeed: ${backup.error ?? ''}`)
@@ -69,6 +79,9 @@ async function main() {
         assert.ok(!fs.existsSync(staleBackup), 'previous backup was pruned')
         assert.ok(fs.existsSync(userFile), 'unrelated user file was NOT touched')
         assert.ok(/^orchestrator-backup-.*\.tar\.gz$/.test(backupData.filename), 'backup filename matches the pattern')
+        const backupEntries = await listTarGzEntries(backupData.path)
+        assert.ok(!backupEntries.some(entry => entry.includes('private/whatsapp-web/')), 'legacy WhatsApp session is excluded from backup')
+        assert.ok(!backupEntries.some(entry => entry.includes('private/whatsapp-baileys/')), 'Baileys WhatsApp session is excluded from backup')
         console.log(`  create_backup: ${backupData.filename} (${backupData.size}), stale pruned, user file kept`)
 
         // --- wiring ----------------------------------------------------------
@@ -84,6 +97,10 @@ async function main() {
         assert.ok(doctrine.length > 500, 'app_guide doctrine is substantial')
         assert.ok(/factory reset/i.test(doctrine), 'doctrine covers factory reset')
         assert.ok(/create_backup/.test(doctrine), 'doctrine mentions the create_backup tool')
+        assert.ok(/WhatsApp.*Baileys/i.test(doctrine), 'doctrine covers the default WhatsApp Baileys provider')
+        assert.ok(/WHATSAPP_PROVIDER=disabled/i.test(doctrine), 'doctrine covers the WhatsApp provider kill switch')
+        assert.ok(/resumable/i.test(doctrine), 'doctrine covers stored Baileys sessions as resumable')
+        assert.ok(/serialized and lightly paced/i.test(doctrine), 'doctrine covers paced WhatsApp operational calls')
 
         // Gating: host_status hidden until app_guide is activated; create_backup always present.
         const candidates = getToolsForAgent(['create_backup', 'host_status'])
@@ -106,3 +123,21 @@ main().catch((err) => {
     console.error(err)
     process.exit(1)
 })
+
+function listTarGzEntries(archivePath: string): Promise<string[]> {
+    return new Promise((resolve, reject) => {
+        const names: string[] = []
+        const extractor = tarExtract()
+        extractor.on('entry', (header, stream, next) => {
+            names.push(header.name)
+            stream.on('end', next)
+            stream.resume()
+        })
+        extractor.on('finish', () => resolve(names))
+        extractor.on('error', reject)
+
+        const gunzip = zlib.createGunzip()
+        gunzip.on('error', reject)
+        Readable.from(fs.readFileSync(archivePath)).pipe(gunzip).pipe(extractor)
+    })
+}

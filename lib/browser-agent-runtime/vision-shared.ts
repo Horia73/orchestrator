@@ -243,6 +243,10 @@ export function buildVisionParts(
         visualContextLines.push('- Frames marked `Capture: overview` show the full page for orientation only. Use them to decide where to scroll, not where to click.');
     }
 
+    if (orderedFrames.length > 1) {
+        visualContextLines.push('- Each image is attached right after its `Frame N/M` text label, and the image file is named `frame-N.jpg` in the SAME oldest→newest order. If the images ever seem out of order, trust the number in `frame-N.jpg` / the `Frame N/M` label, not the order you happen to read them in.');
+    }
+
     const traceContext = `${visualContextLines.join('\n')}\n`;
 
     const parts: VisionRequestPart[] = [
@@ -259,8 +263,9 @@ export function buildVisionParts(
                     : orderedFrames.length > 1
                         ? 'previous-frame'
                         : 'page-frame';
+        const imageFileLabel = orderedFrames.length > 1 ? ` (image file: frame-${index + 1}.jpg)` : '';
         parts.push({
-            text: `Frame ${index + 1}/${orderedFrames.length}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nCoordinate space: ${coordinateSpaceLabel ?? currentFrame.coordinateSpace ?? 'normalized-viewport'}\nViewport: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\nPage: ${currentFrame.page.width}x${currentFrame.page.height}\nScroll: ${currentFrame.page.scrollX}, ${currentFrame.page.scrollY}\nTimestamp: ${currentFrame.timestamp}`,
+            text: `Frame ${index + 1}/${orderedFrames.length}${imageFileLabel}: ${label}\nURL: ${currentFrame.url}\nCapture: ${currentFrame.captureMode}\nCoordinate space: ${coordinateSpaceLabel ?? currentFrame.coordinateSpace ?? 'normalized-viewport'}\nViewport: ${currentFrame.viewport.width}x${currentFrame.viewport.height}\nPage: ${currentFrame.page.width}x${currentFrame.page.height}\nScroll: ${currentFrame.page.scrollX}, ${currentFrame.page.scrollY}\nTimestamp: ${currentFrame.timestamp}`,
         });
         parts.push({
             inlineData: {

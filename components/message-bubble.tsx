@@ -36,6 +36,17 @@ const COLLAPSED_HEIGHT = 460
 const COLLAPSED_HEIGHT_FLOOR = 180
 const COLLAPSED_BOTTOM_GAP = 52 // gap from bottom of block to input container
 
+// Live-streaming window: instead of filling all available space (which leaves a
+// half-cut "semi" card on mobile and an unbounded stack on desktop), regulate it
+// to a whole number of tool cards. A tool-call panel is ~230px tall (see
+// TOOL_CALL_PANEL_HEIGHT in tool-call-view). Desktop targets 2 full cards, mobile
+// 1. The window still grows only as far as the viewport allows and never below the
+// per-device floor.
+const LIVE_CARD_UNIT = 230
+const LIVE_CARD_GAP = 8
+const LIVE_WINDOW_TARGET_DESKTOP = LIVE_CARD_UNIT * 2 + LIVE_CARD_GAP + 14 // ~2 cards
+const LIVE_WINDOW_TARGET_MOBILE = LIVE_CARD_UNIT + 14 // ~1 full card
+
 function getThoughtTitle(content: string): string {
     const boldTitleRegex = /\*\*(.+?)\*\*/g
     let latest: string | null = null
@@ -197,7 +208,10 @@ function useAvailableHeight(
                 const available = Math.floor(bottom - blockRect.top - COLLAPSED_BOTTOM_GAP)
                 const compactViewport = window.matchMedia("(max-width: 767px), (pointer: coarse)").matches
                 const minimumHeight = compactViewport ? COLLAPSED_HEIGHT_FLOOR : COLLAPSED_HEIGHT
-                const nextHeight = Math.max(minimumHeight, available)
+                // Cap to a whole number of cards (2 desktop / 1 mobile) so the window
+                // never shows a half card, while still shrinking to fit short viewports.
+                const targetHeight = compactViewport ? LIVE_WINDOW_TARGET_MOBILE : LIVE_WINDOW_TARGET_DESKTOP
+                const nextHeight = Math.max(minimumHeight, Math.min(available, targetHeight))
                 setHeight((current) => current === nextHeight ? current : nextHeight)
             })
         }
@@ -414,18 +428,40 @@ function ThoughtBlock({
         wasStreamingRef.current = isLiveStreaming
     }, [autoExpand, hasStoredOpen, isLiveStreaming, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
 
-    // Auto-scroll content during streaming
+    // Auto-scroll content during streaming.
+    //
+    // A new reasoning entry (a fresh card) should glide up smoothly so the card
+    // appears to rise into view from below; the latest entry merely growing as it
+    // streams stays hard-pinned to the bottom so text tracks without lag.
+    const prevReasoningLenRef = React.useRef(0)
     React.useEffect(() => {
-        if (!isOpen || !scrollRef.current || isExpanded) return
-        if (isLiveStreaming) {
-            requestAnimationFrame(() => {
-                if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight
-            })
-        } else {
+        if (!isOpen || !scrollRef.current || isExpanded) {
+            prevReasoningLenRef.current = reasoning.length
+            return
+        }
+        if (!isLiveStreaming) {
+            prevReasoningLenRef.current = reasoning.length
             requestAnimationFrame(() => {
                 if (scrollRef.current) scrollRef.current.scrollTop = 0
             })
+            return
         }
+        const isNewEntry =
+            reasoning.length > prevReasoningLenRef.current &&
+            prevReasoningLenRef.current > 0
+        prevReasoningLenRef.current = reasoning.length
+        const smooth =
+            isNewEntry &&
+            !window.matchMedia("(prefers-reduced-motion: reduce)").matches
+        requestAnimationFrame(() => {
+            const node = scrollRef.current
+            if (!node) return
+            if (smooth) {
+                node.scrollTo({ top: node.scrollHeight, behavior: "smooth" })
+            } else {
+                node.scrollTop = node.scrollHeight
+            }
+        })
     }, [reasoning, isOpen, isExpanded, isLiveStreaming])
 
     const [isMounted, setIsMounted] = React.useState(false)

@@ -10,7 +10,10 @@ export async function POST(request: Request) {
         if (guard) return guard
 
         try {
-            const googleDrive = await disconnectGoogleDrive()
+            const body = await optionalJsonBody(request)
+            const connectionId =
+                typeof body.connectionId === 'string' ? body.connectionId : undefined
+            const googleDrive = await disconnectGoogleDrive(connectionId)
             return NextResponse.json({ success: true, googleDrive })
         } catch (err) {
             return NextResponse.json(
@@ -19,4 +22,17 @@ export async function POST(request: Request) {
             )
         }
   })
+}
+
+async function optionalJsonBody(request: Request): Promise<Record<string, unknown>> {
+    const text = await request.text().catch(() => '')
+    if (!text.trim()) return {}
+    try {
+        const parsed = JSON.parse(text) as unknown
+        return parsed && typeof parsed === 'object' && !Array.isArray(parsed)
+            ? parsed as Record<string, unknown>
+            : {}
+    } catch {
+        return {}
+    }
 }

@@ -96,7 +96,7 @@ export function buildAuthServiceDescriptors(
       id: "gmail",
       name: data.gmail.name,
       summary:
-        data.gmail.accountEmail ??
+        accountSummary(data.gmail.accountEmail, data.gmail.availableConnections.length) ??
         oauthSummary(
           data.gmail.configured,
           data.gmail.connected,
@@ -121,7 +121,10 @@ export function buildAuthServiceDescriptors(
       name: data.googleCalendar.name,
       summary:
         data.googleCalendar.primaryCalendarSummary ??
-        data.googleCalendar.accountEmail ??
+        accountSummary(
+          data.googleCalendar.accountEmail,
+          data.googleCalendar.availableConnections.length
+        ) ??
         oauthSummary(
           data.googleCalendar.configured,
           data.googleCalendar.connected,
@@ -136,7 +139,10 @@ export function buildAuthServiceDescriptors(
       id: "googleDrive",
       name: data.googleDrive.name,
       summary:
-        data.googleDrive.accountEmail ??
+        accountSummary(
+          data.googleDrive.accountEmail,
+          data.googleDrive.availableConnections.length
+        ) ??
         data.googleDrive.accountName ??
         oauthSummary(
           data.googleDrive.configured,
@@ -183,6 +189,12 @@ export function buildAuthServiceDescriptors(
   ]
 }
 
+function accountSummary(accountEmail: string | null, connectionCount: number): string | null {
+  if (!accountEmail) return null
+  if (connectionCount <= 1) return accountEmail
+  return `${accountEmail} + ${connectionCount - 1} more`
+}
+
 export function oauthStatus(
   configured: boolean,
   connected: boolean,
@@ -209,29 +221,33 @@ export function oauthSummary(
 export function whatsAppStatus(
   entry: WhatsAppIntegrationStatusEntry
 ): Pick<AuthServiceDescriptor, "tone" | "status"> {
+  if (entry.provider === "disabled") return { tone: "muted", status: "Disabled" }
   if (!entry.configured) return { tone: "warn", status: "Browser needed" }
   if (entry.connected && !entry.needsReconnect)
     return { tone: "success", status: "Connected" }
   if (entry.phase === "qr") return { tone: "warn", status: "Scan QR" }
   if (entry.phase === "starting" || entry.phase === "authenticated")
     return { tone: "warn", status: "Linking" }
-  if (entry.sessionStored) return { tone: "warn", status: "Saved" }
   if (
+    entry.needsReconnect ||
     entry.phase === "error" ||
-    entry.phase === "auth_failure" ||
-    entry.needsReconnect
+    entry.phase === "auth_failure"
   ) {
     return { tone: "warn", status: "Reconnect" }
   }
+  if (entry.sessionStored) return { tone: "warn", status: "Saved" }
   return { tone: "muted", status: "Not connected" }
 }
 
 export function whatsAppSummary(entry: WhatsAppIntegrationStatusEntry): string {
+  if (entry.provider === "disabled") return "Disabled"
   if (entry.connected)
     return entry.accountName || entry.phoneNumber || "Local session running"
   if (entry.phase === "qr") return "Waiting for QR scan"
   if (entry.phase === "starting" || entry.phase === "authenticated")
-    return "WhatsApp Web is linking"
+    return "WhatsApp is linking"
+  if (entry.sessionStored && entry.needsReconnect)
+    return "Local session needs reconnect"
   if (entry.sessionStored) return "Session saved locally"
   if (!entry.configured) return "Local browser not found"
   return "No active session"

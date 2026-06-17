@@ -25,6 +25,7 @@ import { formatAssetReference } from '@/lib/ai/media-assets'
 import type { Attachment } from '@/lib/types'
 import { MAX_UPLOAD_FILE_BYTES, persistUploadBytes, resolveExistingUploadPath } from '@/lib/uploads'
 import { runIdBatch } from '@/lib/integrations/batch'
+import { withWhatsAppToolGuard } from '@/lib/integrations/whatsapp-tool-guard'
 import { booleanArg, clamp, collectIds, numberArg, stringArg } from './helpers'
 import { displayPath, isInsideProtectedAgentPath, resolveSandboxed } from './sandbox'
 
@@ -35,7 +36,7 @@ const MAX_WHATSAPP_TOTAL_ATTACHMENT_BYTES = 75 * 1024 * 1024
 export const whatsappStatusTool: ToolDef = {
     id: 'WhatsAppStatus',
     name: 'WhatsAppStatus',
-    description: 'Checks the local WhatsApp Web integration status, including whether a QR code is currently available and which confirmed write capabilities are enabled.',
+    description: 'Checks the local WhatsApp companion integration status, including provider, QR availability, local session state, and confirmed write capabilities.',
     input_schema: {
         type: 'object',
         properties: {},
@@ -47,7 +48,7 @@ export const whatsappConnectTool: ToolDef = {
     id: 'WhatsAppConnect',
     name: 'WhatsAppConnect',
     description: [
-        'Starts the local WhatsApp Web session and returns a QR image URL/markdown when login is needed.',
+        'Starts the local WhatsApp companion session and returns a QR image URL/markdown when login is needed.',
         'Use this when the user asks to configure, connect, reconnect, or scan WhatsApp.',
         'If qrMarkdown is present, show it directly in the final answer so the user can scan it from their phone.',
         'This setup tool never sends messages.',
@@ -62,7 +63,7 @@ export const whatsappConnectTool: ToolDef = {
 export const whatsappListChatsTool: ToolDef = {
     id: 'WhatsAppListChats',
     name: 'WhatsAppListChats',
-    description: 'Lists recent WhatsApp chats from the connected local WhatsApp Web session. Does not send or mark chats handled.',
+    description: 'Lists recent WhatsApp chats from the connected local companion session. Does not send or mark chats handled.',
     input_schema: {
         type: 'object',
         properties: {
@@ -78,13 +79,13 @@ export const whatsappListChatsTool: ToolDef = {
 export const whatsappUnreadSummaryTool: ToolDef = {
     id: 'WhatsAppUnreadSummary',
     name: 'WhatsAppUnreadSummary',
-    description: 'Returns the total unread WhatsApp count and unread chats from the connected local WhatsApp Web session. Does not read message bodies, send, or mark chats handled.',
+    description: 'Returns the total unread WhatsApp count and unread chats from the connected local companion session. Does not read message bodies, send, or mark chats handled.',
     input_schema: {
         type: 'object',
         properties: {
             max_results: {
                 type: 'integer',
-                description: 'Maximum unread chats to return. Defaults to 50 and is capped at 50. The total unread count scans all chats returned by WhatsApp Web.',
+                description: 'Maximum unread chats to return. Defaults to 50 and is capped at 50. The total unread count scans the chats currently known to the active provider.',
             },
         },
     },
@@ -123,7 +124,7 @@ export const whatsappReadChatTool: ToolDef = {
 export const whatsappSearchMessagesTool: ToolDef = {
     id: 'WhatsAppSearchMessages',
     name: 'WhatsAppSearchMessages',
-    description: 'Searches recent WhatsApp message bodies by scanning recent chats from the connected local WhatsApp Web session. This is not full account history search.',
+    description: 'Searches recent WhatsApp message bodies by scanning recent chats from the connected local companion session. This is not full account history search.',
     input_schema: {
         type: 'object',
         properties: {
@@ -157,10 +158,10 @@ export const whatsappFindMessagesTool: ToolDef = {
     id: 'WhatsAppFindMessages',
     name: 'WhatsAppFindMessages',
     description: [
-        'Finds older WhatsApp messages or media inside one chat by progressively loading that chat\'s WhatsApp Web history.',
+        'Finds WhatsApp messages or media inside one known chat, bounded by the active provider.',
         'Use this when WhatsAppReadChat/WhatsAppSearchMessages only see recent history, or when the user asks for older audio/photos/files by date.',
         'Pass chat_id from WhatsAppListChats, then narrow with query, date_from/date_to, types, media_only, or from_me. Returned ids can be passed to WhatsAppDownloadMedia when hasMedia is true.',
-        'This is read-only and never marks chats read, but it is bounded and not a guaranteed full account export; WhatsApp Web may stop before very old history or expired media.',
+        'This is read-only and never marks chats read. With Baileys it searches the bounded recent-message store; with legacy wwebjs it may progressively load older WhatsApp Web history, still capped by max_messages/max_loads.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -204,11 +205,11 @@ export const whatsappFindMessagesTool: ToolDef = {
             },
             max_messages: {
                 type: 'integer',
-                description: 'Approximate maximum messages to inspect while loading older history. Defaults to 500 and is capped at 2000.',
+                description: 'Approximate maximum messages to inspect. Defaults to 500 and is capped at 2000.',
             },
             max_loads: {
                 type: 'integer',
-                description: 'Maximum WhatsApp Web load-earlier batches. Defaults to 12 and is capped at 40.',
+                description: 'Maximum legacy WhatsApp Web load-earlier batches. Baileys ignores this because it only searches the bounded recent-message store. Defaults to 12 and is capped at 40.',
             },
         },
         required: ['chat_id'],
@@ -224,7 +225,7 @@ export const whatsappDownloadMediaTool: ToolDef = {
         'Pass the message_id (the id field from WhatsAppReadChat or WhatsAppSearchMessages) of a message whose hasMedia is true.',
         'On success the result includes mediaMarkdown — embed that string verbatim in your final answer so the photo/file appears inline for the user. The saved file is also exposed as an upload (attachment.id and url), which you can reuse, e.g. to forward it with WhatsAppSendMedia.',
         'This only reads and downloads; it never sends, forwards, or deletes anything, so no user confirmation is required.',
-        'Caveat about caching: WhatsApp removes media from its servers after a while. Old attachments can fail to download once they have dropped out of the local WhatsApp Web cache. If the download fails, tell the user the media is no longer retrievable and, if they still need it, ask them to reopen or resend it in WhatsApp. For older messages, call WhatsAppReadChat on that chat first so the message is loaded into view, then retry.',
+        'Caveat about caching: WhatsApp removes media from its servers after a while. Old attachments can fail to download once they have dropped out of the active provider cache. If the download fails, tell the user the media is no longer retrievable and, if they still need it, ask them to reopen or resend it in WhatsApp. For older messages, call WhatsAppReadChat or WhatsAppFindMessages on that chat first so the message is present in the bounded store, then retry.',
     ].join(' '),
     input_schema: {
         type: 'object',
@@ -260,7 +261,7 @@ export const whatsappSendMessageTool: ToolDef = {
             },
             link_preview: {
                 type: 'boolean',
-                description: 'Optional link preview setting. Defaults to WhatsApp Web behavior.',
+                description: 'Optional link preview setting. Defaults to the active WhatsApp provider behavior.',
             },
             confirmed_by_user: {
                 type: 'boolean',
@@ -422,7 +423,7 @@ export async function executeWhatsAppConnect(
     _args: Record<string, unknown>,
     ctx?: ToolExecutionContext
 ): Promise<ToolResult> {
-    const result = await startWhatsApp(ctx?.appOrigin)
+    const result = await withWhatsAppToolGuard('setup', 'connect', () => startWhatsApp(ctx?.appOrigin))
     return {
         success: true,
         data: {
@@ -438,13 +439,13 @@ export async function executeWhatsAppConnect(
 
 export async function executeWhatsAppListChats(args: Record<string, unknown>): Promise<ToolResult> {
     const maxResults = clamp(Math.floor(numberArg(args, ['max_results', 'maxResults'], 10)), 1, 50)
-    const result = await whatsappListChats(maxResults)
+    const result = await withWhatsAppToolGuard('read', `list:${maxResults}`, () => whatsappListChats(maxResults))
     return { success: true, data: result }
 }
 
 export async function executeWhatsAppUnreadSummary(args: Record<string, unknown>): Promise<ToolResult> {
     const maxResults = clamp(Math.floor(numberArg(args, ['max_results', 'maxResults'], 50)), 1, 50)
-    const result = await whatsappUnreadSummary(maxResults)
+    const result = await withWhatsAppToolGuard('read', `unread:${maxResults}`, () => whatsappUnreadSummary(maxResults))
     return { success: true, data: result }
 }
 
@@ -454,7 +455,11 @@ export async function executeWhatsAppReadChat(args: Record<string, unknown>): Pr
 
     const maxMessages = clamp(Math.floor(numberArg(args, ['max_messages', 'maxMessages'], 30)), 1, 100)
     const maxChars = clamp(Math.floor(numberArg(args, ['max_chars', 'maxChars'], 30_000)), 2_000, 80_000)
-    const result = await whatsappReadChat(chatId, maxMessages, maxChars)
+    const result = await withWhatsAppToolGuard(
+        'read',
+        `read:${chatId}:${maxMessages}:${maxChars}`,
+        () => whatsappReadChat(chatId, maxMessages, maxChars)
+    )
     return { success: true, data: result }
 }
 
@@ -467,13 +472,17 @@ export async function executeWhatsAppSearchMessages(args: Record<string, unknown
     const maxChats = clamp(Math.floor(numberArg(args, ['max_chats', 'maxChats'], 20)), 1, 50)
     const perChatLimit = clamp(Math.floor(numberArg(args, ['per_chat_limit', 'perChatLimit'], 50)), 1, 150)
 
-    const result = await whatsappSearchMessages({
-        query,
-        chatId: chatId || undefined,
-        maxResults,
-        maxChats,
-        perChatLimit,
-    })
+    const result = await withWhatsAppToolGuard(
+        'read',
+        `search:${chatId || '*'}:${maxResults}:${maxChats}:${perChatLimit}`,
+        () => whatsappSearchMessages({
+            query,
+            chatId: chatId || undefined,
+            maxResults,
+            maxChats,
+            perChatLimit,
+        })
+    )
     return { success: true, data: result }
 }
 
@@ -501,19 +510,23 @@ export async function executeWhatsAppFindMessages(args: Record<string, unknown>)
     const timeZone = stringArg(args, ['time_zone', 'timeZone', 'timezone']) || getConfiguredTimezone()
 
     try {
-        const result = await whatsappFindMessages({
-            chatId,
-            query: query || undefined,
-            dateFrom: dateFrom || undefined,
-            dateTo: dateTo || undefined,
-            timeZone,
-            types,
-            mediaOnly,
-            fromMe,
-            maxResults,
-            maxMessages,
-            maxLoads,
-        })
+        const result = await withWhatsAppToolGuard(
+            'deep_read',
+            `find:${chatId}:${maxResults}:${maxMessages}:${maxLoads}`,
+            () => whatsappFindMessages({
+                chatId,
+                query: query || undefined,
+                dateFrom: dateFrom || undefined,
+                dateTo: dateTo || undefined,
+                timeZone,
+                types,
+                mediaOnly,
+                fromMe,
+                maxResults,
+                maxMessages,
+                maxLoads,
+            })
+        )
         return {
             success: true,
             data: {
@@ -534,7 +547,7 @@ export async function executeWhatsAppDownloadMedia(args: Record<string, unknown>
 
     let media: WhatsAppDownloadedMedia
     try {
-        media = await whatsappDownloadMedia(messageId)
+        media = await withWhatsAppToolGuard('download', `download:${messageId}`, () => whatsappDownloadMedia(messageId))
     } catch (error) {
         return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
@@ -581,10 +594,14 @@ export async function executeWhatsAppSendMessage(args: Record<string, unknown>):
         return { success: false, error: `WhatsApp message body is over ${MAX_WHATSAPP_MESSAGE_CHARS} characters. Ask the user to approve a shorter message or split it.` }
     }
 
-    const result = await whatsappSendMessage(chatId, body, {
-        quotedMessageId: stringArg(args, ['quoted_message_id', 'quotedMessageId']) || undefined,
-        linkPreview: optionalBooleanArg(args, ['link_preview', 'linkPreview']),
-    })
+    const result = await withWhatsAppToolGuard(
+        'write',
+        `send:${chatId}`,
+        () => whatsappSendMessage(chatId, body, {
+            quotedMessageId: stringArg(args, ['quoted_message_id', 'quotedMessageId']) || undefined,
+            linkPreview: optionalBooleanArg(args, ['link_preview', 'linkPreview']),
+        })
+    )
     return { success: true, data: result }
 }
 
@@ -606,9 +623,13 @@ export async function executeWhatsAppSendMedia(
         return { success: false, error: `WhatsApp caption is over ${MAX_WHATSAPP_MESSAGE_CHARS} characters. Ask the user to approve a shorter caption.` }
     }
 
-    const result = await whatsappSendMedia(chatId, attachments.value, caption || undefined, {
-        quotedMessageId: stringArg(args, ['quoted_message_id', 'quotedMessageId']) || undefined,
-    })
+    const result = await withWhatsAppToolGuard(
+        'write',
+        `send-media:${chatId}:${attachments.value.length}`,
+        () => whatsappSendMedia(chatId, attachments.value, caption || undefined, {
+            quotedMessageId: stringArg(args, ['quoted_message_id', 'quotedMessageId']) || undefined,
+        })
+    )
     return {
         success: true,
         data: {
@@ -631,23 +652,83 @@ export async function executeWhatsAppDeleteMessageForEveryone(args: Record<strin
     const messageIds = collectIds(args, ['message_ids', 'message_id', 'messageId', 'ids', 'id'])
     if (messageIds.length === 0) return { success: false, error: 'Missing required parameter: message_id' }
 
-    if (messageIds.length === 1) return { success: true, data: await whatsappDeleteMessageForEveryone(messageIds[0]) }
-    // WhatsApp Web runs through a single client session — keep concurrency low.
-    return { success: true, data: await runIdBatch(messageIds, id => whatsappDeleteMessageForEveryone(id), { concurrency: 3 }) }
+    if (messageIds.length === 1) {
+        return {
+            success: true,
+            data: await withWhatsAppToolGuard(
+                'write',
+                `delete:${messageIds[0]}`,
+                () => whatsappDeleteMessageForEveryone(messageIds[0])
+            ),
+        }
+    }
+    // WhatsApp runs through a single local companion session; the guard serializes each operation.
+    return {
+        success: true,
+        data: await runIdBatch(
+            messageIds,
+            id => withWhatsAppToolGuard(
+                'write',
+                `delete:${id}`,
+                () => whatsappDeleteMessageForEveryone(id)
+            ),
+            { concurrency: 3 }
+        ),
+    }
 }
 
 export async function executeWhatsAppMarkChatRead(args: Record<string, unknown>): Promise<ToolResult> {
     const chatIds = collectIds(args, ['chat_ids', 'chat_id', 'chatId', 'ids', 'id'])
     if (chatIds.length === 0) return { success: false, error: 'Missing required parameter: chat_id' }
-    if (chatIds.length === 1) return { success: true, data: await whatsappMarkChatRead(chatIds[0]) }
-    return { success: true, data: await runIdBatch(chatIds, id => whatsappMarkChatRead(id), { concurrency: 3 }) }
+    if (chatIds.length === 1) {
+        return {
+            success: true,
+            data: await withWhatsAppToolGuard(
+                'write',
+                `mark-read:${chatIds[0]}`,
+                () => whatsappMarkChatRead(chatIds[0])
+            ),
+        }
+    }
+    return {
+        success: true,
+        data: await runIdBatch(
+            chatIds,
+            id => withWhatsAppToolGuard(
+                'write',
+                `mark-read:${id}`,
+                () => whatsappMarkChatRead(id)
+            ),
+            { concurrency: 3 }
+        ),
+    }
 }
 
 export async function executeWhatsAppMarkChatUnread(args: Record<string, unknown>): Promise<ToolResult> {
     const chatIds = collectIds(args, ['chat_ids', 'chat_id', 'chatId', 'ids', 'id'])
     if (chatIds.length === 0) return { success: false, error: 'Missing required parameter: chat_id' }
-    if (chatIds.length === 1) return { success: true, data: await whatsappMarkChatUnread(chatIds[0]) }
-    return { success: true, data: await runIdBatch(chatIds, id => whatsappMarkChatUnread(id), { concurrency: 3 }) }
+    if (chatIds.length === 1) {
+        return {
+            success: true,
+            data: await withWhatsAppToolGuard(
+                'write',
+                `mark-unread:${chatIds[0]}`,
+                () => whatsappMarkChatUnread(chatIds[0])
+            ),
+        }
+    }
+    return {
+        success: true,
+        data: await runIdBatch(
+            chatIds,
+            id => withWhatsAppToolGuard(
+                'write',
+                `mark-unread:${id}`,
+                () => whatsappMarkChatUnread(id)
+            ),
+            { concurrency: 3 }
+        ),
+    }
 }
 
 interface ParsedAttachmentInput {

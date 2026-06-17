@@ -177,7 +177,7 @@ export function createActivateIntegrationToolsExecutor(
             continue
         }
         const state = snapshot?.[entry.statusKind]?.state
-        if (state === 'connected') {
+        if (state === 'connected' || state === 'resumable') {
             activatedNow.push(id)
             report.push(`${describeActivatedIntegration(id)} If a listed tool schema is not directly visible in this same turn, call RunActivatedIntegrationTool with its tool_id and arguments.${activatedToolSchemasBlock(id, resolveTool)}`)
         } else {
@@ -185,6 +185,7 @@ export function createActivateIntegrationToolsExecutor(
             const stateText =
                 state === 'needs_reconnect' ? 'needs reconnect'
                 : state === 'configured' ? 'configured but not connected'
+                : state === 'disabled' ? 'disabled'
                 : state === 'not_configured' ? 'not configured'
                 : 'connection state unknown'
             report.push(

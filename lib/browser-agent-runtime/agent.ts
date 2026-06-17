@@ -3,7 +3,7 @@
  * Smart automation loop with failure tracking and memory
  */
 
-import { ActionTrace, BrowserDiagnosticsSnapshot, BrowserFetchResult, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
+import { ActionTrace, ActionTraceFrame, BrowserDiagnosticsSnapshot, BrowserFetchResult, BrowserFrameSnapshot, BrowserPageSession, BrowserVideoRecording } from './browser';
 import { VisionService, AgentAction, VisionConfig, VisionCoordinateMode } from './vision';
 import { ActionHistoryItem, IterationLimitReview } from './prompts';
 import { initializeDefaultLearnings, addLearning } from './memory';
@@ -351,6 +351,10 @@ export function createAgentController(
                     let shouldRestartLoop = false;
                     const frameCapturedAtMs = Date.parse(frame.timestamp);
                     let executedEarlierActionInBatch = false;
+                    // Per-step evidence for batches: one screenshot after each batched
+                    // action so the next reasoning turn can see what every step did and
+                    // exactly where a multi-action batch diverged.
+                    const batchStepFrames: ActionTraceFrame[] = [];
 
                     for (let i = 0; i < actions.length; i++) {
                         const action = actions[i];
@@ -592,10 +596,24 @@ export function createAgentController(
                             pendingCaptureSettle = true;
                         }
 
+                        // Capture what this batched step produced. Skip the final step —
+                        // the next loop captures a fresh, settled frame of that state.
+                        if (actions.length > 1 && i < actions.length - 1 && actionCanChangeVisualState(action)) {
+                            const stepFrame = await browser.captureLiveFrame().catch(() => null);
+                            if (stepFrame) {
+                                batchStepFrames.push({ ...stepFrame, label: `batch step ${i + 1}/${actions.length}: ${desc}` });
+                            }
+                        }
+
                         if (action.action === 'inspectPage' || action.action === 'findInPage') {
                             shouldRestartLoop = true;
                             break;
                         }
+                    }
+
+                    if (batchStepFrames.length > 0) {
+                        pendingSupplementalFrames = [...batchStepFrames, ...pendingSupplementalFrames];
+                        onStatusUpdate(`🎞️ Captured ${batchStepFrames.length} per-step frame(s) from the batch.`);
                     }
 
                     if (shouldBreak) break;
@@ -1147,9 +1165,14 @@ async function executeAction(
                     return { success: false, trace: null, supplementalFrames: [] };
                 }
                 onStatusUpdate(`🔎 Finding in page: "${query}"`);
-                await browser.findInPage(query, Boolean(action.submit));
+                const findResult = await browser.findInPage(query, Boolean(action.submit));
                 await sleep(timing.actionSettleDelayMs);
-                return { success: true, trace: null, supplementalFrames: [] };
+                const findObservation = findResult.found
+                    ? `Found "${query}"${findResult.count > 1 ? ` — ${findResult.count} matches on the page` : ''}. Scrolled the match into view and highlighted it.`
+                    : findResult.count > 0
+                        ? `"${query}" appears ${findResult.count} time(s) in the page text but could not be auto-scrolled to (it may be hidden, collapsed, or inside an iframe). Try scrolling or expanding sections.`
+                        : `No match for "${query}" in the current page text. It may be inside a collapsed section, behind a tab, in an iframe, rendered as an image, or not present.`;
+                return { success: true, trace: null, supplementalFrames: [], observation: findObservation };
             }
 
             case 'inspectDiagnostics': {
