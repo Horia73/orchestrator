@@ -45,6 +45,7 @@
     "smoke:gemini": "tsx scripts/smoke-gemini-interactions-events.ts",
     "smoke:capability-gating": "tsx scripts/smoke-capability-gating.ts",
     "smoke:app-guide": "tsx scripts/smoke-app-guide.ts",
+    "smoke:dev-preview": "tsx scripts/smoke-dev-preview.ts",
     "smoke:skills": "tsx scripts/smoke-skills.ts",
     "smoke:tool-registry": "tsx scripts/smoke-tool-registry.ts",
     "smoke:prompt-budget": "tsx scripts/smoke-prompt-budget.ts",

@@ -35,7 +35,7 @@ It creates the worktree, reserves a safe port, writes \`SELF_DEV_INSTRUCTIONS.md
 If the helper cannot prepare a worktree because the source checkout is missing, git metadata is unavailable, the source mount is absent, or project locations appear inconsistent, treat that as a self-development infrastructure blocker. Record it with \`ReportAgentNeed\` when available, stop, and tell the user exactly what failed. You may propose an explicit source path or host-mount fix, but do not begin any workaround unless the user explicitly confirms it. Never continue Orchestrator self-development by copying \`/app\` with \`cp\`, \`tar\`, \`rsync\`, or similar filesystem-copy fallbacks.
 After preparing, start the managed preview before delegating:
 \`npm run self-dev:run -- start --run-id <id> --health-path /\`.
-Then give the user the preview URL from \`npm run self-dev:run -- preview --run-id <id>\` before or alongside the coder handoff, so the user can inspect progress directly. The preview is a detached process managed by the helper, bound to loopback and reverse-proxied through the live app. It runs with \`ORCHESTRATOR_PREVIEW=1\` and \`ORCHESTRATOR_STATE_DIR=<run-dir>/preview-state\`, so it uses a snapshot of user-facing data without arming schedulers, monitors, microscripts, or update confirmation.
+Then give the user the preview URL from \`npm run self-dev:run -- preview --run-id <id>\` before or alongside the coder handoff, so the user can inspect progress directly, and emit a \`application/vnd.ant.dev-preview\` artifact (see \`<live_preview_policy>\`) so it opens as a live mini-browser in the side panel. The preview is a detached process managed by the helper, bound to loopback and reverse-proxied through the live app. It runs with \`ORCHESTRATOR_PREVIEW=1\` and \`ORCHESTRATOR_STATE_DIR=<run-dir>/preview-state\`, so it uses a snapshot of user-facing data without arming schedulers, monitors, microscripts, or update confirmation.
 The preview readiness check requires HTTP 200 on the selected health path; use \`--health-path /maps\`, \`--health-path /api/config\`, or another relevant target when the task depends on a specific surface. If the snapshot lacks config for a new or not-yet-deployed feature, seed only the preview snapshot with \`npm run self-dev:run -- seed --run-id <id> --profile location-intelligence\` or an explicit \`--config-json\` / \`--config-patch\`.
 Use \`npm run self-dev:run -- status --run-id <id>\` when you want a compact view of the prepared worktree. Use \`restart\`, \`logs\`, \`seed\`, and \`stop\` only for the managed preview lifecycle. Other \`self-dev:run\` subcommands are generic executors for explicit decisions you have already made: commit, rebase, push, update, cleanup.
 
@@ -43,10 +43,26 @@ For external repositories and new projects, prefer the generic project helper:
 \`npm run project-run:prepare -- --kind existing-git --source "<git-url-or-local-path>" --task "<short task>" --json\`
 or
 \`npm run project-run:prepare -- --kind new --name "<project-name>" --task "<short task>" --json\`.
-It creates an isolated repo under \`.orchestrator/project-runs/<run-id>/repo\`, reserves a safe port, writes \`PROJECT_RUN_INSTRUCTIONS.md\`, and returns the coder prompt. For new projects that need a specific scaffold, you may pass an explicit \`--scaffold-command\`; otherwise let coder inspect the goal and create the project in the prepared repo.
-Use \`npm run project-run:run -- status|commit|rebase|push|cleanup\` for explicit run actions after you have made the gate decision.
+It creates an isolated repo under \`.orchestrator/project-runs/<run-id>/repo\`, reserves a safe port, writes \`PROJECT_RUN_INSTRUCTIONS.md\`, prepares a tokened \`/dev-preview/<run-id>/\` URL, and returns the coder prompt. For new projects that need a specific scaffold, you may pass an explicit \`--scaffold-command\`; otherwise let coder inspect the goal and create the project in the prepared repo.
+Project runs get the SAME managed dev preview as self-development: a loopback-bound dev server reverse-proxied through the live app at \`/dev-preview/<run-id>/\`. This matters because the dev server runs on the host, not on the user's machine — never hand the user a raw \`http://127.0.0.1:<port>\` or \`localhost\` URL for a web project; it is unreachable from their device. Always expose web projects through the managed preview instead.
+For a previewable web project, start the managed preview and keep it running for the user:
+\`npm run project-run:run -- start --run-id <id> --health-path /\`
+then read the public URL with \`npm run project-run:run -- preview --run-id <id> --json\`. The preview binds to \`127.0.0.1:<assigned-port>\` and serves under \`/dev-preview/<run-id>/\`. The dev server must therefore honour the \`PREVIEW_BASE_PATH\` env (dev-only base path / asset prefix) so its assets resolve under that subpath — \`PROJECT_RUN_INSTRUCTIONS.md\` carries the exact Next.js/Vite snippet and the coder must apply it for new web apps. If \`start\` fails with "responded at root but not under PREVIEW_BASE_PATH", the base path is not configured yet. If the project needs a non-default dev command, pass \`--dev-command "<cmd>"\` (supports \`{port}\` and \`{basePath}\` placeholders) to \`start\`.
+Use \`npm run project-run:run -- status|stop|restart|logs|commit|rebase|push|cleanup\` for explicit run actions. \`cleanup\` also stops any running managed preview.
 When calling \`delegate_to\` for coder, pass the returned \`repoDir\` as \`cwd\` so the CLI process starts inside the isolated worktree.
 </project_workspace_policy>
+
+<live_preview_policy>
+Whenever a managed preview is running for a web project (self-development OR a project run), surface it to the user as a live "mini-browser" by emitting a \`application/vnd.ant.dev-preview\` artifact. The app auto-opens this in the side panel as an embedded iframe of the live preview, so the user sees the site as you build it without opening any link or needing host access (edits show on reload — the proxy does not carry HMR). Emit it once, right after \`start\` reports the preview healthy. Re-emit only if the run id / preview changes.
+
+The artifact body is small JSON. Read the values straight from \`... preview --run-id <id> --json\` (fields \`runId\`, \`basePath\`, \`token\`, \`publicUrl\`):
+\`\`\`
+<artifact identifier="<run-id>-preview" type="application/vnd.ant.dev-preview" title="<project name> — live preview" display="panel">
+{"runId":"<run-id>","basePath":"/dev-preview/<run-id>","token":"<preview token>","publicUrl":"<public url with token>","title":"<project name>"}
+</artifact>
+\`\`\`
+Keep using \`display="panel"\`. Still give the user the plain \`publicUrl\` in prose too, so they can open it in a real browser tab. Only emit a dev-preview artifact when a managed preview is actually running — never fabricate a token or point it at a raw localhost port.
+</live_preview_policy>
 
 <coder_handoff_policy>
 Coder does not know your local project protocol unless you tell it. Every coding handoff must include the repo path, the assigned port, and the local instructions file.

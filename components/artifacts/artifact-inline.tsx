@@ -8,6 +8,7 @@ import { AppLinkRenderer } from "./renderers/app-link-renderer"
 import { CadRenderer } from "./renderers/cad-renderer"
 import { CodeRenderer } from "./renderers/code-renderer"
 import { CsvRenderer } from "./renderers/csv-renderer"
+import { DevPreviewRenderer } from "./renderers/dev-preview-renderer"
 import { HtmlSandboxRenderer } from "./renderers/html-sandbox-renderer"
 import { JsonRenderer } from "./renderers/json-renderer"
 import { LatexRenderer } from "./renderers/latex-renderer"
@@ -116,6 +117,8 @@ export function ArtifactBody({
             return <WorkoutRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/vnd.ant.cad':
             return <CadRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
+        case 'application/vnd.ant.dev-preview':
+            return <DevPreviewRenderer source={content} title={artifact.title} mode={mode} artifactId={artifact.id} />
         case 'application/xml':
         case 'text/vnd.graphviz':
             // No first-class renderer yet — fall through to syntax-highlighted code.
@@ -146,6 +149,7 @@ function extensionFor(mime: string, language?: string | null): string {
         case 'application/vnd.ant.recipe': return 'json'
         case 'application/vnd.ant.workout': return 'json'
         case 'application/vnd.ant.cad': return 'json'
+        case 'application/vnd.ant.dev-preview': return 'json'
         case 'application/vnd.ant.app-link': return 'json'
         case 'application/vnd.ant.code': return language || 'txt'
         case 'application/xml': return 'xml'

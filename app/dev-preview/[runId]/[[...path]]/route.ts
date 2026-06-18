@@ -166,6 +166,12 @@ function upstreamResponseHeaders(headers: Headers): Headers {
   for (const name of HOP_BY_HOP_HEADERS) next.delete(name)
   next.delete('content-encoding')
   next.delete('content-length')
+  // The preview is rendered inside the live app's own mini-browser iframe
+  // (same-origin via this proxy). Strip frame-blocking headers a dev server
+  // might emit so the embedded preview is never blank.
+  next.delete('x-frame-options')
+  next.delete('content-security-policy')
+  next.delete('content-security-policy-report-only')
   return next
 }
 

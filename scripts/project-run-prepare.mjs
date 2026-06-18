@@ -3,7 +3,7 @@ import fs from 'fs'
 import net from 'net'
 import os from 'os'
 import path from 'path'
-import { randomUUID } from 'crypto'
+import { randomBytes, randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
 
 const projectDir = process.cwd()
@@ -61,6 +61,24 @@ try {
 
   const port = await reservePort(requestedPort)
   const devUrl = `http://127.0.0.1:${port}`
+  // Reverse-proxy the loopback dev server through the live app so the user can
+  // open the preview from anywhere (not just the box the dev server runs on).
+  // Mirrors the self-dev managed preview; lifecycle is driven by
+  // `project-run:run -- start|stop`.
+  const previewToken = randomBytes(24).toString('base64url')
+  const previewBasePath = `/dev-preview/${encodeURIComponent(runId)}`
+  const publicPreviewUrl = buildPublicPreviewUrl(previewBasePath, previewToken)
+  const localPreviewUrl = `${devUrl}${previewBasePath}/`
+  const preview = {
+    token: previewToken,
+    basePath: previewBasePath,
+    publicUrl: publicPreviewUrl,
+    localUrl: localPreviewUrl,
+    logPath: path.join(runDir, 'preview.log'),
+    stateDir: path.join(runDir, 'preview-state'),
+    status: 'prepared',
+    pid: null,
+  }
   const hints = detectProjectHints(repoDir, {
     packageManager: packageManagerArg,
     devCommand: devCommandArg,
@@ -81,6 +99,7 @@ try {
     branch,
     port,
     devUrl,
+    preview,
     template,
     deployTarget,
     pushPolicy,
@@ -97,6 +116,7 @@ try {
     instructionsPath,
     port,
     devUrl,
+    preview,
     template,
     deployTarget,
     pushPolicy,
@@ -113,6 +133,7 @@ try {
     baseRef: prepared.baseRef,
     port,
     devUrl,
+    preview,
     instructionsPath,
     task,
     template,
@@ -144,6 +165,8 @@ try {
     console.log(`Base: ${prepared.baseRef || '(none)'}`)
     console.log(`Port: ${port}`)
     console.log(`Dev URL: ${devUrl}`)
+    console.log(`Preview base path: ${previewBasePath}`)
+    console.log(`Preview URL: ${publicPreviewUrl || '(set ORCHESTRATOR_PUBLIC_URL to expose a public /dev-preview link)'}`)
     console.log(`Instructions: ${instructionsPath}`)
     console.log(`State: ${statePath}`)
     console.log('')
@@ -383,28 +406,55 @@ function buildInstructions(values) {
     '',
     'Do not pull, rebase, reset, stash, or discard local work unless the orchestrator explicitly asks you to.',
     '',
-    '## Development Server',
+    '## Development Server & Managed Preview',
     '',
-    'Use the assigned port for local dev/testing:',
+    'The Orchestrator runs the dev server for you as a managed, reverse-proxied preview so the user can open it from anywhere. Do NOT start your own long-running dev server for this repo; the orchestrator owns its lifecycle via:',
+    '',
+    '```bash',
+    `npm run project-run:run -- start --run-id ${values.runId} --health-path /`,
+    `npm run project-run:run -- restart --run-id ${values.runId}`,
+    `npm run project-run:run -- logs --run-id ${values.runId} --lines 200`,
+    '```',
+    '',
+    'Assigned loopback dev URL (used internally by the managed preview):',
     '',
     '```text',
     values.devUrl,
     '```',
     '',
-    'Bind dev servers to `127.0.0.1` when possible. Avoid port `3000` because it may be used by the running Orchestrator app.',
+    `The managed preview binds to \`127.0.0.1:${values.port}\` and is exposed through the live app at \`${values.preview.basePath}/\`${values.preview.publicUrl ? ` (public: ${values.preview.publicUrl})` : ''}. Never use port \`3000\` (the running Orchestrator app).`,
+    '',
+    '### Base-path contract (required for previewable web apps)',
+    '',
+    `Because the preview is served under \`${values.preview.basePath}/\` rather than \`/\`, a web app MUST honour the \`PREVIEW_BASE_PATH\` env so its assets and routes resolve. This is dev-only and must not affect production builds. Examples:`,
+    '',
+    '```js',
+    '// next.config.mjs — basePath/assetPrefix only when PREVIEW_BASE_PATH is set',
+    'const previewBase = process.env.PREVIEW_BASE_PATH',
+    'const nextConfig = {',
+    '  ...(previewBase ? { basePath: previewBase, assetPrefix: previewBase } : {}),',
+    '}',
+    'export default nextConfig',
+    '```',
+    '',
+    '```js',
+    '// vite.config.js — base from PREVIEW_BASE_PATH (trailing slash)',
+    "const previewBase = process.env.PREVIEW_BASE_PATH",
+    "export default { base: previewBase ? previewBase + '/' : '/' }",
+    '```',
+    '',
+    `The managed preview sets \`PREVIEW_BASE_PATH=${values.preview.basePath}\`, \`HOST=127.0.0.1\`, and \`PORT=${values.port}\` when it launches your dev command. If a framework needs a non-default dev command, the orchestrator can pass \`--dev-command\` to \`start\`.`,
     '',
     devCommand
       ? [
-        'Suggested dev command when it matches the project:',
+        'Detected dev command the managed preview will use by default:',
         '',
         '```bash',
         devCommand,
         '```',
         '',
       ].join('\n')
-      : 'Inspect the project and choose the right dev command. If the tool accepts host/port flags, use the assigned host and port.\n',
-    'Stop any dev server you started before returning.',
-    '',
+      : 'No dev command was auto-detected. Make sure a standard dev command exists (or tell the orchestrator to pass `--dev-command` to `start`).\n',
     '## Verification',
     '',
     'Inspect the project and choose the checks that match the change. Prefer existing package scripts, framework checks, and targeted smoke tests.',
@@ -443,7 +493,9 @@ function buildCoderPrompt(values) {
     `- Kind: ${values.kind}`,
     `- Branch: ${branch}`,
     `- Base: ${values.baseRef || values.baseBranch || '(new project)'}`,
-    `- Assigned dev URL: ${values.devUrl}`,
+    `- Assigned dev URL (loopback): ${values.devUrl}`,
+    `- Managed preview base path: ${values.preview.basePath}/ (orchestrator runs the dev server via \`project-run:run -- start\`; do not run your own)`,
+    `- Previewable web apps must honour PREVIEW_BASE_PATH (dev-only basePath/assetPrefix) so assets resolve under ${values.preview.basePath}/. See the instructions file.`,
     `- Push policy hint: ${values.pushPolicy}`,
     `- Deployment target hint: ${values.deployTarget}`,
     values.clonedFrom ? `- Cloned from: ${values.clonedFrom}` : null,
@@ -453,10 +505,30 @@ function buildCoderPrompt(values) {
     values.template ? `- Template hint: ${values.template}` : null,
     '- Before editing, run `git branch --show-current` and `git status --short` in the isolated repository.',
     '',
-    'You own implementation and testing. Inspect the repo yourself, choose the needed commands, fix failures you introduce, and stop any dev server before returning.',
+    'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Use the orchestrator-managed preview for visual checks instead of starting your own dev server; if the preview is down, ask the orchestrator to restart it.',
     '',
-    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, dev URL used if any, and blockers/risks.',
+    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, the managed preview URL if used, and blockers/risks.',
   ].filter(Boolean).join('\n')
+}
+
+function buildPublicPreviewUrl(basePath, token) {
+  const origin = publicOrigin()
+  if (!origin) return null
+  const url = new URL(`${basePath}/`, origin)
+  url.searchParams.set('preview_token', token)
+  return url.toString()
+}
+
+function publicOrigin() {
+  const raw = process.env.ORCHESTRATOR_PUBLIC_URL
+    || process.env.ORCHESTRATOR_APP_URL
+    || process.env.NEXT_PUBLIC_APP_URL
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `https://${raw}`).origin
+  } catch {
+    return null
+  }
 }
 
 function parseArgs(argv) {

@@ -2640,6 +2640,26 @@ export function ChatView() {
       .catch(() => {})
   }, [conversationId])
 
+  // ── Live preview auto-open ────────────────────────────────────────────
+  // When the agent emits a dev-preview artifact (a managed project-run /
+  // self-dev preview), pop the side panel open as a live "mini-browser" so the
+  // user sees the site being built without hunting for a link. Tracked per
+  // artifact id so closing it — or a later unrelated artifact — never yanks it
+  // back open.
+  const autoOpenedPreviewIdsRef = React.useRef<Set<string>>(new Set())
+  React.useEffect(() => {
+    function onArtifact(e: Event) {
+      const row = (e as CustomEvent).detail as ArtifactRow | undefined
+      if (!row || row.type !== "application/vnd.ant.dev-preview") return
+      if (row.conversationId !== conversationId) return
+      if (autoOpenedPreviewIdsRef.current.has(row.id)) return
+      autoOpenedPreviewIdsRef.current.add(row.id)
+      handleArtifactExpand(row)
+    }
+    window.addEventListener("orch:artifact", onArtifact)
+    return () => window.removeEventListener("orch:artifact", onArtifact)
+  }, [conversationId, handleArtifactExpand])
+
   // ── Keyboard shortcuts ────────────────────────────────────────────────
   //   Cmd/Ctrl + \  — toggle the side panel (close if open, reopen last if not)
   //   Cmd/Ctrl + Shift + E — open panel for the most recent artifact in conv

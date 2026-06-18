@@ -82,7 +82,7 @@ function printStatus(context) {
 }
 
 async function startPreview(context) {
-  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is not available for this run.')
   assertRepoReady(context)
   assertExpectedBranch(context)
 
@@ -119,27 +119,52 @@ async function startPreview(context) {
     return output(previewOutput(context, { running: true }), previewSummary(context, true))
   }
 
-  const refreshState = boolArg('refresh-state')
-  if (refreshState || !fs.existsSync(preview.stateDir)) {
-    await snapshotPreviewState(context, preview.stateDir)
-  } else {
-    ensurePreviewStateDirs(preview.stateDir)
+  const selfRun = isSelfRun(context)
+
+  // Self-development previews run a copy of the Orchestrator app and therefore
+  // need a snapshot of live state plus the app's node_modules. Generic project
+  // runs (new sites / external repos) just run the project's own dev server in
+  // the prepared repo, so they skip both.
+  if (selfRun) {
+    const refreshState = boolArg('refresh-state')
+    if (refreshState || !fs.existsSync(preview.stateDir)) {
+      await snapshotPreviewState(context, preview.stateDir)
+    } else {
+      ensurePreviewStateDirs(preview.stateDir)
+    }
+    ensureNodeModulesLink(context)
   }
 
-  ensureNodeModulesLink(context)
   await assertPortAvailable(port)
 
   fs.mkdirSync(path.dirname(preview.logPath), { recursive: true })
   const outFd = fs.openSync(preview.logPath, 'a')
-  const nextBin = resolveNextBin(context)
-  const commandArgs = ['dev', '--turbopack', '-H', '127.0.0.1', '-p', String(port)]
-  const env = previewProcessEnv({ context, preview, port })
-  const child = spawn(nextBin, commandArgs, {
-    cwd: context.state.repoDir,
-    detached: true,
-    stdio: ['ignore', outFd, outFd],
-    env,
-  })
+
+  let child
+  let commandLabel
+  if (selfRun) {
+    const nextBin = resolveNextBin(context)
+    const commandArgs = ['dev', '--turbopack', '-H', '127.0.0.1', '-p', String(port)]
+    commandLabel = `${nextBin} ${commandArgs.join(' ')}`
+    child = spawn(nextBin, commandArgs, {
+      cwd: context.state.repoDir,
+      detached: true,
+      stdio: ['ignore', outFd, outFd],
+      env: previewProcessEnv({ context, preview, port }),
+    })
+  } else {
+    commandLabel = resolveProjectDevCommand(context, port)
+    // shell:true so package-manager scripts (`npm run dev`, `pnpm dev`) work as
+    // written; detached:true makes the child a process-group leader so stop can
+    // reap the whole tree (npm/pnpm wrappers fork the real dev server).
+    child = spawn(commandLabel, {
+      cwd: context.state.repoDir,
+      detached: true,
+      shell: true,
+      stdio: ['ignore', outFd, outFd],
+      env: projectPreviewProcessEnv({ context, preview, port }),
+    })
+  }
   child.unref()
   fs.closeSync(outFd)
 
@@ -151,19 +176,20 @@ async function startPreview(context) {
     stoppedAt: null,
     exitCode: null,
     healthPath,
-    command: `${nextBin} ${commandArgs.join(' ')}`,
+    command: commandLabel,
   })
 
   try {
     await waitForPreview(context, port, preview.basePath, healthPath)
   } catch (error) {
     const alive = child.pid ? isPidAlive(child.pid) : false
+    const detail = !selfRun ? await describeProjectPreviewFailure(port, preview.basePath) : ''
     updatePreviewState(context, {
       status: alive ? 'starting' : 'failed',
       checkedAt: new Date().toISOString(),
-      lastError: error instanceof Error ? error.message : String(error),
+      lastError: `${error instanceof Error ? error.message : String(error)}${detail}`,
     })
-    throw error
+    throw new Error(`${error instanceof Error ? error.message : String(error)}${detail}`)
   }
 
   updatePreviewState(context, {
@@ -190,19 +216,11 @@ async function stopPreview(context, options = {}) {
     return
   }
 
-  try {
-    process.kill(info.pid, 'SIGTERM')
-  } catch {
-    // Already gone; state is updated below.
-  }
+  signalPreviewProcess(info.pid, 'SIGTERM')
 
   const stopped = await waitForPidExit(info.pid, 5000)
   if (!stopped && boolArg('force')) {
-    try {
-      process.kill(info.pid, 'SIGKILL')
-    } catch {
-      // Already gone.
-    }
+    signalPreviewProcess(info.pid, 'SIGKILL')
     await waitForPidExit(info.pid, 2000)
   } else if (!stopped) {
     updatePreviewState(context, {
@@ -223,13 +241,13 @@ async function stopPreview(context, options = {}) {
 }
 
 function printPreview(context) {
-  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is not available for this run.')
   const info = previewOutput(context)
   output(info, previewSummary(context, info.running))
 }
 
 function printLogs(context) {
-  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is not available for this run.')
   const preview = ensurePreviewMetadata(context)
   const lines = intArg('lines', LOG_TAIL_DEFAULT_LINES)
   const body = tailFile(preview.logPath, Math.max(1, lines))
@@ -237,7 +255,7 @@ function printLogs(context) {
 }
 
 async function seedPreview(context) {
-  if (!supportsManagedPreview(context)) fail('Managed dev preview is only available for Orchestrator self-development runs.')
+  if (!supportsManagedPreview(context)) fail('Managed dev preview is not available for this run.')
 
   const preview = ensurePreviewMetadata(context)
   if (!fs.existsSync(preview.stateDir)) {
@@ -565,7 +583,7 @@ function collectStatus(context) {
 
 function ensurePreviewMetadata(context) {
   if (!supportsManagedPreview(context)) {
-    fail('Managed dev preview is only available for Orchestrator self-development runs.')
+    fail('Managed dev preview is not available for this run.')
   }
   const existing = context.state.preview && typeof context.state.preview === 'object'
     ? context.state.preview
@@ -599,9 +617,18 @@ function ensurePreviewMetadata(context) {
 }
 
 function supportsManagedPreview(context) {
-  if (context.state.kind === 'self') return true
+  const kind = context.state.kind
+  // Self-development runs and generic project runs (new sites / external repos)
+  // all share the same loopback-bound dev server reverse-proxied through the
+  // live app at /dev-preview/<run-id>/. The only difference is how the dev
+  // process is launched (see startPreview), not whether a preview is allowed.
+  if (kind === 'self' || kind === 'new' || kind === 'existing-git') return true
   const preview = context.state.preview
   return Boolean(preview && typeof preview === 'object' && typeof preview.basePath === 'string' && preview.basePath.startsWith('/dev-preview/'))
+}
+
+function isSelfRun(context) {
+  return context.state.kind === 'self'
 }
 
 function updatePreviewState(context, patch) {
@@ -662,6 +689,9 @@ function previewOutput(context, overrides = {}) {
     localUrl: preview.localUrl,
     publicUrl: preview.publicUrl,
     basePath: preview.basePath,
+    // Exposed so the agent can build a dev-preview artifact (live mini-browser)
+    // without parsing it back out of publicUrl. Already embedded in publicUrl.
+    token: preview.token,
     healthPath: preview.healthPath ?? '/',
     stateDir: preview.stateDir,
     logPath: preview.logPath,
@@ -824,6 +854,100 @@ function previewProcessEnv({ context, preview, port }) {
     ORCHESTRATOR_PREVIEW_RUN_ID: context.state.runId,
     ORCHESTRATOR_PREVIEW_BASE_PATH: preview.basePath,
   }
+}
+
+// Environment for a generic project-run dev server. Unlike previewProcessEnv
+// (which arms a sandboxed copy of the Orchestrator app), this passes only the
+// loopback host/port and the reverse-proxy base path. A previewable web project
+// is expected to honour PREVIEW_BASE_PATH (e.g. Next.js basePath/assetPrefix,
+// Vite `base`) so its assets resolve under /dev-preview/<run-id>/.
+function projectPreviewProcessEnv({ preview, port }) {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    if (
+      key.startsWith('__NEXT_') ||
+      key.startsWith('NEXT_PRIVATE_') ||
+      key === 'NEXT_RUNTIME' ||
+      key === 'NEXT_DEPLOYMENT_ID'
+    ) {
+      delete env[key]
+    }
+  }
+  return {
+    ...env,
+    NODE_ENV: 'development',
+    NEXT_TELEMETRY_DISABLED: '1',
+    HOST: '127.0.0.1',
+    HOSTNAME: '127.0.0.1',
+    PORT: String(port),
+    PREVIEW_PORT: String(port),
+    PREVIEW_BASE_PATH: preview.basePath,
+    PREVIEW_ASSET_PREFIX: preview.basePath,
+    PREVIEW_PUBLIC_PATH: `${preview.basePath}/`,
+  }
+}
+
+// Resolve the dev command for a project run: an explicit --dev-command (or the
+// devCommand stored at prepare time) wins; otherwise fall back to a framework
+// default derived from prepare-time hints. {port} and {basePath} placeholders
+// are interpolated so callers can template the command.
+function resolveProjectDevCommand(context, port) {
+  const explicit = stringArg('dev-command') || (typeof context.state.devCommand === 'string' ? context.state.devCommand : null)
+  if (explicit) return interpolateDevCommand(explicit, context, port)
+
+  const hints = context.state.hints && typeof context.state.hints === 'object' ? context.state.hints : {}
+  if (typeof hints.devCommand === 'string' && hints.devCommand.trim()) {
+    return interpolateDevCommand(hints.devCommand, context, port)
+  }
+  const pm = typeof hints.packageManager === 'string' && hints.packageManager ? hints.packageManager : 'npm'
+  const runner = pm === 'npm' ? 'npx' : pm
+  const basePath = context.state.preview?.basePath || ''
+  if (hints.framework === 'next') {
+    return `${runner} next dev -H 127.0.0.1 -p ${port}`
+  }
+  if (hints.framework === 'vite') {
+    return `${runner} vite --host 127.0.0.1 --port ${port} --base ${basePath}/`
+  }
+  fail(`No dev command is known for this project run. Pass --dev-command "<command that serves 127.0.0.1:${port} under PREVIEW_BASE_PATH=${basePath || '/dev-preview/<run-id>'}>".`)
+}
+
+function interpolateDevCommand(command, context, port) {
+  return command
+    .replaceAll('{port}', String(port))
+    .replaceAll('{basePath}', context.state.preview?.basePath || '')
+}
+
+// Detached previews are process-group leaders; signal the whole group first so
+// package-manager wrappers (npm/pnpm) don't orphan the underlying dev server,
+// then fall back to the single pid.
+function signalPreviewProcess(pid, signal) {
+  try {
+    process.kill(-pid, signal)
+    return
+  } catch {
+    // No process group (or already gone) — fall back to the single pid.
+  }
+  try {
+    process.kill(pid, signal)
+  } catch {
+    // Already gone; caller updates state.
+  }
+}
+
+// When a project preview fails its base-path health check, probe the server
+// root to distinguish "dev server never came up" from "dev server is up but is
+// not serving under PREVIEW_BASE_PATH" (the most common misconfiguration).
+async function describeProjectPreviewFailure(port, basePath) {
+  try {
+    const response = await fetch(`http://127.0.0.1:${port}/`, { cache: 'no-store', redirect: 'manual' })
+    if (response.status < 500) {
+      return ` The dev server responded at http://127.0.0.1:${port}/ but not under ${basePath}/. Configure the framework base path from PREVIEW_BASE_PATH (Next.js: basePath + assetPrefix; Vite: base) so it serves under ${basePath}/.`
+    }
+  } catch {
+    // Root not reachable either: the dev server likely never started. The base
+    // error plus preview.log already cover that case.
+  }
+  return ''
 }
 
 function copyDirIfExists(source, target) {

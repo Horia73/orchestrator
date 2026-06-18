@@ -69,6 +69,22 @@ Send the generated `coderPrompt` to coder and pass `repoDir` as `cwd`:
 
 Coder owns implementation and testing, but does not commit or push unless the orchestrator explicitly says so.
 
+## Managed Preview
+
+Project runs share the self-dev managed preview: a loopback-bound dev server reverse-proxied through the live app at `/dev-preview/<run-id>/`, so the user can open it from any device instead of an unreachable `127.0.0.1:<port>` on the host.
+
+```bash
+npm run project-run:run -- start --run-id <run-id> --health-path /
+npm run project-run:run -- preview --run-id <run-id> --json
+npm run project-run:run -- restart --run-id <run-id>
+npm run project-run:run -- logs --run-id <run-id> --lines 200
+npm run project-run:run -- stop --run-id <run-id>
+```
+
+The preview binds to `127.0.0.1:<assigned-port>` and serves under `/dev-preview/<run-id>/`, so a previewable web app must honour the `PREVIEW_BASE_PATH` env (dev-only `basePath`/`assetPrefix` for Next.js, `base` for Vite). `PROJECT_RUN_INSTRUCTIONS.md` carries the exact snippet. `start` sets `PREVIEW_BASE_PATH`, `HOST=127.0.0.1`, and `PORT`; pass `--dev-command "<cmd>"` (with `{port}` / `{basePath}` placeholders) when the framework needs a non-default command. If `start` reports the server responded at the root but not under `PREVIEW_BASE_PATH`, the base path is not configured yet.
+
+To surface the preview to the user as a live mini-browser in the side panel, emit a `application/vnd.ant.dev-preview` artifact (`display="panel"`) built from the `preview … --json` output (`runId`, `basePath`, `token`, `publicUrl`). The chat auto-opens it.
+
 ## Gate And Publish
 
 Orchestrator owns the final gate:
