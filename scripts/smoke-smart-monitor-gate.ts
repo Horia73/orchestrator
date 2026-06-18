@@ -33,9 +33,10 @@ async function main(): Promise<void> {
         readGate,
         SMART_MONITOR_POLL_INTERVAL_MS,
     } = await import('@/lib/monitoring/smart-monitor-cheap-pass')
-    const { createMonitorWatch, getMonitorWatch, setWatchCheckpoint } = await import(
+    const { createMonitorWatch, deleteMonitorWatch, getMonitorWatch, setWatchCheckpoint } = await import(
         '@/lib/monitor/store'
     )
+    const { gmailSourceAdapter } = await import('@/lib/monitor/sources/gmail')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -191,6 +192,55 @@ async function main(): Promise<void> {
         taskId: 't_followup_after',
     })
     check('completed follow-up does not re-fire', quietAfter.noteworthy === false, quietAfter.summary)
+
+    // --- pre-wake stale-pending recheck ------------------------------------
+    // If a buffered connector match is handled by the user while the model is
+    // still asleep, the final source recheck should drop it and keep the agent
+    // asleep. Stub the Gmail adapter method directly; getSourceAdapter('gmail')
+    // returns this same object, so no live Gmail connection is needed.
+    const originalGmailRevalidate = gmailSourceAdapter.revalidatePending
+    gmailSourceAdapter.revalidatePending = async () => ({
+        active: false,
+        reason: 'test message no longer unread',
+        checkedAt: NOW,
+    })
+    const staleGmail = createMonitorWatch({
+        title: 'Urgent Gmail',
+        source: 'gmail',
+        target: 'urgent mail',
+        rule: { kind: 'gmail_from', senders: ['alerts@example.com'] },
+        createdBy: 'user',
+    })
+    try {
+        const stale = await runSmartMonitorCheapPass({
+            priorState: {
+                minWakeGapMs: 15 * MINUTE,
+                maxWakeGapMs: 6 * HOUR,
+                _smartGate: {
+                    lastWakeAt: NOW - 20 * MINUTE,
+                    pending: [{
+                        watchId: staleGmail.id,
+                        watchTitle: staleGmail.title,
+                        source: 'gmail',
+                        summary: 'alerts@example.com — Urgent',
+                        externalId: 'msg_stale',
+                        ts: NOW - 5 * MINUTE,
+                        details: { messageId: 'msg_stale', labels: ['INBOX', 'UNREAD'] },
+                    }],
+                    lastCheapRunAt: NOW - 5 * MINUTE,
+                },
+            },
+            now: NOW,
+            taskId: 't_stale_recheck',
+        })
+        const staleGate = (stale.nextState as Record<string, unknown>)._smartGate as Record<string, unknown>
+        check('pre-wake stale recheck drops pending item', Array.isArray(staleGate.pending) && staleGate.pending.length === 0, staleGate)
+        check('pre-wake stale recheck avoids model wake', stale.noteworthy === false, stale.summary)
+        check('stale recheck is reported in the run summary', stale.summary.includes('1 stale dropped'), stale.summary)
+    } finally {
+        gmailSourceAdapter.revalidatePending = originalGmailRevalidate
+        deleteMonitorWatch(staleGmail.id)
+    }
 
     // --- finalizeSmartMonitorWake ------------------------------------------
     const gate = {

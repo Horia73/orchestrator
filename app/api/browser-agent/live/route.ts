@@ -67,6 +67,23 @@ export async function POST(request: Request) {
             })
         }
 
+        if (action === 'copy_from_browser') {
+            const key = (body as Record<string, unknown>)?.key
+            if (key !== undefined && !isSafeBrowserKey(key)) {
+                return NextResponse.json({ error: 'key is invalid' }, { status: 400 })
+            }
+            const result = await manager.copyFromBrowser(typeof key === 'string' ? key : undefined, sessionId)
+            if (result.text && result.text.length > 200_000) {
+                return NextResponse.json({ error: 'browser clipboard text is too large' }, { status: 413 })
+            }
+            return NextResponse.json({
+                clipboardText: result.text,
+                state: toClientState(request, result.state),
+            }, {
+                headers: { 'Cache-Control': 'no-store' },
+            })
+        }
+
         return NextResponse.json({ error: 'unsupported browser live action' }, { status: 400 })
   })
 }

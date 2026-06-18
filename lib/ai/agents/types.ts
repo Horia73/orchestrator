@@ -1,4 +1,5 @@
 import type { ModelFeatureValue, ThinkingLevel } from "@/lib/config"
+import type { BrowserSessionMode } from "@/lib/browser-agent-runtime/session-mode"
 import type {
   Attachment,
   ContentSegment,
@@ -425,6 +426,11 @@ export interface ProviderSendOptions {
    * specifics like Gemini's 50-day window or Files API's 48h reupload.
    */
   prevSession?: { id: string; at: number } | null
+  /**
+   * Browser-provider only. `persistent` uses the saved Patchright profile;
+   * `incognito` uses a temporary isolated profile for this browser thread.
+   */
+  browserSessionMode?: BrowserSessionMode
   /**
    * Context to thread into tool executions (delegation, etc.). Required
    * when the tool list contains delegation tools. Provider passes this to

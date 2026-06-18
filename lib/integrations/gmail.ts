@@ -954,7 +954,7 @@ export async function gmailDownloadAttachment(messageId: string, attachmentId: s
     }
 }
 
-async function gmailGetMessageMetadata(id: string): Promise<GmailSearchResult> {
+export async function gmailGetMessageMetadata(id: string): Promise<GmailSearchResult> {
     const params = new URLSearchParams({ format: 'metadata' })
     for (const header of ['Subject', 'From', 'To', 'Date', 'List-Unsubscribe', 'List-Unsubscribe-Post']) {
         params.append('metadataHeaders', header)

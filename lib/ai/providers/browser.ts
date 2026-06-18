@@ -12,6 +12,7 @@ import { getBrowserSessionManager } from '@/lib/ai/providers/browser-session-man
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
 import type { BrowserDownloadFile } from '@/lib/browser-agent-runtime/browser'
 import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type MediaResolutionLevel, type VisionProvider } from '@/lib/browser-agent-runtime/config'
+import { browserSessionModeLabel, type BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import { redactBrowserAgentText } from '@/lib/browser-agent-runtime/redaction'
 import { codexAuthFileExists, prepareCodexRuntimeHome } from '@/lib/cli/codex-env'
 import { getApiKey, getConfig, type BrowserAgentModelSettings, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
@@ -79,6 +80,7 @@ export class BrowserProvider implements AIProvider {
         const lease = await sessionManager.acquire({
             config: runtimeConfig,
             prevSession: options.prevSession,
+            sessionMode: options.browserSessionMode,
             onStatus(message) {
                 if (!recordStatus(message)) return
                 const safeMessage = redactBrowserAgentText(message)
@@ -97,6 +99,11 @@ export class BrowserProvider implements AIProvider {
             callbacks.onThinking(`${message}\n`)
         } else if (lease.resumed) {
             const message = `Resuming browser session ${lease.id}.`
+            recordStatus(message)
+            callbacks.onThinking(`${message}\n`)
+        }
+        if (lease.mode === 'incognito' && !lease.resumed) {
+            const message = 'Using an incognito browser session with a temporary isolated profile.'
             recordStatus(message)
             callbacks.onThinking(`${message}\n`)
         }
@@ -142,6 +149,7 @@ export class BrowserProvider implements AIProvider {
                 finalStatus.lastStatusMessage || lastStatusMessage,
                 finalStatus.currentUrl,
                 lease.id,
+                lease.mode,
                 managedStatus,
                 finalStatus.lastTerminalAction,
                 statusTranscript,
@@ -278,6 +286,7 @@ function formatBrowserRunOutput(
     lastStatusMessage: string,
     currentUrl: string,
     sessionId: string,
+    sessionMode: BrowserSessionMode,
     status: string,
     terminalAction?: { action?: string; reasoning?: string; text?: string } | null,
     statusTranscript: string[] = [],
@@ -285,6 +294,7 @@ function formatBrowserRunOutput(
 ): string {
     const lines = ['Browser agent finished.']
     lines.push(`Browser session: ${sessionId}`)
+    lines.push(`Session mode: ${browserSessionModeLabel(sessionMode)}`)
     lines.push(`Session status: ${status}`)
     const isCheckpoint = terminalAction?.action === 'checkpoint'
     if (isCheckpoint) {

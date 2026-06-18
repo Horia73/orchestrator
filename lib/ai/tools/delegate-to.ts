@@ -5,6 +5,7 @@ import type { AgentKind, ToolDef, ToolExecutionContext, ToolResult } from '@/lib
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
 import { getAgent } from '@/lib/ai/agents/registry'
 import { createAgentThread, getAgentThread, getAgentThreadMessages, type AgentThread } from '@/lib/db'
+import { parseBrowserSessionMode, type BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import type { Attachment } from '@/lib/types'
 import { classifyUploadMime, MAX_UPLOAD_FILES, resolveExistingUploadPath, uploadContentType } from '@/lib/uploads'
 
@@ -22,6 +23,7 @@ export const delegateToTool: ToolDef = {
         'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
         'To hand a prior specialist\'s result to this agent without retyping it, pass context_thread_ids — the final output of each referenced agent thread is forwarded verbatim as <forwarded_context>. This is how you pass a researcher\'s report straight to worker for a deliverable: you reference it, you do not re-summarize it.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. For browser_agent, pass bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison. The prompt must be self-contained: exact URL(s) or clearly scoped site flow, goal, allowed data, forbidden data, account/session assumptions, exact stop boundary, confirmation status, screenshot/video needs, and expected evidence. Reuse thread_id to continue the same browser state.',
+        'For browser_agent only, set browser_session_mode="incognito" when the task should run without the saved browser profile/cookies/logins/localStorage, such as checking logged-out behavior, avoiding personalized results, or retrying a site in a private session. Omit it or set "persistent" to use the normal saved profile.',
         'browser_agent runs in bounded segments (~50 actions). If it returns Session status awaiting_user with Final action "checkpoint", the action budget was reached — this is NOT a failure or a user question. Read the action log, then FINALIZE (synthesize from evidence), CONTINUE (same thread_id + a corrected focused instruction: what is done, the next sub-goal, any loop fix), or ABORT. Do not re-send the same goal if the log shows no progress; cap continuations at ~3 segments per task.',
         'For browser_agent loading/API diagnostics, ask for inspectDiagnostics and same-origin fetchUrl results instead of only visual inspection or API-tab switching.',
     ].join(' '),
@@ -58,6 +60,11 @@ export const delegateToTool: ToolDef = {
                 items: { type: 'string' },
                 description: 'Optional agent_thread_ids whose final output should be forwarded verbatim into this sub-agent\'s turn as <forwarded_context> (e.g. a researcher thread you want the worker to build on). The threads must belong to this conversation. Use this instead of pasting a prior agent\'s result into the prompt.',
             },
+            browser_session_mode: {
+                type: 'string',
+                enum: ['persistent', 'incognito'],
+                description: 'Only for browser_agent. persistent uses the saved browser profile; incognito uses a temporary isolated profile with no saved cookies/logins/localStorage. Reuse the same thread_id for continuations.',
+            },
         },
         required: ['agent_id', 'prompt'],
     },
@@ -71,7 +78,7 @@ export const delegateParallelTool: ToolDef = {
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
         'Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
-        'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
+        'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. For browser_agent only, browser_session_mode="incognito" runs without the saved profile/cookies/logins/localStorage. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
         'Each job may carry attachment_ids — upload ids forwarded into that job\'s sub-agent turn so it can see the files directly.',
         'Each job may carry context_thread_ids — prior agent threads whose final output is forwarded verbatim as <forwarded_context>, so you can hand earlier results to a job without retyping them.',
     ].join(' '),
@@ -113,6 +120,11 @@ export const delegateParallelTool: ToolDef = {
                             type: 'array',
                             items: { type: 'string' },
                             description: 'Optional agent_thread_ids whose final output is forwarded verbatim into this job\'s sub-agent turn as <forwarded_context> (e.g. hand a researcher thread to worker without retyping it).',
+                        },
+                        browser_session_mode: {
+                            type: 'string',
+                            enum: ['persistent', 'incognito'],
+                            description: 'Only for browser_agent jobs. persistent uses the saved browser profile; incognito uses a temporary isolated profile.',
                         },
                     },
                     required: ['agent_id', 'prompt'],
@@ -242,6 +254,7 @@ type PreparedDelegation =
         thread: AgentThread
         cwd?: string
         attachments?: Attachment[]
+        browserSessionMode?: BrowserSessionMode
     }
 
 type DelegationPlan =
@@ -252,6 +265,7 @@ type DelegationPlan =
         forwardedContext: string
         cwd?: string
         attachments: Attachment[]
+        browserSessionMode?: BrowserSessionMode
         thread?: AgentThread
         newThread: {
             conversationId: string
@@ -309,6 +323,8 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
     if (target.status === 'planned') {
         return { ok: false, error: `Sub-agent ${agentId} is planned but not implemented yet.` }
     }
+    const browserModePlan = resolveBrowserSessionMode(args.browser_session_mode, target.id)
+    if (!browserModePlan.ok) return { ok: false, error: browserModePlan.error }
 
     let thread: AgentThread | undefined
     const newThread = {
@@ -340,7 +356,17 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
         thread = existing
     }
 
-    return { ok: true, target, prompt: prompt.trim(), forwardedContext: contextPlan.block, cwd: cwdPlan.cwd, attachments: attachmentsPlan.attachments, thread, newThread }
+    return {
+        ok: true,
+        target,
+        prompt: prompt.trim(),
+        forwardedContext: contextPlan.block,
+        cwd: cwdPlan.cwd,
+        attachments: attachmentsPlan.attachments,
+        browserSessionMode: browserModePlan.mode,
+        thread,
+        newThread,
+    }
 }
 
 function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): PreparedDelegation {
@@ -349,6 +375,7 @@ function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): Pre
         prompt: appendForwardedContext(plan.prompt, plan.forwardedContext),
         cwd: plan.cwd,
         attachments: plan.attachments,
+        browserSessionMode: plan.browserSessionMode,
         thread: plan.thread ?? createAgentThread(plan.newThread),
     }
 }
@@ -379,6 +406,7 @@ async function runPreparedDelegation(
             agentThreadId: prepared.thread.id,
             cwd: prepared.cwd,
             attachments: prepared.attachments,
+            browserSessionMode: prepared.browserSessionMode,
         })
         : runner.runMediaSubAgent({
             target: prepared.target,
@@ -479,6 +507,21 @@ function normalizeDelegationCwd(value: unknown): { ok: true; cwd?: string } | { 
     }
     if (!stat.isDirectory()) return { ok: false, error: `cwd is not a directory: ${clean}` }
     return { ok: true, cwd: path.resolve(clean) }
+}
+
+function resolveBrowserSessionMode(
+    value: unknown,
+    agentId: string
+): { ok: true; mode?: BrowserSessionMode } | { ok: false; error: string } {
+    if (value === undefined || value === null || value === '') return { ok: true }
+    if (agentId !== 'browser_agent') {
+        return { ok: false, error: 'browser_session_mode is only valid when delegating to browser_agent.' }
+    }
+    const mode = parseBrowserSessionMode(value)
+    if (!mode) {
+        return { ok: false, error: 'browser_session_mode must be "persistent" or "incognito".' }
+    }
+    return { ok: true, mode }
 }
 
 async function mapWithConcurrency<T, R>(

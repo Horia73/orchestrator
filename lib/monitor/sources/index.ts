@@ -74,4 +74,12 @@ export function actionKindAllowedForSource(kind: MonitorAction['kind'], source: 
     return getSourceAdapter(source).supportedActionKinds.includes(kind)
 }
 
-export type { SourceAdapter, AvailabilityResult, CheapCheckInput, CheapCheckResult, MatchedCandidate } from './types'
+export type {
+    SourceAdapter,
+    AvailabilityResult,
+    CheapCheckInput,
+    CheapCheckResult,
+    MatchedCandidate,
+    PendingRevalidationInput,
+    PendingRevalidationResult,
+} from './types'

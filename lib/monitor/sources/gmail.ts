@@ -10,6 +10,8 @@ import {
     type CheapCheckInput,
     type CheapCheckResult,
     type MatchedCandidate,
+    type PendingRevalidationInput,
+    type PendingRevalidationResult,
     type SourceAdapter,
 } from './types'
 
@@ -74,6 +76,24 @@ function parseGmailDate(raw: string): number {
     // Gmail's "internalDate"-derived header is RFC 2822 — Date.parse handles it.
     const ts = Date.parse(raw)
     return Number.isFinite(ts) ? ts : 0
+}
+
+function stringArray(value: unknown): string[] {
+    return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
+}
+
+function gmailNotFound(err: unknown): boolean {
+    return err instanceof Error && /\bGmail API failed \(404\)\b/.test(err.message)
+}
+
+function staleReasonFromLabels(originalLabels: string[], currentLabels: string[]): string | null {
+    const original = new Set(originalLabels)
+    const current = new Set(currentLabels)
+    if (current.has('TRASH')) return 'Gmail message is now in Trash.'
+    if (current.has('SPAM')) return 'Gmail message is now in Spam.'
+    if (original.has('UNREAD') && !current.has('UNREAD')) return 'Gmail message is no longer unread.'
+    if (original.has('INBOX') && !current.has('INBOX')) return 'Gmail message is no longer in the Inbox.'
+    return null
 }
 
 function pickWindowHours(cadenceSeconds: number, lastSeenAt: number | undefined, now: number): number {
@@ -214,5 +234,76 @@ export const gmailSourceAdapter: SourceAdapter = {
                 fetchedAt: now,
             }
         })
+    },
+
+    revalidatePending(input: PendingRevalidationInput): Promise<PendingRevalidationResult> {
+        return (async () => {
+            const { watch, pending, now, timeoutMs } = input
+            const details = pending.details ?? {}
+            const messageId =
+                typeof details.messageId === 'string'
+                    ? details.messageId
+                    : typeof pending.externalId === 'string'
+                        ? pending.externalId
+                        : null
+            if (!messageId) {
+                return { active: true, checkedAt: now, error: 'Gmail pending item has no message id to recheck.' }
+            }
+
+            try {
+                const { gmailGetMessageMetadata } = await import('@/lib/integrations/gmail')
+                const m = await withTimeout(
+                    gmailGetMessageMetadata(messageId),
+                    timeoutMs,
+                    'gmail pending recheck',
+                )
+                const originalLabels = stringArray(details.labels)
+                const staleReason = staleReasonFromLabels(originalLabels, m.labelIds)
+                if (staleReason) {
+                    return { active: false, reason: staleReason, checkedAt: now }
+                }
+
+                const ts = parseGmailDate(m.date)
+                const candidate: GmailCandidate = {
+                    source: 'gmail',
+                    id: m.id,
+                    threadId: m.threadId,
+                    labels: m.labelIds,
+                    from: m.from,
+                    to: m.to,
+                    subject: m.subject,
+                    snippet: m.snippet,
+                    timestamp: ts || now,
+                }
+                if (!evaluateRule(watch.rule, candidate)) {
+                    return { active: false, reason: 'Gmail message no longer matches the watch rule.', checkedAt: now }
+                }
+
+                return {
+                    active: true,
+                    checkedAt: now,
+                    summary: `${m.from} — ${m.subject || '(no subject)'}`,
+                    details: {
+                        ...details,
+                        messageId: m.id,
+                        threadId: m.threadId,
+                        from: m.from,
+                        subject: m.subject,
+                        snippet: m.snippet,
+                        labels: m.labelIds,
+                        date: m.date,
+                    },
+                }
+            } catch (err) {
+                if (gmailNotFound(err)) {
+                    return { active: false, reason: 'Gmail message no longer exists.', checkedAt: now }
+                }
+                return {
+                    active: true,
+                    checkedAt: now,
+                    error: err instanceof Error ? err.message : String(err),
+                }
+            }
+        })()
     },
 }

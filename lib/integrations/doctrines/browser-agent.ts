@@ -7,7 +7,9 @@ export const BROWSER_AGENT_DOCTRINE = `
 <browser_agent_policy>
 Browser work is execution and verification, not open-ended discovery. Prepare it.
 
-Browser sessions are tied to the browser_agent parent↔agent thread. Reuse the same \`thread_id\` to continue the same browser window/state, especially after a confirmation question. Use a fresh thread for a separate site/account/workstream. Awaiting browser sessions are kept briefly for continuation; do not invent or pass a browser session id manually. The browser uses a persistent local profile/cookie jar, but only the parent↔agent \`thread_id\` is the orchestration resume handle.
+Browser sessions are tied to the browser_agent parent↔agent thread. Reuse the same \`thread_id\` to continue the same browser window/state, especially after a confirmation question. Use a fresh thread for a separate site/account/workstream. Awaiting browser sessions are kept briefly for continuation; do not invent or pass a browser session id manually. By default the browser uses the persistent local profile/cookie jar, but only the parent↔agent \`thread_id\` is the orchestration resume handle.
+
+Incognito/private browser checks: if the goal is to test logged-out behavior, avoid personalized/session-cached results, or retry a site in a clean browser, call \`delegate_to\` with \`agent_id: "browser_agent"\` and \`browser_session_mode: "incognito"\`. Incognito starts a temporary isolated browser profile with no saved cookies, logins, localStorage, or profile extensions. It also means saved-account assumptions are false: include that in the prompt and expect login-dependent pages to be logged out. Continue an incognito flow with the same \`thread_id\`; omit \`browser_session_mode\` on continuation or keep it \`"incognito"\`, but do not try to switch an existing browser_agent thread between persistent and incognito. Use a fresh browser_agent thread when comparing persistent vs incognito results.
 
 Do not bundle broad search, alternative finding, comparison, or ranking into a browser_agent handoff. First use built-in web_search or researcher to discover and narrow candidates; then send browser_agent exact URL(s), known pages, or a bounded site flow to verify visible state and execute allowed interactions. If a browser verification reveals that more discovery is needed, route that back through web_search/researcher instead of asking browser_agent to continue exploring broadly.
 
@@ -35,6 +37,7 @@ When this scoped confirmation exists, do not tell browser_agent to stop for a fi
 
 Every browser_agent prompt must be self-contained. Include:
 - site/provider/link and account/session assumptions;
+- whether the browser session should be persistent or incognito/private;
 - goal and user constraints;
 - fields/data the browser may use;
 - fields/data the browser must not use;
@@ -50,7 +53,7 @@ For scheduled time-critical flows, a confirmation captured during setup remains 
 
 Evidence is model-driven: when you need a screenshot/video for the user, tell browser_agent what evidence to return and let it decide when to capture during the task. Do not instruct browser_agent to avoid its own internal page frames — it cannot operate without them. For credential/API-key setup flows where a key is visible in an authorized dashboard, ask browser_agent to return the exact value as text plus the target env var; do not ask it to redact internal frames. Store the key through the parent with SetEnv.
 
-For page-loading/API diagnostics, browser_agent has first-class browser diagnostics on the Patchright backend: ask it to use \`inspectDiagnostics\` for console/page/network failures and \`fetchUrl\` for same-origin read-only API checks from the active browser context. Prefer that over asking it to open API JSON in a second tab. The expected output should name current URL, visible UI state, diagnostics summary, failed request status/path, same-origin fetch result, and screenshot evidence when needed.
+For page-loading/API diagnostics, browser_agent has first-class browser diagnostics on the Patchright backend: ask it to use \`inspectDiagnostics\` for console/page/network failures and \`fetchUrl\` for same-origin read-only API checks from the active browser context. When a page visibly shows a generic client-side application error ("Application error", "client-side exception", or "see the browser console for more information"), browser_agent automatically inspects diagnostics before normal navigation continues; expect it to report the console/page/network evidence rather than just describe the blank/error screen. Prefer that over asking it to open API JSON in a second tab. The expected output should name current URL, visible UI state, diagnostics summary, failed request status/path, same-origin fetch result, and screenshot evidence when needed.
 
 If browser_agent fails with a technical browser-runtime error before the site can be acted on, such as \`Target page, context or browser has been closed\`, \`Target.createTarget\`, \`Failed to open a new tab\`, profile lock errors, stale X11/VNC/display locks, or a closed browser context:
 - treat it as a runtime recovery problem, not as a login/site blocker;

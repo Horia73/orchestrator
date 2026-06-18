@@ -1,12 +1,20 @@
 import assert from 'node:assert/strict'
 
 import { parseBrowserBackendPreference, resolveBrowserBackend } from '@/lib/browser-agent-backend'
+import { inferBrowserSessionModeFromSessionId, parseBrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import { buildActionPrompt, buildSystemPrompt, type ActionHistoryItem } from '@/lib/browser-agent-runtime/prompts'
 
 assert.equal(parseBrowserBackendPreference('auto'), null)
 assert.equal(parseBrowserBackendPreference('official_display'), null)
 assert.equal(parseBrowserBackendPreference('patchright'), 'patchright')
 assert.equal(parseBrowserBackendPreference('unknown'), null)
+assert.equal(parseBrowserSessionMode('persistent'), 'persistent')
+assert.equal(parseBrowserSessionMode('incognito'), 'incognito')
+assert.equal(parseBrowserSessionMode('private'), 'incognito')
+assert.equal(parseBrowserSessionMode('unknown'), null)
+assert.equal(inferBrowserSessionModeFromSessionId('browser_incognito_123'), 'incognito')
+assert.equal(inferBrowserSessionModeFromSessionId('browser_123'), 'persistent')
+assert.equal(inferBrowserSessionModeFromSessionId('other_123'), null)
 
 const darwinPatchright = resolveBrowserBackend({
     settingsValue: 'patchright',
@@ -43,6 +51,8 @@ assert.match(systemPrompt, /Do not click a row\/card\/link\/button just to focus
 assert.match(systemPrompt, /coordinate.*hover.*inert panel point/i)
 assert.match(systemPrompt, /If the form or page is scrollable/)
 assert.match(systemPrompt, /confirmation\/result screen/)
+assert.match(systemPrompt, /Client-Side Application Errors/)
+assert.match(systemPrompt, /use `inspectDiagnostics` before refreshing/)
 
 const normalizedDisplayPrompt = buildSystemPrompt(false, 'normalized-display')
 assert.match(normalizedDisplayPrompt, /NORMALIZED COORDINATES \(0-1000 range\)/)

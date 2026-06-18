@@ -8,6 +8,8 @@ import {
     type CheapCheckInput,
     type CheapCheckResult,
     type MatchedCandidate,
+    type PendingRevalidationInput,
+    type PendingRevalidationResult,
     type SourceAdapter,
 } from './types'
 
@@ -380,4 +382,83 @@ export const whatsappSourceAdapter: SourceAdapter = {
             }
         })
     },
+
+    revalidatePending(input: PendingRevalidationInput): Promise<PendingRevalidationResult> {
+        return safeRevalidateWhatsAppPending(input)
+    },
+}
+
+async function safeRevalidateWhatsAppPending(input: PendingRevalidationInput): Promise<PendingRevalidationResult> {
+    const { watch, pending, now, timeoutMs } = input
+    const details = pending.details ?? {}
+    const chatId = typeof details.chatId === 'string' ? details.chatId : null
+    if (!chatId) {
+        return { active: true, checkedAt: now, error: 'WhatsApp pending item has no chat id to recheck.' }
+    }
+
+    try {
+        const { whatsappReadChat } = await import('@/lib/integrations/whatsapp')
+        const { withWhatsAppToolGuard } = await import('@/lib/integrations/whatsapp-tool-guard')
+        const result = await guardedWhatsAppRead(
+            withWhatsAppToolGuard,
+            `monitor:${watch.id}:revalidate:${chatId}`,
+            timeoutMs,
+            `whatsapp recheck ${chatId}`,
+            () => whatsappReadChat(chatId, MAX_MESSAGES_PER_CHAT, MAX_READ_CHAT_MAX_CHARS),
+        )
+
+        if (result.chat.unreadCount <= 0) {
+            return { active: false, reason: 'WhatsApp chat no longer has unread messages.', checkedAt: now }
+        }
+
+        const messageId = typeof pending.externalId === 'string' ? pending.externalId : null
+        const message = messageId ? result.messages.find((m) => m.id === messageId) : null
+        if (!message) {
+            return {
+                active: true,
+                checkedAt: now,
+                error: messageId
+                    ? 'WhatsApp chat is still unread, but the exact pending message was not in the bounded recent read.'
+                    : 'WhatsApp chat is still unread, but the pending item has no message id to recheck.',
+            }
+        }
+
+        const ts = toWaMs(message.timestamp) || (message.date ? Date.parse(message.date) : 0)
+        const candidate: WhatsAppCandidate = {
+            source: 'whatsapp',
+            id: message.id,
+            chatId: message.chatId,
+            chatName: message.chatName ?? result.chat.name ?? null,
+            from: message.author ?? message.from,
+            fromMe: message.fromMe,
+            body: message.body,
+            mentions: extractMentions(message),
+            timestamp: ts || now,
+        }
+        if (!evaluateRule(watch.rule, candidate)) {
+            return { active: false, reason: 'WhatsApp message no longer matches the watch rule.', checkedAt: now }
+        }
+
+        const preview = message.body.length > 200 ? `${message.body.slice(0, 200)}…` : message.body
+        return {
+            active: true,
+            checkedAt: now,
+            summary: `${candidate.chatName ?? candidate.from}: ${preview}`,
+            details: {
+                ...details,
+                chatId: message.chatId,
+                chatName: candidate.chatName,
+                from: candidate.from,
+                body: message.body,
+                timestamp: ts,
+                hasMedia: message.hasMedia,
+            },
+        }
+    } catch (err) {
+        return {
+            active: true,
+            checkedAt: now,
+            error: err instanceof Error ? err.message : String(err),
+        }
+    }
 }

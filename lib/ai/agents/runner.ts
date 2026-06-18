@@ -46,6 +46,7 @@ import {
     touchAgentThreadRuntime,
     updateAgentThreadInteractionId,
 } from '@/lib/db'
+import type { BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import {
     buildAutoArtifactTag,
     getDirectEmitArtifactData,
@@ -76,6 +77,7 @@ interface RunTextSubAgentArgs {
     cwd?: string
     /** User attachments to forward to the model on this turn. */
     attachments?: Attachment[]
+    browserSessionMode?: BrowserSessionMode
 }
 
 interface RunMediaSubAgentArgs {
@@ -354,6 +356,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             systemPrompt,
             thinkingLevel: runtime.thinkingLevel,
             modelOptions: runtime.modelOptions,
+            browserSessionMode: args.browserSessionMode,
             tools: agentTools.length > 0 ? agentTools : undefined,
             builtins: agentBuiltins,
             prevSession,

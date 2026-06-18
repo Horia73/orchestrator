@@ -1,8 +1,9 @@
 "use client"
 
 import * as React from "react"
-import { ClipboardPaste, Loader2, Maximize2, Minimize2, Monitor, MousePointer2, Play, WifiOff } from "lucide-react"
+import { ClipboardCopy, ClipboardPaste, Loader2, Maximize2, Minimize2, Monitor, MousePointer2, Play, WifiOff } from "lucide-react"
 
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 
 type LiveControlMode = "agent" | "user"
@@ -39,6 +40,11 @@ interface BrowserAgentLiveViewProps {
     onOpenDetails?: () => void
 }
 
+interface BrowserClipboardResponse {
+    clipboardText: string | null
+    state: BrowserAgentLiveState
+}
+
 export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenDetails }: BrowserAgentLiveViewProps) {
     const liveViewRef = React.useRef<HTMLDivElement>(null)
     const viewportRef = React.useRef<HTMLDivElement>(null)
@@ -49,6 +55,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
     const stateRef = React.useRef<BrowserAgentLiveState | null>(null)
     const inputBusyRef = React.useRef(false)
     const manualPasteCaptureRef = React.useRef(false)
+    const lastBrowserClipboardSyncRef = React.useRef<{ text: string; at: number } | null>(null)
     const inputMessageTimerRef = React.useRef<number | null>(null)
     const [state, setState] = React.useState<BrowserAgentLiveState | null>(null)
     const [connection, setConnection] = React.useState<"idle" | "connecting" | "connected" | "disconnected" | "error">("idle")
@@ -112,6 +119,30 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         })
     }, [showInputMessage])
 
+    const syncBrowserClipboardText = React.useCallback(async (text: string, options: { silentDuplicate?: boolean } = {}) => {
+        if (!text) {
+            showInputMessage("Browser clipboard is empty.")
+            focusRfb()
+            return false
+        }
+
+        const now = Date.now()
+        const last = lastBrowserClipboardSyncRef.current
+        if (options.silentDuplicate && last?.text === text && now - last.at < 1_500) {
+            return true
+        }
+
+        const copied = await copyTextToClipboard(text)
+        if (copied) {
+            lastBrowserClipboardSyncRef.current = { text, at: Date.now() }
+            showInputMessage(`Copied ${formatCharacterCount(text.length)} from browser.`)
+        } else {
+            showInputMessage("Browser clipboard was read, but local clipboard access was blocked.")
+        }
+        focusRfb()
+        return copied
+    }, [focusRfb, showInputMessage])
+
     const refresh = React.useCallback(async () => {
         const url = sessionId
             ? `/api/browser-agent/live?sessionId=${encodeURIComponent(sessionId)}`
@@ -158,9 +189,15 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 rfb.compressionLevel = 2
                 rfb.showDotCursor = true
                 rfb.viewOnly = controlModeRef.current !== "user"
+                const handleClipboard = (event: Event) => {
+                    const text = (event as CustomEvent<{ text?: unknown }>).detail?.text
+                    if (typeof text !== "string") return
+                    void syncBrowserClipboardText(text, { silentDuplicate: true })
+                }
                 rfb.addEventListener("connect", () => setConnection("connected"))
                 rfb.addEventListener("disconnect", () => setConnection("disconnected"))
                 rfb.addEventListener("securityfailure", () => setConnection("error"))
+                rfb.addEventListener("clipboard", handleClipboard)
                 rfbRef.current = rfb
             })
             .catch(() => {
@@ -172,7 +209,7 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
             rfbRef.current?.disconnect()
             rfbRef.current = null
         }
-    }, [state?.mode, state?.wsUrl])
+    }, [state?.mode, state?.wsUrl, syncBrowserClipboardText])
 
     React.useEffect(() => {
         if (!rfbRef.current || !controlMode) return
@@ -203,6 +240,30 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
         setState(nextState)
         return nextState
     }, [sessionId])
+
+    const copyFromBrowser = React.useCallback(async (key?: string): Promise<boolean> => {
+        setInputBusy(true)
+        try {
+            const res = await fetch("/api/browser-agent/live", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify(sessionId ? { action: "copy_from_browser", key, sessionId } : { action: "copy_from_browser", key }),
+            })
+            if (!res.ok) {
+                const message = await res.text().catch(() => "")
+                throw new Error(message || `Browser copy failed: ${res.status}`)
+            }
+            const payload = await res.json() as BrowserClipboardResponse
+            setState(payload.state)
+            return syncBrowserClipboardText(payload.clipboardText || "")
+        } catch (error) {
+            showInputMessage(`Copy failed: ${formatInputError(error)}`)
+            focusRfb()
+            return false
+        } finally {
+            setInputBusy(false)
+        }
+    }, [focusRfb, sessionId, showInputMessage, syncBrowserClipboardText])
 
     const setControl = async (mode: LiveControlMode) => {
         setBusy(true)
@@ -285,8 +346,12 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                 .catch(() => requestManualPasteCapture("Clipboard permission was denied. Press paste shortcut again."))
             return
         }
+        if (key === "Control+C" || key === "Meta+C") {
+            void copyFromBrowser(key)
+            return
+        }
         void sendKey(key)
-    }, [pasteText, requestManualPasteCapture, sendKey])
+    }, [copyFromBrowser, pasteText, requestManualPasteCapture, sendKey])
 
     const browserInputContainsTarget = React.useCallback((target: EventTarget | null) => {
         const root = liveViewRef.current
@@ -482,17 +547,30 @@ export function BrowserAgentLiveView({ active = false, sessionId = null, onOpenD
                     {userControl ? "Return to agent" : "Take control"}
                 </button>
                 {userControl && (
-                    <button
-                        type="button"
-                        disabled={inputBusy}
-                        onClick={pasteFromClipboard}
-                        className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
-                        aria-label="Paste clipboard into browser"
-                        title="Paste clipboard into browser"
-                    >
-                        {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}
-                        Paste
-                    </button>
+                    <>
+                        <button
+                            type="button"
+                            disabled={inputBusy}
+                            onClick={() => copyFromBrowser()}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                            aria-label="Copy browser clipboard locally"
+                            title="Copy browser clipboard locally"
+                        >
+                            {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardCopy className="size-3.5" />}
+                            Copy
+                        </button>
+                        <button
+                            type="button"
+                            disabled={inputBusy}
+                            onClick={pasteFromClipboard}
+                            className="inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] font-medium text-foreground/80 transition-colors hover:bg-muted hover:text-foreground disabled:opacity-60"
+                            aria-label="Paste clipboard into browser"
+                            title="Paste clipboard into browser"
+                        >
+                            {inputBusy ? <Loader2 className="size-3.5 animate-spin" /> : <ClipboardPaste className="size-3.5" />}
+                            Paste
+                        </button>
+                    </>
                 )}
                 <button
                     type="button"
@@ -547,6 +625,10 @@ function browserShortcutFromEvent(event: BrowserShortcutEvent, platform: NodeJS.
 function formatInputError(error: unknown): string {
     if (error instanceof Error) return error.message
     return String(error || "unknown error")
+}
+
+function formatCharacterCount(count: number): string {
+    return `${count.toLocaleString()} character${count === 1 ? "" : "s"}`
 }
 
 function normalizeShortcutKey(key: string): string | null {

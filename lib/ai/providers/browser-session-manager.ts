@@ -1,4 +1,6 @@
 import { randomUUID } from 'crypto'
+import fs from 'fs'
+import os from 'os'
 import path from 'path'
 
 import type { BrowserEvidenceCapture } from '@/lib/browser-agent-runtime/agent'
@@ -6,6 +8,14 @@ import { createBrowserManager, type BrowserDownloadFile, type BrowserManager, ty
 import type { BrowserLiveViewState } from '@/lib/browser-agent-runtime/display'
 import type { AgentConfig as BrowserRuntimeConfig } from '@/lib/browser-agent-runtime/config'
 import { createAgentRuntime, type AgentRuntime, type AgentRuntimeStatus } from '@/lib/browser-agent-runtime/runtime'
+import {
+    BROWSER_INCOGNITO_SESSION_PREFIX,
+    BROWSER_SESSION_PREFIX,
+    DEFAULT_BROWSER_SESSION_MODE,
+    browserSessionModeLabel,
+    inferBrowserSessionModeFromSessionId,
+    type BrowserSessionMode,
+} from '@/lib/browser-agent-runtime/session-mode'
 import { DEFAULT_VIEWPORT } from '@/lib/browser-agent-runtime/viewport'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 
@@ -24,6 +34,7 @@ export type ManagedBrowserSessionStatus =
 
 export interface BrowserSessionLease {
     id: string
+    mode: BrowserSessionMode
     resumed: boolean
     runtime: AgentRuntime
     release(): void
@@ -36,6 +47,7 @@ export interface BrowserLiveViewClientState extends BrowserLiveViewState {
     paused: boolean
     sessions: Array<{
         id: string
+        mode: BrowserSessionMode
         status: ManagedBrowserSessionStatus
         running: boolean
         paused: boolean
@@ -43,15 +55,22 @@ export interface BrowserLiveViewClientState extends BrowserLiveViewState {
     }>
 }
 
+export interface BrowserLiveClipboardResult {
+    text: string | null
+    state: BrowserLiveViewClientState
+}
+
 export interface AcquireBrowserSessionOptions {
     config: BrowserRuntimeConfig
     prevSession?: { id: string; at: number } | null
+    sessionMode?: BrowserSessionMode
     onStatus: (message: string) => void
     onEvidence: (capture: BrowserEvidenceCapture) => void | Promise<void>
 }
 
 interface ManagedBrowserSession {
     id: string
+    mode: BrowserSessionMode
     createdAt: number
     lastUsedAt: number
     status: ManagedBrowserSessionStatus
@@ -59,6 +78,7 @@ interface ManagedBrowserSession {
     pageSession: BrowserPageSession
     runtime: AgentRuntime
     lock: AsyncLock
+    temporaryProfileDir: string | null
     currentStatusHandler: ((message: string) => void) | null
     currentEvidenceHandler: ((capture: BrowserEvidenceCapture) => void | Promise<void>) | null
     pendingStatusMessages: string[]
@@ -134,12 +154,10 @@ function normalizeMaxConcurrent(value: number): number {
 
 function getEffectiveMaxConcurrent(): number {
     // One browser agent at a time, globally. The browser shares a single
-    // logged-in profile, and two Chromium processes cannot open the same
-    // profile dir concurrently — so real parallelism would mean either separate
-    // (logged-out) profiles or multiple windows fighting over one virtual
-    // display. We keep the shared profile (logins preserved) and serialize:
-    // additional runs queue on runSlots and start automatically when the active
-    // one finishes.
+    // live-control channel/virtual display, and parallel execution could still
+    // duplicate external actions even when an incognito run uses a separate
+    // temporary profile. Additional runs queue on runSlots and start
+    // automatically when the active one finishes.
     return 1
 }
 
@@ -159,16 +177,19 @@ class BrowserSessionManager {
         const releaseRunSlot = await this.runSlots.acquire(maxConcurrent)
 
         try {
-            await this.ensureBrowserManager(options.config)
+            const sessionMode = this.resolveSessionMode(options)
             await this.cleanupExpiredSessions()
 
             const previous = options.prevSession?.id
                 ? this.sessions.get(options.prevSession.id)
                 : undefined
+            if (previous && previous.mode !== sessionMode) {
+                throw new Error(`Cannot continue browser session ${previous.id} as ${browserSessionModeLabel(sessionMode)}; it was started as ${browserSessionModeLabel(previous.mode)}. Start a fresh browser_agent thread for a different browser session mode.`)
+            }
             const resumed = Boolean(previous && !this.isExpired(previous))
             const session = resumed
                 ? previous!
-                : await this.createSession(options.config)
+                : await this.createSession(options.config, sessionMode)
 
             const releaseLock = await session.lock.acquire()
             if (this.humanControl) {
@@ -189,6 +210,7 @@ class BrowserSessionManager {
 
             return {
                 id: session.id,
+                mode: session.mode,
                 resumed,
                 runtime: session.runtime,
                 release: () => {
@@ -295,6 +317,7 @@ class BrowserSessionManager {
                 })
             }
         }
+        this.removeTemporaryProfile(session.temporaryProfileDir)
         return true
     }
 
@@ -349,6 +372,7 @@ class BrowserSessionManager {
             }
             return {
                 id: session.id,
+                mode: session.mode,
                 status: session.status,
                 running,
                 paused,
@@ -407,6 +431,26 @@ class BrowserSessionManager {
         return this.getLiveViewState(session.id)
     }
 
+    async copyFromBrowser(key?: string, sessionId?: string | null): Promise<BrowserLiveClipboardResult> {
+        if (!this.humanControl) {
+            throw new Error('Take browser control before reading clipboard.')
+        }
+        const session = this.getHumanInteractionSession(sessionId ?? this.humanControlSessionId)
+        if (!session) {
+            throw new Error('No active browser session is available.')
+        }
+        if (key) {
+            await session.pageSession.pressKey(key)
+            await new Promise(resolve => setTimeout(resolve, 150))
+        }
+        const text = await session.pageSession.readClipboard()
+        session.lastUsedAt = Date.now()
+        return {
+            text,
+            state: await this.getLiveViewState(session.id),
+        }
+    }
+
     private async ensureBrowserManager(config: BrowserRuntimeConfig): Promise<void> {
         if (this.browserManager) {
             await this.browserManager.launch()
@@ -429,27 +473,73 @@ class BrowserSessionManager {
         await this.browserManager.launch()
     }
 
-    private async createSession(config: BrowserRuntimeConfig): Promise<ManagedBrowserSession> {
-        const id = `browser_${randomUUID()}`
+    private async createIsolatedBrowserManager(
+        config: BrowserRuntimeConfig,
+        userDataDir: string,
+    ): Promise<BrowserManager> {
+        const manager = await createBrowserManager({
+            backend: config.browser.backend,
+            userDataDir,
+            downloadsDir: path.join(activeRuntimePaths().workspaceDir, 'browser-downloads'),
+            headless: config.browser.headless,
+            liveView: config.browser.liveView,
+            launchArgs: config.browser.launchArgs,
+            viewport: config.browser.headless ? DEFAULT_VIEWPORT : null,
+            onLog: () => {
+                // Per-run status is emitted by each runtime session; manager-level
+                // launch logs would otherwise leak into unrelated browser tasks.
+            },
+        })
+        await manager.launch()
+        return manager
+    }
+
+    private async createSession(
+        config: BrowserRuntimeConfig,
+        mode: BrowserSessionMode,
+    ): Promise<ManagedBrowserSession> {
+        const id = this.createSessionId(mode)
         const pendingStatusMessages: string[] = []
-        await this.ensureBrowserManager(config)
-        if (!this.browserManager) {
+        const temporaryProfileDir = mode === 'incognito'
+            ? fs.mkdtempSync(path.join(os.tmpdir(), 'orchestrator-browser-incognito-'))
+            : null
+        let browserManager: BrowserManager | null = null
+        let pageSession: BrowserPageSession
+        try {
+            if (mode === 'incognito') {
+                browserManager = await this.createIsolatedBrowserManager(config, temporaryProfileDir!)
+            } else {
+                await this.ensureBrowserManager(config)
+                if (!this.browserManager) {
+                    throw new Error('Browser manager is not initialized')
+                }
+                browserManager = this.browserManager
+            }
+            pageSession = await browserManager.createSession({
+                id,
+                startupUrl: config.browser.startupUrl || undefined,
+            })
+        } catch (error) {
+            if (mode === 'incognito') {
+                await browserManager?.close().catch(() => {})
+                this.removeTemporaryProfile(temporaryProfileDir)
+            }
+            throw error
+        }
+        if (!browserManager) {
             throw new Error('Browser manager is not initialized')
         }
-        const browserManager = this.browserManager
-        const pageSession = await browserManager.createSession({
-            id,
-            startupUrl: config.browser.startupUrl || undefined,
-        })
 
         const session: Partial<ManagedBrowserSession> = {
             id,
+            mode,
             createdAt: Date.now(),
             lastUsedAt: Date.now(),
             status: 'idle',
             browserManager,
             pageSession,
             lock: new AsyncLock(),
+            temporaryProfileDir,
             currentStatusHandler: null,
             currentEvidenceHandler: null,
             pendingStatusMessages,
@@ -492,6 +582,28 @@ class BrowserSessionManager {
         return sessions.find(session => session.status === 'running' || session.status === 'awaiting_user')
             ?? sessions[0]
             ?? null
+    }
+
+    private resolveSessionMode(options: AcquireBrowserSessionOptions): BrowserSessionMode {
+        const inferred = inferBrowserSessionModeFromSessionId(options.prevSession?.id)
+        if (options.sessionMode && inferred && options.sessionMode !== inferred) {
+            throw new Error(`Cannot continue browser session ${options.prevSession?.id} as ${browserSessionModeLabel(options.sessionMode)}; it was started as ${browserSessionModeLabel(inferred)}. Start a fresh browser_agent thread for a different browser session mode.`)
+        }
+        return options.sessionMode
+            ?? inferred
+            ?? DEFAULT_BROWSER_SESSION_MODE
+    }
+
+    private createSessionId(mode: BrowserSessionMode): string {
+        const prefix = mode === 'incognito'
+            ? BROWSER_INCOGNITO_SESSION_PREFIX
+            : BROWSER_SESSION_PREFIX
+        return `${prefix}${randomUUID()}`
+    }
+
+    private removeTemporaryProfile(profileDir: string | null | undefined): void {
+        if (!profileDir) return
+        fs.rm(profileDir, { recursive: true, force: true }, () => {})
     }
 
     private isExpired(session: ManagedBrowserSession): boolean {

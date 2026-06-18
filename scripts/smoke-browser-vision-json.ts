@@ -112,6 +112,23 @@ assert.equal(codexVisionTestHooks.turnTimeoutForEffort('low'), 120_000)
 assert.deepEqual(browserAgentCoordinateTestHooks.denormalize([500, 500], 1980, 1080), [990, 540])
 assert.deepEqual(browserAgentCoordinateTestHooks.clampToViewport([500.4, 1200], 1980, 1080), [500, 1079])
 assert.deepEqual(browserAgentCoordinateTestHooks.clampToViewport([-5, 10], 1980, 1080), [0, 10])
+assert.equal(
+    browserAgentCoordinateTestHooks.hasRecentDiagnosticsForCurrentPage(
+        [{ action: 'inspectDiagnostics', url: 'https://example.test/app#section', success: true }],
+        'https://example.test/app',
+    ),
+    true,
+)
+assert.equal(
+    browserAgentCoordinateTestHooks.hasRecentDiagnosticsForCurrentPage(
+        [
+            { action: 'inspectDiagnostics', url: 'https://example.test/app', success: true },
+            { action: 'click', coordinate: [500, 500], success: true, reasoning: 'Try reload button' },
+        ],
+        'https://example.test/app',
+    ),
+    false,
+)
 
 // Dispatcher coordinate mode follows the provider; no backend is instantiated
 // by getCoordinateMode/updateConfig alone (no API key needed here).

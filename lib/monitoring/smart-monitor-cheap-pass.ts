@@ -73,6 +73,12 @@ const MAX_WAKE_GAP_CEIL_MS = DAY
  *  a slow integration can't stall the whole pass or the scheduler. */
 const CHEAP_CHECK_TIMEOUT_MS = 20_000
 
+/** Total budget for the final stale-pending recheck performed only when the
+ *  gate is about to wake the model. This keeps "already read/handled" source
+ *  state fresh without adding work to quiet ticks. */
+const PRE_WAKE_RECHECK_BUDGET_MS = 20_000
+const PRE_WAKE_RECHECK_MIN_ITEM_MS = 1_000
+
 /** Buffer cap. A noisy quiet-period can't grow task_state without bound; we keep
  *  the most-recent items and note the truncation in the wake prompt. */
 const PENDING_CAP = 50
@@ -120,6 +126,13 @@ export interface SmartCheapPassResult {
     nextState: Record<string, unknown>
     /** The gate snapshot embedded in nextState — used by finalizeSmartMonitorWake. */
     gate: SmartGateState
+}
+
+interface PendingRecheckStats {
+    checked: number
+    stale: number
+    errors: number
+    skipped: number
 }
 
 function isFiniteNumber(v: unknown): v is number {
@@ -216,6 +229,95 @@ function mergePending(
     }
     const all = [...map.values()].sort((a, b) => a.ts - b.ts)
     return all.length > PENDING_CAP ? all.slice(all.length - PENDING_CAP) : all
+}
+
+function emptyRecheckStats(): PendingRecheckStats {
+    return { checked: 0, stale: 0, errors: 0, skipped: 0 }
+}
+
+function formatRecheckStats(stats: PendingRecheckStats): string {
+    if (stats.checked === 0 && stats.skipped === 0) return ''
+    const parts = [`${stats.checked} rechecked`]
+    if (stats.stale > 0) parts.push(`${stats.stale} stale dropped`)
+    if (stats.errors > 0) parts.push(`${stats.errors} inconclusive`)
+    if (stats.skipped > 0) parts.push(`${stats.skipped} skipped`)
+    return `; pre-wake recheck: ${parts.join(', ')}`
+}
+
+async function revalidatePendingBeforeWake(args: {
+    pending: SmartPendingMatch[]
+    watches: MonitorWatch[]
+    now: number
+}): Promise<{ pending: SmartPendingMatch[]; stats: PendingRecheckStats }> {
+    const stats = emptyRecheckStats()
+    const byWatch = new Map(args.watches.map((w) => [w.id, w]))
+    const kept: SmartPendingMatch[] = []
+    const startedAt = Date.now()
+
+    for (const item of args.pending) {
+        const watch = byWatch.get(item.watchId)
+        if (!watch) {
+            stats.skipped++
+            kept.push(item)
+            continue
+        }
+        const adapter = getSourceAdapter(watch.source)
+        if (!adapter.revalidatePending) {
+            stats.skipped++
+            kept.push(item)
+            continue
+        }
+
+        const remainingMs = PRE_WAKE_RECHECK_BUDGET_MS - (Date.now() - startedAt)
+        if (remainingMs < PRE_WAKE_RECHECK_MIN_ITEM_MS) {
+            stats.skipped++
+            kept.push(item)
+            continue
+        }
+
+        try {
+            const result = await adapter.revalidatePending({
+                watch,
+                pending: item,
+                now: args.now,
+                timeoutMs: Math.min(CHEAP_CHECK_TIMEOUT_MS, remainingMs),
+            })
+            stats.checked++
+            if (!result.active) {
+                stats.stale++
+                try {
+                    recordWatchEvent(watch.id, 'suppress', {
+                        patternReason: 'pre-wake stale recheck',
+                        summary: item.summary,
+                        reason: result.reason ?? 'pending item no longer active',
+                    }, args.now)
+                } catch {
+                    /* best-effort audit */
+                }
+                continue
+            }
+            if (result.error) stats.errors++
+            kept.push({
+                ...item,
+                summary: result.summary ?? item.summary,
+                details: result.details ?? item.details,
+            })
+        } catch (err) {
+            stats.checked++
+            stats.errors++
+            try {
+                recordWatchEvent(watch.id, 'check', {
+                    message: err instanceof Error ? err.message : 'pre-wake recheck failed',
+                    phase: 'pre_wake_recheck',
+                }, args.now)
+            } catch {
+                /* best-effort audit */
+            }
+            kept.push(item)
+        }
+    }
+
+    return { pending: kept, stats }
 }
 
 function safeEvaluate(rule: Parameters<typeof evaluateRule>[0], candidate: Parameters<typeof evaluateRule>[1]): boolean {
@@ -440,9 +542,21 @@ export async function runSmartMonitorCheapPass(args: {
     gate.lastCheapRunAt = now
 
     const sinceWake = now - (gate.lastWakeAt ?? now)
-    const hasPending = gate.pending.length > 0
+    let hasPending = gate.pending.length > 0
     const minElapsed = sinceWake >= gate.minWakeGapMs
     const ceilingHit = sinceWake >= gate.maxWakeGapMs
+    let recheckStats = emptyRecheckStats()
+
+    if (hasPending && minElapsed) {
+        const rechecked = await revalidatePendingBeforeWake({
+            pending: gate.pending,
+            watches,
+            now,
+        })
+        gate.pending = rechecked.pending
+        recheckStats = rechecked.stats
+        hasPending = gate.pending.length > 0
+    }
 
     let wakeReason: WakeReason | null = null
     if (hasPending && minElapsed) wakeReason = 'matches'
@@ -454,7 +568,7 @@ export async function runSmartMonitorCheapPass(args: {
             : 'nothing new'
         return {
             noteworthy: false,
-            summary: `Smart monitor cheap pass: ${checkedCount} checked, ${fresh.length} new, ${suppressedCount} suppressed, ${unavailableCount} unavailable, ${errorCount} error(s) — ${heldNote}; agent stays asleep.`,
+            summary: `Smart monitor cheap pass: ${checkedCount} checked, ${fresh.length} new, ${suppressedCount} suppressed, ${unavailableCount} unavailable, ${errorCount} error(s)${formatRecheckStats(recheckStats)} — ${heldNote}; agent stays asleep.`,
             nextState: composeState(prior, gate),
             gate,
         }
@@ -495,8 +609,8 @@ export async function runSmartMonitorCheapPass(args: {
 
     const summary =
         wakeReason === 'ceiling'
-            ? `Smart monitor safety wake (${Math.round(gate.maxWakeGapMs / HOUR)}h ceiling): ${gate.pending.length} buffered item(s) across ${contributing.size} watch(es).`
-            : `Smart monitor wake: ${gate.pending.length} new item(s) across ${contributing.size} watch(es).`
+            ? `Smart monitor safety wake (${Math.round(gate.maxWakeGapMs / HOUR)}h ceiling): ${gate.pending.length} buffered item(s) across ${contributing.size} watch(es)${formatRecheckStats(recheckStats)}.`
+            : `Smart monitor wake: ${gate.pending.length} new item(s) across ${contributing.size} watch(es)${formatRecheckStats(recheckStats)}.`
 
     return {
         noteworthy: true,

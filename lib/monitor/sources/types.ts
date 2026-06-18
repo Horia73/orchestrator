@@ -65,6 +65,35 @@ export interface CheapCheckInput {
     timeoutMs: number
 }
 
+export interface PendingRevalidationInput {
+    watch: MonitorWatch
+    pending: {
+        watchId: string
+        watchTitle: string
+        source: string
+        summary: string
+        externalId?: string
+        ts: number
+        details?: Record<string, unknown>
+    }
+    now: number
+    /** Hard upper bound (ms) for this stale-pending recheck. */
+    timeoutMs: number
+}
+
+export interface PendingRevalidationResult {
+    /** False means the buffered match was handled/stale and should not wake the model. */
+    active: boolean
+    /** Optional short reason for audit events when active=false or a recheck was inconclusive. */
+    reason?: string
+    /** Optional refreshed summary/details to pass into the wake prompt. */
+    summary?: string
+    details?: Record<string, unknown>
+    /** Recheck could not prove staleness. The engine keeps the pending item. */
+    error?: string
+    checkedAt: number
+}
+
 export interface SourceAdapter {
     readonly source: WatchSource
     /** Predicate kinds this adapter understands. Composition (any_of/all_of)
@@ -79,6 +108,12 @@ export interface SourceAdapter {
     /** Run the cheap fetch + rule eval for one watch. Never throws — failures
      *  come back as `{ ok: false, error }`. */
     cheapCheck(input: CheapCheckInput): Promise<CheapCheckResult>
+    /** Optional final freshness check right before the Smart Monitor gate wakes
+     *  the model. Use this to drop buffered connector matches that the user has
+     *  already handled since the cheap pass first saw them, such as a Gmail
+     *  message that is no longer unread or a WhatsApp chat whose unread badge
+     *  has cleared. Inconclusive checks should return active=true with error. */
+    revalidatePending?(input: PendingRevalidationInput): Promise<PendingRevalidationResult>
 }
 
 // --- small helpers shared by adapters -------------------------------------

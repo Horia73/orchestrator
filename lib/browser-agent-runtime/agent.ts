@@ -75,6 +75,24 @@ export type BrowserEvidenceCapture =
         page: BrowserVideoRecording['page'];
     };
 
+const CLIENT_SIDE_APPLICATION_ERROR_PATTERNS = [
+    /application error:\s*a client-side exception has occurred/i,
+    /client-side exception has occurred while loading/i,
+    /see the browser console for more information/i,
+];
+
+const DIAGNOSTIC_CONTEXT_RESET_ACTIONS = new Set<AgentAction['action']>([
+    'click',
+    'key',
+    'navigate',
+    'refresh',
+    'goBack',
+    'goForward',
+    'switchTab',
+    'newTab',
+    'closeTab',
+]);
+
 export interface AgentControllerStatus {
     running: boolean;
     paused: boolean;
@@ -289,6 +307,7 @@ export function createAgentController(
                     const openTabs = await browser.listTabs();
                     const downloads = browser.getDownloads();
                     const isFinalIteration = iterationCount === maxIterations;
+                    const visibleClientCrash = await detectVisibleClientSideApplicationError(browser);
 
                     if (supplementalFrames.length > 0) {
                         onStatusUpdate(`🗺️ Using ${supplementalFrames.length} supplemental frame(s) for orientation.`);
@@ -300,6 +319,22 @@ export function createAgentController(
 
                     onStatusUpdate('🤖 AI deciding...');
                     let actions: AgentAction[] = [];
+
+                    if (
+                        browser.capabilities.diagnostics &&
+                        visibleClientCrash.detected &&
+                        !hasRecentDiagnosticsForCurrentPage(actionHistory, frame.url)
+                    ) {
+                        const crashText = visibleClientCrash.text
+                            ? ` Visible text: "${visibleClientCrash.text}"`
+                            : '';
+                        onStatusUpdate('🧪 Visible client-side application error detected; inspecting browser diagnostics before deciding next step.');
+                        actions = [{
+                            action: 'inspectDiagnostics',
+                            url: frame.url,
+                            reasoning: `The page visibly reports a client-side application error; console/page/network diagnostics are required before recovery or final reporting.${crashText}`,
+                        }];
+                    }
 
                     if (escalationState && escalationState.active) {
                         escalationState.iterations++;
@@ -881,6 +916,7 @@ function sleep(ms: number): Promise<void> {
 export const browserAgentCoordinateTestHooks = {
     denormalize,
     clampToViewport,
+    hasRecentDiagnosticsForCurrentPage,
 };
 
 function recordBrowserIterationLimitNeed(
@@ -1009,6 +1045,61 @@ function trimObservation(value: string, maxChars: number): string {
     return clean.length <= maxChars ? clean : `${clean.slice(0, maxChars - 1).trimEnd()}…`;
 }
 
+async function detectVisibleClientSideApplicationError(
+    browser: BrowserPageSession
+): Promise<{ detected: boolean; text?: string }> {
+    const page = browser.getPage();
+    if (!page) {
+        return { detected: false };
+    }
+
+    try {
+        const text = await page.evaluate(() => {
+            const title = document.title || '';
+            const bodyText = document.body?.innerText || '';
+            return `${title}\n${bodyText}`.replace(/\s+/g, ' ').trim().slice(0, 3000);
+        });
+        if (!CLIENT_SIDE_APPLICATION_ERROR_PATTERNS.some((pattern) => pattern.test(text))) {
+            return { detected: false };
+        }
+        return {
+            detected: true,
+            text: trimObservation(text, 260),
+        };
+    } catch {
+        return { detected: false };
+    }
+}
+
+function hasRecentDiagnosticsForCurrentPage(actionHistory: ActionHistoryItem[], currentUrl: string): boolean {
+    const normalizedCurrent = normalizeDiagnosticUrl(currentUrl);
+
+    for (let index = actionHistory.length - 1; index >= 0; index--) {
+        const action = actionHistory[index];
+
+        if (action.action === 'inspectDiagnostics') {
+            const diagnosticUrl = normalizeDiagnosticUrl(action.url || '');
+            return !normalizedCurrent || !diagnosticUrl || diagnosticUrl === normalizedCurrent;
+        }
+
+        if (DIAGNOSTIC_CONTEXT_RESET_ACTIONS.has(action.action as AgentAction['action'])) {
+            return false;
+        }
+    }
+
+    return false;
+}
+
+function normalizeDiagnosticUrl(value: string): string {
+    try {
+        const url = new URL(value);
+        url.hash = '';
+        return url.toString();
+    } catch {
+        return value.trim();
+    }
+}
+
 function summarizeDiagnostics(diagnostics: BrowserDiagnosticsSnapshot): string {
     if (!diagnostics.supported) {
         return 'Browser diagnostics are unavailable on this backend.';
@@ -1039,7 +1130,8 @@ function summarizeDiagnostics(diagnostics: BrowserDiagnosticsSnapshot): string {
     if (pageErrors.length > 0) {
         lines.push('Page errors:');
         for (const entry of pageErrors) {
-            lines.push(`- ${formatObservationUrl(entry.url)}: ${trimObservation(entry.message, 240)}`);
+            const stack = entry.stack ? ` | stack: ${trimObservation(entry.stack, 500)}` : '';
+            lines.push(`- ${formatObservationUrl(entry.url)}: ${trimObservation(entry.message, 240)}${stack}`);
         }
     }
 

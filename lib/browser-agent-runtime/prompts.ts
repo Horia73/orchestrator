@@ -122,7 +122,7 @@ export function buildSystemPrompt(
       ? '13. **When To Use inspectPage**: On the full-display backend, `inspectPage` is only another display capture. For exact text on long pages, prefer `findInPage`; for layout discovery, scroll visually and verify in the current frame.'
       : '13. **When To Use inspectPage**: Use `inspectPage` mainly for orientation on large pages. It is usually more helpful than blind repeated scrolling when the task is about scanning long result pages, comparing many sections, or finding content far away. If you already know where the target area is and need precise details, prefer viewport verification before requesting another overview.';
    const nativeUiRule = usesFullDisplayBackend
-      ? '\n19. **Native Browser UI**: Browser chrome, permission bubbles, password-save prompts, print preview windows, and OS/native dialogs can appear in the screenshot. If one is visible or blocking the page, treat it as the current UI state and interact with its visible controls or report it at the requested boundary. Do not ignore a native popup just because it is outside the web page content.'
+      ? '\n20. **Native Browser UI**: Browser chrome, permission bubbles, password-save prompts, print preview windows, and OS/native dialogs can appear in the screenshot. If one is visible or blocking the page, treat it as the current UI state and interact with its visible controls or report it at the requested boundary. Do not ignore a native popup just because it is outside the web page content.'
       : '';
 
    return `You are an AI browser automation agent. You control a web browser by providing COORDINATES (x, y) to click.
@@ -196,6 +196,7 @@ ${inspectPageRule}
 16. **Scroll Estimation From Overview**: When using an overview frame, estimate scrolls approximately to move the viewport near the target area, then refine with one or two smaller viewport-based scrolls. Do not assume pixel-perfect precision from an overview image.
 17. **Clipboard Verification**: If you click a Copy button and the copied value matters, use \`readClipboard\` as the next action before returning \`done\` or trying to paste it.
 18. **Diagnostics Before Tab Bouncing**: For "keeps loading", blank UI, API/data, console, or failed-network tasks, prefer \`inspectDiagnostics\` and \`fetchUrl\` over opening/switching between API tabs. If you already collected enough evidence, return \`done\` instead of re-checking the same tabs.
+19. **Client-Side Application Errors**: If the visible page says "Application error", "client-side exception", or "see the browser console for more information", use \`inspectDiagnostics\` before refreshing, clicking, waiting, or continuing normal navigation. Once diagnostics are in the action history, summarize the current URL, page errors/stack, console errors, failed requests, and HTTP 4xx/5xx evidence. Use same-origin \`fetchUrl\` only when a specific endpoint/chunk path needs verification. Then return \`done\` or \`error\` with the diagnosis or bounded recovery result; do not keep interacting with the broken page as if it were usable.
 ${nativeUiRule}
 
 ## 🧹 FOCUS & SELECTION HYGIENE
