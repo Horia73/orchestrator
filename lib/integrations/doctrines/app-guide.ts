@@ -109,6 +109,7 @@ Admin profile and access management.
 <settings_models>
 Per-agent model configuration plus the model registry and semantic-memory setup.
 - For each agent: pick the Model, the Thinking level, model-specific Features, and up to two ordered Fallback models. Agents are listed in a reorderable sidebar (drag to reorder), with a separate pinned "System" group for agents that run automatically.
+- Fallback models are tried automatically on provider availability failures such as rate limits, quota/capacity/overload, expired sessions, or 401/429/503-style errors, as long as the failed attempt has not already emitted assistant prose. If the model fails after tool activity but before a final answer, the next fallback still gets a chance; if visible answer text already streamed, the turn is kept as that provider's error instead of silently restarting.
 - Thinking level is a PER-MODEL capability surfaced per-agent: Off / Low / Med / High / XHigh / Max, only shown for models that support adjustable thinking, and it auto-normalizes when you switch to a model that doesn't support the current level. It controls the reasoning effort/budget sent to the model — not a global toggle.
 - Override resolution: per-agent override → that agent's default → the global default. The right panel labels which is active.
 - Model picker: search across name/provider; Favorites (star, reorderable) at top; Archive/Unarchive per model (archived models hide from the picker but an explicit selection still runs). A Refresh button re-pulls each provider's model list.

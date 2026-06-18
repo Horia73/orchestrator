@@ -17,6 +17,7 @@ import { getAgent } from './registry'
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID } from './audio-context-agent'
 import { resolveRuntimeAgentConfig } from './runtime-agent-config'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
+import { shouldTryModelFallback } from '@/lib/ai/model-fallback'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
 import {
     appendBoundedToolDelta,
@@ -545,7 +546,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         return {
             success: false,
             error: `Sub-agent ${target.id} failed: ${msg}`,
-            data: { fallbackSafe: !accContent.trim() && toolCallCount === 0 },
+            data: { fallbackSafe: isFallbackSafeAttemptFailure(msg, accContent, toolCallCount) },
         }
     }
 
@@ -577,7 +578,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         return {
             success: false,
             error: `Sub-agent ${target.id} reported error: ${providerError}`,
-            data: { fallbackSafe: !accContent.trim() && toolCallCount === 0 },
+            data: { fallbackSafe: isFallbackSafeAttemptFailure(providerError, accContent, toolCallCount) },
         }
     }
 
@@ -942,6 +943,12 @@ function isFallbackSafeToolResult(result: ToolResult): boolean {
         !Array.isArray(data) &&
         (data as { fallbackSafe?: unknown }).fallbackSafe === true
     )
+}
+
+function isFallbackSafeAttemptFailure(error: string, content: string, toolCallCount: number): boolean {
+    if (content.trim()) return false
+    if (toolCallCount === 0) return true
+    return shouldTryModelFallback(error, { afterToolCall: true })
 }
 
 function mergeProviderError(current: string | null, next: string): string {

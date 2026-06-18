@@ -1709,13 +1709,16 @@ export async function POST(request: Request) {
               }
               if (attemptStreamError) {
                 lastModelAttemptError = attemptStreamError
+                const attemptProducedContent =
+                  accContent.length !== attemptContentStart
                 const canRetry =
                   attemptIndex < modelAttempts.length - 1 &&
-                  !attemptHadToolCall &&
-                  accContent.length === attemptContentStart &&
-                  shouldTryModelFallback(attemptStreamError)
+                  !attemptProducedContent &&
+                  shouldTryModelFallback(attemptStreamError, {
+                    afterToolCall: attemptHadToolCall,
+                  })
                 if (canRetry) {
-                  const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before output; trying fallback.\n`
+                  const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before final output; trying fallback.\n`
                   accThinking += note
                   appendThinkingChunk(note)
                   send({ type: "thinking", content: note })
