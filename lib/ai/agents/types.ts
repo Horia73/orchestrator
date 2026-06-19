@@ -291,6 +291,10 @@ export type AgentRunEvent =
       toolCallId?: string
       agentId: string
       agentName: string
+      /** Persona name the delegating agent gave this run, e.g. "Marty". Optional. */
+      assignedName?: string
+      /** Short task topic for this run (the agent thread title), e.g. "solar panels in europe". */
+      taskLabel?: string
       kind: AgentKind
       agentThreadId?: string
       prompt: string

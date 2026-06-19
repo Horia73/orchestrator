@@ -18,6 +18,7 @@ import {
   subscribeChatViewSettled,
 } from "@/lib/chat-view-settled"
 import { cn } from "@/lib/utils"
+import { LOADED_WHILE_HIDDEN } from "@/lib/loaded-while-hidden"
 import { VIEW_FADE_MS } from "@/lib/view-fade"
 import type { Conversation } from "@/lib/types"
 
@@ -230,8 +231,28 @@ export default function Page() {
   // page instance mounted" — true only on a cold start, false on a warm
   // route→chat nav (the store already hydrated in the layout provider).
   const [appRevealed, setAppRevealed] = React.useState(() => !state.isLoading)
+
+  // Background-reload instant reveal. When the page loaded while the tab was
+  // hidden (the OS reloaded a discarded background tab), the scroll-restore —
+  // and therefore the whole reveal — was blocked on rAF until the user came
+  // back. Without this it then replays the cold-start animation in front of
+  // them: splash fades out, the shell crossfades, the conversation eases in.
+  // Instead, suppress the splash and the crossfade so the already-settled chat
+  // is simply there, unmoved, exactly where they left it. Scoped to the first
+  // reveal via a layout effect (keeps SSR/first render identical to the server,
+  // so no hydration mismatch) — later route/conversation changes fade normally.
+  const [instantReveal, setInstantReveal] = React.useState(false)
+  React.useLayoutEffect(() => {
+    if (LOADED_WHILE_HIDDEN) {
+      setInstantReveal(true)
+      setAppRevealed(true)
+    }
+  }, [])
   React.useEffect(() => {
-    if (viewVisible) setAppRevealed(true)
+    if (viewVisible) {
+      setAppRevealed(true)
+      setInstantReveal(false)
+    }
   }, [viewVisible])
 
   useDocumentViewportLock()
@@ -244,7 +265,8 @@ export default function Page() {
         {viewReady && (
           <div
             className={cn(
-              "relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background transition-opacity duration-150 ease-out motion-reduce:transition-none",
+              "relative flex min-h-0 flex-1 flex-col overflow-hidden bg-background motion-reduce:transition-none",
+              !instantReveal && "transition-opacity duration-150 ease-out",
               shellVisible ? "opacity-100" : "pointer-events-none opacity-0"
             )}
           >

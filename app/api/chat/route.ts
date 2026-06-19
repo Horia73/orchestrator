@@ -762,6 +762,8 @@ export async function POST(request: Request) {
               parentRunId: event.parentRunId,
               agentId: event.agentId,
               agentName: event.agentName,
+              assignedName: event.assignedName,
+              taskLabel: event.taskLabel,
               kind: event.kind,
               agentThreadId: event.agentThreadId,
               title: `${event.agentName}`,

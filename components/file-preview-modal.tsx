@@ -141,7 +141,7 @@ export function FilePreviewModal({ attachment, gallery, onClose }: FilePreviewMo
     if (isPresentationFile(active)) {
         return framed(
             <PptxViewer
-                previewUrl={appPath(`/api/uploads/${encodeURIComponent(active.id)}/preview-pdf`)}
+                previewUrl={active.previewUrl ?? appPath(`/api/uploads/${encodeURIComponent(active.id)}/preview-pdf`)}
                 downloadUrl={url}
                 filename={active.filename}
                 onClose={onClose}

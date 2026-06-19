@@ -34,6 +34,10 @@ export const delegateToTool: ToolDef = {
                 type: 'string',
                 description: 'Id of the sub-agent to invoke. Must be one of the agents listed in <runtime_agents>.',
             },
+            agent_name: {
+                type: 'string',
+                description: 'A short, human first name to give this sub-agent run (e.g. "Marty", "Lena") so the user can tell parallel agents apart. Shown next to the role as "Researcher Marty". Keep it to a single given name. Reuse the same name when continuing the same thread_id.',
+            },
             prompt: {
                 type: 'string',
                 description: 'Message to send into the parent↔agent thread. Include user-chat context only when the agent needs it; the agent sees this thread, not the user conversation.',
@@ -94,6 +98,10 @@ export const delegateParallelTool: ToolDef = {
                         agent_id: {
                             type: 'string',
                             description: 'Id of the sub-agent to invoke. Must be one of the agents listed in <runtime_agents>.',
+                        },
+                        agent_name: {
+                            type: 'string',
+                            description: 'A short, human first name for this sub-agent run (e.g. "Marty", "Lena") so the user can tell parallel agents apart. Shown next to the role as "Researcher Marty". Give each job in the batch a distinct name.',
                         },
                         prompt: {
                             type: 'string',
@@ -252,6 +260,7 @@ type PreparedDelegation =
         target: NonNullable<ReturnType<typeof getAgent>>
         prompt: string
         thread: AgentThread
+        assignedName?: string
         cwd?: string
         attachments?: Attachment[]
         browserSessionMode?: BrowserSessionMode
@@ -263,6 +272,7 @@ type DelegationPlan =
         target: NonNullable<ReturnType<typeof getAgent>>
         prompt: string
         forwardedContext: string
+        assignedName?: string
         cwd?: string
         attachments: Attachment[]
         browserSessionMode?: BrowserSessionMode
@@ -295,6 +305,7 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
     const prompt = args.prompt
     const threadId = args.thread_id
     const threadTitle = args.thread_title
+    const assignedName = sanitizeAssignedName(args.agent_name)
     const cwdPlan = normalizeDelegationCwd(args.cwd)
     if (!cwdPlan.ok) return { ok: false, error: cwdPlan.error }
     const attachmentsPlan = resolveDelegationAttachments(args.attachment_ids)
@@ -361,6 +372,7 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
         target,
         prompt: prompt.trim(),
         forwardedContext: contextPlan.block,
+        assignedName,
         cwd: cwdPlan.cwd,
         attachments: attachmentsPlan.attachments,
         browserSessionMode: browserModePlan.mode,
@@ -373,11 +385,25 @@ function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): Pre
     return {
         target: plan.target,
         prompt: appendForwardedContext(plan.prompt, plan.forwardedContext),
+        assignedName: plan.assignedName,
         cwd: plan.cwd,
         attachments: plan.attachments,
         browserSessionMode: plan.browserSessionMode,
         thread: plan.thread ?? createAgentThread(plan.newThread),
     }
+}
+
+/**
+ * Normalize a model-supplied persona name to a short, single-line display
+ * token. Returns undefined for empty/garbage so the UI falls back to the bare
+ * role name. We keep just the first word-ish token (the example is a first
+ * name) and cap length so it never blows out the agent card / chip label.
+ */
+function sanitizeAssignedName(value: unknown): string | undefined {
+    if (typeof value !== 'string') return undefined
+    const firstToken = value.trim().split(/\s+/)[0] ?? ''
+    const clean = firstToken.replace(/[^\p{L}\p{N}'-]/gu, '').slice(0, 24)
+    return clean.length > 0 ? clean : undefined
 }
 
 function appendForwardedContext(prompt: string, forwardedContext: string): string {
@@ -404,6 +430,8 @@ async function runPreparedDelegation(
             prompt: prepared.prompt,
             parentCtx: ctx,
             agentThreadId: prepared.thread.id,
+            assignedName: prepared.assignedName,
+            taskLabel: prepared.thread.title,
             cwd: prepared.cwd,
             attachments: prepared.attachments,
             browserSessionMode: prepared.browserSessionMode,
@@ -413,6 +441,8 @@ async function runPreparedDelegation(
             prompt: prepared.prompt,
             parentCtx: ctx,
             agentThreadId: prepared.thread.id,
+            assignedName: prepared.assignedName,
+            taskLabel: prepared.thread.title,
         })
 }
 

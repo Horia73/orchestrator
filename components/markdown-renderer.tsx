@@ -6,10 +6,19 @@ import remarkGfm from "remark-gfm"
 import remarkMath from "remark-math"
 import type { Options as RemarkMathOptions } from "remark-math"
 import rehypeKatex from "rehype-katex"
-import { Copy, Check } from "lucide-react"
+import { Copy, Check, FileText, FileSpreadsheet, Presentation, Image as ImageIcon, Video } from "lucide-react"
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { appApiPath, appPath } from "@/lib/app-path"
+import { UPLOAD_MIME_MAP } from "@/lib/upload-mime"
+import {
+  is3DModelFile,
+  isCodeOrTextFile,
+  isDocxFile,
+  isPresentationFile,
+  isSpreadsheetFile,
+  isSvgFile,
+} from "@/lib/preview-kinds"
 import type { Components } from "react-markdown"
 import type { Attachment } from "@/lib/types"
 
@@ -207,7 +216,14 @@ function MarkdownImage({ src, alt }: { src?: string | Blob; alt?: string }) {
   const onPreview = React.useContext(MarkdownImageClickContext)
   const [failed, setFailed] = React.useState(false)
   const rawSrc = typeof src === "string" ? src : undefined
-  const imageSrc = rawSrc ? appPath(rawSrc) : undefined
+  // An agent embedding a generated image inline (e.g. `![chart](files/chart.png)`
+  // or a full workspace path) references it by its workspace path — exactly what
+  // the output contract tells it to do for files. Resolve that through the same
+  // /api/workspace/files endpoint that download links use; otherwise the relative
+  // src 404s against the chat route and the image silently shows as unavailable.
+  // Uploads (`/api/uploads/<id>`) and absolute URLs fall through unchanged.
+  const workspaceSrc = workspaceDownloadHref(rawSrc)
+  const imageSrc = workspaceSrc ?? (rawSrc ? appPath(rawSrc) : undefined)
   const isWhatsAppQr =
     typeof imageSrc === "string" &&
     imageSrc.includes("/api/integrations/whatsapp/qr")
@@ -289,24 +305,33 @@ function handleNewTabLinkClick(
   window.open(href, "_blank", "noopener,noreferrer")
 }
 
-function workspaceDownloadHref(href: string | undefined): string | undefined {
+// The raw workspace path a link points at (the value to feed as `?path=`), or
+// null when the href is not a workspace file. Shared by the download-link path
+// and the inline file-card path so both agree on what counts as a workspace file.
+function workspaceCandidatePath(href: string | undefined): string | null {
   const raw = href?.trim()
-  if (!raw || raw.startsWith("#") || raw.startsWith("?")) return undefined
-  if (raw.startsWith("/api/workspace/files?")) return appPath(raw)
-  if (/^(?:mailto|tel|javascript):/i.test(raw)) return undefined
+  if (!raw || raw.startsWith("#") || raw.startsWith("?")) return null
+  if (raw.startsWith("/api/workspace/files?")) {
+    try {
+      return new URLSearchParams(raw.slice(raw.indexOf("?") + 1)).get("path")
+    } catch {
+      return null
+    }
+  }
+  if (/^(?:mailto|tel|javascript):/i.test(raw)) return null
 
   let candidate = raw
   let hasProtocol = false
   try {
     const url = new URL(raw)
     hasProtocol = true
-    if (url.protocol !== "file:") return undefined
+    if (url.protocol !== "file:") return null
     candidate = url.pathname
   } catch {
     hasProtocol = /^[a-z][a-z0-9+.-]*:/i.test(raw)
   }
 
-  if (hasProtocol && !raw.startsWith("file://")) return undefined
+  if (hasProtocol && !raw.startsWith("file://")) return null
 
   const pathOnly = candidate.split(/[?#]/, 1)[0]?.replace(/\\/g, "/") ?? ""
   const isWorkspacePath = pathOnly.includes(WORKSPACE_PATH_MARKER)
@@ -315,8 +340,150 @@ function workspaceDownloadHref(href: string | undefined): string | undefined {
     !pathOnly.includes("://") &&
     DOWNLOADABLE_WORKSPACE_EXT_RE.test(candidate)
 
-  if (!isWorkspacePath && !isRelativeWorkspaceFile) return undefined
+  if (!isWorkspacePath && !isRelativeWorkspaceFile) return null
+  return candidate
+}
+
+function workspaceDownloadHref(href: string | undefined): string | undefined {
+  const candidate = workspaceCandidatePath(href)
+  if (candidate == null) return undefined
   return appApiPath("/api/workspace/files", { path: candidate })
+}
+
+interface WorkspaceFileRef {
+  /** Raw workspace path to feed as the `?path=` query param. */
+  filePath: string
+  /** Resolved one-click download URL (/api/workspace/files?path=…). */
+  downloadHref: string
+  /** Basename for display. */
+  filename: string
+  /** MIME guessed from the extension (may be "" for unknown types). */
+  mimeType: string
+}
+
+function workspaceFileRef(href: string | undefined): WorkspaceFileRef | null {
+  const candidate = workspaceCandidatePath(href)
+  if (candidate == null) return null
+  const filename =
+    candidate.split(/[?#]/, 1)[0]?.split(/[\\/]/).filter(Boolean).pop() || "file"
+  const dot = filename.lastIndexOf(".")
+  const ext = dot >= 0 ? filename.slice(dot).toLowerCase() : ""
+  return {
+    filePath: candidate,
+    downloadHref: appApiPath("/api/workspace/files", { path: candidate }),
+    filename,
+    mimeType: UPLOAD_MIME_MAP[ext] ?? "",
+  }
+}
+
+// Which in-app viewer category a workspace file opens in the FilePreviewModal,
+// or null when the modal has no real preview for it (archives, audio, etc.) —
+// those keep a plain download link instead of a card. Mirrors the predicates the
+// modal itself routes on.
+function workspacePreviewKind(filename: string, mimeType: string): Attachment["type"] | null {
+  const att = { filename, mimeType }
+  const dot = filename.lastIndexOf(".")
+  const ext = dot >= 0 ? filename.slice(dot + 1).toLowerCase() : ""
+  if (ext === "pdf" || mimeType === "application/pdf") return "pdf"
+  if (isPresentationFile(att)) return "presentation"
+  if (isSpreadsheetFile(att)) return "spreadsheet"
+  if (isSvgFile(att)) return "image"
+  if (isDocxFile(att)) return "document"
+  if (is3DModelFile(att)) return "other"
+  if (mimeType.startsWith("image/")) return "image"
+  if (mimeType.startsWith("video/")) return "video"
+  if (isCodeOrTextFile(att)) return "document"
+  return null
+}
+
+const WORKSPACE_FILE_ICON: Record<Attachment["type"], React.ComponentType<{ className?: string }>> = {
+  image: ImageIcon,
+  video: Video,
+  pdf: FileText,
+  document: FileText,
+  spreadsheet: FileSpreadsheet,
+  presentation: Presentation,
+  audio: FileText,
+  other: FileText,
+}
+
+// A compact, inline-flex card for a workspace file the assistant links inline.
+// Clicking opens the in-app FilePreviewModal (PDF/Office/code/3D/image) instead
+// of a bare download. Rendered as a <button> (phrasing content) so it is valid
+// inside the surrounding <p>. Only shown when a preview handler is in context;
+// otherwise the link falls back to a plain one-click download.
+function WorkspaceFileCard({
+  fileRef,
+  kind,
+  onPreview,
+}: {
+  fileRef: WorkspaceFileRef
+  kind: Attachment["type"]
+  onPreview: MarkdownImageClickHandler
+}) {
+  const Icon = WORKSPACE_FILE_ICON[kind] ?? FileText
+  const dot = fileRef.filename.lastIndexOf(".")
+  const ext = dot >= 0 ? fileRef.filename.slice(dot + 1).toUpperCase() : kind.toUpperCase()
+  const open = () => {
+    onPreview({
+      id: fileRef.filePath,
+      filename: fileRef.filename,
+      mimeType: fileRef.mimeType || "application/octet-stream",
+      size: 0,
+      type: kind,
+      origin: "workspace",
+      url: fileRef.downloadHref,
+      previewUrl:
+        kind === "presentation"
+          ? appApiPath("/api/workspace/files/preview-pdf", { path: fileRef.filePath })
+          : undefined,
+    })
+  }
+  return (
+    <button
+      type="button"
+      onClick={open}
+      title={`Open ${fileRef.filename}`}
+      className="my-1 inline-flex max-w-full items-center gap-2 rounded-lg border border-border/70 bg-white px-3 py-2 text-left align-middle text-[13px] text-foreground/90 transition-colors hover:border-border hover:bg-muted/40 dark:bg-muted/20"
+    >
+      <Icon className="size-4 shrink-0 text-muted-foreground" />
+      <span className="min-w-0 truncate font-medium">{fileRef.filename}</span>
+      <span className="shrink-0 rounded border border-border/50 bg-muted/30 px-1.5 py-0.5 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+        {ext}
+      </span>
+    </button>
+  )
+}
+
+// Link renderer: a workspace document opens the in-app preview card when a
+// preview handler is available; everything else stays a normal link (workspace
+// files without an in-app viewer become one-click downloads via workspaceDownloadHref).
+function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
+  const onPreview = React.useContext(MarkdownImageClickContext)
+  const fileRef = workspaceFileRef(href)
+  if (fileRef && onPreview) {
+    const kind = workspacePreviewKind(fileRef.filename, fileRef.mimeType)
+    if (kind) {
+      return <WorkspaceFileCard fileRef={fileRef} kind={kind} onPreview={onPreview} />
+    }
+  }
+  const downloadHref = fileRef?.downloadHref
+  const resolvedHref = downloadHref ?? (href ? appPath(href) : undefined)
+  return (
+    <a
+      href={resolvedHref}
+      target={downloadHref ? undefined : "_blank"}
+      rel={downloadHref ? undefined : "noopener noreferrer"}
+      onClick={
+        downloadHref || !resolvedHref
+          ? undefined
+          : (event) => handleNewTabLinkClick(event, resolvedHref)
+      }
+      className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
+    >
+      {children}
+    </a>
+  )
 }
 
 // ---------------------------------------------------------------------------
@@ -399,25 +566,7 @@ const baseComponents: Components = {
     return <CodeBlock language="" code={code} />
   },
   hr: () => <hr className="my-4 border-t border-border/60" />,
-  a: ({ href, children }) => {
-    const downloadHref = workspaceDownloadHref(href)
-    const resolvedHref = downloadHref ?? (href ? appPath(href) : undefined)
-    return (
-      <a
-        href={resolvedHref}
-        target={downloadHref ? undefined : "_blank"}
-        rel={downloadHref ? undefined : "noopener noreferrer"}
-        onClick={
-          downloadHref || !resolvedHref
-            ? undefined
-            : (event) => handleNewTabLinkClick(event, resolvedHref)
-        }
-        className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
-      >
-        {children}
-      </a>
-    )
-  },
+  a: ({ href, children }) => <MarkdownLink href={href}>{children}</MarkdownLink>,
   table: ({ children }) => (
     <div className="my-3 overflow-x-auto rounded-lg border border-border/50">
       <table className="w-full text-[14px]">{children}</table>

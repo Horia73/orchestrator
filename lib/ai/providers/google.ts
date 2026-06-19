@@ -542,6 +542,20 @@ export class GoogleProvider implements AIProvider {
             const streamingFunctionCalls = new Map<number, StreamingFunctionCallState>()
             const emittedServerToolCalls = new Set<string>()
             const emittedServerToolResults = new Set<string>()
+            // Gemini repeats a model_output step's opening text in BOTH the
+            // step.start snapshot and the step.delta stream, so eagerly emitting
+            // the snapshot double-prints the first chunk ("VoiVoi …"). Treat the
+            // deltas as authoritative and only fall back to the snapshot when no
+            // text delta ever arrives for that step index.
+            const modelOutputStreamedIndexes = new Set<number>()
+            const modelOutputSnapshots = new Map<number, string>()
+            const flushModelOutput = (index: number) => {
+                const snapshot = modelOutputSnapshots.get(index)
+                modelOutputSnapshots.delete(index)
+                if (modelOutputStreamedIndexes.has(index) || !snapshot) return
+                emitModelText(snapshot)
+                modelOutputStreamedIndexes.add(index)
+            }
 
             const emitServerToolStep = (step: GeminiStreamEvent, index: number) => {
                 const stepType = stringValue(step.type)
@@ -669,8 +683,9 @@ export class GoogleProvider implements AIProvider {
                         const text = readThinkingStep(step)
                         if (text) cb.onThinking(text)
                     } else if (stepType === 'model_output') {
-                        for (const text of contentTexts(step.content)) {
-                            emitModelText(text)
+                        const snapshot = contentTexts(step.content).join('')
+                        if (snapshot) {
+                            modelOutputSnapshots.set(Number(event.index) || 0, snapshot)
                         }
                     } else if (stepType === 'function_call') {
                         startFunctionCall(step, Number(event.index) || 0)
@@ -691,6 +706,7 @@ export class GoogleProvider implements AIProvider {
                     }
 
                     if (deltaType === 'text') {
+                        modelOutputStreamedIndexes.add(Number(event.index) || 0)
                         emitModelText(delta.text)
                     }
 
@@ -720,6 +736,7 @@ export class GoogleProvider implements AIProvider {
 
                 if (eventType === 'step.stop') {
                     flushFunctionCall(Number(event.index) || 0)
+                    flushModelOutput(Number(event.index) || 0)
                 }
 
                 if (eventType === 'interaction.complete' || eventType === 'interaction.completed') {
@@ -743,6 +760,9 @@ export class GoogleProvider implements AIProvider {
 
             for (const index of streamingFunctionCalls.keys()) {
                 flushFunctionCall(index)
+            }
+            for (const index of Array.from(modelOutputSnapshots.keys())) {
+                flushModelOutput(index)
             }
 
             if (options.signal?.aborted) {

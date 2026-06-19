@@ -1,5 +1,5 @@
 import { spawn } from "child_process"
-import { randomUUID } from "crypto"
+import { createHash, randomUUID } from "crypto"
 import fs from "fs/promises"
 import path from "path"
 import { activeRuntimePaths } from "@/lib/runtime-paths"
@@ -25,6 +25,7 @@ const CACHE_CAP_BYTES = 512 * 1024 * 1024
 const CONVERT_TIMEOUT_MS = 90_000
 
 const inflight = new Map<string, Promise<string>>()
+const inflightWorkspace = new Map<string, Promise<string>>()
 let availabilityCache: Promise<boolean> | null = null
 
 export const PPTX_EXTENSIONS = new Set([".pptx", ".ppt"])
@@ -237,5 +238,40 @@ export async function convertPptxToPdf(uploadId: string): Promise<string> {
         inflight.delete(uploadId)
     })
     inflight.set(uploadId, job)
+    return job
+}
+
+/**
+ * Convert a PPTX/PPT that lives in the agent workspace (a resolved absolute
+ * path, NOT an upload id) to PDF for the in-app preview, returning the cached
+ * PDF path. Unlike immutable uploads, workspace files are mutable, so the cache
+ * entry is keyed by a hash of the absolute path and only reused when it is newer
+ * than the source — an edited deck self-heals (re-converts) on next open.
+ */
+export async function convertWorkspacePptxToPdf(absInputPath: string): Promise<string> {
+    const input = path.resolve(absInputPath)
+
+    const { previewCacheDir } = activeRuntimePaths()
+    const key = createHash("sha1").update(input).digest("hex").slice(0, 24)
+    const out = path.join(previewCacheDir, `ws-${key}.pdf`)
+
+    try {
+        const [outStat, inStat] = await Promise.all([fs.stat(out), fs.stat(input)])
+        if (outStat.mtimeMs >= inStat.mtimeMs && (await isValidPdf(out))) {
+            const now = new Date()
+            void fs.utimes(out, now, now).catch(() => {})
+            return out
+        }
+    } catch {
+        // no cache yet, or source vanished — fall through to (re)convert
+    }
+
+    const existing = inflightWorkspace.get(key)
+    if (existing) return existing
+
+    const job = doConvert(key, input, previewCacheDir, out).finally(() => {
+        inflightWorkspace.delete(key)
+    })
+    inflightWorkspace.set(key, job)
     return job
 }

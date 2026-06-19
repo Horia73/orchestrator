@@ -16,6 +16,10 @@ export interface Attachment {
   /** Optional explicit fetch URL. Uploads resolve to /api/uploads/[id] by
    *  default; set this for files served elsewhere (e.g. workspace files). */
   url?: string
+  /** Optional server-rendered preview source (e.g. PPTX→PDF). Uploads derive
+   *  this from /api/uploads/[id]/preview-pdf; set explicitly for workspace files
+   *  served through /api/workspace/files/preview-pdf. */
+  previewUrl?: string
 }
 
 export interface TokenUsageBreakdown {
@@ -191,6 +195,10 @@ export interface AgentCallReasoningEntry {
   parentRunId?: string
   agentId: string
   agentName: string
+  /** Persona name the delegating agent gave this run, e.g. "Marty". */
+  assignedName?: string
+  /** Short task topic for this run (the agent thread title), e.g. "solar panels in europe". */
+  taskLabel?: string
   kind: AgentKind
   title: string
   prompt: string

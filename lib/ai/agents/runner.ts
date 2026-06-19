@@ -74,6 +74,10 @@ interface RunTextSubAgentArgs {
     prompt: string
     parentCtx: ToolExecutionContext
     agentThreadId?: string
+    /** Persona name the delegating agent assigned this run, e.g. "Marty". */
+    assignedName?: string
+    /** Short task topic for this run (the agent thread title) shown in the UI. */
+    taskLabel?: string
     cwd?: string
     /** User attachments to forward to the model on this turn. */
     attachments?: Attachment[]
@@ -85,6 +89,10 @@ interface RunMediaSubAgentArgs {
     prompt: string
     parentCtx: ToolExecutionContext
     agentThreadId?: string
+    /** Persona name the delegating agent assigned this run, e.g. "Marty". */
+    assignedName?: string
+    /** Short task topic for this run (the agent thread title) shown in the UI. */
+    taskLabel?: string
 }
 
 const VIDEO_POLL_INTERVAL_MS = 10_000
@@ -221,6 +229,8 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         toolCallId: parentCtx.currentToolCallId,
         agentId: target.id,
         agentName: target.name,
+        assignedName: args.assignedName,
+        taskLabel: args.taskLabel,
         kind: target.kind,
         agentThreadId,
         prompt,
@@ -696,6 +706,8 @@ export async function runMediaSubAgent(args: RunMediaSubAgentArgs): Promise<Tool
         toolCallId: parentCtx.currentToolCallId,
         agentId: target.id,
         agentName: target.name,
+        assignedName: args.assignedName,
+        taskLabel: args.taskLabel,
         kind: target.kind,
         agentThreadId,
         prompt,

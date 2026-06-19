@@ -63,6 +63,7 @@ import {
   type ChatScrollTarget,
 } from "@/lib/chat-scroll-target"
 import { publishChatViewSettled } from "@/lib/chat-view-settled"
+import { LOADED_WHILE_HIDDEN } from "@/lib/loaded-while-hidden"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
@@ -173,6 +174,12 @@ export function ChatView() {
   const [showScrollBtn, setShowScrollBtn] = React.useState(false)
   const [isRestoringScroll, setIsRestoringScroll] = React.useState(false)
   const [isScrollJumpFading, setIsScrollJumpFading] = React.useState(false)
+  // First message-list reveal after a background reload (tab discarded while
+  // hidden) snaps in instead of fading — so on return the conversation is just
+  // there, not animating into place. Set via layout effect to keep the first
+  // render server-identical (no hydration mismatch); released after the first
+  // reveal so later conversation switches fade normally again.
+  const [instantFirstReveal, setInstantFirstReveal] = React.useState(false)
   const [isScrollbarVisible, setIsScrollbarVisible] = React.useState(false)
   const [isScrollbarSuppressed, setIsScrollbarSuppressed] =
     React.useState(false)
@@ -342,11 +349,13 @@ export function ChatView() {
     cachedActiveAgentRun.run.runId === activeAgentRunId
       ? cachedActiveAgentRun.run
       : null)
-  const activeChildAgentRun = React.useMemo(
+  const activeChildAgentRuns = React.useMemo(
     () =>
       activePanelAgentRun
-        ? agentRuns.find((run) => run.parentRunId === activePanelAgentRun.runId)
-        : undefined,
+        ? agentRuns.filter(
+            (run) => run.parentRunId === activePanelAgentRun.runId
+          )
+        : [],
     [agentRuns, activePanelAgentRun]
   )
 
@@ -1707,16 +1716,18 @@ export function ChatView() {
     const container = scrollContainerRef.current
     if (!container) return
 
-    // Preferred path: keep the just-finalized answer pinned in place. When the
-    // working trace was scrolled above the fold, the committed bubble mounts it
-    // collapsed and the answer below jumps up by the folded height — measure
-    // that and undo it. A message-level anchor can't fix this: the message top
-    // (above the fold) never moves, only the content between it and the answer.
-    if (
-      fin &&
-      fin.conversationId === conversationId &&
-      fin.distanceFromBottom > STICKY_BOTTOM_THRESHOLD
-    ) {
+    // Preferred path: keep the just-finalized answer pinned exactly where it sat
+    // on screen. Folding the working trace into the one-line "Worked for …"
+    // disclosure removes height *above* the answer in the same commit the
+    // committed bubble mounts (no animation to follow), so the answer jumps up by
+    // the folded height. We captured the answer's on-screen bottom every
+    // streaming frame (fin); undo the jump by shifting scrollTop the same amount,
+    // absorbing the freed space at the top so the reader's text never moves.
+    // Applies near the bottom too (a non-follow reader watching it finish) — only
+    // an active bottom-follow is excluded, by the early return above. A
+    // message-level anchor can't fix this: the message top never moves, only the
+    // content between it and the answer.
+    if (fin && fin.conversationId === conversationId) {
       const lastMsg = (activeConversation?.messages ?? []).at(-1)
       const wrapper =
         lastMsg?.role === "assistant" &&
@@ -1727,10 +1738,13 @@ export function ChatView() {
       if (wrapper instanceof HTMLElement && content instanceof HTMLElement) {
         const containerTop = container.getBoundingClientRect().top
         const wrapperTop = wrapper.getBoundingClientRect().top - containerTop
-        // Only when the working trace sat above the viewport top. If the block
-        // was on screen the user watched it fold and an in-place collapse reads
-        // as expected, so leave it to the message-anchor fallback below.
-        if (wrapperTop < 0) {
+        // Compensate whenever the folding trace sits above the viewport bottom —
+        // the turn is at least partially on screen or scrolled above it, so the
+        // collapse moves what the reader is looking at. When the whole turn is
+        // still below the fold (the reader is up in earlier messages) the
+        // collapse happens off-screen below them and must NOT shift their view,
+        // so skip it and let the message-anchor fallback handle that case.
+        if (wrapperTop < container.clientHeight) {
           // Discount the committed bubble's trailing meta row (timestamp/actions)
           // — the streaming bubble has no equivalent, so the answer bottoms line
           // up exactly instead of ~a row apart.
@@ -2439,6 +2453,19 @@ export function ChatView() {
     isAwaitingInitialScrollRestore || isRestoringScroll
   const isMessageListHidden = isScrollJumpFading || isRestoringInitialFrame
 
+  // Arm the instant first reveal on a background reload (see instantFirstReveal
+  // above). Layout effect so it lands before the first paint — which, on a
+  // backgrounded reload, only happens once the tab is foregrounded — and never
+  // diverges from the server's first render.
+  React.useLayoutEffect(() => {
+    if (LOADED_WHILE_HIDDEN) setInstantFirstReveal(true)
+  }, [])
+  // Release it the moment the list first becomes visible, so the snap applies
+  // only to that first reveal and subsequent conversation switches fade.
+  React.useEffect(() => {
+    if (instantFirstReveal && !isMessageListHidden) setInstantFirstReveal(false)
+  }, [instantFirstReveal, isMessageListHidden])
+
   // Tell the page (lib/chat-view-settled) which conversation has its initial
   // layout settled (messages rendered + scroll restored), so the route-level
   // fade-in starts only once nothing will shift. Layout effect: it publishes
@@ -2817,7 +2844,8 @@ export function ChatView() {
               <div
                 data-chat-message-list="true"
                 className={cn(
-                  "flex-1 pt-8 transition-opacity duration-150",
+                  "flex-1 pt-8",
+                  !instantFirstReveal && "transition-opacity duration-150",
                   isMessageListHidden && "pointer-events-none opacity-0"
                 )}
                 style={{ paddingBottom: inputOffset + 24 }}
@@ -3035,8 +3063,9 @@ export function ChatView() {
             {activePanelAgentRun ? (
               <AgentWorkspacePanel
                 run={activePanelAgentRun}
-                childRun={activeChildAgentRun}
+                childRuns={activeChildAgentRuns}
                 onClose={handleAgentClose}
+                onOpenAgent={handleAgentOpen}
                 onAttachmentClick={openPreview}
               />
             ) : genArtifact ? (
@@ -3066,8 +3095,9 @@ export function ChatView() {
             {activePanelAgentRun ? (
               <AgentWorkspacePanel
                 run={activePanelAgentRun}
-                childRun={activeChildAgentRun}
+                childRuns={activeChildAgentRuns}
                 onClose={handleAgentClose}
+                onOpenAgent={handleAgentOpen}
                 onAttachmentClick={openPreview}
               />
             ) : genArtifact ? (

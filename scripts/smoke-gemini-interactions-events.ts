@@ -76,13 +76,22 @@ const streams: GeminiEvent[][] = [
             type: 'interaction.created',
             interaction: { id: 'int_final', status: 'in_progress', steps: [], created: '', updated: '' },
         },
+        // Gemini repeats the opening chunk in the step.start snapshot AND the
+        // first text delta. The provider must treat the deltas as authoritative
+        // and drop the snapshot, otherwise the first word double-prints
+        // ("FinalFinal answer.").
         {
             event_type: 'step.start',
             index: 0,
             step: { type: 'model_output', content: [{ type: 'text', text: 'Final' }] },
         },
         {
-            type: 'step.delta',
+            event_type: 'step.delta',
+            index: 0,
+            delta: { type: 'text', text: 'Final' },
+        },
+        {
+            event_type: 'step.delta',
             index: 0,
             delta: { type: 'text', text: ' answer.' },
         },
@@ -202,3 +211,47 @@ assert.deepEqual(doneMeta, {
     },
     thinkingDuration: 1,
 })
+
+// Fallback: a model_output step that delivers its text only in the step.start
+// snapshot (no text deltas) must still be emitted, via the end-of-round flush.
+{
+    const fallbackProvider = new GoogleProvider('fake-api-key')
+    ;(fallbackProvider as unknown as { client: unknown }).client = {
+        interactions: {
+            create: async () =>
+                makeStream([
+                    {
+                        event_type: 'interaction.created',
+                        interaction: { id: 'int_snap', status: 'in_progress', steps: [], created: '', updated: '' },
+                    },
+                    {
+                        event_type: 'step.start',
+                        index: 0,
+                        step: { type: 'model_output', content: [{ type: 'text', text: 'Snapshot only.' }] },
+                    },
+                    {
+                        event_type: 'interaction.completed',
+                        interaction: { id: 'int_snap', status: 'completed', steps: [], created: '', updated: '', usage: secondRoundUsage },
+                    },
+                ]),
+        },
+    }
+
+    const fallbackContents: string[] = []
+    await fallbackProvider.stream(
+        { model: 'gemini-smoke', thinkingLevel: 'low', messages: [{ role: 'user', content: 'Hi' }] },
+        {
+            onThinking: () => {},
+            onThinkingDone: () => {},
+            onContent: (text) => fallbackContents.push(text),
+            onToolCall: () => {},
+            onToolResult: () => {},
+            onUsage: () => {},
+            onDone: () => {},
+            onError: (error) => { throw new Error(error) },
+        }
+    )
+    assert.equal(fallbackContents.join(''), 'Snapshot only.')
+}
+
+console.log('smoke-gemini-interactions-events: ok')

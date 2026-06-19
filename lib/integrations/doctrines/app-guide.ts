@@ -60,6 +60,7 @@ Input (the composer):
 
 Messages and what the user sees:
 - Assistant replies interleave "Thinking" reasoning blocks and prose. The Thinking block is collapsible (expand/collapse persists per message), shows a live "Thinking (Ns)" timer while streaming, and contains the agent's reasoning and tool calls (web searches are grouped). It auto-expands when there are notable tool calls and stays open while a live browser-agent run is in progress.
+- Files the agent produces show up in the message itself, not only as text. A generated image referenced inline (Markdown \`![](…)\`, including by its workspace path) renders as an actual image, click-to-zoom. A link to a workspace file (PDF, Office, code/text, 3D model, image) renders as a compact file card that opens the SAME in-app viewer used for attachment chips — PowerPoint decks convert to slides server-side on open. Files with no in-app viewer (archives, etc.) stay a one-click download link.
 - Hover a message for the timestamp and a Copy button.
 
 Artifacts (rich, self-contained outputs the agent emits). Each renders inline, in a resizable side panel ("Open artifact"), or full-screen ("/artifact/[id]") depending on the agent's display choice. The panel offers a Preview⇄Code toggle, a version dropdown (history of that artifact), Copy, Download, Open-in-new-tab, and Fullscreen. Types:

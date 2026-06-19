@@ -77,8 +77,24 @@ export function InlineToolCallView({ entry, searchDisplay = "expanded" }: Inline
 }
 
 function isHiddenToolCall(entry: ToolCallReasoningEntry): boolean {
-    const name = (entry.toolName ?? entry.title).trim().toLowerCase()
-    return name === "todowrite" || name === "delegate_to" || name.startsWith("delegate to ")
+    // Strip any MCP server prefix ("mcp__orch-tools__delegate_to",
+    // "orch-tools__delegate_to", "orch-tools.delegate_to") so CLI/codex-backed
+    // delegations are matched the same as native ones.
+    const stripMcpPrefix = (raw: string): string => {
+        let n = raw.trim()
+        const dunder = n.lastIndexOf("__")
+        if (dunder >= 0) n = n.slice(dunder + 2)
+        const dot = n.lastIndexOf(".")
+        if (dot >= 0) n = n.slice(dot + 1)
+        return n.toLowerCase()
+    }
+    const name = stripMcpPrefix(entry.toolName ?? entry.title)
+    // Delegations render as their own agent blocks; the tool-call row would be an
+    // empty box, so hide it (delegate_to and delegate_parallel, native or MCP).
+    if (name === "todowrite" || name === "delegate_to" || name === "delegate_parallel") return true
+    // Fallback for entries that only carry the human title.
+    const title = (entry.title ?? "").trim().toLowerCase()
+    return title.startsWith("delegate to ") || title.startsWith("delegate in parallel") || /^delegate \d+ jobs in parallel/.test(title)
 }
 
 function isSearchTool(toolName: string | undefined): boolean {

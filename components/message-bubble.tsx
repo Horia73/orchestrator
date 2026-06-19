@@ -15,8 +15,10 @@ import { InlineToolCallView, InlineWebSearchGroup, getToolCallDisplayTitle, isWe
 import { BrowserAgentLiveView } from "@/components/browser-agent-live-view"
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID, AudioContextAgentCard } from "@/components/chat/audio-context-agent-card"
 import { useMessageSelectionGutter } from "@/components/message-bubble/use-message-selection-gutter"
+import { useTrapWheel } from "@/components/use-trap-wheel"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { appPath } from "@/lib/app-path"
+import { agentFullLabel } from "@/lib/agent-label"
 
 type SearchToolDisplay = "expanded" | "compact"
 
@@ -60,7 +62,7 @@ function getThoughtTitle(content: string): string {
 function getEntryTitle(entry: ReasoningEntry | undefined): string {
     if (!entry) return "Thinking"
     if (entry.type === "tool_call") return getToolCallDisplayTitle(entry)
-    if (entry.type === "agent_call") return entry.title || entry.agentName
+    if (entry.type === "agent_call") return agentFullLabel(entry)
     if (entry.type === "context_compaction") return entry.title
     if (entry.type === "memory_recall") {
         const n = entry.hits.length
@@ -376,6 +378,7 @@ function ThoughtBlock({
     }, [keepOpenForBrowser])
 
     // Content measurement
+    const headerRef = React.useRef<HTMLButtonElement>(null)
     const blockRef = React.useRef<HTMLDivElement>(null)
     const contentRef = React.useRef<HTMLDivElement>(null)
     const scrollRef = React.useRef<HTMLDivElement>(null)
@@ -512,12 +515,15 @@ function ThoughtBlock({
     return (
         <div className="flex w-full min-w-0 flex-col">
             <button
+                ref={headerRef}
                 type="button"
                 onClick={() => {
                     const next = !isOpen
                     if (next) userOpenedRef.current = true
                     updateOpen(next)
-                    if (next && shouldDefaultExpand) autoExpand()
+                    // Opening the dropdown by hand goes straight to the full,
+                    // expanded view — no intermediate collapsed "Show more" preview.
+                    if (next) autoExpand()
                     if (next) window.dispatchEvent(new Event("stop-chat-autoscroll"))
                 }}
                 className="flex items-center gap-1.5 text-[15px] text-muted-foreground transition-colors hover:text-foreground group w-fit max-w-full min-w-0"
@@ -620,7 +626,16 @@ function ThoughtBlock({
                                     <div className="mt-2 relative z-20">
                                         <button
                                             type="button"
-                                            onClick={() => updateExpanded(false)}
+                                            onClick={() => {
+                                                updateExpanded(false)
+                                                // After a long expansion the header is scrolled far
+                                                // above the viewport; bring it back so the dropdown
+                                                // is one easy click away from closing.
+                                                requestAnimationFrame(() => {
+                                                    headerRef.current?.scrollIntoView({ behavior: "smooth", block: "nearest" })
+                                                })
+                                                window.dispatchEvent(new Event("stop-chat-autoscroll"))
+                                            }}
                                             className="text-[13px] text-muted-foreground hover:text-foreground"
                                         >
                                             Show less
@@ -737,6 +752,9 @@ function WorkedForBlock({
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
 
+    // Chain the wheel to the page once this box hits its scroll boundary.
+    const scrollRef = useTrapWheel<HTMLDivElement>()
+
     // Duration is the source of truth; older rows (and providers that never
     // stamped it) fall back to the activity summary, then a bare "Worked".
     const workEntries = React.useMemo(
@@ -784,7 +802,7 @@ function WorkedForBlock({
                         isOpen ? "translate-y-0 opacity-100" : "-translate-y-1 opacity-0"
                     )}
                 >
-                    <div className="tool-call-scroll mt-2 max-h-[70vh] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
+                    <div ref={scrollRef} className="tool-call-scroll mt-2 max-h-[70vh] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
                         {bodyMounted && (
                         <div className="relative flex flex-col pb-2">
                             <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
@@ -854,8 +872,26 @@ function ReasoningEntryList({
 }) {
     const nodes: React.ReactNode[] = []
 
+    // Agents spawned by another agent in this same reasoning list (their
+    // parentRunId is a sibling agent_call's runId) are nested sub-agents. They
+    // belong inside that parent agent's workspace panel, not inline at the top
+    // level — so skip them here. Direct sub-agents of the turn carry a
+    // parentRunId that is the message id, never another agent's runId.
+    const agentRunIds = new Set<string>()
+    for (const entry of reasoning) {
+        if (entry.type === "agent_call") agentRunIds.add(entry.runId)
+    }
+
     for (let index = 0; index < reasoning.length; index++) {
         const entry = reasoning[index]
+
+        if (
+            entry.type === "agent_call" &&
+            entry.parentRunId &&
+            agentRunIds.has(entry.parentRunId)
+        ) {
+            continue
+        }
 
         if (entry.type === "tool_call" && searchToolDisplay !== "compact" && isWebSearchToolCall(entry)) {
             const entries = [entry]
@@ -943,6 +979,7 @@ function MemoryRecallBlock({ entry }: { entry: MemoryRecallReasoningEntry }) {
     const [expanded, setExpanded] = React.useState<Set<number>>(() => new Set())
     const [fullSnippets, setFullSnippets] = React.useState<Record<number, string>>({})
     const loadingFullSnippetsRef = React.useRef<Set<number>>(new Set())
+    const listRef = useTrapWheel<HTMLUListElement>()
 
     const loadFullSnippet = React.useCallback(async (i: number, hit: MemoryRecallReasoningEntry["hits"][number]) => {
         if (hit.kind === "file") return
@@ -993,7 +1030,7 @@ function MemoryRecallBlock({ entry }: { entry: MemoryRecallReasoningEntry }) {
                 <span className="mb-1 block text-[11px] text-muted-foreground/75">
                     Surfaced by similarity to your message · click to inspect what was injected
                 </span>
-                <ul className="flex max-h-[360px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
+                <ul ref={listRef} className="flex max-h-[360px] flex-col gap-0.5 overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable]">
                     {entry.hits.map((hit, i) => {
                         const isOpen = expanded.has(i)
                         const displayTitle = displayMemoryHitTitle(hit.source, hit.title)
@@ -1133,7 +1170,7 @@ function GenericAgentCallBlock({
                 <FileText className="mt-[3px] size-4 shrink-0 rounded-full bg-background text-muted-foreground transition-colors group-hover:text-foreground" />
                 <span className="min-w-0">
                     <span className="block truncate text-[14px] font-medium tracking-tight text-muted-foreground group-hover:text-foreground transition-colors">
-                        {entry.title || entry.agentName}
+                        {agentFullLabel(entry)}
                     </span>
                     <span className="block truncate text-[11px] text-muted-foreground/75">
                         {statusText}{toolCount > 0 ? ` · ${toolCount} tool${toolCount === 1 ? "" : "s"}` : ""}

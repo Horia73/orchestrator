@@ -1,6 +1,7 @@
 "use client"
 
 import * as React from "react"
+import { X } from "lucide-react"
 
 import { AttachmentCard } from "@/components/attachment-card"
 import type { ArtifactPayload } from "@/components/artifact-panel"
@@ -8,6 +9,7 @@ import { StreamingBubble } from "@/components/message-bubble"
 import { TodoBar } from "@/components/todo-bar"
 import { useTrapWheel } from "@/components/use-trap-wheel"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
+import { agentRoleAndName } from "@/lib/agent-label"
 import { appPath } from "@/lib/app-path"
 import { cn } from "@/lib/utils"
 import type {
@@ -38,19 +40,50 @@ type SelectedAgentTool = {
 
 export function AgentWorkspacePanel({
   run,
-  childRun,
+  childRuns,
   onClose,
+  onOpenAgent,
   onAttachmentClick,
 }: {
   run: AgentCallReasoningEntry
-  childRun?: AgentCallReasoningEntry
+  childRuns?: AgentCallReasoningEntry[]
   onClose: () => void
+  onOpenAgent?: (entry: AgentCallReasoningEntry) => void
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
   const [selectedTool, setSelectedTool] =
     React.useState<SelectedAgentTool | null>(null)
+  // Sub-agents the user hid from this panel via the chip "×". View-only — the
+  // run keeps going and is still reachable from the message trace; this just
+  // declutters the Sub-agents bar. Reset when the primary agent changes.
+  const [dismissedRunIds, setDismissedRunIds] = React.useState<Set<string>>(
+    () => new Set()
+  )
   const scrollbarVisible = useRevealOnScroll()
   const wheelTrapRef = useTrapWheel<HTMLDivElement>()
+
+  React.useEffect(() => {
+    setDismissedRunIds(new Set())
+  }, [run.runId])
+
+  const children = (childRuns ?? []).filter(
+    (child) => !dismissedRunIds.has(child.runId)
+  )
+  const dismissChild = React.useCallback((runId: string) => {
+    setDismissedRunIds((prev) => {
+      const next = new Set(prev)
+      next.add(runId)
+      return next
+    })
+  }, [])
+  // The lower pane live-previews one nested agent: the one currently running,
+  // otherwise the most recently started. The "Sub-agents" bar lists them all
+  // and lets you drill into any (opening it as the panel's primary agent), so
+  // arbitrarily deep delegation chains stay reachable.
+  const childRun =
+    children.find((c) => c.status === "running") ??
+    children[children.length - 1]
+  const showChildSelector = children.length > 0
 
   React.useEffect(() => {
     setSelectedTool(null)
@@ -76,7 +109,7 @@ export function AgentWorkspacePanel({
       <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
         <div className="min-w-0">
           <div className="truncate text-[15px] font-medium">
-            {run.agentName}
+            {agentRoleAndName(run)}
           </div>
           <div className="text-[12px] text-muted-foreground">
             {run.status === "aborted" ? "stopped" : run.status}
@@ -119,16 +152,28 @@ export function AgentWorkspacePanel({
             onClose={() => setSelectedTool(null)}
           />
         ) : childRun ? (
-          <AgentRunPane
-            run={childRun}
-            compact
-            selectedArtifact={childInlineTool ?? null}
-            onArtifactClick={(artifact) =>
-              setSelectedTool({ runId: childRun.runId, artifact })
-            }
-            onSelectedArtifactClose={() => setSelectedTool(null)}
-            onAttachmentClick={onAttachmentClick}
-          />
+          <div className="grid min-h-0 grid-rows-[auto_minmax(0,1fr)]">
+            {showChildSelector && (
+              <ChildAgentSelector
+                runs={children}
+                activeRunId={childRun.runId}
+                onOpen={onOpenAgent}
+                onDismiss={dismissChild}
+              />
+            )}
+            <AgentRunPane
+              key={childRun.runId}
+              run={childRun}
+              compact
+              hideNestedLabel={showChildSelector}
+              selectedArtifact={childInlineTool ?? null}
+              onArtifactClick={(artifact) =>
+                setSelectedTool({ runId: childRun.runId, artifact })
+              }
+              onSelectedArtifactClose={() => setSelectedTool(null)}
+              onAttachmentClick={onAttachmentClick}
+            />
+          </div>
         ) : null}
       </div>
     </div>
@@ -205,9 +250,96 @@ function AgentToolResultPreview({
   )
 }
 
+function ChildAgentSelector({
+  runs,
+  activeRunId,
+  onOpen,
+  onDismiss,
+}: {
+  runs: AgentCallReasoningEntry[]
+  activeRunId: string
+  /** Open a sub-agent as the panel's primary agent (drill in). */
+  onOpen?: (entry: AgentCallReasoningEntry) => void
+  /** Hide a sub-agent from this panel (view-only; the run keeps going). */
+  onDismiss?: (runId: string) => void
+}) {
+  return (
+    <div className="agent-scroll flex shrink-0 items-center gap-1.5 overflow-x-auto border-b border-border px-3 py-2">
+      <span className="mr-1 shrink-0 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+        {runs.length === 1 ? "Sub-agent" : "Sub-agents"}
+      </span>
+      {runs.map((run) => {
+        const active = run.runId === activeRunId
+        const label = agentRoleAndName(run)
+        return (
+          <div
+            key={run.runId}
+            className={cn(
+              "flex shrink-0 items-center rounded-full border text-[12px] transition-colors",
+              active
+                ? "border-foreground/25 bg-muted text-foreground"
+                : "border-border text-muted-foreground",
+              onOpen && !active && "hover:bg-muted/50"
+            )}
+          >
+            <button
+              type="button"
+              onClick={onOpen ? () => onOpen(run) : undefined}
+              disabled={!onOpen}
+              title={onOpen ? `Open ${label}` : label}
+              className={cn(
+                "flex items-center gap-1.5 rounded-full py-1 pl-2.5 transition-colors",
+                onDismiss ? "pr-1.5" : "pr-2.5",
+                onOpen && "hover:text-foreground"
+              )}
+            >
+              <AgentStatusDot status={run.status} />
+              <span className="max-w-[160px] truncate">{label}</span>
+            </button>
+            {onDismiss && (
+              <button
+                type="button"
+                onClick={() => onDismiss(run.runId)}
+                title={`Remove ${label} from panel`}
+                aria-label={`Remove ${label} from panel`}
+                className="mr-1 flex size-4 shrink-0 items-center justify-center rounded-full text-muted-foreground/70 transition-colors hover:bg-foreground/10 hover:text-foreground"
+              >
+                <X className="size-3" />
+              </button>
+            )}
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+function AgentStatusDot({
+  status,
+}: {
+  status: AgentCallReasoningEntry["status"]
+}) {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn(
+        "size-1.5 shrink-0 rounded-full",
+        status === "running"
+          ? "animate-pulse bg-sky-500"
+          : status === "error"
+            ? "bg-destructive"
+            : status === "aborted"
+              ? "bg-muted-foreground/50"
+              : "bg-emerald-500"
+      )}
+    />
+  )
+}
+
 function AgentRunPane({
   run,
   compact,
+  hideNestedLabel,
   selectedArtifact,
   onArtifactClick,
   onSelectedArtifactClose,
@@ -215,6 +347,7 @@ function AgentRunPane({
 }: {
   run: AgentCallReasoningEntry
   compact?: boolean
+  hideNestedLabel?: boolean
   selectedArtifact?: ArtifactPayload | null
   onArtifactClick?: (artifact: ArtifactPayload) => void
   onSelectedArtifactClose?: () => void
@@ -224,9 +357,9 @@ function AgentRunPane({
 
   return (
     <div className="agent-scroll min-h-0 overflow-auto px-4 py-4">
-      {compact && (
+      {compact && !hideNestedLabel && (
         <div className="mb-3 text-[12px] font-medium tracking-wide text-muted-foreground uppercase">
-          Nested agent: {run.agentName}
+          Nested agent: {agentRoleAndName(run)}
         </div>
       )}
       <div className="mb-4 rounded-md border border-border bg-muted/30 p-3">
