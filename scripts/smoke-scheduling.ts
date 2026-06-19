@@ -17,6 +17,7 @@ async function main(): Promise<void> {
   const base = Date.UTC(2026, 4, 25, 21, 30, 0)
   const hourMs = 60 * 60 * 1000
   const quarterMs = 15 * 60 * 1000
+  const day = 24 * hourMs
 
   let failures = 0
   function check(label: string, cond: unknown, detail?: unknown) {
@@ -30,7 +31,7 @@ async function main(): Promise<void> {
   try {
     Date.now = () => base
 
-    const { createScheduledTask, getScheduledTask, claimForRun } =
+    const { createScheduledTask, getScheduledTask, claimForRun, setTaskState } =
       await import("@/lib/scheduling/store")
     const { executeRescheduleTask } = await import("@/lib/ai/tools/schedule")
     const { updateConfig } = await import("@/lib/config")
@@ -119,11 +120,106 @@ async function main(): Promise<void> {
       prompt.match(/current public-web research.*/)?.[0]
     )
 
+    // ---- Product price task_state -> Watchlist backstop ----------------------
+    {
+      const { listWatchlistItems, listWatchlistObservations } =
+        await import("@/lib/watchlist/store")
+      const { executeWatchlistRecordProductPrice } =
+        await import("@/lib/ai/tools/watchlist")
+      const productUrl =
+        "https://www.roastmarket.de/sage-the-oracletm-dual-boiler.html"
+      const firstObservedAt = Date.UTC(2026, 4, 26, 8, 15, 0)
+      const nextObservedAt = firstObservedAt + day
+      const productTask = createScheduledTask({
+        title: "Roastmarket price monitor",
+        action: {
+          kind: "agent",
+          prompt: "Check the product price and update task state.",
+        },
+        schedule: { kind: "every", everyMs: day },
+        enabled: true,
+        createdBy: "user",
+      })
+
+      setTaskState(productTask.id, {
+        product_url: productUrl,
+        product_name: "Sage the Oracle Dual Boiler",
+        last_observed_price_eur: "899,00 €",
+        currency: "EUR",
+        checked_at: new Date(firstObservedAt).toISOString(),
+      })
+
+      const productItem = listWatchlistItems().find(
+        (item) => item.kind === "product" && item.url === productUrl
+      )
+      check(
+        "product task_state creates Watchlist item",
+        productItem !== undefined
+      )
+      let observations = productItem
+        ? listWatchlistObservations(productItem.id)
+        : []
+      check(
+        "product task_state records observed price",
+        observations.length === 1 &&
+          observations[0].price === 899 &&
+          observations[0].ts === firstObservedAt,
+        observations
+      )
+
+      const explicitRecord = executeWatchlistRecordProductPrice({
+        url: productUrl,
+        name: "Sage the Oracle Dual Boiler",
+        price: 899,
+        currency: "EUR",
+        observed_at: firstObservedAt,
+      })
+      observations = productItem
+        ? listWatchlistObservations(productItem.id)
+        : []
+      check(
+        "explicit product price tool dedupes same check",
+        explicitRecord.success && observations.length === 1,
+        { explicitRecord, observations }
+      )
+
+      setTaskState(productTask.id, {
+        productUrl,
+        productName: "Sage the Oracle Dual Boiler",
+        currentPriceEur: 899,
+        observedAt: firstObservedAt,
+      })
+      observations = productItem
+        ? listWatchlistObservations(productItem.id)
+        : []
+      check(
+        "repeated product task_state dedupes same check",
+        observations.length === 1,
+        observations
+      )
+
+      setTaskState(productTask.id, {
+        url: productUrl,
+        productName: "Sage the Oracle Dual Boiler",
+        lowestInStockPriceEur: 899,
+        observedAt: nextObservedAt,
+      })
+      observations = productItem
+        ? listWatchlistObservations(productItem.id)
+        : []
+      check(
+        "next-day same product price records a new observation",
+        observations.length === 2 &&
+          observations[0].ts === firstObservedAt &&
+          observations[1].ts === nextObservedAt,
+        observations
+      )
+    }
+
     // --- terminal one-shot pruning -------------------------------------------
     const { finishRun, pruneTerminalOneShots, listTaskRuns, recordTaskRun } =
       await import("@/lib/scheduling/store")
 
-    const day = 24 * hourMs
     const mkOnce = (title: string) =>
       createScheduledTask({
         title,

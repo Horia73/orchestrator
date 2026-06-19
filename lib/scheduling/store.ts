@@ -26,6 +26,7 @@ import {
   computeNextRunAt,
   ensureEveryStartAt,
 } from "./compute"
+import { syncProductWatchlistFromTaskState } from "./product-watchlist-sync"
 
 // Recurring tasks auto-pause after this many consecutive failures so a bad
 // prompt or broken integration cannot loop forever (cost / runaway guard).
@@ -899,9 +900,21 @@ export function setTaskState(id: string, state: unknown): void {
     return // non-serializable — drop rather than corrupt the row
   }
   if (serialized.length > 100_000) serialized = serialized.slice(0, 100_000)
-  db.prepare(
-    "UPDATE scheduled_tasks SET state = @state, updatedAt = @now WHERE id = @id"
-  ).run({ id, state: serialized, now: Date.now() })
+  const result = db
+    .prepare(
+      "UPDATE scheduled_tasks SET state = @state, updatedAt = @now WHERE id = @id"
+    )
+    .run({ id, state: serialized, now: Date.now() })
+  if (result.changes < 1) return
+
+  try {
+    syncProductWatchlistFromTaskState(id, state)
+  } catch (error) {
+    console.warn(
+      "[scheduling] failed to sync product watchlist observation from task_state",
+      error
+    )
+  }
 }
 
 // ---------------------------------------------------------------------------

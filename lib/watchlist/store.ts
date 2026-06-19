@@ -198,6 +198,9 @@ const ASSET_CLASSES = new Set<WatchlistAssetClass>([
   "other",
 ])
 
+const PRODUCT_OBSERVATION_DEDUPE_WINDOW_MS = 5 * 60 * 1000
+const PRICE_EPSILON = 0.000001
+
 function now() {
   return Date.now()
 }
@@ -442,11 +445,11 @@ export function addWatchlistItem(input: WatchlistItemInput): {
       typeof input.price === "number" &&
       Number.isFinite(input.price)
     ) {
-      appendWatchlistObservation({
-        itemId: existing.id,
-        providerSymbol: existing.providerSymbol,
+      appendProductPriceObservation({
+        itemIdOrSymbol: existing.id,
         price: input.price,
-        ts:
+        currency: input.currency,
+        observedAt:
           typeof input.observedAt === "number" &&
           Number.isFinite(input.observedAt)
             ? input.observedAt
@@ -529,11 +532,11 @@ export function addWatchlistItem(input: WatchlistItemInput): {
     typeof input.price === "number" &&
     Number.isFinite(input.price)
   ) {
-    appendWatchlistObservation({
-      itemId: item.id,
-      providerSymbol: item.providerSymbol,
+    appendProductPriceObservation({
+      itemIdOrSymbol: item.id,
       price: input.price,
-      ts:
+      currency: input.currency,
+      observedAt:
         typeof input.observedAt === "number" &&
         Number.isFinite(input.observedAt)
           ? input.observedAt
@@ -745,6 +748,40 @@ export function appendWatchlistObservation(args: {
   return observation
 }
 
+function samePrice(a: number | null, b: number): boolean {
+  return (
+    typeof a === "number" &&
+    Number.isFinite(a) &&
+    Math.abs(a - b) < PRICE_EPSILON
+  )
+}
+
+function findDuplicateProductObservation(args: {
+  itemId: string
+  price: number
+  observedAt: number
+}): WatchlistObservation | null {
+  const rows = db
+    .prepare(
+      `
+        SELECT * FROM watchlist_observations
+        WHERE itemId = @itemId
+          AND price IS NOT NULL
+          AND ts BETWEEN @minTs AND @maxTs
+        ORDER BY ABS(ts - @observedAt) ASC, ts DESC
+        LIMIT 20
+      `
+    )
+    .all({
+      itemId: args.itemId,
+      minTs: args.observedAt - PRODUCT_OBSERVATION_DEDUPE_WINDOW_MS,
+      maxTs: args.observedAt + PRODUCT_OBSERVATION_DEDUPE_WINDOW_MS,
+      observedAt: args.observedAt,
+    }) as WatchlistObservationRow[]
+  const duplicate = rows.find((row) => samePrice(row.price, args.price))
+  return duplicate ? observationFromRow(duplicate) : null
+}
+
 export function appendProductPriceObservation(args: {
   itemIdOrSymbol: string
   price: number
@@ -762,11 +799,23 @@ export function appendProductPriceObservation(args: {
       "UPDATE watchlist_items SET currency = ?, updatedAt = ? WHERE id = ?"
     ).run(currency, now(), item.id)
   }
+  const observedAt =
+    typeof args.observedAt === "number" && Number.isFinite(args.observedAt)
+      ? args.observedAt
+      : now()
+  const duplicate = findDuplicateProductObservation({
+    itemId: item.id,
+    price: args.price,
+    observedAt,
+  })
+  if (duplicate) {
+    return { item: getWatchlistItem(item.id) ?? item, observation: duplicate }
+  }
   const observation = appendWatchlistObservation({
     itemId: item.id,
     providerSymbol: item.providerSymbol,
     price: args.price,
-    ts: args.observedAt,
+    ts: observedAt,
   })
   return { item: getWatchlistItem(item.id) ?? item, observation }
 }
