@@ -17,6 +17,7 @@ import {
     base64UrlDecodeBuffer,
     base64UrlEncode,
     buildMimeMessage,
+    assertOutgoingAttachmentBudget,
     cleanAddressList,
     cleanHeaderValue,
     cleanLabelIds,
@@ -25,10 +26,14 @@ import {
     getHeader,
     limitThreadMessages,
     normalizeOutgoingAttachments,
+    normalizeOutgoingInlineAttachments,
     summarizeOutgoingAttachments,
+    summarizeOutgoingInlineAttachments,
     type GmailAttachmentInfo,
     type GmailAttachmentSummary,
+    type GmailInlineAttachmentSummary,
     type GmailOutgoingAttachment,
+    type GmailOutgoingInlineAttachment,
     type GmailPayloadPart,
 } from '@/lib/integrations/gmail-message-formatting'
 
@@ -187,8 +192,10 @@ export interface GmailCreateDraftInput {
     bcc?: string[]
     subject: string
     body: string
+    html?: string
     threadId?: string
     attachments?: GmailOutgoingAttachment[]
+    inlineAttachments?: GmailOutgoingInlineAttachment[]
 }
 
 export interface GmailDraftResult {
@@ -200,6 +207,7 @@ export interface GmailDraftResult {
     bcc: string[]
     subject: string
     attachments: GmailAttachmentSummary[]
+    inlineAttachments: GmailInlineAttachmentSummary[]
 }
 
 export interface GmailSendResult {
@@ -207,6 +215,7 @@ export interface GmailSendResult {
     threadId: string
     labelIds: string[]
     attachments: GmailAttachmentSummary[]
+    inlineAttachments: GmailInlineAttachmentSummary[]
 }
 
 export interface GmailAttachmentDownload {
@@ -216,6 +225,7 @@ export interface GmailAttachmentDownload {
 }
 
 export type { GmailAttachmentInfo, GmailAttachmentSummary, GmailOutgoingAttachment }
+export type { GmailInlineAttachmentSummary, GmailOutgoingInlineAttachment }
 
 export interface GmailLabel {
     id: string
@@ -489,10 +499,14 @@ export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<Gm
     const bcc = cleanAddressList(input.bcc ?? [])
     const subject = cleanHeaderValue(input.subject)
     const body = input.body.trimEnd()
+    const html = input.html?.trimEnd()
     const attachments = normalizeOutgoingAttachments(input.attachments)
+    const inlineAttachments = normalizeOutgoingInlineAttachments(input.inlineAttachments)
+    assertOutgoingAttachmentBudget({ attachments, inlineAttachments })
 
     if (to.length === 0) throw new Error('At least one recipient is required.')
     if (!subject) throw new Error('Subject is required.')
+    if (!body && !html) throw new Error('Either body or html is required.')
 
     const replyHeaders = input.threadId ? await getReplyHeaders(input.threadId) : null
     const from = token.accountEmail || 'me'
@@ -503,7 +517,9 @@ export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<Gm
         bcc,
         subject,
         body,
+        html,
         attachments,
+        inlineAttachments,
         inReplyTo: replyHeaders?.inReplyTo,
         references: replyHeaders?.references,
     })
@@ -528,6 +544,7 @@ export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<Gm
         bcc,
         subject,
         attachments: summarizeOutgoingAttachments(attachments),
+        inlineAttachments: summarizeOutgoingInlineAttachments(inlineAttachments),
     }
 }
 
@@ -544,6 +561,7 @@ export async function gmailSendDraft(draftId: string): Promise<GmailSendResult> 
         threadId: message.threadId,
         labelIds: message.labelIds ?? [],
         attachments: [],
+        inlineAttachments: [],
     }
 }
 
@@ -554,10 +572,14 @@ export async function gmailSendMessage(input: GmailCreateDraftInput): Promise<Gm
     const bcc = cleanAddressList(input.bcc ?? [])
     const subject = cleanHeaderValue(input.subject)
     const body = input.body.trimEnd()
+    const html = input.html?.trimEnd()
     const attachments = normalizeOutgoingAttachments(input.attachments)
+    const inlineAttachments = normalizeOutgoingInlineAttachments(input.inlineAttachments)
+    assertOutgoingAttachmentBudget({ attachments, inlineAttachments })
 
     if (to.length === 0) throw new Error('At least one recipient is required.')
     if (!subject) throw new Error('Subject is required.')
+    if (!body && !html) throw new Error('Either body or html is required.')
 
     const replyHeaders = input.threadId ? await getReplyHeaders(input.threadId) : null
     const mime = buildMimeMessage({
@@ -567,7 +589,9 @@ export async function gmailSendMessage(input: GmailCreateDraftInput): Promise<Gm
         bcc,
         subject,
         body,
+        html,
         attachments,
+        inlineAttachments,
         inReplyTo: replyHeaders?.inReplyTo,
         references: replyHeaders?.references,
     })
@@ -586,6 +610,7 @@ export async function gmailSendMessage(input: GmailCreateDraftInput): Promise<Gm
         threadId: sent.threadId,
         labelIds: sent.labelIds ?? [],
         attachments: summarizeOutgoingAttachments(attachments),
+        inlineAttachments: summarizeOutgoingInlineAttachments(inlineAttachments),
     }
 }
 
