@@ -12,6 +12,8 @@ const eslintConfig = defineConfig([
     "out/**",
     "build/**",
     "next-env.d.ts",
+    // Local Orchestrator runtime state and self-dev worktrees are not app code.
+    ".orchestrator/**",
     ".orchestrator/private/**",
     // Bundled third-party worker file (minified vendor asset).
     "public/pdf.worker.min.mjs",
