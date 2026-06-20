@@ -3,6 +3,7 @@ import path from 'path'
 
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import {
+    type GmailOutgoingInlineAttachment,
     type GmailOutgoingAttachment,
     type GmailModifyTargetType,
     gmailArchive,
@@ -69,8 +70,8 @@ export const gmailReadThreadTool: ToolDef = {
 export const gmailCreateDraftTool: ToolDef = {
     id: 'GmailCreateDraft',
     name: 'GmailCreateDraft',
-    description: 'Creates an unsent Gmail draft in the connected mailbox, optionally with workspace file attachments. This tool does not send email.',
-    input_schema: mailComposeSchema('Draft subject line.', 'Plain-text draft body.', false),
+    description: 'Creates an unsent Gmail draft in the connected mailbox, optionally with HTML, inline CID images, and workspace file attachments. This tool does not send email.',
+    input_schema: mailComposeSchema('Draft subject line.', 'Plain-text fallback body.', false),
     tags: ['write', 'gmail', 'email'],
 }
 
@@ -92,8 +93,8 @@ export const gmailSendDraftTool: ToolDef = {
 export const gmailSendEmailTool: ToolDef = {
     id: 'GmailSendEmail',
     name: 'GmailSendEmail',
-    description: 'Composes and immediately sends a Gmail message, optionally with workspace file attachments. Only use when the user explicitly asked to send this exact email or approved sending it.',
-    input_schema: mailComposeSchema('Email subject line.', 'Plain-text email body.', true),
+    description: 'Composes and immediately sends a Gmail message, optionally with HTML, inline CID images, and workspace file attachments. Only use when the user explicitly asked to send this exact email or approved sending it.',
+    input_schema: mailComposeSchema('Email subject line.', 'Plain-text fallback body.', true),
     tags: ['write', 'gmail', 'email', 'external_action'],
 }
 
@@ -375,8 +376,23 @@ function mailComposeSchema(subjectDescription: string, bodyDescription: string, 
         cc: { type: 'array', description: 'Optional CC recipients.', items: { type: 'string' } },
         bcc: { type: 'array', description: 'Optional BCC recipients.', items: { type: 'string' } },
         subject: { type: 'string', description: subjectDescription },
-        body: { type: 'string', description: `${bodyDescription} Use an empty string when the user explicitly asks for a blank email body.` },
+        body: { type: 'string', description: `${bodyDescription} Use an empty string only when html is provided or the user explicitly asks for a blank email body.` },
+        html: { type: 'string', description: 'Optional HTML body. When provided, Gmail receives a multipart/alternative email with body as the plain-text fallback.' },
         thread_id: { type: 'string', description: 'Optional Gmail thread ID when replying in an existing thread.' },
+        inline_attachments: {
+            type: 'array',
+            description: 'Optional workspace files embedded inline in the HTML body via cid: references. Example: html contains <img src="cid:logo"> and inline_attachments has content_id "logo".',
+            items: {
+                type: 'object',
+                properties: {
+                    path: { type: 'string', description: 'Workspace file path to embed inline.' },
+                    content_id: { type: 'string', description: 'CID used by the HTML, without cid: and without angle brackets.' },
+                    filename: { type: 'string', description: 'Optional filename shown by email clients.' },
+                    content_type: { type: 'string', description: 'Optional MIME type. Defaults from file extension.' },
+                },
+                required: ['path', 'content_id'],
+            },
+        },
         attachments: {
             type: 'array',
             description: 'Optional files from the agent workspace to attach to the draft/email.',
@@ -391,7 +407,7 @@ function mailComposeSchema(subjectDescription: string, bodyDescription: string, 
             },
         },
     }
-    const required = ['to', 'subject', 'body']
+    const required = ['to', 'subject']
     if (includeConfirmation) {
         properties.confirmed_by_user = { type: 'boolean', description: 'Must be true only after explicit user approval to send.' }
         required.push('confirmed_by_user')
@@ -422,19 +438,24 @@ function targetTypeParam(): ToolDef['input_schema'] {
 }
 
 function parseComposeArgs(args: Record<string, unknown>):
-    | { ok: true; input: { to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; threadId?: string; attachments?: GmailOutgoingAttachment[] } }
+    | { ok: true; input: { to: string[]; cc: string[]; bcc: string[]; subject: string; body: string; html?: string; threadId?: string; attachments?: GmailOutgoingAttachment[]; inlineAttachments?: GmailOutgoingInlineAttachment[] } }
     | { ok: false; error: ToolResult } {
     const to = stringArrayArg(args, 'to')
     const cc = stringArrayArg(args, 'cc')
     const bcc = stringArrayArg(args, 'bcc')
     const subject = stringArg(args, ['subject'])
     const body = nullableStringArg(args, ['body', 'text'])
+    const html = nullableStringArg(args, ['html', 'body_html', 'html_body'])
     const threadId = stringArg(args, ['thread_id', 'threadId'])
     const attachments = parseOutgoingAttachments(args)
+    const inlineAttachments = parseOutgoingInlineAttachments(args)
     if (to.length === 0) return { ok: false, error: { success: false, error: 'Missing required parameter: to' } }
     if (!subject) return { ok: false, error: { success: false, error: 'Missing required parameter: subject' } }
-    if (body === null) return { ok: false, error: { success: false, error: 'Missing required parameter: body' } }
+    if ((body === null || body.trimEnd() === '') && (html === null || html.trimEnd() === '')) {
+        return { ok: false, error: { success: false, error: 'Provide body, html, or both.' } }
+    }
     if (!attachments.ok) return attachments
+    if (!inlineAttachments.ok) return inlineAttachments
     return {
         ok: true,
         input: {
@@ -442,9 +463,11 @@ function parseComposeArgs(args: Record<string, unknown>):
             cc,
             bcc,
             subject,
-            body,
+            body: body ?? '',
+            html: html?.trimEnd() || undefined,
             threadId: threadId || undefined,
             attachments: attachments.value.length > 0 ? attachments.value : undefined,
+            inlineAttachments: inlineAttachments.value.length > 0 ? inlineAttachments.value : undefined,
         },
     }
 }
@@ -521,7 +544,73 @@ function parseOutgoingAttachments(args: Record<string, unknown>):
     return { ok: true, value: attachments }
 }
 
-function parseAttachmentInput(value: unknown): { ok: true; path: string; filename?: string; contentType?: string } | { ok: false; error: string } {
+function parseOutgoingInlineAttachments(args: Record<string, unknown>):
+    | { ok: true; value: GmailOutgoingInlineAttachment[] }
+    | { ok: false; error: ToolResult } {
+    const raw = args.inline_attachments ?? args.inlineAttachments
+    if (raw === undefined || raw === null) return { ok: true, value: [] }
+    if (!Array.isArray(raw)) return { ok: false, error: { success: false, error: 'inline_attachments must be an array.' } }
+
+    const attachments: GmailOutgoingInlineAttachment[] = []
+    let totalBytes = 0
+    const seenContentIds = new Set<string>()
+
+    for (const [index, item] of raw.entries()) {
+        const parsed = parseAttachmentInput(item)
+        if (!parsed.ok) {
+            return { ok: false, error: { success: false, error: `Invalid inline attachment at index ${index}: ${parsed.error}` } }
+        }
+        if (!parsed.contentId) {
+            return { ok: false, error: { success: false, error: `Invalid inline attachment at index ${index}: missing content_id.` } }
+        }
+        const contentId = cleanContentId(parsed.contentId)
+        if (!contentId) {
+            return { ok: false, error: { success: false, error: `Invalid inline attachment at index ${index}: content_id is empty.` } }
+        }
+        const contentIdKey = contentId.toLowerCase()
+        if (seenContentIds.has(contentIdKey)) {
+            return { ok: false, error: { success: false, error: `Duplicate inline attachment content_id: ${contentId}` } }
+        }
+
+        const resolved = resolveSandboxed(parsed.path)
+        if (!resolved.ok) return { ok: false, error: { success: false, error: resolved.error } }
+
+        let stat: fs.Stats
+        try {
+            stat = fs.statSync(resolved.resolved)
+        } catch {
+            return { ok: false, error: { success: false, error: `Inline attachment file does not exist: ${parsed.path}` } }
+        }
+
+        if (!stat.isFile()) {
+            return { ok: false, error: { success: false, error: `Inline attachment path is not a file: ${parsed.path}` } }
+        }
+        if (stat.size <= 0) {
+            return { ok: false, error: { success: false, error: `Inline attachment file is empty: ${parsed.path}` } }
+        }
+        if (stat.size > MAX_OUTGOING_ATTACHMENT_BYTES) {
+            return { ok: false, error: { success: false, error: `Inline attachment is over 25MB: ${parsed.path}` } }
+        }
+
+        totalBytes += stat.size
+        if (totalBytes > MAX_OUTGOING_TOTAL_ATTACHMENT_BYTES) {
+            return { ok: false, error: { success: false, error: 'Total Gmail inline attachment size is capped at 25MB.' } }
+        }
+
+        seenContentIds.add(contentIdKey)
+        const filename = safeFilename(parsed.filename || path.basename(resolved.resolved))
+        attachments.push({
+            filename,
+            mimeType: normalizeMimeType(parsed.contentType || inferMimeType(filename)),
+            bytes: fs.readFileSync(resolved.resolved),
+            contentId,
+        })
+    }
+
+    return { ok: true, value: attachments }
+}
+
+function parseAttachmentInput(value: unknown): { ok: true; path: string; filename?: string; contentType?: string; contentId?: string } | { ok: false; error: string } {
     if (typeof value === 'string' && value.trim()) {
         return { ok: true, path: value.trim() }
     }
@@ -536,6 +625,7 @@ function parseAttachmentInput(value: unknown): { ok: true; path: string; filenam
         path: filePath,
         filename: firstString(record, ['filename', 'name']) || undefined,
         contentType: firstString(record, ['content_type', 'contentType', 'mime_type', 'mimeType']) || undefined,
+        contentId: firstString(record, ['content_id', 'contentId', 'cid']) || undefined,
     }
 }
 
@@ -560,6 +650,10 @@ function firstString(record: Record<string, unknown>, keys: string[]): string {
         if (typeof value === 'string' && value.trim()) return value.trim()
     }
     return ''
+}
+
+function cleanContentId(value: string): string {
+    return value.replace(/[\r\n]+/g, ' ').replace(/^<+/, '').replace(/>+$/, '').trim()
 }
 
 function normalizeMimeType(value: string): string {

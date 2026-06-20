@@ -36,10 +36,18 @@ export interface GmailOutgoingAttachment {
     bytes: Buffer
 }
 
+export interface GmailOutgoingInlineAttachment extends GmailOutgoingAttachment {
+    contentId: string
+}
+
 export interface GmailAttachmentSummary {
     filename: string
     mimeType: string
     size: number
+}
+
+export interface GmailInlineAttachmentSummary extends GmailAttachmentSummary {
+    contentId: string
 }
 
 export interface GmailThreadMessageForLimit {
@@ -139,12 +147,67 @@ export function normalizeOutgoingAttachments(attachments: GmailOutgoingAttachmen
     return clean
 }
 
+export function normalizeOutgoingInlineAttachments(attachments: GmailOutgoingInlineAttachment[] | undefined): GmailOutgoingInlineAttachment[] {
+    const clean: GmailOutgoingInlineAttachment[] = []
+    let totalBytes = 0
+    const seenContentIds = new Set<string>()
+
+    for (const attachment of attachments ?? []) {
+        const filename = cleanAttachmentFilename(attachment.filename)
+        const contentId = cleanContentId(attachment.contentId)
+        const bytes = Buffer.isBuffer(attachment.bytes) ? attachment.bytes : Buffer.from(attachment.bytes)
+        const mimeType = cleanMimeType(attachment.mimeType)
+
+        if (!contentId) throw new Error('Inline attachment contentId is required.')
+        if (seenContentIds.has(contentId.toLowerCase())) {
+            throw new Error(`Duplicate inline attachment contentId: ${contentId}`)
+        }
+        if (!filename) throw new Error(`Inline attachment ${contentId} filename is required.`)
+        if (bytes.byteLength === 0) throw new Error(`Inline attachment ${filename} is empty.`)
+        if (bytes.byteLength > GMAIL_MAX_ATTACHMENT_BYTES) {
+            throw new Error(`Inline attachment ${filename} is too large. Gmail attachment limit is 25MB per file.`)
+        }
+
+        totalBytes += bytes.byteLength
+        if (totalBytes > GMAIL_MAX_TOTAL_ATTACHMENT_BYTES) {
+            throw new Error('Gmail inline attachments are too large. Total inline attachment size is capped at 25MB.')
+        }
+
+        seenContentIds.add(contentId.toLowerCase())
+        clean.push({ filename, mimeType, bytes, contentId })
+    }
+
+    return clean
+}
+
 export function summarizeOutgoingAttachments(attachments: GmailOutgoingAttachment[]): GmailAttachmentSummary[] {
     return attachments.map(attachment => ({
         filename: attachment.filename,
         mimeType: attachment.mimeType,
         size: attachment.bytes.byteLength,
     }))
+}
+
+export function summarizeOutgoingInlineAttachments(attachments: GmailOutgoingInlineAttachment[]): GmailInlineAttachmentSummary[] {
+    return attachments.map(attachment => ({
+        filename: attachment.filename,
+        mimeType: attachment.mimeType,
+        size: attachment.bytes.byteLength,
+        contentId: attachment.contentId,
+    }))
+}
+
+export function assertOutgoingAttachmentBudget(args: {
+    attachments: GmailOutgoingAttachment[]
+    inlineAttachments: GmailOutgoingInlineAttachment[]
+}): void {
+    const totalBytes = [
+        ...args.attachments.map(attachment => attachment.bytes.byteLength),
+        ...args.inlineAttachments.map(attachment => attachment.bytes.byteLength),
+    ].reduce((sum, size) => sum + size, 0)
+    if (totalBytes > GMAIL_MAX_TOTAL_ATTACHMENT_BYTES) {
+        throw new Error('Gmail attachments are too large. Total message attachment size is capped at 25MB, including inline images.')
+    }
 }
 
 export function buildMimeMessage(args: {
@@ -154,10 +217,15 @@ export function buildMimeMessage(args: {
     bcc: string[]
     subject: string
     body: string
+    html?: string
     attachments?: GmailOutgoingAttachment[]
+    inlineAttachments?: GmailOutgoingInlineAttachment[]
     inReplyTo?: string
     references?: string
 }): string {
+    const html = args.html?.trimEnd()
+    const inlineAttachments = args.inlineAttachments ?? []
+    const attachments = args.attachments ?? []
     const headers = [
         `From: ${cleanHeaderValue(args.from)}`,
         `To: ${args.to.join(', ')}`,
@@ -170,7 +238,7 @@ export function buildMimeMessage(args: {
         'MIME-Version: 1.0',
     ].filter((line): line is string => line !== null)
 
-    if (!args.attachments?.length) {
+    if (!html && inlineAttachments.length === 0 && attachments.length === 0) {
         return [
             ...headers,
             'Content-Type: text/plain; charset="UTF-8"',
@@ -180,17 +248,17 @@ export function buildMimeMessage(args: {
         ].join('\r\n')
     }
 
-    const boundary = `orchestrator-gmail-${randomBytes(12).toString('hex')}`
+    const contentEntity = buildMessageContentEntity(args.body, html, inlineAttachments)
+    if (attachments.length === 0) return [...headers, ...contentEntity].join('\r\n')
+
+    const boundary = mimeBoundary()
     const lines = [
         ...headers,
         `Content-Type: multipart/mixed; boundary="${boundary}"`,
         '',
         `--${boundary}`,
-        'Content-Type: text/plain; charset="UTF-8"',
-        'Content-Transfer-Encoding: 8bit',
-        '',
-        args.body,
-        ...args.attachments.flatMap(attachment => attachmentMimePart(boundary, attachment)),
+        ...contentEntity,
+        ...attachments.flatMap(attachment => attachmentMimePart(boundary, attachment)),
         `--${boundary}--`,
         '',
     ]
@@ -244,10 +312,78 @@ function attachmentMimePart(boundary: string, attachment: GmailOutgoingAttachmen
     ]
 }
 
+function inlineAttachmentMimePart(boundary: string, attachment: GmailOutgoingInlineAttachment): string[] {
+    return [
+        `--${boundary}`,
+        `Content-Type: ${cleanMimeType(attachment.mimeType)}; ${mimeFilenameParameter('name', attachment.filename)}`,
+        'Content-Transfer-Encoding: base64',
+        `Content-ID: <${cleanContentId(attachment.contentId)}>`,
+        `Content-Disposition: inline; ${mimeFilenameParameter('filename', attachment.filename)}`,
+        '',
+        wrapBase64(attachment.bytes.toString('base64')),
+    ]
+}
+
+function buildMessageContentEntity(body: string, html: string | undefined, inlineAttachments: GmailOutgoingInlineAttachment[]): string[] {
+    if (!html) {
+        return [
+            'Content-Type: text/plain; charset="UTF-8"',
+            'Content-Transfer-Encoding: 8bit',
+            '',
+            body,
+        ]
+    }
+
+    const alternativeEntity = buildAlternativeEntity(body, html)
+    if (inlineAttachments.length === 0) return alternativeEntity
+
+    const boundary = mimeBoundary()
+    return [
+        `Content-Type: multipart/related; boundary="${boundary}"; type="multipart/alternative"`,
+        '',
+        `--${boundary}`,
+        ...alternativeEntity,
+        ...inlineAttachments.flatMap(attachment => inlineAttachmentMimePart(boundary, attachment)),
+        `--${boundary}--`,
+        '',
+    ]
+}
+
+function buildAlternativeEntity(body: string, html: string): string[] {
+    const boundary = mimeBoundary()
+    return [
+        `Content-Type: multipart/alternative; boundary="${boundary}"`,
+        '',
+        `--${boundary}`,
+        'Content-Type: text/plain; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        body,
+        `--${boundary}`,
+        'Content-Type: text/html; charset="UTF-8"',
+        'Content-Transfer-Encoding: 8bit',
+        '',
+        html,
+        `--${boundary}--`,
+        '',
+    ]
+}
+
 function encodeMimeHeader(value: string): string {
     const clean = cleanHeaderValue(value)
     if (/^[\x20-\x7e]*$/.test(clean)) return clean
     return `=?UTF-8?B?${Buffer.from(clean, 'utf-8').toString('base64')}?=`
+}
+
+function cleanContentId(value: string | undefined): string {
+    return cleanHeaderValue(value ?? '')
+        .replace(/^<+/, '')
+        .replace(/>+$/, '')
+        .trim()
+}
+
+function mimeBoundary(): string {
+    return `orchestrator-gmail-${randomBytes(12).toString('hex')}`
 }
 
 function mimeFilenameParameter(name: string, filename: string): string {
