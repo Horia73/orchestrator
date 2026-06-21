@@ -3,10 +3,15 @@ from __future__ import annotations
 
 import json
 import os
+import pty
 import re
+import select
 import shutil
+import signal
+import struct
 import subprocess
 import sys
+import termios
 import threading
 import time
 import urllib.error
@@ -33,16 +38,24 @@ CLI_UPDATE_PACKAGES = [
     pkg.strip()
     for pkg in os.environ.get(
         "ORCHESTRATOR_CLI_UPDATE_PACKAGES",
-        "@openai/codex@latest",
+        "@anthropic-ai/claude-code@latest,@openai/codex@latest",
     ).split(",")
     if pkg.strip()
 ]
-CLI_VERSION_PROBE = "/home/node/.npm-global/bin/codex --version 2>/dev/null"
+CLI_VERSION_PROBE = (
+    "/home/node/.npm-global/bin/claude --version 2>/dev/null; "
+    "/home/node/.npm-global/bin/codex --version 2>/dev/null"
+)
 LOG_DIR = Path(os.environ.get("ORCHESTRATOR_UPDATE_LOG_DIR", str(APP_DIR.parent / "logs")))
 LOG_PATH = LOG_DIR / "docker-update-bridge.log"
 ROLLBACK_STATE_PATH = Path(
     os.environ.get("ORCHESTRATOR_ROLLBACK_STATE_FILE", str(LOG_DIR.parent / "rollback-state.json"))
 )
+CLAUDE_USAGE_TIMEOUT_SECONDS = float(os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_TIMEOUT_SECONDS", "30"))
+CLAUDE_USAGE_CWD = Path(
+    os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_CWD", str(Path.home() / ".orchestrator" / "claude-usage-cwd"))
+).expanduser().resolve()
+CLAUDE_USAGE_AUTO_TRUST = os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_AUTO_TRUST", "1") != "0"
 LOG_STREAM_CATCHUP_BYTES = int(os.environ.get("ORCHESTRATOR_UPDATE_LOG_CATCHUP_BYTES", str(32 * 1024)))
 LOG_STREAM_MAX_DURATION_S = float(os.environ.get("ORCHESTRATOR_UPDATE_LOG_MAX_DURATION_S", "3600"))
 LOG_STREAM_HEARTBEAT_S = float(os.environ.get("ORCHESTRATOR_UPDATE_LOG_HEARTBEAT_S", "15"))
@@ -53,6 +66,7 @@ LOG_STREAM_POLL_S = float(os.environ.get("ORCHESTRATOR_UPDATE_LOG_POLL_S", "0.4"
 ANSI_ESCAPE_RE = re.compile(rb"\x1B(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])")
 
 update_lock = threading.Lock()
+claude_usage_lock = threading.Lock()
 state_lock = threading.Lock()
 state = {
     "phase": "idle",
@@ -241,6 +255,246 @@ def compose_command() -> list[str]:
         return [legacy]
 
     raise RuntimeError("Docker Compose is not available.")
+
+
+def host_path() -> str:
+    home = Path.home()
+    candidates = [
+        str(home / ".npm-global" / "bin"),
+        str(home / ".local" / "bin"),
+        "/opt/homebrew/bin",
+        "/usr/local/bin",
+        "/usr/bin",
+        "/bin",
+    ]
+    current = os.environ.get("PATH", "")
+    parts = [p for p in current.split(os.pathsep) if p]
+    for candidate in candidates:
+        if candidate not in parts:
+            parts.append(candidate)
+    return os.pathsep.join(parts)
+
+
+def resolve_claude_bin() -> str:
+    configured = os.environ.get("ORCHESTRATOR_CLAUDE_BIN") or os.environ.get("CLAUDE_CODE_BIN")
+    if configured:
+        path = Path(configured).expanduser()
+        if path.exists():
+            return str(path)
+        raise RuntimeError(f"Configured Claude Code binary does not exist: {path}")
+
+    env = os.environ.copy()
+    env["PATH"] = host_path()
+    found = shutil.which("claude", path=env["PATH"])
+    if found:
+        return found
+
+    raise RuntimeError("Claude Code CLI is not installed on the host. Install it with `npm install -g @anthropic-ai/claude-code` and run `claude auth login` on the host.")
+
+
+def ensure_claude_usage_workspace() -> None:
+    CLAUDE_USAGE_CWD.mkdir(parents=True, exist_ok=True)
+    try:
+        CLAUDE_USAGE_CWD.chmod(0o700)
+    except OSError:
+        pass
+    if CLAUDE_USAGE_AUTO_TRUST:
+        ensure_claude_project_trusted(CLAUDE_USAGE_CWD)
+
+
+def ensure_claude_project_trusted(path: Path) -> None:
+    config_path = Path.home() / ".claude.json"
+    if config_path.exists():
+        try:
+            data = json.loads(config_path.read_text(encoding="utf-8"))
+        except Exception as exc:
+            raise RuntimeError(f"Could not read {config_path}: {exc}")
+        if not isinstance(data, dict):
+            raise RuntimeError(f"Could not update {config_path}: expected a JSON object.")
+    else:
+        data = {}
+
+    projects = data.setdefault("projects", {})
+    if not isinstance(projects, dict):
+        raise RuntimeError(f"Could not update {config_path}: projects is not an object.")
+
+    key = str(path)
+    project = projects.setdefault(key, {})
+    if not isinstance(project, dict):
+        project = {}
+        projects[key] = project
+
+    changed = False
+    defaults = {
+        "allowedTools": [],
+        "mcpContextUris": [],
+        "mcpServers": {},
+        "enabledMcpjsonServers": [],
+        "disabledMcpjsonServers": [],
+        "hasClaudeMdExternalIncludesApproved": False,
+        "hasClaudeMdExternalIncludesWarningShown": False,
+    }
+    for name, value in defaults.items():
+        if name not in project:
+            project[name] = value
+            changed = True
+    if project.get("hasTrustDialogAccepted") is not True:
+        project["hasTrustDialogAccepted"] = True
+        changed = True
+    if not isinstance(project.get("projectOnboardingSeenCount"), int) or project["projectOnboardingSeenCount"] < 1:
+        project["projectOnboardingSeenCount"] = 1
+        changed = True
+
+    if not changed:
+        return
+
+    tmp_path = config_path.with_name(config_path.name + ".tmp")
+    tmp_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    try:
+        tmp_path.chmod(0o600)
+    except OSError:
+        pass
+    os.replace(tmp_path, config_path)
+
+
+ANSI_REPLACEMENTS = [
+    re.compile(r"\x1B\[[?]?[0-9;]*[a-zA-Z@`~]"),
+    re.compile(r"\x1B\][^\x07\x1B]*(?:\x07|\x1B\\)"),
+    re.compile(r"\x1B[()*+][0-9A-Za-z]"),
+    re.compile(r"\x1B[=>]"),
+]
+CONTROL_RE = re.compile(r"[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]")
+
+
+def strip_ansi(value: str) -> str:
+    cleaned = value
+    for pattern in ANSI_REPLACEMENTS:
+        cleaned = pattern.sub("", cleaned)
+    return CONTROL_RE.sub("", cleaned)
+
+
+def has_claude_usage_quota(value: str) -> bool:
+    norm = re.sub(r"\s+", " ", value)
+    section = r"Curr[a-z]*\s*(?:session|week)"
+    used = r"\d{1,3}%\s*u\w*d"
+    reset = r"Res(?:ets?|es)"
+    return re.search(section + r".{0,500}?" + used + r".{0,500}?" + reset, norm, re.IGNORECASE) is not None
+
+
+def terminate_process(proc: subprocess.Popen) -> None:
+    if proc.poll() is not None:
+        return
+    try:
+        os.killpg(proc.pid, signal.SIGTERM)
+    except ProcessLookupError:
+        return
+    except Exception:
+        proc.terminate()
+    deadline = time.time() + 2
+    while time.time() < deadline:
+        if proc.poll() is not None:
+            return
+        time.sleep(0.05)
+    try:
+        os.killpg(proc.pid, signal.SIGKILL)
+    except Exception:
+        proc.kill()
+
+
+def capture_claude_usage() -> dict:
+    if not claude_usage_lock.acquire(blocking=False):
+        return {"ok": False, "error": "Claude usage capture is already running."}
+
+    master_fd = -1
+    slave_fd = -1
+    proc: Optional[subprocess.Popen] = None
+    try:
+        claude_bin = resolve_claude_bin()
+        ensure_claude_usage_workspace()
+        master_fd, slave_fd = pty.openpty()
+        fcntl_winsize(slave_fd, rows=50, cols=140)
+
+        env = os.environ.copy()
+        env["PATH"] = host_path()
+        env["TERM"] = env.get("TERM") or "xterm-256color"
+        args = [claude_bin, "--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
+        proc = subprocess.Popen(
+            args,
+            cwd=str(CLAUDE_USAGE_CWD),
+            stdin=slave_fd,
+            stdout=slave_fd,
+            stderr=slave_fd,
+            env=env,
+            start_new_session=True,
+            close_fds=True,
+        )
+        os.close(slave_fd)
+        slave_fd = -1
+
+        buffer = bytearray()
+        started = time.time()
+        last_data = started
+        phase = "wait-prompt"
+        enter_at: Optional[float] = None
+
+        while True:
+            now = time.time()
+            if now - started > CLAUDE_USAGE_TIMEOUT_SECONDS:
+                cleaned = strip_ansi(buffer.decode("utf-8", errors="ignore"))
+                tail = re.sub(r"\s+", " ", cleaned[-500:]).strip()
+                return {"ok": False, "error": f"Timed out waiting for Claude /usage panel. Last output: {tail}"}
+
+            readable, _, _ = select.select([master_fd], [], [], 0.25)
+            if readable:
+                try:
+                    chunk = os.read(master_fd, 8192)
+                except OSError:
+                    chunk = b""
+                if chunk:
+                    buffer.extend(chunk)
+                    last_data = time.time()
+
+            cleaned = strip_ansi(buffer.decode("utf-8", errors="ignore"))
+            lower = cleaned.lower()
+            idle = time.time() - last_data
+            elapsed = time.time() - started
+
+            if phase == "wait-prompt" and ("trust this folder" in lower or "trustthisfolder" in lower):
+                return {"ok": False, "error": f"Claude needs to trust {CLAUDE_USAGE_CWD} first. Run `claude` once on the host in that directory or set ORCHESTRATOR_CLAUDE_USAGE_CWD to a trusted directory."}
+
+            if phase == "wait-prompt" and ((idle > 1.2 and cleaned.strip()) or elapsed > 5):
+                phase = "wait-panel"
+                os.write(master_fd, b"/usage")
+                enter_at = time.time() + 0.25
+
+            if phase == "wait-panel" and enter_at is not None and time.time() >= enter_at:
+                os.write(master_fd, b"\r")
+                enter_at = None
+
+            if phase == "wait-panel" and has_claude_usage_quota(cleaned) and idle > 1.2:
+                return {"ok": True, "text": cleaned, "raw": cleaned, "fetchedAt": int(time.time() * 1000)}
+
+            if proc.poll() is not None:
+                if has_claude_usage_quota(cleaned):
+                    return {"ok": True, "text": cleaned, "raw": cleaned, "fetchedAt": int(time.time() * 1000)}
+                return {"ok": False, "error": "Claude exited before rendering the /usage panel."}
+    except Exception as exc:
+        return {"ok": False, "error": str(exc)}
+    finally:
+        if proc is not None:
+            terminate_process(proc)
+        for fd in (master_fd, slave_fd):
+            if fd >= 0:
+                try:
+                    os.close(fd)
+                except OSError:
+                    pass
+        claude_usage_lock.release()
+
+
+def fcntl_winsize(fd: int, rows: int, cols: int) -> None:
+    import fcntl
+    fcntl.ioctl(fd, termios.TIOCSWINSZ, struct.pack("HHHH", rows, cols, 0, 0))
 
 
 def notify_app(
@@ -633,10 +887,10 @@ NPM_STAGING_SWEEP = (
     'for t in "$d"/.*-*; do [ -d "$t" ] && rm -rf "$t"; done; done; true'
 )
 # `npm install` exits 0 even when a platform-native optionalDependency silently
-# failed to download. Probe the bin so we report a broken install instead of a
-# false success.
+# failed to download — that leaves `claude` as a stub that errors on every run.
+# Probe each bin so we report a broken install instead of a false success.
 CLI_VERIFY_PROBE = (
-    'rc=0; for b in /home/node/.npm-global/bin/codex; do '
+    'rc=0; for b in /home/node/.npm-global/bin/claude /home/node/.npm-global/bin/codex; do '
     '[ -e "$b" ] || continue; '
     '"$b" --version >/dev/null 2>&1 || { echo "BROKEN: $b"; rc=1; }; done; exit $rc'
 )
@@ -714,7 +968,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in {"/status", "/update-log"}:
+        if path not in {"/status", "/claude-usage", "/update-log"}:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
@@ -729,6 +983,15 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/update-log":
             stream_update_log(self)
             return
+
+        write_log("Starting Claude usage capture")
+        payload = capture_claude_usage()
+        if payload.get("ok"):
+            write_log("Completed Claude usage capture")
+            self.send_json(200, payload)
+        else:
+            write_log(f"Claude usage capture failed: {payload.get('error')}")
+            self.send_json(502, payload)
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]

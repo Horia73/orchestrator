@@ -6,6 +6,7 @@ import {
     CheckCircle2,
     Clock,
     Download,
+    KeyRound,
     Loader2,
     LogIn,
     LogOut,
@@ -23,7 +24,7 @@ import { useCliStatus, type CliStatusEntry } from "./use-cli-status"
 interface ModalState {
     cliId: string
     cliName: string
-    mode: "install" | "login" | "logout" | "free"
+    mode: "install" | "login" | "logout" | "free" | "setup-token"
     hint: string
 }
 
@@ -93,6 +94,7 @@ export function CliAccountsSection() {
                 {data && Object.entries(data).map(([id, entry]) => (
                     <CliCard
                         key={id}
+                        id={id}
                         entry={entry}
                         onRestart={() => restartCli(id, refresh)}
                         onInstall={() => setModal({
@@ -113,6 +115,12 @@ export function CliAccountsSection() {
                             mode: "logout",
                             hint: "Removing stored credentials. This may be instant.",
                         })}
+                        onSetupToken={() => setModal({
+                            cliId: id,
+                            cliName: entry.name,
+                            mode: "setup-token",
+                            hint: "Browser will open to mint a long-lived API token. Copy the token it prints back into this terminal, then close this window. The token is stored locally and does not expire — recommended for headless installs.",
+                        })}
                     />
                 ))}
             </div>
@@ -130,11 +138,13 @@ export function CliAccountsSection() {
     )
 }
 
-function CliCard({ entry, onInstall, onLogin, onLogout, onRestart }: {
+function CliCard({ id, entry, onInstall, onLogin, onLogout, onSetupToken, onRestart }: {
+    id: string
     entry: CliStatusEntry
     onInstall: () => void
     onLogin: () => void
     onLogout: () => void
+    onSetupToken: () => void
     onRestart: () => Promise<void>
 }) {
     const [restarting, setRestarting] = React.useState(false)
@@ -147,6 +157,9 @@ function CliCard({ entry, onInstall, onLogin, onLogout, onRestart }: {
             setRestarting(false)
         }
     }
+    // Only Claude Code exposes the setup-token flow today; codex doesn't have
+    // an equivalent and would confuse the user with an option that no-ops.
+    const supportsSetupToken = id === "claude-code"
     const isOAuth = entry.authMethod === "oauth"
     const isSetupToken = entry.authMethod === "setup-token"
 
@@ -206,6 +219,17 @@ function CliCard({ entry, onInstall, onLogin, onLogout, onRestart }: {
                     )}
                 </div>
 
+                {entry.needsReconnect && supportsSetupToken && (
+                    <div className="rounded-lg border border-amber-500/30 bg-amber-500/5 px-3 py-2 text-[12px] text-amber-900 dark:text-amber-200">
+                        <p className="font-medium">OAuth session expired.</p>
+                        <p className="mt-0.5 text-amber-800/85 dark:text-amber-200/85">
+                            Click <span className="font-medium">Reconnect</span> to refresh via browser OAuth, or set up a{" "}
+                            <span className="font-medium">long-lived token</span> — recommended on a headless server so the
+                            session does not drop every few days.
+                        </p>
+                    </div>
+                )}
+
                 <div className="flex flex-wrap gap-2 pt-1">
                     {!entry.installed ? (
                         <>
@@ -236,6 +260,15 @@ function CliCard({ entry, onInstall, onLogin, onLogout, onRestart }: {
                                 <LogIn className="size-3.5" />
                                 Reconnect
                             </button>
+                            {supportsSetupToken && (
+                                <button
+                                    onClick={onSetupToken}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    <KeyRound className="size-3.5" />
+                                    Use long-lived token
+                                </button>
+                            )}
                             <button
                                 onClick={onLogout}
                                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
@@ -246,6 +279,16 @@ function CliCard({ entry, onInstall, onLogin, onLogout, onRestart }: {
                         </>
                     ) : entry.loggedIn ? (
                         <>
+                            {supportsSetupToken && isOAuth && (
+                                <button
+                                    onClick={onSetupToken}
+                                    title="Switch to a non-expiring API token — best for headless installs."
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    <KeyRound className="size-3.5" />
+                                    Switch to long-lived token
+                                </button>
+                            )}
                             <button
                                 onClick={onLogout}
                                 className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:border-destructive/40 hover:bg-destructive/5 hover:text-destructive"
@@ -263,6 +306,15 @@ function CliCard({ entry, onInstall, onLogin, onLogout, onRestart }: {
                                 <LogIn className="size-3.5" />
                                 Log in
                             </button>
+                            {supportsSetupToken && (
+                                <button
+                                    onClick={onSetupToken}
+                                    className="inline-flex h-8 items-center gap-1.5 rounded-lg border border-border bg-background px-2.5 text-[12.5px] font-medium text-foreground/75 transition-colors hover:bg-muted/60 hover:text-foreground"
+                                >
+                                    <KeyRound className="size-3.5" />
+                                    Use long-lived token
+                                </button>
+                            )}
                         </>
                     )}
                     {entry.installed && (

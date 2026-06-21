@@ -108,17 +108,21 @@ export function UsageTab() {
 }
 
 // ---------------------------------------------------------------------------
-// CLI subscription quotas (Codex)
+// CLI subscription quotas (Claude Code + Codex)
 // ---------------------------------------------------------------------------
 
 const CLI_LABELS: Record<string, { name: string; description: string }> = {
+    "claude-code": {
+        name: "Claude Code",
+        description: "Anthropic subscription. Scraped live from the host claude /usage panel.",
+    },
     "codex": {
         name: "Codex CLI",
         description: "OpenAI subscription. Live from the same /wham/usage endpoint codex's /status polls.",
     },
 }
 
-const CLI_ORDER = ["codex"] as const
+const CLI_ORDER = ["claude-code", "codex"] as const
 
 function CliQuotaSection() {
     const { data, loading, error, refresh } = useCliUsage()
@@ -129,7 +133,8 @@ function CliQuotaSection() {
                 <div className="min-w-0">
                     <h2 className="text-[15px] font-semibold text-foreground/85">CLI subscription quotas</h2>
                     <p className="mt-0.5 text-[12.5px] text-foreground/50">
-                        5-hour rolling and 7-day rolling windows for the local Codex CLI.
+                        5-hour rolling and 7-day rolling windows for the local coding CLIs — the same numbers their
+                        own <code className="rounded bg-muted px-1 py-0.5 text-[11.5px]">/usage</code> command shows.
                     </p>
                 </div>
                 <button
@@ -156,7 +161,10 @@ function CliQuotaSection() {
 
             <div className="grid min-w-0 grid-cols-1 gap-4 md:grid-cols-2">
                 {!data && loading && (
-                    <div className="h-[170px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+                    <>
+                        <div className="h-[170px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+                        <div className="h-[170px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+                    </>
                 )}
                 {data && CLI_ORDER.map(id => (
                     <CliQuotaCard key={id} id={id} snapshot={data[id]} />
@@ -193,6 +201,9 @@ function CliQuotaCard({ id, snapshot }: { id: string; snapshot: CliQuotaSnapshot
                 <div className="flex flex-col gap-3.5">
                     <QuotaBar label="5-hour window" window={snapshot.fiveHour} fallbackWindowSeconds={FIVE_HOUR_SECONDS} />
                     <QuotaBar label="7-day window" window={snapshot.weekly} fallbackWindowSeconds={WEEKLY_SECONDS} />
+                    {snapshot.weeklySonnet && (
+                        <QuotaBar label="7-day · Sonnet" window={snapshot.weeklySonnet} fallbackWindowSeconds={WEEKLY_SECONDS} muted />
+                    )}
                 </div>
             )}
         </div>

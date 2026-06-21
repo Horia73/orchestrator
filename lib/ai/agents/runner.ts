@@ -193,7 +193,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     // the user prompt straight through to the subprocess. Pure-LLM agents
     // require a buildPrompt for their system prompt.
     const isProviderBackedWithoutPrompt = runtime.provider === 'browser'
-    const isCliBacked = runtime.provider === 'codex'
+    const isCliBacked = runtime.provider === 'claude-code' || runtime.provider === 'codex'
     if (!runtimeTarget.buildPrompt && !isCliBacked && !isProviderBackedWithoutPrompt) {
         return {
             success: false,
@@ -1071,7 +1071,7 @@ function buildSubAgentMessages(
 ): Array<{ role: string; content: string; attachments?: MessageAttachment[] }> {
     const userAttachments = attachments.length > 0 ? attachments : undefined
 
-    if (providerId === 'codex' && !hasPrevSession && history.length > 0) {
+    if ((providerId === 'claude-code' || providerId === 'codex') && !hasPrevSession && history.length > 0) {
         return [{
             role: 'user',
             content: [

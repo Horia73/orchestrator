@@ -579,11 +579,13 @@ export interface ProviderCapabilities {
   requiresApiKey: boolean
   /**
    * Prefix the provider exposes our custom (non-native) tools under, as the
-   * model actually sees and must call them. Providers that pass custom tools
-   * under their bare names (codex dynamicTools, API provider function tools)
-   * leave this undefined. The prompt layer renders tool names and the calling
-   * convention with this prefix so the advertised name always matches the
-   * callable name.
+   * model actually sees and must call them. Claude Code bridges custom tools
+   * through a stdio MCP server, so it surfaces them as
+   * `mcp__<server>__<tool>` — the model cannot call the bare id. Providers
+   * that pass custom tools under their bare names (codex dynamicTools, the
+   * API providers' function tools) leave this undefined. The prompt layer
+   * renders tool names and the calling convention with this prefix so the
+   * advertised name always matches the callable name.
    */
   customToolNamePrefix?: string
 }

@@ -36,7 +36,7 @@ export type ModelKind = z.infer<typeof ModelKindSchema>
  * Pricing is a discriminated union:
  * - `tokens`: standard per-token billing (with optional large-context tier)
  * - `unit`: per-image/video/second/request billing
- * - `subscription`: included in a flat-rate plan. May carry `equivalent*` token
+ * - `subscription`: included in a flat-rate plan (e.g. Claude Code via Max). May carry `equivalent*` token
  *   rates — the à-la-carte API price of the SAME underlying model the
  *   subscription/CLI route wraps — so we can show "included (≈ $X/$Y per M)" and
  *   compute the notional cost the user avoided by being on the plan.

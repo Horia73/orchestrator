@@ -12,7 +12,7 @@ import { runWithProfileContext } from '@/lib/profiles/context'
  * MCP-server proxy endpoint.
  *
  * Our stdio MCP server (lib/cli/mcp-server.mjs) is a separate child process
- * spawned by a CLI provider; it doesn't share JS state with us. To bridge the
+ * spawned by Claude Code; it doesn't share JS state with us. To bridge the
  * gap it POSTs here with an opaque token (issued at CLI launch time) plus the
  * tool request. We look up the binding, execute the tool with the right
  * `ToolExecutionContext`, and hand the result back.
@@ -69,7 +69,9 @@ function resolveBinding(token: string): Binding | null {
 
 async function handleBoundRequest(body: Body, binding: Binding) {
     if (body.action === 'list') {
-        // Map our ToolDef shape onto MCP's tool descriptor shape.
+        // Map our ToolDef shape onto MCP's tool descriptor shape. Names go
+        // through as-is; Claude Code prefixes them with `mcp__<server>__` when
+        // surfacing tool_use blocks, but the model sees the bare name.
         const tools = binding.toolDefs.map(t => ({
             name: t.name,
             description: t.description,

@@ -57,18 +57,19 @@ interface CliQuotaWindow {
 }
 
 interface CliQuotaSnapshot {
-    cliId: "codex"
+    cliId: "claude-code" | "codex"
     available: boolean
     error?: string
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
-    source: "api" | "none"
+    weeklySonnet?: CliQuotaWindow
+    source: "api" | "host-bridge" | "log" | "tui" | "none"
     fetchedAt: number
     dataTimestamp?: number
 }
 
 type CliQuotaMap = Record<string, CliQuotaSnapshot>
-type CliProviderId = "codex"
+type CliProviderId = "claude-code" | "codex"
 
 type DraftAttachment = {
     file?: File
@@ -89,11 +90,12 @@ interface ChatStatusPopoverProps {
 const BASE_CHAT_OVERHEAD_TOKENS = 1200
 
 const CLI_LABELS: Record<CliProviderId, string> = {
+    "claude-code": "Claude Code",
     codex: "Codex CLI",
 }
 
 function isCliProvider(providerId: string | undefined): providerId is CliProviderId {
-    return providerId === "codex"
+    return providerId === "claude-code" || providerId === "codex"
 }
 
 export function ChatStatusPopover({ messages, draftValue, attachments, contextUsage, side = "top" }: ChatStatusPopoverProps) {
@@ -292,6 +294,15 @@ function PlanUsageSection({
                         tone="weekly"
                         caption={<PaceCaption window={snapshot.weekly} fallbackWindowSeconds={WEEKLY_SECONDS} />}
                     />
+                    {snapshot.weeklySonnet && (
+                        <MetricRow
+                            label="Weekly · Sonnet"
+                            value={formatQuotaValue(snapshot.weeklySonnet)}
+                            progress={snapshot.weeklySonnet.usedPercent}
+                            tone="sonnet"
+                            caption={<PaceCaption window={snapshot.weeklySonnet} fallbackWindowSeconds={WEEKLY_SECONDS} />}
+                        />
+                    )}
                 </div>
             )}
         </section>

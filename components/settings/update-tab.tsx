@@ -746,7 +746,7 @@ export function UpdateTab() {
           <Section
             icon={TerminalIcon}
             title="CLI tools"
-            description="Codex lives in a mounted volume, so app updates never refresh it. Update it in place (this restarts the container), or restart the container on its own."
+            description="Claude Code and Codex live in a mounted volume, so app updates never refresh them. Update them in place (this restarts the container), or restart the container on its own."
           >
             <div className="flex flex-wrap items-center gap-2">
               <Button

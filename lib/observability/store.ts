@@ -1057,10 +1057,10 @@ function normalizeStoredInputTokens(provider: string, inputTokens: number | null
     if (inputTokens === null || cachedTokens === null) return inputTokens
     if (cachedTokens <= inputTokens) return inputTokens
 
-    // Legacy Anthropic rows were stored with `inputTokens` as the
+    // Legacy Anthropic/Claude rows were stored with `inputTokens` as the
     // provider-emitted uncached input only, while the UI expects cached tokens
     // to be a subset of input. Fix old rows at read time without mutating DB.
-    if (provider === 'anthropic') {
+    if (provider === 'anthropic' || provider === 'claude-code') {
         return inputTokens + cachedTokens
     }
 

@@ -1,4 +1,7 @@
 import { spawn } from 'child_process'
+import { readFileSync, statSync } from 'fs'
+import { homedir } from 'os'
+import { join } from 'path'
 
 import { CLI_IDS, CLI_SPECS, type CliId, type CliStatus } from './specs'
 import { resolveBin, augmentedEnv } from './resolve-bin'
@@ -21,6 +24,14 @@ const STATUS_CACHE_TTL_MS = 15_000
  * out.
  */
 const LAST_GOOD_MAX_AGE_MS = 5 * 60 * 1000
+
+/**
+ * Treat OAuth access tokens as "needs reconnect" once they're within this
+ * window of expiry. Claude Code refreshes opportunistically, but a token that
+ * expires mid-stream surfaces as a silent 401 to the user — better to flag
+ * Settings as "Reconnect" 10 minutes before the cliff than after.
+ */
+const OAUTH_EXPIRY_REFRESH_THRESHOLD_MS = 10 * 60 * 1000
 
 let cachedStatuses: { at: number; data: Record<CliId, CliStatus> } | null = null
 /** Coalesces concurrent non-forced probes so a page-load burst (settings
@@ -64,8 +75,7 @@ async function probeInstalled(bin: string): Promise<InstallProbe> {
 }
 
 function envForCli(id: CliId): NodeJS.ProcessEnv {
-    void id
-    return codexCliEnv()
+    return id === 'codex' ? codexCliEnv() : augmentedEnv()
 }
 
 /**
@@ -139,11 +149,16 @@ async function runStatus(id: CliId): Promise<ProbeResult> {
 /**
  * Positive on-disk evidence that a CLI is authenticated, used only to override
  * an inconclusive probe. Presence is a fallback "logged in" signal; absence is
- * never treated as proof of logout.
+ * never treated as proof of logout (e.g. Claude Code keychain logins have no
+ * credentials file).
  */
 function authFileExists(id: CliId): boolean {
-    void id
-    return codexAuthFileExists()
+    if (id === 'codex') return codexAuthFileExists()
+    try {
+        return statSync(join(homedir(), '.claude', '.credentials.json')).size > 0
+    } catch {
+        return false
+    }
 }
 
 /**
@@ -169,12 +184,122 @@ function resolveStatus(id: CliId, probe: ProbeResult): CliStatus {
     return probe.status
 }
 
+/**
+ * Inspect the on-disk credentials file for a CLI and decide whether the
+ * session is healthy, expiring soon, or already dead. `claude auth status`
+ * only reports presence — it returns `loggedIn:true` even for tokens that
+ * expired days ago, which silently breaks chat with a 401 mid-stream.
+ *
+ * We only enrich `claude-code` today; codex doesn't expose its tokens in a
+ * file we can portably read.
+ */
+function enrichWithCredentialMetadata(id: CliId, status: CliStatus): CliStatus {
+    if (!status.loggedIn || id !== 'claude-code') return status
+
+    // Claude Code's `auth status` reports the auth source it actually used:
+    //   "claude.ai"   → browser OAuth, refreshed from .credentials.json
+    //   "oauth_token" → CLAUDE_CODE_OAUTH_TOKEN env (long-lived, doesn't expire)
+    //   "api_key"     → ANTHROPIC_API_KEY env
+    // When the CLI is using a non-keychain source, the .credentials.json
+    // file's expiry is irrelevant — env-var tokens win, and they don't
+    // expire on the same clock. Skip enrichment to avoid a false "Reconnect"
+    // badge on headless installs that already moved to a long-lived token.
+    let runtimeAuthMethod: string | undefined
+    try {
+        const parsedRaw = status.raw ? JSON.parse(status.raw) as Record<string, unknown> : null
+        const v = parsedRaw?.authMethod
+        runtimeAuthMethod = typeof v === 'string' ? v : undefined
+    } catch {
+        /* raw isn't JSON — fall through */
+    }
+
+    if (runtimeAuthMethod === 'oauth_token') {
+        return {
+            ...status,
+            authMethod: 'setup-token',
+            // Override the (stale) `claude.ai · expired Nd ago` shape the
+            // earlier code path would have produced — long-lived tokens
+            // don't expire from a per-request perspective.
+            detail: status.detail?.replace(/\s*·?\s*expired[^·]*$/i, '').trim() || undefined,
+        }
+    }
+    if (runtimeAuthMethod === 'api_key') {
+        return { ...status, authMethod: 'api-key' }
+    }
+
+    const credentialsPath = join(homedir(), '.claude', '.credentials.json')
+    let raw: string
+    try {
+        raw = readFileSync(credentialsPath, 'utf-8')
+    } catch {
+        // File missing despite `loggedIn:true` from the CLI — the CLI knows
+        // about a session we can't introspect (e.g. macOS Keychain). Leave
+        // the status alone; the CLI's own answer is authoritative.
+        return status
+    }
+
+    let parsed: unknown
+    try {
+        parsed = JSON.parse(raw)
+    } catch {
+        return status
+    }
+
+    const oauth = (parsed as { claudeAiOauth?: Record<string, unknown> })?.claudeAiOauth
+    if (oauth && typeof oauth === 'object') {
+        const expiresAt = typeof oauth.expiresAt === 'number' ? oauth.expiresAt : undefined
+        const now = Date.now()
+        const enriched: CliStatus = {
+            ...status,
+            authMethod: 'oauth',
+            expiresAt,
+        }
+        if (typeof expiresAt === 'number' && expiresAt - now < OAUTH_EXPIRY_REFRESH_THRESHOLD_MS) {
+            // Token already expired (or expiring in the next 10 min) and the
+            // CLI didn't refresh it. Mark as needs-reconnect so the UI can
+            // prompt before the user fires a chat and hits a 401.
+            enriched.needsReconnect = true
+            const expiredAgoMs = now - expiresAt
+            enriched.detail = enriched.detail
+                ? `${enriched.detail} · ${describeExpiry(expiredAgoMs)}`
+                : describeExpiry(expiredAgoMs)
+        }
+        return enriched
+    }
+
+    // Long-lived `claude setup-token` stores under a different key; presence
+    // alone is enough — those tokens are static API keys.
+    const setupToken = (parsed as { primaryApiKey?: unknown; apiKey?: unknown; setupToken?: unknown })
+    if (setupToken?.primaryApiKey || setupToken?.apiKey || setupToken?.setupToken) {
+        return { ...status, authMethod: 'setup-token' }
+    }
+
+    return status
+}
+
+function describeExpiry(expiredAgoMs: number): string {
+    if (expiredAgoMs < 0) {
+        const inMs = -expiredAgoMs
+        if (inMs < 60_000) return 'expires in <1m'
+        if (inMs < 3_600_000) return `expires in ${Math.round(inMs / 60_000)}m`
+        return `expires in ${Math.round(inMs / 3_600_000)}h`
+    }
+    if (expiredAgoMs < 60_000) return 'expired just now'
+    if (expiredAgoMs < 3_600_000) return `expired ${Math.round(expiredAgoMs / 60_000)}m ago`
+    if (expiredAgoMs < 86_400_000) return `expired ${Math.round(expiredAgoMs / 3_600_000)}h ago`
+    return `expired ${Math.round(expiredAgoMs / 86_400_000)}d ago`
+}
+
 /** Probe every CLI once, enrich + resolve, and refresh the shared cache. */
 async function probeAllCliStatuses(): Promise<Record<CliId, CliStatus>> {
     const entries = await Promise.all(
         CLI_IDS.map(async id => {
             const probe = await runStatus(id)
-            return [id, resolveStatus(id, probe)] as const
+            const enriched: ProbeResult = {
+                conclusive: probe.conclusive,
+                status: enrichWithCredentialMetadata(id, probe.status),
+            }
+            return [id, resolveStatus(id, enriched)] as const
         })
     )
     const result = {} as Record<CliId, CliStatus>

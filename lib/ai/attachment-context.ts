@@ -2,7 +2,7 @@ import type { Attachment } from "@/lib/types"
 import { resolveExistingUploadPath } from "@/lib/uploads"
 
 export function canProviderReadLocalUploads(providerId: string): boolean {
-    return providerId === "codex"
+    return providerId === "codex" || providerId === "claude-code"
 }
 
 function formatAttachmentSize(bytes: unknown): string {

@@ -334,7 +334,7 @@ Installer-managed Docker installs use a local host bridge:
 orchestrator update
 ```
 
-The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, and exposes narrow host-only operations. It runs managed updates (`git pull --ff-only`, rebuild, restart) and container/CLI maintenance actions.
+The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, and exposes narrow host-only operations. It runs managed updates (`git pull --ff-only`, rebuild, restart) and container/CLI maintenance actions, and reads Claude Code subscription usage from the host Claude CLI so Docker installs do not need to scrape Claude's interactive TUI inside the container.
 
 Managed installs use GitHub Releases as the update source:
 

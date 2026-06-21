@@ -13,7 +13,7 @@ import { activeRuntimePaths } from '@/lib/runtime-paths'
 // We use node-pty (real pty) so interactive CLIs see a TTY: ANSI colour, line
 // editing, resize, mouse modes, bracketed paste — everything xterm.js renders
 // on the client. Plain child_process.spawn would degrade to non-TTY output,
-// which breaks `codex` interactive flows.
+// which breaks `claude` REPL and `codex` interactive flows.
 //
 // PTY data is a single byte stream — we forward as base64 so binary-safe over
 // SSE (xterm.js writes the decoded buffer back into the terminal).
@@ -22,7 +22,7 @@ import { activeRuntimePaths } from '@/lib/runtime-paths'
 const IDLE_TIMEOUT_MS = 30 * 60 * 1000
 const MAX_BUFFER_BYTES = 512 * 1024
 
-export type SessionMode = 'install' | 'login' | 'logout' | 'status' | 'generate' | 'free'
+export type SessionMode = 'install' | 'login' | 'logout' | 'status' | 'generate' | 'free' | 'setup-token'
 
 export interface SessionEvent {
     type: 'data' | 'exit' | 'error'
@@ -86,6 +86,16 @@ export function startSession(args: StartArgs): string {
         case 'status': cliArgs = spec.statusArgs; break
         case 'generate': cliArgs = args.extraArgs ?? []; break
         case 'free': cliArgs = []; break
+        case 'setup-token':
+            // Claude Code mints a long-lived API token via `claude
+            // setup-token`. Codex has no equivalent; the spawn route rejects
+            // setup-token for unsupported CLIs so we don't need to handle it
+            // here defensively beyond throwing if the spec lacks args.
+            if (!spec.setupTokenArgs) {
+                throw new Error(`${spec.name} does not support setup-token mode`)
+            }
+            cliArgs = spec.setupTokenArgs
+            break
     }
 
     const cols = args.cols ?? 100
@@ -97,7 +107,8 @@ export function startSession(args: StartArgs): string {
     const binPath = resolveBin(binName)
 
     // FORCE_COLOR + a full xterm-256color TERM gives the CLI permission to
-    // render colours and use cursor addressing.
+    // render colours and use cursor addressing — both important for the
+    // Claude Code TUI.
     //
     // Default cwd to the same workspace used by agent runs so the terminal
     // and automated provider paths agree about where the model starts.
@@ -218,7 +229,7 @@ export function resizeSession(id: string, cols: number, rows: number): boolean {
 
 /**
  * Tear down every live session for a CLI. Used by the "Restart" control so a
- * stale/hung interactive session is cleared before the
+ * stale/hung interactive session (login, setup-token…) is cleared before the
  * UI re-detects status. Returns how many sessions were signalled.
  */
 export function closeSessionsForCli(cli: CliId): number {

@@ -6,7 +6,7 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export const dynamic = 'force-dynamic'
 
-/** POST /api/update/cli — update Codex CLI in the container, then restart. */
+/** POST /api/update/cli — update claude-code + codex in the container, then restart. */
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
         const guard = guardSensitiveRequest(request)

@@ -1498,6 +1498,7 @@ export async function POST(request: Request) {
                       if (finalContextUsage) {
                         publishContextUsage(
                           (prepared.settings.provider === "codex" ||
+                            prepared.settings.provider === "claude-code" ||
                             prepared.settings.provider === "google") &&
                             latestContextUsage
                             ? {

@@ -36,7 +36,7 @@ export interface ModelPickerProps {
 // wrapper. Hide its entries from every picker (the browser agent's card
 // hides the picker entirely so its "default" entry never needs to show up).
 const HIDDEN_PROVIDERS = new Set(['browser'])
-const CLI_PROVIDER_IDS = new Set(['codex'])
+const CLI_PROVIDER_IDS = new Set(['claude-code', 'codex'])
 
 export interface ModelPickerOption {
   key: string
