@@ -13,6 +13,7 @@ import type {
     VideoGenJob,
 } from './types'
 import { MAX_AGENT_DEPTH } from './types'
+import { acquireRun, releaseTree, type GatePriority, type RunPermit } from '@/lib/ai/concurrency-gate'
 import { getAgent } from './registry'
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID } from './audio-context-agent'
 import { resolveRuntimeAgentConfig } from './runtime-agent-config'
@@ -108,45 +109,62 @@ const VIDEO_POLL_TIMEOUT_MS = 10 * 60_000
  * tree by joining on this column.
  */
 export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolResult> {
-    const runtimes = resolveAgentRuntimeCandidates(args.target)
-    let lastResult: ToolResult | null = null
-    const attempts: Array<{ provider: string; model: string; error: string }> = []
+    // Concurrency gate: every agent run (delegations, scheduled tasks, inbox
+    // replies, microscript wakes, repairs) flows through here, so this is the
+    // single point that bounds how many agents run at once. depth 0 ⇒ this run's
+    // parent is synthetic, i.e. it is a top-level run that also takes a `main`
+    // slot. The permit + rootRunId thread into the run's tool context so nested
+    // delegate_to calls can release/re-acquire the slot and honour the tree
+    // budget. See lib/ai/concurrency-gate.ts.
+    const isTopLevel = args.parentCtx.depth === 0
+    const rootRunId = args.parentCtx.rootRunId ?? `root_${randomUUID()}`
+    const ownsTree = isTopLevel || !args.parentCtx.rootRunId
+    const priority: GatePriority = isTopLevel ? 'background' : 'interactive'
+    const permit = await acquireRun({ topLevel: isTopLevel, priority })
+    try {
+        const runtimes = resolveAgentRuntimeCandidates(args.target)
+        let lastResult: ToolResult | null = null
+        const attempts: Array<{ provider: string; model: string; error: string }> = []
 
-    for (let index = 0; index < runtimes.length; index++) {
-        const runtime = runtimes[index]
-        const result = await runTextSubAgentAttempt(args, runtime)
-        if (result.success) return result
-        lastResult = result
-        attempts.push({
-            provider: runtime.provider,
-            model: runtime.model,
-            error: result.error ?? 'Unknown error',
-        })
-        if (index >= runtimes.length - 1) break
-        if (!isFallbackSafeToolResult(result)) break
-    }
-
-    if (!lastResult) {
-        return {
-            success: false,
-            error: `Sub-agent ${args.target.id} failed before a model attempt could start.`,
+        for (let index = 0; index < runtimes.length; index++) {
+            const runtime = runtimes[index]
+            const result = await runTextSubAgentAttempt(args, runtime, permit, rootRunId)
+            if (result.success) return result
+            lastResult = result
+            attempts.push({
+                provider: runtime.provider,
+                model: runtime.model,
+                error: result.error ?? 'Unknown error',
+            })
+            if (index >= runtimes.length - 1) break
+            if (!isFallbackSafeToolResult(result)) break
         }
-    }
 
-    // When the orchestrator tried a primary provider AND one or more fallbacks,
-    // returning only the last attempt's error is misleading: a codex auth
-    // failure that fell through to an unconfigured google fallback would surface
-    // just "API key missing for provider google", hiding the real cause. Surface
-    // the whole chain so the primary failure is visible in the Inbox and in the
-    // scheduled task's lastRunError. Single-attempt failures pass through as-is.
-    if (attempts.length > 1) {
-        const chain = attempts
-            .map((a) => `${a.provider}/${a.model}: ${stripSubAgentPrefix(a.error, args.target.id)}`)
-            .join(' → ')
-        return { ...lastResult, error: `Sub-agent ${args.target.id} failed on all providers — ${chain}` }
-    }
+        if (!lastResult) {
+            return {
+                success: false,
+                error: `Sub-agent ${args.target.id} failed before a model attempt could start.`,
+            }
+        }
 
-    return lastResult
+        // When the orchestrator tried a primary provider AND one or more fallbacks,
+        // returning only the last attempt's error is misleading: a codex auth
+        // failure that fell through to an unconfigured google fallback would surface
+        // just "API key missing for provider google", hiding the real cause. Surface
+        // the whole chain so the primary failure is visible in the Inbox and in the
+        // scheduled task's lastRunError. Single-attempt failures pass through as-is.
+        if (attempts.length > 1) {
+            const chain = attempts
+                .map((a) => `${a.provider}/${a.model}: ${stripSubAgentPrefix(a.error, args.target.id)}`)
+                .join(' → ')
+            return { ...lastResult, error: `Sub-agent ${args.target.id} failed on all providers — ${chain}` }
+        }
+
+        return lastResult
+    } finally {
+        permit.dispose()
+        if (ownsTree) releaseTree(rootRunId)
+    }
 }
 
 /** Drop the redundant "Sub-agent <id>:" prefix from a per-attempt error so the
@@ -158,7 +176,7 @@ function stripSubAgentPrefix(error: string, agentId: string): string {
         : error
 }
 
-async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings): Promise<ToolResult> {
+async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings, permit?: RunPermit, rootRunId?: string): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId, cwd, attachments } = args
     const runtimeTarget = resolveRuntimeAgentConfig(target, runtime.provider)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
@@ -278,6 +296,10 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         appOrigin: parentCtx.appOrigin,
         preactivatedCapabilities: parentCtx.preactivatedCapabilities,
         toolSurfaceMode: parentCtx.toolSurfaceMode,
+        // Concurrency-gate handles for nested delegations (release-while-waiting
+        // + per-tree spawn budget). See lib/ai/concurrency-gate.ts.
+        permit,
+        rootRunId,
     }
 
     const threadMessages = agentThreadId ? getAgentThreadMessages(agentThreadId) : []
@@ -659,6 +681,25 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
 }
 
 export async function runMediaSubAgent(args: RunMediaSubAgentArgs): Promise<ToolResult> {
+    // Media agents (image/video generation) don't delegate, but they still
+    // consume CPU/RAM/quota, so they take a concurrency-gate slot like any other
+    // agent run. depth 0 ⇒ top-level (also takes a `main` slot).
+    const isTopLevel = args.parentCtx.depth === 0
+    const rootRunId = args.parentCtx.rootRunId ?? `root_${randomUUID()}`
+    const ownsTree = isTopLevel || !args.parentCtx.rootRunId
+    const permit = await acquireRun({
+        topLevel: isTopLevel,
+        priority: isTopLevel ? 'background' : 'interactive',
+    })
+    try {
+        return await runMediaSubAgentInner(args)
+    } finally {
+        permit.dispose()
+        if (ownsTree) releaseTree(rootRunId)
+    }
+}
+
+async function runMediaSubAgentInner(args: RunMediaSubAgentArgs): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId } = args
     const runtime = resolveAgentRuntimeSettings(target)
     if (agentThreadId) touchAgentThreadRuntime(agentThreadId, runtime.provider, runtime.model)

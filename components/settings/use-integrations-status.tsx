@@ -262,6 +262,38 @@ export interface LocationIntelligenceIntegrationStatusEntry {
     error?: string
 }
 
+export interface RemoteMcpServerStatusEntry {
+    id: string
+    label: string
+    url: string
+    transport: "streamable-http"
+    authType: "oauth" | "none"
+    enabled: boolean
+    configured: boolean
+    connected: boolean
+    needsReconnect: boolean
+    toolCount: number | null
+    toolsPreview: string[]
+    lastCheckedAt: number | null
+    error?: string
+    notes?: string
+}
+
+export interface RemoteMcpIntegrationStatusEntry {
+    id: "mcp"
+    name: string
+    description: string
+    configured: boolean
+    connected: boolean
+    needsReconnect: boolean
+    missingConfig: string[]
+    serverCount: number
+    connectedServerCount: number
+    servers: RemoteMcpServerStatusEntry[]
+    capabilities: string[]
+    setupPrompt: string
+}
+
 export interface RuntimeAccessInfo {
     appOrigin: string
     appHost: string | null
@@ -293,6 +325,7 @@ export type IntegrationStatusEntry =
     | MapsIntegrationStatusEntry
     | WeatherIntegrationStatusEntry
     | LocationIntelligenceIntegrationStatusEntry
+    | RemoteMcpIntegrationStatusEntry
 
 export interface IntegrationsStatus {
     gmail: GmailIntegrationStatusEntry
@@ -303,6 +336,7 @@ export interface IntegrationsStatus {
     maps: MapsIntegrationStatusEntry
     weather: WeatherIntegrationStatusEntry
     locationIntelligence: LocationIntelligenceIntegrationStatusEntry
+    mcp: RemoteMcpIntegrationStatusEntry
     runtime?: RuntimeAccessInfo
 }
 

@@ -1,5 +1,6 @@
 import type { ModelFeatureValue, ThinkingLevel } from "@/lib/config"
 import type { BrowserSessionMode } from "@/lib/browser-agent-runtime/session-mode"
+import type { RunPermit } from "@/lib/ai/concurrency-gate"
 import type {
   Attachment,
   ContentSegment,
@@ -88,6 +89,12 @@ export interface ToolExecutionContext {
   toolSurfaceMode?: "default" | "read-only"
   /** Inject MONITORS.md in full into the woken agent's prompt (monitor-contract wakes). */
   injectMonitorsFile?: boolean
+  /** Concurrency-gate slot held by this agent run. delegate_to releases it while
+   *  awaiting children and re-acquires it before resuming (deadlock-free fan-out). */
+  permit?: RunPermit
+  /** Id of the top-level run that owns this call tree. Used to enforce the
+   *  per-tree spawn budget across nested delegations. */
+  rootRunId?: string
 }
 
 // ---------------------------------------------------------------------------

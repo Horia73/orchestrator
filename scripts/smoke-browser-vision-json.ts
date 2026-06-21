@@ -4,6 +4,8 @@ import { browserVisionTestHooks, createVisionService, type VisionUsage } from '@
 import { codexVisionTestHooks } from '@/lib/browser-agent-runtime/vision-codex'
 import { browserAgentCoordinateTestHooks } from '@/lib/browser-agent-runtime/agent'
 import { buildSystemPrompt, buildActionPrompt } from '@/lib/browser-agent-runtime/prompts'
+import { buildVisionParts } from '@/lib/browser-agent-runtime/vision-shared'
+import type { BrowserFrameSnapshot } from '@/lib/browser-agent-runtime/browser'
 
 const {
     buildRequestConfig,
@@ -155,6 +157,28 @@ assert.equal(
     assert.match(pixelActionPrompt, /Output PIXEL COORDINATES/)
     const normalizedActionPrompt = buildActionPrompt('goal', [], [], [], true)
     assert.match(normalizedActionPrompt, /Estimate NORMALIZED COORDINATES \(0-1000\)/)
+
+    const displayPrompt = buildSystemPrompt(false, 'pixel-display', true, { width: 1280, height: 720 })
+    assert.match(displayPrompt, /full browser display/)
+    assert.match(displayPrompt, /NOT a DOM full-page screenshot/)
+    assert.doesNotMatch(displayPrompt, /full-page overview screenshot/)
+
+    const displayActionPrompt = buildActionPrompt('goal', [], [], [], true, 'pixel-display')
+    assert.match(displayActionPrompt, /final display frame/)
+
+    const displayFrame: BrowserFrameSnapshot = {
+        id: 'frame-display',
+        source: 'agent',
+        timestamp: '2026-06-21T00:00:00.000Z',
+        imageBase64: 'ZmFrZQ==',
+        url: 'https://example.test/',
+        captureMode: 'viewport',
+        coordinateSpace: 'normalized-display',
+        viewport: { width: 1280, height: 720 },
+        page: { width: 1280, height: 720, scrollX: 0, scrollY: 0 },
+    }
+    const displayParts = buildVisionParts('', '', 'act', displayFrame, null, [], 'pixel-display')
+    assert.match(displayParts[0].text ?? '', /current display frame/)
 }
 
 const review = parseIterationLimitReviewFromModelText(JSON.stringify({

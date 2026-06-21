@@ -12,6 +12,10 @@ import { copyTextToClipboard } from "@/lib/clipboard"
 import { appApiPath, appPath } from "@/lib/app-path"
 import { UPLOAD_MIME_MAP } from "@/lib/upload-mime"
 import {
+  workspaceHtmlPreviewFromHref,
+  type WorkspaceHtmlPreview,
+} from "@/lib/workspace-html-preview"
+import {
   is3DModelFile,
   isCodeOrTextFile,
   isDocxFile,
@@ -34,19 +38,26 @@ import type { Attachment } from "@/lib/types"
 // ---------------------------------------------------------------------------
 
 type MarkdownImageClickHandler = (attachment: Attachment) => void
+type WorkspaceHtmlPreviewHandler = (preview: WorkspaceHtmlPreview) => void
 const MarkdownImageClickContext =
   React.createContext<MarkdownImageClickHandler | null>(null)
+const WorkspaceHtmlPreviewContext =
+  React.createContext<WorkspaceHtmlPreviewHandler | null>(null)
 
 export function MarkdownImagePreviewProvider({
   onPreview,
+  onWorkspaceHtmlPreview,
   children,
 }: {
   onPreview: MarkdownImageClickHandler
+  onWorkspaceHtmlPreview?: WorkspaceHtmlPreviewHandler
   children: React.ReactNode
 }) {
   return (
     <MarkdownImageClickContext.Provider value={onPreview}>
-      {children}
+      <WorkspaceHtmlPreviewContext.Provider value={onWorkspaceHtmlPreview ?? null}>
+        {children}
+      </WorkspaceHtmlPreviewContext.Provider>
     </MarkdownImageClickContext.Provider>
   )
 }
@@ -460,6 +471,34 @@ function WorkspaceFileCard({
 // files without an in-app viewer become one-click downloads via workspaceDownloadHref).
 function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
   const onPreview = React.useContext(MarkdownImageClickContext)
+  const onWorkspaceHtmlPreview = React.useContext(WorkspaceHtmlPreviewContext)
+  const workspaceHtmlPreview = workspaceHtmlPreviewFromHref(href, childrenText(children))
+  if (workspaceHtmlPreview && onWorkspaceHtmlPreview) {
+    return (
+      <a
+        href={workspaceHtmlPreview.src}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(event) => {
+          if (
+            event.defaultPrevented ||
+            event.button !== 0 ||
+            event.metaKey ||
+            event.ctrlKey ||
+            event.shiftKey ||
+            event.altKey
+          ) {
+            return
+          }
+          event.preventDefault()
+          onWorkspaceHtmlPreview(workspaceHtmlPreview)
+        }}
+        className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
+      >
+        {children}
+      </a>
+    )
+  }
   const fileRef = workspaceFileRef(href)
   if (fileRef && onPreview) {
     const kind = workspacePreviewKind(fileRef.filename, fileRef.mimeType)
@@ -484,6 +523,16 @@ function MarkdownLink({ href, children }: { href?: string; children?: React.Reac
       {children}
     </a>
   )
+}
+
+function childrenText(children: React.ReactNode): string {
+  if (typeof children === "string") return children
+  if (typeof children === "number") return String(children)
+  if (Array.isArray(children)) return children.map(childrenText).join("")
+  if (React.isValidElement<{ children?: React.ReactNode }>(children)) {
+    return childrenText(children.props.children)
+  }
+  return ""
 }
 
 // ---------------------------------------------------------------------------

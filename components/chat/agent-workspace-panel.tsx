@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { X } from "lucide-react"
+import { Check, Copy, X } from "lucide-react"
 
 import { AttachmentCard } from "@/components/attachment-card"
 import type { ArtifactPayload } from "@/components/artifact-panel"
@@ -11,6 +11,7 @@ import { useTrapWheel } from "@/components/use-trap-wheel"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
 import { agentRoleAndName } from "@/lib/agent-label"
 import { appPath } from "@/lib/app-path"
+import { copyTextToClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 import type {
   AgentCallReasoningEntry,
@@ -42,17 +43,20 @@ export function AgentWorkspacePanel({
   run,
   childRuns,
   onClose,
-  onOpenAgent,
   onAttachmentClick,
 }: {
   run: AgentCallReasoningEntry
   childRuns?: AgentCallReasoningEntry[]
   onClose: () => void
-  onOpenAgent?: (entry: AgentCallReasoningEntry) => void
   onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
 }) {
   const [selectedTool, setSelectedTool] =
     React.useState<SelectedAgentTool | null>(null)
+  const [selectedChildRunId, setSelectedChildRunId] = React.useState<
+    string | null
+  >(null)
+  const [copiedOutput, setCopiedOutput] = React.useState(false)
+  const copyResetTimerRef = React.useRef<number | null>(null)
   // Sub-agents the user hid from this panel via the chip "×". View-only — the
   // run keeps going and is still reachable from the message trace; this just
   // declutters the Sub-agents bar. Reset when the primary agent changes.
@@ -64,6 +68,7 @@ export function AgentWorkspacePanel({
 
   React.useEffect(() => {
     setDismissedRunIds(new Set())
+    setSelectedChildRunId(null)
   }, [run.runId])
 
   const children = (childRuns ?? []).filter(
@@ -75,19 +80,58 @@ export function AgentWorkspacePanel({
       next.add(runId)
       return next
     })
+    setSelectedChildRunId((current) => (current === runId ? null : current))
   }, [])
-  // The lower pane live-previews one nested agent: the one currently running,
-  // otherwise the most recently started. The "Sub-agents" bar lists them all
-  // and lets you drill into any (opening it as the panel's primary agent), so
-  // arbitrarily deep delegation chains stay reachable.
-  const childRun =
+  const selectChild = React.useCallback((entry: AgentCallReasoningEntry) => {
+    setSelectedChildRunId(entry.runId)
+  }, [])
+  const selectedChildRun =
+    children.find((child) => child.runId === selectedChildRunId) ?? null
+  // The lower pane previews one nested agent. By default it follows the running
+  // child, then the newest child; once the user clicks a chip, that chip stays
+  // loaded in this pane instead of replacing the panel's primary agent.
+  const autoChildRun =
     children.find((c) => c.status === "running") ??
     children[children.length - 1]
+  const childRun = selectedChildRun ?? autoChildRun
   const showChildSelector = children.length > 0
+
+  React.useEffect(() => {
+    if (
+      selectedChildRunId &&
+      !children.some((child) => child.runId === selectedChildRunId)
+    ) {
+      setSelectedChildRunId(null)
+    }
+  }, [children, selectedChildRunId])
 
   React.useEffect(() => {
     setSelectedTool(null)
   }, [run.runId, childRun?.runId])
+
+  React.useEffect(() => {
+    if (copyResetTimerRef.current) window.clearTimeout(copyResetTimerRef.current)
+    setCopiedOutput(false)
+  }, [run.runId])
+
+  React.useEffect(() => {
+    return () => {
+      if (copyResetTimerRef.current) window.clearTimeout(copyResetTimerRef.current)
+    }
+  }, [])
+
+  const outputChars = run.content.length
+  const outputDetail =
+    outputChars > 0
+      ? `${formatCompactCount(outputChars)} output${run.agentThreadId ? " saved" : ""}`
+      : null
+  const handleCopyOutput = React.useCallback(async () => {
+    if (!run.content.trim()) return
+    if (!await copyTextToClipboard(run.content)) return
+    if (copyResetTimerRef.current) window.clearTimeout(copyResetTimerRef.current)
+    setCopiedOutput(true)
+    copyResetTimerRef.current = window.setTimeout(() => setCopiedOutput(false), 1600)
+  }, [run.content])
 
   const splitTool = selectedTool && !childRun ? selectedTool.artifact : null
   const parentInlineTool =
@@ -111,17 +155,39 @@ export function AgentWorkspacePanel({
           <div className="truncate text-[15px] font-medium">
             {agentRoleAndName(run)}
           </div>
-          <div className="text-[12px] text-muted-foreground">
-            {run.status === "aborted" ? "stopped" : run.status}
+          <div
+            className="truncate text-[12px] text-muted-foreground"
+            title={run.agentThreadId ? `Agent thread ${run.agentThreadId}` : undefined}
+          >
+            {[
+              run.status === "aborted" ? "stopped" : run.status,
+              outputDetail,
+              run.agentThreadId ? `thread ${shortThreadId(run.agentThreadId)}` : null,
+            ].filter(Boolean).join(" · ")}
           </div>
         </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="rounded-md px-2 py-1 text-sm text-muted-foreground hover:bg-muted hover:text-foreground"
-        >
-          Close
-        </button>
+        <div className="flex shrink-0 items-center gap-1">
+          {run.content.trim() && (
+            <button
+              type="button"
+              onClick={handleCopyOutput}
+              className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+              aria-label="Copy full agent output"
+              title="Copy full agent output"
+            >
+              {copiedOutput ? <Check className="size-4" /> : <Copy className="size-4" />}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={onClose}
+            className="rounded-md p-1.5 text-muted-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Close agent panel"
+            title="Close"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
       </div>
       <div
         className={cn(
@@ -157,7 +223,7 @@ export function AgentWorkspacePanel({
               <ChildAgentSelector
                 runs={children}
                 activeRunId={childRun.runId}
-                onOpen={onOpenAgent}
+                onSelect={selectChild}
                 onDismiss={dismissChild}
               />
             )}
@@ -253,13 +319,13 @@ function AgentToolResultPreview({
 function ChildAgentSelector({
   runs,
   activeRunId,
-  onOpen,
+  onSelect,
   onDismiss,
 }: {
   runs: AgentCallReasoningEntry[]
   activeRunId: string
-  /** Open a sub-agent as the panel's primary agent (drill in). */
-  onOpen?: (entry: AgentCallReasoningEntry) => void
+  /** Load a sub-agent into this panel's nested preview pane. */
+  onSelect?: (entry: AgentCallReasoningEntry) => void
   /** Hide a sub-agent from this panel (view-only; the run keeps going). */
   onDismiss?: (runId: string) => void
 }) {
@@ -279,18 +345,19 @@ function ChildAgentSelector({
               active
                 ? "border-foreground/25 bg-muted text-foreground"
                 : "border-border text-muted-foreground",
-              onOpen && !active && "hover:bg-muted/50"
+              onSelect && !active && "hover:bg-muted/50"
             )}
           >
             <button
               type="button"
-              onClick={onOpen ? () => onOpen(run) : undefined}
-              disabled={!onOpen}
-              title={onOpen ? `Open ${label}` : label}
+              onClick={onSelect ? () => onSelect(run) : undefined}
+              disabled={!onSelect}
+              aria-pressed={active}
+              title={onSelect ? `View ${label}` : label}
               className={cn(
                 "flex items-center gap-1.5 rounded-full py-1 pl-2.5 transition-colors",
                 onDismiss ? "pr-1.5" : "pr-2.5",
-                onOpen && "hover:text-foreground"
+                onSelect && "hover:text-foreground"
               )}
             >
               <AgentStatusDot status={run.status} />
@@ -334,6 +401,20 @@ function AgentStatusDot({
       )}
     />
   )
+}
+
+function formatCompactCount(value: number): string {
+  if (value >= 1_000_000) return `${trimCompact(value / 1_000_000)}m chars`
+  if (value >= 1_000) return `${trimCompact(value / 1_000)}k chars`
+  return `${value} chars`
+}
+
+function trimCompact(value: number): string {
+  return value >= 10 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "")
+}
+
+function shortThreadId(threadId: string): string {
+  return threadId.length > 12 ? `${threadId.slice(0, 8)}...` : threadId
 }
 
 function AgentRunPane({

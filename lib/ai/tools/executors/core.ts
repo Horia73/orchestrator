@@ -15,6 +15,7 @@ import { executeWebFetch } from "../web"
 import { executeTodoWrite } from "../todo-write"
 import { executeReportAgentNeed } from "../agent-needs"
 import { executeSetEnv } from "../set-env"
+import { executeListEnvVars } from "../env-vars"
 import { executeActivateIntegrationTools } from "../integrations"
 import {
   executeActivateSkill,
@@ -47,6 +48,7 @@ export const coreToolExecutors: Record<string, ToolExecutor> = {
   WebFetch: executeWebFetch,
   TodoWrite: executeTodoWrite,
   ReportAgentNeed: executeReportAgentNeed,
+  ListEnvVars: executeListEnvVars,
   SetEnv: executeSetEnv,
   ActivateIntegrationTools: executeActivateIntegrationTools,
   SkillSearch: executeSkillSearch,

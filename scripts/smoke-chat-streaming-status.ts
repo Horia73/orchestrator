@@ -1,7 +1,11 @@
 import assert from "node:assert/strict"
 
 import { chatReducer, type ChatState } from "../hooks/chat-store-reducer"
-import { stoppedStreamState } from "../hooks/chat-store-utils"
+import {
+  agentCallEntryFromStartEvent,
+  stoppedStreamState,
+} from "../hooks/chat-store-utils"
+import { agentFullLabel } from "../lib/agent-label"
 import type { Message } from "../lib/types"
 
 const baseState: ChatState = {
@@ -76,5 +80,28 @@ const stopped = chatReducer(withSnapshot, {
 
 assert.equal(stopped.streamingStatus, null)
 assert.equal(stopped.isStreaming, false)
+
+const liveAgentStart = agentCallEntryFromStartEvent(
+  {
+    type: "agent_start",
+    runId: "run_lena",
+    agentId: "researcher",
+    agentName: "Researcher",
+    assignedName: "Lena",
+    taskLabel: "Romania B2B cold email legality",
+    kind: "text",
+    prompt: "Check Romanian B2B cold email rules.",
+    startedAt: 3_000,
+  },
+  1
+)
+
+assert.ok(liveAgentStart)
+assert.equal(liveAgentStart.assignedName, "Lena")
+assert.equal(liveAgentStart.taskLabel, "Romania B2B cold email legality")
+assert.equal(
+  agentFullLabel(liveAgentStart),
+  "Researcher Lena (Romania B2B cold email legality)"
+)
 
 console.log("chat streaming status smoke passed")

@@ -10,8 +10,8 @@
  * and interrupts working unchanged and gives the pro model a fresh context.
  *
  * The model grounds natively in screenshot pixels, so this backend prompts in
- * the 'pixel-viewport' coordinate space; agent.ts skips 0-1000 denormalization
- * for it. The final assistant message is constrained with a strict-safe
+ * a pixel coordinate space; agent.ts skips 0-1000 denormalization for it. The
+ * final assistant message is constrained with a strict-safe
  * `outputSchema`; if the installed codex rejects the schema we fall back to
  * prompt-only JSON plus the shared parse-with-retries loop.
  *
@@ -30,7 +30,7 @@ import { resolveBin } from '@/lib/cli/resolve-bin';
 import { codexCliEnv, prepareCodexRuntimeHome } from '@/lib/cli/codex-env';
 import { activeRuntimePaths } from '@/lib/runtime-paths';
 import { ActionTrace, BrowserDownloadFile, BrowserFrameSnapshot } from './browser';
-import { buildSystemPrompt, buildMemoryContext, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview } from './prompts';
+import { buildSystemPrompt, buildMemoryContext, buildActionPrompt, buildInterruptPrompt, buildIterationLimitReviewPrompt, ActionHistoryItem, TabInfo, IterationLimitReview, type PromptCoordinateSpace } from './prompts';
 import { getMemories } from './memory';
 import {
     AgentAction,
@@ -57,6 +57,10 @@ type AnyObj = Record<string, unknown>;
 const JSON_RPC_REQUEST_TIMEOUT_MS = 60_000;
 const STALE_FRAME_DIR_MAX_AGE_MS = 24 * 60 * 60 * 1000;
 const DEFAULT_CODEX_VISION_MODEL = 'gpt-5.5';
+
+function promptCoordinateSpaceForFrame(frame: BrowserFrameSnapshot): PromptCoordinateSpace {
+    return frame.coordinateSpace === 'normalized-display' ? 'pixel-display' : 'pixel-viewport';
+}
 
 // ---------------------------------------------------------------------------
 // Strict-safe output schemas (root object, additionalProperties:false,
@@ -773,18 +777,19 @@ export function createCodexVisionService(
             downloads: BrowserDownloadFile[] = [],
             escalationEnabled: boolean = true
         ): Promise<AgentAction[]> {
-            const systemPrompt = buildSystemPrompt(isAdvancedMode, 'pixel-viewport', escalationEnabled, frame.viewport);
+            const promptCoordinateSpace = promptCoordinateSpaceForFrame(frame);
+            const systemPrompt = buildSystemPrompt(isAdvancedMode, promptCoordinateSpace, escalationEnabled, frame.viewport);
             const memoryContext = buildMemoryContext(getMemories(frame.url, goal));
 
             const actionPrompt = isInterrupt
                 ? buildInterruptPrompt(goal)
-                : buildActionPrompt(goal, actionHistory, openTabs, downloads, escalationEnabled, 'pixel-viewport');
+                : buildActionPrompt(goal, actionHistory, openTabs, downloads, escalationEnabled, promptCoordinateSpace);
 
             try {
                 const historyContext = conversationHistory.length > 0
                     ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
                     : '';
-                const requestParts = buildVisionParts(memoryContext, historyContext, actionPrompt, frame, recentTrace, supplementalFrames, 'pixel-viewport');
+                const requestParts = buildVisionParts(memoryContext, historyContext, actionPrompt, frame, recentTrace, supplementalFrames, promptCoordinateSpace);
 
                 return await requestParsedJsonWithRetries({
                     contextLabel: 'browser action',
@@ -821,7 +826,8 @@ export function createCodexVisionService(
                 const historyContext = conversationHistory.length > 0
                     ? `\n## 📜 CONVERSATION HISTORY (Context):\n${conversationHistory.join('\n')}\n`
                     : '';
-                const requestParts = buildVisionParts('', historyContext, reviewPrompt, frame, recentTrace, supplementalFrames, 'pixel-viewport');
+                const promptCoordinateSpace = promptCoordinateSpaceForFrame(frame);
+                const requestParts = buildVisionParts('', historyContext, reviewPrompt, frame, recentTrace, supplementalFrames, promptCoordinateSpace);
 
                 const parsed = await requestParsedJsonWithRetries({
                     contextLabel: 'iteration-limit review',

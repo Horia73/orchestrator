@@ -8,6 +8,7 @@ import {
   GOOGLE_SLIDES_TOOL_IDS,
   HOME_ASSISTANT_TOOL_IDS,
   MAPS_TOOL_IDS,
+  REMOTE_MCP_TOOL_IDS,
   WEATHER_TOOL_IDS,
   WHATSAPP_TOOL_IDS,
 } from "@/lib/ai/agents/builtins"
@@ -40,6 +41,7 @@ export type IntegrationStatusKind =
   | "maps"
   | "weather"
   | "location-intelligence"
+  | "mcp"
 
 export interface IntegrationManifestEntry {
   /** Stable id — used by ActivateIntegrationTools, the activation store, and the runbook. */
@@ -101,6 +103,13 @@ const MAPS_SETUP = [
   "MapsSetLocationSource",
 ]
 const WEATHER_SETUP = ["WeatherStatus"]
+const REMOTE_MCP_SETUP = [
+  "RemoteMcpStatus",
+  "RemoteMcpConfigure",
+  "RemoteMcpStartOAuth",
+  "RemoteMcpDisconnect",
+  "RemoteMcpRemove",
+]
 
 function operationalOnly(all: string[], setup: string[]): string[] {
   const setupSet = new Set(setup)
@@ -225,6 +234,18 @@ export const INTEGRATION_MANIFEST: IntegrationManifestEntry[] = [
     operationalToolIds: [],
     alwaysInScope: true,
     note: 'Stores non-secret config in workspace config.json. The current compatible journal layout is microscripts/<scriptId>/files/location/{points.jsonl,days/*.json,routine.json,place_aliases.json}. Preserve raw points, infer stays from webhook gaps, and ask about retention, including "keep everything", before enabling tracking.',
+  },
+  {
+    id: "mcp",
+    label: "Remote MCP servers",
+    capability:
+      "Custom remote MCP servers over Streamable HTTP: save an endpoint, complete OAuth when required, list the server's live tool schemas, and call a selected MCP tool through a generic guarded wrapper.",
+    runbookId: "mcp",
+    statusKind: "mcp",
+    setupToolIds: REMOTE_MCP_SETUP,
+    operationalToolIds: operationalOnly(REMOTE_MCP_TOOL_IDS, REMOTE_MCP_SETUP),
+    alwaysInScope: true,
+    note: "Generic remote MCP support is provider-agnostic. Only connect trusted HTTPS endpoints (localhost/.local HTTP is for testing). The generic caller cannot know every provider's credit policy, so for mutating, outreach, enrichment, or credit-consuming tools, get explicit user approval and pass confirmed_by_user=true.",
   },
 ]
 

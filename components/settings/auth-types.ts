@@ -27,6 +27,15 @@ export interface GoogleMapsConfigInput {
   rawEnv?: string
 }
 
+export interface RemoteMcpConfigInput {
+  id?: string
+  label?: string
+  url: string
+  authType?: "oauth" | "none"
+  enabled?: boolean
+  notes?: string
+}
+
 export type BusyAction =
   | "connect"
   | "disconnect"
@@ -44,6 +53,10 @@ export type BusyAction =
   | "homeassistant-disconnect"
   | "homeassistant-action-mode"
   | "google-maps-save"
+  | "mcp-save"
+  | "mcp-connect"
+  | "mcp-disconnect"
+  | "mcp-remove"
   | null
 
 export type NoticeTone = "success" | "error" | "warning"

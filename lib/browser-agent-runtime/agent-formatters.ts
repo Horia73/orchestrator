@@ -26,7 +26,7 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
             return `Hover ${formatCoordinate(action.coordinate, coordinateMode)} - ${reason(action)}`;
         }
         case 'inspectPage':
-            return `Inspect Full Page - ${reason(action)}`;
+            return `Inspect Page Context - ${reason(action)}`;
         case 'findInPage':
             return `Find "${formatBrowserAgentTextForLog(action.text, action.reasoning, 40)}" - ${reason(action)}`;
         case 'inspectDiagnostics':

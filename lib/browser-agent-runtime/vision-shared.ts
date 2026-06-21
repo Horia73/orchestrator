@@ -217,6 +217,8 @@ export function buildVisionParts(
         ? [...recentTrace.frames, ...supplementalFrames, frame]
         : [...supplementalFrames, frame];
     const hasOverviewFrame = orderedFrames.some((candidate) => candidate.captureMode === 'overview');
+    const finalFrameIsDisplay = coordinateSpaceLabel === 'pixel-display' || frame.coordinateSpace === 'normalized-display';
+    const finalFrameLabel = finalFrameIsDisplay ? 'current display frame' : 'current viewport';
 
     const visualContextLines = recentTrace?.frames?.length
         ? [
@@ -224,7 +226,7 @@ export function buildVisionParts(
             `You are receiving ${orderedFrames.length} frames ordered oldest to newest.`,
             `- Frames 1-${recentTrace.frames.length} show the recent ${recentTrace.action} sampled roughly every ${recentTrace.intervalMs}ms.`,
             '- Later frames may include supplemental overview captures for orientation.',
-            '- The final frame is always the current viewport and is the ONLY frame you may use for output coordinates.',
+            `- The final frame is always the ${finalFrameLabel} and is the ONLY frame you may use for output coordinates.`,
             '- Use earlier frames to understand motion, page layout, transient UI changes, loaders, progress, or where content sits on the full page.',
         ]
         : [
@@ -232,7 +234,7 @@ export function buildVisionParts(
             orderedFrames.length > 1
                 ? `You are receiving ${orderedFrames.length} frames ordered oldest to newest.`
                 : 'You are receiving one current frame of the page.',
-            '- The final frame is always the current viewport and is the ONLY frame you may use for output coordinates.',
+            `- The final frame is always the ${finalFrameLabel} and is the ONLY frame you may use for output coordinates.`,
         ];
 
     if (!recentTrace?.frames?.length && orderedFrames.length > 1) {

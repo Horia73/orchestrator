@@ -42,7 +42,13 @@ ENV NODE_ENV=production \
     WHATSAPP_CHROME_EXECUTABLE_PATH=/usr/bin/chromium \
     PUPPETEER_EXECUTABLE_PATH=/usr/bin/chromium \
     CAD_PYTHON=/usr/bin/python3 \
-    CAD_SNAPSHOT_CHROMIUM=/usr/bin/chromium
+    CAD_SNAPSHOT_CHROMIUM=/usr/bin/chromium \
+    # OOM backstop (2026-06-21 incident): cap V8's old-space so a heap runaway
+    # crashes THIS process for a fast restart instead of dragging the whole
+    # 16 GB host into a kernel OOM that can take neighbour containers down. The
+    # agent concurrency gate (lib/ai/concurrency-gate.ts) is the real fix; this
+    # is belt-and-suspenders. Override NODE_OPTIONS on a larger box.
+    NODE_OPTIONS=--max-old-space-size=6144
 
 RUN groupmod --gid 1002 node \
   && usermod --uid 1002 --gid 1002 node \

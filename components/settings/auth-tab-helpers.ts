@@ -7,12 +7,14 @@ import {
   Mail,
   MapPinned,
   MessageCircle,
+  Network,
 } from "lucide-react"
 import type {
   GoogleDriveIntegrationStatusEntry,
   IntegrationsStatus,
   LocationIntelligenceIntegrationStatusEntry,
   MapsIntegrationStatusEntry,
+  RemoteMcpIntegrationStatusEntry,
   WeatherIntegrationStatusEntry,
   WhatsAppIntegrationStatusEntry,
 } from "@/components/settings/use-integrations-status"
@@ -25,6 +27,7 @@ export const AUTH_SERVICE_IDS = [
   "homeAssistant",
   "mapsWeather",
   "locationIntelligence",
+  "mcp",
 ] as const
 
 export type AuthServiceId = (typeof AUTH_SERVICE_IDS)[number]
@@ -90,6 +93,7 @@ export function buildAuthServiceDescriptors(
       >)
   const mapsStatus = mapsWeatherStatus(data.maps, data.weather)
   const locationStatus = locationIntelligenceStatus(data.locationIntelligence)
+  const mcpStatus = remoteMcpStatus(data.mcp)
 
   return [
     {
@@ -185,6 +189,15 @@ export function buildAuthServiceDescriptors(
       iconWrapClassName: "bg-violet-500/10",
       iconClassName: "text-violet-700 dark:text-violet-400",
       ...locationStatus,
+    },
+    {
+      id: "mcp",
+      name: data.mcp.name,
+      summary: remoteMcpSummary(data.mcp),
+      icon: Network,
+      iconWrapClassName: "bg-indigo-500/10",
+      iconClassName: "text-indigo-700 dark:text-indigo-400",
+      ...mcpStatus,
     },
   ]
 }
@@ -308,6 +321,24 @@ export function locationIntelligenceSummary(
     return `${entry.journal.dayCount} days indexed`
   if (entry.journal.exists) return "Journal ready; no days yet"
   return "Journal files missing"
+}
+
+export function remoteMcpStatus(
+  entry: RemoteMcpIntegrationStatusEntry
+): Pick<AuthServiceDescriptor, "tone" | "status"> {
+  if (!entry.configured) return { tone: "muted", status: "Optional" }
+  if (entry.connected && !entry.needsReconnect) return { tone: "success", status: "Connected" }
+  if (entry.needsReconnect) return { tone: "warn", status: "Reconnect" }
+  return { tone: "warn", status: "Needs OAuth" }
+}
+
+export function remoteMcpSummary(entry: RemoteMcpIntegrationStatusEntry): string {
+  if (!entry.configured) return "Add any remote MCP endpoint"
+  if (entry.connectedServerCount > 0) {
+    return `${entry.connectedServerCount}/${entry.serverCount} servers connected`
+  }
+  if (entry.serverCount === 1) return "1 server configured"
+  return `${entry.serverCount} servers configured`
 }
 
 export function scopeLabel(scope: string): string {

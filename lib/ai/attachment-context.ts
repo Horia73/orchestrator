@@ -35,15 +35,15 @@ export function buildAttachmentContext(
                 ? att.mimeType.split(";")[0].trim()
                 : "application/octet-stream"
         const filePath = resolveExistingUploadPath(att.id)
-        const location =
-            options.includeLocalPath && filePath
-                ? `local path: ${filePath}`
-                : filePath
-                    ? `upload_id: ${att.id}`
-                    : `upload_id: ${att.id}; local upload file is no longer available`
+        const locationParts = [`upload_id: ${att.id}`]
+        if (options.includeLocalPath && filePath) {
+            locationParts.push(`local path: ${filePath}`)
+        } else if (!filePath) {
+            locationParts.push("local upload file is no longer available")
+        }
 
         lines.push(
-            `- ${filename} (${mimeType}, ${formatAttachmentSize(att.size)}); ${location}`
+            `- ${filename} (${mimeType}, ${formatAttachmentSize(att.size)}); ${locationParts.join("; ")}`
         )
     }
 
@@ -52,7 +52,7 @@ export function buildAttachmentContext(
     return [
         `The user attached ${lines.length === 1 ? "this file" : "these files"}:`,
         ...lines,
-        `Use upload_id when a tool asks for one of these uploaded attachments. Use local paths only when filesystem inspection is available.`,
+        `When a tool asks for upload_id, copy the exact upload_id above, including the file extension (for example .jpg/.pdf); do not strip it from a local path. Use local paths only when filesystem inspection is available.`,
         `Uploads are read-only originals stored outside your workspace. To edit, convert, or otherwise process one with filesystem tools (Bash/ffmpeg, Read/Write/Edit), first stage a copy inside the workspace — copy_upload_to_workspace(upload_id) when available — and work on the copy; never modify the original upload file in place.`,
     ].join("\n")
 }

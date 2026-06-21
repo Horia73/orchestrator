@@ -27,6 +27,7 @@ import {
   GoogleWorkspaceCard,
   LocationIntelligenceCard,
   MapsWeatherCard,
+  RemoteMcpCard,
   WhatsAppCard,
 } from "@/components/settings/auth-service-cards"
 import type {
@@ -37,6 +38,7 @@ import type {
   GoogleMapsConfigInput,
   HomeAssistantConfigInput,
   NoticeTone,
+  RemoteMcpConfigInput,
 } from "@/components/settings/auth-types"
 import { Button } from "@/components/ui/button"
 import { CliAccountsSection } from "@/components/settings/cli-accounts"
@@ -101,12 +103,15 @@ function ConnectedServicesSection() {
       if (
         event.data.provider !== "gmail" &&
         event.data.provider !== "googleCalendar" &&
-        event.data.provider !== "googleDrive"
+        event.data.provider !== "googleDrive" &&
+        event.data.provider !== "mcp"
       )
         return
       setBusy(null)
       const label =
-        event.data.provider === "googleCalendar"
+        event.data.provider === "mcp"
+          ? "Remote MCP"
+          : event.data.provider === "googleCalendar"
           ? "Google Calendar"
           : event.data.provider === "googleDrive"
             ? "Google Workspace"
@@ -129,7 +134,8 @@ function ConnectedServicesSection() {
     if (
       busy !== "connect" &&
       busy !== "google-calendar-connect" &&
-      busy !== "google-drive-connect"
+      busy !== "google-drive-connect" &&
+      busy !== "mcp-connect"
     )
       return
     const timer = window.setInterval(() => {
@@ -723,6 +729,161 @@ function ConnectedServicesSection() {
     }
   }
 
+  const saveRemoteMcpConfig = async (
+    input: RemoteMcpConfigInput
+  ): Promise<boolean> => {
+    setBusy("mcp-save")
+    setFeedback(null)
+    try {
+      const res = await fetch("/api/integrations/mcp/config", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: input.id,
+          label: input.label,
+          url: input.url,
+          auth_type: input.authType ?? "oauth",
+          enabled: input.enabled ?? true,
+          notes: input.notes,
+        }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        error?: string
+        server?: { id: string; label: string; authType: "oauth" | "none" }
+      }
+      if (!res.ok || !json.server)
+        throw new Error(json.error || `Save failed (${res.status})`)
+      setFeedback({
+        tone: "success",
+        text:
+          json.server.authType === "oauth"
+            ? `${json.server.label} saved. Use Connect to complete OAuth.`
+            : `${json.server.label} saved. Recheck status to list tools.`,
+      })
+      await refresh()
+      return true
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        text:
+          err instanceof Error
+            ? err.message
+            : "Could not save remote MCP server.",
+      })
+      return false
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const connectRemoteMcp = async (serverId: string) => {
+    setBusy("mcp-connect")
+    setFeedback(null)
+    try {
+      const res = await fetch("/api/integrations/mcp/oauth/start", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server_id: serverId }),
+      })
+      const json = (await res.json().catch(() => ({}))) as {
+        authUrl?: string
+        redirectUri?: string
+        alreadyAuthorized?: boolean
+        error?: string
+      }
+      if (!res.ok) throw new Error(json.error || `OAuth start failed (${res.status})`)
+      if (json.alreadyAuthorized) {
+        setFeedback({ tone: "success", text: "MCP server is already authorized." })
+        await refresh()
+        setBusy(null)
+        return
+      }
+      if (!json.authUrl)
+        throw new Error(json.error || `OAuth start failed (${res.status})`)
+      if (
+        json.redirectUri &&
+        shouldWarnAboutLocalhostRedirect(json.redirectUri)
+      ) {
+        setFeedback(localhostRedirectNotice(json.redirectUri, data?.runtime))
+      }
+      const popup = window.open(
+        json.authUrl,
+        "orchestrator-mcp-oauth",
+        "popup=yes,width=560,height=760,menubar=no,toolbar=no,location=yes,status=no"
+      )
+      if (!popup) {
+        window.location.assign(json.authUrl)
+        return
+      }
+      popupRef.current = popup
+      popup.focus()
+    } catch (err) {
+      setBusy(null)
+      setFeedback({
+        tone: "error",
+        text:
+          err instanceof Error ? err.message : "Could not start MCP OAuth.",
+      })
+    }
+  }
+
+  const disconnectRemoteMcp = async (serverId: string) => {
+    const confirmed = window.confirm(
+      "Disconnect this MCP server? Stored local OAuth tokens will be removed."
+    )
+    if (!confirmed) return
+    setBusy("mcp-disconnect")
+    setFeedback(null)
+    try {
+      const res = await fetch("/api/integrations/mcp/disconnect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server_id: serverId }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok)
+        throw new Error(json.error || `Disconnect failed (${res.status})`)
+      setFeedback({ tone: "success", text: "MCP server disconnected." })
+      await refresh()
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        text:
+          err instanceof Error ? err.message : "Could not disconnect MCP.",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
+  const removeRemoteMcp = async (serverId: string) => {
+    const confirmed = window.confirm(
+      "Remove this MCP server from Orchestrator? Config and local OAuth tokens will be deleted."
+    )
+    if (!confirmed) return
+    setBusy("mcp-remove")
+    setFeedback(null)
+    try {
+      const res = await fetch("/api/integrations/mcp/remove", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ server_id: serverId }),
+      })
+      const json = (await res.json().catch(() => ({}))) as { error?: string }
+      if (!res.ok)
+        throw new Error(json.error || `Remove failed (${res.status})`)
+      setFeedback({ tone: "success", text: "MCP server removed." })
+      await refresh()
+    } catch (err) {
+      setFeedback({
+        tone: "error",
+        text: err instanceof Error ? err.message : "Could not remove MCP.",
+      })
+    } finally {
+      setBusy(null)
+    }
+  }
+
   const serviceDescriptors = React.useMemo(
     () => (data ? buildAuthServiceDescriptors(data) : []),
     [data]
@@ -821,6 +982,17 @@ function ConnectedServicesSection() {
         )
       case "locationIntelligence":
         return <LocationIntelligenceCard entry={data.locationIntelligence} />
+      case "mcp":
+        return (
+          <RemoteMcpCard
+            entry={data.mcp}
+            busy={busy}
+            onSaveConfig={saveRemoteMcpConfig}
+            onStartOAuth={connectRemoteMcp}
+            onDisconnect={disconnectRemoteMcp}
+            onRemove={removeRemoteMcp}
+          />
+        )
     }
   }
 

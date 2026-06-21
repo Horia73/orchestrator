@@ -44,6 +44,10 @@ export function buildToolTitle(
     return typeof args?.pattern === "string" ? `Grep ${args.pattern}` : "Grep"
   if (toolName === "WebFetch")
     return typeof args?.url === "string" ? `Fetch ${args.url}` : "Fetch URL"
+  if (toolName === "ListEnvVars")
+    return typeof args?.query === "string" && args.query.trim()
+      ? `List env names matching ${args.query.trim()}`
+      : "List env names"
   if (toolName === "SetEnv")
     return typeof args?.key === "string" ? `Set env ${args.key}` : "Set env"
   if (toolName === "web_search" || toolName === "WebSearch") {

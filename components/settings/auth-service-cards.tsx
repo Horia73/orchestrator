@@ -17,11 +17,13 @@ import {
   Mail,
   MapPinned,
   MessageCircle,
+  Network,
   Plus,
   QrCode,
   Save,
   ShieldCheck,
   Smartphone,
+  Trash2,
   Unplug,
 } from "lucide-react"
 
@@ -46,6 +48,7 @@ import type {
   GoogleCalendarConfigInput,
   GoogleDriveConfigInput,
   GoogleMapsConfigInput,
+  RemoteMcpConfigInput,
 } from "@/components/settings/auth-types"
 import { Button } from "@/components/ui/button"
 import { Select } from "@/components/ui/select"
@@ -76,6 +79,7 @@ import type {
   GoogleDriveIntegrationStatusEntry,
   LocationIntelligenceIntegrationStatusEntry,
   MapsIntegrationStatusEntry,
+  RemoteMcpIntegrationStatusEntry,
   RuntimeAccessInfo,
   WeatherIntegrationStatusEntry,
   WhatsAppIntegrationStatusEntry,
@@ -319,6 +323,248 @@ export function LocationIntelligenceCard({
             </p>
           </div>
         </details>
+      </CardContent>
+    </Card>
+  )
+}
+
+export function RemoteMcpCard({
+  entry,
+  busy,
+  onSaveConfig,
+  onStartOAuth,
+  onDisconnect,
+  onRemove,
+}: {
+  entry: RemoteMcpIntegrationStatusEntry
+  busy: BusyAction
+  onSaveConfig: (input: RemoteMcpConfigInput) => Promise<boolean>
+  onStartOAuth: (serverId: string) => void
+  onDisconnect: (serverId: string) => void
+  onRemove: (serverId: string) => void
+}) {
+  const [label, setLabel] = React.useState("")
+  const [url, setUrl] = React.useState("")
+  const [authType, setAuthType] = React.useState<"oauth" | "none">("oauth")
+  const [notes, setNotes] = React.useState("")
+  const isBusy = busy !== null
+  const badge = !entry.configured ? (
+    <Badge tone="muted" icon={<Network className="size-3" />}>
+      Optional
+    </Badge>
+  ) : entry.connected ? (
+    <Badge tone="success" icon={<CheckCircle2 className="size-3" />}>
+      {entry.connectedServerCount}/{entry.serverCount} ready
+    </Badge>
+  ) : (
+    <Badge tone="warn" icon={<AlertCircle className="size-3" />}>
+      Needs auth
+    </Badge>
+  )
+
+  const submit = async (event: React.FormEvent) => {
+    event.preventDefault()
+    const saved = await onSaveConfig({
+      label,
+      url,
+      authType,
+      enabled: true,
+      notes,
+    })
+    if (saved) {
+      setLabel("")
+      setUrl("")
+      setNotes("")
+      setAuthType("oauth")
+    }
+  }
+
+  return (
+    <Card className="lg:col-span-2">
+      <CardHeader>
+        <div className="flex items-start justify-between gap-2">
+          <div className="flex min-w-0 items-center gap-2">
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-lg bg-indigo-500/10">
+              <Network className="size-4 text-indigo-700 dark:text-indigo-400" />
+            </span>
+            <CardTitle className="truncate">{entry.name}</CardTitle>
+          </div>
+          {badge}
+        </div>
+        <CardDescription>{entry.description}</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <div className="grid gap-4">
+          <form
+            onSubmit={submit}
+            className="grid gap-3 rounded-xl border border-border/70 bg-background/60 p-3"
+          >
+            <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_160px]">
+              <ConfigInput
+                label="Label"
+                value={label}
+                onChange={setLabel}
+                placeholder="Apollo, Linear, custom MCP"
+              />
+              <ConfigInput
+                label="MCP endpoint"
+                value={url}
+                onChange={setUrl}
+                placeholder="https://provider.example/mcp"
+              />
+              <label className="grid gap-1">
+                <span className="text-[11.5px] font-medium text-foreground/60">
+                  Auth
+                </span>
+                <Select
+                  value={authType}
+                  options={[
+                    { value: "oauth", label: "OAuth" },
+                    { value: "none", label: "No auth" },
+                  ]}
+                  disabled={isBusy}
+                  onValueChange={(value) =>
+                    setAuthType(value === "none" ? "none" : "oauth")
+                  }
+                />
+              </label>
+            </div>
+            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+              <ConfigInput
+                label="Notes"
+                value={notes}
+                onChange={setNotes}
+                placeholder="Optional non-secret provider limits or intended use"
+              />
+              <Button
+                type="submit"
+                size="sm"
+                disabled={isBusy || !url.trim()}
+                className="md:mb-0.5"
+              >
+                {busy === "mcp-save" ? (
+                  <Loader2 className="size-3.5 animate-spin" />
+                ) : (
+                  <Save className="size-3.5" />
+                )}
+                Save server
+              </Button>
+            </div>
+          </form>
+
+          <div className="grid gap-2">
+            {entry.servers.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border/70 bg-muted/30 px-3 py-8 text-center text-[13px] text-foreground/45">
+                No remote MCP servers configured.
+              </div>
+            ) : (
+              entry.servers.map((server) => (
+                <div
+                  key={server.id}
+                  className="grid gap-3 rounded-xl border border-border/70 bg-background/60 p-3"
+                >
+                  <div className="flex flex-wrap items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <div className="flex min-w-0 items-center gap-2">
+                        <span className="truncate text-[13px] font-medium text-foreground/80">
+                          {server.label}
+                        </span>
+                        <Badge
+                          tone={server.connected ? "success" : "warn"}
+                          icon={
+                            server.connected ? (
+                              <CheckCircle2 className="size-3" />
+                            ) : (
+                              <AlertCircle className="size-3" />
+                            )
+                          }
+                        >
+                          {server.connected ? "Ready" : "Needs auth"}
+                        </Badge>
+                      </div>
+                      <div className="mt-1 truncate font-mono text-[11.5px] text-foreground/45">
+                        {server.url}
+                      </div>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      {server.authType === "oauth" && !server.connected && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isBusy}
+                          onClick={() => onStartOAuth(server.id)}
+                        >
+                          {busy === "mcp-connect" ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : (
+                            <LogIn className="size-3.5" />
+                          )}
+                          Connect
+                        </Button>
+                      )}
+                      {server.authType === "oauth" && server.connected && (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="sm"
+                          disabled={isBusy}
+                          onClick={() => onDisconnect(server.id)}
+                        >
+                          <Unplug className="size-3.5" />
+                          Disconnect
+                        </Button>
+                      )}
+                      <Button
+                        type="button"
+                        variant="outline"
+                        size="sm"
+                        disabled={isBusy}
+                        onClick={() => onRemove(server.id)}
+                      >
+                        <Trash2 className="size-3.5" />
+                        Remove
+                      </Button>
+                    </div>
+                  </div>
+                  <div className="grid gap-1.5 text-[12.5px] md:grid-cols-3">
+                    <StatusRow
+                      label="Auth"
+                      value={server.authType === "oauth" ? "OAuth" : "No auth"}
+                    />
+                    <StatusRow
+                      label="Tools"
+                      value={
+                        server.toolCount === null
+                          ? "Not listed"
+                          : String(server.toolCount)
+                      }
+                    />
+                    <StatusRow
+                      label="Checked"
+                      value={formatStatusTimestamp(server.lastCheckedAt)}
+                    />
+                  </div>
+                  {server.toolsPreview.length > 0 && (
+                    <div className="flex flex-wrap gap-1">
+                      {server.toolsPreview.map((tool) => (
+                        <span
+                          key={tool}
+                          className="rounded-md bg-muted px-1.5 py-0.5 font-mono text-[11px] text-foreground/60"
+                        >
+                          {tool}
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {server.error && (
+                    <InlineNotice tone="warning" text={server.error} />
+                  )}
+                </div>
+              ))
+            )}
+          </div>
+        </div>
       </CardContent>
     </Card>
   )

@@ -4,6 +4,7 @@ import path from 'path'
 import type { ToolDef, ToolResult } from '@/lib/ai/agents/types'
 import { listAllAttachments } from '@/lib/db'
 import { sniffContentType } from '@/lib/file-sniff'
+import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { resolveExistingUploadPath, uploadContentType } from '@/lib/uploads'
 import { ensureParentDir, stringArg } from './helpers'
 import {
@@ -32,6 +33,7 @@ import {
 const DEFAULT_DEST_DIR = 'tmp'
 const SNIFF_HEAD_BYTES = 8192
 const MAX_DEDUPE_ATTEMPTS = 50
+const BARE_UPLOAD_UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
 export const copyUploadToWorkspaceTool: ToolDef = {
     id: 'copy_upload_to_workspace',
@@ -60,16 +62,17 @@ export const copyUploadToWorkspaceTool: ToolDef = {
 }
 
 export function executeCopyUploadToWorkspace(args: Record<string, unknown>): ToolResult {
-    const uploadId = stringArg(args, ['upload_id', 'id'])
-    if (!uploadId) return { success: false, error: 'Missing required parameter: upload_id' }
+    const rawUploadId = stringArg(args, ['upload_id', 'id']).trim()
+    if (!rawUploadId) return { success: false, error: 'Missing required parameter: upload_id' }
 
-    const sourcePath = resolveExistingUploadPath(uploadId)
-    if (!sourcePath) {
+    const resolvedUpload = resolveUploadReference(rawUploadId)
+    if (!resolvedUpload.ok) {
         return {
             success: false,
-            error: `Upload not found on disk: ${uploadId}. Use an upload_id from the current message or find_past_uploads, or ask the user to re-attach the file.`,
+            error: resolvedUpload.error,
         }
     }
+    const { uploadId, sourcePath } = resolvedUpload
 
     const typing = resolveUploadTyping(uploadId, sourcePath)
     const destArg = stringArg(args, ['dest_path', 'path'])
@@ -101,6 +104,48 @@ export function executeCopyUploadToWorkspace(args: Record<string, unknown>): Too
         }
     } catch (err) {
         return { success: false, error: err instanceof Error ? err.message : 'Unknown error copying upload' }
+    }
+}
+
+function resolveUploadReference(input: string):
+    | { ok: true; uploadId: string; sourcePath: string }
+    | { ok: false; error: string } {
+    const exact = resolveExistingUploadPath(input)
+    if (exact) return { ok: true, uploadId: input, sourcePath: exact }
+
+    if (!BARE_UPLOAD_UUID_RE.test(input)) {
+        return {
+            ok: false,
+            error: `Upload not found on disk: ${input}. Use the exact upload_id from the current message or find_past_uploads, including the file extension, or ask the user to re-attach the file.`,
+        }
+    }
+
+    let names: string[]
+    try {
+        names = fs.readdirSync(activeRuntimePaths().uploadsDir)
+    } catch {
+        return {
+            ok: false,
+            error: `Upload not found on disk: ${input}. Use the exact upload_id from the current message or find_past_uploads, including the file extension, or ask the user to re-attach the file.`,
+        }
+    }
+
+    const prefix = `${input}.`
+    const matches = names
+        .filter(name => name.startsWith(prefix))
+        .map(name => ({ uploadId: name, sourcePath: resolveExistingUploadPath(name) }))
+        .filter((entry): entry is { uploadId: string; sourcePath: string } => Boolean(entry.sourcePath))
+
+    if (matches.length === 1) return { ok: true, ...matches[0] }
+    if (matches.length > 1) {
+        return {
+            ok: false,
+            error: `Multiple uploads match ${input}: ${matches.map(match => match.uploadId).join(', ')}. Use the exact upload_id including the file extension.`,
+        }
+    }
+    return {
+        ok: false,
+        error: `Upload not found on disk: ${input}. Use the exact upload_id from the current message or find_past_uploads, including the file extension, or ask the user to re-attach the file.`,
     }
 }
 

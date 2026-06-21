@@ -3,6 +3,7 @@ import path from 'path'
 
 import type { AgentKind, ToolDef, ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
+import { tryReserveTreeSpawn, agentGateLimits } from '@/lib/ai/concurrency-gate'
 import { getAgent } from '@/lib/ai/agents/registry'
 import { createAgentThread, getAgentThread, getAgentThreadMessages, type AgentThread } from '@/lib/db'
 import { parseBrowserSessionMode, type BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
@@ -19,7 +20,7 @@ export const delegateToTool: ToolDef = {
     description: [
         'Delegate a task to a specialist sub-agent and wait for its final answer.',
         'Use this when the task is outside your remit, when a specialist would do better, or when you want a fresh perspective on your own output.',
-        'Returns the sub-agent\'s complete response and agent_thread_id. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
+        'Returns the sub-agent\'s complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Pass thread_id to continue an existing parent↔agent thread; omit it to create a new one.',
         'To let the sub-agent see a file directly (image, PDF, document), pass attachment_ids — upload ids from the current user message or from find_past_uploads; the files are forwarded into its turn for providers that support them.',
         'To hand a prior specialist\'s result to this agent without retyping it, pass context_thread_ids — the final output of each referenced agent thread is forwarded verbatim as <forwarded_context>. This is how you pass a researcher\'s report straight to worker for a deliverable: you reference it, you do not re-summarize it.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. For browser_agent, pass bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison. The prompt must be self-contained: exact URL(s) or clearly scoped site flow, goal, allowed data, forbidden data, account/session assumptions, exact stop boundary, confirmation status, screenshot/video needs, and expected evidence. Reuse thread_id to continue the same browser state.',
@@ -81,7 +82,7 @@ export const delegateParallelTool: ToolDef = {
     description: [
         'Delegate multiple independent tasks to specialist sub-agents concurrently and wait for all final answers.',
         'Use only for workstreams that do not depend on each other and do not mutate the same files or external systems.',
-        'Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
+        'Each job returns its complete response, output length metadata, and agent_thread_id. The complete response is also persisted in the agent thread; if a UI preview is clipped, do not treat that as data loss. Each job may pass thread_id to continue an existing parent↔agent thread, or omit it to create a new one.',
         'Prefer researcher for open web discovery, availability checks, comparisons, rankings, and vendor/product lookup. Browser_agent jobs must be bounded execution/verification tasks on known pages/sites, not open-ended research/discovery/comparison; include a complete action contract and stop boundary. For loading/API diagnostics, request inspectDiagnostics and same-origin fetchUrl results. Reuse thread_id for the same browser flow; use separate threads only for independent flows. For browser_agent only, browser_session_mode="incognito" runs without the saved profile/cookies/logins/localStorage. Do not parallelize browser jobs that can create duplicate orders/bookings/sends or mutate the same external account.',
         'Each job may carry attachment_ids — upload ids forwarded into that job\'s sub-agent turn so it can see the files directly.',
         'Each job may carry context_thread_ids — prior agent threads whose final output is forwarded verbatim as <forwarded_context>, so you can hand earlier results to a job without retyping them.',
@@ -91,7 +92,7 @@ export const delegateParallelTool: ToolDef = {
         properties: {
             jobs: {
                 type: 'array',
-                description: 'Independent delegation jobs. Maximum 6 per call; default concurrency is 6.',
+                description: 'Independent delegation jobs. Maximum 10 per call; default concurrency is 10.',
                 items: {
                     type: 'object',
                     properties: {
@@ -140,7 +141,7 @@ export const delegateParallelTool: ToolDef = {
             },
             max_concurrency: {
                 type: 'integer',
-                description: 'Optional concurrency limit. Defaults to 6 and is capped at 6.',
+                description: 'Optional concurrency limit. Defaults to 10 and is capped at 10.',
             },
         },
         required: ['jobs'],
@@ -156,28 +157,44 @@ export async function executeDelegateTo(
     if (!plan.ok) return { success: false, error: plan.error }
     const prepared = materializeDelegation(plan)
 
-    const result = await runPreparedDelegation(prepared, ctx!)
-    if (result.success && result.data && typeof result.data === 'object') {
+    // Per-tree spawn budget: a runaway recursion (agents endlessly spawning more
+    // agents) is capped so a single top-level run cannot flood the queue. When
+    // exhausted, the caller is told to finish the work itself — graceful
+    // degradation instead of an unbounded backlog.
+    if (!tryReserveTreeSpawn(ctx?.rootRunId)) {
         return {
-            ...result,
-            data: {
-                ...(result.data as Record<string, unknown>),
-                agentThreadId: prepared.thread.id,
-                agent_thread_id: prepared.thread.id,
-            },
+            success: false,
+            error: `Delegation limit reached: this task has already spawned its maximum of ${agentGateLimits.treeBudget} sub-agents. Do NOT retry delegation — finish the remaining work yourself with your own tools, or wrap up and report what you have. This is a hard cap, not a transient error.`,
         }
     }
-    return result.success
-        ? result
-        : {
-            ...result,
-            error: `${result.error ?? 'Delegation failed'} (agent_thread_id: ${prepared.thread.id})`,
-            data: {
-                agentId: prepared.target.id,
-                agentThreadId: prepared.thread.id,
-                agent_thread_id: prepared.thread.id,
-            },
+
+    // Release-while-waiting: this agent is now idle awaiting its child, so give
+    // up its active slot for the duration and reclaim it before resuming. This
+    // is what makes a small global concurrency cap deadlock-free under nested
+    // delegation. See lib/ai/concurrency-gate.ts.
+    ctx?.permit?.releaseForChildren()
+    try {
+        const result = await runPreparedDelegation(prepared, ctx!)
+        if (result.success && result.data && typeof result.data === 'object' && !Array.isArray(result.data)) {
+            return {
+                ...result,
+                data: withDelegationOutputMetadata(result.data as Record<string, unknown>, prepared.thread.id),
+            }
         }
+        return result.success
+            ? result
+            : {
+                ...result,
+                error: `${result.error ?? 'Delegation failed'} (agent_thread_id: ${prepared.thread.id})`,
+                data: {
+                    agentId: prepared.target.id,
+                    agentThreadId: prepared.thread.id,
+                    agent_thread_id: prepared.thread.id,
+                },
+            }
+    } finally {
+        await ctx?.permit?.reacquireForResume()
+    }
 }
 
 export async function executeDelegateParallel(
@@ -226,21 +243,59 @@ export async function executeDelegateParallel(
         : MAX_PARALLEL_DELEGATIONS
     const concurrency = Math.max(1, Math.min(requestedConcurrency, MAX_PARALLEL_DELEGATIONS, jobs.length))
 
-    const results = await mapWithConcurrency(jobs, concurrency, async (job, index) => {
-        const result = await runPreparedDelegation(job, ctx)
-        return {
-            index,
-            success: result.success,
-            agentId: job.target.id,
-            agentThreadId: job.thread.id,
-            agent_thread_id: job.thread.id,
-            output: result.success && result.data && typeof result.data === 'object'
-                ? (result.data as Record<string, unknown>).output
-                : undefined,
-            data: result.data,
-            error: result.error,
-        }
-    })
+    // Release-while-waiting: the delegating agent is idle until every job
+    // returns, so it gives up its active slot for the duration (reclaimed in the
+    // finally). This keeps the global concurrency cap deadlock-free even when N
+    // parents fan out at once. See lib/ai/concurrency-gate.ts.
+    ctx.permit?.releaseForChildren()
+    let results: Array<Record<string, unknown>>
+    try {
+        results = await mapWithConcurrency(jobs, concurrency, async (job, index) => {
+            // Per-tree spawn budget: stop a runaway recursion from flooding the
+            // queue. An over-budget job degrades to a clear error so the agent
+            // finishes that branch itself instead of spawning forever.
+            if (!tryReserveTreeSpawn(ctx.rootRunId)) {
+                return {
+                    index,
+                    success: false,
+                    agentId: job.target.id,
+                    agentThreadId: job.thread.id,
+                    agent_thread_id: job.thread.id,
+                    output: undefined,
+                    outputChars: 0,
+                    output_chars: 0,
+                    fullOutputSaved: false,
+                    full_output_saved: false,
+                    data: undefined,
+                    error: `Delegation limit reached: this task has already spawned its maximum of ${agentGateLimits.treeBudget} sub-agents. Do NOT retry — handle this part yourself with your own tools. This is a hard cap, not a transient error.`,
+                }
+            }
+            const result = await runPreparedDelegation(job, ctx)
+            const data = result.data && typeof result.data === 'object' && !Array.isArray(result.data)
+                ? withDelegationOutputMetadata(result.data as Record<string, unknown>, job.thread.id)
+                : result.data
+            const output = data && typeof data === 'object' && !Array.isArray(data)
+                ? stringField(data as Record<string, unknown>, 'output')
+                : undefined
+            const outputChars = output?.length ?? 0
+            return {
+                index,
+                success: result.success,
+                agentId: job.target.id,
+                agentThreadId: job.thread.id,
+                agent_thread_id: job.thread.id,
+                output,
+                outputChars,
+                output_chars: outputChars,
+                fullOutputSaved: Boolean(output && job.thread.id),
+                full_output_saved: Boolean(output && job.thread.id),
+                data,
+                error: result.error,
+            }
+        })
+    } finally {
+        await ctx.permit?.reacquireForResume()
+    }
 
     const failed = results.filter(result => !result.success)
     return {
@@ -253,7 +308,40 @@ export async function executeDelegateParallel(
     }
 }
 
-const MAX_PARALLEL_DELEGATIONS = 6
+// Max jobs per delegate_parallel call. The *global* concurrency gate
+// (lib/ai/concurrency-gate.ts) is what actually bounds how many run at once, so
+// this is just the per-call request ceiling.
+const MAX_PARALLEL_DELEGATIONS = 10
+
+function withDelegationOutputMetadata(
+    data: Record<string, unknown>,
+    agentThreadId: string
+): Record<string, unknown> {
+    const output = stringField(data, 'output')
+    const outputChars = output?.length ?? 0
+    return {
+        ...data,
+        agentThreadId,
+        agent_thread_id: agentThreadId,
+        outputChars,
+        output_chars: outputChars,
+        fullOutputSaved: Boolean(output && agentThreadId),
+        full_output_saved: Boolean(output && agentThreadId),
+        fullOutputLocation: output && agentThreadId ? `agent_thread:${agentThreadId}` : undefined,
+        full_output_location: output && agentThreadId ? `agent_thread:${agentThreadId}` : undefined,
+        fullOutputNote: output && agentThreadId
+            ? 'Complete output is persisted in agent_thread_id; UI preview clipping is not data loss.'
+            : undefined,
+        full_output_note: output && agentThreadId
+            ? 'Complete output is persisted in agent_thread_id; UI preview clipping is not data loss.'
+            : undefined,
+    }
+}
+
+function stringField(data: Record<string, unknown>, key: string): string | undefined {
+    const value = data[key]
+    return typeof value === 'string' ? value : undefined
+}
 
 type PreparedDelegation =
     {

@@ -7,6 +7,7 @@ const API_GUARD_EXEMPT_PATHS = new Set([
   "/api/cli/mcp-exec",
   "/api/integrations/gmail/oauth/callback",
   "/api/integrations/google/oauth/callback",
+  "/api/integrations/mcp/oauth/callback",
   "/api/update/host-result",
 ])
 

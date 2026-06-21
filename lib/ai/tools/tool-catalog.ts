@@ -12,6 +12,7 @@ import { webFetchTool } from "./web"
 import { todoWriteTool } from "./todo-write"
 import { reportAgentNeedTool } from "./agent-needs"
 import { setEnvTool } from "./set-env"
+import { listEnvVarsTool } from "./env-vars"
 import {
   activateIntegrationToolsTool,
   runActivatedIntegrationTool,
@@ -24,6 +25,7 @@ import { googleDriveTools } from "./google-drive"
 import { googleSheetsTools } from "./google-sheets"
 import { googleSlidesTools } from "./google-slides"
 import { homeAssistantTools } from "./home-assistant"
+import { remoteMcpTools } from "./mcp"
 import { whatsappTools } from "./whatsapp"
 import { scheduleTools } from "./schedule"
 import { observabilityTools } from "./observability"
@@ -87,6 +89,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   webFetchTool,
   todoWriteTool,
   reportAgentNeedTool,
+  listEnvVarsTool,
   setEnvTool,
   activateIntegrationToolsTool,
   runActivatedIntegrationTool,
@@ -99,6 +102,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   ...googleSlidesTools,
   ...whatsappTools,
   ...homeAssistantTools,
+  ...remoteMcpTools,
   ...scheduleTools,
   ...observabilityTools,
   notifyInboxTool,

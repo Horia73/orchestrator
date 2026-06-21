@@ -33,10 +33,10 @@ export function buildMemoryContext(memories: RetrievedMemory): string {
 
 /**
  * Coordinate space the model is prompted in. Frames only ever carry the
- * normalized spaces; 'pixel-viewport' is a prompt-level concept used by
- * backends whose models ground natively in screenshot pixels (Codex/GPT-5.5).
+ * normalized spaces; pixel spaces are prompt-level concepts used by backends
+ * whose models ground natively in screenshot pixels (Codex/GPT-5.5).
  */
-export type PromptCoordinateSpace = BrowserCoordinateSpace | 'pixel-viewport';
+export type PromptCoordinateSpace = BrowserCoordinateSpace | 'pixel-viewport' | 'pixel-display';
 
 export function buildSystemPrompt(
    isAdvancedMode: boolean = false,
@@ -83,11 +83,19 @@ export function buildSystemPrompt(
    const loopDetectionRule = escalationEnabled
       ? '1. **Loop Detection**: If you repeat the same actions with no progress, stop. Escalate to the advanced agent if you feel stuck.'
       : '1. **Loop Detection**: If you repeat the same actions with no progress, stop. Re-evaluate and try a materially different approach — a different element, a refresh, or a new navigation path.';
-   const usesFullDisplayBackend = coordinateSpace === 'normalized-display';
-   const usesPixelSpace = coordinateSpace === 'pixel-viewport';
+   const usesFullDisplayBackend = coordinateSpace === 'normalized-display' || coordinateSpace === 'pixel-display';
+   const usesPixelSpace = coordinateSpace === 'pixel-viewport' || coordinateSpace === 'pixel-display';
+   const usesPixelDisplay = coordinateSpace === 'pixel-display';
    const viewportHint = viewport ? `${viewport.width}x${viewport.height}` : 'stated in each frame\'s metadata';
    const coordinateInstructions = usesPixelSpace
-      ? `2. You output the PIXEL COORDINATES of the element you want to interact with, measured on the screenshot itself.
+      ? usesPixelDisplay
+         ? `2. You output the PIXEL COORDINATES of the element you want to interact with, measured on the full display screenshot itself.
+   - The screenshot shows the full browser display, including tabs, address bar, toolbar, page content, popups, and context menus.
+   - (0, 0) is the top-left corner of the screenshot.
+   - The bottom-right corner is (width, height) of the display screenshot (currently ${viewportHint}; each frame's metadata states its exact display dimensions).
+   - Output integer pixel values and aim for the CENTER of the target element.
+   - IMPORTANT: output coordinates ONLY for the final current display frame.`
+         : `2. You output the PIXEL COORDINATES of the element you want to interact with, measured on the screenshot itself.
    - (0, 0) is the top-left corner of the screenshot.
    - The bottom-right corner is (width, height) of the viewport (currently ${viewportHint}; each frame's metadata states its exact Viewport dimensions).
    - Output integer pixel values and aim for the CENTER of the target element.
@@ -105,10 +113,14 @@ export function buildSystemPrompt(
    - Example directly in the middle: [500, 500].
    - IMPORTANT: output coordinates ONLY for the final viewport frame, never for an overview frame.`;
    const coordinateAccuracyRule = usesPixelSpace
-      ? '1. **Coordinate Accuracy**: Use exact pixel positions on the final viewport frame; click the center of the target element.'
+      ? usesPixelDisplay
+         ? '1. **Coordinate Accuracy**: Use exact pixel positions on the final display frame; click the center of the target element.'
+         : '1. **Coordinate Accuracy**: Use exact pixel positions on the final viewport frame; click the center of the target element.'
       : '1. **Coordinate Accuracy**: Use the 1000x1000 grid system. Be precise.';
    const coordinateLabel = usesPixelSpace ? 'pixel' : 'normalized';
-   const coordinateComment = usesPixelSpace ? 'Viewport pixels' : 'Normalized 0-1000';
+   const coordinateComment = usesPixelSpace
+      ? usesPixelDisplay ? 'Display pixels' : 'Viewport pixels'
+      : 'Normalized 0-1000';
    const inspectPageDoc = usesFullDisplayBackend
       ? '- **inspectPage**: Capture another full display frame for orientation. On this backend it is NOT a DOM full-page screenshot; prefer `findInPage` for exact text and visual scrolling for long pages.'
       : '- **inspectPage**: Request an extra full-page overview screenshot for orientation. Use this when the page is long/wide and the current viewport is not enough to decide where to scroll next, or you just need to get information about the page. This does NOT interact with the page. After using it, you will receive an overview frame plus the normal viewport frame.';
@@ -532,6 +544,8 @@ export function buildActionPrompt(
 
    const coordinateStep = coordinateSpace === 'pixel-viewport'
       ? '2. Output PIXEL COORDINATES based only on the final viewport frame (its Viewport WxH is stated in the frame metadata).'
+      : coordinateSpace === 'pixel-display'
+         ? '2. Output PIXEL COORDINATES based only on the final display frame (its display WxH is stated in the frame metadata).'
       : '2. Estimate NORMALIZED COORDINATES (0-1000) based only on the final viewport frame.';
 
    return `## 🎯 GOAL: ${goal}

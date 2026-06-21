@@ -9,12 +9,15 @@ const SCROLLABLE_OVERFLOW = new Set(["auto", "scroll", "overlay"])
 // reaches a boundary in the wheel's direction — or has nothing to scroll at all
 // — hand the gesture off to the page scroll surface behind it.
 //
-// The handoff is driven by us (preventDefault + a proportional scrollBy on the
-// outer surface) rather than left to the browser's native scroll-chaining. That
-// keeps the transition clean: each wheel tick moves the page by exactly what the
-// user input, with no native momentum "dump" that would fling the page when you
-// flick the inner box hard. Touch is left to CSS `overscroll-behavior` on the
-// box itself; this only governs the wheel (i.e. the hover/desktop case).
+// The handoff is driven by us (preventDefault + scrolling the outer surface
+// ourselves) rather than left to the browser, because the inner box carries
+// `overscroll-behavior: contain` (for touch) which also disables native wheel
+// chaining. To keep that handoff from flinging the page we latch each gesture to
+// whichever surface it started on — see the listener below — so the inertial
+// momentum tail of a hard flick inside the box stays in the box instead of
+// dumping onto the page in one fast, jerky lurch. Touch is left to CSS
+// `overscroll-behavior` on the box itself; this only governs the wheel (i.e. the
+// hover/desktop case).
 //
 // Implemented as a native, non-passive `wheel` listener in the bubble phase —
 // NOT React's onWheel/onWheelCapture — for two reasons:
@@ -31,21 +34,48 @@ export function useTrapWheel<T extends HTMLElement>() {
     React.useEffect(() => {
         const el = ref.current
         if (!el) return
+
+        // Gesture latching. A continuous wheel gesture — and, on a Mac trackpad,
+        // the inertial momentum tail the OS keeps firing after your fingers lift —
+        // arrives as a stream of events less than LATCH_GAP_MS apart. Once the
+        // inner box has scrolled during a gesture it "owns" that gesture: every
+        // later event in it is swallowed instead of shoved onto the page, so the
+        // momentum of a hard flick that bottoms out the box stays in the box. The
+        // page only takes over when a *fresh* gesture starts with the box already
+        // pinned at its boundary — and then the page owns the gesture, momentum
+        // and all, exactly as a normal page scroll would. This mirrors the
+        // browser's native scroll-latching, which our manual chaining replaces.
+        const LATCH_GAP_MS = 200
+        let lastWheelAt = 0
+        let innerOwnsGesture = false
+
         const handleWheel = (event: WheelEvent) => {
             const axis = Math.abs(event.deltaY) >= Math.abs(event.deltaX) ? "y" : "x"
             const delta = axis === "y" ? event.deltaY : event.deltaX
             if (delta === 0) return
 
-            // If the hovered box can still scroll in this direction, stay out of
-            // the way and let it scroll natively.
-            const inner = findScrollerInside(event.target, el, axis)
-            if (inner && !isAtEdge(inner, axis, delta)) return
+            const newGesture = event.timeStamp - lastWheelAt > LATCH_GAP_MS
+            lastWheelAt = event.timeStamp
+            if (newGesture) innerOwnsGesture = false
 
-            // The box is at its boundary (or has nothing to scroll): chain the
-            // gesture to the nearest scrollable surface behind us. We always
-            // preventDefault so the box can never bounce the locked document;
-            // when a chainable surface exists we drive it ourselves.
+            // If the hovered box can still scroll in this direction, stay out of
+            // the way, let it scroll natively, and latch the gesture to it.
+            const inner = findScrollerInside(event.target, el, axis)
+            if (inner && !isAtEdge(inner, axis, delta)) {
+                innerOwnsGesture = true
+                return
+            }
+
+            // The box is at its boundary (or has nothing to scroll). Always
+            // preventDefault so it can never bounce the locked document.
             event.preventDefault()
+
+            // A gesture the box already claimed keeps its momentum to itself:
+            // don't fling the page with the tail of a hard flick.
+            if (innerOwnsGesture) return
+
+            // A fresh gesture that began at the edge chains to the nearest
+            // scrollable surface behind us, one wheel tick at a time.
             const outer = findScrollerOutside(el, axis, delta)
             if (!outer) return
             if (axis === "y") outer.scrollTop += delta

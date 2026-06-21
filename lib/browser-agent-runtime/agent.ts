@@ -585,7 +585,7 @@ export function createAgentController(
                             onStatusUpdate(`🧩 Captured ${pendingTrace.frames.length} trace frames from ${pendingTrace.action}`);
                         }
                         if (execution.supplementalFrames.length > 0) {
-                            onStatusUpdate(`🗺️ Captured ${execution.supplementalFrames.length} overview frame(s). Re-evaluating...`);
+                            onStatusUpdate(`🗺️ Captured ${execution.supplementalFrames.length} supplemental frame(s). Re-evaluating...`);
                         }
 
                         if (success && action.memory) {
@@ -1246,9 +1246,15 @@ async function executeAction(
                 return { success: false, trace: null, supplementalFrames: [] };
 
             case 'inspectPage': {
-                onStatusUpdate('🗺️  Capturing full-page overview...');
-                const overviewFrame = await browser.captureOverviewFrame();
-                return { success: true, trace: null, supplementalFrames: [overviewFrame] };
+                const canCaptureOverview = browser.capabilities.overviewCapture;
+                onStatusUpdate(canCaptureOverview
+                    ? '🗺️  Capturing full-page overview...'
+                    : '🗺️  Capturing current display for page context...');
+                const inspectionFrame = await browser.captureOverviewFrame();
+                const supplementalFrame = canCaptureOverview
+                    ? inspectionFrame
+                    : { ...inspectionFrame, label: 'current-display-inspection' };
+                return { success: true, trace: null, supplementalFrames: [supplementalFrame] };
             }
 
             case 'findInPage': {

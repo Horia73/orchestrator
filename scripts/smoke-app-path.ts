@@ -6,6 +6,10 @@ import {
   currentPreviewBasePath,
   prefixWithPreviewBasePath,
 } from "@/lib/app-path"
+import {
+  extractWorkspaceHtmlPreviewsFromMarkdown,
+  workspaceHtmlPreviewFromHref,
+} from "@/lib/workspace-html-preview"
 
 const originalPreviewBasePath = process.env.ORCHESTRATOR_PREVIEW_BASE_PATH
 const globals = globalThis as Record<string, unknown>
@@ -48,6 +52,15 @@ try {
     appApiPath("/api/workspace/files", { path: "tarom boarding pass.png" }),
     "/dev-preview/self-123/api/workspace/files?path=tarom+boarding+pass.png"
   )
+  assert.deepEqual(
+    workspaceHtmlPreviewFromHref("files/email previews/variant-1.html", "Variant 1"),
+    {
+      id: "files/email previews/variant-1.html",
+      title: "Variant 1",
+      filePath: "files/email previews/variant-1.html",
+      src: "/dev-preview/self-123/files/email%20previews/variant-1.html",
+    }
+  )
 
   assert.equal(
     prefixWithPreviewBasePath("/api/uploads/file.png", "/dev-preview/manual/"),
@@ -67,6 +80,33 @@ try {
   assert.equal(
     appPath("/api/uploads/file.png"),
     "/dev-preview/global-run/api/uploads/file.png"
+  )
+  assert.deepEqual(
+    extractWorkspaceHtmlPreviewsFromMarkdown([
+      "[variant-1.html](/files/nectaria-email-previews/variant-1.html)",
+      "[variant-2.html](/api/workspace/files?path=files/nectaria-email-previews/variant-2.html)",
+      "https://orchestrator-h7k2.duckdns.org/files/nectaria-email-previews/variant-3.html",
+    ].join("\n")),
+    [
+      {
+        id: "files/nectaria-email-previews/variant-1.html",
+        title: "variant-1.html",
+        filePath: "files/nectaria-email-previews/variant-1.html",
+        src: "/dev-preview/global-run/files/nectaria-email-previews/variant-1.html",
+      },
+      {
+        id: "files/nectaria-email-previews/variant-2.html",
+        title: "variant-2.html",
+        filePath: "files/nectaria-email-previews/variant-2.html",
+        src: "/dev-preview/global-run/files/nectaria-email-previews/variant-2.html",
+      },
+      {
+        id: "files/nectaria-email-previews/variant-3.html",
+        title: "variant-3.html",
+        filePath: "files/nectaria-email-previews/variant-3.html",
+        src: "/dev-preview/global-run/files/nectaria-email-previews/variant-3.html",
+      },
+    ]
   )
 
   console.log("app path smoke ok")

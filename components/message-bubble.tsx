@@ -1160,11 +1160,19 @@ function GenericAgentCallBlock({
 }) {
     const toolCount = countAgentTools(entry)
     const statusText = formatAgentStatus(entry.status)
+    const outputChars = entry.content.length
+    const details = [
+        statusText,
+        toolCount > 0 ? `${toolCount} tool${toolCount === 1 ? "" : "s"}` : "",
+        outputChars > 0 ? `${formatCompactCount(outputChars)} output` : "",
+        outputChars > 0 && entry.agentThreadId ? "full transcript saved" : "",
+    ].filter(Boolean)
     return (
         <div className="relative z-10 flex max-w-full py-1 text-left">
             <button
                 type="button"
                 onClick={() => onOpen?.(entry)}
+                title={entry.agentThreadId ? `Agent thread ${entry.agentThreadId}` : undefined}
                 className="group flex w-max max-w-full items-start gap-3 text-left"
             >
                 <FileText className="mt-[3px] size-4 shrink-0 rounded-full bg-background text-muted-foreground transition-colors group-hover:text-foreground" />
@@ -1173,12 +1181,22 @@ function GenericAgentCallBlock({
                         {agentFullLabel(entry)}
                     </span>
                     <span className="block truncate text-[11px] text-muted-foreground/75">
-                        {statusText}{toolCount > 0 ? ` · ${toolCount} tool${toolCount === 1 ? "" : "s"}` : ""}
+                        {details.join(" · ")}
                     </span>
                 </span>
             </button>
         </div>
     )
+}
+
+function formatCompactCount(value: number): string {
+    if (value >= 1_000_000) return `${trimCompact(value / 1_000_000)}m chars`
+    if (value >= 1_000) return `${trimCompact(value / 1_000)}k chars`
+    return `${value} chars`
+}
+
+function trimCompact(value: number): string {
+    return value >= 10 ? String(Math.round(value)) : value.toFixed(1).replace(/\.0$/, "")
 }
 
 function BrowserAgentCallBlock({

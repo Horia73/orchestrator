@@ -109,6 +109,46 @@ export const stoppedStreamState = {
   streamingMessageId: null as string | null,
 }
 
+export function agentCallEntryFromStartEvent(
+  data: Record<string, unknown>,
+  phase: number,
+  now = Date.now()
+): AgentCallReasoningEntry | null {
+  const runId = typeof data.runId === "string" ? data.runId : ""
+  const agentId = typeof data.agentId === "string" ? data.agentId : ""
+  if (!runId || !agentId) return null
+
+  const agentName =
+    typeof data.agentName === "string" ? data.agentName : agentId || "Agent"
+  const kind = typeof data.kind === "string" ? data.kind : "text"
+
+  return {
+    type: "agent_call",
+    id: `agent_${runId}`,
+    phase,
+    toolCallId:
+      typeof data.toolCallId === "string" ? data.toolCallId : undefined,
+    runId,
+    agentThreadId:
+      typeof data.agentThreadId === "string" ? data.agentThreadId : undefined,
+    parentRunId:
+      typeof data.parentRunId === "string" ? data.parentRunId : undefined,
+    agentId,
+    agentName,
+    assignedName:
+      typeof data.assignedName === "string" ? data.assignedName : undefined,
+    taskLabel: typeof data.taskLabel === "string" ? data.taskLabel : undefined,
+    kind: kind as AgentCallReasoningEntry["kind"],
+    title: agentName,
+    prompt: typeof data.prompt === "string" ? data.prompt : "",
+    status: "running",
+    startedAt: typeof data.startedAt === "number" ? data.startedAt : now,
+    content: "",
+    contentSegments: [],
+    reasoning: [],
+  }
+}
+
 export const INITIAL_MESSAGE_PAGE_SIZE = 32
 export const OLDER_MESSAGE_PAGE_SIZE = 64
 /** Server caps a message page at 200; use the max when paging toward a

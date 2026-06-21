@@ -235,7 +235,7 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     {
         id: 'setup',
         label: 'Integration setup',
-        capability: 'Connect, configure, and re-auth connection-based integrations: Gmail/Calendar/Drive (status/configure/OAuth), Home Assistant (status/configure), WhatsApp (status/connect). Live connection state is already shown in <integrations>, so activate this only when you are actually about to connect, repair, or reconfigure an integration.',
+        capability: 'Connect, configure, and re-auth connection-based integrations: Gmail/Calendar/Drive (status/configure/OAuth), Home Assistant (status/configure), WhatsApp (status/connect), and Remote MCP servers (configure/OAuth/disconnect/remove). Live connection state is already shown in <integrations>, so activate this only when you are actually about to connect, repair, or reconfigure an integration.',
         toolIds: [
             'GoogleCalendarStatus',
             'GoogleCalendarConfigure',
@@ -247,6 +247,11 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
             'HomeAssistantConfigure',
             'WhatsAppStatus',
             'WhatsAppConnect',
+            'RemoteMcpStatus',
+            'RemoteMcpConfigure',
+            'RemoteMcpStartOAuth',
+            'RemoteMcpDisconnect',
+            'RemoteMcpRemove',
         ],
     },
     {

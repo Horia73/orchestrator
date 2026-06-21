@@ -8,6 +8,7 @@ export const WORKSPACE_TOOL_IDS: string[] = [
     'Glob',
     'Grep',
     'WebFetch',
+    'ListEnvVars',
     'SetEnv',
     'TodoWrite',
     'ReportAgentNeed',
@@ -197,6 +198,16 @@ export const HOME_ASSISTANT_TOOL_IDS: string[] = [
     'HomeAssistantSetClimate',
     'HomeAssistantNotify',
     'HomeAssistantReadActionAudit',
+]
+
+export const REMOTE_MCP_TOOL_IDS: string[] = [
+    'RemoteMcpStatus',
+    'RemoteMcpConfigure',
+    'RemoteMcpStartOAuth',
+    'RemoteMcpDisconnect',
+    'RemoteMcpRemove',
+    'RemoteMcpListTools',
+    'RemoteMcpCallTool',
 ]
 
 export const SCHEDULING_TOOL_IDS: string[] = [

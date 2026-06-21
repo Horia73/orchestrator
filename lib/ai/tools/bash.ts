@@ -4,8 +4,16 @@ import { spawn as spawnProcess } from 'child_process'
 
 import type { ToolExecutionContext, ToolResult } from '@/lib/ai/agents/types'
 import { MAX_TOOL_DELTA_TEXT_CHARS } from '@/lib/ai/reasoning-limits'
+import { augmentedEnv } from '@/lib/cli/resolve-bin'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { displayPath } from './sandbox'
+import {
+    collectEnvKeys,
+    createSecretStreamRedactor,
+    redactSecretText,
+    resolveEnvVarInjection,
+    type EnvVarInjection,
+} from './env-vars'
 export { bashTool } from './bash-def'
 
 const DEFAULT_TIMEOUT_MS = 120_000
@@ -21,8 +29,17 @@ export async function executeBash(args: Record<string, unknown>, ctx?: ToolExecu
 
     const timeoutMs = clamp(Math.floor(numberArg(args, ['timeout'], DEFAULT_TIMEOUT_MS)), 1_000, MAX_TIMEOUT_MS)
     const runInBackground = booleanArg(args, ['run_in_background'])
-    if (runInBackground) return startBackgroundCommand(command, cwdResult.cwd, timeoutMs)
-    return runForegroundCommand(command, cwdResult.cwd, timeoutMs, ctx)
+    const envResolution = resolveEnvVarInjection(collectEnvKeys(args))
+    if (!envResolution.ok) {
+        return {
+            success: false,
+            error: envResolution.error,
+            data: envResolution.missing ? { missing_env_keys: envResolution.missing } : undefined,
+        }
+    }
+
+    if (runInBackground) return startBackgroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection)
+    return runForegroundCommand(command, cwdResult.cwd, timeoutMs, envResolution.injection, ctx)
 }
 
 function resolveCwd(cwdArg: string): { ok: true; cwd: string } | { ok: false; error: string } {
@@ -33,18 +50,23 @@ function resolveCwd(cwdArg: string): { ok: true; cwd: string } | { ok: false; er
     return { ok: true, cwd: resolved }
 }
 
-function startBackgroundCommand(command: string, cwd: string, timeoutMs: number): ToolResult {
+function startBackgroundCommand(command: string, cwd: string, timeoutMs: number, injection: EnvVarInjection): ToolResult {
     const id = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const logPath = `${activeRuntimePaths().workspaceDir}/.background-jobs/${id}.log`
     ensureParentDir(logPath)
     const logStream = fs.createWriteStream(/* turbopackIgnore: true */ logPath, { flags: 'a' })
-    logStream.write(`$ ${command}\n\n`)
+    const logRedactor = createSecretStreamRedactor(injection.redactions)
+    logStream.write(redactSecretText(`$ ${command}\n`, injection.redactions))
+    if (injection.keys.length > 0) {
+        logStream.write(`[orchestrator] injected env keys: ${injection.keys.join(', ')}\n`)
+    }
+    logStream.write('\n')
 
     let proc: ReturnType<typeof spawnProcess>
     try {
         proc = spawnProcess(process.env.SHELL || '/bin/zsh', ['-lc', command], {
             cwd,
-            env: process.env,
+            env: augmentedEnv(injection.env),
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: true,
         })
@@ -65,10 +87,18 @@ function startBackgroundCommand(command: string, cwd: string, timeoutMs: number)
         }, 1500)
     }, timeoutMs)
 
-    proc.stdout?.pipe(logStream, { end: false })
-    proc.stderr?.pipe(logStream, { end: false })
+    const writeRedacted = (chunk: Buffer | string) => {
+        const text = typeof chunk === 'string' ? chunk : chunk.toString('utf-8')
+        const redacted = logRedactor.push(text)
+        if (redacted) logStream.write(redacted)
+    }
+
+    proc.stdout?.on('data', writeRedacted)
+    proc.stderr?.on('data', writeRedacted)
     proc.on('exit', code => {
         clearTimeout(timer)
+        const tail = logRedactor.flush()
+        if (tail) logStream.write(tail)
         logStream.write(`\n[orchestrator] exited with code ${code ?? 'unknown'} after ${Date.now() - startedAt}ms\n`)
         logStream.end()
     })
@@ -82,16 +112,17 @@ function startBackgroundCommand(command: string, cwd: string, timeoutMs: number)
             cwd: displayPath(cwd),
             log_path: displayPath(logPath),
             started: true,
+            ...injectionSummary(injection),
         },
     }
 }
 
-async function runForegroundCommand(command: string, cwd: string, timeoutMs: number, ctx?: ToolExecutionContext): Promise<ToolResult> {
+async function runForegroundCommand(command: string, cwd: string, timeoutMs: number, injection: EnvVarInjection, ctx?: ToolExecutionContext): Promise<ToolResult> {
     const { spawn: ptySpawn } = await import('node' + '-pty') as typeof import('node-pty')
 
     return new Promise<ToolResult>(resolve => {
         const startedAt = Date.now()
-        let output = ''
+        let rawOutput = ''
         let outputTruncated = false
         let finished = false
         let timedOut = false
@@ -100,6 +131,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
         const signal = ctx?.signal
         const toolCallId = ctx?.currentToolCallId
         let proc: ReturnType<typeof ptySpawn>
+        const liveRedactor = createSecretStreamRedactor(injection.redactions)
 
         const emitToolDelta = (text: string) => {
             if (!toolCallId || !text) return
@@ -136,9 +168,10 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
         }
 
         const emit = (text: string) => {
-            emitToolDelta(text)
-            const next = appendBounded(output, text)
-            output = next.text
+            const liveText = liveRedactor.push(text)
+            if (liveText) emitToolDelta(liveText)
+            const next = appendBounded(rawOutput, text)
+            rawOutput = next.text
             outputTruncated ||= next.truncated
         }
 
@@ -166,11 +199,11 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
                 cols: 120,
                 rows: 32,
                 cwd,
-                env: {
-                    ...process.env,
+                env: augmentedEnv({
+                    ...injection.env,
                     FORCE_COLOR: process.env.FORCE_COLOR ?? '1',
                     TERM: 'xterm-256color',
-                } as Record<string, string>,
+                }) as Record<string, string>,
             })
         } catch (err) {
             finish({
@@ -186,7 +219,9 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
             emit(chunk)
         })
         proc.onExit(({ exitCode }) => {
-            const out = truncateText(output, MAX_STREAM_CHARS)
+            const liveTail = liveRedactor.flush()
+            if (liveTail) emitToolDelta(liveTail)
+            const out = truncateText(redactSecretText(rawOutput, injection.redactions), MAX_STREAM_CHARS)
             const code = typeof exitCode === 'number' ? exitCode : null
             const success = !timedOut && (code === 0)
             finish({
@@ -200,6 +235,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
                     stderr: '',
                     durationMs: Date.now() - startedAt,
                     truncated: outputTruncated || out.truncated,
+                    ...injectionSummary(injection),
                 } : undefined,
                 error: success ? undefined : JSON.stringify({
                     command,
@@ -211,10 +247,19 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
                     stderr: '',
                     durationMs: Date.now() - startedAt,
                     truncated: outputTruncated || out.truncated,
+                    ...injectionSummary(injection),
                 }, null, 2),
             })
         })
     })
+}
+
+function injectionSummary(injection: EnvVarInjection): Record<string, unknown> {
+    if (injection.keys.length === 0) return {}
+    return {
+        injected_env_keys: injection.keys,
+        injected_env_sources: injection.sources,
+    }
 }
 
 function appendBounded(current: string, chunk: string): { text: string; truncated: boolean } {

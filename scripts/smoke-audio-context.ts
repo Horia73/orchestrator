@@ -243,11 +243,26 @@ try {
   assert.equal(nonAudioPath.success, false)
   assert.match(nonAudioPath.error ?? '', /Not an audio file/)
 
+  // Attachment prompt context must show the exact upload_id even when a Codex
+  // provider also gets a local filesystem path.
+  const { buildAttachmentContext } = await import('@/lib/ai/attachment-context')
+  const attachmentPrompt = buildAttachmentContext([doc.attachment], { includeLocalPath: true })
+  assert.ok(attachmentPrompt.includes(`upload_id: ${doc.attachment.id}`))
+  assert.ok(attachmentPrompt.includes('local path: '))
+  assert.match(attachmentPrompt, /including the file extension/)
+
   // --- copy_upload_to_workspace ---------------------------------------------
   const { executeCopyUploadToWorkspace } = await import('@/lib/ai/tools/copy-upload')
 
   const missingCopy = executeCopyUploadToWorkspace({ upload_id: 'does-not-exist.bin' })
   assert.equal(missingCopy.success, false)
+
+  // If a model strips the extension from a UUID-style upload id, recover the
+  // single matching stored upload instead of forcing a retry.
+  const bareUploadId = doc.attachment.id.replace(/\.[^.]+$/, '')
+  const copiedBare = executeCopyUploadToWorkspace({ upload_id: bareUploadId, dest_path: 'tmp/bare-upload.txt' })
+  assert.equal(copiedBare.success, true)
+  assert.equal((copiedBare.data as { upload_id: string }).upload_id, doc.attachment.id)
 
   // Default destination: tmp/<name> with the upload's bytes intact.
   const copied = executeCopyUploadToWorkspace({ upload_id: doc.attachment.id })

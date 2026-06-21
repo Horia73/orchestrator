@@ -43,6 +43,7 @@ import {
   OLDER_MESSAGE_PAGE_SIZE,
   STREAM_RECOVERY_ATTEMPTS,
   STREAM_RECOVERY_DELAY_MS,
+  agentCallEntryFromStartEvent,
   appendAgentContent,
   appendAgentThought,
   deriveUnreadConversationIds,
@@ -1993,56 +1994,19 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                     })
                   }
                 } else if (data.type === "agent_start") {
-                  const runId = typeof data.runId === "string" ? data.runId : ""
-                  const agentId =
-                    typeof data.agentId === "string" ? data.agentId : ""
-                  const agentName =
-                    typeof data.agentName === "string"
-                      ? data.agentName
-                      : agentId || "Agent"
-                  const kind =
-                    typeof data.kind === "string" ? data.kind : "text"
-                  const promptText =
-                    typeof data.prompt === "string" ? data.prompt : ""
-                  if (runId && agentId) {
+                  const entry = agentCallEntryFromStartEvent(
+                    data,
+                    reasoningPhase
+                  )
+                  if (entry) {
                     if (streamMode === "content") {
                       reasoningPhase += 1
                       streamMode = "reasoning"
-                    }
-                    const entry: AgentCallReasoningEntry = {
-                      type: "agent_call",
-                      id: `agent_${runId}`,
-                      phase: reasoningPhase,
-                      toolCallId:
-                        typeof data.toolCallId === "string"
-                          ? data.toolCallId
-                          : undefined,
-                      runId,
-                      agentThreadId:
-                        typeof data.agentThreadId === "string"
-                          ? data.agentThreadId
-                          : undefined,
-                      parentRunId:
-                        typeof data.parentRunId === "string"
-                          ? data.parentRunId
-                          : undefined,
-                      agentId,
-                      agentName,
-                      kind: kind as AgentCallReasoningEntry["kind"],
-                      title: agentName,
-                      prompt: promptText,
-                      status: "running",
-                      startedAt:
-                        typeof data.startedAt === "number"
-                          ? data.startedAt
-                          : Date.now(),
-                      content: "",
-                      contentSegments: [],
-                      reasoning: [],
+                      entry.phase = reasoningPhase
                     }
                     const existing = accReasoning.findIndex(
                       (item) =>
-                        item.type === "agent_call" && item.runId === runId
+                        item.type === "agent_call" && item.runId === entry.runId
                     )
                     if (existing >= 0) accReasoning[existing] = entry
                     else accReasoning.push(entry)
