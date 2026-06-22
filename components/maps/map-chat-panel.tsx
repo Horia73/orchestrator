@@ -105,6 +105,7 @@ export function MapChatPanel({
   const buildSendOptions = React.useCallback(
     (): SendMessageOptions => ({
       promptContext: buildPromptContext(),
+      promptContextSource: "Smart Maps UI",
       activateIntegrations: ["maps"],
     }),
     [buildPromptContext]

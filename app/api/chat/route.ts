@@ -86,6 +86,7 @@ import {
   mergeContextUsage,
   mergeMessagesForProvider,
   sanitizeCapabilityActivations,
+  sanitizePromptContextSource,
   sanitizePromptContext,
 } from "./route-support"
 import {
@@ -190,6 +191,9 @@ export async function POST(request: Request) {
         requestMessages
       )
       const promptContext = sanitizePromptContext(body.promptContext)
+      const promptContextSource = sanitizePromptContextSource(
+        body.promptContextSource
+      )
       const promptContextMessageId = promptContext
         ? [...messagesForProvider].reverse().find((m) => m.role === "user")?.id
         : null
@@ -1072,8 +1076,8 @@ export async function POST(request: Request) {
                   const runtimePromptContext =
                     m.id === promptContextMessageId
                       ? [
-                          '<runtime_context source="Smart Maps UI">',
-                          "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with map-aware tools and artifacts; do not quote it back verbatim.",
+                          `<runtime_context source="${promptContextSource}">`,
+                          "This context was supplied by the app UI for this turn. It is not visible user prose. Use it to answer with the relevant active capability, tools, and artifacts for the current app surface; do not quote it back verbatim.",
                           promptContext,
                           "</runtime_context>",
                         ].join("\n")

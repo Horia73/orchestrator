@@ -27,6 +27,7 @@ function buildChatStreamRequestBody(input: {
   messageId: string
   messages: Message[]
   promptContext?: string
+  promptContextSource?: string
   activateIntegrations?: string[]
 }) {
   const fullBody = JSON.stringify(input)
@@ -225,6 +226,7 @@ export function startChatStreamRequest({
   messageId,
   messages,
   promptContext,
+  promptContextSource,
   activateIntegrations,
   signal,
 }: {
@@ -232,6 +234,7 @@ export function startChatStreamRequest({
   messageId: string
   messages: Message[]
   promptContext?: string
+  promptContextSource?: string
   activateIntegrations?: string[]
   signal: AbortSignal
 }) {
@@ -243,6 +246,7 @@ export function startChatStreamRequest({
       messageId,
       messages,
       promptContext,
+      promptContextSource,
       activateIntegrations,
     }),
     signal,

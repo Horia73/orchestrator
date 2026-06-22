@@ -11,9 +11,11 @@ import type { SendMessageOptions } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
+import type { Attachment, Conversation } from "@/lib/types"
 import { cn } from "@/lib/utils"
 
 const SUPPRESS: string[] = ["application/vnd.ant.workout"]
+const SIDE_CONVERSATION_KEY_PREFIX = "workout:coach-conversation:"
 
 interface WorkoutChatPanelProps {
   open: boolean
@@ -21,9 +23,44 @@ interface WorkoutChatPanelProps {
   docked?: boolean
   activeWorkoutTitle: string
   preferredConversationId?: string | null
+  sideConversationKey?: string | null
   buildPromptContext: () => string
   onCollapse: () => void
   onWorkoutArtifact?: (artifact: ArtifactRow) => void
+}
+
+function sideConversationStorageKey(key: string | null | undefined): string | null {
+  const clean = key?.trim()
+  if (!clean) return null
+  return `${SIDE_CONVERSATION_KEY_PREFIX}${encodeURIComponent(clean)}`
+}
+
+function readStoredConversationId(storageKey: string | null): string | null {
+  if (!storageKey || typeof window === "undefined") return null
+  try {
+    const value = window.localStorage.getItem(storageKey)?.trim()
+    return value || null
+  } catch {
+    return null
+  }
+}
+
+function writeStoredConversationId(storageKey: string | null, conversationId: string): void {
+  if (!storageKey || typeof window === "undefined") return
+  try {
+    window.localStorage.setItem(storageKey, conversationId)
+  } catch {
+    /* localStorage may be unavailable in private contexts */
+  }
+}
+
+function clearStoredConversationId(storageKey: string | null): void {
+  if (!storageKey || typeof window === "undefined") return
+  try {
+    window.localStorage.removeItem(storageKey)
+  } catch {
+    /* ignore */
+  }
 }
 
 /**
@@ -40,17 +77,31 @@ export function WorkoutChatPanel({
   docked = false,
   activeWorkoutTitle,
   preferredConversationId,
+  sideConversationKey,
   buildPromptContext,
   onCollapse,
   onWorkoutArtifact,
 }: WorkoutChatPanelProps) {
-  const { newChat, selectConversation, state } = useChatStore()
+  const { newChat, selectConversation, sendMessageToConversation, state } = useChatStore()
   const keyboardInset = useMobileKeyboardInset()
   const scrollbarVisible = useRevealOnScroll()
   const scrollRef = React.useRef<HTMLDivElement | null>(null)
   const preferredSelectionRef = React.useRef<string | null>(null)
   const lastPreferredConversationIdRef = React.useRef<string | null>(null)
   const blankConversationPreparedRef = React.useRef(false)
+  const storageKey = React.useMemo(
+    () => sideConversationStorageKey(sideConversationKey),
+    [sideConversationKey]
+  )
+  const [sideConversationId, setSideConversationId] = React.useState<string | null>(() =>
+    readStoredConversationId(storageKey)
+  )
+
+  React.useEffect(() => {
+    setSideConversationId(readStoredConversationId(storageKey))
+    preferredSelectionRef.current = null
+    blankConversationPreparedRef.current = false
+  }, [storageKey])
 
   React.useEffect(() => {
     if (lastPreferredConversationIdRef.current !== preferredConversationId) {
@@ -66,11 +117,53 @@ export function WorkoutChatPanel({
       return
     }
 
+    const targetConversationId = preferredConversationId ?? sideConversationId
+
+    if (targetConversationId) {
+      if (preferredSelectionRef.current === targetConversationId) return
+      preferredSelectionRef.current = targetConversationId
+      const existing = state.conversations.find(
+        (conversation) => conversation.id === targetConversationId
+      )
+      if (state.activeConversationId === targetConversationId && existing) return
+      if (existing) {
+        selectConversation(targetConversationId)
+        return
+      }
+
+      let cancelled = false
+      void fetch(`/api/conversations/${encodeURIComponent(targetConversationId)}`, {
+        cache: "no-store",
+      })
+        .then((response) => (response.ok ? response.json() : null))
+        .then((conversation: Conversation | null) => {
+          if (cancelled) return
+          if (conversation?.id === targetConversationId) {
+            selectConversation(targetConversationId, conversation)
+            return
+          }
+          if (!preferredConversationId) {
+            clearStoredConversationId(storageKey)
+            setSideConversationId(null)
+            preferredSelectionRef.current = null
+            blankConversationPreparedRef.current = false
+          }
+        })
+        .catch(() => {
+          if (cancelled) return
+          if (!preferredConversationId) {
+            clearStoredConversationId(storageKey)
+            setSideConversationId(null)
+            preferredSelectionRef.current = null
+            blankConversationPreparedRef.current = false
+          }
+        })
+      return () => {
+        cancelled = true
+      }
+    }
+
     if (preferredConversationId) {
-      if (preferredSelectionRef.current === preferredConversationId) return
-      preferredSelectionRef.current = preferredConversationId
-      if (state.activeConversationId === preferredConversationId) return
-      selectConversation(preferredConversationId)
       return
     }
 
@@ -82,7 +175,10 @@ export function WorkoutChatPanel({
     open,
     preferredConversationId,
     selectConversation,
+    sideConversationId,
     state.activeConversationId,
+    state.conversations,
+    storageKey,
   ])
 
   const activeConversation = React.useMemo(
@@ -109,9 +205,38 @@ export function WorkoutChatPanel({
   const buildSendOptions = React.useCallback(
     (): SendMessageOptions => ({
       promptContext: buildPromptContext(),
+      promptContextSource: "Workout Coach UI",
       activateIntegrations: ["workout"],
     }),
     [buildPromptContext]
+  )
+
+  const handleSend = React.useCallback(
+    (
+      content: string,
+      files?: File[],
+      uploadedAttachments?: Attachment[],
+      options?: SendMessageOptions
+    ) => {
+      const targetConversationId = preferredConversationId ?? sideConversationId
+      void sendMessageToConversation(
+        targetConversationId,
+        content,
+        files,
+        uploadedAttachments,
+        options
+      ).then((conversationId) => {
+        if (!conversationId || preferredConversationId) return
+        writeStoredConversationId(storageKey, conversationId)
+        setSideConversationId(conversationId)
+      })
+    },
+    [
+      preferredConversationId,
+      sendMessageToConversation,
+      sideConversationId,
+      storageKey,
+    ]
   )
 
   React.useEffect(() => {
@@ -268,6 +393,7 @@ export function WorkoutChatPanel({
               draftNamespace="workout-coach"
               placeholder="Cere o modificare, o alternativă, sau atașează o poză…"
               buildSendOptions={buildSendOptions}
+              onSend={handleSend}
             />
           </div>
         </div>

@@ -7,6 +7,7 @@ export type ChatRequestBody = {
   newMessage?: unknown
   messages?: unknown
   promptContext?: unknown
+  promptContextSource?: unknown
   activateIntegrations?: unknown
 }
 

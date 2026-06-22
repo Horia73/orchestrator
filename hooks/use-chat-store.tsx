@@ -66,6 +66,7 @@ import {
 
 export interface SendMessageOptions {
   promptContext?: string
+  promptContextSource?: string
   activateIntegrations?: string[]
   activateConversation?: boolean
 }
@@ -1730,6 +1731,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
         messageId: assistantMsgId,
         messages: allMessages,
         promptContext: options?.promptContext,
+        promptContextSource: options?.promptContextSource,
         activateIntegrations: options?.activateIntegrations,
         signal: abortController.signal,
       })

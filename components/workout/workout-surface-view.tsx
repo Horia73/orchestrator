@@ -182,6 +182,7 @@ function WorkoutSurfaceInner({
             docked
             activeWorkoutTitle={artifact.title}
             preferredConversationId={sourceConversationId}
+            sideConversationKey={`session:${workout.sessionId}`}
             buildPromptContext={buildPromptContext}
             onCollapse={() => setChatOpen(false)}
           />
@@ -195,6 +196,7 @@ function WorkoutSurfaceInner({
           mobile
           activeWorkoutTitle={artifact.title}
           preferredConversationId={sourceConversationId}
+          sideConversationKey={`session:${workout.sessionId}`}
           buildPromptContext={buildPromptContext}
           onCollapse={() => setChatOpen(false)}
         />

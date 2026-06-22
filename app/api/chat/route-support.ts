@@ -198,6 +198,12 @@ export function sanitizePromptContext(value: unknown): string {
   return value.trim().slice(0, 16_000)
 }
 
+export function sanitizePromptContextSource(value: unknown): string {
+  if (typeof value !== "string") return "App surface UI"
+  const clean = value.trim().replace(/[<>]/g, "").replace(/\s+/g, " ")
+  return clean ? clean.slice(0, 80) : "App surface UI"
+}
+
 export function sanitizeCapabilityActivations(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   const allowed = new Set(ALL_CAPABILITY_IDS)
