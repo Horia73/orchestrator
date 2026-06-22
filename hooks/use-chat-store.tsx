@@ -852,13 +852,12 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       messageId?: string | null
     ): Promise<"final" | "running" | null> => {
       for (let attempt = 0; attempt < STREAM_RECOVERY_ATTEMPTS; attempt += 1) {
-        dispatch({
-          type: "SET_STREAMING",
-          isStreaming: true,
-          conversationId,
-          messageId: messageId ?? undefined,
-          status: recoveryStreamingStatus(),
-        })
+        // Fetch BEFORE touching streaming state. Flipping isStreaming on up
+        // front would re-light the "..." cursor and auto-open every reasoning/
+        // tool card on a conversation that already finished — exactly the
+        // flicker seen when returning to a backgrounded tab. We only enter the
+        // "recovering" UI below, once we know there is genuinely a live or
+        // interrupted stream to recover.
         const [messagesResult, stream] = await Promise.allSettled([
           refreshConversationMessages(conversationId),
           checkServerStreaming(conversationId),
@@ -968,7 +967,17 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           }
         }
 
+        // No terminal message and no active server stream yet: this is a
+        // genuine mid-flight interruption (e.g. a mobile PWA that dropped the
+        // EventSource). Only now show the recovering indicator, then retry.
         if (attempt < STREAM_RECOVERY_ATTEMPTS - 1) {
+          dispatch({
+            type: "SET_STREAMING",
+            isStreaming: true,
+            conversationId,
+            messageId: messageId ?? undefined,
+            status: recoveryStreamingStatus(),
+          })
           await sleep(STREAM_RECOVERY_DELAY_MS)
         }
       }

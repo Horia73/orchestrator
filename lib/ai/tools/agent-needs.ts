@@ -3,6 +3,7 @@ import {
     AGENT_NEED_CATEGORIES,
     AGENT_NEED_SEVERITIES,
     recordAgentNeed,
+    resolveAgentNeed,
 } from '@/lib/agent-needs'
 
 export const reportAgentNeedTool: ToolDef = {
@@ -96,6 +97,71 @@ export function executeReportAgentNeed(
         return {
             success: false,
             error: err instanceof Error ? err.message : 'Unknown error reporting agent need.',
+        }
+    }
+}
+
+export const resolveAgentNeedTool: ToolDef = {
+    id: 'ResolveAgentNeed',
+    name: 'ResolveAgentNeed',
+    description: [
+        'Move an open AGENT_NEEDS.md entry into the Resolved section once its missing capability/bug has shipped or the need is confirmed obsolete.',
+        'Identify the entry by its dedupe_key (the `dedupe_key:` line on each structured entry). Records a short resolution note and timestamp.',
+        'Use this to close the loop after a capability-audit proposal is implemented, or when triage confirms a need no longer applies. Do not invent dedupe keys; if an old hand-written entry has no dedupe_key, move it with the Edit tool instead.',
+    ].join(' '),
+    input_schema: {
+        type: 'object',
+        properties: {
+            dedupe_key: {
+                type: 'string',
+                description: 'The dedupe_key of the open entry to resolve, copied verbatim from AGENT_NEEDS.md.',
+            },
+            resolution: {
+                type: 'string',
+                description: 'One short line on how it was resolved, e.g. "shipped in <commit/release>" or "obsolete because <reason>".',
+            },
+        },
+        required: ['dedupe_key', 'resolution'],
+    },
+    tags: ['write', 'agent_feedback'],
+}
+
+export function executeResolveAgentNeed(
+    args: Record<string, unknown>,
+    ctx?: ToolExecutionContext
+): ToolResult {
+    const dedupeKey = stringValue(args.dedupe_key)
+    const resolution = stringValue(args.resolution)
+
+    if (!dedupeKey.trim()) return { success: false, error: 'dedupe_key must be a non-empty string.' }
+    if (!resolution.trim()) return { success: false, error: 'resolution must be a non-empty string.' }
+
+    try {
+        const result = resolveAgentNeed({
+            dedupeKey,
+            resolution,
+            resolvedBy: ctx?.callerAgentId,
+        })
+
+        if (!result.found) {
+            return {
+                success: false,
+                error: `No open AGENT_NEEDS entry found with dedupe_key "${result.dedupeKey}". Copy it verbatim from AGENT_NEEDS.md, or move a keyless entry with Edit.`,
+            }
+        }
+
+        return {
+            success: true,
+            data: {
+                path: result.path,
+                resolved: result.resolved,
+                dedupe_key: result.dedupeKey,
+            },
+        }
+    } catch (err) {
+        return {
+            success: false,
+            error: err instanceof Error ? err.message : 'Unknown error resolving agent need.',
         }
     }
 }

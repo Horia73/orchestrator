@@ -96,6 +96,24 @@ export async function registerRuntime(): Promise<void> {
     } catch (err) {
         console.error('[memory] failed to wire memory reflection', err)
     }
+    // Arm the weekly Capability audit system task. Idempotent — creates the
+    // single "Capability audit" agent wake on first boot and reconciles its
+    // schedule/prompt on each boot (and on timezone change). It only triages
+    // AGENT_NEEDS.md into a ranked Inbox proposal and never implements; the
+    // logic is model-owned in the task prompt, not in code.
+    try {
+        const { wireCapabilityAudit } = await import('@/lib/self-dev/capability-audit-adapter')
+        await forEachProfile(() => wireCapabilityAudit())
+        const { appEventEmitter } = await import('@/lib/events')
+        appEventEmitter.on('app:update', (event) => {
+            if (event?.type !== 'config.updated') return
+            runForEventProfile(event, () => wireCapabilityAudit()).catch((syncErr) => {
+                console.error('[capability-audit] sync after config change failed', syncErr)
+            })
+        })
+    } catch (err) {
+        console.error('[capability-audit] failed to wire capability audit', err)
+    }
     // Confirm managed self-updates after the restarted process is alive. The
     // update runner/host bridge records the expected commit before restart;
     // this boot hook compares it to the running build and posts one Inbox item.

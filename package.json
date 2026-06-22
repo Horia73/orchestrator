@@ -25,6 +25,7 @@
     "smoke:scheduling": "tsx scripts/smoke-scheduling.ts",
     "smoke:agent-concurrency": "tsx scripts/smoke-agent-concurrency.ts",
     "smoke:memory-reflection": "tsx scripts/smoke-memory-reflection.ts",
+    "smoke:capability-audit": "tsx scripts/smoke-capability-audit.ts",
     "smoke:memory-recall": "tsx scripts/smoke-memory-recall.ts",
     "backfill:memory": "tsx scripts/backfill-memory-embeddings.ts",
     "memory:status": "tsx scripts/memory-status.ts",

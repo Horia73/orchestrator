@@ -10,7 +10,7 @@ import { globTool } from "./glob"
 import { grepTool } from "./grep"
 import { webFetchTool } from "./web"
 import { todoWriteTool } from "./todo-write"
-import { reportAgentNeedTool } from "./agent-needs"
+import { reportAgentNeedTool, resolveAgentNeedTool } from "./agent-needs"
 import { setEnvTool } from "./set-env"
 import { listEnvVarsTool } from "./env-vars"
 import {
@@ -89,6 +89,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   webFetchTool,
   todoWriteTool,
   reportAgentNeedTool,
+  resolveAgentNeedTool,
   listEnvVarsTool,
   setEnvTool,
   activateIntegrationToolsTool,

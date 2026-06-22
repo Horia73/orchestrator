@@ -59,6 +59,19 @@ export interface AgentNeedRecordResult {
     dedupeKey: string
 }
 
+export interface AgentNeedResolveInput {
+    dedupeKey: string
+    resolution: string
+    resolvedBy?: string
+}
+
+export interface AgentNeedResolveResult {
+    resolved: boolean
+    found: boolean
+    path: string
+    dedupeKey: string
+}
+
 const MAX_FIELD_CHARS = 2000
 const MAX_SUMMARY_CHARS = 180
 
@@ -84,6 +97,28 @@ export function recordAgentNeed(input: AgentNeedInput): AgentNeedRecordResult {
         path: AGENT_NEEDS_RELATIVE_PATH,
         dedupeKey: normalized.dedupeKey,
     }
+}
+
+/** Move an open entry (identified by its dedupe_key) into the Resolved section,
+ *  flipping its status and appending a short resolution note + timestamp. Used
+ *  to close the loop after a capability audit proposal ships or a need is
+ *  confirmed obsolete. Returns found=false when no open entry carries the key
+ *  (e.g. an old hand-written entry with no dedupe_key — edit those directly). */
+export function resolveAgentNeed(input: AgentNeedResolveInput): AgentNeedResolveResult {
+    const dedupeKey = cleanDedupeKey(input.dedupeKey)
+    if (!dedupeKey) throw new Error('dedupeKey must be a non-empty string.')
+    const resolution = cleanField(input.resolution ?? '', MAX_FIELD_CHARS)
+    if (!resolution) throw new Error('resolution must be a non-empty string.')
+    const resolvedBy = cleanField(input.resolvedBy ?? '', 80)
+
+    const filePath = ensureAgentNeedsFile()
+    const content = fs.readFileSync(/* turbopackIgnore: true */ filePath, 'utf-8')
+    const next = moveEntryToResolved(content, dedupeKey, resolution, resolvedBy, new Date().toISOString())
+    if (!next) {
+        return { resolved: false, found: false, path: AGENT_NEEDS_RELATIVE_PATH, dedupeKey }
+    }
+    fs.writeFileSync(/* turbopackIgnore: true */ filePath, next, 'utf-8')
+    return { resolved: true, found: true, path: AGENT_NEEDS_RELATIVE_PATH, dedupeKey }
 }
 
 export function ensureAgentNeedsFile(): string {
@@ -201,4 +236,103 @@ function insertUnderOpen(content: string, entry: string): string {
     const beforeResolved = normalized.slice(0, resolvedIndex).trimEnd()
     const afterResolved = normalized.slice(resolvedIndex)
     return `${beforeResolved}\n\n${entry}${afterResolved.trimStart()}\n`
+}
+
+/** Split a section body into its leading preamble (non-entry text) and the
+ *  individual `### ` entry blocks. */
+function splitEntryBlocks(body: string): { preamble: string; blocks: string[] } {
+    const lines = body.split('\n')
+    const preamble: string[] = []
+    const blocks: string[] = []
+    let current: string[] | null = null
+    for (const line of lines) {
+        if (line.startsWith('### ')) {
+            if (current) blocks.push(current.join('\n').trim())
+            current = [line]
+        } else if (current) {
+            current.push(line)
+        } else {
+            preamble.push(line)
+        }
+    }
+    if (current) blocks.push(current.join('\n').trim())
+    return {
+        preamble: preamble.join('\n').trim(),
+        blocks: blocks.filter(Boolean),
+    }
+}
+
+function entryHasDedupeKey(block: string, dedupeKey: string): boolean {
+    return new RegExp(`^- dedupe_key: ${escapeRegExp(dedupeKey)}\\s*$`, 'm').test(block)
+}
+
+function escapeRegExp(value: string): string {
+    return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/** Flip an entry block to resolved: set status, stamp resolved_at/by, and
+ *  append a Resolution note. */
+function markEntryResolved(
+    block: string,
+    resolution: string,
+    resolvedBy: string,
+    timestamp: string
+): string {
+    const stamp = [`- resolved_at: ${timestamp}`]
+    if (resolvedBy) stamp.push(`- resolved_by: ${resolvedBy}`)
+
+    let updated: string
+    if (/^- status:.*$/m.test(block)) {
+        updated = block.replace(/^- status:.*$/m, `- status: resolved\n${stamp.join('\n')}`)
+    } else {
+        // No status line (older shape): add the metadata right after the title.
+        const nl = block.indexOf('\n')
+        const head = nl === -1 ? block : block.slice(0, nl)
+        const rest = nl === -1 ? '' : block.slice(nl + 1)
+        updated = [head, '', `- status: resolved`, ...stamp, rest].join('\n')
+    }
+    return `${updated.trimEnd()}\n\nResolution:\n\n${indentBlock(resolution)}`.trim()
+}
+
+/** Move the open entry carrying `dedupeKey` into the Resolved section. Returns
+ *  the rewritten file content, or null when no such open entry exists. */
+function moveEntryToResolved(
+    content: string,
+    dedupeKey: string,
+    resolution: string,
+    resolvedBy: string,
+    timestamp: string
+): string | null {
+    const openHeading = '## Open'
+    const resolvedHeading = '## Resolved'
+    const openIndex = content.indexOf(openHeading)
+    if (openIndex === -1) return null
+
+    const resolvedIndex = content.indexOf(resolvedHeading, openIndex)
+    const openBodyStart = openIndex + openHeading.length
+    const openBodyEnd = resolvedIndex === -1 ? content.length : resolvedIndex
+    const head = content.slice(0, openBodyStart).trimEnd() // ends with "## Open"
+    const openBody = content.slice(openBodyStart, openBodyEnd)
+    const resolvedBody =
+        resolvedIndex === -1 ? '' : content.slice(resolvedIndex + resolvedHeading.length)
+
+    const open = splitEntryBlocks(openBody)
+    const matchIndex = open.blocks.findIndex((b) => entryHasDedupeKey(b, dedupeKey))
+    if (matchIndex === -1) return null
+
+    const entry = markEntryResolved(open.blocks[matchIndex], resolution, resolvedBy, timestamp)
+    const remainingOpen = open.blocks.filter((_, i) => i !== matchIndex)
+    const resolved = splitEntryBlocks(resolvedBody)
+
+    const openPart = [open.preamble, ...remainingOpen].map((s) => s.trim()).filter(Boolean).join('\n\n')
+    const resolvedPart = [resolved.preamble, entry, ...resolved.blocks]
+        .map((s) => s.trim())
+        .filter(Boolean)
+        .join('\n\n')
+
+    let out = `${head}\n\n`
+    if (openPart) out += `${openPart}\n\n`
+    out += `${resolvedHeading}\n\n`
+    if (resolvedPart) out += `${resolvedPart}\n`
+    return `${out.replace(/\n{3,}/g, '\n\n').trimEnd()}\n`
 }

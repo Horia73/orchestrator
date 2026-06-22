@@ -12,6 +12,7 @@ export const WORKSPACE_TOOL_IDS: string[] = [
     'SetEnv',
     'TodoWrite',
     'ReportAgentNeed',
+    'ResolveAgentNeed',
 ]
 
 export const LEGACY_WORKSPACE_TOOL_IDS: string[] = [
