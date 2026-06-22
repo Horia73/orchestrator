@@ -13,6 +13,7 @@
  * Run: npx tsx scripts/smoke-workout-save.ts
  */
 import { parseWorkoutArtifact } from '@/lib/workout/parser'
+import { summarizeWorkoutForPrompt } from '@/lib/workout/prompt-context'
 import { buildEffectiveWorkout } from '@/lib/workout/session-plan'
 import type { WorkoutSessionState } from '@/lib/workout/use-workout-session'
 import {
@@ -363,11 +364,23 @@ function stateWithLogs(opts: {
     const md = formatSessionMarkdown(log)
     const history = mergeExerciseHistory(null, workout, log, log.exercises[0])
     check('timing: rest event saved', log.restEvents.length === 1, log.restEvents)
+    check('timing: session set summary count', log.setSummary.timedSetCount === 2, log.setSummary)
+    check('timing: session set summary avg', log.setSummary.avgSetSec === 35, log.setSummary)
+    check('timing: exercise set summary longest', log.exercises[0].setTiming.longestSetSec === 40, log.exercises[0].setTiming)
     check('timing: avg rest summarized', log.restSummary.avgRestSec === 85, log.restSummary)
     check('timing: avg set duration summarized in history', history.sessions[0].avgSetDurationSec === 35, history.sessions[0])
+    check('timing: total set duration summarized in history', history.sessions[0].totalSetDurationSec === 70, history.sessions[0])
+    check('timing: timed set count summarized in history', history.sessions[0].timedSetCount === 2, history.sessions[0])
     check('timing: exercise history keeps rest event', history.sessions[0].restEvents?.[0]?.elapsedSec === 85, history.sessions[0])
-    check('timing: markdown includes set time', md.includes('Set time avg'), md)
+    check('timing: markdown includes set time', md.includes('Set time avg') && md.includes('2 timed sets'), md)
     check('timing: markdown includes rest avg', md.includes('Rest avg'), md)
+    const prompt = summarizeWorkoutForPrompt(workout, state, {
+        artifactId: 'artifact-001',
+        identifier: 'test-push',
+        title: workout.title,
+    })
+    check('timing: live prompt includes per-set time', prompt.includes('time 0:30') && prompt.includes('time 0:40'), prompt)
+    check('timing: live prompt includes avg set time', prompt.includes('avg set time 0:35'), prompt)
 }
 
 {

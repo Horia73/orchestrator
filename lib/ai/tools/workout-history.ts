@@ -6,7 +6,7 @@ import {
     readSessionLog,
 } from '@/lib/workout/storage'
 import { estimated1RM } from '@/lib/workout/one-rep-max'
-import { loggedSetDurationSec } from '@/lib/workout/save-session'
+import { loggedSetDurationSec, summarizeSetTimingFromSets } from '@/lib/workout/save-session'
 import { appendBodyMetric, computeBmi, readBodyMetrics } from '@/lib/workout/body-metrics'
 
 // ---------------------------------------------------------------------------
@@ -118,6 +118,11 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
         const est1RM = s.bestSet.actualWeightKg !== undefined && s.bestSet.actualReps !== undefined
             ? estimated1RM(s.bestSet.actualWeightKg, s.bestSet.actualReps)
             : null
+        const setSummary = summarizeSetTimingFromSets(s.allSets)
+        const totalSetDurationSec = s.totalSetDurationSec ?? setSummary.totalSetSec
+        const timedSetCount = s.timedSetCount ?? setSummary.timedSetCount
+        const longestSetDurationSec = s.longestSetDurationSec ?? setSummary.longestSetSec
+        const avgSetDurationSec = s.avgSetDurationSec ?? setSummary.avgSetSec
         return {
             date: s.date,
             sessionId: s.sessionId,
@@ -146,7 +151,13 @@ export async function executeGetExerciseHistory(args: Record<string, unknown>): 
             })),
             totalVolumeKg: s.totalVolumeKg,
             rpeAvg: s.rpeAvg,
-            avgSetDurationSec: s.avgSetDurationSec,
+            avgSetDurationSec,
+            setSummary: {
+                timedSetCount,
+                totalSetDurationSec,
+                avgSetDurationSec,
+                longestSetDurationSec,
+            },
             avgRestSec: s.avgRestSec,
             restEvents: s.restEvents?.map((event) => ({
                 setIndex: event.setIndex,
@@ -215,6 +226,9 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
             plannedAvgRestSec: undefined,
             skippedCount: 0,
         }
+        const sessionSetSummary = log.setSummary ?? summarizeSetTimingFromSets(
+            log.exercises.flatMap((exercise) => exercise.loggedSets),
+        )
         return {
             slug,
             sessionId: log.sessionId,
@@ -227,6 +241,12 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
             setsPlanned: log.totalSetsPlanned,
             setsFailed: log.totalSetsFailed,
             volumeKg: log.totalVolumeKg,
+            setSummary: {
+                timedSetCount: sessionSetSummary.timedSetCount,
+                totalSetDurationSec: sessionSetSummary.totalSetSec,
+                avgSetDurationSec: sessionSetSummary.avgSetSec,
+                longestSetDurationSec: sessionSetSummary.longestSetSec,
+            },
             avgRestSec: restSummary.avgRestSec,
             plannedAvgRestSec: restSummary.plannedAvgRestSec,
             shortenedRestCount: restSummary.skippedCount,
@@ -235,29 +255,38 @@ export async function executeGetRecentWorkouts(args: Record<string, unknown>): P
             difficulty: log.difficulty,
             exerciseCount: log.exercises.length,
             muscleGroups,
-            exercises: log.exercises.map((exercise) => ({
-                id: exercise.id,
-                name: exercise.name,
-                muscleGroups: exercise.muscleGroups,
-                setsCompleted: exercise.loggedSets.filter((set) => set.completed && !set.failed).length,
-                setsFailed: exercise.loggedSets.filter((set) => set.failed).length,
-                bestSet: exercise.bestSet ? {
-                    weightKg: exercise.bestSet.actualWeightKg,
-                    reps: exercise.bestSet.actualReps,
-                    durationSec: exercise.bestSet.actualDurationSec,
-                    distanceM: exercise.bestSet.actualDistanceM,
-                    rpe: exercise.bestSet.actualRpe,
-                    setDurationSec: loggedSetDurationSec(exercise.bestSet),
-                } : null,
-                avgSetDurationSec: averageDuration(exercise.loggedSets.map(loggedSetDurationSec)),
-                avgRestSec: averageDuration(restEvents
-                    .filter((event) => event.exerciseId === exercise.id)
-                    .map((event) => event.elapsedSec)),
-                notes: exercise.loggedSets
-                    .map((set) => set.notes)
-                    .filter((note): note is string => typeof note === 'string' && note.trim().length > 0)
-                    .slice(0, 5),
-            })),
+            exercises: log.exercises.map((exercise) => {
+                const exerciseSetSummary = exercise.setTiming ?? summarizeSetTimingFromSets(exercise.loggedSets)
+                return {
+                    id: exercise.id,
+                    name: exercise.name,
+                    muscleGroups: exercise.muscleGroups,
+                    setsCompleted: exercise.loggedSets.filter((set) => set.completed && !set.failed).length,
+                    setsFailed: exercise.loggedSets.filter((set) => set.failed).length,
+                    bestSet: exercise.bestSet ? {
+                        weightKg: exercise.bestSet.actualWeightKg,
+                        reps: exercise.bestSet.actualReps,
+                        durationSec: exercise.bestSet.actualDurationSec,
+                        distanceM: exercise.bestSet.actualDistanceM,
+                        rpe: exercise.bestSet.actualRpe,
+                        setDurationSec: loggedSetDurationSec(exercise.bestSet),
+                    } : null,
+                    avgSetDurationSec: exerciseSetSummary.avgSetSec,
+                    setSummary: {
+                        timedSetCount: exerciseSetSummary.timedSetCount,
+                        totalSetDurationSec: exerciseSetSummary.totalSetSec,
+                        avgSetDurationSec: exerciseSetSummary.avgSetSec,
+                        longestSetDurationSec: exerciseSetSummary.longestSetSec,
+                    },
+                    avgRestSec: averageDuration(restEvents
+                        .filter((event) => event.exerciseId === exercise.id)
+                        .map((event) => event.elapsedSec)),
+                    notes: exercise.loggedSets
+                        .map((set) => set.notes)
+                        .filter((note): note is string => typeof note === 'string' && note.trim().length > 0)
+                        .slice(0, 5),
+                }
+            }),
         }
     }).filter((s): s is NonNullable<typeof s> => !!s)
     return {

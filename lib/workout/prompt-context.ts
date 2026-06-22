@@ -80,10 +80,40 @@ function loggedSetLabel(set: LoggedSet | undefined, kind: Exercise['kind'], unit
     }
     const tags: string[] = []
     if (set.failed) tags.push(set.partialReps !== undefined ? `failed@${set.partialReps}` : 'failed')
+    const durationSec = loggedSetDurationSec(set)
+    if (durationSec !== undefined && durationSec > 0) tags.push(`time ${formatDuration(durationSec)}`)
     if (set.actualRpe !== undefined) tags.push(`RPE${set.actualRpe}`)
     if (set.actualRir !== undefined) tags.push(`RIR${set.actualRir}`)
     if (set.notes) tags.push(`note: ${set.notes}`)
     return tags.length ? `${core} ${tags.join(' ')}` : core
+}
+
+function loggedSetDurationSec(set: LoggedSet): number | undefined {
+    const startedAt = dateMs(set.startedAt)
+    const completedAt = dateMs(set.completedAt)
+    if (startedAt !== undefined && completedAt !== undefined && completedAt > startedAt) {
+        return Math.round((completedAt - startedAt) / 1000)
+    }
+    return set.actualDurationSec
+}
+
+function dateMs(value: string | undefined): number | undefined {
+    if (!value) return undefined
+    const ms = new Date(value).getTime()
+    return Number.isFinite(ms) ? ms : undefined
+}
+
+function collectLoggedSetDurations(session: WorkoutSessionState): number[] {
+    return Object.values(session.logsByExerciseId)
+        .flatMap((log) => log.sets)
+        .filter((set) => (set.completed || set.failed) && !set.skipped)
+        .map(loggedSetDurationSec)
+        .filter((value): value is number => typeof value === 'number' && Number.isFinite(value) && value > 0)
+}
+
+function averageDuration(values: readonly number[]): number | undefined {
+    if (values.length === 0) return undefined
+    return Math.round((values.reduce((sum, value) => sum + value, 0) / values.length) * 10) / 10
 }
 
 function exerciseLine(exercise: Exercise, session: WorkoutSessionState, units: WorkoutUnits): string[] {
@@ -163,6 +193,11 @@ export function summarizeWorkoutForPrompt(
         const parts = [`${done}/${planned} sets done`]
         if (failed) parts.push(`${failed} failed`)
         if (skipped) parts.push(`${skipped} skipped`)
+        const setDurations = collectLoggedSetDurations(session)
+        const avgSetSec = averageDuration(setDurations)
+        if (avgSetSec !== undefined) {
+            parts.push(`avg set time ${formatDuration(Math.round(avgSetSec))} over ${setDurations.length} timed set${setDurations.length === 1 ? '' : 's'}`)
+        }
         if (started && !finished) {
             const elapsedMs = Date.now() - new Date(session.startedAt!).getTime()
             if (Number.isFinite(elapsedMs) && elapsedMs > 0) {
@@ -170,6 +205,22 @@ export function summarizeWorkoutForPrompt(
             }
         }
         lines.push(`Live totals: ${parts.join(', ')}.`)
+    }
+
+    if (session.activeSet) {
+        const endMs = session.activeSet.finishedAt ?? Date.now()
+        const elapsedSec = Math.max(0, Math.round((endMs - session.activeSet.startedAt) / 1000))
+        lines.push(
+            `Current set timer: ${session.activeSet.exerciseName} set ${session.activeSet.setIndex + 1} — ${session.activeSet.finishedAt ? 'finished, waiting for actuals/save' : 'running'} for ${formatDuration(elapsedSec)}.`,
+        )
+    }
+
+    if (session.rest) {
+        const remainingSec = Math.max(0, Math.round((session.rest.endsAt - Date.now()) / 1000))
+        const elapsedSec = Math.max(0, Math.round((Date.now() - session.rest.startedAt) / 1000))
+        lines.push(
+            `Current rest timer: ${session.rest.exerciseName} after set ${session.rest.setIndex + 1} — elapsed ${formatDuration(elapsedSec)}, remaining ${formatDuration(remainingSec)} of planned ${formatDuration(session.rest.durationSec)}.`,
+        )
     }
 
     return lines.join('\n')

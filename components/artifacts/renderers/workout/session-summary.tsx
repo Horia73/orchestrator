@@ -118,6 +118,9 @@ export function SessionSummary({
                     icon={<Timer className="size-3.5" strokeWidth={1.85} />}
                     label="Duration"
                     value={formatDuration(log.totalDurationSec)}
+                    sub={log.setSummary.avgSetSec !== undefined
+                        ? `sets avg ${formatDuration(Math.round(log.setSummary.avgSetSec))}`
+                        : undefined}
                 />
                 <StatTile
                     icon={<ListChecks className="size-3.5" strokeWidth={1.85} />}
@@ -289,6 +292,11 @@ function ExerciseRecap({ log, units }: { log: SessionLog; units: string }) {
                             {ex.totalVolumeKg > 0 ? (
                                 <span className="shrink-0 tabular-nums text-foreground/65">
                                     {Math.round(ex.totalVolumeKg).toLocaleString()} {units}
+                                </span>
+                            ) : null}
+                            {ex.setTiming.avgSetSec !== undefined ? (
+                                <span className="shrink-0 tabular-nums text-foreground/65">
+                                    avg {formatDuration(Math.round(ex.setTiming.avgSetSec))}
                                 </span>
                             ) : null}
                             {ex.skipped ? <span className="text-[11px] text-muted-foreground italic">skipped</span> : null}
