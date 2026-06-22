@@ -9,6 +9,7 @@ import { ChatStoreProvider } from "@/hooks/use-chat-store"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { NotificationPermissionPrompt } from "@/components/notification-permission-prompt"
 import { PreviewBasePathScript } from "@/components/preview-base-path-script"
+import { ActiveWorkoutFloatingButton } from "@/components/workout/active-workout-floating-button"
 
 const fontSans = Geist({
   subsets: ["latin"],
@@ -122,6 +123,7 @@ export default async function RootLayout({
             <ChatStoreProvider>
               <SidebarProvider defaultOpen={defaultOpen}>
                 {children}
+                <ActiveWorkoutFloatingButton />
                 <NotificationPermissionPrompt />
               </SidebarProvider>
             </ChatStoreProvider>

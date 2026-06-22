@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckCircle, Play, RotateCcw, SkipForward } from "lucide-react"
+import { CheckCircle, Play, RotateCcw, SkipForward, Star } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type { WorkoutSessionApi, WorkoutSetRef } from "@/lib/workout/use-workout-session"
@@ -24,6 +24,7 @@ export function WorkoutActionBar({
     const { isActive, isFinished, start, finish, reset } = sessionApi
     const activeSet = sessionApi.session.activeSet
     const [finishEarlySets, setFinishEarlySets] = React.useState<WorkoutSetRef[] | null>(null)
+    const [feedbackOpen, setFeedbackOpen] = React.useState(false)
 
     if (isFinished) return null
 
@@ -61,7 +62,7 @@ export function WorkoutActionBar({
             setFinishEarlySets(sessionApi.remainingSets)
             return
         }
-        finish()
+        setFeedbackOpen(true)
     }
 
     return (
@@ -105,12 +106,116 @@ export function WorkoutActionBar({
                     onConfirm={(reason) => {
                         sessionApi.skipSets(finishEarlySets, reason?.trim() || 'Finish workout early')
                         setFinishEarlySets(null)
-                        finish()
+                        setFeedbackOpen(true)
                     }}
                     onCancel={() => setFinishEarlySets(null)}
                 />
             ) : null}
+
+            {feedbackOpen ? (
+                <FinishFeedbackDialog
+                    onConfirm={(feedback) => {
+                        setFeedbackOpen(false)
+                        finish(feedback)
+                    }}
+                    onCancel={() => setFeedbackOpen(false)}
+                />
+            ) : null}
         </>
+    )
+}
+
+function FinishFeedbackDialog({
+    onConfirm,
+    onCancel,
+}: {
+    onConfirm: (feedback?: { rating?: number; notes?: string }) => void
+    onCancel: () => void
+}) {
+    const [rating, setRating] = React.useState(0)
+    const [notes, setNotes] = React.useState('')
+    const trimmedNotes = notes.trim()
+    const finish = () => {
+        onConfirm({
+            ...(rating > 0 ? { rating } : {}),
+            ...(trimmedNotes ? { notes: trimmedNotes } : {}),
+        })
+    }
+
+    return (
+        <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Finish workout feedback"
+            className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 px-4 backdrop-blur-sm"
+        >
+            <div className="w-full max-w-sm rounded-xl border border-border/70 bg-popover p-4 shadow-xl">
+                <div className="text-sm font-semibold text-foreground">
+                    Finish workout
+                </div>
+                <p className="mt-1 text-[12.5px] leading-relaxed text-muted-foreground">
+                    Add an optional rating or note for your future training history.
+                </p>
+
+                <div className="mt-4">
+                    <div className="mb-1.5 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Rating
+                    </div>
+                    <div className="flex items-center gap-1" role="radiogroup" aria-label="Session rating">
+                        {[1, 2, 3, 4, 5].map((value) => {
+                            const active = value <= rating
+                            return (
+                                <button
+                                    key={value}
+                                    type="button"
+                                    role="radio"
+                                    aria-checked={rating === value}
+                                    onClick={() => setRating((current) => current === value ? 0 : value)}
+                                    className={cn(
+                                        "flex size-9 items-center justify-center rounded-full transition-colors",
+                                        active ? "text-amber-500" : "text-muted-foreground hover:bg-muted hover:text-foreground",
+                                    )}
+                                    title={`${value} star${value === 1 ? '' : 's'}`}
+                                >
+                                    <Star className={cn("size-5", active && "fill-current")} strokeWidth={1.85} />
+                                </button>
+                            )
+                        })}
+                    </div>
+                </div>
+
+                <label className="mt-4 block">
+                    <span className="mb-1.5 block text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+                        Session notes
+                    </span>
+                    <textarea
+                        value={notes}
+                        onChange={(event) => setNotes(event.target.value)}
+                        placeholder="How did it feel? Anything to remember next time?"
+                        rows={4}
+                        className="w-full resize-none rounded-md border border-border bg-background px-2.5 py-2 text-base text-foreground outline-none transition-shadow placeholder:text-muted-foreground/65 focus:ring-2 focus:ring-ring sm:text-[12.5px]"
+                    />
+                </label>
+
+                <div className="mt-3 flex justify-end gap-2">
+                    <button
+                        type="button"
+                        onClick={onCancel}
+                        className="inline-flex h-9 items-center rounded-md border border-border bg-background px-3 text-[12px] font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="button"
+                        onClick={finish}
+                        className="inline-flex h-9 items-center gap-1.5 rounded-md bg-emerald-600 px-3 text-[12px] font-semibold text-white transition-colors hover:bg-emerald-700"
+                    >
+                        <CheckCircle className="size-3.5" strokeWidth={2} />
+                        Finish workout
+                    </button>
+                </div>
+            </div>
+        </div>
     )
 }
 

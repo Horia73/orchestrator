@@ -386,6 +386,21 @@ function stateWithLogs(opts: {
     check('markdown: contains bench press recap', md.includes('### Bench Press'))
 }
 
+{
+    const state = stateWithLogs({
+        sets: [{ completed: true, weight: 60, reps: 8 }],
+    })
+    state.feedback = { rating: 4, notes: 'Good energy, keep bench at same load next time.' }
+    const log = buildSessionLog(workout, state)
+    const line = formatHistoryEntryLine(log)
+    const md = formatSessionMarkdown(log)
+    check('feedback: rating preserved in log', log.feedback?.rating === 4, log.feedback)
+    check('feedback: notes preserved in log', log.feedback?.notes?.includes('Good energy') === true, log.feedback)
+    check('feedback: history line includes rating', line.includes('★ 4/5'), line)
+    check('feedback: markdown includes stars', md.includes('★★★★☆ (4/5)'), md)
+    check('feedback: markdown includes comments', md.includes('Good energy'), md)
+}
+
 // === summary ===============================================================
 
 console.log(failures === 0 ? '\nALL PASS' : `\n${failures} FAILURE(S)`)

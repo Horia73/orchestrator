@@ -1,7 +1,7 @@
 "use client"
 
 import * as React from "react"
-import { CheckCircle2, Cloud, CloudOff, ListChecks, RotateCcw, Sparkles, Timer, Trophy, XCircle } from "lucide-react"
+import { CheckCircle2, Cloud, CloudOff, ListChecks, RotateCcw, Sparkles, Star, Timer, Trophy, XCircle } from "lucide-react"
 
 import { cn } from "@/lib/utils"
 import type { WorkoutArtifact } from "@/lib/workout/schema"
@@ -60,6 +60,7 @@ export function SessionSummary({
             completedAt: sessionApi.session.completedAt ?? '',
             logsByExerciseId: sessionApi.session.logsByExerciseId,
             addedGroups: sessionApi.session.addedGroups,
+            feedback: sessionApi.session.feedback,
         })
         if (savedKeyRef.current === key) return
         savedKeyRef.current = key
@@ -140,6 +141,8 @@ export function SessionSummary({
                 />
             </div>
 
+            {log.feedback ? <SessionFeedback feedback={log.feedback} /> : null}
+
             {log.prs.length > 0 ? <PrList prs={log.prs} /> : null}
 
             <ExerciseRecap log={log} units={workout.units} />
@@ -155,6 +158,33 @@ export function SessionSummary({
                 </button>
             </footer>
         </section>
+    )
+}
+
+function SessionFeedback({ feedback }: { feedback: NonNullable<SessionLog['feedback']> }) {
+    return (
+        <div className="rounded-xl border border-border/45 bg-background/55 p-3">
+            <div className="mb-1.5 text-[10.5px] font-medium uppercase tracking-wider text-muted-foreground">
+                Session feedback
+            </div>
+            {feedback.rating ? (
+                <div className="flex items-center gap-1 text-amber-500" aria-label={`${feedback.rating} out of 5 stars`}>
+                    {[1, 2, 3, 4, 5].map((value) => (
+                        <Star
+                            key={value}
+                            className={cn("size-4", value <= feedback.rating! && "fill-current")}
+                            strokeWidth={1.85}
+                        />
+                    ))}
+                    <span className="ml-1 text-[12px] font-medium text-foreground">{feedback.rating}/5</span>
+                </div>
+            ) : null}
+            {feedback.notes ? (
+                <p className="mt-2 whitespace-pre-wrap text-[12.5px] leading-relaxed text-foreground/85">
+                    {feedback.notes}
+                </p>
+            ) : null}
+        </div>
     )
 }
 

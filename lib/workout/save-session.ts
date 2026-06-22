@@ -1,5 +1,5 @@
 import type { Exercise, WorkoutArtifact, PersonalBest, PreviousSessionSnapshot, LoggedSet } from './schema'
-import type { RestEvent, WorkoutSessionState } from './use-workout-session'
+import type { RestEvent, WorkoutSessionFeedback, WorkoutSessionState } from './use-workout-session'
 import { estimated1RM } from './one-rep-max'
 import { formatDuration, formatWeightNumber, formatDistance, formatDifficulty } from './format'
 
@@ -62,6 +62,8 @@ export interface SessionLog {
         plannedAvgRestSec?: number
         skippedCount: number
     }
+    /** Optional user feedback captured at Finish workout. */
+    feedback?: WorkoutSessionFeedback
     /** Per-exercise logs in the order they appear in the workout. */
     exercises: Array<{
         id: string
@@ -219,6 +221,7 @@ export function buildSessionLog(
         totalDurationSec,
         restEvents,
         restSummary,
+        feedback: state.feedback,
         exercises,
         totalSetsPlanned,
         totalSetsCompleted,
@@ -605,9 +608,11 @@ export function formatHistoryEntryLine(log: SessionLog): string {
     const setStats = `${log.totalSetsCompleted}/${log.totalSetsPlanned} sets${skipped ? `, ${skipped} skipped` : ''}`
     const volume = log.totalVolumeKg > 0 ? `${Math.round(log.totalVolumeKg).toLocaleString()} ${log.units}` : ''
     const prs = log.prs.length > 0 ? `🏆 ${log.prs.length} PR${log.prs.length > 1 ? 's' : ''}` : ''
+    const rating = log.feedback?.rating ? `★ ${log.feedback.rating}/5` : ''
     const parts = [date, log.title, dur, setStats]
     if (volume) parts.push(volume)
     if (prs) parts.push(prs)
+    if (rating) parts.push(rating)
     return `- ${parts.join(' · ')}`
 }
 
@@ -706,6 +711,12 @@ export function formatSessionMarkdown(log: SessionLog): string {
     }
     if (log.difficulty) {
         lines.push(`- **Dificultate**: ${formatDifficulty(log.difficulty)}`)
+    }
+    if (log.feedback?.rating) {
+        lines.push(`- **Rating**: ${'★'.repeat(log.feedback.rating)}${'☆'.repeat(5 - log.feedback.rating)} (${log.feedback.rating}/5)`)
+    }
+    if (log.feedback?.notes) {
+        lines.push(`- **Comentarii**: ${log.feedback.notes.replace(/\s+/g, ' ')}`)
     }
     if (log.program) {
         lines.push(`- **Program**: ${log.program.name}${log.program.week ? ` · Week ${log.program.week}` : ''}${log.program.day ? ` · Day ${log.program.day}` : ''}`)

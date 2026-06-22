@@ -9,6 +9,7 @@ import { useAppEvent } from "@/hooks/use-app-events"
 import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
 import { useIsMobile } from "@/hooks/use-mobile"
 import { useRevealOnScroll } from "@/hooks/use-reveal-on-scroll"
+import { useScreenWakeLock } from "@/hooks/use-screen-wake-lock"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import type { WorkoutArtifact } from "@/lib/workout/schema"
 import { parseWorkoutArtifact } from "@/lib/workout/parser"
@@ -137,6 +138,7 @@ function WorkoutSurfaceInner({
   const isMobile = useIsMobile()
   const [chatOpen, setChatOpen] = React.useState(false)
   const scrollbarVisible = useRevealOnScroll()
+  useScreenWakeLock()
 
   const sessionApi = useWorkoutSession(workout.sessionId, workout, {
     artifactId: artifact.id,

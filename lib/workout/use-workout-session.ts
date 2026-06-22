@@ -9,6 +9,7 @@ import type {
     PlannedSet,
     WorkoutArtifact,
 } from "./schema"
+import { clearActiveWorkoutSummary, writeActiveWorkoutSummary } from "./active-workout"
 import { estimated1RM } from "./one-rep-max"
 import { buildEffectiveWorkout, normalizeAddedGroups } from "./session-plan"
 
@@ -91,6 +92,11 @@ export interface ActiveSetState {
     key: number
 }
 
+export interface WorkoutSessionFeedback {
+    rating?: number
+    notes?: string
+}
+
 export interface WorkoutSetRef {
     exerciseId: string
     exerciseName: string
@@ -114,6 +120,8 @@ export interface WorkoutSessionState {
     /** Optional current working-set timer. A set is logged only after
      *  Finish -> edit actuals -> Save. */
     activeSet?: ActiveSetState
+    /** Optional user feedback captured when finishing the session. */
+    feedback?: WorkoutSessionFeedback
     /** ISO timestamp of the last persist. Used to reconcile localStorage vs
      *  the server copy on hydration (newer wins). Stamped at write time. */
     updatedAt?: string
@@ -163,6 +171,7 @@ function coercePersistedSession(raw: unknown, sessionId: string): WorkoutSession
         restEvents,
         rest,
         activeSet,
+        feedback: normalizeSessionFeedback((parsed as { feedback?: unknown }).feedback),
         updatedAt: typeof parsed.updatedAt === 'string' ? parsed.updatedAt : undefined,
         _v: STORAGE_VERSION,
     }
@@ -275,6 +284,22 @@ function restToEvent(rest: RestState, status: RestEvent['status'], endedAtMs = D
     }
 }
 
+function normalizeSessionFeedback(value: unknown): WorkoutSessionFeedback | undefined {
+    if (!value || typeof value !== 'object') return undefined
+    const candidate = value as Partial<WorkoutSessionFeedback>
+    const rating = typeof candidate.rating === 'number' && Number.isFinite(candidate.rating)
+        ? Math.min(5, Math.max(1, Math.round(candidate.rating)))
+        : undefined
+    const notes = typeof candidate.notes === 'string'
+        ? candidate.notes.trim().slice(0, 1200)
+        : ''
+    if (rating === undefined && !notes) return undefined
+    return {
+        ...(rating !== undefined ? { rating } : {}),
+        ...(notes ? { notes } : {}),
+    }
+}
+
 function finishRest(
     state: WorkoutSessionState,
     status: RestEvent['status'],
@@ -304,8 +329,8 @@ export interface WorkoutSessionApi {
     isFinished: boolean
     /** Tap Start — sets startedAt and unlocks set check-ins. */
     start: () => void
-    /** Tap Finish — sets completedAt. */
-    finish: () => void
+    /** Tap Finish — sets completedAt and optional session feedback. */
+    finish: (feedback?: WorkoutSessionFeedback) => void
     /** Restart from scratch (clears local state). Used after Finish or for "Discard". */
     reset: () => void
     /** Log (or re-log) a set with optional overrides for actuals. */
@@ -394,6 +419,7 @@ function sessionContentSignature(session: WorkoutSessionState): string {
         logsByExerciseId: session.logsByExerciseId,
         addedGroups: session.addedGroups,
         restEvents: session.restEvents,
+        feedback: session.feedback,
     })
 }
 
@@ -580,16 +606,60 @@ export function useWorkoutSession(
     const remainingSets = React.useMemo(() => findRemainingSets(setOrder, session), [setOrder, session])
     const nextSet = React.useMemo(() => remainingSets[0] ?? findNextSet(setOrder, session), [remainingSets, setOrder, session])
 
+    React.useEffect(() => {
+        if (!artifactId || !isRestored) return
+        if (session.startedAt && !session.completedAt) {
+            writeActiveWorkoutSummary({
+                artifactId,
+                sessionId,
+                title: workout.title,
+                startedAt: session.startedAt,
+                rest: session.rest
+                    ? {
+                        endsAt: session.rest.endsAt,
+                        exerciseName: session.rest.exerciseName,
+                        setIndex: session.rest.setIndex,
+                    }
+                    : undefined,
+                activeSet: session.activeSet
+                    ? {
+                        startedAt: session.activeSet.startedAt,
+                        finishedAt: session.activeSet.finishedAt,
+                        exerciseName: session.activeSet.exerciseName,
+                        setIndex: session.activeSet.setIndex,
+                    }
+                    : undefined,
+            })
+            return
+        }
+        clearActiveWorkoutSummary({ artifactId, sessionId })
+    }, [
+        artifactId,
+        isRestored,
+        session.activeSet,
+        session.completedAt,
+        session.rest,
+        session.startedAt,
+        sessionId,
+        workout.title,
+    ])
+
     const start = React.useCallback(() => {
         setSession((s) => (s.startedAt ? s : { ...s, startedAt: new Date().toISOString() }))
     }, [])
 
-    const finish = React.useCallback(() => {
+    const finish = React.useCallback((feedback?: WorkoutSessionFeedback) => {
         const nowMs = Date.now()
+        const cleanFeedback = normalizeSessionFeedback(feedback)
         setSession((s) => {
             const status = s.rest && nowMs >= s.rest.endsAt ? 'completed' : 'stopped'
             const withRestClosed = finishRest(s, status, nowMs)
-            return { ...withRestClosed, completedAt: new Date(nowMs).toISOString(), activeSet: undefined }
+            return {
+                ...withRestClosed,
+                completedAt: new Date(nowMs).toISOString(),
+                activeSet: undefined,
+                feedback: cleanFeedback,
+            }
         })
     }, [])
 
