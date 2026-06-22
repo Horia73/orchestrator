@@ -15,6 +15,16 @@ export async function registerRuntime(): Promise<void> {
     if (backgroundWorkDisabled()) return
     const { startScheduler } = await import('@/lib/scheduling/scheduler')
     startScheduler()
+    // Memory observability + OOM watchdog: periodically logs process memory
+    // (rss/heapUsed/external/arrayBuffers) and restarts the process in a
+    // controlled way if RSS climbs toward a host OOM. Motivated by the
+    // 2026-06-22 external-memory leak that the V8 heap cap could not catch.
+    try {
+        const { startMemoryWatchdog } = await import('@/lib/observability/memory-watchdog')
+        startMemoryWatchdog()
+    } catch (err) {
+        console.error('[memory] failed to arm watchdog', err)
+    }
     // Pre-warm the integration status snapshot so the first scheduler tick
     // (Smart Monitor, Microscripts, scheduled agents) sees real connection
     // state instead of `unknown`. Fire-and-forget — boot must not block on
