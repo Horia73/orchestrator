@@ -281,6 +281,11 @@ class CodexAppServerClient {
         reject: (err: Error) => void;
     } | null = null;
 
+    /** Re-arms the active turn's idle (no-progress) timeout. Set while a turn
+     *  runs; called from handleNotification so each streamed event resets the
+     *  window. Null between turns. */
+    private turnIdleBump: (() => void) | null = null;
+
     private async ensureProcess(): Promise<void> {
         if (this.disposed) {
             throw new Error('codex vision client is disposed');
@@ -403,6 +408,8 @@ class CodexAppServerClient {
 
     private handleNotification(method: string, params?: AnyObj) {
         const events = this.turnEvents;
+        // Any streamed turn activity resets the idle (no-progress) timeout.
+        this.turnIdleBump?.();
         switch (method) {
             case 'turn/started': {
                 const turn = params?.turn as AnyObj | undefined;
@@ -539,18 +546,37 @@ class CodexAppServerClient {
         });
         const events = this.turnEvents!;
 
+        // Idle (no-progress) timeout, NOT a wall-clock cap: a turn that keeps
+        // streaming events (deltas, completed items, token-usage) re-arms this
+        // window via handleNotification, so a turn that is genuinely working is
+        // never killed no matter how long it runs. Only `timeoutMs` of total
+        // silence — a hung/black-holed turn — interrupts and then recycles the
+        // process.
         let timedOut = false;
-        const timeoutTimer = setTimeout(() => {
-            timedOut = true;
-            this.interruptActiveTurn();
-            // Grace period for turn/completed after the interrupt; then recycle.
-            setTimeout(() => {
-                if (this.turnEvents === events) {
-                    this.killProcess();
-                    this.markDead(`codex turn timed out after ${timeoutMs}ms`);
-                }
-            }, 5_000);
-        }, timeoutMs);
+        let idleTimer: ReturnType<typeof setTimeout> | null = null;
+        const disarmIdle = () => {
+            if (idleTimer) {
+                clearTimeout(idleTimer);
+                idleTimer = null;
+            }
+        };
+        const armIdle = () => {
+            disarmIdle();
+            idleTimer = setTimeout(() => {
+                timedOut = true;
+                this.interruptActiveTurn();
+                // Grace period for turn/completed after the interrupt; then recycle.
+                setTimeout(() => {
+                    if (this.turnEvents === events) {
+                        this.killProcess();
+                        this.markDead(`codex turn idle for ${timeoutMs}ms`);
+                    }
+                }, 5_000);
+            }, timeoutMs);
+            idleTimer.unref?.();
+        };
+        this.turnIdleBump = armIdle;
+        armIdle();
 
         try {
             const turnParams: AnyObj = {
@@ -586,7 +612,7 @@ class CodexAppServerClient {
 
             const outcome = await completion;
             if (timedOut) {
-                throw new Error(`codex turn timed out after ${timeoutMs}ms`);
+                throw new Error(`codex turn idle for ${timeoutMs}ms`);
             }
             if (this.activeTurn?.interrupted) {
                 throw new Error('codex turn was cancelled');
@@ -604,7 +630,8 @@ class CodexAppServerClient {
 
             return { text, usage: events.usage };
         } finally {
-            clearTimeout(timeoutTimer);
+            disarmIdle();
+            this.turnIdleBump = null;
             if (this.turnEvents === events) this.turnEvents = null;
             this.activeTurn = null;
         }
