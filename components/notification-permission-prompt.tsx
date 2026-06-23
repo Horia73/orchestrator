@@ -249,6 +249,7 @@ export function NotificationPermissionPrompt() {
 
   const isDismissed = kind ? Boolean(dismissals[kind]) : false
   if (pathname?.startsWith("/profiles")) return null
+  if (pathname?.startsWith("/onboarding")) return null
   if (!mounted || !kind || isDismissed) return null
 
   const copy = promptCopy({

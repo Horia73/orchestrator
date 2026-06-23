@@ -15,6 +15,7 @@ import {
   KeyRound,
   ArrowLeft,
   UsersRound,
+  Globe,
 } from "lucide-react"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -27,8 +28,9 @@ import { AuthTab } from "@/components/settings/auth-tab"
 import { ModelsTab } from "@/components/settings/models-tab"
 import { ProfilesTab } from "@/components/settings/profiles-tab"
 import { NotificationsTab } from "@/components/settings/notifications-tab"
+import { RemoteAccessTab } from "@/components/settings/remote-access-tab"
 
-const TAB_IDS = ["models", "auth", "files", "logs", "usage", "notifications", "profiles", "updates"] as const
+const TAB_IDS = ["models", "auth", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TABS: Array<{
@@ -39,6 +41,7 @@ const TABS: Array<{
   { id: "models", label: "Models", icon: Cpu },
   { id: "auth", label: "Auth", icon: KeyRound },
   { id: "files", label: "Files", icon: FileText },
+  { id: "remote", label: "Remote Access", icon: Globe },
   { id: "logs", label: "Logs", icon: Activity },
   { id: "usage", label: "Usage", icon: BarChart3 },
   { id: "notifications", label: "Notifications", icon: BellRing },
@@ -220,6 +223,9 @@ function SettingsViewInner() {
               </TabsContent>
               <TabsContent value="auth">
                 <AuthTab />
+              </TabsContent>
+              <TabsContent value="remote">
+                <RemoteAccessTab />
               </TabsContent>
               <TabsContent value="notifications">
                 <NotificationsTab />

@@ -1,0 +1,107 @@
+import { dockerBridgeEndpoint } from '@/lib/update/manager'
+
+export interface TailscaleState {
+  installed: boolean
+  running: boolean
+  loggedIn: boolean
+  dnsName: string | null
+  webhookFunnelEnabled: boolean
+  funnelUrl: string | null
+}
+
+export interface RemoteAccessBridgeStatus {
+  /** Whether a host bridge is reachable (Docker installs only). */
+  available: boolean
+  tailscale: TailscaleState | null
+  error: string | null
+}
+
+const NO_BRIDGE: RemoteAccessBridgeStatus = {
+  available: false,
+  tailscale: null,
+  error: 'The host bridge is only available on Docker installs.',
+}
+
+async function callBridge(
+  segment: string,
+  init?: { method?: 'GET' | 'POST'; body?: unknown },
+): Promise<{ ok: boolean; status: number; json: unknown } | null> {
+  const cfg = dockerBridgeEndpoint(segment)
+  if (!cfg) return null
+  try {
+    const res = await fetch(cfg.url, {
+      method: init?.method ?? 'GET',
+      headers: {
+        Authorization: `Bearer ${cfg.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: init?.body !== undefined ? JSON.stringify(init.body) : undefined,
+      cache: 'no-store',
+    })
+    const json = await res.json().catch(() => null)
+    return { ok: res.ok, status: res.status, json }
+  } catch (e) {
+    return { ok: false, status: 0, json: { error: e instanceof Error ? e.message : 'Bridge unreachable.' } }
+  }
+}
+
+function tailscaleFromPayload(payload: unknown): TailscaleState | null {
+  if (!payload || typeof payload !== 'object') return null
+  const ts = (payload as { tailscale?: unknown }).tailscale
+  if (!ts || typeof ts !== 'object') return null
+  const r = ts as Record<string, unknown>
+  return {
+    installed: r.installed === true,
+    running: r.running === true,
+    loggedIn: r.loggedIn === true,
+    dnsName: typeof r.dnsName === 'string' ? r.dnsName : null,
+    webhookFunnelEnabled: r.webhookFunnelEnabled === true,
+    funnelUrl: typeof r.funnelUrl === 'string' ? r.funnelUrl : null,
+  }
+}
+
+export async function getRemoteAccessStatus(): Promise<RemoteAccessBridgeStatus> {
+  const result = await callBridge('remote-access')
+  if (!result) return NO_BRIDGE
+  if (!result.ok) {
+    const error =
+      (result.json as { error?: string })?.error ?? `Host bridge returned ${result.status}.`
+    return { available: true, tailscale: null, error }
+  }
+  return { available: true, tailscale: tailscaleFromPayload(result.json), error: null }
+}
+
+export interface SetFunnelResult {
+  ok: boolean
+  tailscale: TailscaleState | null
+  error: string | null
+  output?: string
+}
+
+export async function setWebhookFunnel(enable: boolean): Promise<SetFunnelResult> {
+  const result = await callBridge('remote-access/funnel', { method: 'POST', body: { enable } })
+  if (!result) {
+    return { ok: false, tailscale: null, error: NO_BRIDGE.error }
+  }
+  const json = (result.json ?? {}) as Record<string, unknown>
+  return {
+    ok: result.ok && json.ok === true,
+    tailscale: tailscaleFromPayload(json),
+    error: result.ok ? null : (typeof json.error === 'string' ? json.error : `Bridge returned ${result.status}.`),
+    output: typeof json.output === 'string' ? json.output : undefined,
+  }
+}
+
+export async function installTailscale(): Promise<SetFunnelResult> {
+  const result = await callBridge('remote-access/install-tailscale', { method: 'POST', body: {} })
+  if (!result) {
+    return { ok: false, tailscale: null, error: NO_BRIDGE.error }
+  }
+  const json = (result.json ?? {}) as Record<string, unknown>
+  return {
+    ok: result.ok && json.ok === true,
+    tailscale: tailscaleFromPayload(json),
+    error: result.ok ? null : (typeof json.error === 'string' ? json.error : `Bridge returned ${result.status}.`),
+    output: typeof json.output === 'string' ? json.output : undefined,
+  }
+}

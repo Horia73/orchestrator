@@ -26,7 +26,20 @@ const fontDisplay = Manrope({
   variable: "--font-display",
 })
 
-import { cookies } from "next/headers"
+import { cookies, headers } from "next/headers"
+import { redirect } from "next/navigation"
+import { isOnboardingComplete } from "@/lib/onboarding/state"
+
+// Page routes that must stay reachable regardless of onboarding state (the
+// wizard itself + the profile picker that precedes it).
+function isOnboardingExemptPath(pathname: string): boolean {
+  return (
+    pathname === "/onboarding" ||
+    pathname.startsWith("/onboarding/") ||
+    pathname === "/profiles" ||
+    pathname.startsWith("/profiles/")
+  )
+}
 
 export const metadata: Metadata = {
   title: "Orchestrator",
@@ -103,6 +116,19 @@ export default async function RootLayout({
 }>) {
   const cookieStore = await cookies()
   const defaultOpen = cookieStore.get("sidebar_state")?.value !== "false"
+
+  // First-run gate. Middleware (Edge runtime) can't read the workspace state
+  // file, so the redirect decision lives here, server-side, with no client
+  // flash. Established installs are grandfathered by isOnboardingComplete().
+  const headerStore = await headers()
+  const pathname = headerStore.get("x-pathname") ?? ""
+  const onboarded = isOnboardingComplete()
+  if (!onboarded && pathname && !isOnboardingExemptPath(pathname)) {
+    redirect("/onboarding")
+  }
+  if (onboarded && pathname.startsWith("/onboarding")) {
+    redirect("/")
+  }
 
   return (
     <html

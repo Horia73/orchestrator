@@ -826,6 +826,84 @@ def run_capture(command: list[str], timeout: Optional[float] = None) -> tuple[in
     return result.returncode, output
 
 
+def detect_remote_access() -> dict:
+    """Read-only probe of the host's connectivity options for the Remote Access
+    UI. Never raises; missing tailscale just reports installed=False."""
+    ts = {
+        "installed": bool(shutil.which("tailscale")),
+        "running": False,
+        "loggedIn": False,
+        "dnsName": None,
+        "webhookFunnelEnabled": False,
+        "funnelUrl": None,
+    }
+    status_raw = capture_optional(["tailscale", "status", "--json"])
+    if status_raw:
+        ts["installed"] = True
+        try:
+            data = json.loads(status_raw)
+            backend = data.get("BackendState")
+            ts["running"] = backend == "Running"
+            ts["loggedIn"] = backend not in (None, "", "NeedsLogin", "NoState", "Stopped")
+            self_node = data.get("Self") or {}
+            dns_name = (self_node.get("DNSName") or "").rstrip(".")
+            ts["dnsName"] = dns_name or None
+        except Exception:
+            pass
+    serve_blob = (
+        capture_optional(["tailscale", "serve", "status"])
+        + "\n"
+        + capture_optional(["tailscale", "funnel", "status"])
+    )
+    if "/api/webhooks" in serve_blob:
+        ts["webhookFunnelEnabled"] = True
+        if ts["dnsName"]:
+            ts["funnelUrl"] = f"https://{ts['dnsName']}/api/webhooks"
+    return {"ok": True, "tailscale": ts}
+
+
+def set_webhook_funnel(enable: bool) -> dict:
+    """Toggle a public Tailscale Funnel scoped to ONLY /api/webhooks, pointed at
+    the app's loopback port. The UI/whole app is never exposed by this."""
+    target = f"http://127.0.0.1:{APP_PORT}/api/webhooks"
+    if enable:
+        code, out = run_capture(
+            ["tailscale", "funnel", "--bg", "--set-path", "/api/webhooks", target],
+            timeout=45,
+        )
+    else:
+        code, out = run_capture(
+            ["tailscale", "funnel", "--set-path", "/api/webhooks", "off"],
+            timeout=45,
+        )
+    detected = detect_remote_access()
+    return {
+        "ok": code == 0,
+        "exitCode": code,
+        "output": (out or "").strip()[-1500:],
+        "tailscale": detected.get("tailscale"),
+    }
+
+
+def install_tailscale() -> dict:
+    """Best-effort install of Tailscale via the official script. Needs root, so
+    it may fail on hosts without passwordless sudo — the caller falls back to
+    showing the manual command. After install the user still runs `tailscale up`
+    to authenticate the node (interactive browser login)."""
+    code, out = run_capture(
+        ["sh", "-c", "curl -fsSL https://tailscale.com/install.sh | sh"],
+        timeout=240,
+    )
+    detected = detect_remote_access()
+    installed = bool(detected.get("tailscale", {}).get("installed"))
+    return {
+        "ok": code == 0 and installed,
+        "exitCode": code,
+        "output": (out or "").strip()[-2000:],
+        "tailscale": detected.get("tailscale"),
+    }
+
+
 def restart_container_async(delay: float = 0.4) -> None:
     """Restart the orchestrator container shortly after the HTTP response is
     flushed. Done in a background thread because the restart tears down the
@@ -968,11 +1046,14 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in {"/status", "/claude-usage", "/update-log"}:
+        if path not in {"/status", "/claude-usage", "/update-log", "/remote-access"}:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
             self.send_json(401, {"error": "Unauthorized."})
+            return
+        if path == "/remote-access":
+            self.send_json(200, detect_remote_access())
             return
         if path == "/status":
             with state_lock:
@@ -995,12 +1076,39 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = self.path.split("?", 1)[0]
-        if path not in {"/update", "/update-clis", "/restart", "/rollback"}:
+        if path not in {
+            "/update",
+            "/update-clis",
+            "/restart",
+            "/rollback",
+            "/remote-access/funnel",
+            "/remote-access/install-tailscale",
+        }:
             self.send_json(404, {"error": "Not found."})
             return
         if not self.authenticated():
             self.send_json(401, {"error": "Unauthorized."})
             return
+
+        # Remote-access actions are independent of the update pipeline, so handle
+        # them before (and without) the update lock — they're quick commands.
+        if path == "/remote-access/funnel":
+            try:
+                length = min(int(self.headers.get("Content-Length", "0") or "0"), 65536)
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                self.send_json(400, {"error": "Invalid JSON payload."})
+                return
+            result = set_webhook_funnel(bool(body.get("enable")))
+            self.send_json(200 if result.get("ok") else 502, result)
+            return
+
+        if path == "/remote-access/install-tailscale":
+            result = install_tailscale()
+            self.send_json(200 if result.get("ok") else 502, result)
+            return
+
         if not update_lock.acquire(blocking=False):
             self.send_json(409, {"error": "Docker update already running."})
             return

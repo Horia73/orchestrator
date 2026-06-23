@@ -44,7 +44,13 @@ export function proxy(request: NextRequest) {
     if (guard) return guard
   }
 
-  return NextResponse.next()
+  // Expose the pathname to server components (the root layout reads it to decide
+  // the first-run onboarding redirect — middleware runs in the Edge runtime and
+  // can't read the workspace state file itself, so the layout does that with the
+  // pathname this header carries).
+  const requestHeaders = new Headers(request.headers)
+  requestHeaders.set("x-pathname", request.nextUrl.pathname)
+  return NextResponse.next({ request: { headers: requestHeaders } })
 }
 
 export function shouldGuardApiRequest(pathname: string, method = "GET"): boolean {

@@ -758,7 +758,7 @@ export function getDockerHostUpdaterLogConfig(): { url: string; token: string } 
  * Derive a sibling endpoint on the docker-update-bridge from the configured
  * `/update` URL (e.g. `/update-clis`, `/restart`), reusing its bearer token.
  */
-function dockerBridgeEndpoint(segment: string): { url: string; token: string } | null {
+export function dockerBridgeEndpoint(segment: string): { url: string; token: string } | null {
     const base = dockerHostUpdaterConfig()
     if (!base) return null
     try {
