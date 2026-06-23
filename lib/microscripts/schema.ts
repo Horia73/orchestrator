@@ -96,8 +96,16 @@ export const MicroscriptPermissionSchema = z.discriminatedUnion('kind', [
         maxPromptChars: z.number().int().min(200).max(20_000).default(4_000),
         /** Let the woken agent call notify_inbox. Keep true for "model decides whether to surface" gates. */
         allowNotifyInbox: z.boolean().default(true),
-        /** Hard wall-clock timeout for the model wake operation. */
-        timeoutMs: z.number().int().min(5_000).max(15 * 60_000).default(120_000),
+        /**
+         * Idle (no-progress) timeout for the model wake, in ms. The woken agent is
+         * aborted only after this long with NO activity (no tool call, content, or
+         * reasoning) — an agent that keeps making progress runs as long as it needs.
+         * It is NOT a total wall-clock cap. 0 disables the timeout entirely.
+         */
+        timeoutMs: z.number().int().min(0).max(15 * 60_000).default(120_000)
+            .refine((v) => v === 0 || v >= 5_000, {
+                message: 'timeoutMs must be 0 (disabled) or at least 5000ms',
+            }),
         /**
          * Tool surface for the woken agent. 'full' (default) gives the agent its
          * normal gated tool surface — actions stay governed by the action policy

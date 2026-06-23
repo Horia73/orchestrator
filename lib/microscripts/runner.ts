@@ -1121,9 +1121,24 @@ async function executeAgentWake(
         stateSnapshot: clipJsonForPrompt(state, 3_500),
     })
     const notificationsBefore = notifications.length
-    const wakeTimeoutMs = permission.timeoutMs
+    // Idle (no-progress) timeout — NOT a total wall-clock cap. A woken agent doing
+    // real work emits a stream of events (tool calls, content, reasoning); each one
+    // re-arms this timer, so an agent that keeps making progress is never aborted no
+    // matter how long it runs. We abort only when the agent goes fully silent for
+    // `idleMs` — a genuine hang (stuck provider, black-holed stream) that would
+    // otherwise hold a concurrency-gate slot + a live subprocess forever (the
+    // stale-running watchdog only rewrites DB status; it does not reap the in-flight
+    // run). `timeoutMs <= 0` disables it (explicit opt-out). Armed immediately so a
+    // wake wedged before its first event (e.g. stuck in the gate) is still reaped.
+    const idleMs = permission.timeoutMs
     const abortController = new AbortController()
     let acceptingAgentEvents = true
+    let idleAborted = false
+    const idleTimer = createIdleAbortTimer(idleMs, () => {
+        idleAborted = true
+        abortController.abort()
+    })
+    idleTimer.bump()
 
     // Wake continuity: one persistent agent thread per script, so this wake sees
     // the prior wake exchanges (what was observed, what was decided/sent). The
@@ -1166,6 +1181,7 @@ async function executeAgentWake(
         preactivatedCapabilities: ['inbox'],
         onAgentEvent: (event) => {
             if (!acceptingAgentEvents) return
+            idleTimer.bump() // any sign of life resets the idle clock
             if (event.type !== 'agent_tool_call' || event.toolCall?.name !== 'notify_inbox') return
             const args = event.toolCall.arguments as { title?: unknown; body?: unknown; actions?: unknown }
             const body = typeof args.body === 'string' ? args.body.trim() : ''
@@ -1181,17 +1197,20 @@ async function executeAgentWake(
 
     let result: Awaited<ReturnType<typeof runTextSubAgent>>
     try {
-        result = await withAgentWakeTimeout(runTextSubAgent({
+        result = await runTextSubAgent({
             target,
             prompt,
             parentCtx,
             agentThreadId: wakeThreadId ?? undefined,
-        }), abortController, wakeTimeoutMs)
+        })
     } finally {
         acceptingAgentEvents = false
+        idleTimer.clear()
     }
     if (!result.success) {
-        throw new Error(result.error ?? `Agent ${request.agent_id} wake failed.`)
+        throw new Error(idleAborted
+            ? `Agent wake aborted after ${Math.round(idleMs / 1000)}s with no progress (idle timeout).`
+            : result.error ?? `Agent ${request.agent_id} wake failed.`)
     }
     const data = result.data as { output?: unknown } | undefined
     const output = typeof data?.output === 'string' ? data.output : ''
@@ -1219,26 +1238,44 @@ async function executeAgentWake(
     }
 }
 
-function withAgentWakeTimeout<T>(
-    promise: Promise<T>,
-    abortController: AbortController,
-    timeoutMs: number,
-): Promise<T> {
-    let timeout: NodeJS.Timeout | null = null
-    return new Promise<T>((resolve, reject) => {
-        timeout = setTimeout(() => {
-            abortController.abort()
-            reject(new Error(`Agent wake timed out after ${timeoutMs}ms.`))
-        }, timeoutMs)
-        promise.then(
-            (value) => resolve(value),
-            (err) => reject(err),
-        ).finally(() => {
-            if (timeout) clearTimeout(timeout)
-        })
-    }).finally(() => {
-        if (timeout) clearTimeout(timeout)
-    })
+/**
+ * Idle (no-progress) abort timer for an agent wake. `bump()` (re-)arms the
+ * window; if `idleMs` elapses with no bump, `onIdle` fires exactly once. Unlike
+ * a total wall-clock timeout this never aborts an agent that keeps emitting
+ * events — only one that has gone silent. `idleMs <= 0` disables it (bump/clear
+ * become no-ops). Exported for smoke coverage.
+ */
+export function createIdleAbortTimer(
+    idleMs: number,
+    onIdle: () => void,
+): { bump: () => void; clear: () => void } {
+    if (!Number.isFinite(idleMs) || idleMs <= 0) {
+        return { bump: () => { /* disabled */ }, clear: () => { /* disabled */ } }
+    }
+    let timer: NodeJS.Timeout | null = null
+    let done = false
+    const stop = () => {
+        if (timer) {
+            clearTimeout(timer)
+            timer = null
+        }
+    }
+    return {
+        bump() {
+            if (done) return
+            stop()
+            timer = setTimeout(() => {
+                timer = null
+                done = true
+                onIdle()
+            }, idleMs)
+            timer.unref?.()
+        },
+        clear() {
+            done = true
+            stop()
+        },
+    }
 }
 
 function clipJsonForPrompt(value: unknown, maxChars: number): string {

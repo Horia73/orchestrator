@@ -30,7 +30,7 @@ async function main(): Promise<void> {
         claimMicroscriptForWebhook,
         recoverStaleRunningMicroscripts,
     } = await import('@/lib/microscripts/store')
-    const { runMicroscript, validateMicroscriptCode } = await import('@/lib/microscripts/runner')
+    const { runMicroscript, validateMicroscriptCode, createIdleAbortTimer } = await import('@/lib/microscripts/runner')
     const { listInboxConversations } = await import('@/lib/scheduling/store')
     const {
         executeMicroscriptCreate,
@@ -550,6 +550,34 @@ def run(ctx):
     const fileResult = await runMicroscript(fileScript, { trigger: 'manual', preserveEnabled: true })
     const fileAfter = getMicroscript(fileScript.id)
     check('file read/write works', fileResult.ok && fileAfter?.state.content === 'hello', fileAfter)
+
+    // Idle-abort timer powering the agent-wake no-progress timeout: bumps reset
+    // the window, it fires exactly once after idle silence, and 0 disables it.
+    {
+        const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms))
+        let fires = 0
+        const idle = createIdleAbortTimer(120, () => { fires += 1 })
+        idle.bump()
+        await sleep(40); idle.bump()
+        await sleep(40); idle.bump() // ~80ms of activity, window 120ms — must NOT fire yet
+        const firesDuringActivity = fires
+        await sleep(320) // 320ms of silence > 120ms window — must fire exactly once
+        const firesAfterIdle = fires
+        idle.clear()
+        await sleep(180) // cleared timer must never fire again
+        check(
+            'agent-wake idle timer resets on activity and fires once after idle window',
+            firesDuringActivity === 0 && firesAfterIdle === 1 && fires === 1,
+            { firesDuringActivity, firesAfterIdle, fires },
+        )
+
+        let disabledFires = 0
+        const disabled = createIdleAbortTimer(0, () => { disabledFires += 1 })
+        disabled.bump()
+        await sleep(60)
+        disabled.clear()
+        check('agent-wake idle timer with 0 disables the timeout', disabledFires === 0, { disabledFires })
+    }
 
     console.log(`\n${failures === 0 ? '✅ ALL OK' : `❌ ${failures} failure(s)`}`)
     process.exit(failures === 0 ? 0 : 1)
