@@ -21,6 +21,12 @@ Activation:
 - Microscript lifecycle tools reject unknown top-level arguments. Use the exact field names below; aliases such as id, dryRun, includeCode, runId, or scriptId are not accepted.
 
 Tool argument schemas:
+- webhook_describe_capabilities: {}.
+- webhook_list: {}.
+- webhook_create: {title:string, slug:string, description?:string, source?:string, default_event_type?:string, auth_mode?:"bearer"|"hmac"|"svix"|"none", secret?:string, enabled?:boolean, rate_limit_per_minute?:number, retention_days?:number, hmac_tolerance_seconds?:number}.
+- webhook_update: {endpoint_id_or_slug:string, title?:string, description?:string, source?:string, default_event_type?:string, auth_mode?:"bearer"|"hmac"|"svix"|"none", secret?:string, rotate_secret?:boolean, enabled?:boolean, rate_limit_per_minute?:number, retention_days?:number, hmac_tolerance_seconds?:number}.
+- webhook_delete: {endpoint_id_or_slug:string}.
+- webhook_subscription_create: {endpoint_id_or_slug:string, target_id:string, enabled?:boolean, event_type?:string, payload_path?:string, payload_equals?:object, payload_equals_json?:string}. Use payload_equals_json for scalar/array/null filters.
 - microscript_describe_capabilities: {}.
 - microscript_create: {title:string, code:string, manifest:object, enabled?:boolean, initial_state?:object}.
 - microscript_list: {enabled?:boolean, status?:"active"|"running"|"paused"|"completed"|"expired"|"error"}.
@@ -42,7 +48,8 @@ Runtime contract:
 - Store all durable private memory in returned state. Read current memory from ctx["state"].
 - Direct Python networking is allowed by default in trusted_python. Direct file access is confined to the script workspace. Env secrets and shell/process control are blocked by default.
 - To access app integrations or other app tools, use ctx.call_tool/tool.call with tool_call permission, or return requests[]. The parent runtime enforces the manifest permissions and puts results in ctx["results"][request_id] on the next phase.
-- With explicit agent_wake permission, a script may request agent.wake after a deterministic condition matches. The woken text agent runs with real context: the durable memory files, MONITORS.md in full, the script's prior wake exchanges (a persistent per-script agent thread), a snapshot of the script's state, and the script's prompt payload. By default (toolSurface "full") it has its normal tool surface — actions stay governed by the action policy and standing user authorizations; set toolSurface "read-only" only for scripts whose wakes should never act, just judge and notify. If allowNotifyInbox is true it may call notify_inbox, otherwise it returns an internal judgement.
+- With explicit agent_wake permission, a script may request agent.wake after a deterministic condition matches. The woken text agent runs with real context: the durable memory files, MONITORS.md in full, the script's prior wake exchanges (a persistent per-script agent thread), a snapshot of the script's state, and the script's prompt payload. By default (toolSurface "full") it has its normal tool surface — actions stay governed by the action policy and standing user authorizations; set toolSurface "read-only" only for scripts whose wakes should never act, just judge and notify. If allowNotifyInbox is true it may call notify_inbox, otherwise it returns an internal judgement. Each wake has timeoutMs (default 120s, max 15m); timeout fails and records the operation instead of leaving the script running.
+- Webhook endpoints are managed by the webhook_* tools and dispatch only to Microscripts. Use auth_mode "svix" for Resend/Clerk/Svix/Standard Webhooks senders, "hmac" for Shopify/GitHub/Stripe/Slack-style HMAC senders, "bearer" for token callers, and "none" only for local testing or a temporary high-entropy slug workaround.
 
 Blocked-action rule:
 - If a microscript run or validation reports "Blocked microscript action", read the full error. It states what was blocked, why, the safe alternative, and the needed implementation/permission change.

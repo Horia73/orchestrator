@@ -378,7 +378,9 @@ export async function executeMicroscriptDescribeCapabilities(args: Record<string
                 'trusted_python direct networking is allowed by default; direct file access is confined to the script workspace; env secrets and shell/process control are blocked by default.',
                 'Python ZoneInfo works for the configured timezone because the sandbox permits read-only system timezone metadata under /usr/share/zoneinfo; arbitrary absolute file paths remain blocked.',
                 'A script with agent_wake permission may wake a text agent after its deterministic gate passes; the woken agent receives the script prompt plus read-only/context tools, may activate exactly relevant capabilities for context, and may call notify_inbox if allowed.',
+                'agent_wake has a per-operation timeoutMs (default 120000, max 900000); timed-out wakes fail the operation and the script run is recorded instead of staying running.',
                 'Parent-mediated helpers still enforce manifest permissions when they touch app integrations, Inbox notifications, or app tools.',
+                'Generic inbound webhooks are configured through webhook_* tools in the same microscripts capability, then subscribed to a target Microscript.',
                 'Any blocked action error includes why it was blocked, a safe alternative, and instructions to ask the user/record AGENT_NEEDS.md if implementation is needed.',
                 'Use ctx["state"] for durable private state and return {"state": {...}} with the full next state.',
                 'Microscript lifecycle tools reject unknown top-level arguments. Use exact names such as script_id, include_code, dry_run, and test_context.',
@@ -410,6 +412,12 @@ export async function executeMicroscriptDescribeCapabilities(args: Record<string
                 allowEnvironment: 'default false; app/user secrets are never passed to Python',
                 allowShell: 'default false',
                 systemTimezoneData: 'read-only /usr/share/zoneinfo access for Python ZoneInfo',
+            },
+            webhook_auth_modes: {
+                bearer: 'Bearer/header token.',
+                hmac: 'Generic HMAC-SHA256, including Shopify/GitHub/Stripe/Slack-style headers.',
+                svix: 'Svix / Standard Webhooks headers, including Resend.',
+                none: 'No authentication; testing or temporary workaround only.',
             },
             operation_kinds: [
                 'notify.inbox',

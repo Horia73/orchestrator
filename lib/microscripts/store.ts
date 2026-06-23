@@ -659,6 +659,37 @@ export function recoverRunningMicroscripts(now = Date.now()): Microscript[] {
     return recovered
 }
 
+export function recoverStaleRunningMicroscripts(now = Date.now(), staleAfterMs = 30 * 60_000): Microscript[] {
+    const cutoff = now - Math.max(60_000, staleAfterMs)
+    const rows = db
+        .prepare("SELECT * FROM microscripts WHERE status = 'running' AND updatedAt < ?")
+        .all(cutoff) as MicroscriptRow[]
+    const recovered: Microscript[] = []
+    for (const row of rows) {
+        const script = scriptFromRow(row)
+        const nextRunAt = script.enabled ? nextRunForSchedule(script.manifest.schedule, now) : null
+        const reason = `Run exceeded stale-running watchdog after ${Math.round((now - script.updatedAt) / 1000)}s.`
+        db.prepare(
+            `
+            UPDATE microscripts
+            SET status = @status, nextRunAt = @nextRunAt,
+                lastRunStatus = 'error', lastRunError = @error, updatedAt = @now
+            WHERE id = @id AND status = 'running'
+            `,
+        ).run({
+            id: script.id,
+            status: script.enabled ? 'error' : 'paused',
+            nextRunAt,
+            error: reason,
+            now,
+        })
+        recordMicroscriptEvent(script.id, 'recovered', { reason, nextRunAt })
+        recovered.push(script)
+    }
+    if (recovered.length > 0) emitMicroscriptsChanged(undefined, 'recovered-stale')
+    return recovered
+}
+
 export function expireDueMicroscripts(now = Date.now()): Microscript[] {
     const rows = db
         .prepare("SELECT * FROM microscripts WHERE enabled = 1 AND status IN ('active', 'error') AND manifest LIKE '%expiresAt%'")

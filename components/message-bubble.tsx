@@ -19,6 +19,13 @@ import { useTrapWheel } from "@/components/use-trap-wheel"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { appPath } from "@/lib/app-path"
 import { agentFullLabel } from "@/lib/agent-label"
+import { isDesktopViewport } from "@/lib/desktop-viewport"
+
+// Layout effect on the client, plain effect during SSR (matches collapse.tsx /
+// app-sidebar.tsx). Lets us measure collapsible content before the first paint
+// so it never flashes full-height and then snaps shorter on the next frame.
+const useIsomorphicLayoutEffect =
+  typeof window !== "undefined" ? React.useLayoutEffect : React.useEffect
 
 type SearchToolDisplay = "expanded" | "compact"
 
@@ -1270,16 +1277,27 @@ function UserMessageContent({ messageId, content }: { messageId: string; content
         localStorage.setItem(`user:expanded:${messageId}`, String(next))
     }, [isExpanded, messageId])
 
+    const measure = React.useCallback(() => {
+        if (contentRef.current) setContentHeight(Math.ceil(contentRef.current.getBoundingClientRect().height) + 2)
+    }, [])
+
+    // Desktop: settle the collapse height before the first paint so a long
+    // message renders already clamped (with its "Show more" affordance) instead
+    // of flashing full-height and snapping shorter — and shifting everything
+    // below it — when the post-paint effect measures it on conversation open.
+    // Gated to desktop so mobile keeps its deferred, paint-light measurement.
+    useIsomorphicLayoutEffect(() => {
+        if (!isDesktopViewport()) return
+        measure()
+    }, [content, measure])
+
     React.useEffect(() => {
         if (!contentRef.current) return
-        const update = () => {
-            if (contentRef.current) setContentHeight(Math.ceil(contentRef.current.getBoundingClientRect().height) + 2)
-        }
-        update()
-        const observer = new ResizeObserver(update)
+        measure()
+        const observer = new ResizeObserver(measure)
         observer.observe(contentRef.current)
         return () => observer.disconnect()
-    }, [content])
+    }, [content, measure])
 
     return (
         <div className="max-w-[85%] select-text rounded-[10px] bg-[#f0ede6] px-4 py-2.5 text-[16px] dark:bg-muted">

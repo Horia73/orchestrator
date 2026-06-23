@@ -18,7 +18,7 @@ export const WebhookSlugSchema = z
     .transform((value) => value.toLowerCase())
 export type WebhookSlug = z.infer<typeof WebhookSlugSchema>
 
-export const WebhookAuthModeSchema = z.enum(['bearer', 'hmac', 'none'])
+export const WebhookAuthModeSchema = z.enum(['bearer', 'hmac', 'svix', 'none'])
 export type WebhookAuthMode = z.infer<typeof WebhookAuthModeSchema>
 
 export const WebhookEventStatusSchema = z.enum(['received', 'processing', 'processed', 'duplicate', 'error'])

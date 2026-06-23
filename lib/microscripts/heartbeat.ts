@@ -5,6 +5,7 @@ import {
     expireDueMicroscripts,
     listDueMicroscripts,
     recoverRunningMicroscripts,
+    recoverStaleRunningMicroscripts,
 } from './store'
 
 const MICROSCRIPTS_HEARTBEAT_MS = 60_000
@@ -69,6 +70,7 @@ export async function runMicroscriptsHeartbeat(options: { now: number }): Promis
     errors: number
 }> {
     const now = options.now
+    const recovered = recoverStaleRunningMicroscripts(now)
     const expired = expireDueMicroscripts(now)
     const due = listDueMicroscripts(now, MAX_SCRIPTS_PER_HEARTBEAT)
     let processed = 0
@@ -86,6 +88,7 @@ export async function runMicroscriptsHeartbeat(options: { now: number }): Promis
         `Microscripts heartbeat: ${processed} run(s)`,
         `${expired.length} expired`,
     ]
+    if (recovered.length > 0) parts.push(`${recovered.length} stale recovered`)
     if (errors > 0) parts.push(`${errors} error(s)`)
     if (due.length >= MAX_SCRIPTS_PER_HEARTBEAT) {
         parts.push(`hit per-heartbeat cap ${MAX_SCRIPTS_PER_HEARTBEAT}`)

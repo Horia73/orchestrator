@@ -10,6 +10,7 @@
  *   - missing permission is denied in-band;
  *   - blocked actions explain AGENT_NEEDS.md escalation;
  *   - agent wake requests require explicit permission;
+ *   - stale running scripts are recovered by the watchdog;
  *   - direct trusted Python file access stays inside script workspace.
  */
 import fs from 'fs'
@@ -26,6 +27,8 @@ async function main(): Promise<void> {
         getMicroscript,
         listMicroscriptEvents,
         listMicroscripts,
+        claimMicroscriptForWebhook,
+        recoverStaleRunningMicroscripts,
     } = await import('@/lib/microscripts/store')
     const { runMicroscript, validateMicroscriptCode } = await import('@/lib/microscripts/runner')
     const { listInboxConversations } = await import('@/lib/scheduling/store')
@@ -295,6 +298,32 @@ def run(ctx):
             && listMicroscriptEvents(dryAgentScript.id).length === beforeDryAgentEvents
             && listInboxConversations().length === beforeDryAgentInbox,
         { dryAgentRun, afterDryAgent },
+    )
+
+    const staleScript = createMicroscript({
+        title: 'Smoke stale running recovery',
+        code: validCode,
+        enabled: true,
+        manifest: {
+            description: 'Smoke stale-running watchdog test',
+            schedule: { kind: 'manual' },
+            permissions: [],
+            stop: { persistent: true, expiresAt: null },
+            limits: { timeoutMs: 5_000, maxPhases: 4, minIntervalMs: 60_000, maxConsecutiveFailures: 3 },
+        },
+    })
+    const claimedStale = claimMicroscriptForWebhook(staleScript.id, Date.now())
+    const recoveredStale = recoverStaleRunningMicroscripts(Date.now() + 31 * 60_000, 30 * 60_000)
+    const afterStaleRecovery = getMicroscript(staleScript.id)
+    check(
+        'stale running microscript watchdog recovers script to error',
+        Boolean(claimedStale)
+            && recoveredStale.some((script) => script.id === staleScript.id)
+            && afterStaleRecovery?.status === 'error'
+            && afterStaleRecovery.lastRunStatus === 'error'
+            && /stale-running watchdog/.test(afterStaleRecovery.lastRunError ?? '')
+            && listMicroscriptEvents(staleScript.id).some((event) => event.kind === 'recovered'),
+        { claimedStale, recoveredStale, afterStaleRecovery },
     )
 
     const directFileCode = `

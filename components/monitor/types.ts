@@ -160,7 +160,7 @@ export interface MicroscriptDetail extends MicroscriptRow {
   events: MicroscriptEvent[]
 }
 
-export type WebhookAuthMode = "bearer" | "hmac" | "none"
+export type WebhookAuthMode = "bearer" | "hmac" | "svix" | "none"
 export type WebhookEventStatus =
   | "received"
   | "processing"

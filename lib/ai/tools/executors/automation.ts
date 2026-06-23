@@ -111,6 +111,14 @@ import {
   executeMicroscriptRunNow,
   executeMicroscriptUpdate,
 } from "../microscripts"
+import {
+  executeWebhookCreate,
+  executeWebhookDelete,
+  executeWebhookDescribeCapabilities,
+  executeWebhookList,
+  executeWebhookSubscriptionCreate,
+  executeWebhookUpdate,
+} from "../webhooks"
 import type { ToolExecutor } from "./types"
 
 export const automationToolExecutors: Record<string, ToolExecutor> = {
@@ -180,4 +188,10 @@ export const automationToolExecutors: Record<string, ToolExecutor> = {
   microscript_delete: executeMicroscriptDelete,
   microscript_run_now: executeMicroscriptRunNow,
   microscript_get_run: executeMicroscriptGetRun,
+  webhook_describe_capabilities: executeWebhookDescribeCapabilities,
+  webhook_list: executeWebhookList,
+  webhook_create: executeWebhookCreate,
+  webhook_update: executeWebhookUpdate,
+  webhook_delete: executeWebhookDelete,
+  webhook_subscription_create: executeWebhookSubscriptionCreate,
 }

@@ -96,6 +96,8 @@ export const MicroscriptPermissionSchema = z.discriminatedUnion('kind', [
         maxPromptChars: z.number().int().min(200).max(20_000).default(4_000),
         /** Let the woken agent call notify_inbox. Keep true for "model decides whether to surface" gates. */
         allowNotifyInbox: z.boolean().default(true),
+        /** Hard wall-clock timeout for the model wake operation. */
+        timeoutMs: z.number().int().min(5_000).max(15 * 60_000).default(120_000),
         /**
          * Tool surface for the woken agent. 'full' (default) gives the agent its
          * normal gated tool surface — actions stay governed by the action policy

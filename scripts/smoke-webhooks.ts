@@ -10,6 +10,7 @@
 import fs from 'fs'
 import os from 'os'
 import path from 'path'
+import { createHmac } from 'crypto'
 
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'webhooks-smoke-'))
 process.chdir(tmpRoot)
@@ -31,6 +32,11 @@ async function main(): Promise<void> {
         getMicroscript,
         listMicroscriptRuns,
     } = await import('@/lib/microscripts/store')
+    const {
+        executeWebhookCreate,
+        executeWebhookList,
+        executeWebhookSubscriptionCreate,
+    } = await import('@/lib/ai/tools/webhooks')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -75,6 +81,61 @@ async function main(): Promise<void> {
     })
     const goodAuth = authenticateWebhookRequest(endpoint, request, rawBody)
     check('bearer auth accepts valid secret', goodAuth.ok === true, goodAuth)
+
+    const hmacSecret = 'shopify-compatible-hmac-secret'
+    const { endpoint: hmacEndpoint } = createWebhookEndpoint({
+        slug: 'shopify-events',
+        title: 'Shopify events',
+        source: 'shopify',
+        defaultEventType: 'orders/create',
+        authMode: 'hmac',
+        secret: hmacSecret,
+        retentionDays: 7,
+    }, 'system')
+    const shopifyRawBody = JSON.stringify({ id: 1001, topic: 'orders/create' })
+    const shopifySignature = createHmac('sha256', hmacSecret).update(shopifyRawBody).digest('base64')
+    const shopifyAuth = authenticateWebhookRequest(
+        hmacEndpoint,
+        new Request('http://localhost/api/webhooks/shopify-events', {
+            method: 'POST',
+            headers: { 'x-shopify-hmac-sha256': shopifySignature },
+            body: shopifyRawBody,
+        }),
+        shopifyRawBody,
+    )
+    check('hmac auth accepts Shopify-style base64 signature', shopifyAuth.ok === true, shopifyAuth)
+
+    const svixSecretBytes = Buffer.from('resend-svix-smoke-secret')
+    const svixSecret = `whsec_${svixSecretBytes.toString('base64')}`
+    const { endpoint: svixEndpoint } = createWebhookEndpoint({
+        slug: 'resend-events',
+        title: 'Resend events',
+        source: 'resend',
+        defaultEventType: 'email.received',
+        authMode: 'svix',
+        secret: svixSecret,
+        retentionDays: 7,
+    }, 'system')
+    const svixRawBody = JSON.stringify({ type: 'email.received', data: { email_id: 'eml_123' } })
+    const svixId = 'msg_resend_smoke_1'
+    const svixTimestamp = String(Math.floor(Date.now() / 1000))
+    const svixSignature = createHmac('sha256', svixSecretBytes)
+        .update(`${svixId}.${svixTimestamp}.${svixRawBody}`)
+        .digest('base64')
+    const svixAuth = authenticateWebhookRequest(
+        svixEndpoint,
+        new Request('http://localhost/api/webhooks/resend-events', {
+            method: 'POST',
+            headers: {
+                'svix-id': svixId,
+                'svix-timestamp': svixTimestamp,
+                'svix-signature': `v1,${svixSignature}`,
+            },
+            body: svixRawBody,
+        }),
+        svixRawBody,
+    )
+    check('svix auth accepts Resend/Svix signature', svixAuth.ok === true, svixAuth)
 
     const payload = JSON.parse(rawBody) as Record<string, unknown>
     const normalized = normalizeWebhookEvent(endpoint, request, payload)
@@ -130,6 +191,41 @@ def run(ctx):
         eventType: 'smoke.event',
     })
     check('subscription created', subscription.id.startsWith('whs_'), subscription)
+
+    const toolEndpoint = executeWebhookCreate({
+        title: 'Tool-created webhook',
+        slug: 'tool-events',
+        source: 'tool',
+        default_event_type: 'tool.event',
+        auth_mode: 'svix',
+        secret: svixSecret,
+    })
+    check(
+        'webhook_create tool creates endpoint without echoing supplied secret',
+        toolEndpoint.success === true && !(toolEndpoint.data as { secret?: string }).secret,
+        toolEndpoint,
+    )
+    const toolSubscription = executeWebhookSubscriptionCreate({
+        endpoint_id_or_slug: 'tool-events',
+        target_id: script.id,
+        event_type: 'tool.event',
+        payload_path: 'data.status',
+        payload_equals_json: '"paid"',
+    })
+    check(
+        'webhook_subscription_create tool supports scalar payload_equals_json',
+        toolSubscription.success === true
+            && (toolSubscription.data as { subscription?: { payloadEquals?: unknown } }).subscription?.payloadEquals === 'paid',
+        toolSubscription,
+    )
+    const toolList = executeWebhookList()
+    check(
+        'webhook_list tool includes public endpoints',
+        toolList.success === true
+            && Array.isArray((toolList.data as { endpoints?: unknown[] }).endpoints)
+            && ((toolList.data as { endpoints?: Array<{ slug?: string; secret?: string }> }).endpoints ?? []).some((item) => item.slug === 'tool-events' && !('secret' in item)),
+        toolList,
+    )
 
     const dispatched = await dispatchWebhookEvent(first.event.id)
     const afterScript = getMicroscript(script.id)

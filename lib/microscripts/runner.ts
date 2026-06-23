@@ -1121,6 +1121,9 @@ async function executeAgentWake(
         stateSnapshot: clipJsonForPrompt(state, 3_500),
     })
     const notificationsBefore = notifications.length
+    const wakeTimeoutMs = permission.timeoutMs
+    const abortController = new AbortController()
+    let acceptingAgentEvents = true
 
     // Wake continuity: one persistent agent thread per script, so this wake sees
     // the prior wake exchanges (what was observed, what was decided/sent). The
@@ -1152,6 +1155,7 @@ async function executeAgentWake(
         agentThreadId: wakeThreadId ?? undefined,
         parentRequestId: `microscript_${script.id}_${randomUUID()}`,
         appOrigin: resolveAppOrigin(),
+        signal: abortController.signal,
         ...(readOnly ? { toolSurfaceMode: 'read-only' as const } : {}),
         // Monitor-contract wake: the woken agent gets MONITORS.md in full so the
         // durable monitor spec (notify rules, silence rules, standing
@@ -1161,6 +1165,7 @@ async function executeAgentWake(
         // microscript wake can surface a notification without an activation hop.
         preactivatedCapabilities: ['inbox'],
         onAgentEvent: (event) => {
+            if (!acceptingAgentEvents) return
             if (event.type !== 'agent_tool_call' || event.toolCall?.name !== 'notify_inbox') return
             const args = event.toolCall.arguments as { title?: unknown; body?: unknown; actions?: unknown }
             const body = typeof args.body === 'string' ? args.body.trim() : ''
@@ -1174,12 +1179,17 @@ async function executeAgentWake(
         },
     }
 
-    const result = await runTextSubAgent({
-        target,
-        prompt,
-        parentCtx,
-        agentThreadId: wakeThreadId ?? undefined,
-    })
+    let result: Awaited<ReturnType<typeof runTextSubAgent>>
+    try {
+        result = await withAgentWakeTimeout(runTextSubAgent({
+            target,
+            prompt,
+            parentCtx,
+            agentThreadId: wakeThreadId ?? undefined,
+        }), abortController, wakeTimeoutMs)
+    } finally {
+        acceptingAgentEvents = false
+    }
     if (!result.success) {
         throw new Error(result.error ?? `Agent ${request.agent_id} wake failed.`)
     }
@@ -1207,6 +1217,28 @@ async function executeAgentWake(
         notified: notifications.length > notificationsBefore,
         notification_count: notifications.length - notificationsBefore,
     }
+}
+
+function withAgentWakeTimeout<T>(
+    promise: Promise<T>,
+    abortController: AbortController,
+    timeoutMs: number,
+): Promise<T> {
+    let timeout: NodeJS.Timeout | null = null
+    return new Promise<T>((resolve, reject) => {
+        timeout = setTimeout(() => {
+            abortController.abort()
+            reject(new Error(`Agent wake timed out after ${timeoutMs}ms.`))
+        }, timeoutMs)
+        promise.then(
+            (value) => resolve(value),
+            (err) => reject(err),
+        ).finally(() => {
+            if (timeout) clearTimeout(timeout)
+        })
+    }).finally(() => {
+        if (timeout) clearTimeout(timeout)
+    })
 }
 
 function clipJsonForPrompt(value: unknown, maxChars: number): string {

@@ -130,6 +130,12 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
         capability: 'Bounded Python automations for small stateful watchers: run short checks, request permitted operations through the parent runtime, notify or act when conditions are met, then pause/complete/expire so they do not run forever.',
         doctrine: MICROSCRIPTS_DOCTRINE,
         toolIds: [
+            'webhook_describe_capabilities',
+            'webhook_list',
+            'webhook_create',
+            'webhook_update',
+            'webhook_delete',
+            'webhook_subscription_create',
             'microscript_describe_capabilities',
             'microscript_create',
             'microscript_list',

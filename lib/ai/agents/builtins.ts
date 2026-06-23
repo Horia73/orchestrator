@@ -339,6 +339,12 @@ export const MONITORING_TOOL_IDS: string[] = [
 ]
 
 export const MICROSCRIPT_TOOL_IDS: string[] = [
+    'webhook_describe_capabilities',
+    'webhook_list',
+    'webhook_create',
+    'webhook_update',
+    'webhook_delete',
+    'webhook_subscription_create',
     'microscript_describe_capabilities',
     'microscript_create',
     'microscript_list',

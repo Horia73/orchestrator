@@ -10,6 +10,7 @@ import { Copy, Check, FileText, FileSpreadsheet, Presentation, Image as ImageIco
 import { cn } from "@/lib/utils"
 import { copyTextToClipboard } from "@/lib/clipboard"
 import { appApiPath, appPath } from "@/lib/app-path"
+import { isDesktopViewport } from "@/lib/desktop-viewport"
 import { UPLOAD_MIME_MAP } from "@/lib/upload-mime"
 import {
   workspaceHtmlPreviewFromHref,
@@ -140,7 +141,14 @@ function HighlightedCode({
         ) => number
       }
     ).requestIdleCallback
-    if (typeof ric === "function") {
+    if (isDesktopViewport()) {
+      // Desktop: highlight right away (still async via the dynamic import) so a
+      // freshly opened conversation isn't shown with plain code that visibly
+      // colors in up to ~1.2s later — which reads as the text "still loading".
+      // The mobile idle-deferral below stays: it's there to keep a burst of code
+      // blocks off the conversation-open critical path on phones.
+      highlight()
+    } else if (typeof ric === "function") {
       idleHandle = ric(highlight, { timeout: 1200 })
     } else {
       idleHandle = window.setTimeout(highlight, 1)

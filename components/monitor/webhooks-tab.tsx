@@ -35,6 +35,7 @@ import type {
 const AUTH_OPTIONS = [
   { value: "bearer", label: "Bearer secret" },
   { value: "hmac", label: "HMAC SHA-256" },
+  { value: "svix", label: "Svix / Standard Webhooks" },
   { value: "none", label: "No auth" },
 ]
 
@@ -1427,6 +1428,8 @@ function authLabel(authMode: WebhookAuthMode): string {
       return "Bearer secret"
     case "hmac":
       return "HMAC SHA-256"
+    case "svix":
+      return "Svix / Standard Webhooks"
     case "none":
       return "No auth"
   }
