@@ -174,6 +174,7 @@ export function RemoteAccessPanel({
   const [loading, setLoading] = React.useState(true)
   const [busy, setBusy] = React.useState(false)
   const [installing, setInstalling] = React.useState(false)
+  const [showReconfig, setShowReconfig] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
   const { confirm, dialog } = useConfirm()
 
@@ -290,10 +291,25 @@ export function RemoteAccessPanel({
 
       <Section icon={<Globe className="h-4 w-4" />} title="HTTPS / public address">
         {hasHttps ? (
-          <div className="flex items-center gap-2 text-sm text-foreground">
-            <CheckCircle2 className="h-4 w-4 text-emerald-500" />
-            <span>HTTPS is set up.</span>
-            {access.publicUrl ? <CopyLink url={access.publicUrl} /> : null}
+          <div className="space-y-2">
+            <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+              <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+              <span>HTTPS is set up.</span>
+              {access.publicUrl ? <CopyLink url={access.publicUrl} /> : null}
+            </div>
+            {bridge.available ? (
+              showReconfig ? (
+                <HttpsSetupForm onDone={load} />
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => setShowReconfig(true)}
+                  className="text-xs font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                >
+                  Change HTTPS domain (DuckDNS)
+                </button>
+              )
+            ) : null}
           </div>
         ) : (
           <div className="space-y-3">
