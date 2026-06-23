@@ -16,11 +16,16 @@
  *
  * Run with: npx tsx scripts/smoke-agent-concurrency.ts
  */
+// Disable the staggered-admission ramp so the smoke runs fast (the ramp adds
+// real setTimeout spacing between fresh starts in production).
+process.env.AGENT_RAMP_MS = '0'
+
 import {
     acquireRun,
     releaseTree,
     tryReserveTreeSpawn,
     __setGateCapacitiesForTest,
+    __setProviderCapForTest,
     getAgentGateStats,
 } from '@/lib/ai/concurrency-gate'
 
@@ -196,7 +201,37 @@ async function main() {
     check('total-active never exceeded cap (8)', maxTotal <= 8, `peak=${maxTotal}`)
     check('counters drained to zero', liveTotal === 0 && liveMain === 0, `total=${liveTotal} main=${liveMain}`)
 
-    // ---- Scenario 4: gate accounting returns to idle ------------------------
+    // ---- Scenario 4: per-provider rate-limit cap ----------------------------
+    // 10 agents all on the same backend with a generous total pool but a
+    // provider cap of 3 — at most 3 may hit that backend at once (so a burst
+    // can't trip the upstream 429/529).
+    console.log('\nScenario 4 — per-provider cap (claude=3) with generous total (20):')
+    __setGateCapacitiesForTest(20, 20, 1000)
+    __setProviderCapForTest('claude', 3)
+    let claudeLive = 0
+    let claudeMax = 0
+    const r4 = await withTimeout(
+        Promise.all(
+            Array.from({ length: 10 }, () => async () => {
+                const permit = await acquireRun({ topLevel: false, priority: 'interactive', provider: 'claude' })
+                claudeLive += 1
+                if (claudeLive > claudeMax) claudeMax = claudeLive
+                try {
+                    await sleep(4)
+                } finally {
+                    claudeLive -= 1
+                    permit.dispose()
+                }
+            }).map(run => run())
+        ),
+        15_000
+    )
+    check('completed (no deadlock)', r4 !== 'TIMEOUT')
+    check('provider-active never exceeded cap (3)', claudeMax <= 3, `peak=${claudeMax}`)
+    check('reached the provider cap (throttling engaged)', claudeMax === 3, `peak=${claudeMax}`)
+    check('provider counter drained to zero', claudeLive === 0, `live=${claudeLive}`)
+
+    // ---- Scenario 5: gate accounting returns to idle ------------------------
     const stats = getAgentGateStats()
     check(
         'gate idle after all runs',

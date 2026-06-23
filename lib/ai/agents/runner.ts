@@ -120,9 +120,11 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
     const rootRunId = args.parentCtx.rootRunId ?? `root_${randomUUID()}`
     const ownsTree = isTopLevel || !args.parentCtx.rootRunId
     const priority: GatePriority = isTopLevel ? 'background' : 'interactive'
-    const permit = await acquireRun({ topLevel: isTopLevel, priority })
+    // Resolve the runtimes up front so the gate can apply the per-provider
+    // rate-limit cap (the primary candidate's backend is what this run hits).
+    const runtimes = resolveAgentRuntimeCandidates(args.target)
+    const permit = await acquireRun({ topLevel: isTopLevel, priority, provider: runtimes[0]?.provider })
     try {
-        const runtimes = resolveAgentRuntimeCandidates(args.target)
         let lastResult: ToolResult | null = null
         const attempts: Array<{ provider: string; model: string; error: string }> = []
 
@@ -690,6 +692,7 @@ export async function runMediaSubAgent(args: RunMediaSubAgentArgs): Promise<Tool
     const permit = await acquireRun({
         topLevel: isTopLevel,
         priority: isTopLevel ? 'background' : 'interactive',
+        provider: resolveAgentRuntimeSettings(args.target).provider,
     })
     try {
         return await runMediaSubAgentInner(args)
