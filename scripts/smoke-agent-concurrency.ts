@@ -231,7 +231,36 @@ async function main() {
     check('reached the provider cap (throttling engaged)', claudeMax === 3, `peak=${claudeMax}`)
     check('provider counter drained to zero', claudeLive === 0, `live=${claudeLive}`)
 
-    // ---- Scenario 5: gate accounting returns to idle ------------------------
+    // ---- Scenario 5: onQueued fires for runs that have to wait --------------
+    // Drives the UI "queued" card. With total=2 and 5 runs, the 3 that wait for
+    // a slot must each get an onQueued callback; the 2 that start immediately
+    // must not.
+    console.log('\nScenario 5 — onQueued fires for waiting runs (total=2, 5 runs):')
+    __setGateCapacitiesForTest(2, 2, 1000)
+    let onQueuedCount = 0
+    const r5 = await withTimeout(
+        Promise.all(
+            Array.from({ length: 5 }, () => async () => {
+                const permit = await acquireRun({
+                    topLevel: false,
+                    priority: 'interactive',
+                    onQueued: () => {
+                        onQueuedCount += 1
+                    },
+                })
+                try {
+                    await sleep(4)
+                } finally {
+                    permit.dispose()
+                }
+            }).map(run => run())
+        ),
+        15_000
+    )
+    check('completed', r5 !== 'TIMEOUT')
+    check('onQueued fired for the 3 runs that waited', onQueuedCount === 3, `fired=${onQueuedCount}`)
+
+    // ---- Scenario 6: gate accounting returns to idle ------------------------
     const stats = getAgentGateStats()
     check(
         'gate idle after all runs',

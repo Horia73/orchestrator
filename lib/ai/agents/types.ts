@@ -292,6 +292,24 @@ export type AgentRunStatus = "running" | "ok" | "error" | "aborted"
 
 export type AgentRunEvent =
   | {
+      /** Emitted when a run is admitted to the concurrency gate's queue (it had
+       *  to wait for a slot). The UI shows a "queued" card that the matching
+       *  agent_start (same runId) replaces with the running card. Transient —
+       *  never persisted. */
+      type: "agent_queued"
+      runId: string
+      parentRunId?: string
+      toolCallId?: string
+      agentId: string
+      agentName: string
+      assignedName?: string
+      taskLabel?: string
+      kind: AgentKind
+      agentThreadId?: string
+      depth: number
+      startedAt: number
+    }
+  | {
       type: "agent_start"
       runId: string
       parentRunId?: string

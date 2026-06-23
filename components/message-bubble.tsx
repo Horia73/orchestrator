@@ -1132,7 +1132,8 @@ function ToolCallBlock({
     return <InlineToolCallView entry={entry} onOpen={onArtifactClick} searchDisplay={searchToolDisplay} />
 }
 
-function formatAgentStatus(status: AgentCallReasoningEntry["status"]): string {
+function formatAgentStatus(status: AgentCallReasoningEntry["status"], queued?: boolean): string {
+    if (queued) return "queued"
     if (status === "running") return "running"
     if (status === "error") return "failed"
     if (status === "aborted") return "stopped"
@@ -1166,7 +1167,7 @@ function GenericAgentCallBlock({
     onOpen?: (entry: AgentCallReasoningEntry) => void
 }) {
     const toolCount = countAgentTools(entry)
-    const statusText = formatAgentStatus(entry.status)
+    const statusText = formatAgentStatus(entry.status, entry.queued)
     const outputChars = entry.content.length
     const details = [
         statusText,

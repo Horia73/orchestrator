@@ -203,6 +203,9 @@ export interface AgentCallReasoningEntry {
   title: string
   prompt: string
   status: AgentRunStatus
+  /** True while the run is waiting in the concurrency-gate queue (admitted but
+   *  not yet started). Cleared when the matching agent_start arrives. */
+  queued?: boolean
   startedAt: number
   endedAt?: number
   content: string

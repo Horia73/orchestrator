@@ -267,11 +267,6 @@ function reserveRampSlot(): number {
     return earliest - now
 }
 
-async function rampGate(): Promise<void> {
-    const wait = reserveRampSlot()
-    if (wait > 0) await new Promise<void>(r => setTimeout(r, wait))
-}
-
 /** A held slot for one agent run. Always `dispose()` it in a finally. */
 export interface RunPermit {
     /** Release the total + provider slots while this agent awaits delegated
@@ -292,6 +287,10 @@ interface AcquireOpts {
     /** Backend this run will call (claude/codex/google/browser). Gated by the
      *  per-provider rate-limit cap. Omit for runs with no upstream call. */
     provider?: string
+    /** Fired once if this run has to WAIT before it can start (a pool is at
+     *  capacity, or the staggered ramp is spacing it out). Lets the UI show a
+     *  "queued" indicator until the run is admitted. */
+    onQueued?: () => void
 }
 
 /** Acquire the slots for one agent run. Resolves once the agent may start.
@@ -300,10 +299,25 @@ interface AcquireOpts {
 export async function acquireRun(opts: AcquireOpts): Promise<RunPermit> {
     const prio = PRIORITY[opts.priority]
 
-    // Stagger fresh starts so a fan-out burst doesn't slam the event loop.
-    await rampGate()
-
     const providerSem = opts.provider ? getProviderSemaphore(opts.provider) : null
+
+    // Will this run have to wait? (a pool is saturated, or the ramp is spacing
+    // it out). If so, tell the caller so the UI can show a "queued" card.
+    const willBlock =
+        (providerSem ? providerSem.active >= providerSem.capacity : false) ||
+        (opts.topLevel ? state.main.active >= state.main.capacity : false) ||
+        state.total.active >= state.total.capacity
+    // Stagger fresh starts so a fan-out burst doesn't slam the event loop.
+    const rampWait = reserveRampSlot()
+    if (opts.onQueued && (willBlock || rampWait > 0)) {
+        try {
+            opts.onQueued()
+        } catch {
+            /* never let an observer hook break admission */
+        }
+    }
+    if (rampWait > 0) await new Promise<void>(r => setTimeout(r, rampWait))
+
     if (providerSem) await providerSem.acquire(prio)
     let holdsProvider = Boolean(providerSem)
 

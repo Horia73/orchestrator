@@ -2004,6 +2004,28 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
                       title: resultTitle,
                     })
                   }
+                } else if (data.type === "agent_queued") {
+                  // Transient "waiting for a slot" card. The matching agent_start
+                  // (same runId) replaces it in place once the run is admitted.
+                  const entry = agentCallEntryFromStartEvent(
+                    data,
+                    reasoningPhase
+                  )
+                  if (entry) {
+                    entry.queued = true
+                    if (streamMode === "content") {
+                      reasoningPhase += 1
+                      streamMode = "reasoning"
+                      entry.phase = reasoningPhase
+                    }
+                    const existing = accReasoning.findIndex(
+                      (item) =>
+                        item.type === "agent_call" && item.runId === entry.runId
+                    )
+                    if (existing >= 0) accReasoning[existing] = entry
+                    else accReasoning.push(entry)
+                    dispatch({ type: "UPSERT_STREAMING_AGENT_CALL", entry })
+                  }
                 } else if (data.type === "agent_start") {
                   const entry = agentCallEntryFromStartEvent(
                     data,

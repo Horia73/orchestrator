@@ -123,14 +123,39 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
     // Resolve the runtimes up front so the gate can apply the per-provider
     // rate-limit cap (the primary candidate's backend is what this run hits).
     const runtimes = resolveAgentRuntimeCandidates(args.target)
-    const permit = await acquireRun({ topLevel: isTopLevel, priority, provider: runtimes[0]?.provider })
+    // Stable id for this run, generated before admission so a "queued" card can
+    // be shown while the gate makes us wait; the first attempt reuses it so the
+    // queued card flips to the running card in place.
+    const queuedRunId = `sub_${randomUUID()}`
+    const permit = await acquireRun({
+        topLevel: isTopLevel,
+        priority,
+        provider: runtimes[0]?.provider,
+        onQueued: () =>
+            emitAgent(args.parentCtx, {
+                type: 'agent_queued',
+                runId: queuedRunId,
+                parentRunId: args.parentCtx.parentAgentRunId,
+                toolCallId: args.parentCtx.currentToolCallId,
+                agentId: args.target.id,
+                agentName: args.target.name,
+                assignedName: args.assignedName,
+                taskLabel: args.taskLabel,
+                kind: args.target.kind,
+                agentThreadId: args.agentThreadId,
+                depth: args.parentCtx.depth + 1,
+                startedAt: Date.now(),
+            }),
+    })
     try {
         let lastResult: ToolResult | null = null
         const attempts: Array<{ provider: string; model: string; error: string }> = []
 
         for (let index = 0; index < runtimes.length; index++) {
             const runtime = runtimes[index]
-            const result = await runTextSubAgentAttempt(args, runtime, permit, rootRunId)
+            // First attempt reuses the pre-generated runId (matches the queued
+            // card); fallbacks get fresh ids so each is its own row.
+            const result = await runTextSubAgentAttempt(args, runtime, permit, rootRunId, index === 0 ? queuedRunId : undefined)
             if (result.success) return result
             lastResult = result
             attempts.push({
@@ -178,7 +203,7 @@ function stripSubAgentPrefix(error: string, agentId: string): string {
         : error
 }
 
-async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings, permit?: RunPermit, rootRunId?: string): Promise<ToolResult> {
+async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: RuntimeAgentSettings, permit?: RunPermit, rootRunId?: string, providedRunId?: string): Promise<ToolResult> {
     const { target, prompt, parentCtx, agentThreadId, cwd, attachments } = args
     const runtimeTarget = resolveRuntimeAgentConfig(target, runtime.provider)
     const prevSession = agentThreadId ? getAgentThreadInteractionId(agentThreadId, runtime.provider, runtime.model) : null
@@ -223,7 +248,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         }
     }
 
-    const subRequestId = `sub_${randomUUID()}`
+    const subRequestId = providedRunId ?? `sub_${randomUUID()}`
     const startedAt = Date.now()
     const subDepth = parentCtx.depth + 1
 
