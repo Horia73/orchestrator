@@ -105,3 +105,29 @@ export async function installTailscale(): Promise<SetFunnelResult> {
     output: typeof json.output === 'string' ? json.output : undefined,
   }
 }
+
+export interface SetupHttpsResult {
+  ok: boolean
+  publicUrl: string | null
+  error: string | null
+  output?: string
+}
+
+export async function setupHttps(input: {
+  domain: string
+  token: string
+  email?: string
+}): Promise<SetupHttpsResult> {
+  const result = await callBridge('remote-access/https', {
+    method: 'POST',
+    body: { domain: input.domain, token: input.token, email: input.email ?? '' },
+  })
+  if (!result) return { ok: false, publicUrl: null, error: NO_BRIDGE.error }
+  const json = (result.json ?? {}) as Record<string, unknown>
+  return {
+    ok: result.ok && json.ok === true,
+    publicUrl: typeof json.publicUrl === 'string' ? json.publicUrl : null,
+    error: result.ok ? null : (typeof json.error === 'string' ? json.error : `Bridge returned ${result.status}.`),
+    output: typeof json.output === 'string' ? json.output : undefined,
+  }
+}

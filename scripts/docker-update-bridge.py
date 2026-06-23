@@ -802,7 +802,11 @@ def stream_update_log(handler: "Handler") -> None:
         time.sleep(LOG_STREAM_POLL_S)
 
 
-def run_capture(command: list[str], timeout: Optional[float] = None) -> tuple[int, str]:
+def run_capture(
+    command: list[str],
+    timeout: Optional[float] = None,
+    env: Optional[dict[str, str]] = None,
+) -> tuple[int, str]:
     """Run a command, mirror its combined output into the bridge log, and
     return (exit_code, output). Unlike `run`, this never raises on a non-zero
     exit — the caller decides how to report it."""
@@ -815,6 +819,7 @@ def run_capture(command: list[str], timeout: Optional[float] = None) -> tuple[in
             stderr=subprocess.STDOUT,
             text=True,
             timeout=timeout,
+            env=env,
         )
     except subprocess.TimeoutExpired:
         write_log(f"Command timed out after {timeout}s: {' '.join(command)}")
@@ -901,6 +906,40 @@ def install_tailscale() -> dict:
         "exitCode": code,
         "output": (out or "").strip()[-2000:],
         "tailscale": detected.get("tailscale"),
+    }
+
+
+def setup_https_duckdns(domain: str, token: str, email: str) -> dict:
+    """Provision public HTTPS (DuckDNS + Let's Encrypt + nginx) by invoking the
+    installer's focused `setup-https` entrypoint with the supplied inputs. Needs
+    root, so on hosts without passwordless sudo it fails and the caller falls
+    back to showing the manual command. Best-effort; never raises."""
+    script = APP_DIR / "scripts" / "install.sh"
+    if not script.exists():
+        return {"ok": False, "error": "install.sh not found in the app directory.", "publicUrl": None}
+    child_env = dict(os.environ)
+    child_env.update(
+        {
+            "ORCHESTRATOR_APP_DIR": str(APP_DIR),
+            "ORCHESTRATOR_HOME": str(TOKEN_FILE.parent),
+            "ORCHESTRATOR_PORT": str(APP_PORT),
+            "ORCHESTRATOR_PUBLIC_HTTPS_SETUP": "duckdns",
+            "ORCHESTRATOR_DUCKDNS_DOMAIN": domain,
+            "ORCHESTRATOR_DUCKDNS_TOKEN": token,
+            "ORCHESTRATOR_LETSENCRYPT_EMAIL": email or "",
+        }
+    )
+    code, out = run_capture(["bash", str(script), "setup-https"], timeout=300, env=child_env)
+    public_url = None
+    for line in (out or "").splitlines():
+        s = line.strip()
+        if s.startswith("ORCHESTRATOR_PUBLIC_URL="):
+            public_url = s.split("=", 1)[1].strip()
+    return {
+        "ok": code == 0 and bool(public_url),
+        "exitCode": code,
+        "output": (out or "").strip()[-2500:],
+        "publicUrl": public_url,
     }
 
 
@@ -1083,6 +1122,7 @@ class Handler(BaseHTTPRequestHandler):
             "/rollback",
             "/remote-access/funnel",
             "/remote-access/install-tailscale",
+            "/remote-access/https",
         }:
             self.send_json(404, {"error": "Not found."})
             return
@@ -1106,6 +1146,24 @@ class Handler(BaseHTTPRequestHandler):
 
         if path == "/remote-access/install-tailscale":
             result = install_tailscale()
+            self.send_json(200 if result.get("ok") else 502, result)
+            return
+
+        if path == "/remote-access/https":
+            try:
+                length = min(int(self.headers.get("Content-Length", "0") or "0"), 65536)
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                self.send_json(400, {"error": "Invalid JSON payload."})
+                return
+            domain = str(body.get("domain") or "").strip()
+            token = str(body.get("token") or "").strip()
+            email = str(body.get("email") or "").strip()
+            if not domain or not token:
+                self.send_json(400, {"error": "domain and token are required."})
+                return
+            result = setup_https_duckdns(domain, token, email)
             self.send_json(200 if result.get("ok") else 502, result)
             return
 

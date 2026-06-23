@@ -119,6 +119,13 @@ import {
   executeWebhookSubscriptionCreate,
   executeWebhookUpdate,
 } from "../webhooks"
+import {
+  executeRemoteAccessStatus,
+  executeRemoteAccessEnableWebhookFunnel,
+  executeRemoteAccessDisableWebhookFunnel,
+  executeRemoteAccessInstallTailscale,
+  executeRemoteAccessSetupHttps,
+} from "../remote-access"
 import type { ToolExecutor } from "./types"
 
 export const automationToolExecutors: Record<string, ToolExecutor> = {
@@ -194,4 +201,9 @@ export const automationToolExecutors: Record<string, ToolExecutor> = {
   webhook_update: executeWebhookUpdate,
   webhook_delete: executeWebhookDelete,
   webhook_subscription_create: executeWebhookSubscriptionCreate,
+  remote_access_status: executeRemoteAccessStatus,
+  remote_access_enable_webhook_funnel: executeRemoteAccessEnableWebhookFunnel,
+  remote_access_disable_webhook_funnel: executeRemoteAccessDisableWebhookFunnel,
+  remote_access_install_tailscale: executeRemoteAccessInstallTailscale,
+  remote_access_setup_https: executeRemoteAccessSetupHttps,
 }

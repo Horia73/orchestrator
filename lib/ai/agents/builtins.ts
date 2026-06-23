@@ -228,6 +228,14 @@ export const UPDATE_TOOL_IDS: string[] = [
     'apply_update',
 ]
 
+export const REMOTE_ACCESS_TOOL_IDS: string[] = [
+    'remote_access_status',
+    'remote_access_enable_webhook_funnel',
+    'remote_access_disable_webhook_funnel',
+    'remote_access_install_tailscale',
+    'remote_access_setup_https',
+]
+
 export const OBSERVABILITY_TOOL_IDS: string[] = [
     'search_past_runs',
     'get_past_run',

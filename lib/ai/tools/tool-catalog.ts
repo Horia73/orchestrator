@@ -37,6 +37,7 @@ import { monitorWakeFeedbackTool } from "./smart-monitor-feedback"
 import { smartMonitorManageTools } from "./smart-monitor-manage"
 import { microscriptTools } from "./microscripts"
 import { webhookTools } from "./webhooks"
+import { remoteAccessTools } from "./remote-access"
 import {
   mapRenderTool,
   mapsCurrentLocationTool,
@@ -115,6 +116,7 @@ export const ALL_TOOL_DEFS: ToolDef[] = [
   ...smartMonitorManageTools,
   ...microscriptTools,
   ...webhookTools,
+  ...remoteAccessTools,
   mapsStatusTool,
   mapsCurrentLocationTool,
   mapsListLocationSourcesTool,

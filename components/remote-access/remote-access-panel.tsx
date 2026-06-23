@@ -6,6 +6,7 @@ import { Globe, Wifi, Webhook, Loader2, CheckCircle2, AlertCircle, Copy, Check }
 import { cn } from "@/lib/utils"
 import { appApiPath } from "@/lib/app-path"
 import { Button } from "@/components/ui/button"
+import { Input } from "@/components/ui/input"
 import { useConfirm } from "@/components/ui/confirm-dialog"
 
 interface RuntimeAccessInfo {
@@ -74,6 +75,92 @@ function Section({
       </div>
       <div className="mt-3 space-y-2">{children}</div>
     </section>
+  )
+}
+
+function HttpsSetupForm({ onDone }: { onDone: () => Promise<void> | void }) {
+  const [domain, setDomain] = React.useState("")
+  const [token, setToken] = React.useState("")
+  const [email, setEmail] = React.useState("")
+  const [busy, setBusy] = React.useState(false)
+  const [error, setError] = React.useState<string | null>(null)
+  const [output, setOutput] = React.useState<string | null>(null)
+  const [doneUrl, setDoneUrl] = React.useState<string | null>(null)
+
+  const canSubmit = domain.trim().length > 0 && token.trim().length > 0 && !busy
+
+  const submit = React.useCallback(async () => {
+    setBusy(true)
+    setError(null)
+    setOutput(null)
+    try {
+      const res = await fetch(appApiPath("/api/remote-access/https"), {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ domain: domain.trim(), token: token.trim(), email: email.trim() }),
+      })
+      const json = await res.json().catch(() => null)
+      if (!res.ok || !json?.ok) {
+        if (json?.output) setOutput(String(json.output))
+        throw new Error(json?.error || "HTTPS setup didn't complete — see the details below.")
+      }
+      setDoneUrl(json.publicUrl ?? null)
+      await onDone()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "HTTPS setup failed.")
+    } finally {
+      setBusy(false)
+    }
+  }, [domain, token, email, onDone])
+
+  if (doneUrl) {
+    return (
+      <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+        <CheckCircle2 className="h-4 w-4 text-emerald-500" />
+        <span>HTTPS is set up — open Orchestrator at</span>
+        <CopyLink url={doneUrl} />
+      </div>
+    )
+  }
+
+  return (
+    <div className="space-y-2 rounded-lg border border-border/60 bg-card/40 p-3">
+      <div className="grid gap-2 sm:grid-cols-2">
+        <Input
+          value={domain}
+          onChange={(e) => setDomain(e.target.value)}
+          placeholder="DuckDNS domain (e.g. my-orchestrator)"
+          className="h-8 text-[13px]"
+        />
+        <Input
+          value={token}
+          onChange={(e) => setToken(e.target.value)}
+          placeholder="DuckDNS token"
+          type="password"
+          className="h-8 text-[13px]"
+        />
+      </div>
+      <Input
+        value={email}
+        onChange={(e) => setEmail(e.target.value)}
+        placeholder="Let's Encrypt email (optional)"
+        className="h-8 text-[13px]"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <Button size="sm" disabled={!canSubmit} onClick={() => void submit()}>
+          {busy ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Set up HTTPS"}
+        </Button>
+        <span className="text-[11px] text-muted-foreground">
+          Provisions a Let&apos;s Encrypt cert + reverse proxy on the host (needs root).
+        </span>
+      </div>
+      {error ? <p className="text-xs text-destructive">{error}</p> : null}
+      {output ? (
+        <pre className="max-h-32 overflow-auto rounded bg-muted/50 p-2 text-[10px] leading-snug text-muted-foreground">
+          {output}
+        </pre>
+      ) : null}
+    </div>
   )
 }
 
@@ -209,11 +296,20 @@ export function RemoteAccessPanel({
             {access.publicUrl ? <CopyLink url={access.publicUrl} /> : null}
           </div>
         ) : (
-          <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400">
-            No public HTTPS URL configured. HTTPS is needed for Google/Gmail sign-in and browser
-            notifications. Set <span className="font-mono">ORCHESTRATOR_PUBLIC_URL</span> to your
-            HTTPS domain, or run the installer&apos;s HTTPS setup.
-          </p>
+          <div className="space-y-3">
+            <p className="text-xs leading-relaxed text-amber-600 dark:text-amber-400">
+              No public HTTPS URL yet. HTTPS is needed for Google/Gmail sign-in and browser
+              notifications. Set it up with your own domain on DuckDNS:
+            </p>
+            {bridge.available ? (
+              <HttpsSetupForm onDone={load} />
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                HTTPS setup runs on the host (Docker installs). Point your domain at a LAN IP and set{" "}
+                <span className="font-mono">ORCHESTRATOR_PUBLIC_URL</span>, or re-run the installer&apos;s HTTPS step.
+              </p>
+            )}
+          </div>
         )}
       </Section>
 

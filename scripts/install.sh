@@ -1360,6 +1360,32 @@ install_docker_stack() {
   install_docker_cli
 }
 
+# Focused entrypoint so the running app (via the host bridge) can provision
+# public HTTPS after the fact, instead of only at install time. Reads the
+# DuckDNS inputs from the environment (ORCHESTRATOR_DUCKDNS_DOMAIN/TOKEN,
+# ORCHESTRATOR_LETSENCRYPT_EMAIL) and reuses the same stack the installer runs.
+setup_https_only() {
+  setup_install_logging
+  [ "$(uname -s)" = "Linux" ] || fail "DuckDNS HTTPS setup is supported on Linux servers only."
+  PUBLIC_HTTPS_SETUP="duckdns"
+  configure_public_https_inputs
+  install_public_https_stack
+  if [ -n "$PUBLIC_URL" ]; then
+    # Persist for container rebuilds, and write the live workspace env so the
+    # running container picks up the public URL without a restart.
+    if [ -f "$APP_DIR/.env" ]; then
+      upsert_env_value "$APP_DIR/.env" ORCHESTRATOR_PUBLIC_URL "$PUBLIC_URL" || true
+    fi
+    mkdir -p "$ORCH_HOME/workspace" 2>/dev/null || true
+    if [ -d "$ORCH_HOME/workspace" ]; then
+      upsert_env_value "$ORCH_HOME/workspace/.env.local" ORCHESTRATOR_PUBLIC_URL "$PUBLIC_URL" || true
+      chmod 600 "$ORCH_HOME/workspace/.env.local" 2>/dev/null || true
+    fi
+    log "HTTPS configured. Public URL: $PUBLIC_URL"
+    printf 'ORCHESTRATOR_PUBLIC_URL=%s\n' "$PUBLIC_URL"
+  fi
+}
+
 main() {
   local mode
   mode="$(resolve_install_mode)"
@@ -1394,4 +1420,11 @@ main() {
   fi
 }
 
-main "$@"
+case "${1:-}" in
+  setup-https)
+    setup_https_only
+    ;;
+  *)
+    main "$@"
+    ;;
+esac
