@@ -68,6 +68,7 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           totalTokens INTEGER,
           modalityBreakdown TEXT,
           billingBreakdown TEXT,
+          usageCorrectionVersion TEXT,
           toolCallCount INTEGER NOT NULL DEFAULT 0,
           interactionId TEXT,
           statefulMode INTEGER NOT NULL DEFAULT 0,
@@ -110,6 +111,11 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
           messages TEXT,
           tools TEXT,
           createdAt INTEGER
+      );
+
+      CREATE TABLE IF NOT EXISTS schema_migrations (
+          id TEXT PRIMARY KEY,
+          appliedAt INTEGER NOT NULL
       );
 
       CREATE TABLE IF NOT EXISTS agent_threads (
@@ -564,6 +570,95 @@ export function initializeDatabaseSchema(db: SqliteExecutor): void {
     db.exec(`ALTER TABLE request_logs ADD COLUMN billingBreakdown TEXT`)
   } catch {
     /* column already exists */
+  }
+  try {
+    db.exec(`ALTER TABLE request_logs ADD COLUMN usageCorrectionVersion TEXT`)
+  } catch {
+    /* column already exists */
+  }
+
+  // Backfill: Codex app-server used to persist tokenUsage.total as the request
+  // usage. On resumed stateful threads that field is cumulative for the whole
+  // thread, so later rows looked like tens of millions of input/cache tokens.
+  // Convert existing rows once by subtracting the previous row on the same
+  // app-server interaction. New rows are already written as per-turn deltas.
+  try {
+    db.exec(`
+      WITH legacy_rows AS (
+        SELECT
+          id,
+          LAG(inputTokens) OVER (
+            PARTITION BY interactionId ORDER BY startedAt, id
+          ) AS prevInputTokens,
+          LAG(cachedTokens) OVER (
+            PARTITION BY interactionId ORDER BY startedAt, id
+          ) AS prevCachedTokens,
+          LAG(outputTokens) OVER (
+            PARTITION BY interactionId ORDER BY startedAt, id
+          ) AS prevOutputTokens,
+          LAG(thinkingTokens) OVER (
+            PARTITION BY interactionId ORDER BY startedAt, id
+          ) AS prevThinkingTokens,
+          LAG(totalTokens) OVER (
+            PARTITION BY interactionId ORDER BY startedAt, id
+          ) AS prevTotalTokens
+        FROM request_logs
+        WHERE provider = 'codex'
+          AND statefulMode = 1
+          AND interactionId LIKE 'appserver:%'
+          AND usageCorrectionVersion IS NULL
+      ),
+      deltas AS (
+        SELECT
+          request_logs.id AS id,
+          request_logs.inputTokens - legacy_rows.prevInputTokens AS inputTokens,
+          CASE
+            WHEN request_logs.cachedTokens IS NOT NULL
+             AND legacy_rows.prevCachedTokens IS NOT NULL
+             AND request_logs.cachedTokens >= legacy_rows.prevCachedTokens
+            THEN request_logs.cachedTokens - legacy_rows.prevCachedTokens
+            ELSE request_logs.cachedTokens
+          END AS cachedTokens,
+          request_logs.outputTokens - legacy_rows.prevOutputTokens AS outputTokens,
+          CASE
+            WHEN request_logs.thinkingTokens IS NOT NULL
+             AND legacy_rows.prevThinkingTokens IS NOT NULL
+             AND request_logs.thinkingTokens >= legacy_rows.prevThinkingTokens
+            THEN request_logs.thinkingTokens - legacy_rows.prevThinkingTokens
+            ELSE request_logs.thinkingTokens
+          END AS thinkingTokens,
+          request_logs.totalTokens - legacy_rows.prevTotalTokens AS totalTokens
+        FROM request_logs
+        JOIN legacy_rows ON legacy_rows.id = request_logs.id
+        WHERE legacy_rows.prevInputTokens IS NOT NULL
+          AND legacy_rows.prevOutputTokens IS NOT NULL
+          AND legacy_rows.prevTotalTokens IS NOT NULL
+          AND request_logs.inputTokens IS NOT NULL
+          AND request_logs.outputTokens IS NOT NULL
+          AND request_logs.totalTokens IS NOT NULL
+          AND request_logs.inputTokens >= legacy_rows.prevInputTokens
+          AND request_logs.outputTokens >= legacy_rows.prevOutputTokens
+          AND request_logs.totalTokens >= legacy_rows.prevTotalTokens
+          AND NOT EXISTS (
+            SELECT 1 FROM schema_migrations
+            WHERE id = 'codex-appserver-turn-delta-v1'
+          )
+      )
+      UPDATE request_logs
+      SET
+        inputTokens = (SELECT inputTokens FROM deltas WHERE deltas.id = request_logs.id),
+        cachedTokens = (SELECT cachedTokens FROM deltas WHERE deltas.id = request_logs.id),
+        outputTokens = (SELECT outputTokens FROM deltas WHERE deltas.id = request_logs.id),
+        thinkingTokens = (SELECT thinkingTokens FROM deltas WHERE deltas.id = request_logs.id),
+        totalTokens = (SELECT totalTokens FROM deltas WHERE deltas.id = request_logs.id),
+        usageCorrectionVersion = 'codex-appserver-turn-delta-v1'
+      WHERE id IN (SELECT id FROM deltas);
+
+      INSERT OR IGNORE INTO schema_migrations (id, appliedAt)
+      VALUES ('codex-appserver-turn-delta-v1', strftime('%s', 'now') * 1000);
+    `)
+  } catch {
+    /* best-effort historical usage backfill */
   }
 
   // Cleanup: v1.0.6-v1.0.7 model research could create Codex app-server logs

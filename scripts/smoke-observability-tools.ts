@@ -7,6 +7,8 @@ import fs from 'fs'
 import os from 'os'
 import path from 'path'
 
+import type { TokenUsageBreakdown } from '@/lib/types'
+
 const tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), 'observability-tools-smoke-'))
 process.chdir(tmpRoot)
 
@@ -28,6 +30,9 @@ async function main(): Promise<void> {
         sealInterruptedStreamingRequestLogs,
     } = await import('@/lib/observability/store')
     const { updateConfig } = await import('@/lib/config')
+    const { codexUsageForCurrentTurn } = await import('@/lib/ai/providers/codex-helpers')
+    const { default: Database } = await import('better-sqlite3')
+    const { initializeDatabaseSchema } = await import('@/lib/db-schema')
 
     let failures = 0
     function check(label: string, cond: unknown, detail?: unknown) {
@@ -39,6 +44,66 @@ async function main(): Promise<void> {
     updateConfig({ timezone: 'Europe/Bucharest' })
 
     const now = Date.now()
+    const legacyUsageDb = new Database(path.join(tmpRoot, 'legacy-codex-usage.db'))
+    initializeDatabaseSchema(legacyUsageDb)
+    legacyUsageDb
+        .prepare(`DELETE FROM schema_migrations WHERE id = ?`)
+        .run('codex-appserver-turn-delta-v1')
+    const insertLegacyCodexRow = legacyUsageDb.prepare(`
+        INSERT INTO request_logs (
+            id, conversationId, agentId, provider, model, thinkingLevel,
+            status, startedAt, statefulMode, interactionId,
+            inputTokens, cachedTokens, outputTokens, thinkingTokens, totalTokens
+        ) VALUES (?, ?, 'orchestrator', 'codex', 'gpt-5.5', 'high',
+            'ok', ?, 1, 'appserver:smoke-thread', ?, ?, ?, ?, ?)
+    `)
+    insertLegacyCodexRow.run(
+        'legacy_codex_first',
+        'conv_legacy_codex',
+        now - 2_000,
+        1_000,
+        900,
+        20,
+        7,
+        1_020
+    )
+    insertLegacyCodexRow.run(
+        'legacy_codex_second',
+        'conv_legacy_codex',
+        now - 1_000,
+        1_080,
+        960,
+        33,
+        12,
+        1_118
+    )
+    initializeDatabaseSchema(legacyUsageDb)
+    const migratedLegacyCodex = legacyUsageDb
+        .prepare(`
+            SELECT inputTokens, cachedTokens, outputTokens, thinkingTokens,
+                   totalTokens, usageCorrectionVersion
+            FROM request_logs WHERE id = ?
+        `)
+        .get('legacy_codex_second') as {
+            inputTokens: number
+            cachedTokens: number
+            outputTokens: number
+            thinkingTokens: number
+            totalTokens: number
+            usageCorrectionVersion: string | null
+        }
+    check(
+        'legacy codex cumulative usage migration stores per-turn delta',
+        migratedLegacyCodex.inputTokens === 80 &&
+        migratedLegacyCodex.cachedTokens === 60 &&
+        migratedLegacyCodex.outputTokens === 13 &&
+        migratedLegacyCodex.thinkingTokens === 5 &&
+        migratedLegacyCodex.totalTokens === 98 &&
+        migratedLegacyCodex.usageCorrectionVersion === 'codex-appserver-turn-delta-v1',
+        migratedLegacyCodex
+    )
+    legacyUsageDb.close()
+
     const task = createScheduledTask({
         title: 'Runtime history smoke',
         enabled: true,
@@ -182,6 +247,74 @@ async function main(): Promise<void> {
     const legacyBrowserLog = getRequestLog(legacyBrowserRequestId)
     check('legacy browser output usage is read back', legacyBrowserLog?.totalTokens === 46, legacyBrowserLog)
     check('legacy browser billing model is inferred', legacyBrowserLog?.billingBreakdown?.[0]?.model === 'gemini-3.1-flash-lite', legacyBrowserLog)
+
+    let codexBaseline: TokenUsageBreakdown | null = null
+    const codexFirstUsage = codexUsageForCurrentTurn({
+        last: {
+            inputTokens: 50,
+            cachedInputTokens: 40,
+            outputTokens: 5,
+            reasoningOutputTokens: 2,
+            totalTokens: 57,
+        },
+        total: {
+            inputTokens: 1_000,
+            cachedInputTokens: 940,
+            outputTokens: 15,
+            reasoningOutputTokens: 4,
+            totalTokens: 1_019,
+        },
+    }, codexBaseline)
+    codexBaseline = codexFirstUsage.baseline
+    check('codex usage first update uses current turn delta', codexFirstUsage.usage?.inputTokens === 50 && codexFirstUsage.usage?.totalTokens === 57, codexFirstUsage)
+
+    const codexSecondUsage = codexUsageForCurrentTurn({
+        last: {
+            inputTokens: 30,
+            cachedInputTokens: 20,
+            outputTokens: 8,
+            reasoningOutputTokens: 3,
+            totalTokens: 41,
+        },
+        total: {
+            inputTokens: 1_030,
+            cachedInputTokens: 960,
+            outputTokens: 23,
+            reasoningOutputTokens: 7,
+            totalTokens: 1_060,
+        },
+    }, codexBaseline)
+    check(
+        'codex usage accumulates current turn without prior thread total',
+        codexSecondUsage.usage?.inputTokens === 80 &&
+        codexSecondUsage.usage?.cachedInputTokens === 60 &&
+        codexSecondUsage.usage?.outputTokens === 13 &&
+        codexSecondUsage.usage?.reasoningOutputTokens === 5 &&
+        codexSecondUsage.usage?.totalTokens === 98,
+        codexSecondUsage
+    )
+
+    const codexRequestId = 'req_observability_codex_usage_delta'
+    logRequestStart({
+        requestId: codexRequestId,
+        conversationId: 'conv_observability_smoke',
+        agentId: 'orchestrator',
+        provider: 'codex',
+        model: 'gpt-5.5',
+        thinkingLevel: 'high',
+        statefulMode: true,
+        startedAt: now - 700,
+        inputText: 'Run a Codex resumed-thread smoke task.',
+    })
+    logRequestComplete({
+        requestId: codexRequestId,
+        endedAt: now - 650,
+        provider: 'codex',
+        usage: codexSecondUsage.usage,
+        outputText: 'Codex usage smoke.',
+    })
+    const codexLog = getRequestLog(codexRequestId)
+    check('codex request log stores per-turn usage delta', codexLog?.inputTokens === 80 && codexLog?.totalTokens === 98, codexLog)
 
     const usage = buildUsageReport('all')
     const geminiUsage = usage.byModel.find((row) => row.provider === 'google' && row.model === 'gemini-3-flash-preview')

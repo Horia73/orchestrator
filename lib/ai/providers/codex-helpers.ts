@@ -241,6 +241,32 @@ export function codexContextUsageSnapshot(args: {
     }
 }
 
+export function codexUsageForCurrentTurn(
+    rawTokenUsage: unknown,
+    previousBaseline: TokenUsageBreakdown | null
+): { usage: TokenUsageBreakdown | null; baseline: TokenUsageBreakdown | null } {
+    const tokenUsage = toRecord(rawTokenUsage)
+    const last = tokenUsageBreakdown(tokenUsage.last)
+    const total = tokenUsageBreakdown(tokenUsage.total)
+
+    if (total && last) {
+        const baseline = previousBaseline ?? codexUsageBaseline(total, last)
+        return {
+            usage: codexUsageDelta(total, baseline, last),
+            baseline,
+        }
+    }
+
+    if (last) {
+        return { usage: last, baseline: previousBaseline }
+    }
+
+    return {
+        usage: tokenUsageBreakdown(tokenUsage),
+        baseline: previousBaseline,
+    }
+}
+
 function tokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
     const raw = toRecord(value)
     const totalTokens = numberOrNull(raw.totalTokens)
@@ -264,6 +290,55 @@ function tokenUsageBreakdown(value: unknown): TokenUsageBreakdown | null {
         outputTokens,
         reasoningOutputTokens,
     }
+}
+
+function codexUsageBaseline(total: TokenUsageBreakdown, last: TokenUsageBreakdown): TokenUsageBreakdown {
+    return {
+        totalTokens: subtractKnown(total.totalTokens, last.totalTokens),
+        inputTokens: subtractKnown(total.inputTokens, last.inputTokens),
+        cachedInputTokens: subtractKnown(total.cachedInputTokens, last.cachedInputTokens),
+        outputTokens: subtractKnown(total.outputTokens, last.outputTokens),
+        reasoningOutputTokens: subtractKnown(total.reasoningOutputTokens, last.reasoningOutputTokens),
+    }
+}
+
+function codexUsageDelta(
+    total: TokenUsageBreakdown,
+    baseline: TokenUsageBreakdown | null,
+    fallback: TokenUsageBreakdown
+): TokenUsageBreakdown | null {
+    const usage = {
+        totalTokens: deltaOrFallback(total.totalTokens, baseline?.totalTokens, fallback.totalTokens),
+        inputTokens: deltaOrFallback(total.inputTokens, baseline?.inputTokens, fallback.inputTokens),
+        cachedInputTokens: deltaOrFallback(total.cachedInputTokens, baseline?.cachedInputTokens, fallback.cachedInputTokens),
+        outputTokens: deltaOrFallback(total.outputTokens, baseline?.outputTokens, fallback.outputTokens),
+        reasoningOutputTokens: deltaOrFallback(total.reasoningOutputTokens, baseline?.reasoningOutputTokens, fallback.reasoningOutputTokens),
+    }
+    return hasUsageValues(usage) ? usage : null
+}
+
+function subtractKnown(total: number | null | undefined, last: number | null | undefined): number | null {
+    if (typeof total !== 'number' || typeof last !== 'number') return null
+    return Math.max(0, total - last)
+}
+
+function deltaOrFallback(
+    total: number | null | undefined,
+    baseline: number | null | undefined,
+    fallback: number | null | undefined
+): number | null {
+    if (typeof total === 'number' && typeof baseline === 'number') return Math.max(0, total - baseline)
+    return typeof fallback === 'number' ? fallback : null
+}
+
+function hasUsageValues(usage: TokenUsageBreakdown): boolean {
+    return (
+        usage.totalTokens !== null ||
+        usage.inputTokens !== null ||
+        usage.cachedInputTokens !== null ||
+        usage.outputTokens !== null ||
+        usage.reasoningOutputTokens !== null
+    )
 }
 
 function numberOrNull(value: unknown): number | null {

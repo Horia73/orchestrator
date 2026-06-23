@@ -61,6 +61,53 @@ async function main(): Promise<void> {
     }
 
     {
+        const prompt = buildSmartMonitorAgentPrompt({
+            now: Date.now(),
+            taskId: 'task_smart',
+            taskState: {},
+            detected: [{
+                watchId: w.id,
+                watchTitle: w.title,
+                source: 'gmail',
+                summary: 'mom@example.com — Travel details',
+                ts: Date.now(),
+                details: {
+                    messageId: 'm1',
+                    threadId: 't1',
+                    from: 'mom@example.com',
+                    to: 'horia@example.com',
+                    subject: 'Travel details',
+                    snippet: 'Arrive at 18:30',
+                    labels: ['INBOX', 'UNREAD'],
+                    date: 'Tue, 23 Jun 2026 10:00:00 +0300',
+                    gmailContext: {
+                        included: true,
+                        scope: 'matched_message',
+                        maxChars: 50000,
+                        truncated: false,
+                        messages: [{
+                            id: 'm1',
+                            from: 'mom@example.com',
+                            to: 'horia@example.com',
+                            date: 'Tue, 23 Jun 2026 10:00:00 +0300',
+                            subject: 'Travel details',
+                            snippet: 'Arrive at 18:30',
+                            labels: ['INBOX', 'UNREAD'],
+                            bodySourceMimeType: 'text/html',
+                            body: 'I arrive at 18:30. Open itinerary (https://example.com/itinerary).',
+                            attachments: [],
+                        }],
+                    },
+                },
+            }],
+            wakeReason: 'matches',
+        })
+        check('detected block includes Gmail message id', prompt.includes('messageId: m1'))
+        check('detected block includes Gmail body text', prompt.includes('I arrive at 18:30'))
+        check('detected block marks HTML body conversion', prompt.includes('text/html converted to text'))
+    }
+
+    {
         const fb = await executeMonitorWakeFeedback({
             watch_id: w.id,
             was_worth_it: false,

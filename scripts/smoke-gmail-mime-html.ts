@@ -7,7 +7,12 @@
  *
  * Run: npx tsx scripts/smoke-gmail-mime-html.ts
  */
-import { assertOutgoingAttachmentBudget, buildMimeMessage } from "../lib/integrations/gmail-message-formatting"
+import {
+  assertOutgoingAttachmentBudget,
+  base64UrlEncode,
+  buildMimeMessage,
+  extractMessageContent,
+} from "../lib/integrations/gmail-message-formatting"
 
 let failures = 0
 function check(label: string, cond: unknown, detail?: unknown): void {
@@ -87,6 +92,22 @@ const htmlInlineAndAttachment = buildMimeMessage({
 check("mixed: outer multipart/mixed", htmlInlineAndAttachment.includes("Content-Type: multipart/mixed; boundary="), htmlInlineAndAttachment)
 check("mixed: keeps inline image inline", htmlInlineAndAttachment.includes("Content-ID: <logo>"), htmlInlineAndAttachment)
 check("mixed: keeps normal attachment as attachment", htmlInlineAndAttachment.includes('Content-Disposition: attachment; filename="offer.pdf"'), htmlInlineAndAttachment)
+
+const inboundHtmlOnly = extractMessageContent({
+  mimeType: "multipart/alternative",
+  parts: [{
+    mimeType: "text/html",
+    body: {
+      data: base64UrlEncode(Buffer.from('<html><body><p>Hello <a href="https://example.com/a?x=1&amp;y=2">open link</a></p></body></html>')),
+    },
+  }],
+})
+check("incoming: html-only source is marked", inboundHtmlOnly.sourceMimeType === "text/html", inboundHtmlOnly)
+check(
+  "incoming: html link href is preserved in text",
+  inboundHtmlOnly.text.includes("open link (https://example.com/a?x=1&y=2)"),
+  inboundHtmlOnly,
+)
 
 try {
   assertOutgoingAttachmentBudget({

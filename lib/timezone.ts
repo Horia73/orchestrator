@@ -1,5 +1,10 @@
 const DEFAULT_TIMEZONE = "UTC"
 
+const TIMEZONE_ALIASES: Record<string, string> = {
+  // Common misspelling observed in external tools/config.
+  "Europe/Buchrest": "Europe/Bucharest",
+}
+
 export function isValidTimezone(timezone: string): boolean {
   try {
     new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0))
@@ -20,8 +25,11 @@ export function systemTimezone(): string {
 
 export function normalizeTimezone(value: unknown, fallback = DEFAULT_TIMEZONE): string {
   const candidate = typeof value === "string" ? value.trim() : ""
-  if (candidate && isValidTimezone(candidate)) return candidate
-  return isValidTimezone(fallback) ? fallback : DEFAULT_TIMEZONE
+  const normalized = candidate ? TIMEZONE_ALIASES[candidate] ?? candidate : ""
+  if (normalized && isValidTimezone(normalized)) return normalized
+  const fallbackCandidate = fallback.trim()
+  const normalizedFallback = TIMEZONE_ALIASES[fallbackCandidate] ?? fallbackCandidate
+  return isValidTimezone(normalizedFallback) ? normalizedFallback : DEFAULT_TIMEZONE
 }
 
 export function dateStampInTimezone(

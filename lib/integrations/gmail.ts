@@ -22,7 +22,7 @@ import {
     cleanHeaderValue,
     cleanLabelIds,
     collectAttachments,
-    extractMessageText,
+    extractMessageContent,
     getHeader,
     limitThreadMessages,
     normalizeOutgoingAttachments,
@@ -181,6 +181,7 @@ export interface GmailThreadMessage {
     subject: string
     snippet: string
     body: string
+    bodySourceMimeType: 'none' | 'text/plain' | 'text/html'
     attachments: GmailAttachmentInfo[]
     listUnsubscribe: string
     listUnsubscribePost: string
@@ -469,27 +470,43 @@ export async function gmailReadThread(threadId: string, maxChars: number): Promi
     truncated: boolean
 }> {
     const thread = await gmailApi<GmailThread>(`/users/me/threads/${encodeURIComponent(threadId)}?format=full`)
-    const messages = (thread.messages ?? []).map(message => {
-        const headers = message.payload?.headers ?? []
-        return {
-            id: message.id,
-            threadId: message.threadId,
-            labelIds: message.labelIds ?? [],
-            from: getHeader(headers, 'From'),
-            to: getHeader(headers, 'To'),
-            cc: getHeader(headers, 'Cc'),
-            date: getHeader(headers, 'Date'),
-            subject: getHeader(headers, 'Subject'),
-            snippet: message.snippet ?? '',
-            body: extractMessageText(message.payload),
-            attachments: collectAttachments(message.payload, message.id),
-            listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
-            listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
-        }
-    })
+    const messages = (thread.messages ?? []).map(gmailMessageToThreadMessage)
 
     const limited = limitThreadMessages(messages, maxChars)
     return { threadId: thread.id, messages: limited.messages, truncated: limited.truncated }
+}
+
+export async function gmailReadMessage(messageId: string, maxChars: number): Promise<{
+    message: GmailThreadMessage
+    truncated: boolean
+}> {
+    const cleanId = cleanHeaderValue(messageId)
+    if (!cleanId) throw new Error('Message ID is required.')
+    const message = await gmailApi<GmailMessage>(`/users/me/messages/${encodeURIComponent(cleanId)}?format=full`)
+    const mapped = gmailMessageToThreadMessage(message)
+    const limited = limitThreadMessages([mapped], maxChars)
+    return { message: limited.messages[0] ?? { ...mapped, body: '' }, truncated: limited.truncated }
+}
+
+function gmailMessageToThreadMessage(message: GmailMessage): GmailThreadMessage {
+    const headers = message.payload?.headers ?? []
+    const content = extractMessageContent(message.payload)
+    return {
+        id: message.id,
+        threadId: message.threadId,
+        labelIds: message.labelIds ?? [],
+        from: getHeader(headers, 'From'),
+        to: getHeader(headers, 'To'),
+        cc: getHeader(headers, 'Cc'),
+        date: getHeader(headers, 'Date'),
+        subject: getHeader(headers, 'Subject'),
+        snippet: message.snippet ?? '',
+        body: content.text,
+        bodySourceMimeType: content.sourceMimeType,
+        attachments: collectAttachments(message.payload, message.id),
+        listUnsubscribe: getHeader(headers, 'List-Unsubscribe'),
+        listUnsubscribePost: getHeader(headers, 'List-Unsubscribe-Post'),
+    }
 }
 
 export async function gmailCreateDraft(input: GmailCreateDraftInput): Promise<GmailDraftResult> {

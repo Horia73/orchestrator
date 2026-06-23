@@ -45,6 +45,128 @@ function clipLine(text: string, maxChars = 500): string {
     return `${compact.slice(0, maxChars)}...`
 }
 
+const DETECTED_DETAILS_TOTAL_BUDGET = 40_000
+const DETECTED_DETAILS_PER_ITEM_BUDGET = 12_000
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value)
+        ? (value as Record<string, unknown>)
+        : null
+}
+
+function stringField(record: Record<string, unknown> | null, key: string): string {
+    const value = record?.[key]
+    return typeof value === 'string' ? value : ''
+}
+
+function recordArray(value: unknown): Record<string, unknown>[] {
+    return Array.isArray(value)
+        ? value.map(asRecord).filter((record): record is Record<string, unknown> => record !== null)
+        : []
+}
+
+function clipBlock(text: string, maxChars: number): { text: string; truncated: boolean } {
+    if (text.length <= maxChars) return { text, truncated: false }
+    return { text: text.slice(0, Math.max(0, maxChars)), truncated: true }
+}
+
+function indentBlock(text: string, prefix: string): string[] {
+    if (!text) return []
+    return text.split('\n').map((line) => `${prefix}${line}`)
+}
+
+function renderGmailDetectedDetails(details: Record<string, unknown>, maxChars: number): string {
+    const lines: string[] = []
+    let used = 0
+
+    function push(line = ''): boolean {
+        const next = used + line.length + 1
+        if (next > maxChars) return false
+        lines.push(line)
+        used = next
+        return true
+    }
+
+    function pushBody(label: string, body: string, indent = '    '): boolean {
+        const available = maxChars - used - label.length - 120
+        if (available <= 0) return false
+        const clipped = clipBlock(body.trim(), available)
+        if (!push(label)) return false
+        for (const line of indentBlock(clipped.text, indent)) {
+            if (!push(line)) return false
+        }
+        if (clipped.truncated) push(`${indent}[truncated in wake prompt; call GmailReadThread for the rest]`)
+        return true
+    }
+
+    const thread = asRecord(details.gmailContext) ?? asRecord(details.gmailThread)
+    const rawMessages = recordArray(thread?.messages)
+    const messageId = stringField(details, 'messageId')
+    const target = rawMessages.find((message) => stringField(message, 'id') === messageId)
+    const orderedMessages = target
+        ? [target, ...rawMessages.filter((message) => message !== target)]
+        : rawMessages
+    const fallbackMessage = orderedMessages.length === 0 ? [details] : orderedMessages
+    const threadTruncated = thread?.truncated === true
+
+    push('details:')
+    push('  gmail:')
+    push(`    messageId: ${messageId || '(unknown)'}`)
+    push(`    threadId: ${stringField(details, 'threadId') || '(unknown)'}`)
+    push(`    from: ${stringField(details, 'from') || '(unknown)'}`)
+    push(`    subject: ${stringField(details, 'subject') || '(no subject)'}`)
+    if (stringField(details, 'date')) push(`    date: ${stringField(details, 'date')}`)
+    if (stringField(details, 'snippet')) push(`    snippet: ${clipLine(stringField(details, 'snippet'), 500)}`)
+    if (thread) {
+        push(`    messageRead: included, scope=${thread.scope ?? 'matched_message'}, maxChars=${thread.maxChars ?? '?'}, truncated=${threadTruncated ? 'yes' : 'no'}`)
+    }
+    const readError = stringField(details, 'gmailMessageReadError') || stringField(details, 'gmailThreadReadError')
+    if (readError) {
+        push(`    messageReadError: ${clipLine(readError, 500)}`)
+    }
+
+    push('  gmail_message_context:')
+    let renderedMessages = 0
+    for (const message of fallbackMessage) {
+        const id = stringField(message, 'id') || messageId || '(unknown)'
+        const from = stringField(message, 'from') || '(unknown sender)'
+        const subject = stringField(message, 'subject') || stringField(details, 'subject') || '(no subject)'
+        const date = stringField(message, 'date')
+        const source = stringField(message, 'bodySourceMimeType') || stringField(details, 'bodySourceMimeType') || 'none'
+        const body = stringField(message, 'body') || stringField(details, 'body')
+        if (!push(`    - id: ${id}${id === messageId ? ' (matched message)' : ''}`)) break
+        push(`      from: ${from}`)
+        push(`      subject: ${subject}`)
+        if (date) push(`      date: ${date}`)
+        if (stringField(message, 'snippet')) push(`      snippet: ${clipLine(stringField(message, 'snippet'), 500)}`)
+        if (body) {
+            const label = source === 'text/html'
+                ? '      body (text/html converted to text, links preserved where possible):'
+                : `      body (${source}):`
+            if (!pushBody(label, body, '        ')) break
+        } else {
+            push(`      body: (empty or unavailable; call GmailReadThread if needed)`)
+        }
+        renderedMessages++
+    }
+
+    if (renderedMessages < rawMessages.length) {
+        push(`    - ${rawMessages.length - renderedMessages} more Gmail context message(s) omitted by prompt budget; call GmailReadThread for full thread.`)
+    }
+    return lines.join('\n')
+}
+
+function renderDetectedDetails(change: DetectedChange, maxChars: number): string[] {
+    if (!change.details || maxChars <= 200) return []
+    const details = asRecord(change.details)
+    if (!details) return []
+
+    const rendered = change.source === 'gmail'
+        ? renderGmailDetectedDetails(details, maxChars)
+        : `details:\n${clipUnknownJson(details, Math.min(maxChars, 2_000))}`
+    return indentBlock(rendered, '      ')
+}
+
 function renderTaskRunLine(run: TaskRunRecord): string {
     const out = run.error || run.summary || '(no output)'
     const timezone = getConfig().timezone
@@ -136,18 +258,28 @@ export interface DetectedChange {
 
 function buildDetectedBlock(detected: DetectedChange[]): string[] {
     const lines = ['<detected_changes>']
-    lines.push(`The cheap pass already detected these ${detected.length} new item(s) since the last wake. Anchor this wake on them — do not blindly re-scan every source; fetch more only when an item needs context to judge.`)
+    lines.push(`The cheap pass already detected these ${detected.length} new item(s) since the last wake. Anchor this wake on them — do not blindly re-scan every source; fetch more only when an item needs context to judge. Gmail items may include body text from a pre-wake matched-message read; HTML mail is converted to text with links preserved where possible. If a Gmail body says truncated/omitted, call GmailReadThread for that thread before deciding.`)
     const byWatch = new Map<string, DetectedChange[]>()
     for (const d of detected) {
         const arr = byWatch.get(d.watchId) ?? []
         arr.push(d)
         byWatch.set(d.watchId, arr)
     }
+    let detailBudget = DETECTED_DETAILS_TOTAL_BUDGET
     for (const [, items] of byWatch) {
         const head = items[0]
         lines.push(`- ${head.watchTitle} (${head.source}, ${items.length} item${items.length === 1 ? '' : 's'}):`)
         for (const it of items.slice(0, 12)) {
             lines.push(`    • ${clipLine(it.summary, 240)}`)
+            if (it.details && detailBudget > 0) {
+                const detailLines = renderDetectedDetails(it, Math.min(DETECTED_DETAILS_PER_ITEM_BUDGET, detailBudget))
+                if (detailLines.length > 0) {
+                    lines.push(...detailLines)
+                    detailBudget -= detailLines.join('\n').length
+                }
+            } else if (it.details) {
+                lines.push('      details omitted by prompt budget; use the source read tool if the summary is insufficient.')
+            }
         }
         if (items.length > 12) lines.push(`    • …and ${items.length - 12} more`)
     }

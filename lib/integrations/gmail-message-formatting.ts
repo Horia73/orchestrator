@@ -57,17 +57,33 @@ export interface GmailThreadMessageForLimit {
     body: string
 }
 
+export type GmailMessageBodySource = 'none' | 'text/plain' | 'text/html'
+
+export interface GmailExtractedMessageContent {
+    text: string
+    sourceMimeType: GmailMessageBodySource
+}
+
 export function getHeader(headers: GmailHeader[], name: string): string {
     const lower = name.toLowerCase()
     return headers.find(header => header.name.toLowerCase() === lower)?.value ?? ''
 }
 
-export function extractMessageText(payload: GmailPayloadPart | undefined): string {
-    if (!payload) return ''
+export function extractMessageContent(payload: GmailPayloadPart | undefined): GmailExtractedMessageContent {
+    if (!payload) return { text: '', sourceMimeType: 'none' }
     const plain = collectPayloadText(payload, 'text/plain')
-    if (plain.length > 0) return plain.join('\n\n').trim()
+    if (plain.length > 0) {
+        return { text: plain.join('\n\n').trim(), sourceMimeType: 'text/plain' }
+    }
     const html = collectPayloadText(payload, 'text/html')
-    return html.map(htmlToText).join('\n\n').trim()
+    if (html.length > 0) {
+        return { text: html.map(htmlToText).join('\n\n').trim(), sourceMimeType: 'text/html' }
+    }
+    return { text: '', sourceMimeType: 'none' }
+}
+
+export function extractMessageText(payload: GmailPayloadPart | undefined): string {
+    return extractMessageContent(payload).text
 }
 
 export function collectAttachments(part: GmailPayloadPart | undefined, messageId: string): GmailAttachmentInfo[] {
@@ -283,22 +299,47 @@ function collectPayloadText(part: GmailPayloadPart, mimeType: string): string[] 
 }
 
 function htmlToText(html: string): string {
-    return html
+    return decodeHtmlEntities(html
         .replace(/<script[\s\S]*?<\/script>/gi, ' ')
         .replace(/<style[\s\S]*?<\/style>/gi, ' ')
+        .replace(/<a\b[^>]*\bhref\s*=\s*(?:"([^"]*)"|'([^']*)'|([^\s>]+))[^>]*>([\s\S]*?)<\/a>/gi, (_match, dq, sq, bare, label) => {
+            const text = htmlInlineText(String(label ?? ''))
+            const href = decodeHtmlEntities(String(dq ?? sq ?? bare ?? '')).trim()
+            if (!href) return text
+            if (!text) return href
+            return text.includes(href) ? text : `${text} (${href})`
+        })
         .replace(/<\/(p|div|section|article|header|footer|main|li|h[1-6]|tr)>/gi, '\n')
         .replace(/<br\s*\/?>/gi, '\n')
         .replace(/<[^>]+>/g, ' ')
-        .replace(/&nbsp;/g, ' ')
-        .replace(/&amp;/g, '&')
-        .replace(/&lt;/g, '<')
-        .replace(/&gt;/g, '>')
-        .replace(/&quot;/g, '"')
-        .replace(/&#39;/g, "'")
         .replace(/[ \t]+/g, ' ')
         .replace(/\n\s+/g, '\n')
         .replace(/\n{3,}/g, '\n\n')
+        .trim())
+}
+
+function htmlInlineText(html: string): string {
+    return decodeHtmlEntities(html.replace(/<[^>]+>/g, ' '))
+        .replace(/\s+/g, ' ')
         .trim()
+}
+
+function decodeHtmlEntities(value: string): string {
+    return value
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#39;/g, "'")
+        .replace(/&#x([0-9a-f]+);/gi, (_m, hex) => {
+            const code = Number.parseInt(String(hex), 16)
+            return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
+        })
+        .replace(/&#([0-9]+);/g, (_m, dec) => {
+            const code = Number.parseInt(String(dec), 10)
+            return code >= 0 && code <= 0x10ffff ? String.fromCodePoint(code) : ''
+        })
 }
 
 function attachmentMimePart(boundary: string, attachment: GmailOutgoingAttachment): string[] {

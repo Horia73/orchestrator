@@ -17,9 +17,11 @@ import { getToolsForAgent } from '@/lib/ai/tools/registry'
 import { operationalIntegrationFor } from '@/lib/integrations/manifest'
 import { subsystemForGatedTool } from '@/lib/integrations/subsystem-manifest'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
+import type { TokenUsageBreakdown } from '@/lib/types'
 import { latestUserPromptWithPortableHistory } from './history'
 import {
     codexContextUsageSnapshot,
+    codexUsageForCurrentTurn,
     codexWebArgs,
     contentItemsToText,
     customToolsForCodex,
@@ -169,6 +171,7 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
         let activeTurnId: string | undefined
         let finalUsage: unknown
         let finalDurationMs: number | undefined
+        let turnUsageBaseline: TokenUsageBreakdown | null = null
         let providerError: string | null = null
         const diagnostics: string[] = []
 
@@ -490,13 +493,18 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
                     return
                 }
                 case 'thread/tokenUsage/updated': {
-                    if (!activeTurnId || params?.turnId === activeTurnId) {
-                        // Prefer the cumulative thread total over the last turn's
-                        // marginal usage, so multi-round runs are logged/billed for
-                        // the whole run (matching the Gemini accumulator). `.last` stays as a fallback for
-                        // protocol versions that omit `.total`.
-                        const tokenUsage = params?.tokenUsage as AnyObj | undefined
-                        finalUsage = tokenUsage?.total ?? tokenUsage?.last ?? tokenUsage
+                    const eventTurnId = typeof params?.turnId === 'string' ? params.turnId : undefined
+                    const belongsToCurrentTurn = eventTurnId
+                        ? (!activeTurnId || eventTurnId === activeTurnId)
+                        : Boolean(activeTurnId)
+                    if (belongsToCurrentTurn) {
+                        // Codex reports `total` as a cumulative thread counter on
+                        // resumed stateful threads. Request logs need the current
+                        // turn only, so derive a per-turn delta from total - first
+                        // observed baseline while still falling back to `last`.
+                        const nextUsage = codexUsageForCurrentTurn(params?.tokenUsage, turnUsageBaseline)
+                        turnUsageBaseline = nextUsage.baseline
+                        finalUsage = nextUsage.usage ?? finalUsage
                     }
                     fireContextUsage(params)
                     return

@@ -1,4 +1,5 @@
 import { resolveAppOrigin } from '@/lib/app-origin'
+import type { GmailThreadMessage } from '@/lib/integrations/gmail'
 
 import { evaluateRule, type GmailCandidate } from '../rules'
 import type { WatchState } from '../schema'
@@ -43,6 +44,8 @@ const SEEN_RING_CAP = 200
 const MIN_QUERY_WINDOW_HOURS = 1
 const MAX_QUERY_WINDOW_HOURS = 24
 const MAX_FETCH = 25 // Gmail API max for one paged call in our wrapper
+const GMAIL_MONITOR_MESSAGE_MAX_CHARS = 50_000
+const GMAIL_MONITOR_MIN_RECHECK_MS = 1_000
 
 interface GmailExtraState {
     /** Epoch ms of the most-recently-seen message; we fetch newer than this. */
@@ -82,6 +85,21 @@ function stringArray(value: unknown): string[] {
     return Array.isArray(value) ? value.filter((v): v is string => typeof v === 'string') : []
 }
 
+type RecheckedGmailMessage = {
+    id: string
+    threadId: string
+    labelIds: string[]
+    from: string
+    to: string
+    cc?: string
+    date: string
+    subject: string
+    snippet: string
+    body?: string
+    bodySourceMimeType?: string
+    attachments?: unknown[]
+}
+
 function gmailNotFound(err: unknown): boolean {
     return err instanceof Error && /\bGmail API failed \(404\)\b/.test(err.message)
 }
@@ -94,6 +112,56 @@ function staleReasonFromLabels(originalLabels: string[], currentLabels: string[]
     if (original.has('UNREAD') && !current.has('UNREAD')) return 'Gmail message is no longer unread.'
     if (original.has('INBOX') && !current.has('INBOX')) return 'Gmail message is no longer in the Inbox.'
     return null
+}
+
+function remainingRecheckMs(startedAt: number, timeoutMs: number): number {
+    return Math.max(GMAIL_MONITOR_MIN_RECHECK_MS, timeoutMs - (Date.now() - startedAt))
+}
+
+function threadMessageToRechecked(message: GmailThreadMessage): RecheckedGmailMessage {
+    return {
+        id: message.id,
+        threadId: message.threadId,
+        labelIds: message.labelIds,
+        from: message.from,
+        to: message.to,
+        cc: message.cc,
+        date: message.date,
+        subject: message.subject,
+        snippet: message.snippet,
+        body: message.body,
+        bodySourceMimeType: message.bodySourceMimeType,
+        attachments: message.attachments,
+    }
+}
+
+function gmailMessageContext(messages: GmailThreadMessage[], truncated: boolean): Record<string, unknown> {
+    return {
+        included: true,
+        scope: 'matched_message',
+        maxChars: GMAIL_MONITOR_MESSAGE_MAX_CHARS,
+        truncated,
+        messages: messages.map(message => ({
+            id: message.id,
+            from: message.from,
+            to: message.to,
+            cc: message.cc,
+            date: message.date,
+            subject: message.subject,
+            snippet: message.snippet,
+            labels: message.labelIds,
+            bodySourceMimeType: message.bodySourceMimeType,
+            body: message.body,
+            attachments: message.attachments.map(attachment => ({
+                filename: attachment.filename,
+                mimeType: attachment.mimeType,
+                size: attachment.size,
+                attachmentId: attachment.attachmentId,
+                partId: attachment.partId,
+                messageId: attachment.messageId,
+            })),
+        })),
+    }
 }
 
 function pickWindowHours(cadenceSeconds: number, lastSeenAt: number | undefined, now: number): number {
@@ -251,28 +319,61 @@ export const gmailSourceAdapter: SourceAdapter = {
             }
 
             try {
-                const { gmailGetMessageMetadata } = await import('@/lib/integrations/gmail')
-                const m = await withTimeout(
-                    gmailGetMessageMetadata(messageId),
-                    timeoutMs,
-                    'gmail pending recheck',
-                )
+                const startedAt = Date.now()
+                const { gmailGetMessageMetadata, gmailReadMessage } = await import('@/lib/integrations/gmail')
+                let current: RecheckedGmailMessage | null = null
+                let context: Record<string, unknown> | undefined
+                let fullReadError: string | undefined
+
+                try {
+                    const read = await withTimeout(
+                        gmailReadMessage(messageId, GMAIL_MONITOR_MESSAGE_MAX_CHARS),
+                        remainingRecheckMs(startedAt, timeoutMs),
+                        'gmail pending message read',
+                    )
+                    current = threadMessageToRechecked(read.message)
+                    context = gmailMessageContext([read.message], read.truncated)
+                } catch (err) {
+                    if (gmailNotFound(err)) {
+                        return { active: false, reason: 'Gmail message no longer exists.', checkedAt: now }
+                    }
+                    fullReadError = err instanceof Error ? err.message : String(err)
+                }
+
+                if (!current) {
+                    const m = await withTimeout(
+                        gmailGetMessageMetadata(messageId),
+                        remainingRecheckMs(startedAt, timeoutMs),
+                        'gmail pending metadata recheck',
+                    )
+                    current = {
+                        id: m.id,
+                        threadId: m.threadId,
+                        labelIds: m.labelIds,
+                        from: m.from,
+                        to: m.to,
+                        date: m.date,
+                        subject: m.subject,
+                        snippet: m.snippet,
+                    }
+                }
+
                 const originalLabels = stringArray(details.labels)
-                const staleReason = staleReasonFromLabels(originalLabels, m.labelIds)
+                const staleReason = staleReasonFromLabels(originalLabels, current.labelIds)
                 if (staleReason) {
                     return { active: false, reason: staleReason, checkedAt: now }
                 }
 
-                const ts = parseGmailDate(m.date)
+                const ts = parseGmailDate(current.date)
                 const candidate: GmailCandidate = {
                     source: 'gmail',
-                    id: m.id,
-                    threadId: m.threadId,
-                    labels: m.labelIds,
-                    from: m.from,
-                    to: m.to,
-                    subject: m.subject,
-                    snippet: m.snippet,
+                    id: current.id,
+                    threadId: current.threadId,
+                    labels: current.labelIds,
+                    from: current.from,
+                    to: current.to,
+                    subject: current.subject,
+                    snippet: current.snippet,
                     timestamp: ts || now,
                 }
                 if (!evaluateRule(watch.rule, candidate)) {
@@ -282,16 +383,23 @@ export const gmailSourceAdapter: SourceAdapter = {
                 return {
                     active: true,
                     checkedAt: now,
-                    summary: `${m.from} — ${m.subject || '(no subject)'}`,
+                    summary: `${current.from} — ${current.subject || '(no subject)'}`,
                     details: {
                         ...details,
-                        messageId: m.id,
-                        threadId: m.threadId,
-                        from: m.from,
-                        subject: m.subject,
-                        snippet: m.snippet,
-                        labels: m.labelIds,
-                        date: m.date,
+                        messageId: current.id,
+                        threadId: current.threadId,
+                        from: current.from,
+                        to: current.to,
+                        cc: current.cc ?? '',
+                        subject: current.subject,
+                        snippet: current.snippet,
+                        labels: current.labelIds,
+                        date: current.date,
+                        body: current.body ?? '',
+                        bodySourceMimeType: current.bodySourceMimeType ?? 'none',
+                        attachments: current.attachments ?? [],
+                        gmailContext: context,
+                        gmailMessageReadError: fullReadError,
                     },
                 }
             } catch (err) {

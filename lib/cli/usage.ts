@@ -26,6 +26,7 @@ import { resolveBin, augmentedEnv } from './resolve-bin'
 import { codexCliEnv, codexRuntimeAuthPath, prepareCodexRuntimeHome } from './codex-env'
 import { getAllCliStatuses } from './status'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { normalizeTimezone, systemTimezone } from '@/lib/timezone'
 
 export interface CliQuotaWindow {
     /** Percent of the window used, 0–100. */
@@ -368,7 +369,7 @@ function hasClaudeUsageQuota(text: string): boolean {
  * as "Sonet nly") because of absolute-positioning gaps between glyphs, so we
  * match `Current week (...)` loosely and classify by inner-text contents.
  */
-function parseClaudeUsageText(text: string): {
+export function parseClaudeUsageText(text: string): {
     fiveHour?: CliQuotaWindow
     weekly?: CliQuotaWindow
     weeklySonnet?: CliQuotaWindow
@@ -494,7 +495,7 @@ function assembleEpoch(
     timeOnly = false
 ): number {
     const now = new Date()
-    const zone = tz || Intl.DateTimeFormat().resolvedOptions().timeZone
+    const zone = normalizeTimezone(tz, systemTimezone())
 
     // Year defaults to the current year in that tz, but if the resulting
     // moment is in the past for a date-bearing input, bump to next year.
