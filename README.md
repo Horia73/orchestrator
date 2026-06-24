@@ -18,8 +18,25 @@
 </p>
 
 <p align="center">
-  <img src="docs/hero.png" alt="Orchestrator interface" width="100%">
+  <img src="docs/hero.png" alt="Orchestrator chat" width="100%">
 </p>
+
+<table>
+  <tr>
+    <td width="33%" valign="top">
+      <img src="docs/shot-watchlist.png" alt="Watchlist with live quotes and charts"><br>
+      <sub><b>Watchlist</b> — live quotes &amp; charts for stocks, ETFs, FX, and crypto.</sub>
+    </td>
+    <td width="33%" valign="top">
+      <img src="docs/shot-models.png" alt="Per-agent model configuration"><br>
+      <sub><b>Models</b> — pick a model, thinking level, and fallbacks per agent.</sub>
+    </td>
+    <td width="33%" valign="top">
+      <img src="docs/shot-settings.png" alt="Integrations settings"><br>
+      <sub><b>Integrations</b> — connect Gmail, Calendar, WhatsApp, Home Assistant &amp; more, no code.</sub>
+    </td>
+  </tr>
+</table>
 
 ---
 
