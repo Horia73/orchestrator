@@ -21,23 +21,6 @@
   <img src="docs/hero.png" alt="Orchestrator chat" width="100%">
 </p>
 
-<table>
-  <tr>
-    <td width="33%" valign="top">
-      <img src="docs/shot-watchlist.png" alt="Watchlist with live quotes and charts"><br>
-      <sub><b>Watchlist</b> — live quotes &amp; charts for stocks, ETFs, FX, and crypto.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <img src="docs/shot-models.png" alt="Per-agent model configuration"><br>
-      <sub><b>Models</b> — pick a model, thinking level, and fallbacks per agent.</sub>
-    </td>
-    <td width="33%" valign="top">
-      <img src="docs/shot-settings.png" alt="Integrations settings"><br>
-      <sub><b>Integrations</b> — connect Gmail, Calendar, WhatsApp, Home Assistant &amp; more, no code.</sub>
-    </td>
-  </tr>
-</table>
-
 ---
 
 Orchestrator runs your personal AI agents on hardware you control. Multi-provider
@@ -71,6 +54,11 @@ by hand to get started.
 - **A vision browser agent** that drives real, logged-in web sessions, with an optional live view you can take control of.
 - **Rich inline outputs (artifacts):** markdown, code, live HTML/React, diagrams, SVG, CSV/JSON, maps, weather cards, recipes, interactive workouts, 3D CAD models, and live previews of web apps it builds for you.
 
+<p align="center">
+  <img src="docs/shot-models.png" alt="Per-agent model configuration" width="85%"><br>
+  <sub>Per-agent model, thinking level, and fallbacks — in Settings → Models.</sub>
+</p>
+
 ### Background automation
 - **Scheduling** — run anything once later or on a recurring cadence (in / at / daily / weekly / every / cron).
 - **Smart Monitor** — one always-on, model-owned monitor that pings you only when something matters and learns to stay quiet about noise.
@@ -85,12 +73,22 @@ by hand to get started.
 - **Smart Maps & Weather** — Google Maps Platform (places, routes, 3D), with a keyless weather fallback.
 - **Remote MCP servers** — connect any Streamable HTTP MCP endpoint.
 
+<p align="center">
+  <img src="docs/shot-settings.png" alt="Integration settings" width="85%"><br>
+  <sub>Connect services from Settings → Auth — no code, and tokens stay on your machine.</sub>
+</p>
+
 ### Your workspace & memory
 - **Library** — every file, image, voice note, artifact, recipe, map, and workout in one place, with in-app viewers for PDF, Office, code, and more.
 - **Durable, tiered memory with semantic recall** — it remembers what matters and surfaces it by meaning, not just keywords.
 - **Watchlist** — track stocks, ETFs, FX, and crypto (live quotes + candlestick charts) plus product prices over time.
 - **Interactive workouts** with training history, PRs, body metrics, and an in-session AI coach.
 - Uploads, voice notes, and generated files all persist privately on your machine.
+
+<p align="center">
+  <img src="docs/shot-watchlist.png" alt="Watchlist with live quotes and a price chart" width="85%"><br>
+  <sub>Watchlist — live quotes and price history for the instruments you track.</sub>
+</p>
 
 ### Multi-profile & self-hosted
 - **Netflix-style profiles**, each with isolated data, integrations, and permissions; an admin controls access.
