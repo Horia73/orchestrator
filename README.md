@@ -1,432 +1,178 @@
-# Orchestrator
+<p align="center">
+  <img src="public/icon.svg" alt="Orchestrator" width="96">
+</p>
 
-Local-first AI orchestrator web app for personal agents, model routing, browser automation, scheduling, inbox-style task results, watchlists, artifacts, and service integrations.
+<h1 align="center">Orchestrator</h1>
 
-Orchestrator is designed to run on your own machine or a private Linux host. It can execute local tools, launch browser sessions, store API keys in local env files, and persist private workspace state. Treat it as a trusted local application, not a public web service.
+<p align="center">
+  A self-hosted AI workspace for chat, agents, browser automation, scheduling,
+  and your everyday integrations — running entirely on your own machine.
+</p>
 
-## Features
+<p align="center">
+  <a href="#quick-start">Quick Start</a> ·
+  <a href="#features">Features</a> ·
+  <a href="#running-on-a-remote-server">Remote Server</a> ·
+  <a href="#security">Security</a> ·
+  <a href="#updating">Updating</a>
+</p>
 
-- Multi-agent chat with provider/model configuration.
-- Local CLI-backed agents, browser agent, artifacts, upload handling, and terminal output rendering.
-- Scheduling, recurring monitors, and an Inbox for silent/background runs.
-- Generic inbound webhooks with authenticated event logs and Microscript dispatch.
-- Microscripts for bounded deterministic checks, with optional restricted agent wake escalation after a concrete match.
-- Watchlist for financial instruments with optional Twelve Data quotes/history.
-- Integrations for Google Workspace, Gmail, Home Assistant, WhatsApp, and local tool execution.
-- Managed updater based on GitHub Releases for native services and installer-managed Docker.
-- Docker/Compose deployment for Linux with browser runtime included.
+<p align="center">
+  <img src="docs/hero.png" alt="Orchestrator interface" width="100%">
+</p>
 
-## Security Model
+---
 
-By default the app binds to `127.0.0.1`. Keep it that way unless it is behind a trusted access layer such as SSH tunneling, Tailscale, VPN, or a reverse proxy with authentication.
+Orchestrator runs your personal AI agents on hardware you control. Multi-provider
+chat, CLI-backed coding agents, a real browser agent, background automation, and
+service integrations — all behind a single local web app, with your keys and data
+staying on your machine.
 
-Do not expose Orchestrator directly to the public internet. The app has endpoints that can run agents, mutate local state, use local credentials, and execute local tools. Cross-origin mutating API requests are blocked, but that is not a substitute for authentication at the network edge.
+## Quick Start
 
-All private `/api/*` routes are restricted to same-origin browser requests or
-direct loopback calls. Direct API calls to a non-loopback host must include
-`ORCHESTRATOR_API_TOKEN` as `Authorization: Bearer <token>` or
-`X-Orchestrator-API-Token: <token>`. OAuth callbacks and internal tokenized
-bridge endpoints are handled separately.
-
-Inbound webhook routes under `POST /api/webhooks/:slug` are intentionally
-cross-origin capable. They bypass the same-origin API guard and authenticate
-with the per-webhook secret configured in Orchestrator.
-
-When a caller needs both the private API token and an endpoint-specific bearer
-secret, keep them in separate headers: use `X-Orchestrator-API-Token` for the
-global API token and `Authorization: Bearer <webhook-secret>` or
-`X-Orchestrator-Webhook-Secret` for the webhook secret.
-
-## Requirements
-
-- Node.js `22.x` for native/manual installs.
-- npm `11.x` or compatible with Node 22.
-- Git.
-- Docker with Compose for container deployment.
-- Optional API keys in `.env` / `.env.local`.
-
-## One-Line Linux Install
-
-On Linux, the installer uses Docker by default. It installs/verifies Docker and Compose, starts the Docker daemon where supported, clones or updates the repo under `~/orchestrator/`, sets up `~/.orchestrator/` for runtime data (bind-mounted into the container so files are owned by your host user and visible on the host filesystem), creates `.env` if missing, installs the local Docker update bridge, builds the image, and starts the stack detached.
+The one-line installer is the recommended path. On Linux it installs Docker if
+needed; on macOS it installs as a managed native service. Either way it sets the
+app up and starts it.
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | bash
 ```
 
-Open:
+When it finishes, it **prints the URL to open** (`http://127.0.0.1:3000` by
+default). Open it and a **setup wizard** walks you through the rest — API keys,
+model providers, remote access, and integrations. There's no config file to edit
+by hand to get started.
 
-```text
-http://127.0.0.1:3000
-```
+> Prefer plain Docker? `git clone https://github.com/Horia73/orchestrator.git && cd orchestrator && cp .env.example .env && docker compose up --build -d`
 
-### Public HTTPS With DuckDNS
+## Features
 
-For a personal Linux server, the installer can also configure a DuckDNS hostname,
-DNS-based Let's Encrypt certificate, nginx reverse proxy, and the app's public
-origin. This keeps every install tied to the user's own hostname; do not bake a
-shared Orchestrator URL into the repo or image.
+### Chat & agents
+- **Multi-provider chat** across Claude, OpenAI, and Gemini, with per-agent model, thinking level, and automatic fallbacks.
+- **One orchestrator** that does the work itself and delegates the rest to specialist sub-agents, shown live as agent cards.
+- **CLI-backed coding agents** (Claude Code, Codex) — no API key needed once you're logged in.
+- **A vision browser agent** that drives real, logged-in web sessions, with an optional live view you can take control of.
+- **Rich inline outputs (artifacts):** markdown, code, live HTML/React, diagrams, SVG, CSV/JSON, maps, weather cards, recipes, interactive workouts, 3D CAD models, and live previews of web apps it builds for you.
 
-Prerequisites:
+### Background automation
+- **Scheduling** — run anything once later or on a recurring cadence (in / at / daily / weekly / every / cron).
+- **Smart Monitor** — one always-on, model-owned monitor that pings you only when something matters and learns to stay quiet about noise.
+- **Inbox** — a mail-style home for results, alerts, and proactive proposals from background runs; silent by default.
+- **Microscripts** — bounded, deterministic Python checks that can escalate to an agent only after a real match.
+- **Inbound webhooks** — authenticated public endpoints (HMAC / Svix / bearer) that dispatch events to microscripts.
 
-- A DuckDNS subdomain owned by the user, for example `my-orchestrator.duckdns.org`.
-- The DuckDNS account token.
-- Port `443` reachable from the user's browser to the server. Port `80` is only
-  used for HTTP-to-HTTPS redirect when reachable.
-- `sudo` on the server. The installer uses Docker for the app and host nginx for
-  TLS termination.
+### Integrations — connected from Settings, no code
+- **Gmail, Google Calendar, Google Workspace** (Drive, Docs, Sheets, Slides, Contacts) — multiple accounts each.
+- **WhatsApp** — a local companion session (reads plus confirmed writes).
+- **Home Assistant** — read state and control your devices.
+- **Smart Maps & Weather** — Google Maps Platform (places, routes, 3D), with a keyless weather fallback.
+- **Remote MCP servers** — connect any Streamable HTTP MCP endpoint.
 
-Interactive setup:
+### Your workspace & memory
+- **Library** — every file, image, voice note, artifact, recipe, map, and workout in one place, with in-app viewers for PDF, Office, code, and more.
+- **Durable, tiered memory with semantic recall** — it remembers what matters and surfaces it by meaning, not just keywords.
+- **Watchlist** — track stocks, ETFs, FX, and crypto (live quotes + candlestick charts) plus product prices over time.
+- **Interactive workouts** with training history, PRs, body metrics, and an in-session AI coach.
+- Uploads, voice notes, and generated files all persist privately on your machine.
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
-  ORCHESTRATOR_PUBLIC_HTTPS_SETUP=duckdns \
-  bash
-```
+### Multi-profile & self-hosted
+- **Netflix-style profiles**, each with isolated data, integrations, and permissions; an admin controls access.
+- **One-line install** (Docker or native), backup / restore, and an in-app updater driven by GitHub Releases.
+- Everything — keys, tokens, sessions, and data — stays on the machine you run it on.
 
-The installer asks for:
+## Running on a remote server
 
-- DuckDNS domain, either `my-orchestrator` or `my-orchestrator.duckdns.org`.
-- DuckDNS token.
-- Optional Let's Encrypt email.
+Installing on AWS, a VPS, or any headless box? Orchestrator binds to `127.0.0.1`
+by design, so it is **never exposed just by running on a public host**. SSH into
+the server, run the same one-line installer, then reach the app one of two ways:
 
-Non-interactive setup:
+- **SSH tunnel** — quickest, nothing to configure:
 
-```bash
-curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
-  ORCHESTRATOR_PUBLIC_HTTPS_SETUP=duckdns \
-  ORCHESTRATOR_DUCKDNS_DOMAIN=my-orchestrator \
-  ORCHESTRATOR_DUCKDNS_TOKEN='paste-duckdns-token-here' \
-  ORCHESTRATOR_LETSENCRYPT_EMAIL='me@example.com' \
-  bash
-```
+  ```bash
+  ssh -N -L 3000:127.0.0.1:3000 user@your-server
+  ```
 
-This mode:
+  then open `http://localhost:3000` on your laptop.
 
-- sets `ORCHESTRATOR_PUBLIC_URL=https://<domain>.duckdns.org`;
-- sets `ORCHESTRATOR_SSH_HOST=<domain>.duckdns.org`;
-- updates the DuckDNS record immediately and installs a systemd user timer, or a
-  cron fallback, to keep it current;
-- installs nginx plus acme.sh;
-- issues a Let's Encrypt certificate with DuckDNS DNS-01 validation;
-- configures nginx on `80`/`443` to proxy Orchestrator to `127.0.0.1:3000` and
-  browser live-view WebSockets to `/vnc/`;
-- sets `BROWSER_AGENT_VNC_WS_PUBLIC_URL=wss://<domain>.duckdns.org/vnc`.
+- **Public HTTPS** — set it up in-app from the first-run wizard or
+  **Settings → Remote Access**. It provisions a DuckDNS hostname, a Let's Encrypt
+  certificate, and an nginx reverse proxy for you. This is required if you want
+  Google / Gmail sign-in or push notifications on a remote box.
 
-After install, open:
-
-```text
-https://<domain>.duckdns.org
-```
-
-Google OAuth setup is handled from Orchestrator's Settings UI. The important
-installer responsibility is that `ORCHESTRATOR_PUBLIC_URL` is the user's real
-HTTPS origin before the app starts, so Orchestrator reports the correct redirect
-URIs.
-
-Useful overrides:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
-  ORCHESTRATOR_PORT=3100 \
-  BROWSER_AGENT_VNC_WS_PORT=6081 \
-  ORCHESTRATOR_HOME="$HOME/.orchestrator" \
-  bash
-```
-
-Force the native service installer instead:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
-  ORCHESTRATOR_INSTALL_MODE=native \
-  bash
-```
-
-The installed `orchestrator` CLI supports `start`, `stop`, `restart`, `status`, `logs`, and `update`. Installer-managed Docker installs also enable Settings -> Updates -> Update from inside the app.
-
-## Quick Start With Docker
-
-Docker is the recommended Linux deployment because the app uses native Node modules and browser automation runtimes.
-
-```bash
-git clone https://github.com/Horia73/orchestrator.git
-cd orchestrator
-cp .env.example .env
-docker compose up --build -d
-```
-
-Open:
-
-```text
-http://127.0.0.1:3000
-```
-
-The Compose file publishes only local host ports:
-
-- `127.0.0.1:3000` for the app.
-- `127.0.0.1:6080` for browser live view WebSocket/VNC proxy.
-
-If your Docker installation uses the legacy binary, use:
-
-```bash
-docker-compose up --build -d
-```
-
-## Docker Operations
-
-View logs:
-
-```bash
-docker compose logs -f orchestrator
-```
-
-Restart:
-
-```bash
-docker compose restart orchestrator
-```
-
-Update a Docker install:
-
-```bash
-orchestrator update
-```
-
-Manual Docker checkouts can still update with `git pull --ff-only && docker compose up --build -d`.
-
-Persistent data lives in the `orchestrator-data` Docker volume mounted at `/app/.orchestrator`.
-
-## Native Install
-
-Use native install for macOS/Linux desktops or when you want the managed updater.
-
-```bash
-git clone https://github.com/Horia73/orchestrator.git
-cd orchestrator
-npm ci
-npm run browsers:install
-npm run build
-npm start
-```
-
-Open:
-
-```text
-http://127.0.0.1:3000
-```
-
-The `npm start` wrapper binds to `ORCHESTRATOR_HOST` and `ORCHESTRATOR_PORT`; defaults are `127.0.0.1` and `3000`.
-
-## Native Managed Service Install
-
-macOS uses the native managed service install by default. Linux can opt into it with `ORCHESTRATOR_INSTALL_MODE=native`.
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
-  ORCHESTRATOR_INSTALL_MODE=native \
-  bash
-```
-
-The native installer:
-
-- clones or updates the app under `~/orchestrator/`;
-- installs Node 22 with `nvm` if needed;
-- installs Linux build/browser dependencies where possible;
-- runs `npm ci`;
-- installs the Patchright Chromium runtime;
-- stores runtime workspace state under `~/.orchestrator/state` and links it into the checkout;
-- builds the app;
-- creates a `systemd --user` service on Linux or a `launchd` service on macOS;
-- installs an `orchestrator` CLI with `start`, `stop`, `restart`, `status`, `logs`, and `update`.
-
-Native overrides:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/Horia73/orchestrator/master/scripts/install.sh | \
-  ORCHESTRATOR_INSTALL_MODE=native \
-  ORCHESTRATOR_PORT=3100 \
-  ORCHESTRATOR_HOST=127.0.0.1 \
-  ORCHESTRATOR_HOME="$HOME/.orchestrator" \
-  bash
-```
+Either way it's the **same build** — no code changes, just a different way in.
 
 ## Configuration
 
-Start from:
+Most configuration happens **in the app** — the first-run wizard and **Settings**
+cover API keys, providers, and integrations. You rarely need to touch a file.
+
+For advanced or headless setups, copy the template and edit it directly:
 
 ```bash
 cp .env.example .env
 ```
 
-Important variables:
+`.env.example` documents every supported variable, including provider keys
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), the watchlist
+(`TWELVE_DATA_API_KEY`), Smart Maps (`GOOGLE_MAPS_API_KEY`), Google OAuth, and
+Home Assistant.
 
-- `GEMINI_API_KEY`: Google/Gemini provider and browser vision loop.
-- `OPENAI_API_KEY`: OpenAI provider.
-- `ANTHROPIC_API_KEY`: Anthropic provider.
-- `TWELVE_DATA_API_KEY`: Watchlist financial search, quotes, and history.
-- `GOOGLE_MAPS_API_KEY`: optional Google Maps Platform key for Smart Maps, geocoding, places, routes, Google Weather, Google Air Quality, and Google Pollen. Weather/pollen can fall back through keyless Open-Meteo if a Google environmental API is not enabled.
-- `GOOGLE_MAPS_MAP_ID`: recommended JavaScript Vector Map ID with Tilt and Rotation enabled for production Smart Maps tilt/heading. Earth-like 3D uses Google Maps JavaScript 3D Maps beta where coverage exists.
-- `GOOGLE_OAUTH_CLIENT_ID` / `GOOGLE_OAUTH_CLIENT_SECRET`: Google Workspace and Gmail OAuth.
-- `HOME_ASSISTANT_URL` / `HOME_ASSISTANT_TOKEN`: Home Assistant integration.
-- `WHATSAPP_CHROME_EXECUTABLE_PATH`: browser executable override for WhatsApp.
-- `WHATSAPP_USER_AGENT`: optional WhatsApp Web browser user-agent override.
-- `BROWSER_AGENT_LIVE_VIEW`: enables live browser view on Linux/Docker.
+Persistent data lives at `~/.orchestrator/` and is owned by your host user, so a
+backup is a plain `cp -a ~/.orchestrator/ <destination>` (or use **Settings →
+Updates → Backup**).
 
-For native installs, runtime workspace state is stored at `~/.orchestrator/state` and exposed to the app through `~/orchestrator/.orchestrator` (a symlink). For Docker installs, persistent app data lives directly at `~/.orchestrator/` on the host (bind-mounted into the container at `/app/.orchestrator`), the container cache lives at `~/.orchestrator-node-home/` (bind-mounted at `/home/node`), and the host git checkout is bind-mounted at `/orchestrator-source` for self-development worktree creation. `/app` is a built image copy and intentionally has no `.git` metadata because `.dockerignore` excludes it from the production image. These paths are owned by your host user (`ORCHESTRATOR_UID`/`ORCHESTRATOR_GID` in `.env`), so backups are a simple `cp -a ~/.orchestrator/ <dest>`.
+## Updating
 
-## Browser Agent Live View
+Managed installs update from inside the app or the shell:
 
-The browser agent always uses Patchright. Settings > Models > Browser Agent lets you choose the light model and optional pro escalation model, but the backend is fixed to Patchright. The provided Docker image includes the browser/live-view dependencies needed for the managed browser session.
+- **Settings → Updates** shows the installed and latest versions and applies updates.
+- `orchestrator update` does the same from the host.
 
-Default Docker live-view settings:
+Active AI runs are allowed to finish before an update starts. Manual Docker
+checkouts update with `git pull --ff-only && docker compose up --build -d`.
 
-```text
-ORCHESTRATOR_PUBLIC_URL=
-BROWSER_AGENT_LIVE_VIEW=1
-BROWSER_AGENT_ALLOW_NO_SANDBOX=1
-BROWSER_AGENT_VNC_WS_HOST=0.0.0.0
-BROWSER_AGENT_VNC_WS_PORT=6080
-BROWSER_AGENT_VNC_WS_PUBLIC_URL=ws://127.0.0.1:6080
-```
+## Security
 
-In Docker, Chromium may require `BROWSER_AGENT_ALLOW_NO_SANDBOX=1`; run that
-container on an isolated host boundary.
+Orchestrator is a **trusted local application, not a public web service**. By
+default it binds to `127.0.0.1`.
 
-Leave `ORCHESTRATOR_PUBLIC_URL` empty for local installs or when a trusted
-reverse proxy sends correct canonical `Host` / `X-Forwarded-*` headers. Do not
-forward arbitrary client-supplied `Host` values as a loopback host. Set it when
-the app must advertise one canonical URL, especially for public HTTPS installs:
+- Keep it bound to loopback unless it sits behind a trusted access layer — an SSH
+  tunnel, Tailscale, a VPN, or the built-in HTTPS setup with TLS.
+- Don't expose it directly to the open internet. Its endpoints can run agents,
+  use your local credentials, and execute local tools.
+- Private `/api/*` routes are restricted to same-origin or loopback callers;
+  non-loopback calls require an API token. This is defense in depth, **not** a
+  replacement for authentication at the network edge.
 
-```text
-ORCHESTRATOR_PUBLIC_URL=https://<your-domain>.duckdns.org
-```
+## Diagnostics & uninstall
 
-Google OAuth is stricter than normal app routing: Authorized redirect URIs must
-be either `localhost` for a local/SSH-tunnel setup, or an HTTPS URL on a real
-public domain. Names such as `.lan`, `.local`, and private IPs are fine for
-opening Orchestrator, but Google rejects them as OAuth redirect URIs. When the
-app URL is not Google-compatible, Orchestrator falls back to
-`http://localhost:3000/...` for OAuth.
-
-For DuckDNS public HTTPS installs, prefer the installer flow in
-**Public HTTPS With DuckDNS**. It writes `ORCHESTRATOR_PUBLIC_URL`, configures
-DuckDNS updates, issues the certificate, and installs nginx.
-
-For headless Linux where the browser is on another machine, keep the app
-reachable through the LAN name/IP for normal use, but do Google OAuth through a
-local tunnel:
+The installer ships a doctor and a clean uninstaller, exposed through the
+`orchestrator` CLI:
 
 ```bash
-ssh -N -L 3000:127.0.0.1:3000 user@your-server.lan
+orchestrator doctor            # health check (preflight + state + runtime)
+orchestrator uninstall         # remove the install, keep your data
+orchestrator uninstall --purge # also wipe ~/.orchestrator and Docker volumes
 ```
 
-Then open `http://localhost:3000/settings`, run Connect, wait until the
-integration card says Connected, and stop the tunnel with `Ctrl+C`. If the LAN
-IP changes, prefer a stable LAN DNS name or a private network name; the app also
-reports current SSH host candidates in the integration status payload.
+Install and doctor runs log to `~/.orchestrator/logs/`.
 
-Keep `6080` bound to `127.0.0.1` unless it is protected by the same private access layer as the main app.
+## Requirements
 
-## Updates
+- Docker with Compose (recommended Linux deployment), **or** Node.js `22.x` for a
+  native install.
+- Git.
+- API keys for the providers and integrations you want — added in-app.
 
-Installer-managed Docker installs use a local host bridge:
+## License
 
-```bash
-orchestrator update
-```
+Licensed under the [GNU Affero General Public License v3.0 or later](LICENSE) —
+© 2026 Horia73. You're free to self-host and modify Orchestrator; if you run a
+**modified** version as a network service, you must make your source available
+to its users under the same license.
 
-The bridge is installed by `scripts/install.sh`, listens locally for the container through `host.docker.internal`, authenticates with a generated token, and exposes narrow host-only operations. It runs managed updates (`git pull --ff-only`, rebuild, restart) and container/CLI maintenance actions, and reads Claude Code subscription usage from the host Claude CLI so Docker installs do not need to scrape Claude's interactive TUI inside the container.
+---
 
-Managed installs use GitHub Releases as the update source:
-
-- Settings -> Updates shows installed and latest release versions.
-- Settings -> Updates -> Update queues an update when the install is managed.
-- `orchestrator update` performs the same update from the host shell.
-- Active AI runs are allowed to finish before maintenance starts.
-- During maintenance, new AI requests are paused until restart completes.
-
-Manual Docker checkouts without the installer bridge should update from the host:
-
-```bash
-git pull --ff-only
-docker compose up --build -d
-```
-
-## Diagnostics and Uninstall
-
-The installer ships `scripts/doctor.sh`, also exposed as `orchestrator doctor`.
-Use it to validate a host before installing, to inspect leftover state after a
-previous installation, to verify the running system, or to remove the install
-cleanly.
-
-```bash
-orchestrator doctor            # full health check (preflight + state + runtime)
-orchestrator doctor preflight  # read-only pre-install checks
-orchestrator doctor inspect    # inventory of previous-install artifacts
-orchestrator doctor fix        # apply suggested fixes for the last check
-orchestrator uninstall         # remove install, keep data/logs and Docker volumes
-orchestrator uninstall --purge # also wipe ~/.orchestrator and Orchestrator Docker volumes/image
-```
-
-`uninstall` does not remove shared system dependencies such as Docker, Node.js,
-nginx, or acme.sh itself. `--purge` removes data owned by Orchestrator, including
-managed native state and Docker named volumes created by the Compose stack.
-
-Every install run writes a full log to `~/.orchestrator/logs/install-<timestamp>.log`.
-Every doctor run writes its own log to `~/.orchestrator/logs/doctor/run-<timestamp>.log`.
-If the installer fails, the trailing message points at both the log file and the
-doctor command for follow-up.
-
-Exit codes follow:
-
-- `0` healthy / clean / done
-- `1` hard failure (blocker)
-- `2` warnings only — non-blocking
-- `3` stale state from a previous install was found (`inspect` only)
-
-The installer calls `doctor preflight` and `doctor inspect` automatically right
-after the checkout step. When stale state is detected on an interactive run the
-installer offers `keep` (reuse what is valid), `reset` (uninstall first, then
-install fresh), or `abort`. Set `ORCHESTRATOR_SKIP_DOCTOR=1` to bypass these
-checks entirely.
-
-## Development
-
-```bash
-npm ci
-npm run browsers:install
-npm run dev
-```
-
-Quality checks:
-
-```bash
-npm run typecheck
-npm run smoke:monitor
-npm run lint
-npm run build
-npm audit --omit=dev --audit-level=high
-```
-
-## Release
-
-Normal branch pushes are development snapshots. Public releases are tags.
-
-Before releasing:
-
-```bash
-git status --short
-npm run typecheck
-npm run smoke:monitor
-npm run lint
-npm run build
-```
-
-Create and push a release:
-
-```bash
-npm run release:patch
-npm run release:minor
-npm run release:major
-```
-
-The release script runs checks, bumps `package.json` and `package-lock.json`, commits, tags, pushes the branch, and pushes the tag. The GitHub Release workflow creates the GitHub Release for pushed `v*` tags.
+<p align="center">
+  A personal, self-hosted project — run it on your own machine.
+</p>
