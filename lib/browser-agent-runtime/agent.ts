@@ -1596,8 +1596,31 @@ async function executeAction(
                 return { success: true, trace: null, supplementalFrames: [], observation };
             }
 
+            case 'getCurrentUrl': {
+                onStatusUpdate('🔗 Reading current browser URL...');
+                const current = await browser.getCurrentUrl();
+                const sourceLabel = current.source === 'address-bar'
+                    ? 'address bar'
+                    : current.source === 'navigation-history'
+                        ? 'navigation history'
+                        : 'page URL';
+                const observation = current.url
+                    ? `Current URL (${sourceLabel}): ${current.url}`
+                    : 'Current URL is unavailable.';
+
+                if (current.url) {
+                    clipboardOps.set(current.url);
+                    onStatusUpdate(`🔗 ${observation}`);
+                    return { success: true, trace: null, supplementalFrames: [], observation };
+                }
+
+                onStatusUpdate(`⚠️ ${observation}`);
+                return { success: false, trace: null, supplementalFrames: [], observation };
+            }
+
             case 'getLink': {
                 let linkToCopy: string | null = null;
+                let observation = '';
                 if (action.coordinate) {
                     const resolved = await resolveCoordinate(browser, action.coordinate, timing.coordinateMode);
                     const [x, y] = resolved;
@@ -1606,17 +1629,27 @@ async function executeAction(
                 }
 
                 if (!linkToCopy) {
-                    linkToCopy = browser.getPageUrl();
-                    onStatusUpdate(`🔗 Copying Page URL: ${linkToCopy}`);
+                    const current = await browser.getCurrentUrl();
+                    linkToCopy = current.url;
+                    const sourceLabel = current.source === 'address-bar'
+                        ? 'address bar'
+                        : current.source === 'navigation-history'
+                            ? 'navigation history'
+                            : 'page URL';
+                    observation = linkToCopy
+                        ? `Copied current URL (${sourceLabel}): ${linkToCopy}`
+                        : 'No current URL found.';
+                    onStatusUpdate(`🔗 Copying Current URL (${sourceLabel}): ${linkToCopy}`);
                 } else {
+                    observation = `Copied found link: ${linkToCopy}`;
                     onStatusUpdate(`🔗 Copying Found Link: ${linkToCopy}`);
                 }
 
                 if (linkToCopy) {
                     clipboardOps.set(linkToCopy);
-                    return { success: true, trace: null, supplementalFrames: [] };
+                    return { success: true, trace: null, supplementalFrames: [], observation };
                 }
-                return { success: false, trace: null, supplementalFrames: [] };
+                return { success: false, trace: null, supplementalFrames: [], observation };
             }
 
             case 'pasteLink': {

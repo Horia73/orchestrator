@@ -140,6 +140,13 @@ export interface BrowserFetchResult {
     error?: string;
 }
 
+export type BrowserCurrentUrlSource = 'address-bar' | 'navigation-history' | 'page-url';
+
+export interface BrowserCurrentUrlResult {
+    url: string;
+    source: BrowserCurrentUrlSource;
+}
+
 export type BrowserTabOrigin = 'initial' | 'newTab' | 'popup' | 'recovered';
 
 export interface BrowserTabInfo {
@@ -200,6 +207,7 @@ export interface BrowserPageSession {
     switchTab(index: number): Promise<boolean>;
     newTab(url?: string): Promise<boolean>;
     getHrefAt(x: number, y: number): Promise<string | null>;
+    getCurrentUrl(): Promise<BrowserCurrentUrlResult>;
     getPage(): Page | null;
     getPageUrl(): string;
     getOpenTabCount(): Promise<number>;

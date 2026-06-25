@@ -48,7 +48,7 @@ export function buildSystemPrompt(
    const timezone = getConfiguredTimezone();
    const dateString = now.toLocaleDateString('ro-RO', { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric', timeZone: timezone });
    const localTime = formatDateTimeInTimezone(now, timezone);
-   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
+   const baseActions = '"click" | "type" | "key" | "scroll" | "scrollToBottom" | "undo" | "wait" | "navigate" | "hold" | "drag" | "hover" | "inspectPage" | "findInPage" | "inspectDiagnostics" | "fetchUrl" | "screenshot" | "recordVideo" | "closeTab" | "refresh" | "getCurrentUrl" | "getLink" | "pasteLink" | "readClipboard" | "clear" | "goBack" | "goForward" | "listTabs" | "switchTab" | "newTab" | "listDownloads" | "waitForDownloads"';
    const responseActionList = isAdvancedMode
       ? `${baseActions} | "ask" | "yield_control"`
       : escalationEnabled
@@ -125,7 +125,7 @@ export function buildSystemPrompt(
       ? '- **inspectPage**: Capture another full display frame for orientation. On this backend it is NOT a DOM full-page screenshot; prefer `findInPage` for exact text and visual scrolling for long pages.'
       : '- **inspectPage**: Request an extra full-page overview screenshot for orientation. Use this when the page is long/wide and the current viewport is not enough to decide where to scroll next, or you just need to get information about the page. This does NOT interact with the page. After using it, you will receive an overview frame plus the normal viewport frame.';
    const getLinkDoc = usesFullDisplayBackend
-      ? '- **getLink**: Copies the current page URL only. Element-level href extraction is not available on the full-display backend; click links visually or use browser context menus yourself when needed.'
+      ? '- **getLink**: Copies the current URL only, using the same address-bar-aware path as `getCurrentUrl`. Element-level href extraction is not available on the full-display backend; click links visually or use browser context menus yourself when needed.'
       : '- **getLink**: Copy link from element at (x,y). If no element/coords, copies Page URL.';
    const tabListDoc = usesFullDisplayBackend
       ? '- **listTabs**: Limited on the full-display backend. Read the browser tab strip visually; use `newTab`, `closeTab`, and `switchTab` when the visible tab order is clear.'
@@ -175,9 +175,10 @@ ${inspectPageDoc}
 - **recordVideo**: Record the current visible viewport as evidence for a specific duration. Specify \`durationMs\` in milliseconds. Use this when the task asks for video or when motion/loading/animation matters. Recording blocks other actions while it captures; keep it short unless the user requested a longer duration.
 - **refresh**: Reload the page.
 - **closeTab**: Close a tab. If you provide \`tabIndex\`, it closes that tab even if it is not active. If omitted, it closes the current tab.
+- **getCurrentUrl**: Read and return the current browser URL without navigating. On the full-display backend this tries the visible address bar first, which can recover the original failed URL from Chromium error pages such as OAuth localhost redirects. Use this when the task asks for the exact current/address-bar URL; the result is returned directly, so do not call \`readClipboard\` afterward just to retrieve it.
 ${getLinkDoc}
 - **readClipboard**: Read the browser/OS clipboard and store it for later use. Use this after clicking a visible "Copy", "Copy link", "Copy key", or similar button when the task depends on the copied value or you need to paste it elsewhere.
-- **pasteLink**: Paste the stored clipboard/link content into the input at (x,y). If no link was stored through \`getLink\`, this can use the real browser clipboard read by \`readClipboard\` or a page Copy button.
+- **pasteLink**: Paste the stored clipboard/link content into the input at (x,y). If no link was stored through \`getLink\` or \`getCurrentUrl\`, this can use the real browser clipboard read by \`readClipboard\` or a page Copy button.
 - **clear**: Clear the input field at (x,y). Always use this before typing in a non-empty input field.
 - **goBack**: Go back.
 - **goForward**: Go forward.

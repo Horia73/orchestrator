@@ -34,6 +34,7 @@ import type {
     BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
+    BrowserCurrentUrlResult,
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
@@ -67,6 +68,7 @@ export type {
     BrowserFetchResult,
     BrowserFrameSnapshot,
     BrowserFrameSource,
+    BrowserCurrentUrlResult,
     BrowserManager,
     BrowserManagerOptions,
     BrowserNetworkEntry,
@@ -83,6 +85,13 @@ export type {
 
 const MAX_DIAGNOSTIC_ENTRIES = 80;
 const MAX_FETCH_BODY_CHARS = 12_000;
+const INTERNAL_BROWSER_URL_PREFIXES = [
+    'about:',
+    'chrome-error://',
+    'chrome://',
+    'edge://',
+    'devtools://',
+];
 
 interface HumanMouseMoveOptions {
     durationMs?: number;
@@ -104,6 +113,18 @@ interface BrowserPageSettleSignature extends BrowserFrameMetrics {
 }
 
 const DISPLAY_AUTOMATION_COMMANDS = ['import', 'xdotool'] as const;
+const DISPLAY_CLIPBOARD_COMMANDS = [
+    {
+        command: 'xclip',
+        readArgs: ['-selection', 'clipboard', '-out'],
+        writeArgs: ['-selection', 'clipboard', '-in'],
+    },
+    {
+        command: 'xsel',
+        readArgs: ['--clipboard', '--output'],
+        writeArgs: ['--clipboard', '--input'],
+    },
+] as const;
 const executableCache = new Map<string, boolean>();
 
 function commandExists(command: string): boolean {
@@ -140,6 +161,86 @@ function runDisplayCommand(display: string | undefined, command: string, args: s
         throw new Error(`${command} ${args.join(' ')} failed${detail ? `: ${detail}` : ''}`);
     }
     return result.stdout;
+}
+
+function readDisplayClipboard(display: string | undefined): string | null {
+    for (const candidate of DISPLAY_CLIPBOARD_COMMANDS) {
+        if (!commandExists(candidate.command)) continue;
+        try {
+            return runDisplayCommand(display, candidate.command, [...candidate.readArgs]).toString('utf8');
+        } catch {
+            // Try the next clipboard tool.
+        }
+    }
+    return null;
+}
+
+function writeDisplayClipboard(display: string | undefined, text: string): boolean {
+    for (const candidate of DISPLAY_CLIPBOARD_COMMANDS) {
+        if (!commandExists(candidate.command)) continue;
+        try {
+            runDisplayCommand(display, candidate.command, [...candidate.writeArgs], text);
+            return true;
+        } catch {
+            // Try the next clipboard tool.
+        }
+    }
+    return false;
+}
+
+function isInternalBrowserUrl(url: string | undefined): boolean {
+    const normalized = String(url || '').trim().toLowerCase();
+    if (!normalized) return true;
+    return INTERNAL_BROWSER_URL_PREFIXES.some(prefix => normalized.startsWith(prefix));
+}
+
+function normalizeAddressBarText(value: string | null | undefined): string | null {
+    const normalized = String(value || '').trim();
+    if (!normalized || normalized.includes('\n') || normalized.includes('\r')) return null;
+    if (normalized.length > 8192) return null;
+
+    // Full URLs and browser-internal URLs are copied exactly by Chromium.
+    if (/^[a-z][a-z0-9+.-]*:/i.test(normalized)) return normalized;
+
+    // Chrome can also copy a bare host/path for some omnibox states.
+    if (/^[^\s/]+\.[^\s/]+(?:[/?#:]|$)/.test(normalized) || /^localhost(?::\d+)?(?:[/?#]|$)/i.test(normalized)) {
+        return normalized;
+    }
+
+    return null;
+}
+
+type CdpSessionLike = {
+    send(method: string, params?: Record<string, unknown>): Promise<unknown>;
+    detach?: () => Promise<void>;
+};
+
+type NavigationHistoryEntry = {
+    url?: string;
+    userTypedURL?: string;
+};
+
+function navigationHistoryCandidate(result: unknown): string | null {
+    if (!result || typeof result !== 'object') return null;
+    const record = result as { currentIndex?: unknown; entries?: unknown };
+    if (!Array.isArray(record.entries) || record.entries.length === 0) return null;
+    const rawIndex = Number(record.currentIndex);
+    const currentIndex = Number.isInteger(rawIndex)
+        ? Math.max(0, Math.min(rawIndex, record.entries.length - 1))
+        : record.entries.length - 1;
+    const entries = record.entries as NavigationHistoryEntry[];
+    const orderedCandidates = [
+        entries[currentIndex]?.userTypedURL,
+        entries[currentIndex]?.url,
+        ...entries.slice(0, currentIndex).reverse().flatMap(entry => [entry.userTypedURL, entry.url]),
+    ];
+
+    for (const candidate of orderedCandidates) {
+        const normalized = normalizeAddressBarText(candidate);
+        if (normalized && !isInternalBrowserUrl(normalized)) return normalized;
+    }
+
+    return null;
 }
 
 function normalizeXdotoolKey(key: string): string {
@@ -285,6 +386,63 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     const xdotool = async (args: string[]) => {
         runDisplayCommand(lastLiveViewState.display, 'xdotool', args);
         await sleep(20);
+    };
+
+    const getNavigationHistoryUrl = async (page: Page): Promise<string | null> => {
+        if (!context) return null;
+        const newSession = (context as unknown as {
+            newCDPSession?: (target: Page) => Promise<CdpSessionLike>;
+        }).newCDPSession;
+        if (typeof newSession !== 'function') return null;
+
+        let cdpSession: CdpSessionLike | null = null;
+        try {
+            cdpSession = await newSession.call(context, page);
+            const history = await cdpSession.send('Page.getNavigationHistory');
+            return navigationHistoryCandidate(history);
+        } catch (error) {
+            log(`⚠️ Could not read browser navigation history: ${formatBrowserError(error)}`);
+            return null;
+        } finally {
+            if (cdpSession?.detach) {
+                await cdpSession.detach().catch(() => {});
+            }
+        }
+    };
+
+    const copyAddressBarUrl = async (page: Page): Promise<string | null> => {
+        if (!shouldUseDisplayAutomation()) return null;
+
+        try {
+            await page.bringToFront();
+        } catch {
+            // xdotool operates on the visible browser window; continue best-effort.
+        }
+
+        const marker = `orchestrator-address-bar-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+        const canWriteClipboard = writeDisplayClipboard(lastLiveViewState.display, marker);
+
+        try {
+            await xdotool(['key', '--clearmodifiers', normalizeXdotoolKey('Control+L')]);
+            await sleep(60);
+            await xdotool(['key', '--clearmodifiers', normalizeXdotoolKey('Control+C')]);
+            await sleep(120);
+
+            const copied = readDisplayClipboard(lastLiveViewState.display);
+            if (canWriteClipboard && copied === marker) {
+                return null;
+            }
+            return normalizeAddressBarText(copied);
+        } catch (error) {
+            log(`⚠️ Could not copy browser address bar URL: ${formatBrowserError(error)}`);
+            return null;
+        } finally {
+            try {
+                await xdotool(['key', '--clearmodifiers', normalizeXdotoolKey('Escape')]);
+            } catch {
+                // Ignore focus restoration failures.
+            }
+        }
     };
 
     const clampDisplayCoordinate = (x: number, y: number): [number, number] => {
@@ -2330,6 +2488,25 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                     const anchor = element.closest('a');
                     return anchor ? anchor.href : null;
                 }, { x: safeX, y: safeY });
+            },
+
+            async getCurrentUrl(): Promise<BrowserCurrentUrlResult> {
+                const activePage = await ensureActivePage(session);
+                const pageUrl = activePage.url();
+
+                const addressBarUrl = await copyAddressBarUrl(activePage);
+                if (addressBarUrl) {
+                    return { url: addressBarUrl, source: 'address-bar' };
+                }
+
+                if (isInternalBrowserUrl(pageUrl)) {
+                    const historyUrl = await getNavigationHistoryUrl(activePage);
+                    if (historyUrl) {
+                        return { url: historyUrl, source: 'navigation-history' };
+                    }
+                }
+
+                return { url: pageUrl, source: 'page-url' };
             },
 
             getPage(): Page | null {

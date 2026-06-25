@@ -102,6 +102,8 @@ export function formatAction(action: AgentAction, coordinateMode: VisionCoordina
         }
         case 'readClipboard':
             return `Read Clipboard - ${reason(action)}`;
+        case 'getCurrentUrl':
+            return `Get Current URL - ${reason(action)}`;
         default:
             return `${action.action} - ${reason(action)}`;
     }

@@ -53,12 +53,15 @@ assert.match(systemPrompt, /If the form or page is scrollable/)
 assert.match(systemPrompt, /confirmation\/result screen/)
 assert.match(systemPrompt, /Client-Side Application Errors/)
 assert.match(systemPrompt, /use `inspectDiagnostics` before refreshing/)
+assert.match(systemPrompt, /getCurrentUrl/)
+assert.match(systemPrompt, /OAuth localhost redirects/)
 
 const normalizedDisplayPrompt = buildSystemPrompt(false, 'normalized-display')
 assert.match(normalizedDisplayPrompt, /NORMALIZED COORDINATES \(0-1000 range\)/)
 assert.match(normalizedDisplayPrompt, /full browser display, including tabs, address bar, toolbar, page content, popups, and context menus/)
 assert.match(normalizedDisplayPrompt, /Native Browser UI/)
 assert.match(normalizedDisplayPrompt, /1000x1000 grid system/)
+assert.match(normalizedDisplayPrompt, /visible address bar first/)
 assert.doesNotMatch(normalizedDisplayPrompt, /ABSOLUTE PIXEL COORDINATES/)
 
 const unsafeScrollFocusPrompt = buildActionPrompt('Scroll a course list to Course 10.', [

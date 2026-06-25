@@ -46,6 +46,12 @@ const batchedActions = parseAgentActionsFromModelText(JSON.stringify([
 assert.equal(batchedActions.length, 2)
 assert.equal(batchedActions[1].action, 'type')
 
+const currentUrlAction = parseAgentActionsFromModelText(JSON.stringify({
+    action: 'getCurrentUrl',
+    reasoning: 'Read the exact current address-bar URL without navigating',
+}))
+assert.equal(currentUrlAction[0].action, 'getCurrentUrl')
+
 assert.throws(
     () => parseAgentActionsFromModelText('{ action: "click", reasoning: "bad JSON" }'),
     /Invalid JSON/,
