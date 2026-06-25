@@ -96,6 +96,7 @@ import {
   type RecalledMemory,
 } from "@/lib/memory/recall"
 import {
+  MAX_MODEL_RETRIES_BEFORE_FALLBACK,
   requestMessagesFromBody,
   shouldTryModelFallback,
   type ChatRequestBody,
@@ -972,6 +973,12 @@ export async function POST(request: Request) {
                 lastModelAttemptError = prepared.payload.error
                 continue
               }
+              let tryNextModel = false
+              for (
+                let retryIndex = 0;
+                retryIndex <= MAX_MODEL_RETRIES_BEFORE_FALLBACK;
+                retryIndex++
+              ) {
               activeAttempt = prepared
               let attemptStreamError: string | null = null
               let attemptHadToolCall = false
@@ -990,7 +997,11 @@ export async function POST(request: Request) {
                 startedAt: requestStartedAt,
                 inputText: latestUserMessage?.content ?? null,
               })
-              if (prepared.settings.fallbackIndex && accContent.length === 0) {
+              if (
+                retryIndex === 0 &&
+                prepared.settings.fallbackIndex &&
+                accContent.length === 0
+              ) {
                 const note = `Using fallback ${prepared.settings.fallbackIndex}: ${prepared.settings.provider}:${prepared.settings.model}.\n`
                 accThinking += note
                 appendThinkingChunk(note)
@@ -1718,19 +1729,32 @@ export async function POST(request: Request) {
                 lastModelAttemptError = attemptStreamError
                 const attemptProducedContent =
                   accContent.length !== attemptContentStart
-                const canRetry =
-                  attemptIndex < modelAttempts.length - 1 &&
+                const canAttemptRecovery =
                   !attemptProducedContent &&
                   shouldTryModelFallback(attemptStreamError, {
                     afterToolCall: attemptHadToolCall,
                   })
-                if (canRetry) {
-                  const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before final output; trying fallback.\n`
+                if (
+                  canAttemptRecovery &&
+                  retryIndex < MAX_MODEL_RETRIES_BEFORE_FALLBACK
+                ) {
+                  const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before final output; retrying same model (${retryIndex + 1}/${MAX_MODEL_RETRIES_BEFORE_FALLBACK}).\n`
                   accThinking += note
                   appendThinkingChunk(note)
                   send({ type: "thinking", content: note })
                   persistAssistantProgress({ force: true })
                   continue
+                }
+                const canTryFallback =
+                  canAttemptRecovery && attemptIndex < modelAttempts.length - 1
+                if (canTryFallback) {
+                  const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before final output; trying fallback.\n`
+                  accThinking += note
+                  appendThinkingChunk(note)
+                  send({ type: "thinking", content: note })
+                  persistAssistantProgress({ force: true })
+                  tryNextModel = true
+                  break
                 }
                 terminalStreamError = attemptStreamError
                 terminalMessageStatus = "error"
@@ -1748,6 +1772,9 @@ export async function POST(request: Request) {
                 })
                 break
               }
+              }
+              if (tryNextModel) continue
+              if (terminalMessageStatus) break
             }
             if (!terminalMessageStatus) {
               const error =

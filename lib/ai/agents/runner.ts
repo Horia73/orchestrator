@@ -18,7 +18,7 @@ import { getAgent } from './registry'
 import { AUDIO_CONTEXT_AGENT_ID, AUDIO_TRANSCRIPT_AGENT_ID } from './audio-context-agent'
 import { resolveRuntimeAgentConfig } from './runtime-agent-config'
 import { getProvider, getProviderCapabilities } from '@/lib/ai/providers'
-import { shouldTryModelFallback } from '@/lib/ai/model-fallback'
+import { MAX_MODEL_RETRIES_BEFORE_FALLBACK, shouldTryModelFallback } from '@/lib/ai/model-fallback'
 import { formatAssetSummary, saveGeneratedAsset } from '@/lib/ai/media-assets'
 import {
     appendBoundedToolDelta,
@@ -58,6 +58,7 @@ import {
     logRequestComplete,
     logRequestFail,
     logRequestAbort,
+    logRequestInput,
     logToolCall,
 } from '@/lib/observability/store'
 import type { Attachment, ContentSegment, ReasoningEntry } from '@/lib/types'
@@ -149,22 +150,30 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
     })
     try {
         let lastResult: ToolResult | null = null
-        const attempts: Array<{ provider: string; model: string; error: string }> = []
+        const attempts: Array<{ provider: string; model: string; retry: number; error: string }> = []
 
         for (let index = 0; index < runtimes.length; index++) {
             const runtime = runtimes[index]
-            // First attempt reuses the pre-generated runId (matches the queued
-            // card); fallbacks get fresh ids so each is its own row.
-            const result = await runTextSubAgentAttempt(args, runtime, permit, rootRunId, index === 0 ? queuedRunId : undefined)
-            if (result.success) return result
-            lastResult = result
-            attempts.push({
-                provider: runtime.provider,
-                model: runtime.model,
-                error: result.error ?? 'Unknown error',
-            })
+            for (let retryIndex = 0; retryIndex <= MAX_MODEL_RETRIES_BEFORE_FALLBACK; retryIndex++) {
+                // The first primary attempt reuses the pre-generated runId
+                // (matches the queued card). Retries and fallbacks get fresh ids
+                // so each failed model call remains inspectable in Logs.
+                const providedRunId = index === 0 && retryIndex === 0 ? queuedRunId : undefined
+                const result = await runTextSubAgentAttempt(args, runtime, permit, rootRunId, providedRunId)
+                if (result.success) return result
+                lastResult = result
+                attempts.push({
+                    provider: runtime.provider,
+                    model: runtime.model,
+                    retry: retryIndex,
+                    error: result.error ?? 'Unknown error',
+                })
+                if (!isFallbackSafeToolResult(result)) break
+                if (retryIndex < MAX_MODEL_RETRIES_BEFORE_FALLBACK && isRetrySafeToolResult(result)) continue
+                break
+            }
             if (index >= runtimes.length - 1) break
-            if (!isFallbackSafeToolResult(result)) break
+            if (!lastResult || !isFallbackSafeToolResult(lastResult)) break
         }
 
         if (!lastResult) {
@@ -182,7 +191,10 @@ export async function runTextSubAgent(args: RunTextSubAgentArgs): Promise<ToolRe
         // scheduled task's lastRunError. Single-attempt failures pass through as-is.
         if (attempts.length > 1) {
             const chain = attempts
-                .map((a) => `${a.provider}/${a.model}: ${stripSubAgentPrefix(a.error, args.target.id)}`)
+                .map((a) => {
+                    const retryLabel = a.retry > 0 ? ` retry ${a.retry}` : ''
+                    return `${a.provider}/${a.model}${retryLabel}: ${stripSubAgentPrefix(a.error, args.target.id)}`
+                })
                 .join(' → ')
             return { ...lastResult, error: `Sub-agent ${args.target.id} failed on all providers — ${chain}` }
         }
@@ -213,7 +225,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         return {
             success: false,
             error: `Sub-agent ${target.id} is missing provider/model — cannot run.`,
-            data: { fallbackSafe: true },
+            data: { fallbackSafe: true, retrySafe: false },
         }
     }
     // CLI-backed agents can omit buildPrompt — they pass
@@ -235,7 +247,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         return {
             success: false,
             error: `Sub-agent ${target.id}: API key missing for provider ${runtime.provider}`,
-            data: { fallbackSafe: true },
+            data: { fallbackSafe: true, retrySafe: false },
         }
     }
 
@@ -244,7 +256,7 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
         return {
             success: false,
             error: `Sub-agent ${target.id}: provider ${runtime.provider} doesn't support text streaming yet (stub)`,
-            data: { fallbackSafe: true },
+            data: { fallbackSafe: true, retrySafe: false },
         }
     }
 
@@ -394,6 +406,23 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
             extra: parentCtx.appOrigin ? { appOrigin: parentCtx.appOrigin } : undefined,
         })
         : undefined
+
+    logRequestInput({
+        requestId: subRequestId,
+        systemPrompt,
+        messages: messages.map(message => ({
+            role: message.role,
+            content: message.content,
+            attachments: message.attachments?.map(attachment => ({
+                filePath: attachment.filePath,
+                mimeType: attachment.mimeType,
+            })),
+        })),
+        tools: [
+            ...agentTools.map(tool => tool.name),
+            ...agentBuiltins,
+        ],
+    })
 
     let accContent = ''
     let accThinking = ''
@@ -1026,6 +1055,17 @@ function isFallbackSafeToolResult(result: ToolResult): boolean {
         typeof data === 'object' &&
         !Array.isArray(data) &&
         (data as { fallbackSafe?: unknown }).fallbackSafe === true
+    )
+}
+
+function isRetrySafeToolResult(result: ToolResult): boolean {
+    const data = result.data
+    return Boolean(
+        isFallbackSafeToolResult(result) &&
+        data &&
+        typeof data === 'object' &&
+        !Array.isArray(data) &&
+        (data as { retrySafe?: unknown }).retrySafe !== false
     )
 }
 

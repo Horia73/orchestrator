@@ -20,6 +20,8 @@ interface RenderArgs {
      * in the conversation doesn't accidentally show in an earlier bubble.
      */
     messageId: string
+    /** True while this message is still receiving stream chunks. */
+    isStreaming?: boolean
     onExpand?: (a: ArtifactRow) => void
     suppressArtifactTypes?: string[]
 }
@@ -42,7 +44,7 @@ interface RenderArgs {
  * `artifact_end`), we render a "Generating artifact…" stub so users see
  * something happening.
  */
-export function RenderMessageContent({ content, messageId, onExpand, suppressArtifactTypes }: RenderArgs) {
+export function RenderMessageContent({ content, messageId, isStreaming = false, onExpand, suppressArtifactTypes }: RenderArgs) {
     const { byMessage, draftsByMessage, loading: artifactsLoading } = useConversationArtifacts()
     const rowsForMessage = React.useMemo(() => byMessage.get(messageId) ?? [], [byMessage, messageId])
     const draftsForMessage = React.useMemo(
@@ -89,23 +91,30 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                 // model is still streaming the body, synthesise a transient
                 // row from the parsed segment so the card renders live.
                 const realRow = rowByIdentifier.get(seg.attrs.identifier)
-                // While the body is mid-stream, route runtime-y types (React,
-                // HTML, mermaid) through application/vnd.ant.code so the
+                const hasDraft = !realRow && draftsForMessage.some(
+                    draft => draft.attrs.identifier === seg.attrs.identifier
+                )
+                const isPendingArtifact = !realRow && (
+                    !seg.closed ||
+                    isStreaming ||
+                    hasDraft ||
+                    artifactsLoading
+                )
+                // While the body is mid-stream, route runtime-y source types
+                // (React, Mermaid) through application/vnd.ant.code so the
                 // sandboxed iframe isn't asked to compile half-written JSX on
                 // every token. Markdown / SVG / CSV stay live — they fail
                 // gracefully on partial input.
                 //
-                // Map and weather artifacts are JSON-bodied. Showing them as
-                // streamed code makes the user stare at a one-line horizontally
-                // scrolling JSON until the close tag lands; a friendly
-                // "building map / weather" placeholder is much better UX while
-                // the model fills in the body.
+                // JSON-bodied cards and HTML artifacts are better as a calm
+                // generating placeholder while the model fills in the body.
                 const streaming = !seg.closed && !realRow
-                const hasDraft = !realRow && draftsForMessage.some(
-                    draft => draft.attrs.identifier === seg.attrs.identifier
-                )
                 const isPlaceholderTarget = streaming && PLACEHOLDER_TYPES.has(seg.attrs.type)
-                if (isPlaceholderTarget) {
+                const isPanelPending = isPendingArtifact && (
+                    seg.attrs.display === "panel" ||
+                    seg.attrs.display === "fullscreen"
+                )
+                if (isPlaceholderTarget || isPanelPending) {
                     return (
                         <StreamingPlaceholder
                             key={`p-${i}-${seg.attrs.identifier}`}
@@ -134,7 +143,7 @@ export function RenderMessageContent({ content, messageId, onExpand, suppressArt
                     createdAt: 0,
                 }
                 const renderTarget = decideRowRenderTarget(artifact)
-                if (seg.closed && !realRow && (hasDraft || artifactsLoading)) {
+                if (seg.closed && !realRow && (isStreaming || hasDraft || artifactsLoading)) {
                     return (
                         <StreamingPlaceholder
                             key={`w-${i}-${seg.attrs.identifier}`}
@@ -323,12 +332,7 @@ function summarizeWorkoutArtifact(content: string): { minutes?: number; exercise
  */
 const RUNTIME_TYPES = new Set([
     'application/vnd.ant.react',
-    'text/html',
     'application/vnd.ant.mermaid',
-    'application/vnd.ant.map',
-    'application/vnd.ant.weather',
-    'application/vnd.ant.recipe',
-    'application/vnd.ant.workout',
 ])
 
 /**
@@ -343,6 +347,7 @@ const PLACEHOLDER_TYPES = new Set([
     'application/vnd.ant.recipe',
     'application/vnd.ant.workout',
     'application/vnd.ant.app-link',
+    'text/html',
 ])
 
 function StreamingPlaceholder({ type, title }: { type: string; title: string }) {
@@ -352,7 +357,7 @@ function StreamingPlaceholder({ type, title }: { type: string; title: string }) 
             <div className="size-2 animate-pulse rounded-full bg-blue-500" aria-hidden />
             <div className="min-w-0 flex-1">
                 <div className="truncate font-medium text-foreground">{title}</div>
-                <div className="text-[12px] text-muted-foreground">Building {kind}…</div>
+                <div className="text-[12px] text-muted-foreground">Generating {kind}…</div>
             </div>
         </div>
     )
@@ -364,6 +369,7 @@ const STREAMING_KIND_LABEL: Record<string, string> = {
     'application/vnd.ant.recipe': 'recipe',
     'application/vnd.ant.workout': 'workout',
     'application/vnd.ant.app-link': 'app card',
+    'text/html': 'HTML artifact',
 }
 
 function prettyArtifactType(type: string): string {

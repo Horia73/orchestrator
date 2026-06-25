@@ -66,7 +66,7 @@ Required attributes:
   - \`application/x-latex\` — standalone LaTeX
   - \`text/vnd.graphviz\` — Graphviz DOT
   - \`application/vnd.ant.code\` — a code snippet or file (set \`language\`)
-  - \`text/html\` — a self-contained HTML page (runs in a sandboxed iframe)
+  - \`text/html\` — a self-contained HTML page/app meant to run inside Orchestrator (runs in a sandboxed iframe)
   - \`application/vnd.ant.react\` — a self-contained React component (runs in a sandboxed iframe)
 - \`title\`: short human-readable label.
 - \`display\`: choose \`inline\`, \`panel\`, or \`fullscreen\` yourself:
@@ -91,9 +91,24 @@ For \`application/vnd.ant.code\` the body is raw source — the renderer applies
 For \`text/markdown\` the body is plain markdown (which CAN contain code fences inside as long as the outer artifact body is not itself fenced).
 </critical_body_rules>
 
+<artifact_vs_file_preview>
+When the deliverable is HTML whose final destination is an email client or Gmail draft (newsletter, campaign email, rich reply, signature, transactional email, marketing email), do NOT emit it as a \`text/html\` artifact just to preview it. Save a real \`.html\` file under \`files/\` and link it in the reply, preferably with a direct \`/files/<path-inside-files>.html\` link. That HTML must remain a file/link surface, not an auto-open chat preview and not a conversation artifact. Use email-compatible HTML (tables/inline styles where needed, no scripts, no app-only interactivity). Use Gmail draft/send tools with the \`html\` field only when the user asked to create/send the email and the action policy permits it.
+
+Use \`text/html\` artifacts for Orchestrator-native standalone pages, demos, dashboards, apps, simulations, or visual outputs the user will interact with inside this app. Use workspace file links for deliverables the user will inspect as files, open in a browser tab, paste, send, or import elsewhere.
+</artifact_vs_file_preview>
+
+<visual_explanation_artifacts>
+For explanatory visuals, do not draw ASCII-art boxes, dashed-line diagrams, or layout sketches in prose (for example \`-----\`, \`|   |\`, \`+---+\`). Make a visual artifact instead.
+
+- Use \`display="inline"\` for explanatory artifacts that belong in the answer flow: architecture diagrams, process flows, layout sketches, spatial explanations, charts, geometry, mechanics, and compact simulations.
+- For 2D visuals, prefer \`application/vnd.ant.mermaid\` for flow/sequence/state diagrams, \`image/svg+xml\` for custom static diagrams, or \`text/html\` / \`application/vnd.ant.react\` for interactive 2D.
+- Use 3D when depth, orientation, assembly, clearance, physical structure, or spatial reasoning matters. If the user is asking for a real part, printable model, enclosure, adapter, bracket, fixture, or assembly, call ActivateIntegrationTools("cad") and emit \`application/vnd.ant.cad\`; the viewer supports orbit, zoom, pan, grid, wireframe, and downloadable CAD/print files.
+- If the 3D is conceptual/explanatory rather than a real CAD deliverable, emit an inline \`text/html\` or \`application/vnd.ant.react\` artifact using Three.js/WebGL/canvas or equivalent. It must be interactively rotatable/orbitable, support zoom/pan or drag rotation, include reset/view controls when useful, and label the key parts. Do not fake 3D with a static screenshot when the user needs to inspect or rotate it.
+</visual_explanation_artifacts>
+
 <when_to_use>
 - Substantial standalone content (>20 lines or content the user would naturally save).
-- Visual content (diagrams, charts, SVG).
+- Visual content (diagrams, charts, SVG, interactive 2D/3D explainers).
 - Code files the user will copy out or run.
 - Interactive demos (HTML, React).
 
@@ -396,7 +411,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`file_tools_root: ${runtimePaths.agentWorkspaceDir}`)
     lines.push(`runtime_state_dir: ${runtimePaths.workspaceDir}`)
     lines.push('filesystem_scope: relative file paths start in workspace_cwd. File tools reject paths outside that workspace unless a native CLI provider grants broader access; shell commands also start in workspace_cwd but may use host commands and absolute paths permitted by the runtime user.')
-    lines.push('library_outputs: save files meant for the user (documents, exports, generated media, downloaded sources) under the `files/` directory in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in the user-facing Library — files written elsewhere in workspace_cwd (scratch, intermediate, or working files) stay out of it. Use the workspace root and other paths for transient/working files; promote anything the user should keep or see into `files/`.')
+    lines.push('library_outputs: save files meant for the user (documents, exports, generated media, downloaded sources) under the `files/` directory in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in the user-facing Library — files written elsewhere in workspace_cwd (scratch, intermediate, or working files) stay out of it. Use the workspace root and other paths for transient/working files; promote anything the user should keep or see into `files/`. For generated HTML files the user should review as HTML, surface a direct `/files/<path-inside-files>.html` link so it opens as a file/browser view rather than an in-chat preview.')
     lines.push('discovery_scope: file discovery tools may omit provider-private CLI metadata; shell command output is returned as produced by the command.')
     lines.push('workspace_files: these workspace files are intentionally accessible to every agent by exact path, relative to workspace_cwd (some are edited from dedicated Settings surfaces rather than the file editor):')
     for (const file of WORKSPACE_FILE_DEFINITIONS) {

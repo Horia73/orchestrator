@@ -43,7 +43,6 @@ import { TodoBar } from "@/components/todo-bar"
 import { MessageBubble, StreamingBubble } from "@/components/message-bubble"
 import { FilePreviewModal } from "@/components/file-preview-modal"
 import { MarkdownImagePreviewProvider } from "@/components/markdown-renderer"
-import { WorkspaceHtmlPreviewPanel } from "@/components/workspace-html-preview-panel"
 import { ArtifactPanel as AntArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
@@ -64,11 +63,8 @@ import {
   type ChatScrollTarget,
 } from "@/lib/chat-scroll-target"
 import { publishChatViewSettled } from "@/lib/chat-view-settled"
+import { CHAT_VIEW_SAVE_STATE_EVENT } from "@/lib/chat-view-state"
 import { LOADED_WHILE_HIDDEN } from "@/lib/loaded-while-hidden"
-import {
-  extractWorkspaceHtmlPreviewsFromMarkdown,
-  type WorkspaceHtmlPreview,
-} from "@/lib/workspace-html-preview"
 import { SidebarTrigger, useSidebar } from "@/components/ui/sidebar"
 import { useChatStore } from "@/hooks/use-chat-store"
 import { useMobileKeyboardInset } from "@/hooks/use-keyboard-inset"
@@ -176,11 +172,6 @@ export function ChatView() {
     () => readSavedArtifactState(state.activeConversationId).artifactOpen
   )
   const [genArtifact, setGenArtifact] = React.useState<ArtifactRow | null>(null)
-  const [workspacePreviewTabs, setWorkspacePreviewTabs] = React.useState<
-    WorkspaceHtmlPreview[]
-  >([])
-  const [activeWorkspacePreviewId, setActiveWorkspacePreviewId] =
-    React.useState<string | null>(null)
   const [showScrollBtn, setShowScrollBtn] = React.useState(false)
   const [isRestoringScroll, setIsRestoringScroll] = React.useState(false)
   const [isScrollJumpFading, setIsScrollJumpFading] = React.useState(false)
@@ -709,6 +700,34 @@ export function ChatView() {
     return true
   }, [getCurrentScrollAnchor])
 
+  const persistCurrentScrollPosition = React.useCallback(() => {
+    const conversationId = activeIdRef.current
+    const element = scrollContainerRef.current
+    if (!conversationId || !element) return false
+    if (
+      element.scrollHeight <= element.clientHeight ||
+      !element.querySelector('[id^="message-"]')
+    ) {
+      return false
+    }
+
+    const didSaveAnchor = saveScrollAnchor()
+    if (!didSaveAnchor) return false
+
+    const distanceFromBottom =
+      element.scrollHeight - element.scrollTop - element.clientHeight
+    const value =
+      distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
+        ? SCROLL_BOTTOM_SENTINEL
+        : Math.round(element.scrollTop).toString()
+    localStorage.setItem(
+      `scroll:chat:${conversationId}`,
+      value
+    )
+    pendingScrollSaveRef.current = { conversationId, value }
+    return true
+  }, [saveScrollAnchor])
+
   const restoreScrollAnchor = React.useCallback(
     (anchor: SavedScrollRestore) => {
       const element = scrollContainerRef.current
@@ -743,33 +762,17 @@ export function ChatView() {
 
   React.useEffect(() => {
     const flushCurrentScroll = () => {
-      const conversationId = activeIdRef.current
-      const element = scrollContainerRef.current
-      if (!conversationId || !element) return
-      if (
-        element.scrollHeight <= element.clientHeight ||
-        !element.querySelector('[id^="message-"]')
-      ) {
-        return
-      }
-      const didSaveAnchor = saveScrollAnchor()
-      if (!didSaveAnchor) return
-      const distanceFromBottom =
-        element.scrollHeight - element.scrollTop - element.clientHeight
-      localStorage.setItem(
-        `scroll:chat:${conversationId}`,
-        distanceFromBottom <= STICKY_BOTTOM_THRESHOLD
-          ? SCROLL_BOTTOM_SENTINEL
-          : Math.round(element.scrollTop).toString()
-      )
+      persistCurrentScrollPosition()
     }
 
     window.addEventListener("pagehide", flushCurrentScroll)
     window.addEventListener("beforeunload", flushCurrentScroll)
+    window.addEventListener(CHAT_VIEW_SAVE_STATE_EVENT, flushCurrentScroll)
 
     return () => {
       window.removeEventListener("pagehide", flushCurrentScroll)
       window.removeEventListener("beforeunload", flushCurrentScroll)
+      window.removeEventListener(CHAT_VIEW_SAVE_STATE_EVENT, flushCurrentScroll)
 
       if (scrollSaveTimeoutRef.current !== null) {
         window.clearTimeout(scrollSaveTimeoutRef.current)
@@ -802,7 +805,7 @@ export function ChatView() {
       scrollButtonLockedUntilStreamingEndRef.current = false
       flushPendingScrollSave()
     }
-  }, [flushPendingScrollSave, saveScrollAnchor])
+  }, [flushPendingScrollSave, persistCurrentScrollPosition])
 
   const syncScrollState = React.useCallback(() => {
     const element = scrollContainerRef.current
@@ -2327,8 +2330,6 @@ export function ChatView() {
       setArtifactOpen(true)
       setActiveAgentRunId(null)
       setGenArtifact(null)
-      setWorkspacePreviewTabs([])
-      setActiveWorkspacePreviewId(null)
       if (conversationId)
         localStorage.setItem(
           `chat:artifact:${conversationId}`,
@@ -2365,29 +2366,16 @@ export function ChatView() {
       localStorage.removeItem(`chat:gen-artifact:${conversationId}`)
   }, [restoreSidebar, conversationId])
 
-  const openWorkspaceHtmlPreviews = React.useCallback(
-    (previews: WorkspaceHtmlPreview[]) => {
-      if (!previews.length) return
+  const openGeneratedArtifactPanel = React.useCallback(
+    (a: ArtifactRow) => {
       const panelAlreadyOpen =
-        artifactOpen ||
-        Boolean(genArtifact) ||
-        Boolean(activePanelAgentRun) ||
-        workspacePreviewTabs.length > 0
+        artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
       if (!panelAlreadyOpen) {
         sidebarWasOpenRef.current = sidebarOpen
       }
-
-      setWorkspacePreviewTabs((current) => {
-        const byId = new Map(current.map((preview) => [preview.id, preview]))
-        for (const preview of previews) {
-          byId.set(preview.id, { ...byId.get(preview.id), ...preview })
-        }
-        return Array.from(byId.values())
-      })
-      setActiveWorkspacePreviewId(previews[0].id)
+      setGenArtifact(a)
       setArtifactOpen(false)
       setActiveAgentRunId(null)
-      setGenArtifact(null)
       setSidebarOpen(false)
     },
     [
@@ -2396,39 +2384,7 @@ export function ChatView() {
       genArtifact,
       setSidebarOpen,
       sidebarOpen,
-      workspacePreviewTabs.length,
     ]
-  )
-
-  const handleWorkspaceHtmlPreview = React.useCallback(
-    (preview: WorkspaceHtmlPreview) => {
-      openWorkspaceHtmlPreviews([preview])
-    },
-    [openWorkspaceHtmlPreviews]
-  )
-
-  const handleWorkspacePreviewClose = React.useCallback(() => {
-    setWorkspacePreviewTabs([])
-    setActiveWorkspacePreviewId(null)
-    restoreSidebar()
-  }, [restoreSidebar])
-
-  const handleWorkspacePreviewTabClose = React.useCallback(
-    (id: string) => {
-      const index = workspacePreviewTabs.findIndex((tab) => tab.id === id)
-      if (index < 0) return
-      const next = workspacePreviewTabs.filter((tab) => tab.id !== id)
-      setWorkspacePreviewTabs(next)
-      if (!next.length) {
-        setActiveWorkspacePreviewId(null)
-        restoreSidebar()
-        return
-      }
-      if (activeWorkspacePreviewId === id) {
-        setActiveWorkspacePreviewId(next[Math.min(index, next.length - 1)].id)
-      }
-    },
-    [activeWorkspacePreviewId, restoreSidebar, workspacePreviewTabs]
   )
 
   const handleArtifactExpand = React.useCallback(
@@ -2443,25 +2399,12 @@ export function ChatView() {
         handleGenArtifactClose()
         return
       }
-      const panelAlreadyOpen =
-        artifactOpen || Boolean(genArtifact) || Boolean(activePanelAgentRun)
-      if (!panelAlreadyOpen) {
-        sidebarWasOpenRef.current = sidebarOpen
-      }
-      setGenArtifact(a)
-      setArtifactOpen(false)
-      setActiveAgentRunId(null)
-      setWorkspacePreviewTabs([])
-      setActiveWorkspacePreviewId(null)
-      setSidebarOpen(false)
+      openGeneratedArtifactPanel(a)
     },
     [
-      activePanelAgentRun,
-      artifactOpen,
-      setSidebarOpen,
-      sidebarOpen,
       genArtifact,
       handleGenArtifactClose,
+      openGeneratedArtifactPanel,
     ]
   )
 
@@ -2487,8 +2430,6 @@ export function ChatView() {
       setActiveAgentRunId(run.runId)
       setArtifactOpen(false)
       setGenArtifact(null)
-      setWorkspacePreviewTabs([])
-      setActiveWorkspacePreviewId(null)
       setSidebarOpen(false)
     },
     [
@@ -2513,23 +2454,17 @@ export function ChatView() {
   const hasArtifact =
     (artifactOpen && !!artifact) ||
     !!genArtifact ||
-    !!activePanelAgentRun ||
-    workspacePreviewTabs.length > 0
+    !!activePanelAgentRun
   const activeArtifactResizeKey = React.useMemo(() => {
     if (activePanelAgentRun) return `agent:${activePanelAgentRun.runId}`
-    if (workspacePreviewTabs.length > 0) {
-      return `workspace-html:${activeWorkspacePreviewId ?? workspacePreviewTabs[0].id}`
-    }
     if (genArtifact) return `generated:${genArtifact.identifier}`
     if (artifactOpen && artifact) return `legacy:${artifactKey(artifact)}`
     return null
   }, [
     activePanelAgentRun,
-    activeWorkspacePreviewId,
     artifact,
     artifactOpen,
     genArtifact,
-    workspacePreviewTabs,
   ])
   // Hide the message list until scroll is restored. Without this we'd show
   // an empty list while messages load, then fade it out + fade it back in
@@ -2766,74 +2701,34 @@ export function ChatView() {
   // ── Live preview auto-open ────────────────────────────────────────────
   // When the agent emits a dev-preview artifact (a managed project-run /
   // self-dev preview), pop the side panel open as a live "mini-browser" so the
-  // user sees the site being built without hunting for a link. Tracked per
-  // artifact id so closing it — or a later unrelated artifact — never yanks it
-  // back open.
+  // user sees the site being built without hunting for a link. If the panel is
+  // already showing an artifact and a newer version of the same identifier
+  // lands, advance the panel to that version instead of leaving stale content.
+  // Dev-preview auto-open is tracked per artifact id so a duplicate event never
+  // replays the open action.
   const autoOpenedPreviewIdsRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
     function onArtifact(e: Event) {
       const row = (e as CustomEvent).detail as ArtifactRow | undefined
-      if (!row || row.type !== "application/vnd.ant.dev-preview") return
+      if (!row) return
       if (row.conversationId !== conversationId) return
-      if (autoOpenedPreviewIdsRef.current.has(row.id)) return
-      autoOpenedPreviewIdsRef.current.add(row.id)
-      handleArtifactExpand(row)
+      const replacesOpenArtifact =
+        genArtifact != null &&
+        genArtifact.identifier === row.identifier &&
+        genArtifact.id !== row.id
+      const shouldAutoOpenPreview =
+        row.type === "application/vnd.ant.dev-preview" &&
+        !autoOpenedPreviewIdsRef.current.has(row.id)
+
+      if (row.type === "application/vnd.ant.dev-preview") {
+        autoOpenedPreviewIdsRef.current.add(row.id)
+      }
+      if (!replacesOpenArtifact && !shouldAutoOpenPreview) return
+      openGeneratedArtifactPanel(row)
     }
     window.addEventListener("orch:artifact", onArtifact)
     return () => window.removeEventListener("orch:artifact", onArtifact)
-  }, [conversationId, handleArtifactExpand])
-
-  const workspacePreviewBaselineRef = React.useRef<{
-    conversationId: string | null
-    latestAssistantMessageId: string | null
-  } | null>(null)
-  const autoOpenedWorkspacePreviewMessageIdsRef = React.useRef<Set<string>>(
-    new Set()
-  )
-  React.useEffect(() => {
-    if (!conversationId) {
-      workspacePreviewBaselineRef.current = null
-      return
-    }
-    if (isInitialMessagesLoading) return
-    const current = workspacePreviewBaselineRef.current
-    if (!current || current.conversationId !== conversationId) {
-      workspacePreviewBaselineRef.current = {
-        conversationId,
-        latestAssistantMessageId,
-      }
-    }
-  }, [conversationId, isInitialMessagesLoading, latestAssistantMessageId])
-
-  React.useEffect(() => {
-    if (!conversationId || isInitialMessagesLoading) return
-    const baseline = workspacePreviewBaselineRef.current
-    if (!baseline || baseline.conversationId !== conversationId) return
-
-    const messages = activeConversation?.messages ?? []
-    let latestAssistant = null as (typeof messages)[number] | null
-    for (let i = messages.length - 1; i >= 0; i--) {
-      if (messages[i].role === "assistant") {
-        latestAssistant = messages[i]
-        break
-      }
-    }
-    if (!latestAssistant || !latestAssistant.content.trim()) return
-    if (latestAssistant.id === baseline.latestAssistantMessageId) return
-    if (autoOpenedWorkspacePreviewMessageIdsRef.current.has(latestAssistant.id)) {
-      return
-    }
-
-    const previews = extractWorkspaceHtmlPreviewsFromMarkdown(latestAssistant.content)
-    if (!previews.length) return
-    autoOpenedWorkspacePreviewMessageIdsRef.current.add(latestAssistant.id)
-    openWorkspaceHtmlPreviews(previews)
-  }, [
-    activeConversation?.messages,
-    conversationId,
-    isInitialMessagesLoading,
-    openWorkspaceHtmlPreviews,
-  ])
+  }, [conversationId, genArtifact, openGeneratedArtifactPanel])
 
   // ── Keyboard shortcuts ────────────────────────────────────────────────
   //   Cmd/Ctrl + \  — toggle the side panel (close if open, reopen last if not)
@@ -2844,9 +2739,7 @@ export function ChatView() {
       if (!mod) return
       if (e.key === "\\" && !e.shiftKey) {
         e.preventDefault()
-        if (workspacePreviewTabs.length > 0) {
-          handleWorkspacePreviewClose()
-        } else if (genArtifact) {
+        if (genArtifact) {
           handleGenArtifactClose()
         } else if (conversationId) {
           const lastId = localStorage.getItem(
@@ -2887,8 +2780,6 @@ export function ChatView() {
     conversationId,
     handleGenArtifactClose,
     handleArtifactExpand,
-    handleWorkspacePreviewClose,
-    workspacePreviewTabs.length,
   ])
 
   const handleScrollButtonClick = React.useCallback(() => {
@@ -2951,7 +2842,6 @@ export function ChatView() {
     <ConversationArtifactsProvider conversationId={conversationId ?? ""}>
       <MarkdownImagePreviewProvider
         onPreview={openPreview}
-        onWorkspaceHtmlPreview={handleWorkspaceHtmlPreview}
       >
       <div
         ref={layoutContainerRef}
@@ -3222,14 +3112,6 @@ export function ChatView() {
                 onClose={handleAgentClose}
                 onAttachmentClick={openPreview}
               />
-            ) : workspacePreviewTabs.length > 0 ? (
-              <WorkspaceHtmlPreviewPanel
-                tabs={workspacePreviewTabs}
-                activeId={activeWorkspacePreviewId}
-                onSelect={setActiveWorkspacePreviewId}
-                onCloseTab={handleWorkspacePreviewTabClose}
-                onClose={handleWorkspacePreviewClose}
-              />
             ) : genArtifact ? (
               // Generated artifact panel takes priority — same right column,
               // distinct chrome (version dropdown, sandbox iframes).
@@ -3260,14 +3142,6 @@ export function ChatView() {
                 childRuns={activeChildAgentRuns}
                 onClose={handleAgentClose}
                 onAttachmentClick={openPreview}
-              />
-            ) : workspacePreviewTabs.length > 0 ? (
-              <WorkspaceHtmlPreviewPanel
-                tabs={workspacePreviewTabs}
-                activeId={activeWorkspacePreviewId}
-                onSelect={setActiveWorkspacePreviewId}
-                onCloseTab={handleWorkspacePreviewTabClose}
-                onClose={handleWorkspacePreviewClose}
               />
             ) : genArtifact ? (
               <AntArtifactPanel

@@ -1,5 +1,8 @@
 import type { Message } from "@/lib/types"
-export { shouldTryModelFallback } from "@/lib/ai/model-fallback"
+export {
+  MAX_MODEL_RETRIES_BEFORE_FALLBACK,
+  shouldTryModelFallback,
+} from "@/lib/ai/model-fallback"
 
 export type ChatRequestBody = {
   conversationId?: unknown

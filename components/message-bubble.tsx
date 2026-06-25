@@ -1609,6 +1609,7 @@ function MessageBubbleComponent({
                 <RenderMessageContent
                     content={item.content}
                     messageId={message.id}
+                    isStreaming={isStreamingMessage}
                     onExpand={onArtifactExpand}
                     suppressArtifactTypes={suppressArtifactTypes}
                 />
@@ -1789,12 +1790,13 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
             {timeline.map((item) => (
                 item.type === "reasoning" ? (
                     <ThoughtBlock
-                        key={`stream-reasoning-${item.phase}`}
+                        key={`stream-reasoning-${messageId ?? "pending"}-${item.phase}`}
                         reasoning={item.entries}
                         isStreaming={activeReasoningPhase === item.phase && streamingMode === "reasoning"}
                         onArtifactClick={onArtifactClick}
                         onAgentOpen={onAgentOpen}
                         onAttachmentClick={onAttachmentClick}
+                        messageId={messageId ? `${messageId}:phase:${item.phase}` : undefined}
                         thinkingSeconds={thinkingSeconds}
                         thinkingDone={thinkingDone}
                         searchToolDisplay={searchToolDisplay}
@@ -1808,6 +1810,7 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                             <RenderMessageContent
                                 content={item.content}
                                 messageId={messageId}
+                                isStreaming
                                 onExpand={onArtifactExpand}
                                 suppressArtifactTypes={suppressArtifactTypes}
                             />

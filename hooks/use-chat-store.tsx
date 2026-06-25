@@ -63,6 +63,7 @@ import {
   type StreamingStatus,
   type StreamingReasoning,
 } from "./chat-store-utils"
+import { CHAT_VIEW_SAVE_STATE_EVENT } from "@/lib/chat-view-state"
 
 export interface SendMessageOptions {
   promptContext?: string
@@ -1354,6 +1355,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   ])
 
   const newChat = React.useCallback(() => {
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(new Event(CHAT_VIEW_SAVE_STATE_EVENT))
+    }
     detachStreaming()
     const focusInput = () => {
       if (typeof window === "undefined") return
@@ -1392,6 +1396,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
       // Re-clicking the active chat would otherwise schedule a no-op
       // transition and fade the current view for one frame.
       if (activeConversationIdRef.current === id) return
+      if (typeof window !== "undefined") {
+        window.dispatchEvent(new Event(CHAT_VIEW_SAVE_STATE_EVENT))
+      }
       if (
         conversation &&
         !conversationsRef.current.some((item) => item.id === id)

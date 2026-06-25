@@ -13,10 +13,6 @@ import { appApiPath, appPath } from "@/lib/app-path"
 import { isDesktopViewport } from "@/lib/desktop-viewport"
 import { UPLOAD_MIME_MAP } from "@/lib/upload-mime"
 import {
-  workspaceHtmlPreviewFromHref,
-  type WorkspaceHtmlPreview,
-} from "@/lib/workspace-html-preview"
-import {
   is3DModelFile,
   isCodeOrTextFile,
   isDocxFile,
@@ -39,26 +35,19 @@ import type { Attachment } from "@/lib/types"
 // ---------------------------------------------------------------------------
 
 type MarkdownImageClickHandler = (attachment: Attachment) => void
-type WorkspaceHtmlPreviewHandler = (preview: WorkspaceHtmlPreview) => void
 const MarkdownImageClickContext =
   React.createContext<MarkdownImageClickHandler | null>(null)
-const WorkspaceHtmlPreviewContext =
-  React.createContext<WorkspaceHtmlPreviewHandler | null>(null)
 
 export function MarkdownImagePreviewProvider({
   onPreview,
-  onWorkspaceHtmlPreview,
   children,
 }: {
   onPreview: MarkdownImageClickHandler
-  onWorkspaceHtmlPreview?: WorkspaceHtmlPreviewHandler
   children: React.ReactNode
 }) {
   return (
     <MarkdownImageClickContext.Provider value={onPreview}>
-      <WorkspaceHtmlPreviewContext.Provider value={onWorkspaceHtmlPreview ?? null}>
-        {children}
-      </WorkspaceHtmlPreviewContext.Provider>
+      {children}
     </MarkdownImageClickContext.Provider>
   )
 }
@@ -403,6 +392,16 @@ function workspacePreviewKind(filename: string, mimeType: string): Attachment["t
   const att = { filename, mimeType }
   const dot = filename.lastIndexOf(".")
   const ext = dot >= 0 ? filename.slice(dot + 1).toLowerCase() : ""
+  const normalizedMime = mimeType.toLowerCase()
+  if (
+    ext === "html" ||
+    ext === "htm" ||
+    ext === "xhtml" ||
+    normalizedMime === "text/html" ||
+    normalizedMime === "application/xhtml+xml"
+  ) {
+    return null
+  }
   if (ext === "pdf" || mimeType === "application/pdf") return "pdf"
   if (isPresentationFile(att)) return "presentation"
   if (isSpreadsheetFile(att)) return "spreadsheet"
@@ -475,38 +474,11 @@ function WorkspaceFileCard({
 }
 
 // Link renderer: a workspace document opens the in-app preview card when a
-// preview handler is available; everything else stays a normal link (workspace
-// files without an in-app viewer become one-click downloads via workspaceDownloadHref).
+// preview handler is available; everything else stays a normal link. HTML
+// deliverables deliberately stay links so the chat never turns them into an
+// embedded preview surface.
 function MarkdownLink({ href, children }: { href?: string; children?: React.ReactNode }) {
   const onPreview = React.useContext(MarkdownImageClickContext)
-  const onWorkspaceHtmlPreview = React.useContext(WorkspaceHtmlPreviewContext)
-  const workspaceHtmlPreview = workspaceHtmlPreviewFromHref(href, childrenText(children))
-  if (workspaceHtmlPreview && onWorkspaceHtmlPreview) {
-    return (
-      <a
-        href={workspaceHtmlPreview.src}
-        target="_blank"
-        rel="noopener noreferrer"
-        onClick={(event) => {
-          if (
-            event.defaultPrevented ||
-            event.button !== 0 ||
-            event.metaKey ||
-            event.ctrlKey ||
-            event.shiftKey ||
-            event.altKey
-          ) {
-            return
-          }
-          event.preventDefault()
-          onWorkspaceHtmlPreview(workspaceHtmlPreview)
-        }}
-        className="text-primary underline underline-offset-2 transition-colors hover:text-primary/80"
-      >
-        {children}
-      </a>
-    )
-  }
   const fileRef = workspaceFileRef(href)
   if (fileRef && onPreview) {
     const kind = workspacePreviewKind(fileRef.filename, fileRef.mimeType)
@@ -531,16 +503,6 @@ function MarkdownLink({ href, children }: { href?: string; children?: React.Reac
       {children}
     </a>
   )
-}
-
-function childrenText(children: React.ReactNode): string {
-  if (typeof children === "string") return children
-  if (typeof children === "number") return String(children)
-  if (Array.isArray(children)) return children.map(childrenText).join("")
-  if (React.isValidElement<{ children?: React.ReactNode }>(children)) {
-    return childrenText(children.props.children)
-  }
-  return ""
 }
 
 // ---------------------------------------------------------------------------

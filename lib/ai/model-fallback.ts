@@ -1,3 +1,5 @@
+export const MAX_MODEL_RETRIES_BEFORE_FALLBACK = 3
+
 export function shouldTryModelFallback(
   error: string | null | undefined,
   opts?: { afterToolCall?: boolean }
@@ -19,6 +21,9 @@ export function shouldTryModelFallback(
     message.includes("unavailable") ||
     message.includes("temporarily unavailable") ||
     message.includes("service unavailable") ||
+    message.includes("invalid argument") ||
+    message.includes("invalid_request") ||
+    message.includes("bad request") ||
     message.includes("expired") ||
     message.includes("429") ||
     message.includes("503") ||
