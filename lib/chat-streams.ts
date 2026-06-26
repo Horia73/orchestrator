@@ -7,18 +7,47 @@ interface ActiveChatStream {
     controller: AbortController
 }
 
+interface PendingStop {
+    messageId?: string
+    requestedAt: number
+}
+
 const globalForChatStreams = globalThis as unknown as {
     __orchestratorChatStreams?: Map<string, ActiveChatStream>
+    __orchestratorPendingChatStops?: Map<string, PendingStop>
 }
 
 const streams = globalForChatStreams.__orchestratorChatStreams ?? new Map<string, ActiveChatStream>()
+const pendingStops = globalForChatStreams.__orchestratorPendingChatStops ?? new Map<string, PendingStop>()
+const PENDING_STOP_TTL_MS = 60_000
 
 if (!globalForChatStreams.__orchestratorChatStreams) {
     globalForChatStreams.__orchestratorChatStreams = streams
 }
 
+if (!globalForChatStreams.__orchestratorPendingChatStops) {
+    globalForChatStreams.__orchestratorPendingChatStops = pendingStops
+}
+
 function streamKey(conversationId: string): string {
     return `${getActiveProfileId()}:${conversationId}`
+}
+
+function prunePendingStops(now = Date.now()) {
+    for (const [key, stop] of pendingStops.entries()) {
+        if (now - stop.requestedAt > PENDING_STOP_TTL_MS) {
+            pendingStops.delete(key)
+        }
+    }
+}
+
+function consumePendingStop(key: string, messageId: string): boolean {
+    prunePendingStops()
+    const pending = pendingStops.get(key)
+    if (!pending) return false
+    if (pending.messageId && pending.messageId !== messageId) return false
+    pendingStops.delete(key)
+    return true
 }
 
 export function registerChatStream(conversationId: string, messageId: string, controller: AbortController) {
@@ -41,6 +70,14 @@ export function registerChatStream(conversationId: string, messageId: string, co
         type: 'chat_stream_started',
         payload: { conversationId, messageId, startedAt: stream.startedAt },
     })
+    if (consumePendingStop(key, messageId)) {
+        controller.abort()
+        streams.delete(key)
+        emitChatEvent({
+            type: 'chat_stream_ended',
+            payload: { conversationId, messageId },
+        })
+    }
 }
 
 export function clearChatStream(conversationId: string, messageId?: string) {
@@ -55,10 +92,19 @@ export function clearChatStream(conversationId: string, messageId?: string) {
     })
 }
 
-export function stopChatStream(conversationId: string): boolean {
+export function stopChatStream(conversationId: string, messageId?: string): boolean {
     const key = streamKey(conversationId)
     const active = streams.get(key)
-    if (!active) return false
+    if (!active) {
+        pendingStops.set(key, { messageId, requestedAt: Date.now() })
+        prunePendingStops()
+        return false
+    }
+    if (messageId && active.messageId !== messageId) {
+        pendingStops.set(key, { messageId, requestedAt: Date.now() })
+        prunePendingStops()
+        return false
+    }
     active.controller.abort()
     streams.delete(key)
     emitChatEvent({

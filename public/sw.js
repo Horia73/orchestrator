@@ -67,6 +67,22 @@ async function hasFocusedWindowClient() {
   })
 }
 
+async function postMessageToWindowClients(message) {
+  const windowClients = await self.clients.matchAll({
+    type: "window",
+    includeUncontrolled: true,
+  })
+  for (const client of windowClients) {
+    try {
+      const clientUrl = new URL(client.url)
+      if (clientUrl.origin !== self.location.origin) continue
+      client.postMessage(message)
+    } catch {
+      // Ignore stale or malformed clients; notification display is independent.
+    }
+  }
+}
+
 self.addEventListener("pushsubscriptionchange", (event) => {
   event.waitUntil(
     (async () => {
@@ -114,6 +130,19 @@ self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
       if (isChat && (await hasFocusedWindowClient())) return
+
+      if (isInbox) {
+        await postMessageToWindowClients({
+          type: "orchestrator:inbox-push",
+          inboxId:
+            typeof data.inboxId === "string" && data.inboxId
+              ? data.inboxId
+              : undefined,
+          unread,
+          url,
+          at: Date.now(),
+        })
+      }
 
       const registrationWithBadge = self.registration
       if (

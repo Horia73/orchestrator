@@ -114,6 +114,9 @@ the server, run the same one-line installer, then reach the app one of two ways:
   certificate, and an nginx reverse proxy for you. This is required if you want
   Google / Gmail sign-in or push notifications on a remote box.
 
+  Already own a domain? Use the manual custom-domain guide instead:
+  [docs/custom-domain.md](docs/custom-domain.md).
+
 Either way it's the **same build** — no code changes, just a different way in.
 
 ## Configuration

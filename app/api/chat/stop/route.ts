@@ -3,7 +3,7 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
 
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
-        let body: { conversationId?: string }
+        let body: { conversationId?: string; messageId?: string }
         try {
             body = await request.json()
         } catch {
@@ -21,7 +21,10 @@ export async function POST(request: Request) {
             })
         }
 
-        const stopped = stopChatStream(conversationId)
+        const messageId = typeof body.messageId === 'string' && body.messageId.trim()
+            ? body.messageId.trim()
+            : undefined
+        const stopped = stopChatStream(conversationId, messageId)
 
         return new Response(JSON.stringify({ stopped }), {
             headers: {

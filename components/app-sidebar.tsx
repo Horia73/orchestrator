@@ -6,6 +6,7 @@ import { usePathname, useRouter, useSearchParams } from "next/navigation"
 import {
   Archive,
   ArchiveRestore,
+  BellRing,
   CalendarClock,
   Inbox as InboxIcon,
   Library as LibraryIcon,
@@ -308,6 +309,8 @@ export function AppSidebar() {
   const isOnMonitor = pathname?.startsWith("/monitor") ?? false
   const isOnMaps = pathname?.startsWith("/maps") ?? false
   const isOnInbox = pathname?.startsWith("/inbox") ?? false
+  const isOnProfileNotifications =
+    pathname?.startsWith("/profile/notifications") ?? false
   // /workouts redirects to /library?tab=workouts — treat both as "Library" active.
   const isOnLibrary =
     (pathname?.startsWith("/library") ?? false) ||
@@ -319,6 +322,7 @@ export function AppSidebar() {
     isOnMonitor ||
     isOnMaps ||
     isOnInbox ||
+    isOnProfileNotifications ||
     isOnLibrary
   const isTabletNavViewport = useMediaQuery(TABLET_NAV_MEDIA)
   const isCompactRouteNav =
@@ -892,6 +896,14 @@ export function AppSidebar() {
     closeMobileSidebar()
     router.push(`/profiles?next=${encodeURIComponent(pathname || "/")}`)
   }, [closeMobileSidebar, pathname, router])
+
+  const handleProfileNotifications = React.useCallback(() => {
+    setProfileMenuOpen(false)
+    profileTriggerRef.current?.blur()
+    closeMobileSidebar()
+    if (isMobile) router.replace("/profile/notifications")
+    else router.push("/profile/notifications")
+  }, [closeMobileSidebar, isMobile, router])
 
   // Navigate to the inbox with a fade-out hand-off. From the chat/home view we
   // ease that shell out (it listens for VIEW_LEAVE_EVENT) and only then swap
@@ -1513,6 +1525,10 @@ export function AppSidebar() {
                   <DropdownMenuItem onClick={handleSwitchProfile}>
                     <UserRound className="mr-2 size-4" />
                     Switch profile
+                  </DropdownMenuItem>
+                  <DropdownMenuItem onClick={handleProfileNotifications}>
+                    <BellRing className="mr-2 size-4" />
+                    Notifications
                   </DropdownMenuItem>
                   <DropdownMenuSeparator />
                   <DropdownMenuItem onClick={handleLogoutProfile}>

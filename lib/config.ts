@@ -21,9 +21,13 @@ import {
 } from "@/lib/browser-agent-backend"
 import type { BrowserBackendPreference } from "@/lib/browser-agent-runtime/config"
 import { emitAppEvent } from "@/lib/events"
-import { getActiveProfileId, isAdminProfileId } from "@/lib/profiles/context"
+import {
+  getActiveProfileId,
+  isAdminProfileId,
+  runWithProfileContext,
+} from "@/lib/profiles/context"
 import { ADMIN_PROFILE_ID } from "@/lib/profiles/constants"
-import { getProfile } from "@/lib/profiles/store"
+import { getProfile, listProfiles } from "@/lib/profiles/store"
 import {
   activeRuntimePaths,
   ORCHESTRATOR_STATE_DIR,
@@ -1283,6 +1287,16 @@ export function setAgentOverride(
   agentId: string,
   override: AgentOverride | null
 ): AppConfig {
+  if (agentId === "orchestrator") {
+    return setSharedOrchestratorOverride(override)
+  }
+  return setAgentOverrideForActiveProfile(agentId, override)
+}
+
+function setAgentOverrideForActiveProfile(
+  agentId: string,
+  override: AgentOverride | null
+): AppConfig {
   const current = getConfig()
   const agentOverrides = { ...current.agentOverrides }
   if (override === null) {
@@ -1291,6 +1305,23 @@ export function setAgentOverride(
     agentOverrides[agentId] = override
   }
   return updateConfig({ agentOverrides })
+}
+
+function setSharedOrchestratorOverride(
+  override: AgentOverride | null
+): AppConfig {
+  const activeProfileId = getActiveProfileId()
+  let activeConfig: AppConfig | null = null
+
+  for (const profile of listProfiles({ includeDisabled: true })) {
+    const updated = runWithProfileContext(
+      { profileId: profile.id, role: profile.role },
+      () => setAgentOverrideForActiveProfile("orchestrator", override)
+    )
+    if (profile.id === activeProfileId) activeConfig = updated
+  }
+
+  return activeConfig ?? setAgentOverrideForActiveProfile("orchestrator", override)
 }
 
 export function setBrowserAgentModel(

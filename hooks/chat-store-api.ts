@@ -91,11 +91,11 @@ export async function requestConversationTitle(
   }
 }
 
-export function stopChatStream(conversationId: string) {
+export function stopChatStream(conversationId: string, messageId?: string | null) {
   return fetch("/api/chat/stop", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ conversationId }),
+    body: JSON.stringify({ conversationId, messageId: messageId ?? undefined }),
   })
 }
 

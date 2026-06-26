@@ -8,6 +8,7 @@ type Listener = (event: AppEvent) => void
 const listeners = new Set<Listener>()
 let source: EventSource | null = null
 let reconnectTimer: number | null = null
+let serviceWorkerMessageHandler: ((event: MessageEvent) => void) | null = null
 
 function isAppEvent(value: unknown): value is AppEvent {
   return (
@@ -20,6 +21,47 @@ function isAppEvent(value: unknown): value is AppEvent {
 
 function notify(event: AppEvent) {
   for (const listener of listeners) listener(event)
+}
+
+function isInboxPushMessage(
+  value: unknown
+): value is {
+  type: "orchestrator:inbox-push"
+  inboxId?: unknown
+  at?: unknown
+} {
+  return (
+    Boolean(value) &&
+    typeof value === "object" &&
+    (value as { type?: unknown }).type === "orchestrator:inbox-push"
+  )
+}
+
+function ensureServiceWorkerMessageBridge() {
+  if (
+    typeof navigator === "undefined" ||
+    !("serviceWorker" in navigator) ||
+    serviceWorkerMessageHandler
+  ) {
+    return
+  }
+
+  serviceWorkerMessageHandler = (message) => {
+    const data = message.data
+    if (!isInboxPushMessage(data)) return
+    notify({
+      type: "inbox.changed",
+      at: typeof data.at === "number" ? data.at : Date.now(),
+      conversationId:
+        typeof data.inboxId === "string" ? data.inboxId : undefined,
+      action: "created",
+    })
+  }
+
+  navigator.serviceWorker.addEventListener(
+    "message",
+    serviceWorkerMessageHandler
+  )
 }
 
 function ensureEventSource() {
@@ -62,6 +104,17 @@ function closeEventSourceIfIdle() {
   }
   source?.close()
   source = null
+  if (
+    typeof navigator !== "undefined" &&
+    "serviceWorker" in navigator &&
+    serviceWorkerMessageHandler
+  ) {
+    navigator.serviceWorker.removeEventListener(
+      "message",
+      serviceWorkerMessageHandler
+    )
+    serviceWorkerMessageHandler = null
+  }
 }
 
 export function useAppEvent(
@@ -82,6 +135,7 @@ export function useAppEvent(
     }
 
     listeners.add(listener)
+    ensureServiceWorkerMessageBridge()
     ensureEventSource()
 
     return () => {

@@ -576,6 +576,10 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   const stopStreaming = React.useCallback(() => {
     const conversationId = activeConversationIdRef.current
+    const stream = conversationId
+      ? activeChatStreamsRef.current[conversationId]
+      : undefined
+    const messageId = clientStreamMessageIdRef.current ?? stream?.messageId
     clientStreamMessageIdRef.current = null
     if (conversationId) {
       streamDoneRef.current = true
@@ -589,7 +593,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     }
     cleanupStream()
     if (conversationId) {
-      stopChatStream(conversationId).catch((err) => {
+      stopChatStream(conversationId, messageId).catch((err) => {
         console.error(err)
       })
     }
@@ -1654,6 +1658,9 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
           conversation: newConv,
           activate: options?.activateConversation !== false,
         })
+        if (options?.activateConversation !== false) {
+          activeConversationIdRef.current = conversationId
+        }
         allMessages = [userMessage]
 
         // Auto-name text-started conversations immediately and in parallel with
