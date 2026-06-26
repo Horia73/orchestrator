@@ -125,13 +125,25 @@ const DISPLAY_CLIPBOARD_COMMANDS = [
         writeArgs: ['--clipboard', '--input'],
     },
 ] as const;
+const DISPLAY_COMMAND_DEFAULT_TIMEOUT_MS = 5_000;
+const DISPLAY_COMMAND_LOOKUP_TIMEOUT_MS = 1_000;
+const DISPLAY_COMMAND_KEY_TIMEOUT_MS = 1_500;
+const DISPLAY_COMMAND_CLIPBOARD_TIMEOUT_MS = 1_500;
+const DISPLAY_COMMAND_SCREENSHOT_TIMEOUT_MS = 10_000;
 const executableCache = new Map<string, boolean>();
+
+interface DisplayCommandOptions {
+    input?: string;
+    timeoutMs?: number;
+}
 
 function commandExists(command: string): boolean {
     const cached = executableCache.get(command);
     if (cached !== undefined) return cached;
     const result = spawnSync('sh', ['-lc', `command -v ${command} >/dev/null 2>&1`], {
         stdio: 'ignore',
+        timeout: DISPLAY_COMMAND_LOOKUP_TIMEOUT_MS,
+        killSignal: 'SIGKILL',
     });
     const exists = result.status === 0;
     executableCache.set(command, exists);
@@ -145,14 +157,29 @@ function displayEnv(display: string | undefined): NodeJS.ProcessEnv {
     };
 }
 
-function runDisplayCommand(display: string | undefined, command: string, args: string[], input?: string): Buffer {
+function runDisplayCommand(
+    display: string | undefined,
+    command: string,
+    args: string[],
+    options: DisplayCommandOptions = {},
+): Buffer {
+    const timeoutMs = Math.max(250, Math.floor(options.timeoutMs ?? DISPLAY_COMMAND_DEFAULT_TIMEOUT_MS));
     const result = spawnSync(command, args, {
         env: displayEnv(display),
-        input,
+        input: options.input,
         maxBuffer: 64 * 1024 * 1024,
+        timeout: timeoutMs,
+        killSignal: 'SIGKILL',
     });
     if (result.error) {
+        const code = (result.error as NodeJS.ErrnoException).code;
+        if (code === 'ETIMEDOUT') {
+            throw new Error(`${command} ${args.join(' ')} timed out after ${timeoutMs}ms`);
+        }
         throw new Error(`${command} is unavailable: ${result.error.message}`);
+    }
+    if (result.signal) {
+        throw new Error(`${command} ${args.join(' ')} was killed by ${result.signal}`);
     }
     if (result.status !== 0) {
         const stderr = result.stderr.toString('utf8').trim();
@@ -167,7 +194,9 @@ function readDisplayClipboard(display: string | undefined): string | null {
     for (const candidate of DISPLAY_CLIPBOARD_COMMANDS) {
         if (!commandExists(candidate.command)) continue;
         try {
-            return runDisplayCommand(display, candidate.command, [...candidate.readArgs]).toString('utf8');
+            return runDisplayCommand(display, candidate.command, [...candidate.readArgs], {
+                timeoutMs: DISPLAY_COMMAND_CLIPBOARD_TIMEOUT_MS,
+            }).toString('utf8');
         } catch {
             // Try the next clipboard tool.
         }
@@ -179,7 +208,10 @@ function writeDisplayClipboard(display: string | undefined, text: string): boole
     for (const candidate of DISPLAY_CLIPBOARD_COMMANDS) {
         if (!commandExists(candidate.command)) continue;
         try {
-            runDisplayCommand(display, candidate.command, [...candidate.writeArgs], text);
+            runDisplayCommand(display, candidate.command, [...candidate.writeArgs], {
+                input: text,
+                timeoutMs: DISPLAY_COMMAND_CLIPBOARD_TIMEOUT_MS,
+            });
             return true;
         } catch {
             // Try the next clipboard tool.
@@ -384,7 +416,9 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
     };
 
     const xdotool = async (args: string[]) => {
-        runDisplayCommand(lastLiveViewState.display, 'xdotool', args);
+        runDisplayCommand(lastLiveViewState.display, 'xdotool', args, {
+            timeoutMs: DISPLAY_COMMAND_KEY_TIMEOUT_MS,
+        });
         await sleep(20);
     };
 
@@ -1188,7 +1222,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                 '-window', 'root',
                 '-quality', String(Math.max(1, Math.min(100, Math.round(quality)))),
                 'jpg:-',
-            ]);
+            ], { timeoutMs: DISPLAY_COMMAND_SCREENSHOT_TIMEOUT_MS });
             const frame: BrowserFrameSnapshot = {
                 id: toFrameId(++session.frameSequence),
                 source,
@@ -1755,7 +1789,7 @@ export async function createBrowserManager(options: BrowserManagerOptions = {}):
                         '-t', String(seconds),
                         '-r', String(fps),
                         outputPath,
-                    ]);
+                    ], { timeoutMs: Math.ceil(seconds * 1000) + DISPLAY_COMMAND_DEFAULT_TIMEOUT_MS });
                     const bytes = fs.readFileSync(outputPath);
                     return {
                         id: `video_${Date.now().toString(36)}`,
