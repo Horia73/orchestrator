@@ -45,6 +45,45 @@ export function contentTypeFor(filePath: string): string {
     return UPLOAD_MIME_MAP[ext] || 'application/octet-stream'
 }
 
+export type ServableWorkspaceTarget =
+    | { kind: 'file'; path: string; stat: fs.Stats }
+    | { kind: 'directory'; path: string; stat: fs.Stats }
+
+/**
+ * Resolve a user/agent-supplied workspace path to a real, servable filesystem
+ * target, or return null if it escapes the sandbox, points at a protected agent
+ * path, or is neither a regular file nor a directory.
+ */
+export function resolveServableWorkspaceTarget(rawPath: string): ServableWorkspaceTarget | null {
+    const requestedPath = normalizeWorkspacePath(rawPath)
+    const sandboxed = resolveSandboxed(requestedPath)
+    if (!sandboxed.ok) return null
+
+    let rootReal: string
+    let targetReal: string
+    try {
+        const root = getSandboxRoots()[0]?.absolute
+        if (!root) return null
+        rootReal = fs.realpathSync.native(/* turbopackIgnore: true */ root)
+        targetReal = fs.realpathSync.native(/* turbopackIgnore: true */ sandboxed.resolved)
+    } catch {
+        return null
+    }
+
+    if (!isInside(rootReal, targetReal)) return null
+    if (isInsideProtectedAgentPath(targetReal)) return null
+
+    try {
+        const stat = fs.statSync(/* turbopackIgnore: true */ targetReal)
+        if (stat.isFile()) return { kind: 'file', path: targetReal, stat }
+        if (stat.isDirectory()) return { kind: 'directory', path: targetReal, stat }
+    } catch {
+        return null
+    }
+
+    return null
+}
+
 /**
  * Resolve a user/agent-supplied workspace path to a real, servable file on disk,
  * or return null if it escapes the sandbox, points at a protected agent path, or
@@ -52,30 +91,6 @@ export function contentTypeFor(filePath: string): string {
  * route so both enforce the SAME sandbox boundary.
  */
 export function resolveServableWorkspaceFile(rawPath: string): string | null {
-    const requestedPath = normalizeWorkspacePath(rawPath)
-    const sandboxed = resolveSandboxed(requestedPath)
-    if (!sandboxed.ok) return null
-
-    let rootReal: string
-    let fileReal: string
-    try {
-        const root = getSandboxRoots()[0]?.absolute
-        if (!root) return null
-        rootReal = fs.realpathSync.native(/* turbopackIgnore: true */ root)
-        fileReal = fs.realpathSync.native(/* turbopackIgnore: true */ sandboxed.resolved)
-    } catch {
-        return null
-    }
-
-    if (!isInside(rootReal, fileReal)) return null
-    if (isInsideProtectedAgentPath(fileReal)) return null
-
-    try {
-        const stat = fs.statSync(/* turbopackIgnore: true */ fileReal)
-        if (!stat.isFile()) return null
-    } catch {
-        return null
-    }
-
-    return fileReal
+    const target = resolveServableWorkspaceTarget(rawPath)
+    return target?.kind === 'file' ? target.path : null
 }

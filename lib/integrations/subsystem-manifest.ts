@@ -10,6 +10,7 @@ import { WORKOUT_DOCTRINE } from '@/lib/integrations/doctrines/workout'
 import { CAD_DOCTRINE } from '@/lib/integrations/doctrines/cad'
 import { APPS_DOCTRINE } from '@/lib/integrations/doctrines/apps'
 import { SELF_DEVELOPMENT_DOCTRINE } from '@/lib/integrations/doctrines/self-development'
+import { PROJECT_DEVELOPMENT_DOCTRINE } from '@/lib/integrations/doctrines/project-development'
 
 // ---------------------------------------------------------------------------
 // Subsystem manifest — orchestrator-native capabilities that mirror the
@@ -43,6 +44,7 @@ export type SubsystemId =
     | 'workout'
     | 'cad'
     | 'apps'
+    | 'project_dev'
     | 'self_dev'
     // Tool-only capability groups (no doctrine): rarely-needed-in-main-chat tool
     // schemas pulled out of the always-on surface and loaded on demand.
@@ -211,9 +213,15 @@ export const SUBSYSTEM_MANIFEST: readonly SubsystemManifestEntry[] = [
     },
     {
         id: 'self_dev',
-        label: 'Self-development & project runs',
-        capability: 'The full protocol for code work on the Orchestrator itself or any other repository/new project: isolated worktrees under .orchestrator/project-runs, the self-dev:prepare / project-run:prepare helpers, managed dev previews, the coder handoff contract, the git commit/rebase/push gate, and the self-update deploy path. Activate BEFORE preparing any code work, coder delegation, or Orchestrator self-development — the helpers and boundaries live in the doctrine, not in your base prompt.',
+        label: 'Orchestrator self-development',
+        capability: 'Protocol for changing Orchestrator itself: self-dev worktree, managed preview, coder handoff, verification, commit/release/deploy gates. Activate only for this app, not external sites/repos.',
         doctrine: SELF_DEVELOPMENT_DOCTRINE,
+    },
+    {
+        id: 'project_dev',
+        label: 'Standalone project development',
+        capability: 'Protocol for non-Orchestrator projects: new sites/apps/games/dashboards or external repos, isolated project-run repos, managed previews, coder handoff, git/deploy gates.',
+        doctrine: PROJECT_DEVELOPMENT_DOCTRINE,
     },
     // --- Tool-only capability groups (no doctrine) --------------------------
     {

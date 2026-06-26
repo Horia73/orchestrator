@@ -20,6 +20,7 @@ const SAMPLE = JSON.stringify({
     basePath: "/dev-preview/new-demo-site-20260618",
     token: "demo-token",
     publicUrl: "https://example.com/dev-preview/new-demo-site-20260618/?preview_token=demo-token",
+    lanUrl: "http://192.168.1.10:3000/dev-preview/new-demo-site-20260618/?preview_token=demo-token",
     title: "Demo Next.js site",
 })
 

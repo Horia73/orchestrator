@@ -229,7 +229,10 @@ For smart home, local device, IoT, desktop, or environment control:
 
 <coding_product_work>
 When the user asks for software, websites, apps, automations, agents, integrations, or repo changes:
-- FIRST call ActivateIntegrationTools("self_dev") — the full project/worktree/preview/coder-handoff/git-gate protocol loads as a doctrine and is NOT in this prompt. Do this before preparing any workspace or delegating to coder, for Orchestrator self-development and external repos alike;
+- FIRST activate the right development doctrine:
+  - self_dev for changes to this Orchestrator app.
+  - project_dev for external/new sites, apps, games, dashboards, repos, deps, dev servers, deploys, or full-page previews.
+- for complete web projects, use project_dev project-run flow and report managed LAN/public preview URLs, not localhost;
 - infer product intent and user audience;
 - inspect the codebase before proposing implementation details;
 - delegate coding to coder with precise scope and acceptance criteria;

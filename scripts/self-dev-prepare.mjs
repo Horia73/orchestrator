@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'fs'
 import net from 'net'
+import os from 'os'
 import path from 'path'
 import { randomBytes, randomUUID } from 'crypto'
 import { spawnSync } from 'child_process'
@@ -50,6 +51,7 @@ try {
   const previewToken = randomBytes(24).toString('base64url')
   const previewBasePath = `/dev-preview/${encodeURIComponent(runId)}`
   const publicPreviewUrl = buildPublicPreviewUrl(previewBasePath, previewToken)
+  const lanPreviewUrl = buildLanPreviewUrl(previewBasePath, previewToken)
   const localPreviewUrl = `${devUrl}${previewBasePath}/`
   const instructionsPath = path.join(repoDir, 'SELF_DEV_INSTRUCTIONS.md')
   const statePath = path.join(runDir, 'run-state.json')
@@ -67,6 +69,7 @@ try {
     devUrl,
     localPreviewUrl,
     publicPreviewUrl,
+    lanPreviewUrl,
     previewBasePath,
     statePath,
     task,
@@ -81,6 +84,7 @@ try {
     devUrl,
     localPreviewUrl,
     publicPreviewUrl,
+    lanPreviewUrl,
     statePath,
     runId,
     task,
@@ -102,6 +106,7 @@ try {
       basePath: previewBasePath,
       localUrl: localPreviewUrl,
       publicUrl: publicPreviewUrl,
+      lanUrl: lanPreviewUrl,
       stateDir: path.join(runDir, 'preview-state'),
       logPath: path.join(runDir, 'preview.log'),
       healthPath: '/',
@@ -125,7 +130,8 @@ try {
     console.log(`Base: ${baseRef}`)
     console.log(`Port: ${port}`)
     console.log(`Dev URL: ${devUrl}`)
-    console.log(`Preview URL: ${publicPreviewUrl || localPreviewUrl}`)
+    console.log(`Preview URL: ${publicPreviewUrl || lanPreviewUrl || localPreviewUrl}`)
+    console.log(`LAN URL: ${lanPreviewUrl || '(no LAN IPv4 detected; set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP)'}`)
     console.log(`Instructions: ${instructionsPath}`)
     console.log(`State: ${statePath}`)
     console.log('')
@@ -304,6 +310,14 @@ function buildPublicPreviewUrl(basePath, token) {
   return url.toString()
 }
 
+function buildLanPreviewUrl(basePath, token) {
+  const origin = lanOrigin()
+  if (!origin) return null
+  const url = new URL(`${basePath}/`, origin)
+  url.searchParams.set('preview_token', token)
+  return url.toString()
+}
+
 function publicOrigin() {
   const raw = process.env.ORCHESTRATOR_PUBLIC_URL
     || process.env.ORCHESTRATOR_APP_URL
@@ -314,6 +328,84 @@ function publicOrigin() {
   } catch {
     return null
   }
+}
+
+function lanOrigin() {
+  const explicit = process.env.ORCHESTRATOR_LAN_ORIGIN
+    || process.env.ORCHESTRATOR_HOST_LAN_ORIGIN
+    || process.env.LAN_ORIGIN
+  const parsedExplicit = parseOrigin(explicit)
+  if (parsedExplicit) return parsedExplicit
+
+  if (!canInferLanOrigin()) return null
+  const host = process.env.ORCHESTRATOR_HOST_LAN_IP
+    || process.env.LAN_IP
+    || detectLanIpv4()
+  if (!host) return null
+  const port = appPort()
+  return parseOrigin(`http://${host}:${port}`)
+}
+
+function appPort() {
+  const raw = process.env.ORCHESTRATOR_APP_PORT
+    || process.env.ORCHESTRATOR_PORT
+    || process.env.PORT
+    || '3000'
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : 3000
+}
+
+function parseOrigin(raw) {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `http://${raw}`).origin
+  } catch {
+    return null
+  }
+}
+
+function canInferLanOrigin() {
+  const manager = String(process.env.ORCHESTRATOR_SERVICE_MANAGER || '').trim().toLowerCase()
+  if (manager === 'docker') return false
+
+  const bindHost = process.env.ORCHESTRATOR_HOST
+    || process.env.NEXT_HOST
+    || process.env.HOST
+  if (bindHost) return !isLoopbackBindHost(bindHost)
+
+  return process.env.NODE_ENV !== 'production'
+}
+
+function isLoopbackBindHost(value) {
+  const clean = String(value).trim().replace(/^\[(.*)]$/, '$1').toLowerCase()
+  return clean === 'localhost'
+    || clean === '127.0.0.1'
+    || clean === '::1'
+}
+
+function detectLanIpv4() {
+  const candidates = []
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
+    if (!entries || isLikelyVirtualInterface(name)) continue
+    for (const entry of entries) {
+      if (entry.family !== 'IPv4' || entry.internal || !entry.address) continue
+      if (entry.address.startsWith('169.254.')) continue
+      candidates.push(entry.address)
+    }
+  }
+  candidates.sort((a, b) => scoreLanIp(a) - scoreLanIp(b))
+  return candidates[0] || null
+}
+
+function isLikelyVirtualInterface(name) {
+  return /^(lo|docker|br-|veth|vmnet|vboxnet|utun|tun|tap|tailscale)/i.test(name)
+}
+
+function scoreLanIp(ip) {
+  if (/^192\.168\./.test(ip)) return 0
+  if (/^10\./.test(ip)) return 1
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2
+  return 10
 }
 
 async function reservePort(preferredPort) {
@@ -452,6 +544,7 @@ function buildInstructions(values) {
     '',
     `- Local preview: ${values.localPreviewUrl}`,
     values.publicPreviewUrl ? `- Public preview: ${values.publicPreviewUrl}` : '- Public preview: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+    values.lanPreviewUrl ? `- LAN preview: ${values.lanPreviewUrl}` : '- LAN preview: unavailable because no LAN IPv4 was detected. The orchestrator can set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP.',
     '',
     'If the preview is down or stale, restart only the managed preview helper:',
     '',
@@ -488,7 +581,7 @@ function buildInstructions(values) {
     '',
     '- files changed;',
     '- commands run;',
-    '- dev URL used, if any;',
+    '- public preview URL and LAN preview URL used, if any;',
     '- blockers or residual risks.',
     '',
   ].join('\n')
@@ -511,13 +604,14 @@ function buildCoderPrompt(values) {
     '- Do not run `npm run dev`, `next dev`, or another web server for this repo. The orchestrator owns the managed preview lifecycle.',
     `- Local preview URL: ${values.localPreviewUrl}`,
     values.publicPreviewUrl ? `- Public preview URL: ${values.publicPreviewUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+    values.lanPreviewUrl ? `- LAN preview URL: ${values.lanPreviewUrl}` : '- LAN preview URL: unavailable because no LAN IPv4 was detected; ask the orchestrator for a LAN-accessible app origin instead of reporting only localhost.',
     `- If the preview is down, restart only the managed helper: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath} --health-path /`,
     `- If missing snapshot config blocks verification, ask for an orchestrator-owned seed such as: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} seed --state ${values.statePath} --profile location-intelligence`,
     '- Do not stop the preview before returning; the orchestrator keeps it alive for user review.',
     '',
     'You own implementation and testing. Inspect the repo yourself, choose the needed checks, and fix failures you introduce.',
     '',
-    'When done, report files changed, checks run, preview URL used, and blockers/risks.',
+    'When done, report files changed, checks run, the public/LAN preview URL used, and blockers/risks.',
   ].join('\n')
 }
 

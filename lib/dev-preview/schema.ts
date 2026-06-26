@@ -5,10 +5,10 @@
  *
  * The agent emits one of these after starting a managed preview (see the
  * self-development doctrine). The body is small and deterministic: it carries
- * the run id, the reverse-proxy base path, and the preview token so the
- * renderer can build a same-origin iframe URL. It does NOT carry the rendered
- * site — that streams live from the dev server through the proxy, so HMR keeps
- * the iframe current as the agent edits the project.
+ * the run id, the reverse-proxy base path, the preview token, and optional
+ * public/LAN URLs. It does NOT carry the rendered site — that streams live from
+ * the dev server through the proxy, so HMR keeps the iframe current as the
+ * agent edits the project.
  *
  * Intentionally permissive (not in STRICT_ARTIFACT_TYPES): the renderer parses
  * defensively and shows a fallback card on malformed content, matching the
@@ -26,6 +26,8 @@ export interface DevPreviewArtifact {
     token: string
     /** Optional absolute public URL (with token) for "open in new tab". */
     publicUrl?: string
+    /** Optional LAN URL (with token), e.g. http://192.168.x.x:3000/dev-preview/<run-id>/. */
+    lanUrl?: string
     /** Optional status hint at emit time (e.g. "running"). */
     status?: string
 }
@@ -61,9 +63,10 @@ export function parseDevPreviewArtifact(source: string): ParseDevPreviewResult {
 
     const title = typeof obj.title === 'string' && obj.title.trim() ? obj.title.trim() : undefined
     const publicUrl = typeof obj.publicUrl === 'string' && obj.publicUrl.trim() ? obj.publicUrl.trim() : undefined
+    const lanUrl = typeof obj.lanUrl === 'string' && obj.lanUrl.trim() ? obj.lanUrl.trim() : undefined
     const status = typeof obj.status === 'string' && obj.status.trim() ? obj.status.trim() : undefined
 
-    return { ok: true, value: { runId, title, basePath, token, publicUrl, status } }
+    return { ok: true, value: { runId, title, basePath, token, publicUrl, lanUrl, status } }
 }
 
 /**

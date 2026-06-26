@@ -397,7 +397,7 @@ check(
 
 const baselineTokensApprox = Math.round(baselinePrompt.length / 4)
 const activatedTokensApprox = Math.round(activatedPrompt.length / 4)
-const BASELINE_PROMPT_TOKEN_CEILING = 39_000
+const BASELINE_PROMPT_TOKEN_CEILING = 40_000
 console.log(`\nApprox token budget (4 chars/token):`)
 console.log(`  baseline (zero activations): ${baselineTokensApprox} tokens`)
 console.log(`  after maps + scheduling activated: ${activatedTokensApprox} tokens`)

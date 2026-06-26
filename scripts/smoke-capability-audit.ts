@@ -3,7 +3,7 @@
  * loop-closer:
  *  - The weekly "Capability audit" system task is well-formed and idempotent.
  *  - Its prompt holds the production-critical invariants (propose-only, never
- *    self_dev in the run, silent on empty weeks, evidence-gated).
+ *    dev activation in the run, silent on empty weeks, evidence-gated).
  *  - ResolveAgentNeed is registered (catalog + workspace builtins + executor)
  *    and moves an open AGENT_NEEDS entry into Resolved by dedupe_key.
  *
@@ -67,8 +67,9 @@ async function main(): Promise<void> {
       prompt.includes("AGENT_NEEDS.md") && /PRIMARY INPUT/i.test(prompt)
     )
     check(
-      "audit prompt is propose-only — forbids implementing / self_dev in this run",
+      "audit prompt is propose-only — forbids implementing / dev activation in this run",
       /must NOT activate self_dev/i.test(prompt) &&
+        /project_dev/i.test(prompt) &&
         /NEVER in this run/i.test(prompt)
     )
     check(

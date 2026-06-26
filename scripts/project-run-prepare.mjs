@@ -68,11 +68,13 @@ try {
   const previewToken = randomBytes(24).toString('base64url')
   const previewBasePath = `/dev-preview/${encodeURIComponent(runId)}`
   const publicPreviewUrl = buildPublicPreviewUrl(previewBasePath, previewToken)
+  const lanPreviewUrl = buildLanPreviewUrl(previewBasePath, previewToken)
   const localPreviewUrl = `${devUrl}${previewBasePath}/`
   const preview = {
     token: previewToken,
     basePath: previewBasePath,
     publicUrl: publicPreviewUrl,
+    lanUrl: lanPreviewUrl,
     localUrl: localPreviewUrl,
     logPath: path.join(runDir, 'preview.log'),
     stateDir: path.join(runDir, 'preview-state'),
@@ -166,7 +168,8 @@ try {
     console.log(`Port: ${port}`)
     console.log(`Dev URL: ${devUrl}`)
     console.log(`Preview base path: ${previewBasePath}`)
-    console.log(`Preview URL: ${publicPreviewUrl || '(set ORCHESTRATOR_PUBLIC_URL to expose a public /dev-preview link)'}`)
+    console.log(`Preview URL: ${publicPreviewUrl || lanPreviewUrl || '(set ORCHESTRATOR_PUBLIC_URL or ORCHESTRATOR_LAN_ORIGIN to expose a /dev-preview link)'}`)
+    console.log(`LAN URL: ${lanPreviewUrl || '(no LAN IPv4 detected; set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP)'}`)
     console.log(`Instructions: ${instructionsPath}`)
     console.log(`State: ${statePath}`)
     console.log('')
@@ -422,7 +425,14 @@ function buildInstructions(values) {
     values.devUrl,
     '```',
     '',
-    `The managed preview binds to \`127.0.0.1:${values.port}\` and is exposed through the live app at \`${values.preview.basePath}/\`${values.preview.publicUrl ? ` (public: ${values.preview.publicUrl})` : ''}. Never use port \`3000\` (the running Orchestrator app).`,
+    `The managed preview binds to \`127.0.0.1:${values.port}\` and is exposed through the live app at \`${values.preview.basePath}/\`${values.preview.publicUrl ? ` (public: ${values.preview.publicUrl})` : ''}${values.preview.lanUrl ? ` (LAN: ${values.preview.lanUrl})` : ''}. Never use port \`3000\` (the running Orchestrator app).`,
+    '',
+    'User-facing preview links:',
+    values.preview.publicUrl ? `- Public preview URL: ${values.preview.publicUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+    values.preview.lanUrl ? `- LAN preview URL: ${values.preview.lanUrl}` : '- LAN preview URL: unavailable because no LAN IPv4 was detected. The orchestrator can set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP.',
+    `- Loopback-only dev URL: ${values.devUrl} (for internal health checks, not a user-facing link).`,
+    '',
+    'When reporting to the orchestrator or user, include the LAN preview URL when present. Never report only a raw localhost/127.0.0.1 project URL for a previewable web project.',
     '',
     '### Base-path contract (required for previewable web apps)',
     '',
@@ -475,7 +485,7 @@ function buildInstructions(values) {
     '',
     '- files changed;',
     '- commands run;',
-    '- dev URL used, if any;',
+    '- public preview URL and LAN preview URL used, if any;',
     '- blockers or residual risks.',
     '',
   ].join('\n')
@@ -495,6 +505,8 @@ function buildCoderPrompt(values) {
     `- Base: ${values.baseRef || values.baseBranch || '(new project)'}`,
     `- Assigned dev URL (loopback): ${values.devUrl}`,
     `- Managed preview base path: ${values.preview.basePath}/ (orchestrator runs the dev server via \`project-run:run -- start\`; do not run your own)`,
+    values.preview.publicUrl ? `- Managed preview public URL: ${values.preview.publicUrl}` : '- Managed preview public URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+    values.preview.lanUrl ? `- Managed preview LAN URL: ${values.preview.lanUrl}` : '- Managed preview LAN URL: unavailable because no LAN IPv4 was detected; ask the orchestrator for a LAN-accessible app origin instead of reporting only localhost.',
     `- Previewable web apps must honour PREVIEW_BASE_PATH (dev-only basePath/assetPrefix) so assets resolve under ${values.preview.basePath}/. See the instructions file.`,
     `- Push policy hint: ${values.pushPolicy}`,
     `- Deployment target hint: ${values.deployTarget}`,
@@ -507,12 +519,20 @@ function buildCoderPrompt(values) {
     '',
     'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Use the orchestrator-managed preview for visual checks instead of starting your own dev server; if the preview is down, ask the orchestrator to restart it.',
     '',
-    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, the managed preview URL if used, and blockers/risks.',
+    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, the managed public/LAN preview URL if used, and blockers/risks.',
   ].filter(Boolean).join('\n')
 }
 
 function buildPublicPreviewUrl(basePath, token) {
   const origin = publicOrigin()
+  if (!origin) return null
+  const url = new URL(`${basePath}/`, origin)
+  url.searchParams.set('preview_token', token)
+  return url.toString()
+}
+
+function buildLanPreviewUrl(basePath, token) {
+  const origin = lanOrigin()
   if (!origin) return null
   const url = new URL(`${basePath}/`, origin)
   url.searchParams.set('preview_token', token)
@@ -529,6 +549,84 @@ function publicOrigin() {
   } catch {
     return null
   }
+}
+
+function lanOrigin() {
+  const explicit = process.env.ORCHESTRATOR_LAN_ORIGIN
+    || process.env.ORCHESTRATOR_HOST_LAN_ORIGIN
+    || process.env.LAN_ORIGIN
+  const parsedExplicit = parseOrigin(explicit)
+  if (parsedExplicit) return parsedExplicit
+
+  if (!canInferLanOrigin()) return null
+  const host = process.env.ORCHESTRATOR_HOST_LAN_IP
+    || process.env.LAN_IP
+    || detectLanIpv4()
+  if (!host) return null
+  const port = appPort()
+  return parseOrigin(`http://${host}:${port}`)
+}
+
+function appPort() {
+  const raw = process.env.ORCHESTRATOR_APP_PORT
+    || process.env.ORCHESTRATOR_PORT
+    || process.env.PORT
+    || '3000'
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : 3000
+}
+
+function parseOrigin(raw) {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `http://${raw}`).origin
+  } catch {
+    return null
+  }
+}
+
+function canInferLanOrigin() {
+  const manager = String(process.env.ORCHESTRATOR_SERVICE_MANAGER || '').trim().toLowerCase()
+  if (manager === 'docker') return false
+
+  const bindHost = process.env.ORCHESTRATOR_HOST
+    || process.env.NEXT_HOST
+    || process.env.HOST
+  if (bindHost) return !isLoopbackBindHost(bindHost)
+
+  return process.env.NODE_ENV !== 'production'
+}
+
+function isLoopbackBindHost(value) {
+  const clean = String(value).trim().replace(/^\[(.*)]$/, '$1').toLowerCase()
+  return clean === 'localhost'
+    || clean === '127.0.0.1'
+    || clean === '::1'
+}
+
+function detectLanIpv4() {
+  const candidates = []
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
+    if (!entries || isLikelyVirtualInterface(name)) continue
+    for (const entry of entries) {
+      if (entry.family !== 'IPv4' || entry.internal || !entry.address) continue
+      if (entry.address.startsWith('169.254.')) continue
+      candidates.push(entry.address)
+    }
+  }
+  candidates.sort((a, b) => scoreLanIp(a) - scoreLanIp(b))
+  return candidates[0] || null
+}
+
+function isLikelyVirtualInterface(name) {
+  return /^(lo|docker|br-|veth|vmnet|vboxnet|utun|tun|tap|tailscale)/i.test(name)
+}
+
+function scoreLanIp(ip) {
+  if (/^192\.168\./.test(ip)) return 0
+  if (/^10\./.test(ip)) return 1
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2
+  return 10
 }
 
 function parseArgs(argv) {

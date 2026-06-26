@@ -289,6 +289,8 @@ const INLINE_URL_RE = /^https?:\/\/[^\s]+$/i
 const WORKSPACE_PATH_MARKER = "/.orchestrator/workspace/"
 const DOWNLOADABLE_WORKSPACE_EXT_RE =
   /\.(?:docx?|xlsx?|pptx?|pdf|txt|md|csv|json|xml|rtf|png|jpe?g|gif|webp|heic|heif|mp3|wav|m4a|aac|aiff|flac|ogg|mp4|webm|mov|mpeg|mpg|avi|wmv|3gp|glb|stl|3mf|step|stp|gcode)(?:[?#].*)?$/i
+const WORKSPACE_OUTPUT_PATH_RE =
+  /^(?:\.\/)?(?:files|browser-downloads|gmail-attachments|artifacts)(?:\/|$)/i
 
 // iOS standalone PWAs frequently swallow the *first* tap on a `target="_blank"`
 // link — the user has to tap twice for it to open. Driving the open from the
@@ -333,8 +335,17 @@ function workspaceCandidatePath(href: string | undefined): string | null {
   try {
     const url = new URL(raw)
     hasProtocol = true
-    if (url.protocol !== "file:") return null
-    candidate = url.pathname
+    if (url.protocol === "file:") {
+      candidate = url.pathname
+    } else if (
+      (url.protocol === "http:" || url.protocol === "https:") &&
+      (typeof window === "undefined" || url.origin === window.location.origin) &&
+      url.pathname.endsWith("/api/workspace/files")
+    ) {
+      return url.searchParams.get("path")
+    } else {
+      return null
+    }
   } catch {
     hasProtocol = /^[a-z][a-z0-9+.-]*:/i.test(raw)
   }
@@ -346,7 +357,8 @@ function workspaceCandidatePath(href: string | undefined): string | null {
   const isRelativeWorkspaceFile =
     !pathOnly.startsWith("/") &&
     !pathOnly.includes("://") &&
-    DOWNLOADABLE_WORKSPACE_EXT_RE.test(candidate)
+    (DOWNLOADABLE_WORKSPACE_EXT_RE.test(candidate) ||
+      WORKSPACE_OUTPUT_PATH_RE.test(pathOnly))
 
   if (!isWorkspacePath && !isRelativeWorkspaceFile) return null
   return candidate

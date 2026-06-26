@@ -8,8 +8,8 @@
  *   - <runtime_tools> renders no per-tool menu for native-schema providers
  *     (codex/API) — schemas already ship in the request;
  *   - <boot_protocol> is included only while BOOT.md exists;
- *   - the self-development protocol loads only via
- *     ActivateIntegrationTools("self_dev");
+ *   - development protocols load only via activation:
+ *     self_dev for Orchestrator itself, project_dev for standalone projects;
  *   - <current_time> (per-minute volatile) is the LAST block, so provider
  *     prefix caching survives turn-to-turn.
  *
@@ -94,12 +94,24 @@ async function main() {
     check('after BOOT.md removal <boot_protocol> drops out', !afterBoot.includes('<boot_protocol>'))
     check('one-line BOOT.md mention stays in context_files_protocol', afterBoot.includes('BOOT.md: temporary onboarding instructions'))
 
-    // --- self_dev doctrine gating --------------------------------------------
-    check('self-dev protocol NOT in zero-activation prompt', !afterBoot.includes('<project_workspace_policy>'))
+    // --- development doctrine gating -----------------------------------------
+    check('development protocols NOT in zero-activation prompt',
+        !afterBoot.includes('<project_workspace_policy>') &&
+        !afterBoot.includes('<project_development_policy>'))
     check('<subsystems> menu lists self_dev', afterBoot.includes('self_dev'))
-    const activated = orchestrator.buildPrompt!(ctx({ preactivatedCapabilities: ['self_dev'] }) as never)
+    check('<subsystems> menu lists project_dev', afterBoot.includes('project_dev'))
+    const activatedSelfDev = orchestrator.buildPrompt!(ctx({ preactivatedCapabilities: ['self_dev'] }) as never)
     check('ActivateIntegrationTools("self_dev") loads the full protocol',
-        activated.includes('<project_workspace_policy>') && activated.includes('<self_update_policy>'))
+        activatedSelfDev.includes('<project_workspace_policy>') &&
+        activatedSelfDev.includes('<self_update_policy>') &&
+        !activatedSelfDev.includes('<project_development_policy>'))
+    const activatedProjectDev = orchestrator.buildPrompt!(ctx({ preactivatedCapabilities: ['project_dev'] }) as never)
+    check('ActivateIntegrationTools("project_dev") loads the full protocol',
+        activatedProjectDev.includes('<project_development_policy>') &&
+        activatedProjectDev.includes('project-run:prepare') &&
+        activatedProjectDev.includes('PREVIEW_BASE_PATH') &&
+        activatedProjectDev.includes('lanUrl') &&
+        !activatedProjectDev.includes('<self_update_policy>'))
 
     fs.rmSync(stateDir, { recursive: true, force: true })
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import fs from 'fs'
 import net from 'net'
+import os from 'os'
 import path from 'path'
 import { randomBytes } from 'crypto'
 import { spawn, spawnSync } from 'child_process'
@@ -73,6 +74,7 @@ function printStatus(context) {
     `Dev URL: ${info.devUrl || '(none)'}`,
     `Preview: ${info.preview.running ? 'running' : info.preview.status}`,
     info.preview.publicUrl ? `Preview URL: ${info.preview.publicUrl}` : null,
+    info.preview.lanUrl ? `LAN URL: ${info.preview.lanUrl}` : null,
     info.preview.logPath ? `Preview log: ${info.preview.logPath}` : null,
     `Changed files: ${info.statusShort.length}`,
     '',
@@ -562,7 +564,7 @@ function collectStatus(context) {
   const exists = fs.existsSync(repoDir)
   const preview = supportsManagedPreview(context)
     ? previewOutput(context)
-    : { status: 'unavailable', running: false, pid: null, publicUrl: null, logPath: null }
+    : { status: 'unavailable', running: false, pid: null, publicUrl: null, lanUrl: null, logPath: null }
   return {
     runId: context.state.runId,
     status: context.state.status ?? 'unknown',
@@ -596,10 +598,13 @@ function ensurePreviewMetadata(context) {
   const publicUrl = typeof existing.publicUrl === 'string' && existing.publicUrl
     ? existing.publicUrl
     : buildPublicPreviewUrl(basePath, token)
+  const computedLanUrl = buildLanPreviewUrl(basePath, token)
+  const lanUrl = computedLanUrl || (typeof existing.lanUrl === 'string' && existing.lanUrl ? existing.lanUrl : null)
   const preview = {
     token,
     basePath,
     publicUrl,
+    lanUrl,
     localUrl: `http://127.0.0.1:${context.state.port}${basePath}/`,
     stateDir: typeof existing.stateDir === 'string' && path.isAbsolute(existing.stateDir)
       ? existing.stateDir
@@ -652,6 +657,14 @@ function buildPublicPreviewUrl(basePath, token) {
   return url.toString()
 }
 
+function buildLanPreviewUrl(basePath, token) {
+  const origin = lanOrigin()
+  if (!origin) return null
+  const url = new URL(`${basePath}/`, origin)
+  url.searchParams.set('preview_token', token)
+  return url.toString()
+}
+
 function publicOrigin() {
   const raw = process.env.ORCHESTRATOR_PUBLIC_URL
     || process.env.ORCHESTRATOR_APP_URL
@@ -662,6 +675,84 @@ function publicOrigin() {
   } catch {
     return null
   }
+}
+
+function lanOrigin() {
+  const explicit = process.env.ORCHESTRATOR_LAN_ORIGIN
+    || process.env.ORCHESTRATOR_HOST_LAN_ORIGIN
+    || process.env.LAN_ORIGIN
+  const parsedExplicit = parseOrigin(explicit)
+  if (parsedExplicit) return parsedExplicit
+
+  if (!canInferLanOrigin()) return null
+  const host = process.env.ORCHESTRATOR_HOST_LAN_IP
+    || process.env.LAN_IP
+    || detectLanIpv4()
+  if (!host) return null
+  const port = appPort()
+  return parseOrigin(`http://${host}:${port}`)
+}
+
+function appPort() {
+  const raw = process.env.ORCHESTRATOR_APP_PORT
+    || process.env.ORCHESTRATOR_PORT
+    || process.env.PORT
+    || '3000'
+  const parsed = Number(raw)
+  return Number.isInteger(parsed) && parsed >= 1 && parsed <= 65535 ? parsed : 3000
+}
+
+function parseOrigin(raw) {
+  if (!raw || typeof raw !== 'string' || !raw.trim()) return null
+  try {
+    return new URL(raw.includes('://') ? raw : `http://${raw}`).origin
+  } catch {
+    return null
+  }
+}
+
+function canInferLanOrigin() {
+  const manager = String(process.env.ORCHESTRATOR_SERVICE_MANAGER || '').trim().toLowerCase()
+  if (manager === 'docker') return false
+
+  const bindHost = process.env.ORCHESTRATOR_HOST
+    || process.env.NEXT_HOST
+    || process.env.HOST
+  if (bindHost) return !isLoopbackBindHost(bindHost)
+
+  return process.env.NODE_ENV !== 'production'
+}
+
+function isLoopbackBindHost(value) {
+  const clean = String(value).trim().replace(/^\[(.*)]$/, '$1').toLowerCase()
+  return clean === 'localhost'
+    || clean === '127.0.0.1'
+    || clean === '::1'
+}
+
+function detectLanIpv4() {
+  const candidates = []
+  for (const [name, entries] of Object.entries(os.networkInterfaces())) {
+    if (!entries || isLikelyVirtualInterface(name)) continue
+    for (const entry of entries) {
+      if (entry.family !== 'IPv4' || entry.internal || !entry.address) continue
+      if (entry.address.startsWith('169.254.')) continue
+      candidates.push(entry.address)
+    }
+  }
+  candidates.sort((a, b) => scoreLanIp(a) - scoreLanIp(b))
+  return candidates[0] || null
+}
+
+function isLikelyVirtualInterface(name) {
+  return /^(lo|docker|br-|veth|vmnet|vboxnet|utun|tun|tap|tailscale)/i.test(name)
+}
+
+function scoreLanIp(ip) {
+  if (/^192\.168\./.test(ip)) return 0
+  if (/^10\./.test(ip)) return 1
+  if (/^172\.(1[6-9]|2\d|3[01])\./.test(ip)) return 2
+  return 10
 }
 
 function previewInfo(context) {
@@ -688,9 +779,10 @@ function previewOutput(context, overrides = {}) {
     port: context.state.port ?? null,
     localUrl: preview.localUrl,
     publicUrl: preview.publicUrl,
+    lanUrl: preview.lanUrl,
     basePath: preview.basePath,
     // Exposed so the agent can build a dev-preview artifact (live mini-browser)
-    // without parsing it back out of publicUrl. Already embedded in publicUrl.
+    // without parsing it back out of publicUrl/lanUrl.
     token: preview.token,
     healthPath: preview.healthPath ?? '/',
     stateDir: preview.stateDir,
@@ -704,6 +796,7 @@ function previewSummary(context, running) {
     `Preview for ${context.state.runId}: ${running ? 'running' : (preview.status || 'stopped')}`,
     `Local URL: ${preview.localUrl}`,
     preview.publicUrl ? `Public URL: ${preview.publicUrl}` : 'Public URL: unavailable; set ORCHESTRATOR_PUBLIC_URL to enable /dev-preview links.',
+    preview.lanUrl ? `LAN URL: ${preview.lanUrl}` : 'LAN URL: unavailable; set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP, or run the app on a LAN-reachable host.',
     `Health: ${preview.healthPath ?? '/'}`,
     `Log: ${preview.logPath}`,
     `State: ${preview.stateDir}`,

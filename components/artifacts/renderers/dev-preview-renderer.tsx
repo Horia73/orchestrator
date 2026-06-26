@@ -64,7 +64,7 @@ function DevPreviewFrame({
     // A reload nonce forces a real navigation (re-sets the preview cookie) and
     // a fresh load state without exposing the nonce in the displayed URL chip.
     const iframeSrc = reloadKey === 0 ? localSrc : `${localSrc}&_r=${reloadKey}`
-    const openUrl = preview.publicUrl || localSrc
+    const openUrl = preview.publicUrl || preview.lanUrl || localSrc
     const displayTitle = preview.title || fallbackTitle || "Live preview"
 
     const refresh = React.useCallback(() => {

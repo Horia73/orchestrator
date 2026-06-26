@@ -45,6 +45,7 @@ import { FilePreviewModal } from "@/components/file-preview-modal"
 import { MarkdownImagePreviewProvider } from "@/components/markdown-renderer"
 import { ArtifactPanel as AntArtifactPanel } from "@/components/artifacts/artifact-panel"
 import { ConversationArtifactsProvider } from "@/components/artifacts/use-conversation-artifacts"
+import { decideRowRenderTarget } from "@/lib/artifacts/render-decision"
 import type { ArtifactRow } from "@/lib/artifacts/schema"
 import {
   consumeLocalSubmitAnchor,
@@ -2698,15 +2699,15 @@ export function ChatView() {
       .catch(() => {})
   }, [conversationId])
 
-  // ── Live preview auto-open ────────────────────────────────────────────
-  // When the agent emits a dev-preview artifact (a managed project-run /
-  // self-dev preview), pop the side panel open as a live "mini-browser" so the
-  // user sees the site being built without hunting for a link. If the panel is
-  // already showing an artifact and a newer version of the same identifier
-  // lands, advance the panel to that version instead of leaving stale content.
-  // Dev-preview auto-open is tracked per artifact id so a duplicate event never
-  // replays the open action.
-  const autoOpenedPreviewIdsRef = React.useRef<Set<string>>(new Set())
+  // ── Generated artifact auto-open ──────────────────────────────────────
+  // When the agent emits a panel artifact, pop the side panel open so the
+  // user sees the rendered result without hunting for a launch card. Managed
+  // dev previews keep this behavior even if an older agent omitted display.
+  // If the panel is already showing an artifact and a newer version of the
+  // same identifier lands, advance the panel to that version instead of
+  // leaving stale content. Auto-open is tracked per artifact id so a duplicate
+  // event never replays the open action.
+  const autoOpenedPanelArtifactIdsRef = React.useRef<Set<string>>(new Set())
   React.useEffect(() => {
     function onArtifact(e: Event) {
       const row = (e as CustomEvent).detail as ArtifactRow | undefined
@@ -2716,14 +2717,15 @@ export function ChatView() {
         genArtifact != null &&
         genArtifact.identifier === row.identifier &&
         genArtifact.id !== row.id
-      const shouldAutoOpenPreview =
-        row.type === "application/vnd.ant.dev-preview" &&
-        !autoOpenedPreviewIdsRef.current.has(row.id)
+      const shouldAutoOpenPanel =
+        (decideRowRenderTarget(row) === "panel" ||
+          row.type === "application/vnd.ant.dev-preview") &&
+        !autoOpenedPanelArtifactIdsRef.current.has(row.id)
 
-      if (row.type === "application/vnd.ant.dev-preview") {
-        autoOpenedPreviewIdsRef.current.add(row.id)
+      if (shouldAutoOpenPanel) {
+        autoOpenedPanelArtifactIdsRef.current.add(row.id)
       }
-      if (!replacesOpenArtifact && !shouldAutoOpenPreview) return
+      if (!replacesOpenArtifact && !shouldAutoOpenPanel) return
       openGeneratedArtifactPanel(row)
     }
     window.addEventListener("orch:artifact", onArtifact)

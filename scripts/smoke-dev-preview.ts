@@ -2,6 +2,7 @@ import assert from "node:assert/strict"
 
 import { parseDevPreviewArtifact, devPreviewLocalSrc } from "@/lib/dev-preview/schema"
 import { SELF_DEVELOPMENT_DOCTRINE } from "@/lib/integrations/doctrines/self-development"
+import { PROJECT_DEVELOPMENT_DOCTRINE } from "@/lib/integrations/doctrines/project-development"
 import { APP_GUIDE_DOCTRINE } from "@/lib/integrations/doctrines/app-guide"
 
 // ── Parser: valid bodies ──────────────────────────────────────────────────
@@ -11,6 +12,7 @@ const valid = parseDevPreviewArtifact(
     basePath: "/dev-preview/new-demo-20260618",
     token: "tok_abc",
     publicUrl: "https://host/dev-preview/new-demo-20260618/?preview_token=tok_abc",
+    lanUrl: "http://192.168.1.10:3000/dev-preview/new-demo-20260618/?preview_token=tok_abc",
     title: "Demo site",
   })
 )
@@ -19,6 +21,7 @@ if (valid.ok) {
   assert.equal(valid.value.runId, "new-demo-20260618")
   assert.equal(valid.value.basePath, "/dev-preview/new-demo-20260618")
   assert.equal(valid.value.token, "tok_abc")
+  assert.equal(valid.value.lanUrl, "http://192.168.1.10:3000/dev-preview/new-demo-20260618/?preview_token=tok_abc")
   assert.equal(valid.value.title, "Demo site")
 }
 
@@ -58,7 +61,7 @@ assert.equal(
 // ── Prompt contract: doctrine + app-guide advertise the type ──────────────
 for (const needle of [
   "application/vnd.ant.dev-preview",
-  "PREVIEW_BASE_PATH",
+  "lanUrl",
   "live_preview_policy",
 ]) {
   assert.ok(
@@ -66,9 +69,25 @@ for (const needle of [
     `self-dev doctrine should mention "${needle}"`
   )
 }
+for (const needle of [
+  "application/vnd.ant.dev-preview",
+  "PREVIEW_BASE_PATH",
+  "project-run:prepare",
+  "lanUrl",
+  "live_preview_policy",
+]) {
+  assert.ok(
+    PROJECT_DEVELOPMENT_DOCTRINE.includes(needle),
+    `project-dev doctrine should mention "${needle}"`
+  )
+}
 assert.ok(
   APP_GUIDE_DOCTRINE.includes("application/vnd.ant.dev-preview"),
   "app-guide should document the dev-preview artifact"
+)
+assert.ok(
+  APP_GUIDE_DOCTRINE.includes("lanUrl"),
+  "app-guide should document LAN preview links"
 )
 
 console.log("smoke-dev-preview: OK")

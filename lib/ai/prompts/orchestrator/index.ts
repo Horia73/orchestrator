@@ -14,10 +14,10 @@ import { ORCHESTRATOR_OUTPUT_CONTRACT } from './output-contract'
 // ActivateIntegrationTools. The always-on capability summary surface is in
 // the <integrations> + <subsystems> blocks built by exposure.ts.
 //
-// The self-development / project-run protocol moved the same way: it lives in
-// lib/integrations/doctrines/self-development.ts behind
-// ActivateIntegrationTools("self_dev") — <coding_product_work> in the action
-// policy points there.
+// The development protocols moved the same way: Orchestrator self-updates live
+// in lib/integrations/doctrines/self-development.ts behind self_dev, while
+// standalone/external projects live in project-development.ts behind
+// project_dev. <coding_product_work> routes to the right one.
 //
 // The one conditional piece is <boot_protocol>: the onboarding script only
 // matters while BOOT.md exists in the workspace, so it is included only then

@@ -27,7 +27,7 @@ const AUDIT_HOUR = 4
 const AUDIT_MINUTE = 0
 
 const CAPABILITY_AUDIT_PROMPT = [
-  'This is the scheduled weekly Capability Audit — background self-development triage, not a user request. No one is waiting. This run ONLY produces a proposal: it must NOT implement anything, must NOT activate self_dev, must NOT prepare a worktree, delegate to coder, push, deploy, or change any code.',
+  'This is the scheduled weekly Capability Audit — background self-development triage, not a user request. No one is waiting. This run ONLY produces a proposal: it must NOT implement anything, must NOT activate self_dev or project_dev, must NOT prepare a worktree, delegate to coder, push, deploy, or change any code.',
   '',
   "Your job: turn the agents' own blocked-needs backlog into a ranked, evidence-backed proposal for the user to approve — with the emphasis on NEW CAPABILITIES / FEATURES the agents found missing, not just bug fixes.",
   '',
@@ -51,7 +51,7 @@ const CAPABILITY_AUDIT_PROMPT = [
   '   Include `actions` buttons (max 8): one "Build: <short>" per top BUILD item, plus "Build all approved", "Drop the flagged needs", and "Dismiss".',
   "   Each Build button's `value` must read like: \"Approved — implement this via self-development: <one-line outcome> (AGENT_NEEDS dedupe_key: <key>). Follow the self_dev gate: worktree + coder + typecheck/build/smoke + managed preview, and ASK ME AGAIN before pushing to master, publishing a release, or deploying to production. When it ships, close the AGENT_NEEDS entry with ResolveAgentNeed.\"",
   '',
-  '7. NEVER in this run: activate self_dev, prepare a worktree, delegate to coder, push, deploy, or change any code. Proposing is the whole job. Implementation happens only after the user clicks a Build button, in a fresh Inbox reply.',
+  '7. NEVER in this run: activate self_dev or project_dev, prepare a worktree, delegate to coder, push, deploy, or change any code. Proposing is the whole job. Implementation happens only after the user clicks a Build button, in a fresh Inbox reply.',
   '',
   '8. Do not paste run narration, tool ids, or internal bookkeeping into the Inbox body — write the clean, user-facing proposal only.',
 ].join('\n')
