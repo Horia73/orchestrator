@@ -779,14 +779,17 @@ async function runCodexAppServer(args: RunCodexAppServerArgs): Promise<void> {
 
 function buildAppServerArgs(nativeCoderRun: boolean, builtins: ProviderBuiltin[]): string[] {
     const out = ['app-server', '--listen', 'stdio://']
+    // Orchestrator owns workflow skills through its own tools. Keep Codex-native
+    // skills disabled even for plain coder runs, otherwise Codex may probe
+    // CODEX_HOME/.codex/skills paths that are intentionally absent.
+    out.push('-c', 'features.multi_agent=false')
+    out.push('-c', 'features.apps=false')
+    out.push('-c', 'features.plugins=false')
+    out.push('-c', 'features.skills=false')
     if (!nativeCoderRun) {
         const allowWebSearch = builtins.includes('web_search')
         const allowShell = codexAllowsShell(builtins)
         out.push('-c', `features.shell_tool=${allowShell ? 'true' : 'false'}`)
-        out.push('-c', 'features.multi_agent=false')
-        out.push('-c', 'features.apps=false')
-        out.push('-c', 'features.plugins=false')
-        out.push('-c', 'features.skills=false')
         out.push('-c', 'apps._default.enabled=false')
         out.push('-c', allowWebSearch ? 'web_search="live"' : 'web_search="disabled"')
     }
@@ -814,6 +817,14 @@ function buildThreadParams(args: {
     if (args.nativeCoderRun) {
         params.approvalPolicy = 'never'
         params.sandbox = 'danger-full-access'
+        params.config = {
+            features: {
+                multi_agent: false,
+                apps: false,
+                plugins: false,
+                skills: false,
+            },
+        }
     } else {
         const allowWebSearch = args.builtins.includes('web_search')
         const allowShell = codexAllowsShell(args.builtins)

@@ -198,10 +198,28 @@ async function main() {
 
   const promptIndex = buildSkillsIndex()
   assert.ok(promptIndex.includes("<skills_index>"), "prompt should include skills_index")
+  assert.ok(
+    promptIndex.includes("Do not read provider-native skill folders"),
+    "prompt skills_index should forbid provider-native skill path probing"
+  )
   for (const expected of EXPECTED_SKILLS) {
     assert.ok(promptIndex.includes(expected.id), `prompt skills_index should mention ${expected.id}`)
   }
   assert.ok(!promptIndex.includes("# PPTX Skill"), "prompt index should not inline SKILL.md")
+
+  const delegateToSource = fs.readFileSync("lib/ai/tools/delegate-to.ts", "utf8")
+  assert.ok(
+    delegateToSource.includes("<orchestrator_cli_coder_runtime>") &&
+      delegateToSource.includes("/app/.orchestrator/.../.codex/skills"),
+    "CLI coder delegation should inject guidance against native skill path probing"
+  )
+
+  const codexProviderSource = fs.readFileSync("lib/ai/providers/codex.ts", "utf8")
+  assert.ok(
+    codexProviderSource.includes("features.skills=false") &&
+      codexProviderSource.includes("even for plain coder runs"),
+    "Codex native coder runs should explicitly disable Codex-native skills"
+  )
 
   const dockerfile = fs.readFileSync("Dockerfile", "utf8")
   const runnerStage = dockerfile.split("FROM node:22-bookworm-slim AS runner")[1] ?? ""

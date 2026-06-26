@@ -79,7 +79,7 @@ export function AppLinkRenderer({ source }: { source: string }) {
 
     const open = () => {
         if (!targetArtifactId || disabled) return
-        window.location.assign(`/artifact/${targetArtifactId}`)
+        window.open(`/artifact/${targetArtifactId}`, '_blank', 'noopener,noreferrer')
     }
 
     return (
@@ -88,8 +88,8 @@ export function AppLinkRenderer({ source }: { source: string }) {
             onClick={open}
             disabled={disabled}
             className="my-2 flex w-full max-w-full items-center gap-3 rounded-lg border border-border/70 bg-muted/25 px-3.5 py-3 text-left text-sm text-foreground/80 transition-colors hover:border-border hover:bg-muted/45 disabled:cursor-not-allowed disabled:opacity-60"
-            aria-label={`Open app: ${title}`}
-            title={disabled ? 'App code is missing' : 'Open app'}
+            aria-label={`Open app in new tab: ${title}`}
+            title={disabled ? 'App code is missing' : 'Open app in new tab'}
         >
             <span className="flex size-10 shrink-0 items-center justify-center rounded-md bg-background text-muted-foreground shadow-[inset_0_0_0_1px_hsl(var(--border))]">
                 {icon

@@ -11,7 +11,7 @@ export const skillSearchTool: ToolDef = {
   id: "SkillSearch",
   name: "SkillSearch",
   description:
-    "Search installed Orchestrator workflow skills by name and description. Use before specialized workflows such as PPTX decks so full skill instructions can be loaded only when relevant.",
+    "Search installed Orchestrator workflow skills by name and description. Use before specialized workflows such as PPTX decks so full skill instructions can be loaded only when relevant. Do not guess or shell-read provider-native skill paths; Orchestrator resolves skill roots for you.",
   input_schema: {
     type: "object",
     properties: {
@@ -33,7 +33,7 @@ export const activateSkillTool: ToolDef = {
   id: "ActivateSkill",
   name: "ActivateSkill",
   description:
-    "Load an installed workflow skill's SKILL.md instructions and return its skill_root. Call this before following a skill-backed workflow.",
+    "Load an installed Orchestrator workflow skill's SKILL.md instructions and return its skill_root. Call this before following a skill-backed workflow instead of reading CODEX_HOME/.codex/skills, ~/.codex/skills, or ~/.claude/skills.",
   input_schema: {
     type: "object",
     properties: {
@@ -62,7 +62,7 @@ export const readSkillFileTool: ToolDef = {
   id: "ReadSkillFile",
   name: "ReadSkillFile",
   description:
-    "Read a specific file inside an activated skill, resolved relative to skill_root. Use for referenced guides, scripts, schemas, and assets.",
+    "Read a specific file inside an activated Orchestrator skill, resolved relative to skill_root. Use for referenced guides, scripts, schemas, and assets; path must be skill-relative, never an inferred provider-native absolute path.",
   input_schema: {
     type: "object",
     properties: {
@@ -172,4 +172,3 @@ function arrayOfStrings(value: unknown): string[] {
   if (!Array.isArray(value)) return []
   return value.filter((entry): entry is string => typeof entry === "string")
 }
-

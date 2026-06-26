@@ -5,6 +5,7 @@ import type { AgentKind, ToolDef, ToolExecutionContext, ToolResult } from '@/lib
 import { MAX_AGENT_DEPTH } from '@/lib/ai/agents/types'
 import { tryReserveTreeSpawn, agentGateLimits } from '@/lib/ai/concurrency-gate'
 import { getAgent } from '@/lib/ai/agents/registry'
+import { getEffectiveAgentSettings } from '@/lib/config'
 import { createAgentThread, getAgentThread, getAgentThreadMessages, type AgentThread } from '@/lib/db'
 import { parseBrowserSessionMode, type BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import type { Attachment } from '@/lib/types'
@@ -13,6 +14,15 @@ import { classifyUploadMime, MAX_UPLOAD_FILES, resolveExistingUploadPath, upload
 // Lazy import for runner: it pulls in tools/registry, and we sit inside that
 // graph too. Eager top-level import causes a circular evaluation deadlock —
 // import on first delegation call instead.
+
+const CLI_CODER_PROVIDERS = new Set(['claude-code', 'codex'])
+const CLI_CODER_SKILL_RUNTIME_GUIDANCE = [
+    '<orchestrator_cli_coder_runtime>',
+    'You are running as Orchestrator\'s plain CLI coder. Orchestrator workflow skills are not installed as provider-native skill files in this runtime.',
+    'Do not try to read CODEX_HOME/.codex/skills, ~/.codex/skills, ~/.claude/skills, or /app/.orchestrator/.../.codex/skills paths.',
+    'If the current checkout explicitly contains a relevant file such as skills/<skill-id>/SKILL.md, you may inspect that repository file. Otherwise, treat the skill name as parent-provided context; if full skill instructions are required, return an agent_need asking the parent to activate/read the skill and pass the relevant guidance.',
+    '</orchestrator_cli_coder_runtime>',
+].join('\n')
 
 export const delegateToTool: ToolDef = {
     id: 'delegate_to',
@@ -472,13 +482,32 @@ function planDelegation(args: Record<string, unknown>, ctx?: ToolExecutionContex
 function materializeDelegation(plan: Extract<DelegationPlan, { ok: true }>): PreparedDelegation {
     return {
         target: plan.target,
-        prompt: appendForwardedContext(plan.prompt, plan.forwardedContext),
+        prompt: appendForwardedContext(
+            applyCliCoderSkillRuntimeGuidance(plan.target, plan.prompt),
+            plan.forwardedContext,
+        ),
         assignedName: plan.assignedName,
         cwd: plan.cwd,
         attachments: plan.attachments,
         browserSessionMode: plan.browserSessionMode,
         thread: plan.thread ?? createAgentThread(plan.newThread),
     }
+}
+
+function applyCliCoderSkillRuntimeGuidance(
+    target: NonNullable<ReturnType<typeof getAgent>>,
+    prompt: string,
+): string {
+    if (target.id !== 'coder') return prompt
+    if (prompt.includes('<orchestrator_cli_coder_runtime>')) return prompt
+
+    const effective = getEffectiveAgentSettings(target.id)
+    const provider = effective.fromOverride
+        ? effective.provider
+        : target.provider ?? effective.provider
+    if (!CLI_CODER_PROVIDERS.has(provider)) return prompt
+
+    return [CLI_CODER_SKILL_RUNTIME_GUIDANCE, prompt].join('\n\n')
 }
 
 /**

@@ -275,7 +275,10 @@ function AppCard({ app, onDelete }: { app: AppListItem; onDelete: () => void }) 
             ) : (
                 <Link
                     href={`/artifact/${app.artifactId}?from=library`}
+                    target="_blank"
+                    rel="noopener noreferrer"
                     className="flex w-full items-center gap-3 rounded-xl border border-border/70 bg-muted/25 px-3.5 py-3 text-left text-sm transition-colors hover:border-border hover:bg-muted/45"
+                    title="Open app in new tab"
                 >
                     {inner}
                 </Link>
