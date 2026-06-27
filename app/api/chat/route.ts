@@ -20,6 +20,7 @@ import type {
   Conversation,
   MemoryRecallReasoningEntry,
   Message,
+  ToolCallReasoningEntry,
 } from "@/lib/types"
 import type {
   AgentRunEvent,
@@ -103,9 +104,11 @@ import {
 } from "@/lib/memory/recall"
 import {
   MAX_MODEL_RETRIES_BEFORE_FALLBACK,
+  buildModelRetryRecoveryContext,
   requestMessagesFromBody,
   shouldTryModelFallback,
   type ChatRequestBody,
+  type ModelRetryRecoveryAttempt,
 } from "./route-request"
 import { createArtifactStreamBridge } from "./artifact-stream"
 import { repairArtifactContent } from "@/lib/artifacts/repair"
@@ -527,6 +530,29 @@ export async function POST(request: Request) {
       let streamMode: "reasoning" | "content" = "reasoning"
       let lastProgressPersistAt = 0
       let accAttachments: Attachment[] = []
+      const modelRetryRecoveryAttempts: ModelRetryRecoveryAttempt[] = []
+
+      const collectAttemptRecoveryToolCalls = (
+        startIndex: number
+      ): ModelRetryRecoveryAttempt["toolCalls"] =>
+        accReasoning
+          .slice(startIndex)
+          .filter(
+            (entry): entry is ToolCallReasoningEntry =>
+              entry.type === "tool_call"
+          )
+          .map((entry) => ({
+            toolName: entry.toolName,
+            title: entry.title,
+            args: entry.args,
+            content: entry.content,
+            success: entry.success,
+            status: entry.status,
+            deltas: entry.deltas?.map((delta) => ({
+              stream: delta.stream,
+              text: delta.text,
+            })),
+          }))
 
       // Merge attachments the provider reported with any upload assets the agent
       // embedded inline as markdown (e.g. a browser sub-agent screenshot the
@@ -1001,6 +1027,7 @@ export async function POST(request: Request) {
               let attemptStreamError: string | null = null
               let attemptHadToolCall = false
               const attemptContentStart = accContent.length
+              const attemptReasoningStart = accReasoning.length
               const requestStartedAt = Date.now()
               logRequestStart({
                 requestId: messageId,
@@ -1057,6 +1084,8 @@ export async function POST(request: Request) {
 
                 const recall = await getRecall()
                 const recalledMemoryContext = recall.block
+                const modelRetryRecoveryContext =
+                  buildModelRetryRecoveryContext(modelRetryRecoveryAttempts)
                 // Surface the recall as a structured, collapsible card in the
                 // assistant's thinking stream once per turn (auditable: which notes
                 // and scores were used). Mirrors the context_compaction
@@ -1113,6 +1142,10 @@ export async function POST(request: Request) {
                       : ""
                   const recalledMemory =
                     m.id === latestUserMessage?.id ? recalledMemoryContext : ""
+                  const modelRetryRecovery =
+                    m.id === latestUserMessage?.id
+                      ? modelRetryRecoveryContext
+                      : ""
                   const result: {
                     role: string
                     content: string
@@ -1123,14 +1156,17 @@ export async function POST(request: Request) {
                       appendPromptContext(
                         appendPromptContext(
                           appendPromptContext(
-                            messageContent,
-                            localAttachmentContext
+                            appendPromptContext(
+                              messageContent,
+                              localAttachmentContext
+                            ),
+                            audioContext
                           ),
-                          audioContext
+                          runtimePromptContext
                         ),
-                        runtimePromptContext
+                        recalledMemory
                       ),
-                      recalledMemory
+                      modelRetryRecovery
                     ),
                   }
 
@@ -1781,6 +1817,19 @@ export async function POST(request: Request) {
                   canAttemptRecovery &&
                   retryIndex < MAX_MODEL_RETRIES_BEFORE_FALLBACK
                 ) {
+                  if (attemptHadToolCall) {
+                    const toolCalls =
+                      collectAttemptRecoveryToolCalls(attemptReasoningStart)
+                    if (toolCalls.length > 0) {
+                      modelRetryRecoveryAttempts.push({
+                        provider: prepared.settings.provider,
+                        model: prepared.settings.model,
+                        retry: retryIndex,
+                        error: attemptStreamError,
+                        toolCalls,
+                      })
+                    }
+                  }
                   const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before final output; retrying same model (${retryIndex + 1}/${MAX_MODEL_RETRIES_BEFORE_FALLBACK}).\n`
                   accThinking += note
                   appendThinkingChunk(note)
@@ -1791,6 +1840,19 @@ export async function POST(request: Request) {
                 const canTryFallback =
                   canAttemptRecovery && attemptIndex < modelAttempts.length - 1
                 if (canTryFallback) {
+                  if (attemptHadToolCall) {
+                    const toolCalls =
+                      collectAttemptRecoveryToolCalls(attemptReasoningStart)
+                    if (toolCalls.length > 0) {
+                      modelRetryRecoveryAttempts.push({
+                        provider: prepared.settings.provider,
+                        model: prepared.settings.model,
+                        retry: retryIndex,
+                        error: attemptStreamError,
+                        toolCalls,
+                      })
+                    }
+                  }
                   const note = `Model ${prepared.settings.provider}:${prepared.settings.model} failed before final output; trying fallback.\n`
                   accThinking += note
                   appendThinkingChunk(note)

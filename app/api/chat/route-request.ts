@@ -1,7 +1,9 @@
 import type { Message } from "@/lib/types"
 export {
+  buildModelRetryRecoveryContext,
   MAX_MODEL_RETRIES_BEFORE_FALLBACK,
   shouldTryModelFallback,
+  type ModelRetryRecoveryAttempt,
 } from "@/lib/ai/model-fallback"
 
 export type ChatRequestBody = {

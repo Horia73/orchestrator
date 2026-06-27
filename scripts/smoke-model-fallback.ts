@@ -1,6 +1,9 @@
 import {
+  buildModelRetryRecoveryContext,
   MAX_MODEL_RETRIES_BEFORE_FALLBACK,
+  MAX_MODEL_RETRY_RECOVERY_TOOL_RESULTS,
   shouldTryModelFallback,
+  type ModelRetryRecoveryAttempt,
 } from "@/lib/ai/model-fallback"
 
 let failures = 0
@@ -51,6 +54,61 @@ check(
 check(
   "aborted turns never retry",
   !shouldTryModelFallback("Aborted", { afterToolCall: true })
+)
+
+check(
+  "recovery context is empty without failed tool attempts",
+  buildModelRetryRecoveryContext([]) === ""
+)
+
+const recoveryAttempt: ModelRetryRecoveryAttempt = {
+  provider: "openrouter",
+  model: "example/model",
+  retry: 0,
+  error: "OpenRouter API error 503: temporarily unavailable",
+  toolCalls: [
+    {
+      toolName: "read_file",
+      title: "Read lib/example.ts",
+      args: { path: "lib/example.ts" },
+      content: '{"ok":true,"value":"kept for retry"}',
+      success: true,
+      status: "ok",
+    },
+  ],
+}
+const recoveryContext = buildModelRetryRecoveryContext([recoveryAttempt])
+check(
+  "recovery context preserves prior tool results",
+  recoveryContext.includes("kept for retry") &&
+    recoveryContext.includes("Do not repeat successful tool calls") &&
+    recoveryContext.includes("<model_retry_recovery_context>")
+)
+
+const manyToolAttempts: ModelRetryRecoveryAttempt[] = [
+  {
+    ...recoveryAttempt,
+    toolCalls: Array.from(
+      { length: MAX_MODEL_RETRY_RECOVERY_TOOL_RESULTS + 2 },
+      (_, index) => ({
+        toolName: "read_file",
+        title: `Read file ${index}`,
+        args: { path: `file-${index}.ts` },
+        content: `result-${index}`,
+        success: true,
+        status: "ok" as const,
+      })
+    ),
+  },
+]
+const boundedContext = buildModelRetryRecoveryContext(manyToolAttempts)
+check(
+  "recovery context is bounded to recent tool results",
+  boundedContext.includes("Older tool calls omitted") &&
+    !boundedContext.includes("result-0") &&
+    boundedContext.includes(
+      `result-${MAX_MODEL_RETRY_RECOVERY_TOOL_RESULTS + 1}`
+    )
 )
 
 if (failures > 0) {
