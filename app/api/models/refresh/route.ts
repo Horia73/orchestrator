@@ -8,7 +8,7 @@ import {
     patchCuratedModel,
 } from '@/lib/models/registry'
 import { readLiveRegistry, writeLiveRegistry } from '@/lib/models/store'
-import { fetchGoogleModels } from '@/lib/models/fetcher'
+import { fetchGoogleModels, fetchOpenRouterModels } from '@/lib/models/fetcher'
 import { probeClaudeAliasVersions, type ClaudeAlias } from '@/lib/cli/model-probe'
 import { runWithAdminCookieProfile } from "@/lib/profiles/server"
 
@@ -89,6 +89,23 @@ export async function POST() {
                 results.google = { fetched: Object.keys(entry.models).length }
             } catch (err) {
                 results.google = {
+                    fetched: 0,
+                    error: err instanceof Error ? err.message : 'Unknown error',
+                }
+            }
+        }
+
+        // ---------- OpenRouter ----------
+        const openRouterKey = getApiKey('openrouter')
+        if (!openRouterKey) {
+            results.openrouter = { fetched: 0, skipped: 'no_api_key' }
+        } else {
+            try {
+                const entry = await fetchOpenRouterModels(openRouterKey)
+                live.providers.openrouter = entry
+                results.openrouter = { fetched: Object.keys(entry.models).length }
+            } catch (err) {
+                results.openrouter = {
                     fetched: 0,
                     error: err instanceof Error ? err.message : 'Unknown error',
                 }

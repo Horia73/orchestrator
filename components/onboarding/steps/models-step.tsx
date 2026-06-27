@@ -8,7 +8,7 @@ import { appApiPath } from "@/lib/app-path"
 import { Input } from "@/components/ui/input"
 import { Button } from "@/components/ui/button"
 import { SettingsProvider, useSettings } from "@/components/settings/use-settings"
-import { ModelPicker } from "@/components/settings/model-picker"
+import { ModelPicker, type ModelPickerOption } from "@/components/settings/model-picker"
 import { CliAccountsSection } from "@/components/settings/cli-accounts"
 import { OnboardingFooter, OnboardingStepShell } from "@/components/onboarding/onboarding-chrome"
 import { useOnboarding } from "@/components/onboarding/onboarding-context"
@@ -205,7 +205,11 @@ function ModelsStepInner() {
           {/* Main assistant model — the one forced choice. */}
           <section className={cn("space-y-2", !hasUsableProvider && "pointer-events-none opacity-50")}>
             <label className="text-sm font-semibold text-foreground">Main assistant model</label>
-            <ModelPicker value={selected} onChange={({ providerId, modelId }) => setSelected(`${providerId}:${modelId}`)} />
+            <ModelPicker
+              value={selected}
+              onChange={({ providerId, modelId }) => setSelected(`${providerId}:${modelId}`)}
+              filterModel={isToolCapableTextModel}
+            />
             {!hasUsableProvider ? (
               <p className="text-xs text-amber-600 dark:text-amber-400">
                 Sign in to a provider or add an API key above to choose a model.
@@ -255,6 +259,7 @@ function AgentRow({ agentId, name }: { agentId: string; name: string }) {
           value={current}
           noneLabel="Use default"
           onNone={() => void 0}
+          filterModel={isToolCapableTextModel}
           onChange={({ providerId, modelId }) =>
             void setAgentOverride(agentId, { provider: providerId, model: modelId })
           }
@@ -268,6 +273,13 @@ function splitKey(key: string): [string, string] {
   const idx = key.indexOf(":")
   if (idx < 0) return [key, ""]
   return [key.slice(0, idx), key.slice(idx + 1)]
+}
+
+function isToolCapableTextModel(option: ModelPickerOption): boolean {
+  const text = option.model.kinds.includes("text") || option.model.capabilities.includes("text")
+  if (!text) return false
+  if (option.providerId !== "openrouter") return true
+  return option.model.capabilities.includes("function_calling")
 }
 
 /** Read an agent's persisted override as a "provider:model" key, if any. */

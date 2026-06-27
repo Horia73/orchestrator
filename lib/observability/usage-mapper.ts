@@ -46,12 +46,38 @@ export function normalizeUsage(provider: string, raw: unknown): NormalizedUsage 
             return mapAnthropic(raw as Record<string, unknown>)
         case 'openai':
             return mapOpenAI(raw as Record<string, unknown>)
+        case 'openrouter':
+            return mapOpenRouter(raw as Record<string, unknown>)
         case 'codex':
             return mapCodex(raw as Record<string, unknown>)
         case 'browser':
             return mapBrowser(raw as Record<string, unknown>)
         default:
             return mapGeneric(raw as Record<string, unknown>)
+    }
+}
+
+interface OpenRouterUsage {
+    prompt_tokens?: number
+    completion_tokens?: number
+    total_tokens?: number
+    input_tokens?: number
+    output_tokens?: number
+    prompt_tokens_details?: { cached_tokens?: number }
+    completion_tokens_details?: { reasoning_tokens?: number }
+}
+
+function mapOpenRouter(raw: Record<string, unknown>): NormalizedUsage {
+    const u = raw as OpenRouterUsage
+    return {
+        inputTokens: numOrNull(u.input_tokens ?? u.prompt_tokens),
+        outputTokens: numOrNull(u.output_tokens ?? u.completion_tokens),
+        thinkingTokens: numOrNull(u.completion_tokens_details?.reasoning_tokens),
+        cachedTokens: numOrNull(u.prompt_tokens_details?.cached_tokens),
+        toolUseTokens: null,
+        totalTokens: numOrNull(u.total_tokens),
+        modalityBreakdown: null,
+        billingBreakdown: null,
     }
 }
 

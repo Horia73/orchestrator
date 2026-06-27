@@ -217,8 +217,12 @@ export const LiveModelEntrySchema = z.object({
     contextWindow: z.number().int().positive().optional(),
     maxOutputTokens: z.number().int().positive().optional(),
     knowledgeCutoff: z.string().min(1).optional(),
+    pricing: PricingFieldSchema.optional(),
+    pricingNotes: z.string().optional(),
     /** True if the model exposes any thinking / extended-reasoning mode */
     thinkingSupported: z.boolean().optional(),
+    thinkingLevels: z.array(ThinkingLevelSchema).optional(),
+    defaultThinkingLevel: ThinkingLevelSchema.optional(),
     capabilities: z.array(CapabilitySchema).optional(),
     features: z.array(ModelFeatureSchema).optional(),
     /** Raw description from the API — useful as context for the research agent */

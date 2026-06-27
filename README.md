@@ -48,7 +48,7 @@ by hand to get started.
 ## Features
 
 ### Chat & agents
-- **Multi-provider chat** across Claude, OpenAI, and Gemini, with per-agent model, thinking level, and automatic fallbacks.
+- **Multi-provider chat** across Claude, OpenAI, Gemini, and OpenRouter, with per-agent model, thinking level, and automatic fallbacks.
 - **One orchestrator** that does the work itself and delegates the rest to specialist sub-agents, shown live as agent cards.
 - **CLI-backed coding agents** (Claude Code, Codex) — no API key needed once you're logged in.
 - **A vision browser agent** that drives real, logged-in web sessions, with an optional live view you can take control of.
@@ -131,7 +131,7 @@ cp .env.example .env
 ```
 
 `.env.example` documents every supported variable, including provider keys
-(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`), the watchlist
+(`ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, `OPENROUTER_API_KEY`), the watchlist
 (`TWELVE_DATA_API_KEY`), Smart Maps (`GOOGLE_MAPS_API_KEY`), Google OAuth, and
 Home Assistant.
 

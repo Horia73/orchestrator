@@ -1,3 +1,5 @@
+import type { ArtifactDisplay } from './schema'
+
 const COMPLETE_ARTIFACT_BLOCK_RE = /<artifact\b([^>]*)>[\s\S]*?<\/artifact>/gi
 const TRAILING_ARTIFACT_BLOCK_RE = /<artifact\b[^>]*>[\s\S]*$/i
 
@@ -26,6 +28,34 @@ function artifactBlockIdentityKey(info: ArtifactBlockInfo): string {
     if (type || title) return `artifact:${type}:${title}`
 
     return `block:${info.block}`
+}
+
+interface ArtifactBlockSource {
+    identifier: string
+    type: string
+    title: string
+    display?: ArtifactDisplay | null
+    language?: string | null
+    content: string
+}
+
+function escapeAttr(value: string): string {
+    return value
+        .replace(/&/g, '&amp;')
+        .replace(/"/g, '&quot;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+}
+
+export function buildArtifactBlockFromRow(row: ArtifactBlockSource): string {
+    const attrs = [
+        `identifier="${escapeAttr(row.identifier)}"`,
+        `type="${escapeAttr(row.type)}"`,
+        `title="${escapeAttr(row.title)}"`,
+    ]
+    if (row.display) attrs.push(`display="${escapeAttr(row.display)}"`)
+    if (row.language) attrs.push(`language="${escapeAttr(row.language)}"`)
+    return `<artifact ${attrs.join(' ')}>\n${row.content}\n</artifact>`
 }
 
 export function extractArtifactBlocks(content: string): string[] {
@@ -74,8 +104,14 @@ export function stripArtifactBlocksForPreview(content: string): string {
 }
 
 export function appendMissingArtifactBlocks(target: string, source: string): string {
+    const missing = missingArtifactBlocks(target, source)
+    if (missing.length === 0) return target
+    return [target.trim(), ...missing].filter(Boolean).join('\n\n')
+}
+
+export function missingArtifactBlocks(target: string, source: string): string[] {
     const sourceInfos = extractArtifactBlockInfos(source)
-    if (sourceInfos.length === 0) return target
+    if (sourceInfos.length === 0) return []
 
     const targetBlocks = new Set(extractArtifactBlocks(target))
     const targetKeys = new Set(extractArtifactBlockInfos(target).map(artifactBlockIdentityKey))
@@ -87,8 +123,7 @@ export function appendMissingArtifactBlocks(target: string, source: string): str
         targetKeys.add(key)
         missing.push(info.block)
     }
-    if (missing.length === 0) return target
-    return [target.trim(), ...missing].filter(Boolean).join('\n\n')
+    return missing
 }
 
 export function dedupeArtifactNotifications<T extends { title?: string; body: string }>(

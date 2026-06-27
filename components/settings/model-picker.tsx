@@ -1,9 +1,24 @@
 "use client"
 
 import * as React from "react"
-import { Archive, ArchiveRestore, Check, ChevronDown, ChevronUp, Loader2, RefreshCcw, Star, X } from "lucide-react"
+import { defaultFilter } from "cmdk"
+import {
+  Archive,
+  ArchiveRestore,
+  Check,
+  ChevronDown,
+  ChevronUp,
+  Loader2,
+  RefreshCcw,
+  Star,
+  X,
+} from "lucide-react"
 
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover"
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover"
 import {
   Command,
   CommandEmpty,
@@ -15,7 +30,11 @@ import {
 } from "@/components/ui/command"
 import { cn } from "@/lib/utils"
 import type { ProviderDef, ModelDef, ModelPricing } from "@/lib/config"
-import { useSettings, type ProviderStatus, type SettingsBootstrap } from "./use-settings"
+import {
+  useSettings,
+  type ProviderStatus,
+  type SettingsBootstrap,
+} from "./use-settings"
 
 export interface ModelPickerProps {
   /** Current value as "providerId:modelId"; null renders the optional None row. */
@@ -35,8 +54,11 @@ export interface ModelPickerProps {
 // The browser provider isn't a real model source — it's an external script
 // wrapper. Hide its entries from every picker (the browser agent's card
 // hides the picker entirely so its "default" entry never needs to show up).
-const HIDDEN_PROVIDERS = new Set(['browser'])
-const CLI_PROVIDER_IDS = new Set(['claude-code', 'codex'])
+const HIDDEN_PROVIDERS = new Set(["browser"])
+const CLI_PROVIDER_IDS = new Set(["claude-code", "codex"])
+const NORMAL_MODEL_BATCH_SIZE = 120
+const SEARCH_MODEL_BATCH_SIZE = 80
+const ARCHIVED_MODEL_BATCH_SIZE = 80
 
 export interface ModelPickerOption {
   key: string
@@ -48,11 +70,30 @@ export interface ModelPickerOption {
 
 type FlatModel = ModelPickerOption
 
-export function ModelPicker({ value, onChange, noneLabel, onNone, className, disabled, filterModel }: ModelPickerProps) {
-  const { data, setFavorites, setArchived, refreshModels, refreshing } = useSettings()
+export function ModelPicker({
+  value,
+  onChange,
+  noneLabel,
+  onNone,
+  className,
+  disabled,
+  filterModel,
+}: ModelPickerProps) {
+  const { data, setFavorites, setArchived, refreshModels, refreshing } =
+    useSettings()
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState("")
   const [showArchived, setShowArchived] = React.useState(false)
+  const [normalModelLimit, setNormalModelLimit] = React.useState(
+    NORMAL_MODEL_BATCH_SIZE
+  )
+  const [searchModelLimit, setSearchModelLimit] = React.useState(
+    SEARCH_MODEL_BATCH_SIZE
+  )
+  const [archivedModelLimit, setArchivedModelLimit] = React.useState(
+    ARCHIVED_MODEL_BATCH_SIZE
+  )
+  const popoverContentRef = React.useRef<HTMLDivElement | null>(null)
   // Controlled cmdk highlight — reset on popover mouse leave so items don't
   // stay visually "stuck" when the cursor moves outside the dropdown.
   const [highlight, setHighlight] = React.useState("")
@@ -64,6 +105,23 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
     if (!open) setHighlight("")
   }, [open])
 
+  React.useEffect(() => {
+    if (!open) return
+    setNormalModelLimit(NORMAL_MODEL_BATCH_SIZE)
+    setSearchModelLimit(SEARCH_MODEL_BATCH_SIZE)
+    setArchivedModelLimit(ARCHIVED_MODEL_BATCH_SIZE)
+  }, [open])
+
+  const handleQueryChange = React.useCallback((next: string) => {
+    setQuery(next)
+    setSearchModelLimit(SEARCH_MODEL_BATCH_SIZE)
+    window.requestAnimationFrame(() => {
+      popoverContentRef.current
+        ?.querySelector<HTMLElement>("[cmdk-list]")
+        ?.scrollTo({ top: 0 })
+    })
+  }, [])
+
   if (!data) return null
 
   // All models from providers that should be visible in Settings. API-backed
@@ -71,38 +129,58 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
   // providers remain visible while logged out so existing selections don't
   // collapse to "No model loaded"; the row/group badges carry the auth state.
   const allModels = flattenModels(data.providers)
-    .filter(m => !HIDDEN_PROVIDERS.has(m.providerId))
-    .filter(m => isProviderVisibleInPicker(m.providerId, data))
-    .filter(m => !filterModel || filterModel(m))
+    .filter((m) => !HIDDEN_PROVIDERS.has(m.providerId))
+    .filter((m) => isProviderVisibleInPicker(m.providerId, data))
+    .filter((m) => !filterModel || filterModel(m))
 
-  // Split archived from active. Archived only show when the user expands the
-  // section explicitly so the main list stays uncluttered.
-  const activeModels = allModels.filter(m => !m.model.archived)
-  const archivedModels = allModels.filter(m => m.model.archived)
-  // Auto-expand the archived section while a search query is active so cmdk
-  // can match archived models too — without that, the rows aren't mounted and
-  // the search misses them.
-  const effectiveShowArchived = showArchived || query.trim().length > 0
-  const modelsByKey = new Map(allModels.map(m => [m.key, m]))
-  const activeKeys = new Set(activeModels.map(m => m.key))
+  // Split archived from active. Archived only show in the normal picker when
+  // the user expands that section, but search mode ranks every visible model
+  // together so an archived exact match can beat a weaker favorite match.
+  const activeModels = allModels.filter((m) => !m.model.archived)
+  const archivedModels = allModels.filter((m) => m.model.archived)
+  const isSearching = query.trim().length > 0
+  const modelsByKey = new Map(allModels.map((m) => [m.key, m]))
+  const activeKeys = new Set(activeModels.map((m) => m.key))
 
   const favorites = data.config.favorites
   // Favorites filtered to active + visible-under-kind. Archiving auto-removes
   // a model from favorites server-side, so this filter is just defensive.
   const favoriteModels = favorites
-    .map(k => modelsByKey.get(k))
+    .map((k) => modelsByKey.get(k))
     .filter((m): m is FlatModel => m !== undefined && activeKeys.has(m.key))
 
-  const groupedNonFavorites = groupByProvider(
-    activeModels.filter(m => !favorites.includes(m.key))
+  const nonFavoriteModels = activeModels.filter(
+    (m) => !favorites.includes(m.key)
   )
+  const visibleNonFavoriteModels = nonFavoriteModels.slice(0, normalModelLimit)
+  const groupedNonFavorites = groupByProvider(visibleNonFavoriteModels)
+  const hasMoreNormalModels = normalModelLimit < nonFavoriteModels.length
+  const visibleArchivedModels = showArchived
+    ? archivedModels.slice(0, archivedModelLimit)
+    : []
+  const hasMoreArchivedModels =
+    showArchived && archivedModelLimit < archivedModels.length
+  const rankedSearchModels = isSearching
+    ? rankSearchModels(allModels, query.trim())
+    : []
+  const visibleSearchModels = rankedSearchModels.slice(0, searchModelLimit)
+  const hasMoreSearchModels = searchModelLimit < rankedSearchModels.length
+  const renderedModelCount = isSearching
+    ? visibleSearchModels.length
+    : favoriteModels.length +
+      visibleNonFavoriteModels.length +
+      visibleArchivedModels.length
 
   // The current value lookup tolerates being out-of-kind — useful when an
   // agent references a model whose kind metadata changed.
   const current = value
-    ? modelsByKey.get(value) ?? (allModels.find(m => m.key === value) ?? undefined)
+    ? (modelsByKey.get(value) ??
+      allModels.find((m) => m.key === value) ??
+      undefined)
     : undefined
-  const currentProviderLabel = current ? providerUnavailableLabel(current.providerId, data) : null
+  const currentProviderLabel = current
+    ? providerUnavailableLabel(current.providerId, data)
+    : null
 
   const handleOpenChange = (nextOpen: boolean) => {
     setOpen(nextOpen)
@@ -114,16 +192,24 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
   const handleSelect = (key: string) => {
     const m = modelsByKey.get(key)
     if (!m) return
+    if (m.model.archived) {
+      void setArchived(m.providerId, m.modelId, false).catch(() => {
+        /* useSettings already re-syncs from server on error */
+      })
+    }
     onChange({ providerId: m.providerId, modelId: m.modelId })
     setOpen(false)
     setQuery("")
   }
 
-  const handleToggleFavorite = (key: string, e: React.MouseEvent | React.KeyboardEvent) => {
+  const handleToggleFavorite = (
+    key: string,
+    e: React.MouseEvent | React.KeyboardEvent
+  ) => {
     e.stopPropagation()
     e.preventDefault()
     const next = favorites.includes(key)
-      ? favorites.filter(k => k !== key)
+      ? favorites.filter((k) => k !== key)
       : [...favorites, key]
     void setFavorites(next).catch(() => {
       /* useSettings already re-syncs from server on error */
@@ -138,10 +224,44 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
     void setFavorites(next)
   }
 
-  const handleToggleArchive = (m: FlatModel, e: React.MouseEvent | React.KeyboardEvent) => {
+  const handleToggleArchive = (
+    m: FlatModel,
+    e: React.MouseEvent | React.KeyboardEvent
+  ) => {
     e.stopPropagation()
     e.preventDefault()
-    void setArchived(m.providerId, m.modelId, !m.model.archived).catch(() => { /* re-synced by hook */ })
+    void setArchived(m.providerId, m.modelId, !m.model.archived).catch(() => {
+      /* re-synced by hook */
+    })
+  }
+
+  const handleListScroll = (event: React.UIEvent<HTMLDivElement>) => {
+    const list = event.currentTarget
+    const distanceFromBottom =
+      list.scrollHeight - list.scrollTop - list.clientHeight
+    if (distanceFromBottom > 96) return
+
+    if (isSearching) {
+      if (hasMoreSearchModels) {
+        setSearchModelLimit((limit) =>
+          Math.min(limit + SEARCH_MODEL_BATCH_SIZE, rankedSearchModels.length)
+        )
+      }
+      return
+    }
+
+    if (hasMoreArchivedModels) {
+      setArchivedModelLimit((limit) =>
+        Math.min(limit + ARCHIVED_MODEL_BATCH_SIZE, archivedModels.length)
+      )
+      return
+    }
+
+    if (hasMoreNormalModels) {
+      setNormalModelLimit((limit) =>
+        Math.min(limit + NORMAL_MODEL_BATCH_SIZE, nonFavoriteModels.length)
+      )
+    }
   }
 
   return (
@@ -153,7 +273,7 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
           aria-haspopup="listbox"
           aria-expanded={open}
           className={cn(
-            "group/picker flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 text-left text-[14px] font-medium text-foreground outline-none transition-colors",
+            "group/picker flex h-9 w-full items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 text-left text-[14px] font-medium text-foreground transition-colors outline-none",
             "hover:bg-muted/50",
             "focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50",
             "data-[state=open]:bg-muted/50",
@@ -182,50 +302,56 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
         </button>
       </PopoverTrigger>
       <PopoverContent
+        ref={popoverContentRef}
         align="start"
         sideOffset={6}
         className="w-(--radix-popover-trigger-width) min-w-[320px] p-0"
         onMouseLeave={() => setHighlight("")}
         // Don't yank focus back to the trigger on close — that caused a scroll
         // jump and contributed to the dropdown feeling like it moved on its own.
-        onCloseAutoFocus={e => e.preventDefault()}
+        onCloseAutoFocus={(e) => e.preventDefault()}
       >
         <Command
-          shouldFilter={true}
+          shouldFilter={!isSearching}
           value={highlight}
           onValueChange={setHighlight}
         >
           <div className="px-2 pt-2">
             <div className="px-0.5 pb-1.5">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-foreground/50">
+              <span className="text-[11px] font-semibold tracking-wider text-foreground/50 uppercase">
                 Search models
               </span>
             </div>
             <CommandInput
               placeholder="Search models…"
               value={query}
-              onValueChange={setQuery}
-              endSlot={query ? (
-                <button
-                  type="button"
-                  aria-label="Clear search"
-                  onPointerDown={e => e.stopPropagation()}
-                  onClick={() => setQuery("")}
-                  className="flex size-5 shrink-0 items-center justify-center rounded text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <X className="size-3.5" />
-                </button>
-              ) : null}
+              onValueChange={handleQueryChange}
+              endSlot={
+                query ? (
+                  <button
+                    type="button"
+                    aria-label="Clear search"
+                    onPointerDown={(e) => e.stopPropagation()}
+                    onClick={() => handleQueryChange("")}
+                    className="flex size-5 shrink-0 items-center justify-center rounded text-foreground/45 transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <X className="size-3.5" />
+                  </button>
+                ) : null
+              }
             />
           </div>
-          <CommandList className="[scrollbar-gutter:stable]">
+          <CommandList
+            className="[scrollbar-gutter:stable]"
+            onScroll={handleListScroll}
+          >
             <CommandEmpty>
               {activeModels.length === 0 && archivedModels.length === 0
                 ? "No models shown. Add an API key or unarchive a CLI model."
                 : `No models match “${query}”.`}
             </CommandEmpty>
 
-            {noneLabel && onNone && (
+            {!isSearching && noneLabel && onNone && (
               <>
                 <CommandGroup>
                   <CommandItem
@@ -238,7 +364,8 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
                     data-active={value === null ? true : undefined}
                     className={cn(
                       "items-start gap-2 py-2 pr-2 data-[selected=true]:bg-muted/45",
-                      value === null && "bg-muted/75 ring-1 ring-border/70 data-[selected=true]:bg-muted/75"
+                      value === null &&
+                        "bg-muted/75 ring-1 ring-border/70 data-[selected=true]:bg-muted/75"
                     )}
                   >
                     <span className="mt-1.5 size-2.5 rounded-full border border-foreground/25" />
@@ -254,118 +381,222 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
                     />
                   </CommandItem>
                 </CommandGroup>
-                {(favoriteModels.length > 0 || Object.keys(groupedNonFavorites).length > 0 || archivedModels.length > 0) && <CommandSeparator />}
+                {(favoriteModels.length > 0 ||
+                  Object.keys(groupedNonFavorites).length > 0 ||
+                  archivedModels.length > 0) && <CommandSeparator />}
               </>
             )}
 
-            {favoriteModels.length > 0 && (
-              <>
-                <CommandGroup
-                  heading={
-                    <span className="flex items-center gap-1.5">
-                      <Star className="size-3 fill-amber-400 text-amber-400" />
-                      Favorites
-                    </span>
-                  }
-                >
-                  {favoriteModels.map((m, idx) => (
-                    <ModelRow
-                      key={m.key}
-                      model={m}
-                      providerLabel={providerUnavailableLabel(m.providerId, data)}
-                      isActive={m.key === value}
-                      isFavorite
-                      onSelect={handleSelect}
-                      onToggleFavorite={handleToggleFavorite}
-                      onToggleArchive={handleToggleArchive}
-                      reorderIndex={favoriteModels.length > 1 ? idx : undefined}
-                      reorderTotal={favoriteModels.length}
-                      onMove={handleMoveFavorite}
-                    />
-                  ))}
-                </CommandGroup>
-                {Object.keys(groupedNonFavorites).length > 0 && <CommandSeparator />}
-              </>
-            )}
-
-            {Object.entries(groupedNonFavorites).map(([providerId, models]) => (
-              <CommandGroup key={providerId} heading={<ProviderGroupHeading providerId={providerId} data={data} />}>
-                {models.map(m => (
+            {isSearching ? (
+              <CommandGroup heading="Search results">
+                {visibleSearchModels.map((m) => (
                   <ModelRow
                     key={m.key}
                     model={m}
                     providerLabel={providerUnavailableLabel(m.providerId, data)}
                     isActive={m.key === value}
-                    isFavorite={false}
+                    isFavorite={favorites.includes(m.key)}
                     onSelect={handleSelect}
                     onToggleFavorite={handleToggleFavorite}
                     onToggleArchive={handleToggleArchive}
+                    showProviderName
                   />
                 ))}
+                {hasMoreSearchModels && (
+                  <LoadMoreRow
+                    shown={visibleSearchModels.length}
+                    total={rankedSearchModels.length}
+                    label="Load more matches"
+                    onLoadMore={() =>
+                      setSearchModelLimit((limit) =>
+                        Math.min(
+                          limit + SEARCH_MODEL_BATCH_SIZE,
+                          rankedSearchModels.length
+                        )
+                      )
+                    }
+                  />
+                )}
               </CommandGroup>
-            ))}
-
-            {archivedModels.length > 0 && (
+            ) : (
               <>
-                {(favoriteModels.length > 0 || Object.keys(groupedNonFavorites).length > 0) && <CommandSeparator />}
-                {/*
-                  Plain CommandItem keeps the row inside cmdk's keyboard nav
-                  but `forceMount` lets us toggle the visual collapse state
-                  without losing the option from the search index.
-                */}
-                <CommandGroup
-                  heading={
-                    <button
-                      type="button"
-                      onClick={e => { e.preventDefault(); e.stopPropagation(); setShowArchived(s => !s) }}
-                      onPointerDown={e => e.stopPropagation()}
-                      className="flex w-full items-center gap-1.5 text-left text-foreground/55 transition-colors hover:text-foreground"
+                {favoriteModels.length > 0 && (
+                  <>
+                    <CommandGroup
+                      heading={
+                        <span className="flex items-center gap-1.5">
+                          <Star className="size-3 fill-amber-400 text-amber-400" />
+                          Favorites
+                        </span>
+                      }
                     >
-                      <Archive className="size-3" />
-                      Archived
-                      <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium tabular-nums text-foreground/55">
-                        {archivedModels.length}
-                      </span>
-                      <ChevronDown
-                        className={cn(
-                          "ml-auto size-3 text-foreground/40 transition-transform",
-                          effectiveShowArchived && "rotate-180"
-                        )}
-                      />
-                    </button>
-                  }
-                >
-                  {effectiveShowArchived && archivedModels.map(m => (
-                    <ModelRow
-                      key={m.key}
-                      model={m}
-                      providerLabel={providerUnavailableLabel(m.providerId, data)}
-                      isActive={m.key === value}
-                      isFavorite={false}
-                      onSelect={handleSelect}
-                      onToggleFavorite={handleToggleFavorite}
-                      onToggleArchive={handleToggleArchive}
-                    />
-                  ))}
-                </CommandGroup>
+                      {favoriteModels.map((m, idx) => (
+                        <ModelRow
+                          key={m.key}
+                          model={m}
+                          providerLabel={providerUnavailableLabel(
+                            m.providerId,
+                            data
+                          )}
+                          isActive={m.key === value}
+                          isFavorite
+                          onSelect={handleSelect}
+                          onToggleFavorite={handleToggleFavorite}
+                          onToggleArchive={handleToggleArchive}
+                          reorderIndex={
+                            favoriteModels.length > 1 ? idx : undefined
+                          }
+                          reorderTotal={favoriteModels.length}
+                          onMove={handleMoveFavorite}
+                        />
+                      ))}
+                    </CommandGroup>
+                    {Object.keys(groupedNonFavorites).length > 0 && (
+                      <CommandSeparator />
+                    )}
+                  </>
+                )}
+
+                {Object.entries(groupedNonFavorites).map(
+                  ([providerId, models]) => (
+                    <CommandGroup
+                      key={providerId}
+                      heading={
+                        <ProviderGroupHeading
+                          providerId={providerId}
+                          data={data}
+                        />
+                      }
+                    >
+                      {models.map((m) => (
+                        <ModelRow
+                          key={m.key}
+                          model={m}
+                          providerLabel={providerUnavailableLabel(
+                            m.providerId,
+                            data
+                          )}
+                          isActive={m.key === value}
+                          isFavorite={false}
+                          onSelect={handleSelect}
+                          onToggleFavorite={handleToggleFavorite}
+                          onToggleArchive={handleToggleArchive}
+                        />
+                      ))}
+                    </CommandGroup>
+                  )
+                )}
+
+                {archivedModels.length > 0 && (
+                  <>
+                    {(favoriteModels.length > 0 ||
+                      Object.keys(groupedNonFavorites).length > 0) && (
+                      <CommandSeparator />
+                    )}
+                    {/*
+                      The normal picker keeps archived rows collapsed. Search
+                      mode renders a separate unified list so archived matches
+                      can rank alongside active favorites.
+                    */}
+                    <CommandGroup
+                      heading={
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.preventDefault()
+                            e.stopPropagation()
+                            setShowArchived((s) => !s)
+                          }}
+                          onPointerDown={(e) => e.stopPropagation()}
+                          className="flex w-full items-center gap-1.5 text-left text-foreground/55 transition-colors hover:text-foreground"
+                        >
+                          <Archive className="size-3" />
+                          Archived
+                          <span className="ml-1 rounded-full bg-muted px-1.5 py-0.5 text-[10px] font-medium text-foreground/55 tabular-nums">
+                            {archivedModels.length}
+                          </span>
+                          <ChevronDown
+                            className={cn(
+                              "ml-auto size-3 text-foreground/40 transition-transform",
+                              showArchived && "rotate-180"
+                            )}
+                          />
+                        </button>
+                      }
+                    >
+                      {showArchived &&
+                        visibleArchivedModels.map((m) => (
+                          <ModelRow
+                            key={m.key}
+                            model={m}
+                            providerLabel={providerUnavailableLabel(
+                              m.providerId,
+                              data
+                            )}
+                            isActive={m.key === value}
+                            isFavorite={false}
+                            onSelect={handleSelect}
+                            onToggleFavorite={handleToggleFavorite}
+                            onToggleArchive={handleToggleArchive}
+                          />
+                        ))}
+                      {hasMoreArchivedModels && (
+                        <LoadMoreRow
+                          shown={visibleArchivedModels.length}
+                          total={archivedModels.length}
+                          label="Load more archived"
+                          onLoadMore={() =>
+                            setArchivedModelLimit((limit) =>
+                              Math.min(
+                                limit + ARCHIVED_MODEL_BATCH_SIZE,
+                                archivedModels.length
+                              )
+                            )
+                          }
+                        />
+                      )}
+                    </CommandGroup>
+                  </>
+                )}
+                {hasMoreNormalModels && (
+                  <LoadMoreRow
+                    shown={visibleNonFavoriteModels.length}
+                    total={nonFavoriteModels.length}
+                    label="Load more models"
+                    onLoadMore={() =>
+                      setNormalModelLimit((limit) =>
+                        Math.min(
+                          limit + NORMAL_MODEL_BATCH_SIZE,
+                          nonFavoriteModels.length
+                        )
+                      )
+                    }
+                  />
+                )}
               </>
             )}
           </CommandList>
 
           <div className="flex items-center justify-between gap-2 border-t border-border/60 px-3 py-1.5 text-[11px] text-foreground/45">
             <span>
-              {activeModels.length} models · {favoriteModels.length} favorited
-              {archivedModels.length > 0 && ` · ${archivedModels.length} archived`}
+              {isSearching
+                ? `${renderedModelCount}/${rankedSearchModels.length} matches`
+                : `${activeModels.length} models · ${favoriteModels.length} favorited`}
+              {!isSearching &&
+                archivedModels.length > 0 &&
+                ` · ${archivedModels.length} archived`}
             </span>
             <button
               type="button"
               disabled={refreshing}
-              onClick={e => {
+              onClick={(e) => {
                 e.preventDefault()
                 e.stopPropagation()
-                void refreshModels().catch(() => { /* hook re-syncs */ })
+                void refreshModels().catch(() => {
+                  /* hook re-syncs */
+                })
               }}
-              onPointerDown={e => e.stopPropagation()}
+              onPointerDown={(e) => e.stopPropagation()}
               title="Refresh model list from provider APIs"
               className={cn(
                 "inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-foreground/55 transition-colors",
@@ -373,7 +604,11 @@ export function ModelPicker({ value, onChange, noneLabel, onNone, className, dis
                 refreshing && "opacity-60"
               )}
             >
-              {refreshing ? <Loader2 className="size-3 animate-spin" /> : <RefreshCcw className="size-3" />}
+              {refreshing ? (
+                <Loader2 className="size-3 animate-spin" />
+              ) : (
+                <RefreshCcw className="size-3" />
+              )}
               {refreshing ? "Refreshing…" : "Refresh"}
             </button>
           </div>
@@ -390,11 +625,19 @@ type ProviderUnavailableLabel = {
   long: string
 }
 
-function ProviderGroupHeading({ providerId, data }: { providerId: string; data: SettingsBootstrap }) {
+function ProviderGroupHeading({
+  providerId,
+  data,
+}: {
+  providerId: string
+  data: SettingsBootstrap
+}) {
   const label = providerUnavailableLabel(providerId, data)
   return (
     <span className="flex min-w-0 flex-1 items-center gap-1.5">
-      <span className="truncate">{data.providers[providerId]?.name ?? providerId}</span>
+      <span className="truncate">
+        {data.providers[providerId]?.name ?? providerId}
+      </span>
       {label && (
         <span
           className="shrink-0 rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 normal-case dark:text-amber-400"
@@ -418,27 +661,40 @@ function ModelRow({
   reorderIndex,
   reorderTotal,
   onMove,
+  showProviderName = false,
 }: {
   model: FlatModel
   providerLabel: ProviderUnavailableLabel | null
   isActive: boolean
   isFavorite: boolean
   onSelect: (key: string) => void
-  onToggleFavorite: (key: string, e: React.MouseEvent | React.KeyboardEvent) => void
-  onToggleArchive: (m: FlatModel, e: React.MouseEvent | React.KeyboardEvent) => void
+  onToggleFavorite: (
+    key: string,
+    e: React.MouseEvent | React.KeyboardEvent
+  ) => void
+  onToggleArchive: (
+    m: FlatModel,
+    e: React.MouseEvent | React.KeyboardEvent
+  ) => void
   /** When defined, this row is in the Favorites group and shows up/down controls. */
   reorderIndex?: number
   reorderTotal?: number
   onMove?: (index: number, direction: -1 | 1) => void
+  showProviderName?: boolean
 }) {
   // Keep cmdk's selected value unique while still matching display names and ids.
   // Searches like "flash-lite", "google", "2.5", or "gemini" all hit.
-  const cmdkKeywords = [model.providerName, model.model.name, model.providerId, model.modelId]
+  const cmdkKeywords = modelSearchKeywords(model)
 
-  const showReorder = reorderIndex !== undefined && reorderTotal !== undefined && onMove !== undefined
+  const showReorder =
+    reorderIndex !== undefined &&
+    reorderTotal !== undefined &&
+    onMove !== undefined
   const canMoveUp = showReorder && reorderIndex! > 0
   const canMoveDown = showReorder && reorderIndex! < reorderTotal! - 1
-  const isPreview = Boolean(model.model.notes && model.model.notes.includes("Preview"))
+  const isPreview = Boolean(
+    model.model.notes && model.model.notes.includes("Preview")
+  )
   const isIncomplete = model.model.dataCompleteness === "incomplete"
 
   return (
@@ -449,18 +705,30 @@ function ModelRow({
       data-active={isActive || undefined}
       className={cn(
         "items-start gap-2 py-2 pr-2 data-[selected=true]:bg-muted/45",
-        isActive && "bg-muted/75 ring-1 ring-border/70 data-[selected=true]:bg-muted/75"
+        isActive &&
+          "bg-muted/75 ring-1 ring-border/70 data-[selected=true]:bg-muted/75"
       )}
     >
       <ProviderDot providerId={model.providerId} className="mt-1.5" />
 
       <div className="min-w-0 flex-1">
         {/* Row 1: model name, full-width, only truncates if it overflows */}
-        <div className="truncate text-[13px] font-medium text-foreground" title={model.model.name}>
+        <div
+          className="truncate text-[13px] font-medium text-foreground"
+          title={model.model.name}
+        >
           {model.model.name}
         </div>
         {/* Row 2: badges + ctx + price, wrapping before they overflow. */}
-        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11.5px] tabular-nums text-foreground/50">
+        <div className="mt-0.5 flex flex-wrap items-center gap-1.5 text-[11.5px] text-foreground/50 tabular-nums">
+          {showProviderName && (
+            <span
+              className="rounded-full bg-background px-1.5 py-0 text-[10px] font-medium text-foreground/65 ring-1 ring-border/70"
+              title={model.providerId}
+            >
+              {model.providerName}
+            </span>
+          )}
           {isPreview && (
             <span className="rounded-full bg-amber-500/10 px-1.5 py-0 text-[10px] font-medium text-amber-700 dark:text-amber-400">
               preview
@@ -472,6 +740,14 @@ function ModelRow({
               title="Pricing, thinking levels, or context size unknown"
             >
               no data
+            </span>
+          )}
+          {model.model.archived && (
+            <span
+              className="rounded-full bg-muted px-1.5 py-0 text-[10px] font-medium text-foreground/55 ring-1 ring-border/60"
+              title="Selecting this model unarchives it"
+            >
+              archived
             </span>
           )}
           {providerLabel && (
@@ -498,11 +774,11 @@ function ModelRow({
 
       {/* Up/down arrows for favorites — stacked vertically, same total height as star */}
       {showReorder && (
-        <div className="flex shrink-0 flex-col -my-0.5">
+        <div className="-my-0.5 flex shrink-0 flex-col">
           <ReorderButton
             disabled={!canMoveUp}
             label="Move up"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation()
               e.preventDefault()
               if (canMoveUp) onMove!(reorderIndex!, -1)
@@ -513,7 +789,7 @@ function ModelRow({
           <ReorderButton
             disabled={!canMoveDown}
             label="Move down"
-            onClick={e => {
+            onClick={(e) => {
               e.stopPropagation()
               e.preventDefault()
               if (canMoveDown) onMove!(reorderIndex!, 1)
@@ -532,14 +808,14 @@ function ModelRow({
       {!model.model.archived && (
         <button
           type="button"
-          onClick={e => onToggleFavorite(model.key, e)}
-          onKeyDown={e => {
+          onClick={(e) => onToggleFavorite(model.key, e)}
+          onKeyDown={(e) => {
             if (e.key === "Enter" || e.key === " ") {
               onToggleFavorite(model.key, e)
             }
           }}
           // Prevent cmdk from selecting the item when this button is clicked
-          onPointerDown={e => e.stopPropagation()}
+          onPointerDown={(e) => e.stopPropagation()}
           aria-label={isFavorite ? "Remove from favorites" : "Add to favorites"}
           className={cn(
             "flex size-7 shrink-0 items-center justify-center rounded-md text-foreground/30 transition-colors",
@@ -553,11 +829,11 @@ function ModelRow({
 
       <button
         type="button"
-        onClick={e => onToggleArchive(model, e)}
-        onKeyDown={e => {
+        onClick={(e) => onToggleArchive(model, e)}
+        onKeyDown={(e) => {
           if (e.key === "Enter" || e.key === " ") onToggleArchive(model, e)
         }}
-        onPointerDown={e => e.stopPropagation()}
+        onPointerDown={(e) => e.stopPropagation()}
         aria-label={model.model.archived ? "Unarchive model" : "Archive model"}
         title={model.model.archived ? "Unarchive" : "Archive"}
         className={cn(
@@ -567,9 +843,42 @@ function ModelRow({
             : "hover:bg-foreground/10 hover:text-foreground/70"
         )}
       >
-        {model.model.archived ? <ArchiveRestore className="size-3.5" /> : <Archive className="size-3.5" />}
+        {model.model.archived ? (
+          <ArchiveRestore className="size-3.5" />
+        ) : (
+          <Archive className="size-3.5" />
+        )}
       </button>
     </CommandItem>
+  )
+}
+
+function LoadMoreRow({
+  shown,
+  total,
+  label,
+  onLoadMore,
+}: {
+  shown: number
+  total: number
+  label: string
+  onLoadMore: () => void
+}) {
+  return (
+    <div className="px-2 py-1.5">
+      <button
+        type="button"
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onLoadMore()
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="flex h-8 w-full items-center justify-center rounded-md border border-dashed border-border/70 bg-muted/25 px-2 text-[12px] font-medium text-foreground/55 transition-colors hover:bg-muted/55 hover:text-foreground"
+      >
+        {label} · {shown}/{total}
+      </button>
+    </div>
   )
 }
 
@@ -589,7 +898,7 @@ function ReorderButton({
       type="button"
       disabled={disabled}
       onClick={onClick}
-      onPointerDown={e => e.stopPropagation()}
+      onPointerDown={(e) => e.stopPropagation()}
       aria-label={label}
       className={cn(
         "flex h-3.5 w-5 items-center justify-center rounded-sm transition-colors",
@@ -603,7 +912,13 @@ function ReorderButton({
   )
 }
 
-function ProviderDot({ providerId, className }: { providerId: string; className?: string }) {
+function ProviderDot({
+  providerId,
+  className,
+}: {
+  providerId: string
+  className?: string
+}) {
   const color =
     providerId === "google"
       ? "bg-blue-500"
@@ -614,7 +929,11 @@ function ProviderDot({ providerId, className }: { providerId: string; className?
           : "bg-foreground/40"
   return (
     <span
-      className={cn("inline-block size-1.5 shrink-0 rounded-full", color, className)}
+      className={cn(
+        "inline-block size-1.5 shrink-0 rounded-full",
+        color,
+        className
+      )}
       aria-hidden
     />
   )
@@ -638,27 +957,42 @@ function flattenModels(providers: Record<string, ProviderDef>): FlatModel[] {
   return out
 }
 
-function isProviderAvailable(providerId: string, data: SettingsBootstrap): boolean {
+function isProviderAvailable(
+  providerId: string,
+  data: SettingsBootstrap
+): boolean {
   const status = data.providerStatus?.[providerId]
   if (typeof status?.available === "boolean") return status.available
   const provider = data.providers[providerId]
-  return Boolean(provider?.apiKeyEnv?.includes("NO_API_KEY") || status?.apiKeyConfigured)
+  return Boolean(
+    provider?.apiKeyEnv?.includes("NO_API_KEY") || status?.apiKeyConfigured
+  )
 }
 
-function isProviderVisibleInPicker(providerId: string, data: SettingsBootstrap): boolean {
+function isProviderVisibleInPicker(
+  providerId: string,
+  data: SettingsBootstrap
+): boolean {
   if (isCliProvider(providerId, data.providerStatus?.[providerId])) return true
   return isProviderAvailable(providerId, data)
 }
 
-function isCliProvider(providerId: string, status: ProviderStatus | undefined): boolean {
+function isCliProvider(
+  providerId: string,
+  status: ProviderStatus | undefined
+): boolean {
   return status?.authKind === "cli" || CLI_PROVIDER_IDS.has(providerId)
 }
 
-function providerUnavailableLabel(providerId: string, data: SettingsBootstrap): ProviderUnavailableLabel | null {
+function providerUnavailableLabel(
+  providerId: string,
+  data: SettingsBootstrap
+): ProviderUnavailableLabel | null {
   const status = data.providerStatus?.[providerId]
   if (!status || status.available || status.authKind !== "cli") return null
 
-  const providerName = status.cliName ?? data.providers[providerId]?.name ?? providerId
+  const providerName =
+    status.cliName ?? data.providers[providerId]?.name ?? providerId
   const reason = (status.unavailableReason ?? "").toLowerCase()
   if (status.cliInstalled === false) {
     return { short: "not installed", long: `${providerName} not installed` }
@@ -684,6 +1018,27 @@ function groupByProvider(models: FlatModel[]): Record<string, FlatModel[]> {
   return out
 }
 
+function rankSearchModels(models: FlatModel[], query: string): FlatModel[] {
+  if (!query) return []
+  return models
+    .map((model, index) => ({
+      model,
+      index,
+      score: defaultFilter(model.key, query, modelSearchKeywords(model)),
+    }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => {
+      const scoreDiff = b.score - a.score
+      if (scoreDiff !== 0) return scoreDiff
+      return a.index - b.index
+    })
+    .map((item) => item.model)
+}
+
+function modelSearchKeywords(model: FlatModel): string[] {
+  return [model.providerName, model.model.name, model.providerId, model.modelId]
+}
+
 function formatContext(n: number): string {
   if (!n || n <= 0) return "ctx ?"
   if (n >= 1_000_000) {
@@ -703,17 +1058,26 @@ function formatPrice(n: number): string {
 function formatPricingShort(pricing: ModelPricing | null): string {
   if (pricing === null) return "price ?"
   if (pricing.kind === "subscription") {
-    if (typeof pricing.equivalentInputPerMillion === "number" && typeof pricing.equivalentOutputPerMillion === "number") {
+    if (
+      typeof pricing.equivalentInputPerMillion === "number" &&
+      typeof pricing.equivalentOutputPerMillion === "number"
+    ) {
       return `included (≈ $${formatPrice(pricing.equivalentInputPerMillion)} / $${formatPrice(pricing.equivalentOutputPerMillion)} per M)`
     }
     return "subscription"
   }
   if (pricing.kind === "unit") {
     const currency = pricing.currency ?? "$"
-    if (typeof pricing.pricePerUnit === "number") return `${currency}${formatPrice(pricing.pricePerUnit)} / ${pricing.unit}`
+    if (typeof pricing.pricePerUnit === "number")
+      return `${currency}${formatPrice(pricing.pricePerUnit)} / ${pricing.unit}`
     if (pricing.tiers?.length) return `${pricing.tiers.length} tiers`
     return pricing.unit
   }
-  const tiered = pricing.inputPerMillionLarge !== undefined || pricing.outputPerMillionLarge !== undefined || pricing.tiers?.length ? " tiered" : ""
+  const tiered =
+    pricing.inputPerMillionLarge !== undefined ||
+    pricing.outputPerMillionLarge !== undefined ||
+    pricing.tiers?.length
+      ? " tiered"
+      : ""
   return `$${formatPrice(pricing.inputPerMillion)} / $${formatPrice(pricing.outputPerMillion)} per M${tiered}`
 }

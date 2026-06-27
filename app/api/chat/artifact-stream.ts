@@ -31,10 +31,12 @@ export function createArtifactStreamBridge({
   conversationId,
   messageId,
   send,
+  onPersistedArtifact,
 }: {
   conversationId: string
   messageId: string
   send: SendChatEvent
+  onPersistedArtifact?: (row: ArtifactRow) => void
 }) {
   const artifactParser = new ArtifactParser()
   const pendingArtifacts = new Map<string, PendingArtifact>()
@@ -59,6 +61,7 @@ export function createArtifactStreamBridge({
         display: pending.attrs.display ?? null,
         content,
       })
+      onPersistedArtifact?.(row)
       send({
         type: "artifact_end",
         clientToken,
@@ -94,6 +97,7 @@ export function createArtifactStreamBridge({
         display: repair.attrs.display ?? null,
         content,
       })
+      onPersistedArtifact?.(row)
       send({ type: "artifact_end", clientToken: repair.clientToken, artifact: row })
       return row
     } catch (err) {

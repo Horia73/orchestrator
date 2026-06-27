@@ -148,12 +148,15 @@ function mergeModel(input: {
 
     // ----- pricing -----
     // Distinguish "unset" (undefined) from "explicitly unknown" (null).
-    // Walk: curated -> seed (live doesn't carry pricing yet).
+    // Walk: curated -> seed -> live. OpenRouter's model API carries pricing,
+    // while providers like Google still leave it to seed/curation.
     let pricing: ModelPricing | null
     if (curatedModel && 'pricing' in curatedModel && curatedModel.pricing !== undefined) {
         pricing = curatedModel.pricing
     } else if (seedModel && seedModel.pricing !== undefined) {
         pricing = seedModel.pricing
+    } else if (liveModel && liveModel.pricing !== undefined) {
+        pricing = liveModel.pricing
     } else {
         pricing = null
     }
@@ -176,8 +179,7 @@ function mergeModel(input: {
     const thinkingLevels: ThinkingLevel[] | undefined =
         curatedModel?.thinkingLevels ??
         seedModel?.thinkingLevels ??
-        // live carries only a boolean — without explicit levels we defer to user research
-        undefined
+        liveModel?.thinkingLevels
 
     const defaultThinkingLevel: ThinkingLevel | undefined =
         curatedModel?.defaultThinkingLevel ??
@@ -193,7 +195,7 @@ function mergeModel(input: {
 
     // ----- notes -----
     const notes = curatedModel?.notes ?? seedModel?.notes ?? liveModel?.rawDescription
-    const pricingNotes = curatedModel?.pricingNotes ?? seedModel?.pricingNotes
+    const pricingNotes = curatedModel?.pricingNotes ?? seedModel?.pricingNotes ?? liveModel?.pricingNotes
     const researchSources: ResearchSource[] | undefined = curatedModel?.researchSources ?? seedModel?.researchSources
     const customMetadata: ModelCustomMetadata[] =
         curatedModel?.customMetadata ??

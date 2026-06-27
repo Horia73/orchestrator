@@ -107,7 +107,11 @@ export function AgentCard({
   const fallbackCapable = supportsAgentFallbacks(agent)
   const isAudioAgent = agent.id === AUDIO_CONTEXT_AGENT_ID || agent.id === AUDIO_TRANSCRIPT_AGENT_ID
   const modelFilter =
-    isAudioAgent ? isAudioContextCompatibleModel : undefined
+    isAudioAgent
+      ? isAudioContextCompatibleModel
+      : fallbackCapable
+        ? isToolCapableTextModel
+        : undefined
 
   const save = async (next: { provider: string; model: string; thinkingLevel: ThinkingLevel; modelOptions?: Record<string, ModelFeatureValue>; fallbacks?: AgentFallback[] }) => {
     setStatus({ kind: "saving" })
@@ -400,7 +404,7 @@ function FallbackSlotControls({
           noneLabel="None"
           onNone={() => onChange(null)}
           onChange={handleModelChange}
-          filterModel={isTextCompatibleModel}
+          filterModel={isToolCapableTextModel}
         />
       </Field>
 
@@ -669,6 +673,12 @@ function isAudioContextCompatibleModel(option: ModelPickerOption): boolean {
 
 function isTextCompatibleModel(option: ModelPickerOption): boolean {
   return option.model.kinds.includes("text") || option.model.capabilities.includes("text")
+}
+
+function isToolCapableTextModel(option: ModelPickerOption): boolean {
+  if (!isTextCompatibleModel(option)) return false
+  if (option.providerId !== "openrouter") return true
+  return option.model.capabilities.includes("function_calling")
 }
 
 function supportsAgentFallbacks(agent: AgentInfo): boolean {

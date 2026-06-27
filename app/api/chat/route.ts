@@ -50,7 +50,13 @@ import {
   logToolCall,
 } from "@/lib/observability/store"
 import { insertArtifact } from "@/lib/artifacts/store"
+import type { ArtifactRow } from "@/lib/artifacts/schema"
 import { stripWrappingCodeFence } from "@/lib/artifacts/sanitize"
+import {
+  buildArtifactBlockFromRow,
+  missingArtifactBlocks,
+  stripArtifactBlocksForPreview,
+} from "@/lib/artifacts/text"
 import {
   buildAutoArtifactTag,
   getArtifactUpdateData,
@@ -348,16 +354,24 @@ export async function POST(request: Request) {
           }
         }
 
-        const candidateTools = filterIntegrationToolExposure(
-          dedupeTools([
-            ...getToolsForAgent(orchestrator.tools),
-            ...getToolsForBuiltins(orchestrator.builtins),
-          ]),
-          { conversationId, origin: requestOrigin, agentId: orchestrator.id }
-        )
+        const modelSupportsFunctionTools =
+          settings.provider !== "openrouter" ||
+          providerDef.models[settings.model]?.capabilities.includes("function_calling")
+        const requestedBuiltins = modelSupportsFunctionTools
+          ? orchestrator.builtins
+          : []
+        const candidateTools = modelSupportsFunctionTools
+          ? filterIntegrationToolExposure(
+              dedupeTools([
+                ...getToolsForAgent(orchestrator.tools),
+                ...getToolsForBuiltins(orchestrator.builtins),
+              ]),
+              { conversationId, origin: requestOrigin, agentId: orchestrator.id }
+            )
+          : []
         const toolSurface = resolveProviderToolSurface(
           candidateTools,
-          orchestrator.builtins,
+          requestedBuiltins,
           provider.capabilities
         )
         const systemPrompt = orchestrator.buildPrompt!({
@@ -535,6 +549,7 @@ export async function POST(request: Request) {
         : ""
       let terminalMessageStatus: Message["status"] | null = null
       let terminalStreamError: string | null = null
+      const persistedArtifactsThisTurn: ArtifactRow[] = []
 
       const persistAssistantProgress = (opts?: {
         force?: boolean
@@ -873,6 +888,9 @@ export async function POST(request: Request) {
             conversationId,
             messageId,
             send,
+            onPersistedArtifact(row) {
+              persistedArtifactsThisTurn.push(row)
+            },
           })
           let activeAttempt = preparedInitial
 
@@ -1167,6 +1185,29 @@ export async function POST(request: Request) {
                 persistAssistantProgress()
               }
 
+              const appendMissingPersistedArtifactBlocks = (): boolean => {
+                if (persistedArtifactsThisTurn.length === 0) return false
+                const latestRows = new Map<string, ArtifactRow>()
+                for (const row of persistedArtifactsThisTurn) {
+                  const key = `${row.type}:${row.identifier}`
+                  const existing = latestRows.get(key)
+                  if (!existing || row.version > existing.version) {
+                    latestRows.set(key, row)
+                  }
+                }
+                const source = [...latestRows.values()]
+                  .map((row) => buildArtifactBlockFromRow(row))
+                  .join("\n\n")
+                const missing = missingArtifactBlocks(accContent, source)
+                if (missing.length === 0) return false
+
+                const suffix = `${accContent.trim().length > 0 ? "\n\n" : ""}${missing.join("\n\n")}`
+                accContent += suffix
+                appendContentChunk(suffix)
+                if (suffix.length > 0) streamMode = "content"
+                return true
+              }
+
               try {
                 const resolvedMessages = await buildResolvedMessages()
                 // Snapshot the EXACT input handed to the provider — the full
@@ -1325,6 +1366,7 @@ export async function POST(request: Request) {
                                   : "inline",
                               content: stripWrappingCodeFence(artifactUpdate.body),
                             })
+                            persistedArtifactsThisTurn.push(row)
                             send({
                               type: "artifact_end",
                               clientToken: `artifact-update-${row.id}`,
@@ -1484,6 +1526,7 @@ export async function POST(request: Request) {
                       // prose; unterminated artifacts are closed and persisted with
                       // whatever content arrived).
                       artifactStream.flush()
+                      appendMissingPersistedArtifactBlocks()
 
                       // Save final message and emit an add_message sync event.
                       terminalMessageStatus = "ok"
@@ -1625,7 +1668,7 @@ export async function POST(request: Request) {
                       void sendChatCompletionPushNotification({
                         conversationId,
                         title: completedConversation?.title ?? "Chat finished",
-                        body: finalAnswer,
+                        body: stripArtifactBlocksForPreview(finalAnswer),
                       }).catch((error) => {
                         console.warn(
                           "Failed to send chat completion notification",

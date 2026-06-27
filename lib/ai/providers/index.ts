@@ -2,6 +2,7 @@ import type { AIProvider, ProviderCapabilities, ProviderSendOptions, StreamCallb
 import { GoogleProvider, GOOGLE_CAPABILITIES } from './google'
 import { AnthropicProvider } from './anthropic'
 import { OpenAIProvider } from './openai'
+import { OpenRouterProvider } from './openrouter'
 import { ClaudeCodeProvider } from './claude-code'
 import { CodexProvider } from './codex'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
@@ -38,6 +39,9 @@ export function getProvider(providerId: string, apiKey: string): AIProvider {
         case 'openai':
             provider = new OpenAIProvider(apiKey)
             break
+        case 'openrouter':
+            provider = new OpenRouterProvider(apiKey)
+            break
         case 'claude-code':
             provider = new ClaudeCodeProvider(apiKey)
             break
@@ -65,6 +69,7 @@ const STATIC_CAPABILITIES: Record<string, ProviderCapabilities> = {
     google: GOOGLE_CAPABILITIES,
     anthropic: new AnthropicProvider('').capabilities,
     openai: new OpenAIProvider('').capabilities,
+    openrouter: new OpenRouterProvider('').capabilities,
     'claude-code': new ClaudeCodeProvider('').capabilities,
     codex: new CodexProvider('').capabilities,
     browser: BROWSER_CAPABILITIES,

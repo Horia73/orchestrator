@@ -257,6 +257,7 @@ function useAvailableHeight(
 function ThoughtBlock({
     reasoning,
     isStreaming,
+    isStreamingTurn = false,
     onArtifactClick,
     onAgentOpen,
     onAttachmentClick,
@@ -273,6 +274,7 @@ function ThoughtBlock({
 }: {
     reasoning: ReasoningEntry[]
     isStreaming?: boolean
+    isStreamingTurn?: boolean
     onArtifactClick?: (artifact: ArtifactPayload) => void
     onAgentOpen?: (entry: AgentCallReasoningEntry) => void
     onAttachmentClick?: (attachment: Attachment, gallery?: Attachment[]) => void
@@ -302,6 +304,7 @@ function ThoughtBlock({
         : undefined
     const effectiveStatus = messageStatus ?? derivedStatus
     const isLiveStreaming = Boolean(isStreaming && effectiveStatus == null)
+    const isLiveTurn = Boolean((isStreaming || isStreamingTurn) && effectiveStatus == null)
     const terminalTitle = effectiveStatus === "aborted"
         ? "Stopped"
         : effectiveStatus === "error"
@@ -309,15 +312,16 @@ function ThoughtBlock({
             : null
 
     // Build display title
-    const liveTitle = terminalTitle ?? (latestEntry?.type === "tool_call"
+    const liveStatusTitle = secs > 0 ? `Thinking (${secs}s)` : "Thinking..."
+    const latestLiveTitle = latestEntry?.type === "tool_call"
         ? latestTitle
-        : isLiveStreaming
+        : isLiveTurn
             ? secs > 0 ? `${latestTitle} (${secs}s)` : latestTitle
             : thinkingDone
                 ? `Thought for ${secs}s`
                 : persistedSecs > 0
                     ? `Thought for ${persistedSecs}s`
-                    : latestTitle)
+                    : latestTitle
 
     // State: open/expanded, persisted via localStorage keyed by messageId
     const storageKey = messageId ? `thought:${messageId}` : null
@@ -338,7 +342,7 @@ function ThoughtBlock({
             const saved = localStorage.getItem(openStorageKey)
             if (saved !== null) return saved === 'true'
         }
-        return keepOpenForBrowser || (thoughtAutoOpen ? isLiveStreaming : false)
+        return keepOpenForBrowser || (thoughtAutoOpen ? isLiveTurn : false)
     })
 
     const userToggledExpandedRef = React.useRef(false)
@@ -392,8 +396,8 @@ function ThoughtBlock({
     const [contentHeight, setContentHeight] = React.useState(0)
 
     // Dynamic collapsed height — adapts to available viewport space
-    const dynamicHeight = useAvailableHeight(blockRef, isOpen && isLiveStreaming && !isExpanded)
-    const collapsedHeight = isLiveStreaming ? dynamicHeight : COLLAPSED_HEIGHT
+    const dynamicHeight = useAvailableHeight(blockRef, isOpen && isLiveTurn && !isExpanded)
+    const collapsedHeight = isLiveTurn ? dynamicHeight : COLLAPSED_HEIGHT
     const isCollapsible = contentHeight > collapsedHeight + 40
     const visibleContentHeight = isExpanded || !isCollapsible
         ? (contentHeight > 0 ? `${contentHeight}px` : "none")
@@ -414,63 +418,47 @@ function ThoughtBlock({
     }, [isOpen])
 
     // Auto-open/close on streaming transitions
-    const wasStreamingRef = React.useRef(isLiveStreaming)
+    const wasStreamingRef = React.useRef(isLiveTurn)
     const userOpenedRef = React.useRef(false)
     React.useEffect(() => {
         if (keepOpenForBrowser) {
             // Keep a live browser session visible by default, but never clobber
             // an explicit user choice — that's what makes the state stick on refresh.
             if (!hasStoredOpen) updateOpen(true)
-            wasStreamingRef.current = isLiveStreaming
+            wasStreamingRef.current = isLiveTurn
             return
         }
         if (!thoughtAutoOpen) {
-            wasStreamingRef.current = isLiveStreaming
+            wasStreamingRef.current = isLiveTurn
             return
         }
-        if (wasStreamingRef.current && !isLiveStreaming && !userOpenedRef.current) {
+        if (wasStreamingRef.current && !isLiveTurn && !userOpenedRef.current) {
             updateOpen(false)
-        } else if (!wasStreamingRef.current && isLiveStreaming) {
+        } else if (!wasStreamingRef.current && isLiveTurn) {
             updateOpen(true)
             if (shouldDefaultExpand) autoExpand()
             userOpenedRef.current = false
         }
-        wasStreamingRef.current = isLiveStreaming
-    }, [autoExpand, hasStoredOpen, isLiveStreaming, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
+        wasStreamingRef.current = isLiveTurn
+    }, [autoExpand, hasStoredOpen, isLiveTurn, keepOpenForBrowser, shouldDefaultExpand, thoughtAutoOpen, updateOpen])
 
-    // Auto-scroll content during streaming.
-    //
-    // A new reasoning entry (a fresh card) should glide up smoothly so the card
-    // appears to rise into view from below; the latest entry merely growing as it
-    // streams stays hard-pinned to the bottom so text tracks without lag.
-    const prevReasoningLenRef = React.useRef(0)
+    // Auto-scroll content during streaming. Keep the live viewport hard-pinned:
+    // smooth scroll animations fight character-level reasoning deltas and make
+    // the panel drift up, then snap back, while text is still arriving.
     React.useEffect(() => {
         if (!isOpen || !scrollRef.current || isExpanded) {
-            prevReasoningLenRef.current = reasoning.length
             return
         }
         if (!isLiveStreaming) {
-            prevReasoningLenRef.current = reasoning.length
             requestAnimationFrame(() => {
                 if (scrollRef.current) scrollRef.current.scrollTop = 0
             })
             return
         }
-        const isNewEntry =
-            reasoning.length > prevReasoningLenRef.current &&
-            prevReasoningLenRef.current > 0
-        prevReasoningLenRef.current = reasoning.length
-        const smooth =
-            isNewEntry &&
-            !window.matchMedia("(prefers-reduced-motion: reduce)").matches
         requestAnimationFrame(() => {
             const node = scrollRef.current
             if (!node) return
-            if (smooth) {
-                node.scrollTo({ top: node.scrollHeight, behavior: "smooth" })
-            } else {
-                node.scrollTop = node.scrollHeight
-            }
+            node.scrollTop = node.scrollHeight
         })
     }, [reasoning, isOpen, isExpanded, isLiveStreaming])
 
@@ -479,9 +467,9 @@ function ThoughtBlock({
 
     const summaryTitle = buildSummary(reasoning, summarySeconds, latestTitle)
     const displayTitle = terminalTitle ?? (isOpen
-        ? (isLiveStreaming ? liveTitle : summaryTitle)
-        : liveCollapsedTitle && isLiveStreaming
-            ? liveTitle
+        ? (isLiveTurn ? liveStatusTitle : summaryTitle)
+        : liveCollapsedTitle && isLiveTurn
+            ? latestLiveTitle
             : summaryTitle)
     const isShowingContent = isOpen && (reasoning.length > 0 || isLiveStreaming)
 
@@ -503,7 +491,9 @@ function ThoughtBlock({
                 : latestEntry.type === "context_compaction"
                     ? `c:${latestEntry.id}:${latestEntry.at}`
             : `b:${latestEntry.id}:${latestBold ?? ""}`
-    const titleAnimKey = `${isOpen ? 1 : 0}|${isLiveStreaming ? 1 : 0}|${thinkingDone ? 1 : 0}|n${reasoning.length}|${stableLatestKey}`
+    const titleAnimKey = isOpen && isLiveTurn
+        ? "open-live"
+        : `${isOpen ? 1 : 0}|${isLiveTurn ? 1 : 0}|${thinkingDone ? 1 : 0}|n${reasoning.length}|${stableLatestKey}`
 
     // Apply right-edge fade only when the title actually overflows.
     const titleRef = React.useRef<HTMLSpanElement>(null)
@@ -541,7 +531,7 @@ function ThoughtBlock({
                     className={cn(
                         "thought-title-text min-w-0",
                         titleOverflows && "thought-title-faded",
-                        liveCollapsedTitle && !isOpen && isLiveStreaming && "thought-title-live"
+                        liveCollapsedTitle && !isOpen && isLiveTurn && "thought-title-live"
                     )}
                 >{displayTitle}</span>
                 <ChevronDown
@@ -574,7 +564,7 @@ function ThoughtBlock({
                                     ref={scrollRef}
                                     className={cn(
                                         "text-[14px] leading-relaxed text-muted-foreground overflow-hidden relative",
-                                        isMounted && "transition-[max-height] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[max-height]"
+                                        isMounted && !isLiveTurn && "transition-[max-height] duration-[360ms] ease-[cubic-bezier(0.22,1,0.36,1)] will-change-[max-height]"
                                     )}
                                     style={{
                                         maxHeight: visibleContentHeight
@@ -651,7 +641,7 @@ function ThoughtBlock({
                                 )}
                             </div>
                             <div className="relative flex items-center gap-3 mt-1 mb-0.5 bg-background w-max py-0.5 z-10">
-                                {isLiveStreaming ? (
+                                {isLiveTurn ? (
                                     <div className="size-4 rounded-full border-[2px] border-muted-foreground border-t-transparent animate-spin" />
                                 ) : effectiveStatus === "aborted" ? (
                                     <CircleStop className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
@@ -662,9 +652,9 @@ function ThoughtBlock({
                                 )}
                                 <span className={cn(
                                     "text-[14px] font-medium tracking-tight mt-[1px]",
-                                    isLiveStreaming ? "text-muted-foreground" : "text-foreground"
+                                    isLiveTurn ? "text-muted-foreground" : "text-foreground"
                                 )}>
-                                    {isLiveStreaming
+                                    {isLiveTurn
                                         ? `Thinking${secs > 0 ? ` (${secs}s)` : "..."}`
                                         : effectiveStatus === "aborted"
                                             ? "Stopped"
@@ -768,15 +758,18 @@ function WorkedForBlock({
         () => items.flatMap((item) => (item.type === "reasoning" ? item.entries : [])),
         [items]
     )
-    const label = durationMs != null
-        ? `Worked for ${formatWorkDuration(durationMs)}`
-        : buildSummary(workEntries, 0, "") || "Worked"
-
     const statusLabel = status === "aborted"
         ? "Stopped"
         : status === "error"
             ? "Failed"
             : "Done"
+    const durationLabel = durationMs != null ? formatWorkDuration(durationMs) : null
+    const isTerminalProblem = status === "aborted" || status === "error"
+    const label = isTerminalProblem
+        ? durationLabel ? `${statusLabel} after ${durationLabel}` : statusLabel
+        : durationLabel
+            ? `Worked for ${durationLabel}`
+            : buildSummary(workEntries, 0, "") || "Worked"
 
     return (
         <div className="flex w-full min-w-0 flex-col">
@@ -784,12 +777,25 @@ function WorkedForBlock({
                 type="button"
                 onClick={toggleOpen}
                 aria-expanded={isOpen}
-                className="flex items-center gap-1.5 text-[15px] text-muted-foreground transition-colors hover:text-foreground group w-fit max-w-full min-w-0"
+                className={cn(
+                    "flex items-center gap-1.5 text-[15px] transition-colors group w-fit max-w-full min-w-0",
+                    status === "error"
+                        ? "text-destructive hover:text-destructive"
+                        : "text-muted-foreground hover:text-foreground"
+                )}
             >
+                {status === "aborted" ? (
+                    <CircleStop className="size-4 shrink-0" />
+                ) : status === "error" ? (
+                    <CircleAlert className="size-4 shrink-0" />
+                ) : null}
                 <span className="min-w-0 truncate">{label}</span>
                 <ChevronDown
                     className={cn(
-                        "size-4 shrink-0 text-muted-foreground/70 group-hover:text-foreground transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        "size-4 shrink-0 transition-transform duration-300 ease-[cubic-bezier(0.22,1,0.36,1)]",
+                        status === "error"
+                            ? "text-destructive/80 group-hover:text-destructive"
+                            : "text-muted-foreground/70 group-hover:text-foreground",
                         isOpen ? "rotate-0" : "-rotate-90"
                     )}
                 />
@@ -1600,6 +1606,7 @@ function MessageBubbleComponent({
                 onAttachmentClick={onAttachmentClick}
                 messageId={`${message.id}:phase:${item.phase}`}
                 isStreaming={isInProgressReasoning && lastReasoningPhase === item.phase}
+                isStreamingTurn={Boolean(isStreamingMessage && isLatestAssistantMessage && message.status == null && lastReasoningPhase === item.phase)}
                 thinkingDuration={message.thinkingDuration}
                 messageStatus={message.status}
                 openOnMount={openLoadedDetails}
@@ -1773,6 +1780,7 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
     const timeline = React.useMemo(() => buildInterleavedTimeline(reasoningGroups, contentSegments), [reasoningGroups, contentSegments])
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
     const hasVisiblePayload = reasoning.length > 0 || content.trim().length > 0 || contentSegments.some(segment => segment.content.trim().length > 0)
+    const isStreamingTurn = streamingMode !== null || streamingStatus != null
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -1793,6 +1801,7 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                         key={`stream-reasoning-${messageId ?? "pending"}-${item.phase}`}
                         reasoning={item.entries}
                         isStreaming={activeReasoningPhase === item.phase && streamingMode === "reasoning"}
+                        isStreamingTurn={isStreamingTurn && activeReasoningPhase === item.phase}
                         onArtifactClick={onArtifactClick}
                         onAgentOpen={onAgentOpen}
                         onAttachmentClick={onAttachmentClick}

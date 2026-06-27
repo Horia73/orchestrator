@@ -432,6 +432,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
       "GEMINI_API_KEY=",
       "OPENAI_API_KEY=",
       "ANTHROPIC_API_KEY=",
+      "OPENROUTER_API_KEY=",
       "",
       "ORCHESTRATOR_PUBLIC_URL=",
       "ORCHESTRATOR_SSH_USER=",

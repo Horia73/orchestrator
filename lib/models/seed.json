@@ -106,6 +106,12 @@
                 }
             }
         },
+        "openrouter": {
+            "name": "OpenRouter",
+            "apiKeyEnv": "OPENROUTER_API_KEY",
+            "listEndpoint": "https://openrouter.ai/api/v1/models",
+            "models": {}
+        },
         "claude-code": {
             "name": "Claude Code (CLI)",
             "apiKeyEnv": "CLAUDE_CODE_NO_API_KEY_REQUIRED",

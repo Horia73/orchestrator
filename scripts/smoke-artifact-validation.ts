@@ -1,7 +1,9 @@
 import { validateArtifactContent } from '@/lib/artifacts/validation'
 import {
     appendMissingArtifactBlocks,
+    buildArtifactBlockFromRow,
     dedupeArtifactNotifications,
+    missingArtifactBlocks,
 } from '@/lib/artifacts/text'
 
 function check(name: string, condition: boolean, detail?: unknown) {
@@ -58,6 +60,26 @@ const artifactA = `<artifact type="application/vnd.ant.workout" identifier="same
 const artifactB = `<artifact title="Picioare + core" identifier="same-workout" type="application/vnd.ant.workout">${validWorkout}</artifact>`
 const appended = appendMissingArtifactBlocks(`First response\n\n${artifactA}`, `Second response\n\n${artifactB}`)
 check('same artifact identifier is not appended twice', appended === `First response\n\n${artifactA}`, appended)
+
+const footerBlock = buildArtifactBlockFromRow({
+    identifier: 'weather-card',
+    type: 'application/json',
+    title: 'Weather "Now"',
+    language: null,
+    display: 'inline',
+    content: '{"ok":true}',
+})
+check(
+    'artifact footer block escapes attrs and keeps body',
+    footerBlock.includes('title="Weather &quot;Now&quot;"') && footerBlock.includes('{"ok":true}'),
+    footerBlock,
+)
+check(
+    'missingArtifactBlocks returns footer block only when absent',
+    missingArtifactBlocks('Done.', footerBlock).length === 1 &&
+        missingArtifactBlocks(`Done.\n\n${footerBlock}`, footerBlock).length === 0,
+    footerBlock,
+)
 
 const dedupedNotifications = dedupeArtifactNotifications([
     { title: 'Workout v1', body: `First text\n\n${artifactA}` },

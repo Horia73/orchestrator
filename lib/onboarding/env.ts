@@ -15,6 +15,7 @@ export const ONBOARDING_ENV_ALLOWLIST = new Set<string>([
   'GOOGLE_GENERATIVE_AI_API_KEY',
   'OPENAI_API_KEY',
   'ANTHROPIC_API_KEY',
+  'OPENROUTER_API_KEY',
   // Optional services
   'GOOGLE_MAPS_API_KEY',
   'GOOGLE_MAPS_MAP_ID',

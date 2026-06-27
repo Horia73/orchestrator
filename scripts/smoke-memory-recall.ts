@@ -210,7 +210,9 @@ async function main(): Promise<void> {
     [...ctxSrc]
   )
   // Overflow guard: a hot file past the per-file budget keeps its tail reachable.
-  fs.writeFileSync(path.join(wsDir, "MEMORY.md"), "# MEMORY\n\n" + "x".repeat(50_000))
+  // Keep this safely above MAX_CONTEXT_FILE_CHARS without statically importing
+  // prompt modules before the test clears embedding env vars.
+  fs.writeFileSync(path.join(wsDir, "MEMORY.md"), "# MEMORY\n\n" + "x".repeat(80_000))
   check(
     "inContextSources re-enables an overflowed hot file (truncated tail stays recall-reachable)",
     !recall.inContextSources().has("MEMORY.md")

@@ -30,11 +30,11 @@ Calls reject when the artifact is not (yet) a registered app — ALWAYS catch an
 2. Emit the artifact (\`text/html\` or \`application/vnd.ant.react\`, kebab-case identifier, \`display="inline"\`).
 3. \`AppSave { slug, title, description, icon, identifier }\` — registers it. Write \`description\` for your future self: what the app does AND the data document schema (field names, types, an example entry). A later conversation must be able to extend the data safely from the description alone.
 4. Seed initial data with \`AppDataSet\` if the app expects any.
-5. \`AppShow { app }\` — mounts the launch card. The card always opens the CURRENT code version.
+5. \`AppShow { app }\` — mounts the launch card. The card always opens the CURRENT code version. This is required before you finish the turn: the user should see the app card in the final response, not only a prose confirmation or a Library reference.
 
 **Update flows:**
 - Data only (most common): \`AppDataGet\` → \`AppDataSet\` (default merge = RFC 7396: objects merge, \`null\` deletes a key, arrays/scalars replace wholesale — to append to an array, send the full new array). Open app instances update live.
-- Code change: re-emit the artifact (same identifier if same conversation, any identifier elsewhere) → \`AppSave\` with the SAME slug to repoint. Data document is untouched. Keep the data schema backward-compatible or migrate the doc in the same turn.
+- Code change: re-emit the artifact (same identifier if same conversation, any identifier elsewhere) → \`AppSave\` with the SAME slug to repoint → \`AppShow\` so the updated app card is visible in the final response. Data document is untouched. Keep the data schema backward-compatible or migrate the doc in the same turn.
 - Opening an existing app: \`AppShow\` — never re-emit code just to show an app.
 
 **Production bar.** Apps are kept and reused, so: handle the empty/first-run state, handle AppHost rejection, validate inputs, design for mobile widths, show errors inline (no bare alert() for errors). Match the user's language in the UI.

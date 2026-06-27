@@ -4,6 +4,7 @@ import {
     type LiveProviderEntry,
     type LiveModelEntry,
     type ModelKind,
+    type ModelPricing,
 } from './schema'
 
 // ---------------------------------------------------------------------------
@@ -34,6 +35,33 @@ type GoogleApiModel = z.infer<typeof GoogleApiModelSchema>
 const GoogleApiListSchema = z.object({
     models: z.array(GoogleApiModelSchema),
     nextPageToken: z.string().optional(),
+})
+
+const OpenRouterPricingSchema = z.record(z.string(), z.string().optional()).optional()
+
+const OpenRouterModelSchema = z.object({
+    id: z.string(),
+    name: z.string().optional(),
+    description: z.string().optional(),
+    context_length: z.number().int().nonnegative().optional(),
+    pricing: OpenRouterPricingSchema,
+    architecture: z.object({
+        modality: z.string().optional(),
+        input_modalities: z.array(z.string()).optional(),
+        output_modalities: z.array(z.string()).optional(),
+        tokenizer: z.string().nullable().optional(),
+        instruct_type: z.string().nullable().optional(),
+    }).optional(),
+    top_provider: z.object({
+        max_completion_tokens: z.number().int().nonnegative().nullable().optional(),
+        is_moderated: z.boolean().optional(),
+    }).optional(),
+    supported_parameters: z.array(z.string()).optional(),
+})
+type OpenRouterModel = z.infer<typeof OpenRouterModelSchema>
+
+const OpenRouterListSchema = z.object({
+    data: z.array(OpenRouterModelSchema),
 })
 
 /**
@@ -126,4 +154,92 @@ export async function fetchGoogleModels(apiKey: string): Promise<LiveProviderEnt
         fetchedAt: Date.now(),
         models,
     }
+}
+
+export async function fetchOpenRouterModels(apiKey: string): Promise<LiveProviderEntry> {
+    const res = await fetch('https://openrouter.ai/api/v1/models', {
+        headers: {
+            Authorization: `Bearer ${apiKey}`,
+            'Content-Type': 'application/json',
+        },
+    })
+    if (!res.ok) {
+        throw new Error(`OpenRouter listModels failed (${res.status}): ${await res.text().catch(() => '')}`)
+    }
+    const json = await res.json()
+    const parsed = OpenRouterListSchema.safeParse(json)
+    if (!parsed.success) {
+        throw new Error(`OpenRouter listModels response failed validation: ${parsed.error.message}`)
+    }
+
+    const models: Record<string, LiveModelEntry> = {}
+    for (const m of parsed.data.data) {
+        if (!openRouterOutputsText(m)) continue
+        const pricing = openRouterTokenPricing(m.pricing)
+        const supported = new Set(m.supported_parameters ?? [])
+        const capabilities = ['text']
+        if (supported.has('tools') || supported.has('tool_choice')) capabilities.push('function_calling')
+        if (supported.has('structured_outputs') || supported.has('response_format')) capabilities.push('structured_outputs')
+        if (supported.has('reasoning') || supported.has('include_reasoning')) capabilities.push('thinking')
+        const thinkingSupported = supported.has('reasoning') || supported.has('include_reasoning')
+
+        models[m.id] = {
+            name: m.name ?? m.id,
+            kinds: ['text'],
+            contextWindow: positiveInt(m.context_length),
+            maxOutputTokens: positiveInt(m.top_provider?.max_completion_tokens ?? undefined),
+            pricing,
+            pricingNotes: pricing
+                ? 'From OpenRouter /api/v1/models; per-token USD converted to per-million token USD.'
+                : undefined,
+            capabilities,
+            thinkingSupported,
+            thinkingLevels: thinkingSupported ? ['low', 'medium', 'high'] : ['none'],
+            defaultThinkingLevel: thinkingSupported ? 'medium' : 'none',
+            rawDescription: m.description,
+            raw: {
+                architecture: m.architecture ?? null,
+                supported_parameters: m.supported_parameters ?? [],
+                top_provider: m.top_provider ?? null,
+            },
+        }
+    }
+
+    return {
+        fetchedAt: Date.now(),
+        models,
+    }
+}
+
+function openRouterOutputsText(m: OpenRouterModel): boolean {
+    const output = m.architecture?.output_modalities
+    if (!output || output.length === 0) return true
+    return output.some(modality => modality.toLowerCase() === 'text')
+}
+
+function openRouterTokenPricing(pricing: OpenRouterModel['pricing']): ModelPricing | null {
+    if (!pricing) return null
+    const prompt = pricePerMillion(pricing.prompt)
+    const completion = pricePerMillion(pricing.completion)
+    if (prompt === null || completion === null) return null
+    const cachedInput = pricePerMillion(pricing.input_cache_read)
+    return {
+        kind: 'tokens',
+        inputPerMillion: prompt,
+        outputPerMillion: completion,
+        ...(cachedInput !== null ? { cachedInputPerMillion: cachedInput } : {}),
+    }
+}
+
+function pricePerMillion(raw: string | undefined): number | null {
+    if (raw === undefined) return null
+    const value = Number(raw)
+    if (!Number.isFinite(value) || value < 0) return null
+    return value * 1_000_000
+}
+
+function positiveInt(value: number | null | undefined): number | undefined {
+    return typeof value === 'number' && Number.isFinite(value) && value > 0
+        ? Math.floor(value)
+        : undefined
 }

@@ -34,6 +34,12 @@ export const ENV_PRESETS = [
     description: "Anthropic API calls",
     placeholder: "sk-ant-...",
   },
+  {
+    key: "OPENROUTER_API_KEY",
+    label: "OpenRouter",
+    description: "OpenRouter model router and model catalog pricing",
+    placeholder: "sk-or-v1-...",
+  },
 ] as const
 
 export async function revealEnvValue(

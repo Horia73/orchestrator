@@ -305,21 +305,28 @@ async function runTextSubAgentAttempt(args: RunTextSubAgentArgs, runtime: Runtim
     })
     // Gate integration operational tools, then remove custom schemas that
     // duplicate this provider's native built-ins.
-    const candidateTools = filterReadOnlyIfNeeded(
-        filterIntegrationToolExposure(
-            dedupeTools(canDelegate
-                ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
-                : [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins)]),
-            {
-                conversationId: parentCtx.conversationId,
-                origin: parentCtx.appOrigin,
-                agentId: runtimeTarget.id,
-                preactivatedCapabilities: parentCtx.preactivatedCapabilities,
-            }
-        ),
-        parentCtx.toolSurfaceMode,
-    )
-    const toolSurface = resolveProviderToolSurface(candidateTools, runtimeTarget.builtins, provider.capabilities)
+    const selectedModel = getEffectiveModel(runtime.provider, runtime.model)
+    const modelSupportsFunctionTools =
+        runtime.provider !== 'openrouter' ||
+        selectedModel?.capabilities.includes('function_calling') === true
+    const requestedBuiltins = modelSupportsFunctionTools ? runtimeTarget.builtins : []
+    const candidateTools = modelSupportsFunctionTools
+        ? filterReadOnlyIfNeeded(
+            filterIntegrationToolExposure(
+                dedupeTools(canDelegate
+                    ? [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins), ...getToolsForAgent(['delegate_to', 'delegate_parallel'])]
+                    : [...baseTools, ...getToolsForBuiltins(runtimeTarget.builtins)]),
+                {
+                    conversationId: parentCtx.conversationId,
+                    origin: parentCtx.appOrigin,
+                    agentId: runtimeTarget.id,
+                    preactivatedCapabilities: parentCtx.preactivatedCapabilities,
+                }
+            ),
+            parentCtx.toolSurfaceMode,
+        )
+        : []
+    const toolSurface = resolveProviderToolSurface(candidateTools, requestedBuiltins, provider.capabilities)
     const agentTools = toolSurface.tools
     const agentBuiltins = toolSurface.builtins
 
