@@ -13,6 +13,7 @@ import {
     validateUploadFileName,
 } from '@/lib/uploads'
 import { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
+import { guardSensitiveRequest } from '@/lib/api/request-guard'
 import { runWithRequestProfile } from "@/lib/profiles/server"
 
 function jsonResponse(body: unknown, status = 200) {
@@ -114,6 +115,9 @@ async function normalizeUploadBytes(args: {
 
 export async function POST(request: Request) {
   return runWithRequestProfile(request, async () => {
+        const guard = guardSensitiveRequest(request)
+        if (guard) return guard
+
         try {
             fs.mkdirSync(activeRuntimePaths().uploadsDir, { recursive: true })
 
@@ -142,14 +146,14 @@ export async function POST(request: Request) {
                     mimeType: file.type || 'application/octet-stream',
                 })
 
-                if (normalized.buffer.length > MAX_UPLOAD_FILE_BYTES) {
+                if (MAX_UPLOAD_FILE_BYTES !== null && normalized.buffer.length > MAX_UPLOAD_FILE_BYTES) {
                     return jsonResponse(
                         { error: `${normalized.filename} exceeds the per-file limit after audio conversion.` },
                         413
                     )
                 }
                 storedTotalBytes += normalized.buffer.length
-                if (storedTotalBytes > MAX_UPLOAD_TOTAL_BYTES) {
+                if (MAX_UPLOAD_TOTAL_BYTES !== null && storedTotalBytes > MAX_UPLOAD_TOTAL_BYTES) {
                     return jsonResponse(
                         { error: 'Uploads exceed the total limit after audio conversion.' },
                         413

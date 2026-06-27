@@ -552,7 +552,7 @@ export async function executeWhatsAppDownloadMedia(args: Record<string, unknown>
         return { success: false, error: error instanceof Error ? error.message : String(error) }
     }
 
-    if (media.bytes.byteLength > MAX_UPLOAD_FILE_BYTES) {
+    if (MAX_UPLOAD_FILE_BYTES !== null && media.bytes.byteLength > MAX_UPLOAD_FILE_BYTES) {
         const sizeMb = (media.bytes.byteLength / (1024 * 1024)).toFixed(1)
         const limitMb = Math.round(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))
         return { success: false, error: `Downloaded WhatsApp media is ${sizeMb}MB, over the ${limitMb}MB limit for saving as an attachment.` }

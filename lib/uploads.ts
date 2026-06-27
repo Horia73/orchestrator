@@ -9,8 +9,8 @@ import { sniffContentType } from '@/lib/file-sniff'
 export { UPLOAD_MIME_MAP } from '@/lib/upload-mime'
 
 export const MAX_UPLOAD_FILES = 10
-export const MAX_UPLOAD_FILE_BYTES = 50 * 1024 * 1024
-export const MAX_UPLOAD_TOTAL_BYTES = 100 * 1024 * 1024
+export const MAX_UPLOAD_FILE_BYTES: number | null = null
+export const MAX_UPLOAD_TOTAL_BYTES: number | null = null
 
 const UPLOAD_ID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}\.[a-z0-9][a-z0-9-]{0,15}$/i
 
@@ -109,7 +109,7 @@ export function validateUploadBatch(files: UploadFileLike[]): { ok: true } | { o
         if (!Number.isFinite(file.size) || file.size < 0) {
             return { ok: false, status: 400, error: `Invalid file size for ${nameCheck.filename}` }
         }
-        if (file.size > MAX_UPLOAD_FILE_BYTES) {
+        if (MAX_UPLOAD_FILE_BYTES !== null && file.size > MAX_UPLOAD_FILE_BYTES) {
             return {
                 ok: false,
                 status: 413,
@@ -118,7 +118,7 @@ export function validateUploadBatch(files: UploadFileLike[]): { ok: true } | { o
         }
 
         totalSize += file.size
-        if (totalSize > MAX_UPLOAD_TOTAL_BYTES) {
+        if (MAX_UPLOAD_TOTAL_BYTES !== null && totalSize > MAX_UPLOAD_TOTAL_BYTES) {
             return {
                 ok: false,
                 status: 413,

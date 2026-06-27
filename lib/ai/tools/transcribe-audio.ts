@@ -235,7 +235,7 @@ async function attachmentFromWorkspacePath(
         return fail(`File not found: ${displayPath(sandboxed.resolved)}`)
     }
     if (!stat.isFile()) return fail(`Not a file: ${displayPath(sandboxed.resolved)}`)
-    if (stat.size > MAX_UPLOAD_FILE_BYTES) {
+    if (MAX_UPLOAD_FILE_BYTES !== null && stat.size > MAX_UPLOAD_FILE_BYTES) {
         return fail(`File is too large to transcribe (${Math.round(stat.size / (1024 * 1024))} MB; max ${Math.round(MAX_UPLOAD_FILE_BYTES / (1024 * 1024))} MB). Split or compress it first (e.g. ffmpeg to a lower-bitrate mp3).`)
     }
 

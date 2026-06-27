@@ -850,7 +850,7 @@ server {
     ssl_certificate $tls_dir/fullchain.pem;
     ssl_certificate_key $tls_dir/privkey.pem;
 
-    client_max_body_size 100m;
+    client_max_body_size 0;
 
     location /vnc/ {
         proxy_pass http://127.0.0.1:$VNC_PORT/;

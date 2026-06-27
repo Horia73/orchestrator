@@ -119,5 +119,5 @@ function previewRunIdFromReferer(value: string | null): string | null {
 }
 
 export const config = {
-  matcher: ["/:path*"],
+  matcher: ["/((?!api/upload(?:/|$)).*)"],
 }
