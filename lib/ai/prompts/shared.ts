@@ -602,8 +602,9 @@ const CONTEXT_FILE_IDS = new Set([
 // recall.ts `inContextSources`, which only excludes what actually fit here).
 // MEMORY_ARCHIVE and (for the plain orchestrator) MONITORS are intentionally
 // never injected and live entirely in the recall-only cold tier. Keeping the hot
-// tier lean is the reflection pass's job, not the clipper's.
-export const MAX_CONTEXT_FILE_CHARS = 40_000
+// tier lean is the reflection pass's job, not the clipper's. The nightly
+// reflection treats 50k as "approaching the limit" and 60k as the hard file cap.
+export const MAX_CONTEXT_FILE_CHARS = 60_000
 export const MAX_CONTEXT_TOTAL_CHARS = 200_000
 
 /** True when a workspace-relative file exists (path-traversal safe). */

@@ -98,6 +98,14 @@ async function main(): Promise<void> {
         /playbook/i.test(parsed.data.action.prompt)
     )
     check(
+      "reflection prompt audits hot-file sizes and handles truncation",
+      parsed.data.action.kind === "agent" &&
+        parsed.data.action.prompt.includes("wc -c USER.md") &&
+        parsed.data.action.prompt.includes("50,000") &&
+        parsed.data.action.prompt.includes("60,000") &&
+        parsed.data.action.prompt.includes("[truncated: file exceeded context budget]")
+    )
+    check(
       "reflection prompt allows the single new-playbook notification only",
       parsed.data.action.kind === "agent" &&
         parsed.data.action.prompt.includes("ONE exception") &&
