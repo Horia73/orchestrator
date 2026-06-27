@@ -112,6 +112,12 @@
             "listEndpoint": "https://openrouter.ai/api/v1/models",
             "models": {}
         },
+        "lm-studio": {
+            "name": "LM Studio",
+            "apiKeyEnv": "LM_STUDIO_BASE_URL",
+            "listEndpoint": "http://localhost:1234/api/v1/models",
+            "models": {}
+        },
         "claude-code": {
             "name": "Claude Code (CLI)",
             "apiKeyEnv": "CLAUDE_CODE_NO_API_KEY_REQUIRED",

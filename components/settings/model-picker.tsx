@@ -56,9 +56,8 @@ export interface ModelPickerProps {
 // hides the picker entirely so its "default" entry never needs to show up).
 const HIDDEN_PROVIDERS = new Set(["browser"])
 const CLI_PROVIDER_IDS = new Set(["claude-code", "codex"])
-const NORMAL_MODEL_BATCH_SIZE = 120
-const SEARCH_MODEL_BATCH_SIZE = 80
 const ARCHIVED_MODEL_BATCH_SIZE = 80
+const PROVIDER_MODEL_PREVIEW_LIMIT = 4
 
 export interface ModelPickerOption {
   key: string
@@ -84,15 +83,15 @@ export function ModelPicker({
   const [open, setOpen] = React.useState(false)
   const [query, setQuery] = React.useState("")
   const [showArchived, setShowArchived] = React.useState(false)
-  const [normalModelLimit, setNormalModelLimit] = React.useState(
-    NORMAL_MODEL_BATCH_SIZE
-  )
-  const [searchModelLimit, setSearchModelLimit] = React.useState(
-    SEARCH_MODEL_BATCH_SIZE
-  )
   const [archivedModelLimit, setArchivedModelLimit] = React.useState(
     ARCHIVED_MODEL_BATCH_SIZE
   )
+  const [expandedNormalProviders, setExpandedNormalProviders] = React.useState<
+    Set<string>
+  >(() => new Set())
+  const [expandedSearchProviders, setExpandedSearchProviders] = React.useState<
+    Set<string>
+  >(() => new Set())
   const popoverContentRef = React.useRef<HTMLDivElement | null>(null)
   // Controlled cmdk highlight — reset on popover mouse leave so items don't
   // stay visually "stuck" when the cursor moves outside the dropdown.
@@ -107,20 +106,34 @@ export function ModelPicker({
 
   React.useEffect(() => {
     if (!open) return
-    setNormalModelLimit(NORMAL_MODEL_BATCH_SIZE)
-    setSearchModelLimit(SEARCH_MODEL_BATCH_SIZE)
     setArchivedModelLimit(ARCHIVED_MODEL_BATCH_SIZE)
   }, [open])
 
   const handleQueryChange = React.useCallback((next: string) => {
     setQuery(next)
-    setSearchModelLimit(SEARCH_MODEL_BATCH_SIZE)
+    setExpandedSearchProviders(new Set())
     window.requestAnimationFrame(() => {
       popoverContentRef.current
         ?.querySelector<HTMLElement>("[cmdk-list]")
         ?.scrollTo({ top: 0 })
     })
   }, [])
+
+  const toggleExpandedProvider = React.useCallback(
+    (mode: "normal" | "search", providerId: string) => {
+      const setExpanded =
+        mode === "normal"
+          ? setExpandedNormalProviders
+          : setExpandedSearchProviders
+      setExpanded((current) => {
+        const next = new Set(current)
+        if (next.has(providerId)) next.delete(providerId)
+        else next.add(providerId)
+        return next
+      })
+    },
+    []
+  )
 
   if (!data) return null
 
@@ -152,9 +165,7 @@ export function ModelPicker({
   const nonFavoriteModels = activeModels.filter(
     (m) => !favorites.includes(m.key)
   )
-  const visibleNonFavoriteModels = nonFavoriteModels.slice(0, normalModelLimit)
-  const groupedNonFavorites = groupByProvider(visibleNonFavoriteModels)
-  const hasMoreNormalModels = normalModelLimit < nonFavoriteModels.length
+  const groupedNonFavorites = groupModelsByProvider(nonFavoriteModels)
   const visibleArchivedModels = showArchived
     ? archivedModels.slice(0, archivedModelLimit)
     : []
@@ -163,12 +174,13 @@ export function ModelPicker({
   const rankedSearchModels = isSearching
     ? rankSearchModels(allModels, query.trim())
     : []
-  const visibleSearchModels = rankedSearchModels.slice(0, searchModelLimit)
-  const hasMoreSearchModels = searchModelLimit < rankedSearchModels.length
+  const groupedSearchModels = isSearching
+    ? groupModelsByProvider(rankedSearchModels)
+    : []
   const renderedModelCount = isSearching
-    ? visibleSearchModels.length
+    ? countVisibleGroupedModels(groupedSearchModels, expandedSearchProviders)
     : favoriteModels.length +
-      visibleNonFavoriteModels.length +
+      countVisibleGroupedModels(groupedNonFavorites, expandedNormalProviders) +
       visibleArchivedModels.length
 
   // The current value lookup tolerates being out-of-kind — useful when an
@@ -242,24 +254,12 @@ export function ModelPicker({
     if (distanceFromBottom > 96) return
 
     if (isSearching) {
-      if (hasMoreSearchModels) {
-        setSearchModelLimit((limit) =>
-          Math.min(limit + SEARCH_MODEL_BATCH_SIZE, rankedSearchModels.length)
-        )
-      }
       return
     }
 
     if (hasMoreArchivedModels) {
       setArchivedModelLimit((limit) =>
         Math.min(limit + ARCHIVED_MODEL_BATCH_SIZE, archivedModels.length)
-      )
-      return
-    }
-
-    if (hasMoreNormalModels) {
-      setNormalModelLimit((limit) =>
-        Math.min(limit + NORMAL_MODEL_BATCH_SIZE, nonFavoriteModels.length)
       )
     }
   }
@@ -382,42 +382,60 @@ export function ModelPicker({
                   </CommandItem>
                 </CommandGroup>
                 {(favoriteModels.length > 0 ||
-                  Object.keys(groupedNonFavorites).length > 0 ||
+                  groupedNonFavorites.length > 0 ||
                   archivedModels.length > 0) && <CommandSeparator />}
               </>
             )}
 
             {isSearching ? (
-              <CommandGroup heading="Search results">
-                {visibleSearchModels.map((m) => (
-                  <ModelRow
-                    key={m.key}
-                    model={m}
-                    providerLabel={providerUnavailableLabel(m.providerId, data)}
-                    isActive={m.key === value}
-                    isFavorite={favorites.includes(m.key)}
-                    onSelect={handleSelect}
-                    onToggleFavorite={handleToggleFavorite}
-                    onToggleArchive={handleToggleArchive}
-                    showProviderName
-                  />
-                ))}
-                {hasMoreSearchModels && (
-                  <LoadMoreRow
-                    shown={visibleSearchModels.length}
-                    total={rankedSearchModels.length}
-                    label="Load more matches"
-                    onLoadMore={() =>
-                      setSearchModelLimit((limit) =>
-                        Math.min(
-                          limit + SEARCH_MODEL_BATCH_SIZE,
-                          rankedSearchModels.length
-                        )
-                      )
-                    }
-                  />
-                )}
-              </CommandGroup>
+              <>
+                {groupedSearchModels.map(({ providerId, models }) => {
+                  const expanded = expandedSearchProviders.has(providerId)
+                  const visibleModels = visibleModelsForProviderGroup(
+                    models,
+                    expanded,
+                    value
+                  )
+                  return (
+                    <CommandGroup
+                      key={providerId}
+                      heading={
+                        <ProviderGroupHeading
+                          providerId={providerId}
+                          data={data}
+                        />
+                      }
+                    >
+                      {visibleModels.map((m) => (
+                        <ModelRow
+                          key={m.key}
+                          model={m}
+                          providerLabel={providerUnavailableLabel(
+                            m.providerId,
+                            data
+                          )}
+                          isActive={m.key === value}
+                          isFavorite={favorites.includes(m.key)}
+                          onSelect={handleSelect}
+                          onToggleFavorite={handleToggleFavorite}
+                          onToggleArchive={handleToggleArchive}
+                          showProviderName
+                        />
+                      ))}
+                      {models.length > PROVIDER_MODEL_PREVIEW_LIMIT && (
+                        <ProviderModelsToggleRow
+                          expanded={expanded}
+                          shown={visibleModels.length}
+                          total={models.length}
+                          onToggle={() =>
+                            toggleExpandedProvider("search", providerId)
+                          }
+                        />
+                      )}
+                    </CommandGroup>
+                  )
+                })}
+              </>
             ) : (
               <>
                 {favoriteModels.length > 0 && (
@@ -451,14 +469,18 @@ export function ModelPicker({
                         />
                       ))}
                     </CommandGroup>
-                    {Object.keys(groupedNonFavorites).length > 0 && (
-                      <CommandSeparator />
-                    )}
+                    {groupedNonFavorites.length > 0 && <CommandSeparator />}
                   </>
                 )}
 
-                {Object.entries(groupedNonFavorites).map(
-                  ([providerId, models]) => (
+                {groupedNonFavorites.map(({ providerId, models }) => {
+                  const expanded = expandedNormalProviders.has(providerId)
+                  const visibleModels = visibleModelsForProviderGroup(
+                    models,
+                    expanded,
+                    value
+                  )
+                  return (
                     <CommandGroup
                       key={providerId}
                       heading={
@@ -468,7 +490,7 @@ export function ModelPicker({
                         />
                       }
                     >
-                      {models.map((m) => (
+                      {visibleModels.map((m) => (
                         <ModelRow
                           key={m.key}
                           model={m}
@@ -483,16 +505,24 @@ export function ModelPicker({
                           onToggleArchive={handleToggleArchive}
                         />
                       ))}
+                      {models.length > PROVIDER_MODEL_PREVIEW_LIMIT && (
+                        <ProviderModelsToggleRow
+                          expanded={expanded}
+                          shown={visibleModels.length}
+                          total={models.length}
+                          onToggle={() =>
+                            toggleExpandedProvider("normal", providerId)
+                          }
+                        />
+                      )}
                     </CommandGroup>
                   )
-                )}
+                })}
 
                 {archivedModels.length > 0 && (
                   <>
                     {(favoriteModels.length > 0 ||
-                      Object.keys(groupedNonFavorites).length > 0) && (
-                      <CommandSeparator />
-                    )}
+                      groupedNonFavorites.length > 0) && <CommandSeparator />}
                     {/*
                       The normal picker keeps archived rows collapsed. Search
                       mode renders a separate unified list so archived matches
@@ -557,21 +587,6 @@ export function ModelPicker({
                       )}
                     </CommandGroup>
                   </>
-                )}
-                {hasMoreNormalModels && (
-                  <LoadMoreRow
-                    shown={visibleNonFavoriteModels.length}
-                    total={nonFavoriteModels.length}
-                    label="Load more models"
-                    onLoadMore={() =>
-                      setNormalModelLimit((limit) =>
-                        Math.min(
-                          limit + NORMAL_MODEL_BATCH_SIZE,
-                          nonFavoriteModels.length
-                        )
-                      )
-                    }
-                  />
                 )}
               </>
             )}
@@ -882,6 +897,43 @@ function LoadMoreRow({
   )
 }
 
+function ProviderModelsToggleRow({
+  expanded,
+  shown,
+  total,
+  onToggle,
+}: {
+  expanded: boolean
+  shown: number
+  total: number
+  onToggle: () => void
+}) {
+  const hiddenCount = Math.max(total - shown, 0)
+  const label = expanded ? "Show less" : `Show ${hiddenCount} more`
+  const Icon = expanded ? ChevronUp : ChevronDown
+  return (
+    <div className="px-2 py-1.5">
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={(e) => {
+          e.preventDefault()
+          e.stopPropagation()
+          onToggle()
+        }}
+        onPointerDown={(e) => e.stopPropagation()}
+        className="flex h-8 w-full items-center justify-center gap-1.5 rounded-md border border-dashed border-border/70 bg-muted/20 px-2 text-[12px] font-medium text-foreground/55 transition-colors hover:bg-muted/55 hover:text-foreground"
+      >
+        <span>{label}</span>
+        <span className="text-foreground/35 tabular-nums">
+          {shown}/{total}
+        </span>
+        <Icon className="size-3.5" />
+      </button>
+    </div>
+  )
+}
+
 function ReorderButton({
   disabled,
   label,
@@ -1009,13 +1061,51 @@ function providerUnavailableLabel(
   }
 }
 
-function groupByProvider(models: FlatModel[]): Record<string, FlatModel[]> {
-  const out: Record<string, FlatModel[]> = {}
+type ProviderModelGroup = {
+  providerId: string
+  models: FlatModel[]
+}
+
+function groupModelsByProvider(models: FlatModel[]): ProviderModelGroup[] {
+  const groups: ProviderModelGroup[] = []
+  const grouped = new Map<string, FlatModel[]>()
   for (const m of models) {
-    if (!out[m.providerId]) out[m.providerId] = []
-    out[m.providerId].push(m)
+    const existing = grouped.get(m.providerId)
+    if (existing) {
+      existing.push(m)
+      continue
+    }
+    const next = [m]
+    grouped.set(m.providerId, next)
+    groups.push({ providerId: m.providerId, models: next })
   }
-  return out
+  return groups
+}
+
+function visibleModelsForProviderGroup(
+  models: FlatModel[],
+  expanded: boolean,
+  activeKey: string | null
+): FlatModel[] {
+  if (expanded || models.length <= PROVIDER_MODEL_PREVIEW_LIMIT) return models
+  const preview = models.slice(0, PROVIDER_MODEL_PREVIEW_LIMIT)
+  if (!activeKey || preview.some((model) => model.key === activeKey)) {
+    return preview
+  }
+  const activeModel = models.find((model) => model.key === activeKey)
+  if (!activeModel) return preview
+  return [...preview.slice(0, PROVIDER_MODEL_PREVIEW_LIMIT - 1), activeModel]
+}
+
+function countVisibleGroupedModels(
+  groups: ProviderModelGroup[],
+  expandedProviders: Set<string>
+): number {
+  return groups.reduce((count, group) => {
+    if (expandedProviders.has(group.providerId))
+      return count + group.models.length
+    return count + Math.min(group.models.length, PROVIDER_MODEL_PREVIEW_LIMIT)
+  }, 0)
 }
 
 function rankSearchModels(models: FlatModel[], query: string): FlatModel[] {

@@ -41,7 +41,7 @@ export interface AgentInfo {
 
 export interface ProviderStatus {
   available: boolean
-  authKind: "api-key" | "cli" | "none"
+  authKind: "api-key" | "base-url" | "cli" | "none"
   apiKeyConfigured: boolean
   apiKeyMasked: string | null
   cliInstalled?: boolean

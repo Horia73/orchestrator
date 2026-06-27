@@ -3,9 +3,17 @@ import { z } from 'zod'
 import {
     type LiveProviderEntry,
     type LiveModelEntry,
+    type Capability,
+    type ModelFeature,
     type ModelKind,
     type ModelPricing,
 } from './schema'
+import {
+    LM_STUDIO_DEFAULT_CONTEXT_TOKENS,
+    lmStudioJsonHeaders,
+    lmStudioNativeModelsUrl,
+    normalizeLMStudioBaseUrl,
+} from '@/lib/lm-studio'
 
 // ---------------------------------------------------------------------------
 // Fetchers — call provider listModels endpoints, normalize into the LiveRegistry
@@ -62,6 +70,71 @@ type OpenRouterModel = z.infer<typeof OpenRouterModelSchema>
 
 const OpenRouterListSchema = z.object({
     data: z.array(OpenRouterModelSchema),
+})
+
+const LMStudioReasoningSchema = z.object({
+    allowed_options: z.array(z.enum(['off', 'on', 'low', 'medium', 'high'])).optional(),
+    default: z.enum(['off', 'on', 'low', 'medium', 'high']).optional(),
+}).passthrough()
+
+const LMStudioLoadedInstanceSchema = z.object({
+    id: z.string(),
+    config: z.object({
+        context_length: z.number().int().positive().optional(),
+        eval_batch_size: z.number().int().positive().optional(),
+        parallel: z.number().int().positive().optional(),
+        flash_attention: z.boolean().optional(),
+        num_experts: z.number().int().positive().optional(),
+        offload_kv_cache_to_gpu: z.boolean().optional(),
+    }).passthrough().optional(),
+}).passthrough()
+
+const LMStudioQuantizationSchema = z.union([
+    z.string(),
+    z.object({
+        name: z.string().nullable().optional(),
+        bits_per_weight: z.number().nullable().optional(),
+    }).passthrough(),
+]).nullable().optional()
+
+const LMStudioModelSchema = z.object({
+    id: z.string().optional(),
+    key: z.string().optional(),
+    display_name: z.string().optional(),
+    type: z.string().optional(),
+    publisher: z.string().nullable().optional(),
+    architecture: z.string().nullable().optional(),
+    compatibility_type: z.string().nullable().optional(),
+    quantization: LMStudioQuantizationSchema,
+    state: z.string().nullable().optional(),
+    max_context_length: z.number().int().nonnegative().nullable().optional(),
+    loaded_context_length: z.number().int().nonnegative().nullable().optional(),
+    loaded_instances: z.array(LMStudioLoadedInstanceSchema).optional(),
+    size_bytes: z.number().int().nonnegative().nullable().optional(),
+    params_string: z.string().nullable().optional(),
+    format: z.string().nullable().optional(),
+    capabilities: z.object({
+        vision: z.boolean().optional(),
+        trained_for_tool_use: z.boolean().optional(),
+        reasoning: LMStudioReasoningSchema.optional(),
+    }).passthrough().optional(),
+    description: z.string().nullable().optional(),
+    variants: z.array(z.string()).optional(),
+    selected_variant: z.string().optional(),
+}).passthrough()
+type LMStudioModel = z.infer<typeof LMStudioModelSchema>
+
+const LMStudioNativeListSchema = z.union([
+    z.object({ models: z.array(LMStudioModelSchema) }),
+    z.object({ data: z.array(LMStudioModelSchema) }),
+])
+
+const LMStudioOpenAIModelSchema = z.object({
+    id: z.string(),
+})
+
+const LMStudioOpenAIListSchema = z.object({
+    data: z.array(LMStudioOpenAIModelSchema),
 })
 
 /**
@@ -209,6 +282,237 @@ export async function fetchOpenRouterModels(apiKey: string): Promise<LiveProvide
         fetchedAt: Date.now(),
         models,
     }
+}
+
+export async function fetchLMStudioModels(baseUrl: string, apiKey?: string | null): Promise<LiveProviderEntry> {
+    const parsed = await fetchLMStudioNativeList(baseUrl, apiKey)
+        .catch(async (nativeErr) => {
+            try {
+                return await fetchLMStudioOpenAIList(baseUrl, apiKey)
+            } catch (openAiErr) {
+                const nativeMessage = nativeErr instanceof Error ? nativeErr.message : String(nativeErr)
+                const openAiMessage = openAiErr instanceof Error ? openAiErr.message : String(openAiErr)
+                throw new Error(`LM Studio listModels failed. Native API: ${nativeMessage}; OpenAI API: ${openAiMessage}`)
+            }
+        })
+
+    const models: Record<string, LiveModelEntry> = {}
+    for (const m of parsed) {
+        if (!lmStudioCanChat(m)) continue
+        const id = lmStudioModelId(m)
+        if (!id) continue
+        const loadedContext = lmStudioLoadedContextLength(m)
+        const contextWindow = positiveInt(m.max_context_length ?? loadedContext ?? m.loaded_context_length ?? undefined)
+        const reasoningLevels = lmStudioReasoningLevels(m)
+        const capabilities = lmStudioCapabilities(m)
+        const customMetadata = [
+            metadata('state', 'State', m.state),
+            metadata('publisher', 'Publisher', m.publisher),
+            metadata('architecture', 'Architecture', m.architecture),
+            metadata('quantization', 'Quantization', lmStudioQuantizationLabel(m.quantization)),
+            metadata('params', 'Parameters', m.params_string),
+            metadata('format', 'Format', m.format),
+            metadata('size_bytes', 'Size', formatBytes(m.size_bytes)),
+            metadata('loaded_instances', 'Loaded instances', m.loaded_instances?.length),
+            metadata('loaded_context', 'Loaded context', loadedContext, 'tokens'),
+            metadata('tool_trained', 'Tool-trained', booleanLabel(m.capabilities?.trained_for_tool_use)),
+            metadata('vision', 'Vision', booleanLabel(m.capabilities?.vision)),
+            metadata('reasoning_default', 'Reasoning default', m.capabilities?.reasoning?.default),
+            metadata('selected_variant', 'Selected variant', m.selected_variant),
+        ].filter((item): item is NonNullable<typeof item> => item !== null)
+
+        models[id] = {
+            name: m.display_name ?? lmStudioDisplayName(id),
+            kinds: ['text'],
+            contextWindow,
+            pricing: {
+                kind: 'tokens',
+                inputPerMillion: 0,
+                outputPerMillion: 0,
+            },
+            pricingNotes: 'Local LM Studio runtime; provider billing is $0. Hardware/electricity costs are not tracked.',
+            capabilities,
+            thinkingSupported: reasoningLevels.some(level => level !== 'none'),
+            thinkingLevels: reasoningLevels,
+            defaultThinkingLevel: lmStudioDefaultReasoningLevel(m, reasoningLevels),
+            features: lmStudioFeatures(contextWindow, loadedContext),
+            rawDescription: lmStudioDescription(m),
+            customMetadata,
+            raw: {
+                key: m.key ?? null,
+                display_name: m.display_name ?? null,
+                type: m.type ?? null,
+                publisher: m.publisher ?? null,
+                architecture: m.architecture ?? null,
+                compatibility_type: m.compatibility_type ?? null,
+                quantization: m.quantization ?? null,
+                state: m.state ?? null,
+                max_context_length: m.max_context_length ?? null,
+                loaded_context_length: m.loaded_context_length ?? null,
+                loaded_instances: m.loaded_instances ?? [],
+                capabilities: m.capabilities ?? null,
+                size_bytes: m.size_bytes ?? null,
+                params_string: m.params_string ?? null,
+                format: m.format ?? null,
+                selected_variant: m.selected_variant ?? null,
+                variants: m.variants ?? [],
+            },
+        }
+    }
+
+    return {
+        fetchedAt: Date.now(),
+        models,
+    }
+}
+
+async function fetchLMStudioNativeList(baseUrl: string, apiKey?: string | null): Promise<LMStudioModel[]> {
+    const res = await fetch(lmStudioNativeModelsUrl(baseUrl), {
+        headers: lmStudioJsonHeaders(apiKey),
+    })
+    if (!res.ok) {
+        throw new Error(`native /api/v1/models failed (${res.status}): ${await res.text().catch(() => '')}`)
+    }
+    const json = await res.json()
+    const parsed = LMStudioNativeListSchema.safeParse(json)
+    if (!parsed.success) {
+        throw new Error(`native /api/v1/models response failed validation: ${parsed.error.message}`)
+    }
+    return 'models' in parsed.data ? parsed.data.models : parsed.data.data
+}
+
+async function fetchLMStudioOpenAIList(baseUrl: string, apiKey?: string | null): Promise<LMStudioModel[]> {
+    const res = await fetch(`${normalizeLMStudioBaseUrl(baseUrl)}/models`, {
+        headers: lmStudioJsonHeaders(apiKey),
+    })
+    if (!res.ok) {
+        throw new Error(`OpenAI /v1/models failed (${res.status}): ${await res.text().catch(() => '')}`)
+    }
+    const json = await res.json()
+    const parsed = LMStudioOpenAIListSchema.safeParse(json)
+    if (!parsed.success) {
+        throw new Error(`OpenAI /v1/models response failed validation: ${parsed.error.message}`)
+    }
+    return parsed.data.data.map(m => ({ id: m.id }))
+}
+
+function lmStudioCanChat(m: LMStudioModel): boolean {
+    const type = m.type?.toLowerCase()
+    if (!type) return true
+    return type === 'llm' || type === 'model' || type === 'chat'
+}
+
+function lmStudioModelId(m: LMStudioModel): string | null {
+    return nonEmptyString(m.key) ?? nonEmptyString(m.id) ?? nonEmptyString(m.selected_variant)
+}
+
+function lmStudioLoadedContextLength(m: LMStudioModel): number | undefined {
+    const fromInstances = m.loaded_instances
+        ?.map(instance => positiveInt(instance.config?.context_length))
+        .filter((value): value is number => value !== undefined)
+        .sort((a, b) => b - a)[0]
+    return fromInstances ?? positiveInt(m.loaded_context_length ?? undefined)
+}
+
+function lmStudioReasoningLevels(m: LMStudioModel): string[] {
+    const allowed = m.capabilities?.reasoning?.allowed_options
+    if (allowed && allowed.length > 0) return Array.from(new Set(allowed.map(level => level === 'off' ? 'none' : level)))
+    const def = m.capabilities?.reasoning?.default
+    if (def) return [def === 'off' ? 'none' : def]
+    return ['none']
+}
+
+function lmStudioDefaultReasoningLevel(m: LMStudioModel, levels: string[]): string {
+    const def = m.capabilities?.reasoning?.default
+    const normalized = def === 'off' ? 'none' : def
+    if (normalized && levels.includes(normalized)) return normalized
+    return levels.includes('none') ? 'none' : levels[0] ?? 'none'
+}
+
+function lmStudioCapabilities(m: LMStudioModel): Capability[] {
+    const capabilities: Capability[] = ['text', 'function_calling']
+    if (m.capabilities?.vision) capabilities.push('image')
+    if (m.capabilities?.reasoning) capabilities.push('thinking')
+    return capabilities
+}
+
+function lmStudioFeatures(contextWindow: number | undefined, loadedContext: number | undefined): ModelFeature[] {
+    const max = contextWindow && contextWindow > 0 ? contextWindow : undefined
+    const defaultValue = max
+        ? Math.min(LM_STUDIO_DEFAULT_CONTEXT_TOKENS, max)
+        : LM_STUDIO_DEFAULT_CONTEXT_TOKENS
+    if (!defaultValue || defaultValue <= 0) return []
+    return [{
+        id: 'lm_studio_context_length',
+        label: 'Context length',
+        description: 'Context tokens requested when Orchestrator auto-loads this LM Studio model.',
+        category: 'LM Studio load',
+        providerParam: 'context_length',
+        type: 'number',
+        min: 1024,
+        ...(max ? { max } : {}),
+        step: 1024,
+        unit: 'tokens',
+        defaultValue: loadedContext && max && loadedContext > max ? max : defaultValue,
+    }]
+}
+
+function lmStudioDisplayName(id: string): string {
+    const last = id.split('/').filter(Boolean).pop() ?? id
+    return last
+        .replace(/\.(gguf|bin|safetensors)$/i, '')
+        .replace(/[-_]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim() || id
+}
+
+function lmStudioDescription(m: LMStudioModel): string {
+    const parts = [
+        m.description || 'Local LM Studio model.',
+        m.state ? `State: ${m.state}.` : null,
+        m.compatibility_type ? `Compatibility: ${m.compatibility_type}.` : null,
+        m.selected_variant ? `Variant: ${m.selected_variant}.` : null,
+    ].filter(Boolean)
+    return parts.join(' ')
+}
+
+function metadata(id: string, label: string, value: string | number | boolean | null | undefined, unit?: string) {
+    if (value === null || value === undefined || value === '') return null
+    return {
+        id,
+        label,
+        value,
+        ...(unit ? { unit } : {}),
+        category: 'LM Studio',
+    }
+}
+
+function lmStudioQuantizationLabel(value: LMStudioModel['quantization']): string | null {
+    if (!value) return null
+    if (typeof value === 'string') return value
+    const bits = typeof value.bits_per_weight === 'number' ? `${value.bits_per_weight}-bit` : null
+    return [value.name, bits].filter(Boolean).join(' · ') || null
+}
+
+function booleanLabel(value: boolean | undefined): string | null {
+    if (value === undefined) return null
+    return value ? 'yes' : 'no'
+}
+
+function formatBytes(value: number | null | undefined): string | null {
+    if (!value || value <= 0) return null
+    const units = ['B', 'KB', 'MB', 'GB', 'TB']
+    let n = value
+    let unit = 0
+    while (n >= 1024 && unit < units.length - 1) {
+        n /= 1024
+        unit += 1
+    }
+    return `${n >= 10 || unit === 0 ? n.toFixed(0) : n.toFixed(1)} ${units[unit]}`
+}
+
+function nonEmptyString(value: string | null | undefined): string | null {
+    return value && value.trim() ? value.trim() : null
 }
 
 function openRouterOutputsText(m: OpenRouterModel): boolean {

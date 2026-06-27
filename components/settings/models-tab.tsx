@@ -255,6 +255,7 @@ export function ModelsTab() {
       const summary = Object.entries(result.results)
         .map(([p, r]) => {
           if (r.skipped === "no_api_key") return `${p}: no key`
+          if (r.skipped === "no_base_url") return `${p}: no URL`
           if (r.skipped === "not_implemented") return `${p}: stub`
           if (r.error) return `${p}: error`
           return `${p}: +${r.fetched}`

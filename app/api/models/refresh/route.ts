@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-import { getApiKey } from '@/lib/config'
+import { getApiKey, getEnvValue } from '@/lib/config'
 import {
     getEffectiveModel,
     getEffectiveRegistry,
@@ -8,9 +8,10 @@ import {
     patchCuratedModel,
 } from '@/lib/models/registry'
 import { readLiveRegistry, writeLiveRegistry } from '@/lib/models/store'
-import { fetchGoogleModels, fetchOpenRouterModels } from '@/lib/models/fetcher'
+import { fetchGoogleModels, fetchLMStudioModels, fetchOpenRouterModels } from '@/lib/models/fetcher'
 import { probeClaudeAliasVersions, type ClaudeAlias } from '@/lib/cli/model-probe'
 import { runWithAdminCookieProfile } from "@/lib/profiles/server"
+import { LM_STUDIO_API_KEY_ENV } from '@/lib/lm-studio'
 
 /**
  * POST /api/models/refresh
@@ -23,7 +24,7 @@ import { runWithAdminCookieProfile } from "@/lib/profiles/server"
 interface ProviderRefreshResult {
     fetched: number
     error?: string
-    skipped?: 'no_api_key' | 'not_implemented'
+    skipped?: 'no_api_key' | 'no_base_url' | 'not_implemented'
 }
 
 // Claude Code's picker entries are curated in seed.json keyed by the CLI's own
@@ -106,6 +107,23 @@ export async function POST() {
                 results.openrouter = { fetched: Object.keys(entry.models).length }
             } catch (err) {
                 results.openrouter = {
+                    fetched: 0,
+                    error: err instanceof Error ? err.message : 'Unknown error',
+                }
+            }
+        }
+
+        // ---------- LM Studio ----------
+        const lmStudioBaseUrl = getApiKey('lm-studio')
+        if (!lmStudioBaseUrl) {
+            results['lm-studio'] = { fetched: 0, skipped: 'no_base_url' }
+        } else {
+            try {
+                const entry = await fetchLMStudioModels(lmStudioBaseUrl, getEnvValue(LM_STUDIO_API_KEY_ENV))
+                live.providers['lm-studio'] = entry
+                results['lm-studio'] = { fetched: Object.keys(entry.models).length }
+            } catch (err) {
+                results['lm-studio'] = {
                     fetched: 0,
                     error: err instanceof Error ? err.message : 'Unknown error',
                 }

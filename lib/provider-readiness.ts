@@ -1,9 +1,10 @@
-import { getProviderApiKeyInfo } from '@/lib/config'
+import { getEnvValue, getProviderApiKeyInfo } from '@/lib/config'
+import { checkLMStudioServer, LM_STUDIO_API_KEY_ENV, LM_STUDIO_BASE_URL_ENV, type LMStudioHealth } from '@/lib/lm-studio'
 import { getAllCliStatuses } from '@/lib/cli/status'
 import { CLI_SPECS, type CliId } from '@/lib/cli/specs'
 import type { EffectiveProviderEntry } from '@/lib/models/schema'
 
-export type ProviderAuthKind = 'api-key' | 'cli' | 'none'
+export type ProviderAuthKind = 'api-key' | 'base-url' | 'cli' | 'none'
 
 export interface ProviderReadiness {
     available: boolean
@@ -18,6 +19,13 @@ export interface ProviderReadiness {
 }
 
 const CLI_PROVIDER_IDS = new Set<string>(['claude-code', 'codex'])
+const BASE_URL_PROVIDER_IDS = new Set<string>(['lm-studio'])
+const LM_STUDIO_READINESS_TTL_MS = 5000
+let lmStudioReadinessCache: {
+    key: string
+    at: number
+    health: LMStudioHealth
+} | null = null
 
 export function isCliProviderId(providerId: string): providerId is CliId {
     return CLI_PROVIDER_IDS.has(providerId)
@@ -94,6 +102,37 @@ export async function getProviderReadiness(
         }
     }
 
+    if (BASE_URL_PROVIDER_IDS.has(providerId)) {
+        const urlInfo = getProviderApiKeyInfo(providerId, provider)
+        const url = urlInfo?.value ?? null
+        if (!url) {
+            return {
+                available: false,
+                authKind: 'base-url',
+                apiKeyConfigured: false,
+                apiKeyMasked: null,
+                unavailableReason: `Missing ${LM_STUDIO_BASE_URL_ENV}.`,
+                chatMessage: `No model loaded. Add ${LM_STUDIO_BASE_URL_ENV} in Settings > Auth > LM Studio, then connect and try again.`,
+            }
+        }
+
+        const apiKey = getEnvValue(LM_STUDIO_API_KEY_ENV)
+        const health = await getCachedLMStudioReadiness(url, apiKey)
+        const available = health.online
+        return {
+            available,
+            authKind: 'base-url',
+            apiKeyConfigured: true,
+            apiKeyMasked: url,
+            unavailableReason: available
+                ? null
+                : `LM Studio is offline at ${health.baseUrl}${health.error ? `: ${health.error}` : ''}`,
+            chatMessage: available
+                ? null
+                : `LM Studio is configured but not reachable at ${health.baseUrl}. Start the LM Studio server, enable LAN access if needed, or reconnect it from Settings > Auth > LM Studio.`,
+        }
+    }
+
     const keyInfo = getProviderApiKeyInfo(providerId, provider)
     const key = keyInfo?.value ?? null
     const available = Boolean(key && key.length > 0)
@@ -109,6 +148,21 @@ export async function getProviderReadiness(
             ? null
             : `No model loaded. Add ${provider.apiKeyEnv} in Settings > Files > .env.local, then try again.`,
     }
+}
+
+async function getCachedLMStudioReadiness(baseUrl: string, apiKey: string | null): Promise<LMStudioHealth> {
+    const key = `${baseUrl}\n${apiKey ?? ''}`
+    const now = Date.now()
+    if (
+        lmStudioReadinessCache &&
+        lmStudioReadinessCache.key === key &&
+        now - lmStudioReadinessCache.at < LM_STUDIO_READINESS_TTL_MS
+    ) {
+        return lmStudioReadinessCache.health
+    }
+    const health = await checkLMStudioServer(baseUrl, apiKey, { timeoutMs: 900 })
+    lmStudioReadinessCache = { key, at: now, health }
+    return health
 }
 
 export async function getProviderReadinessMap(

@@ -40,6 +40,18 @@ export const ENV_PRESETS = [
     description: "OpenRouter model router and model catalog pricing",
     placeholder: "sk-or-v1-...",
   },
+  {
+    key: "LM_STUDIO_BASE_URL",
+    label: "LM Studio",
+    description: "Local/LAN LM Studio server, for example http://192.168.1.25:1234/v1",
+    placeholder: "http://192.168.1.25:1234/v1",
+  },
+  {
+    key: "LM_STUDIO_AUTO_UNLOAD",
+    label: "LM Studio auto-unload",
+    description: "Set to false to keep other LM Studio models loaded when Orchestrator uses one",
+    placeholder: "false",
+  },
 ] as const
 
 export async function revealEnvValue(

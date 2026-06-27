@@ -12,11 +12,11 @@
  *
  * Verifies:
  *   - claude-code exposes customToolNamePrefix === 'mcp__orch-tools__';
- *     codex / google / anthropic do not (they pass custom tools bare).
+ *     codex / google / anthropic / lm-studio do not (they pass custom tools bare).
  *   - buildToolsSection renders custom tool names WITH the prefix and states
  *     the bare→prefixed mapping when a prefix is set.
  *   - With no prefix, the per-tool menu is omitted entirely: those providers
- *     (codex `dynamicTools`, Anthropic/OpenAI/Google native tool defs) already
+ *     (codex `dynamicTools`, Anthropic/OpenAI/Google/LM Studio native tool defs) already
  *     deliver every schema in the request, so a prose copy would duplicate
  *     ~6k tokens. Only the built-ins routing note renders, when present.
  *
@@ -71,7 +71,7 @@ check(
     cc?.customToolNamePrefix === CLAUDE_CODE_PREFIX,
     cc?.customToolNamePrefix
 )
-for (const id of ['codex', 'google', 'anthropic'] as const) {
+for (const id of ['codex', 'google', 'anthropic', 'lm-studio'] as const) {
     const caps = getProviderCapabilities(id)
     // Skip providers not registered in this environment; only assert when present.
     if (!caps) continue

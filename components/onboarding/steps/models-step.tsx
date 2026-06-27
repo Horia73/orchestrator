@@ -115,7 +115,7 @@ function ModelsStepInner() {
 
   const apiKeyProviders = data
     ? Object.entries(data.providerStatus)
-        .filter(([id, s]) => id !== "browser" && s.authKind === "api-key")
+        .filter(([id, s]) => id !== "browser" && (s.authKind === "api-key" || s.authKind === "base-url"))
         .map(([id, s]) => ({ id, status: s, def: data.providers[id] }))
     : []
 
@@ -151,7 +151,7 @@ function ModelsStepInner() {
     <OnboardingStepShell
       icon={<Cpu className="h-6 w-6" />}
       title="Choose your models"
-      subtitle="Orchestrator runs on the model providers you connect — sign in to Claude or Codex, or add an API key. Then pick which model your main assistant uses."
+      subtitle="Orchestrator runs on the model providers you connect — sign in to Claude or Codex, add an API key, or point at a local LM Studio server. Then pick which model your main assistant uses."
       footer={
         <OnboardingFooter
           primaryLabel="Continue"
@@ -183,10 +183,10 @@ function ModelsStepInner() {
             <CliAccountsSection />
           </section>
 
-          {/* API-key providers — paste a key inline. */}
+          {/* API-key/base-URL providers — paste setup values inline. */}
           {apiKeyProviders.length > 0 ? (
             <section className="space-y-2">
-              <h2 className="text-sm font-semibold text-foreground">…or add an API key</h2>
+              <h2 className="text-sm font-semibold text-foreground">…or add an API key / local URL</h2>
               <div className="space-y-2">
                 {apiKeyProviders.map(({ id, status, def }) => (
                   <ApiKeyProviderRow
@@ -212,7 +212,7 @@ function ModelsStepInner() {
             />
             {!hasUsableProvider ? (
               <p className="text-xs text-amber-600 dark:text-amber-400">
-                Sign in to a provider or add an API key above to choose a model.
+                Sign in to a provider, add an API key, or add a local server URL above to choose a model.
               </p>
             ) : null}
           </section>

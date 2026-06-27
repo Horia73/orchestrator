@@ -3,6 +3,7 @@ import { GoogleProvider, GOOGLE_CAPABILITIES } from './google'
 import { AnthropicProvider } from './anthropic'
 import { OpenAIProvider } from './openai'
 import { OpenRouterProvider } from './openrouter'
+import { LMStudioProvider, LM_STUDIO_CAPABILITIES } from './lm-studio'
 import { ClaudeCodeProvider } from './claude-code'
 import { CodexProvider } from './codex'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
@@ -42,6 +43,9 @@ export function getProvider(providerId: string, apiKey: string): AIProvider {
         case 'openrouter':
             provider = new OpenRouterProvider(apiKey)
             break
+        case 'lm-studio':
+            provider = new LMStudioProvider(apiKey)
+            break
         case 'claude-code':
             provider = new ClaudeCodeProvider(apiKey)
             break
@@ -70,6 +74,7 @@ const STATIC_CAPABILITIES: Record<string, ProviderCapabilities> = {
     anthropic: new AnthropicProvider('').capabilities,
     openai: new OpenAIProvider('').capabilities,
     openrouter: new OpenRouterProvider('').capabilities,
+    'lm-studio': LM_STUDIO_CAPABILITIES,
     'claude-code': new ClaudeCodeProvider('').capabilities,
     codex: new CodexProvider('').capabilities,
     browser: BROWSER_CAPABILITIES,

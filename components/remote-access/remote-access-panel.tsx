@@ -40,21 +40,77 @@ export function isPublicHttps(url: string | null | undefined): boolean {
   }
 }
 
+async function copyText(text: string): Promise<boolean> {
+  if (navigator.clipboard?.writeText) {
+    try {
+      await navigator.clipboard.writeText(text)
+      return true
+    } catch {
+      // Fall through to the legacy selection-based copy path.
+    }
+  }
+
+  const textarea = document.createElement("textarea")
+  textarea.value = text
+  textarea.setAttribute("readonly", "")
+  textarea.style.position = "fixed"
+  textarea.style.left = "-9999px"
+  textarea.style.top = "0"
+  document.body.appendChild(textarea)
+  textarea.select()
+  try {
+    return document.execCommand("copy")
+  } catch {
+    return false
+  } finally {
+    textarea.remove()
+  }
+}
+
 function CopyLink({ url }: { url: string }) {
   const [copied, setCopied] = React.useState(false)
+  const copy = React.useCallback(async () => {
+    if (!(await copyText(url))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }, [url])
   return (
     <button
       type="button"
-      onClick={() => {
-        void navigator.clipboard?.writeText(url)
-        setCopied(true)
-        window.setTimeout(() => setCopied(false), 1200)
-      }}
+      onClick={() => void copy()}
       className="inline-flex items-center gap-1.5 rounded-md border border-border/60 bg-card/40 px-2 py-1 font-mono text-xs text-foreground hover:border-border"
     >
       <span className="truncate">{url}</span>
       {copied ? <Check className="h-3 w-3 shrink-0 text-emerald-500" /> : <Copy className="h-3 w-3 shrink-0 text-muted-foreground" />}
     </button>
+  )
+}
+
+function CopyCommand({ command }: { command: string }) {
+  const [copied, setCopied] = React.useState(false)
+  const copy = React.useCallback(async () => {
+    if (!(await copyText(command))) return
+    setCopied(true)
+    window.setTimeout(() => setCopied(false), 1200)
+  }, [command])
+  return (
+    <div className="relative rounded-lg border border-border/60 bg-muted/40 p-3">
+      <pre className="overflow-x-auto pr-9 text-[11px] leading-relaxed text-muted-foreground">
+        <code>{command}</code>
+      </pre>
+      <button
+        type="button"
+        title="Copy command"
+        onClick={() => void copy()}
+        className="absolute top-2 right-2 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border/60 bg-background/80 text-muted-foreground hover:text-foreground"
+      >
+        {copied ? (
+          <Check className="h-3.5 w-3.5 text-emerald-500" />
+        ) : (
+          <Copy className="h-3.5 w-3.5" />
+        )}
+      </button>
+    </div>
   )
 }
 
@@ -75,6 +131,41 @@ function Section({
       </div>
       <div className="mt-3 space-y-2">{children}</div>
     </section>
+  )
+}
+
+const MANUAL_HTTPS_SETUP_COMMAND = `cd /path/to/orchestrator
+ORCHESTRATOR_DUCKDNS_DOMAIN=your-duckdns-subdomain \\
+ORCHESTRATOR_DUCKDNS_TOKEN=your-duckdns-token \\
+ORCHESTRATOR_LETSENCRYPT_EMAIL=you@example.com \\
+bash scripts/install.sh setup-https`
+
+function ManualHttpsSetupFallback({ bridgeError }: { bridgeError: string | null }) {
+  return (
+    <div className="space-y-3">
+      <div className="flex items-start gap-2 rounded-lg bg-amber-500/10 p-3 text-xs leading-relaxed text-amber-700 dark:text-amber-300">
+        <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <div className="space-y-1">
+          <p className="font-medium text-foreground">Automatic setup is not connected on this install.</p>
+          <p>
+            {bridgeError ||
+              "The host bridge is missing, so Orchestrator cannot run the DuckDNS and nginx setup from the browser."}
+          </p>
+        </div>
+      </div>
+      <div className="space-y-2">
+        <p className="text-xs leading-relaxed text-muted-foreground">
+          Replace the placeholders and run this on the machine that hosts Orchestrator. It installs the
+          DuckDNS updater, gets a Let&apos;s Encrypt certificate, configures nginx, and writes{" "}
+          <span className="font-mono">ORCHESTRATOR_PUBLIC_URL</span>.
+        </p>
+        <CopyCommand command={MANUAL_HTTPS_SETUP_COMMAND} />
+        <p className="text-[11px] leading-relaxed text-muted-foreground">
+          After it prints <span className="font-mono">ORCHESTRATOR_PUBLIC_URL=...</span>, restart the app
+          if it is still using the old environment, then press Refresh here.
+        </p>
+      </div>
+    </div>
   )
 }
 
@@ -320,10 +411,7 @@ export function RemoteAccessPanel({
             {bridge.available ? (
               <HttpsSetupForm onDone={load} />
             ) : (
-              <p className="text-xs text-muted-foreground">
-                HTTPS setup runs on the host (Docker installs). Point your domain at a LAN IP and set{" "}
-                <span className="font-mono">ORCHESTRATOR_PUBLIC_URL</span>, or re-run the installer&apos;s HTTPS step.
-              </p>
+              <ManualHttpsSetupFallback bridgeError={bridge.error} />
             )}
           </div>
         )}

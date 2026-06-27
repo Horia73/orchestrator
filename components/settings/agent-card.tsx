@@ -709,6 +709,10 @@ function formatProviderUnavailable(status: ProviderStatus | undefined, apiKeyEnv
       ? `${status.cliName ?? "CLI"} is not installed. Install it in Settings > Auth.`
       : `${status.cliName ?? "CLI"} is not logged in. Log in from Settings > Auth.`
   }
+  if (status?.authKind === "base-url") {
+    if (status.unavailableReason) return status.unavailableReason
+    return `Configure ${apiKeyEnv} from Settings > Auth > LM Studio.`
+  }
   if (status?.authKind === "api-key" || !apiKeyEnv.includes("NO_API_KEY")) {
     return (
       <>
