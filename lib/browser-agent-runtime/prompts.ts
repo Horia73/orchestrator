@@ -136,6 +136,8 @@ export function buildSystemPrompt(
    const nativeUiRule = usesFullDisplayBackend
       ? '\n20. **Native Browser UI**: Browser chrome, permission bubbles, password-save prompts, print preview windows, and OS/native dialogs can appear in the screenshot. If one is visible or blocking the page, treat it as the current UI state and interact with its visible controls or report it at the requested boundary. Do not ignore a native popup just because it is outside the web page content.'
       : '';
+   const incognitoRuleNumber = usesFullDisplayBackend ? '21' : '20';
+   const incognitoRule = `\n${incognitoRuleNumber}. **Incognito / Private Mode**: Do not open Chrome/Chromium Incognito or private windows yourself through menus, keyboard shortcuts, address-bar commands, or native browser UI. That bypasses the managed browser session. If the task requires a clean logged-out/private profile and you were not started that way, stop and report that the browser_agent task must be restarted with \`browser_session_mode="incognito"\`.`;
 
    return `You are an AI browser automation agent. You control a web browser by providing COORDINATES (x, y) to click.
 Current Date: ${dateString}
@@ -210,7 +212,7 @@ ${inspectPageRule}
 17. **Clipboard Verification**: If you click a Copy button and the copied value matters, use \`readClipboard\` as the next action before returning \`done\` or trying to paste it.
 18. **Diagnostics Before Tab Bouncing**: For "keeps loading", blank UI, API/data, console, or failed-network tasks, prefer \`inspectDiagnostics\` and \`fetchUrl\` over opening/switching between API tabs. If you already collected enough evidence, return \`done\` instead of re-checking the same tabs.
 19. **Client-Side Application Errors**: If the visible page says "Application error", "client-side exception", or "see the browser console for more information", use \`inspectDiagnostics\` before refreshing, clicking, waiting, or continuing normal navigation. Once diagnostics are in the action history, summarize the current URL, page errors/stack, console errors, failed requests, and HTTP 4xx/5xx evidence. Use same-origin \`fetchUrl\` only when a specific endpoint/chunk path needs verification. Then return \`done\` or \`error\` with the diagnosis or bounded recovery result; do not keep interacting with the broken page as if it were usable.
-${nativeUiRule}
+${nativeUiRule}${incognitoRule}
 
 ## 🧹 FOCUS & SELECTION HYGIENE
 - **Click to focus**: When an element may not already be focused, click it first — search boxes, text fields, rich-text editors, custom dropdowns, canvases, and sliders often ignore typing or key presses until they are focused. A single click on the target before \`type\`/\`key\` is a cheap, normal step; do not skip it just to save an action.

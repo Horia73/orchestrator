@@ -435,6 +435,7 @@ export const WORKSPACE_FILE_DEFINITIONS: WorkspaceFileDefinition[] = [
       "OPENROUTER_API_KEY=",
       "",
       "ORCHESTRATOR_PUBLIC_URL=",
+      "ORCHESTRATOR_LAN_ORIGIN=",
       "ORCHESTRATOR_SSH_USER=",
       "ORCHESTRATOR_SSH_HOST=",
       "ORCHESTRATOR_HOST_LAN_IP=",

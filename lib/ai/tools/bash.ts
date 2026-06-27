@@ -50,6 +50,16 @@ function resolveCwd(cwdArg: string): { ok: true; cwd: string } | { ok: false; er
     return { ok: true, cwd: resolved }
 }
 
+function runtimeCommandEnv(): Record<string, string> {
+    const paths = activeRuntimePaths()
+    return {
+        ORCHESTRATOR_APP_DIR: process.cwd(),
+        ORCHESTRATOR_AGENT_WORKSPACE_DIR: paths.agentWorkspaceDir,
+        ORCHESTRATOR_PROFILE_STATE_DIR: paths.stateDir,
+        ORCHESTRATOR_PROJECT_RUNS_DIR: path.join(process.cwd(), '.orchestrator', 'project-runs'),
+    }
+}
+
 function startBackgroundCommand(command: string, cwd: string, timeoutMs: number, injection: EnvVarInjection): ToolResult {
     const id = `bg_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`
     const logPath = `${activeRuntimePaths().workspaceDir}/.background-jobs/${id}.log`
@@ -66,7 +76,7 @@ function startBackgroundCommand(command: string, cwd: string, timeoutMs: number,
     try {
         proc = spawnProcess(process.env.SHELL || '/bin/zsh', ['-lc', command], {
             cwd,
-            env: augmentedEnv(injection.env),
+            env: augmentedEnv({ ...runtimeCommandEnv(), ...injection.env }),
             stdio: ['ignore', 'pipe', 'pipe'],
             detached: true,
         })
@@ -200,6 +210,7 @@ async function runForegroundCommand(command: string, cwd: string, timeoutMs: num
                 rows: 32,
                 cwd,
                 env: augmentedEnv({
+                    ...runtimeCommandEnv(),
                     ...injection.env,
                     FORCE_COLOR: process.env.FORCE_COLOR ?? '1',
                     TERM: 'xterm-256color',

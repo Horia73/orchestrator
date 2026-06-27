@@ -109,8 +109,11 @@ async function main() {
     check('ActivateIntegrationTools("project_dev") loads the full protocol',
         activatedProjectDev.includes('<project_development_policy>') &&
         activatedProjectDev.includes('project-run:prepare') &&
-        activatedProjectDev.includes('PREVIEW_BASE_PATH') &&
+        activatedProjectDev.includes('PUBLISHED_BASE_PATH') &&
+        activatedProjectDev.includes('publish-static') &&
         activatedProjectDev.includes('lanUrl') &&
+        !activatedProjectDev.includes('application/vnd.ant.dev-preview') &&
+        !activatedProjectDev.includes('live_preview_policy') &&
         !activatedProjectDev.includes('<self_update_policy>'))
 
     fs.rmSync(stateDir, { recursive: true, force: true })

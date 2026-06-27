@@ -131,7 +131,7 @@ try {
     console.log(`Port: ${port}`)
     console.log(`Dev URL: ${devUrl}`)
     console.log(`Preview URL: ${publicPreviewUrl || lanPreviewUrl || localPreviewUrl}`)
-    console.log(`LAN URL: ${lanPreviewUrl || '(no LAN IPv4 detected; set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP)'}`)
+    console.log(`LAN URL: ${lanPreviewUrl || '(no LAN origin configured; in Docker/reverse-proxy installs set ORCHESTRATOR_LAN_ORIGIN)'}`)
     console.log(`Instructions: ${instructionsPath}`)
     console.log(`State: ${statePath}`)
     console.log('')
@@ -544,7 +544,7 @@ function buildInstructions(values) {
     '',
     `- Local preview: ${values.localPreviewUrl}`,
     values.publicPreviewUrl ? `- Public preview: ${values.publicPreviewUrl}` : '- Public preview: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
-    values.lanPreviewUrl ? `- LAN preview: ${values.lanPreviewUrl}` : '- LAN preview: unavailable because no LAN IPv4 was detected. The orchestrator can set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP.',
+    values.lanPreviewUrl ? `- LAN preview: ${values.lanPreviewUrl}` : '- LAN preview: unavailable because no LAN origin is configured. In Docker/reverse-proxy installs, configure ORCHESTRATOR_LAN_ORIGIN rather than guessing a raw host/container port.',
     '',
     'If the preview is down or stale, restart only the managed preview helper:',
     '',
@@ -604,7 +604,7 @@ function buildCoderPrompt(values) {
     '- Do not run `npm run dev`, `next dev`, or another web server for this repo. The orchestrator owns the managed preview lifecycle.',
     `- Local preview URL: ${values.localPreviewUrl}`,
     values.publicPreviewUrl ? `- Public preview URL: ${values.publicPreviewUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
-    values.lanPreviewUrl ? `- LAN preview URL: ${values.lanPreviewUrl}` : '- LAN preview URL: unavailable because no LAN IPv4 was detected; ask the orchestrator for a LAN-accessible app origin instead of reporting only localhost.',
+    values.lanPreviewUrl ? `- LAN preview URL: ${values.lanPreviewUrl}` : '- LAN preview URL: unavailable because no LAN origin is configured; ask the orchestrator for a LAN-accessible app origin instead of reporting only localhost.',
     `- If the preview is down, restart only the managed helper: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} restart --state ${values.statePath} --health-path /`,
     `- If missing snapshot config blocks verification, ask for an orchestrator-owned seed such as: node ${path.join(appDir, 'scripts', 'self-dev-run.mjs')} seed --state ${values.statePath} --profile location-intelligence`,
     '- Do not stop the preview before returning; the orchestrator keeps it alive for user review.',

@@ -30,6 +30,7 @@ const requestedPort = intArg('port', null)
 const copyEnv = boolArg('copy-env')
 const jsonOutput = boolArg('json')
 const commandStdio = jsonOutput ? ['ignore', 'ignore', 'inherit'] : 'inherit'
+const managedPreview = boolArg('managed-preview')
 
 const stateRoot = path.join(projectDir, '.orchestrator', 'project-runs')
 const runDir = path.join(stateRoot, runId)
@@ -59,28 +60,9 @@ try {
     ? prepareExistingGit()
     : prepareNewProject()
 
-  const port = await reservePort(requestedPort)
-  const devUrl = `http://127.0.0.1:${port}`
-  // Reverse-proxy the loopback dev server through the live app so the user can
-  // open the preview from anywhere (not just the box the dev server runs on).
-  // Mirrors the self-dev managed preview; lifecycle is driven by
-  // `project-run:run -- start|stop`.
-  const previewToken = randomBytes(24).toString('base64url')
-  const previewBasePath = `/dev-preview/${encodeURIComponent(runId)}`
-  const publicPreviewUrl = buildPublicPreviewUrl(previewBasePath, previewToken)
-  const lanPreviewUrl = buildLanPreviewUrl(previewBasePath, previewToken)
-  const localPreviewUrl = `${devUrl}${previewBasePath}/`
-  const preview = {
-    token: previewToken,
-    basePath: previewBasePath,
-    publicUrl: publicPreviewUrl,
-    lanUrl: lanPreviewUrl,
-    localUrl: localPreviewUrl,
-    logPath: path.join(runDir, 'preview.log'),
-    stateDir: path.join(runDir, 'preview-state'),
-    status: 'prepared',
-    pid: null,
-  }
+  const port = managedPreview ? await reservePort(requestedPort) : null
+  const devUrl = port ? `http://127.0.0.1:${port}` : null
+  const preview = managedPreview ? createPreviewMetadata(runId, runDir, devUrl) : null
   const hints = detectProjectHints(repoDir, {
     packageManager: packageManagerArg,
     devCommand: devCommandArg,
@@ -126,6 +108,7 @@ try {
   })
   const state = {
     runId,
+    name,
     kind,
     createdAt: new Date().toISOString(),
     projectDir,
@@ -149,6 +132,9 @@ try {
     remote: prepared.remote,
     deployTarget,
     pushPolicy,
+    buildCommand: buildCommandArg || null,
+    devCommand: devCommandArg || null,
+    testCommand: testCommandArg || null,
     scaffoldCommand: scaffoldCommand || null,
     copyEnv,
     hints,
@@ -165,11 +151,14 @@ try {
     console.log(`Repo: ${repoDir}`)
     console.log(`Branch: ${branch}`)
     console.log(`Base: ${prepared.baseRef || '(none)'}`)
-    console.log(`Port: ${port}`)
-    console.log(`Dev URL: ${devUrl}`)
-    console.log(`Preview base path: ${previewBasePath}`)
-    console.log(`Preview URL: ${publicPreviewUrl || lanPreviewUrl || '(set ORCHESTRATOR_PUBLIC_URL or ORCHESTRATOR_LAN_ORIGIN to expose a /dev-preview link)'}`)
-    console.log(`LAN URL: ${lanPreviewUrl || '(no LAN IPv4 detected; set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP)'}`)
+    console.log(`Managed preview: ${preview ? 'enabled' : 'disabled (standalone projects publish through /published-apps/<slug>/)'}`)
+    if (preview) {
+      console.log(`Port: ${port}`)
+      console.log(`Dev URL: ${devUrl}`)
+      console.log(`Preview base path: ${preview.basePath}`)
+      console.log(`Preview URL: ${preview.publicUrl || preview.lanUrl || '(set ORCHESTRATOR_PUBLIC_URL or ORCHESTRATOR_LAN_ORIGIN to expose a /dev-preview link)'}`)
+      console.log(`LAN URL: ${preview.lanUrl || '(no LAN origin configured)'}`)
+    }
     console.log(`Instructions: ${instructionsPath}`)
     console.log(`State: ${statePath}`)
     console.log('')
@@ -353,16 +342,101 @@ function detectProjectHints(repoPath, overrides) {
 
 function buildInstructions(values) {
   const packagePrefix = values.hints.packageManager || '<package-manager>'
-  const devCommand = values.hints.devCommand
-    || (values.hints.framework === 'next'
-      ? `${packagePrefix === 'npm' ? 'npx' : packagePrefix} next dev -H 127.0.0.1 -p ${values.port}`
-      : null)
+  const devCommand = values.preview
+    ? (values.hints.devCommand
+      || (values.hints.framework === 'next'
+        ? `${packagePrefix === 'npm' ? 'npx' : packagePrefix} next dev -H 127.0.0.1 -p ${values.port}`
+        : null))
+    : null
   const verificationHints = [
     values.hints.testCommand,
     values.hints.buildCommand,
     values.hints.scripts?.test ? `${packagePrefix} ${packagePrefix === 'npm' ? 'run ' : ''}test`.trim() : null,
     values.hints.scripts?.build ? `${packagePrefix} ${packagePrefix === 'npm' ? 'run ' : ''}build`.trim() : null,
   ].filter(Boolean)
+  const basePathEnv = values.preview
+    ? 'process.env.PREVIEW_BASE_PATH || process.env.PUBLISHED_BASE_PATH'
+    : 'process.env.PUBLISHED_BASE_PATH'
+  const basePathIntro = values.preview
+    ? `This run has an explicit managed preview under \`${values.preview.basePath}/\`, and static publishes are served under \`/published-apps/<slug>/\`. Web apps MUST honour \`PREVIEW_BASE_PATH\` for preview and \`PUBLISHED_BASE_PATH\` for publish so assets/routes resolve under those subpaths.`
+    : 'Durable static apps are served under `/published-apps/<slug>/` rather than `/`. Web apps that emit root-absolute assets/routes MUST honour `PUBLISHED_BASE_PATH` at build time so the published app works after the container restarts.'
+  const basePathBlock = [
+    values.preview
+      ? '### Base-path contract (preview and publish)'
+      : '### Base-path contract (published static apps)',
+    '',
+    basePathIntro,
+    '',
+    '```js',
+    values.preview
+      ? '// next.config.mjs - basePath/assetPrefix for managed preview or static publish'
+      : '// next.config.mjs - basePath/assetPrefix for static publish',
+    `const basePath = ${basePathEnv}`,
+    'const nextConfig = {',
+    '  ...(basePath ? { basePath, assetPrefix: basePath } : {}),',
+    '}',
+    'export default nextConfig',
+    '```',
+    '',
+    '```js',
+    values.preview
+      ? '// vite.config.js - base from managed preview or static publish (trailing slash)'
+      : '// vite.config.js - base from static publish (trailing slash)',
+    `const basePath = ${basePathEnv}`,
+    "export default { base: basePath ? basePath + '/' : '/' }",
+    '```',
+    '',
+  ]
+  const previewBlock = values.preview
+    ? [
+      '## Managed Preview',
+      '',
+      'This run was explicitly prepared with a managed, reverse-proxied dev preview. Do NOT start your own long-running dev server for this repo; the orchestrator owns its lifecycle via:',
+      '',
+      '```bash',
+      `npm run project-run:run -- start --run-id ${values.runId} --health-path /`,
+      `npm run project-run:run -- restart --run-id ${values.runId}`,
+      `npm run project-run:run -- logs --run-id ${values.runId} --lines 200`,
+      '```',
+      '',
+      'Assigned loopback dev URL (internal health checks only):',
+      '',
+      '```text',
+      values.devUrl,
+      '```',
+      '',
+      `The preview binds to \`127.0.0.1:${values.port}\` and is exposed through the live app at \`${values.preview.basePath}/\`${values.preview.publicUrl ? ` (public: ${values.preview.publicUrl})` : ''}${values.preview.lanUrl ? ` (LAN: ${values.preview.lanUrl})` : ''}. Never use port \`3000\` (the running Orchestrator app).`,
+      '',
+      'User-facing preview links:',
+      values.preview.publicUrl ? `- Public preview URL: ${values.preview.publicUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+      values.preview.lanUrl ? `- LAN preview URL: ${values.preview.lanUrl}` : '- LAN preview URL: unavailable because no LAN origin is configured. In Docker/reverse-proxy installs, configure ORCHESTRATOR_LAN_ORIGIN rather than guessing a raw container port.',
+      `- Loopback-only dev URL: ${values.devUrl} (internal diagnostics only).`,
+      '',
+      'When reporting to the orchestrator or user, include the LAN preview URL when present. Never report only a raw localhost/127.0.0.1 project URL.',
+      '',
+      ...basePathBlock,
+      `The managed preview sets \`PREVIEW_BASE_PATH=${values.preview.basePath}\`, \`HOST=127.0.0.1\`, and \`PORT=${values.port}\` when it launches your dev command. If a framework needs a non-default dev command, the orchestrator can pass \`--dev-command\` to \`start\`.`,
+      '',
+      devCommand
+        ? [
+          'Detected dev command the managed preview will use by default:',
+          '',
+          '```bash',
+          devCommand,
+          '```',
+          '',
+        ].join('\n')
+        : 'No dev command was auto-detected. Make sure a standard dev command exists (or tell the orchestrator to pass `--dev-command` to `start`).\n',
+    ]
+    : [
+      '## Development Server Policy',
+      '',
+      'This standalone project run is not assigned a managed dev preview. Do not leave long-running dev servers behind, do not edit host nginx/systemd/Docker services on your own, and do not report raw localhost/127.0.0.1 links to the user.',
+      '',
+      'For user-facing static sites/apps, the durable surface is the Orchestrator-published URL returned by `publish-static`. Use package scripts, builds, and short-lived local checks as needed, then stop anything you start before returning.',
+      '',
+      ...basePathBlock,
+    ]
 
   return [
     '# Project Run Instructions',
@@ -409,62 +483,17 @@ function buildInstructions(values) {
     '',
     'Do not pull, rebase, reset, stash, or discard local work unless the orchestrator explicitly asks you to.',
     '',
-    '## Development Server & Managed Preview',
+    ...previewBlock,
+    '## Durable Static Publish',
     '',
-    'The Orchestrator runs the dev server for you as a managed, reverse-proxied preview so the user can open it from anywhere. Do NOT start your own long-running dev server for this repo; the orchestrator owns its lifecycle via:',
+    'If the finished project is a static web app/site (typical Vite quiz, dashboard, landing page, or exported Next.js app), the orchestrator can publish the verified build into the active profile workspace and serve it through the live Orchestrator reverse proxy:',
     '',
     '```bash',
-    `npm run project-run:run -- start --run-id ${values.runId} --health-path /`,
-    `npm run project-run:run -- restart --run-id ${values.runId}`,
-    `npm run project-run:run -- logs --run-id ${values.runId} --lines 200`,
+    `npm run project-run:run -- publish-static --run-id ${values.runId} --slug <stable-app-slug>`,
     '```',
     '',
-    'Assigned loopback dev URL (used internally by the managed preview):',
+    'That command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, copies `dist/`, `out/`, or `build/` into `workspace/published-apps/<slug>/`, and returns stable Public/LAN URLs such as `/published-apps/<slug>/`. Do not put interactive apps under `/files/`: that file route deliberately blocks script execution. Published static apps run without Orchestrator API/network permissions; if the project requires fetch/XHR/WebSocket calls, a backend, SSR server, database, secrets, cron, or paid deployment, report that it is not a static publish and ask the orchestrator for an explicit deployment target/policy instead of editing nginx or host services on your own.',
     '',
-    '```text',
-    values.devUrl,
-    '```',
-    '',
-    `The managed preview binds to \`127.0.0.1:${values.port}\` and is exposed through the live app at \`${values.preview.basePath}/\`${values.preview.publicUrl ? ` (public: ${values.preview.publicUrl})` : ''}${values.preview.lanUrl ? ` (LAN: ${values.preview.lanUrl})` : ''}. Never use port \`3000\` (the running Orchestrator app).`,
-    '',
-    'User-facing preview links:',
-    values.preview.publicUrl ? `- Public preview URL: ${values.preview.publicUrl}` : '- Public preview URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
-    values.preview.lanUrl ? `- LAN preview URL: ${values.preview.lanUrl}` : '- LAN preview URL: unavailable because no LAN IPv4 was detected. The orchestrator can set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP.',
-    `- Loopback-only dev URL: ${values.devUrl} (for internal health checks, not a user-facing link).`,
-    '',
-    'When reporting to the orchestrator or user, include the LAN preview URL when present. Never report only a raw localhost/127.0.0.1 project URL for a previewable web project.',
-    '',
-    '### Base-path contract (required for previewable web apps)',
-    '',
-    `Because the preview is served under \`${values.preview.basePath}/\` rather than \`/\`, a web app MUST honour the \`PREVIEW_BASE_PATH\` env so its assets and routes resolve. This is dev-only and must not affect production builds. Examples:`,
-    '',
-    '```js',
-    '// next.config.mjs — basePath/assetPrefix only when PREVIEW_BASE_PATH is set',
-    'const previewBase = process.env.PREVIEW_BASE_PATH',
-    'const nextConfig = {',
-    '  ...(previewBase ? { basePath: previewBase, assetPrefix: previewBase } : {}),',
-    '}',
-    'export default nextConfig',
-    '```',
-    '',
-    '```js',
-    '// vite.config.js — base from PREVIEW_BASE_PATH (trailing slash)',
-    "const previewBase = process.env.PREVIEW_BASE_PATH",
-    "export default { base: previewBase ? previewBase + '/' : '/' }",
-    '```',
-    '',
-    `The managed preview sets \`PREVIEW_BASE_PATH=${values.preview.basePath}\`, \`HOST=127.0.0.1\`, and \`PORT=${values.port}\` when it launches your dev command. If a framework needs a non-default dev command, the orchestrator can pass \`--dev-command\` to \`start\`.`,
-    '',
-    devCommand
-      ? [
-        'Detected dev command the managed preview will use by default:',
-        '',
-        '```bash',
-        devCommand,
-        '```',
-        '',
-      ].join('\n')
-      : 'No dev command was auto-detected. Make sure a standard dev command exists (or tell the orchestrator to pass `--dev-command` to `start`).\n',
     '## Verification',
     '',
     'Inspect the project and choose the checks that match the change. Prefer existing package scripts, framework checks, and targeted smoke tests.',
@@ -486,12 +515,27 @@ function buildInstructions(values) {
     '- files changed;',
     '- commands run;',
     '- public preview URL and LAN preview URL used, if any;',
+    '- static published URL if the orchestrator published the build;',
     '- blockers or residual risks.',
     '',
   ].join('\n')
 }
 
 function buildCoderPrompt(values) {
+  const previewLines = values.preview
+    ? [
+      `- Managed preview: enabled at ${values.preview.basePath}/ (orchestrator runs the dev server via \`project-run:run -- start\`; do not run your own long-running server)`,
+      `- Assigned dev URL (loopback): ${values.devUrl}`,
+      values.preview.publicUrl ? `- Managed preview public URL: ${values.preview.publicUrl}` : '- Managed preview public URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
+      values.preview.lanUrl ? `- Managed preview LAN URL: ${values.preview.lanUrl}` : '- Managed preview LAN URL: unavailable because no LAN origin is configured.',
+      `- Preview builds must honour PREVIEW_BASE_PATH=${values.preview.basePath}. Static-published apps must honour PUBLISHED_BASE_PATH=/published-apps/<slug>. See the instructions file.`,
+    ]
+    : [
+      '- Managed preview: disabled for this standalone project run.',
+      '- Durable user-facing target: /published-apps/<slug>/ via `project-run:run publish-static` after build/test verification.',
+      '- Static-published apps must honour PUBLISHED_BASE_PATH=/published-apps/<slug>. Do not use /files for interactive apps and do not report raw localhost links as the final result.',
+    ]
+
   return [
     `Task: ${values.task}`,
     '',
@@ -503,11 +547,7 @@ function buildCoderPrompt(values) {
     `- Kind: ${values.kind}`,
     `- Branch: ${branch}`,
     `- Base: ${values.baseRef || values.baseBranch || '(new project)'}`,
-    `- Assigned dev URL (loopback): ${values.devUrl}`,
-    `- Managed preview base path: ${values.preview.basePath}/ (orchestrator runs the dev server via \`project-run:run -- start\`; do not run your own)`,
-    values.preview.publicUrl ? `- Managed preview public URL: ${values.preview.publicUrl}` : '- Managed preview public URL: unavailable because ORCHESTRATOR_PUBLIC_URL is not configured.',
-    values.preview.lanUrl ? `- Managed preview LAN URL: ${values.preview.lanUrl}` : '- Managed preview LAN URL: unavailable because no LAN IPv4 was detected; ask the orchestrator for a LAN-accessible app origin instead of reporting only localhost.',
-    `- Previewable web apps must honour PREVIEW_BASE_PATH (dev-only basePath/assetPrefix) so assets resolve under ${values.preview.basePath}/. See the instructions file.`,
+    ...previewLines,
     `- Push policy hint: ${values.pushPolicy}`,
     `- Deployment target hint: ${values.deployTarget}`,
     values.clonedFrom ? `- Cloned from: ${values.clonedFrom}` : null,
@@ -517,10 +557,26 @@ function buildCoderPrompt(values) {
     values.template ? `- Template hint: ${values.template}` : null,
     '- Before editing, run `git branch --show-current` and `git status --short` in the isolated repository.',
     '',
-    'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Use the orchestrator-managed preview for visual checks instead of starting your own dev server; if the preview is down, ask the orchestrator to restart it.',
+    'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Do not leave long-running dev servers behind. For production-ready static apps, make the build portable under PUBLISHED_BASE_PATH so the orchestrator can publish it at /published-apps/<slug>/ after checks pass. If this run has an explicit managed preview, use its public/LAN URL for visual checks; otherwise rely on build/test plus static publish for user review.',
     '',
-    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, the managed public/LAN preview URL if used, and blockers/risks.',
+    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, the static published URL if published, any managed public/LAN preview URL if used, and blockers/risks.',
   ].filter(Boolean).join('\n')
+}
+
+function createPreviewMetadata(runIdValue, runDirValue, devUrl) {
+  const previewToken = randomBytes(24).toString('base64url')
+  const previewBasePath = `/dev-preview/${encodeURIComponent(runIdValue)}`
+  return {
+    token: previewToken,
+    basePath: previewBasePath,
+    publicUrl: buildPublicPreviewUrl(previewBasePath, previewToken),
+    lanUrl: buildLanPreviewUrl(previewBasePath, previewToken),
+    localUrl: devUrl ? `${devUrl}${previewBasePath}/` : null,
+    logPath: path.join(runDirValue, 'preview.log'),
+    stateDir: path.join(runDirValue, 'preview-state'),
+    status: 'prepared',
+    pid: null,
+  }
 }
 
 function buildPublicPreviewUrl(basePath, token) {

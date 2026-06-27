@@ -36,6 +36,12 @@ export function proxy(request: NextRequest) {
   const previewRewrite = maybeRewritePreviewSubrequest(request)
   if (previewRewrite) return previewRewrite
 
+  const publishedAppApiBlock = maybeBlockPublishedAppApiRequest(request)
+  if (publishedAppApiBlock) return publishedAppApiBlock
+
+  const publishedAppRewrite = maybeRewritePublishedAppSubrequest(request)
+  if (publishedAppRewrite) return publishedAppRewrite
+
   const profileGate = maybeGateProfileRequest(request)
   if (profileGate) return profileGate
 
@@ -104,6 +110,32 @@ function maybeRewritePreviewSubrequest(request: NextRequest): NextResponse | nul
   return NextResponse.rewrite(url)
 }
 
+function maybeBlockPublishedAppApiRequest(request: NextRequest): NextResponse | null {
+  const pathname = request.nextUrl.pathname
+  if (!pathname.startsWith("/api/")) return null
+  if (!publishedAppSlugFromReferer(request.headers.get("referer"))) return null
+
+  return NextResponse.json(
+    { error: "Published static apps cannot call Orchestrator API routes." },
+    { status: 403, headers: { "Cache-Control": "no-store" } }
+  )
+}
+
+function maybeRewritePublishedAppSubrequest(request: NextRequest): NextResponse | null {
+  if (request.method !== "GET" && request.method !== "HEAD") return null
+
+  const pathname = request.nextUrl.pathname
+  if (pathname.startsWith("/published-apps/")) return null
+  if (pathname.startsWith("/api/")) return null
+
+  const slug = publishedAppSlugFromReferer(request.headers.get("referer"))
+  if (!slug) return null
+
+  const url = request.nextUrl.clone()
+  url.pathname = `/published-apps/${encodeURIComponent(slug)}${pathname}`
+  return NextResponse.rewrite(url)
+}
+
 function previewRunIdFromReferer(value: string | null): string | null {
   if (!value) return null
 
@@ -113,6 +145,20 @@ function previewRunIdFromReferer(value: string | null): string | null {
     if (!match) return null
     const runId = decodeURIComponent(match[1] ?? "")
     return /^[A-Za-z0-9._-]{1,80}$/.test(runId) ? runId : null
+  } catch {
+    return null
+  }
+}
+
+function publishedAppSlugFromReferer(value: string | null): string | null {
+  if (!value) return null
+
+  try {
+    const url = new URL(value)
+    const match = url.pathname.match(/^\/published-apps\/([^/?#]+)/)
+    if (!match) return null
+    const slug = decodeURIComponent(match[1] ?? "")
+    return /^[a-z0-9][a-z0-9-]{0,79}$/.test(slug) ? slug : null
   } catch {
     return null
   }

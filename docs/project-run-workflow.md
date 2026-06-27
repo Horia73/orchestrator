@@ -29,7 +29,6 @@ Useful options:
 --base-branch main
 --branch agent/<name>
 --copy-env
---dev-command "npm run dev -- --host 127.0.0.1 --port 3101"
 --test-command "npm test"
 --build-command "npm run build"
 --push-policy agent-branch
@@ -41,15 +40,15 @@ Useful options:
 Prepare an isolated empty git repo:
 
 ```bash
-npm run project-run:prepare -- --kind new --name "site-name" --task "Build a Next.js site" --json
+npm run project-run:prepare -- --kind new --name "site-name" --task "Build a static web app" --json
 ```
 
 If Orchestrator wants to run a scaffold before delegating:
 
 ```bash
 npm run project-run:prepare -- --kind new --name "site-name" \
-  --task "Build a Next.js site" \
-  --scaffold-command "npx create-next-app@latest {repoDir} --yes"
+  --task "Build a static web app" \
+  --scaffold-command "npm create vite@latest {repoDir} -- --template react-ts"
 ```
 
 The placeholders `{repoDir}`, `{runDir}`, and `{name}` are replaced by the helper. Without a scaffold command, coder creates the project inside the prepared repo.
@@ -69,21 +68,37 @@ Send the generated `coderPrompt` to coder and pass `repoDir` as `cwd`:
 
 Coder owns implementation and testing, but does not commit or push unless the orchestrator explicitly says so.
 
-## Managed Preview
+## Default Web App Path
 
-Project runs share the self-dev managed preview: a loopback-bound dev server reverse-proxied through the live app at `/dev-preview/<run-id>/`, so the user can open it from any device instead of an unreachable `127.0.0.1:<port>` on the host.
+Standalone project runs do not get a managed `/dev-preview` by default. For generated sites/apps that the user should keep, the normal path is: build/test in the isolated repo, publish static assets into the Orchestrator workspace, then return the stable `/published-apps/<slug>/` public/LAN URL. Do not return raw `localhost` URLs and do not put interactive apps under `files/`.
+
+The app must honour `PUBLISHED_BASE_PATH=/published-apps/<slug>` when it builds so root-absolute assets and client routes resolve from the published subpath.
+
+## Durable Static Publish
+
+For static web apps/sites/games/dashboards, publish the verified build through Orchestrator:
 
 ```bash
-npm run project-run:run -- start --run-id <run-id> --health-path /
-npm run project-run:run -- preview --run-id <run-id> --json
-npm run project-run:run -- restart --run-id <run-id>
-npm run project-run:run -- logs --run-id <run-id> --lines 200
-npm run project-run:run -- stop --run-id <run-id>
+npm run project-run:run -- publish-static --run-id <run-id> --slug <stable-app-slug> --json
 ```
 
-The preview binds to `127.0.0.1:<assigned-port>` and serves under `/dev-preview/<run-id>/`, so a previewable web app must honour the `PREVIEW_BASE_PATH` env (dev-only `basePath`/`assetPrefix` for Next.js, `base` for Vite). `PROJECT_RUN_INSTRUCTIONS.md` carries the exact snippet. `start` sets `PREVIEW_BASE_PATH`, `HOST=127.0.0.1`, and `PORT`; pass `--dev-command "<cmd>"` (with `{port}` / `{basePath}` placeholders) when the framework needs a non-default command. If `start` reports the server responded at the root but not under `PREVIEW_BASE_PATH`, the base path is not configured yet.
+The command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, detects `dist/`, `out/`, or `build/`, copies it into the active profile workspace at `published-apps/<slug>/`, and returns stable public/LAN URLs served by Orchestrator at `/published-apps/<slug>/`. The files live in the mounted workspace, so they persist and are served again when the Orchestrator container restarts.
 
-To surface the preview to the user as a live mini-browser in the side panel, emit a `application/vnd.ant.dev-preview` artifact (`display="panel"`) built from the `preview … --json` output (`runId`, `basePath`, `token`, `publicUrl`). The chat auto-opens it.
+Published static apps run with script execution but without Orchestrator API/network permissions; if they need fetch/XHR/WebSocket, a backend, SSR, secrets, cron, custom Docker/nginx, or an external host, use an explicit deploy target instead.
+
+Do not publish interactive apps under `files/`: `/files` is for documents/downloads and intentionally blocks scripts. Use host nginx/vhost/Docker/Vercel deployment only when the app has backend/SSR/custom-service requirements and the user has explicitly approved that deployment policy.
+
+## Optional Diagnostic Preview
+
+`/dev-preview/<run-id>/` is normally for Orchestrator self-development. For a standalone project, use it only when an operator explicitly asks for a temporary diagnostic preview. Prepare the run with preview metadata:
+
+```bash
+npm run project-run:prepare -- --kind new --name "site-name" --task "..." --managed-preview --json
+npm run project-run:run -- start --run-id <run-id> --health-path /
+npm run project-run:run -- preview --run-id <run-id> --json
+```
+
+The preview binds to `127.0.0.1:<assigned-port>` and serves under `/dev-preview/<run-id>/`, so a previewable app must honour `PREVIEW_BASE_PATH`. This is not a durable result and should not replace `publish-static`.
 
 ## Gate And Publish
 

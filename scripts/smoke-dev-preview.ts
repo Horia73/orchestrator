@@ -70,15 +70,26 @@ for (const needle of [
   )
 }
 for (const needle of [
-  "application/vnd.ant.dev-preview",
-  "PREVIEW_BASE_PATH",
   "project-run:prepare",
+  "publish-static",
+  "PUBLISHED_BASE_PATH",
+  "/published-apps/<slug>",
   "lanUrl",
-  "live_preview_policy",
 ]) {
   assert.ok(
     PROJECT_DEVELOPMENT_DOCTRINE.includes(needle),
     `project-dev doctrine should mention "${needle}"`
+  )
+}
+for (const needle of [
+  "application/vnd.ant.dev-preview",
+  "PREVIEW_BASE_PATH",
+  "live_preview_policy",
+]) {
+  assert.equal(
+    PROJECT_DEVELOPMENT_DOCTRINE.includes(needle),
+    false,
+    `project-dev doctrine should not mention "${needle}"`
   )
 }
 assert.ok(
@@ -88,6 +99,10 @@ assert.ok(
 assert.ok(
   APP_GUIDE_DOCTRINE.includes("lanUrl"),
   "app-guide should document LAN preview links"
+)
+assert.ok(
+  APP_GUIDE_DOCTRINE.includes("/published-apps/<slug>/"),
+  "app-guide should document durable published app URLs"
 )
 
 console.log("smoke-dev-preview: OK")

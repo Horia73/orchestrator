@@ -49,6 +49,7 @@
     "smoke:capability-gating": "tsx scripts/smoke-capability-gating.ts",
     "smoke:app-guide": "tsx scripts/smoke-app-guide.ts",
     "smoke:dev-preview": "tsx scripts/smoke-dev-preview.ts",
+    "smoke:project-publish": "tsx scripts/smoke-project-publish.ts",
     "smoke:skills": "tsx scripts/smoke-skills.ts",
     "smoke:tool-registry": "tsx scripts/smoke-tool-registry.ts",
     "smoke:tool-name-prefix": "tsx scripts/smoke-tool-name-prefix.ts",

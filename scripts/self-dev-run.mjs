@@ -14,7 +14,7 @@ const command = argv[0]
 const args = parseArgs(argv.slice(1))
 const jsonOutput = boolArg('json')
 
-const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'seed', 'commit', 'rebase', 'push', 'update', 'cleanup'])
+const commands = new Set(['status', 'start', 'stop', 'restart', 'preview', 'logs', 'seed', 'publish-static', 'commit', 'rebase', 'push', 'update', 'cleanup'])
 const PREVIEW_TOKEN_BYTES = 24
 const PREVIEW_START_TIMEOUT_MS = 90_000
 const PREVIEW_POLL_MS = 750
@@ -47,6 +47,8 @@ async function main() {
       return printLogs(context)
     case 'seed':
       return seedPreview(context)
+    case 'publish-static':
+      return publishStatic(context)
     case 'commit':
       return commitRun(context)
     case 'rebase':
@@ -313,6 +315,78 @@ async function seedPreview(context) {
       profiles.length ? `Profiles: ${profiles.join(', ')}` : null,
       `Config: ${configPath}`,
     ].filter(Boolean).join('\n'),
+  )
+}
+
+function publishStatic(context) {
+  if (isSelfRun(context)) fail('publish-static is for standalone project runs, not Orchestrator self-development.')
+  assertRepoReady(context)
+  assertExpectedBranch(context)
+
+  const slug = sanitizePublishSlug(stringArg('slug') || context.state.name || context.state.runId)
+  const publishedBasePath = `/published-apps/${slug}`
+  const buildCommand = resolveProjectBuildCommand(context, publishedBasePath)
+
+  runShellCommand(buildCommand, {
+    cwd: context.state.repoDir,
+    env: projectPublishProcessEnv({ publishedBasePath }),
+  })
+
+  const sourceDir = resolveStaticOutputDir(context)
+  const indexPath = path.join(sourceDir, 'index.html')
+  if (!fs.existsSync(indexPath) || !fs.statSync(indexPath).isFile()) {
+    fail(`Static output must contain index.html: ${sourceDir}`)
+  }
+
+  const workspaceDir = resolvePublishWorkspaceDir(context)
+  const rootDir = path.join(workspaceDir, 'published-apps')
+  const destDir = path.join(rootDir, slug)
+  const rootReal = ensureRealDir(rootDir)
+  const destResolved = path.resolve(destDir)
+  if (!isInside(rootReal, destResolved)) fail(`Refusing to publish outside ${rootReal}`)
+
+  const tmpDir = path.join(rootDir, `.${slug}.tmp-${process.pid}-${Date.now()}`)
+  fs.rmSync(tmpDir, { recursive: true, force: true })
+  fs.cpSync(sourceDir, tmpDir, {
+    recursive: true,
+    dereference: false,
+    filter: (entry) => shouldCopyStaticPublishEntry(entry),
+  })
+
+  const metadata = {
+    slug,
+    runId: context.state.runId,
+    sourceDir,
+    repoDir: context.state.repoDir,
+    buildCommand,
+    basePath: publishedBasePath,
+    publishedAt: new Date().toISOString(),
+  }
+  fs.writeFileSync(path.join(tmpDir, '.orchestrator-published-app.json'), `${JSON.stringify(metadata, null, 2)}\n`, 'utf-8')
+
+  fs.rmSync(destDir, { recursive: true, force: true })
+  fs.renameSync(tmpDir, destDir)
+
+  const published = {
+    ...metadata,
+    path: destDir,
+    publicUrl: buildPublicUrl(publishedBasePath),
+    lanUrl: buildLanUrl(publishedBasePath),
+  }
+  updateRunState(context, {
+    status: 'published-static',
+    published,
+  })
+
+  output(
+    { published: true, ...published },
+    [
+      `Published static app ${slug}.`,
+      `Path: ${destDir}`,
+      `URL: ${published.publicUrl || published.lanUrl || `${publishedBasePath}/`}`,
+      published.lanUrl ? `LAN URL: ${published.lanUrl}` : 'LAN URL: unavailable; set ORCHESTRATOR_LAN_ORIGIN for Docker/reverse-proxy installs.',
+      published.publicUrl ? `Public URL: ${published.publicUrl}` : 'Public URL: unavailable; set ORCHESTRATOR_PUBLIC_URL.',
+    ].join('\n'),
   )
 }
 
@@ -623,12 +697,8 @@ function ensurePreviewMetadata(context) {
 
 function supportsManagedPreview(context) {
   const kind = context.state.kind
-  // Self-development runs and generic project runs (new sites / external repos)
-  // all share the same loopback-bound dev server reverse-proxied through the
-  // live app at /dev-preview/<run-id>/. The only difference is how the dev
-  // process is launched (see startPreview), not whether a preview is allowed.
-  if (kind === 'self' || kind === 'new' || kind === 'existing-git') return true
   const preview = context.state.preview
+  if (kind === 'self') return true
   return Boolean(preview && typeof preview === 'object' && typeof preview.basePath === 'string' && preview.basePath.startsWith('/dev-preview/'))
 }
 
@@ -663,6 +733,18 @@ function buildLanPreviewUrl(basePath, token) {
   const url = new URL(`${basePath}/`, origin)
   url.searchParams.set('preview_token', token)
   return url.toString()
+}
+
+function buildPublicUrl(basePath) {
+  const origin = publicOrigin()
+  if (!origin) return null
+  return new URL(`${basePath}/`, origin).toString()
+}
+
+function buildLanUrl(basePath) {
+  const origin = lanOrigin()
+  if (!origin) return null
+  return new URL(`${basePath}/`, origin).toString()
 }
 
 function publicOrigin() {
@@ -796,7 +878,7 @@ function previewSummary(context, running) {
     `Preview for ${context.state.runId}: ${running ? 'running' : (preview.status || 'stopped')}`,
     `Local URL: ${preview.localUrl}`,
     preview.publicUrl ? `Public URL: ${preview.publicUrl}` : 'Public URL: unavailable; set ORCHESTRATOR_PUBLIC_URL to enable /dev-preview links.',
-    preview.lanUrl ? `LAN URL: ${preview.lanUrl}` : 'LAN URL: unavailable; set ORCHESTRATOR_LAN_ORIGIN or ORCHESTRATOR_HOST_LAN_IP, or run the app on a LAN-reachable host.',
+    preview.lanUrl ? `LAN URL: ${preview.lanUrl}` : 'LAN URL: unavailable; set ORCHESTRATOR_LAN_ORIGIN for Docker/reverse-proxy installs, or run the app on a LAN-reachable non-Docker host.',
     `Health: ${preview.healthPath ?? '/'}`,
     `Log: ${preview.logPath}`,
     `State: ${preview.stateDir}`,
@@ -980,6 +1062,30 @@ function projectPreviewProcessEnv({ preview, port }) {
   }
 }
 
+function projectPublishProcessEnv({ publishedBasePath }) {
+  const env = { ...process.env }
+  for (const key of Object.keys(env)) {
+    if (
+      key.startsWith('__NEXT_') ||
+      key.startsWith('NEXT_PRIVATE_') ||
+      key === 'NEXT_RUNTIME' ||
+      key === 'NEXT_DEPLOYMENT_ID'
+    ) {
+      delete env[key]
+    }
+  }
+  return {
+    ...env,
+    NODE_ENV: 'production',
+    NEXT_TELEMETRY_DISABLED: '1',
+    PUBLISHED_BASE_PATH: publishedBasePath,
+    PUBLISHED_ASSET_PREFIX: publishedBasePath,
+    PUBLISHED_PUBLIC_PATH: `${publishedBasePath}/`,
+    BASE_PATH: publishedBasePath,
+    PUBLIC_URL: publishedBasePath,
+  }
+}
+
 // Resolve the dev command for a project run: an explicit --dev-command (or the
 // devCommand stored at prepare time) wins; otherwise fall back to a framework
 // default derived from prepare-time hints. {port} and {basePath} placeholders
@@ -1008,6 +1114,83 @@ function interpolateDevCommand(command, context, port) {
   return command
     .replaceAll('{port}', String(port))
     .replaceAll('{basePath}', context.state.preview?.basePath || '')
+}
+
+function resolveProjectBuildCommand(context, publishedBasePath) {
+  const explicit = stringArg('build-command')
+    || (typeof context.state.buildCommand === 'string' ? context.state.buildCommand : null)
+    || (typeof context.state.hints?.buildCommand === 'string' ? context.state.hints.buildCommand : null)
+  if (explicit) return interpolatePublishCommand(explicit, publishedBasePath)
+
+  const hints = context.state.hints && typeof context.state.hints === 'object' ? context.state.hints : {}
+  const scripts = hints.scripts && typeof hints.scripts === 'object' ? hints.scripts : {}
+  if (typeof scripts.build === 'string') {
+    const pm = typeof hints.packageManager === 'string' && hints.packageManager ? hints.packageManager : 'npm'
+    return pm === 'npm' ? 'npm run build' : `${pm} build`
+  }
+  const livePackage = readLivePackageMetadata(context.state.repoDir)
+  if (typeof livePackage.scripts.build === 'string') {
+    const pm = livePackage.packageManager || (typeof hints.packageManager === 'string' && hints.packageManager ? hints.packageManager : 'npm')
+    return pm === 'npm' ? 'npm run build' : `${pm} build`
+  }
+  fail('No build command is known for this project run. Pass --build-command "<static build command>".')
+}
+
+function interpolatePublishCommand(command, publishedBasePath) {
+  return command
+    .replaceAll('{publishedBasePath}', publishedBasePath)
+    .replaceAll('{basePath}', publishedBasePath)
+}
+
+function resolveStaticOutputDir(context) {
+  const explicit = stringArg('output-dir') || stringArg('out-dir')
+  const candidates = explicit
+    ? [explicit]
+    : staticOutputCandidates(context)
+
+  const resolvedCandidates = candidates.map(candidate =>
+    path.resolve(context.state.repoDir, candidate)
+  )
+  const found = resolvedCandidates.find(candidate => {
+    try {
+      return fs.statSync(candidate).isDirectory()
+        && fs.statSync(path.join(candidate, 'index.html')).isFile()
+    } catch {
+      return false
+    }
+  })
+  if (found) return found
+  fail(`Could not find a static build output containing index.html. Checked: ${resolvedCandidates.join(', ')}. Pass --output-dir <dir> if the project uses a custom output folder.`)
+}
+
+function staticOutputCandidates(context) {
+  const hints = context.state.hints && typeof context.state.hints === 'object' ? context.state.hints : {}
+  const candidates = []
+  if (hints.framework === 'vite') candidates.push('dist')
+  if (hints.framework === 'next') candidates.push('out')
+  candidates.push('dist', 'out', 'build', 'public')
+  return [...new Set(candidates)]
+}
+
+function readLivePackageMetadata(repoDir) {
+  const packageJsonPath = path.join(repoDir, 'package.json')
+  const out = { scripts: {}, packageManager: null }
+  try {
+    const parsed = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'))
+    if (parsed?.scripts && typeof parsed.scripts === 'object') out.scripts = parsed.scripts
+    if (typeof parsed?.packageManager === 'string' && parsed.packageManager.trim()) {
+      out.packageManager = parsed.packageManager.split('@')[0]
+    } else if (fs.existsSync(path.join(repoDir, 'pnpm-lock.yaml'))) {
+      out.packageManager = 'pnpm'
+    } else if (fs.existsSync(path.join(repoDir, 'yarn.lock'))) {
+      out.packageManager = 'yarn'
+    } else if (fs.existsSync(path.join(repoDir, 'bun.lockb')) || fs.existsSync(path.join(repoDir, 'bun.lock'))) {
+      out.packageManager = 'bun'
+    }
+  } catch {
+    // Missing or malformed package.json: caller will fall back to explicit args.
+  }
+  return out
 }
 
 // Detached previews are process-group leaders; signal the whole group first so
@@ -1188,6 +1371,56 @@ function tailFile(filePath, lines) {
   }
 }
 
+function resolvePublishWorkspaceDir(context) {
+  const fromEnv = process.env.ORCHESTRATOR_AGENT_WORKSPACE_DIR
+  if (fromEnv && path.isAbsolute(fromEnv)) return fromEnv
+  return path.join(resolveSourceStateDir(context), 'workspace')
+}
+
+function sanitizePublishSlug(value) {
+  const slug = String(value || 'app')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 80)
+    .replace(/-+$/g, '')
+  return slug || 'app'
+}
+
+function ensureRealDir(dirPath) {
+  fs.mkdirSync(dirPath, { recursive: true })
+  return fs.realpathSync.native(dirPath)
+}
+
+function isInside(parent, child) {
+  const rel = path.relative(parent, child)
+  return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel))
+}
+
+function shouldCopyStaticPublishEntry(entry) {
+  const name = path.basename(entry)
+  if (name === '.DS_Store') return false
+  if (name === '.git' || name === 'node_modules' || name === '.next' || name === '.turbo') {
+    return false
+  }
+  return true
+}
+
+function runShellCommand(command, options = {}) {
+  const result = spawnSync(command, {
+    cwd: options.cwd || projectDir,
+    env: { ...process.env, ...(options.env || {}) },
+    shell: true,
+    stdio: options.stdio || (jsonOutput ? ['ignore', 'ignore', 'inherit'] : 'inherit'),
+    encoding: 'utf-8',
+  })
+  if (result.error) throw result.error
+  if (result.status !== 0) {
+    throw new Error(`${command} exited with ${result.status}`)
+  }
+  return result
+}
+
 function assertRepoReady(context) {
   const repoDir = context.state.repoDir
   if (!fs.existsSync(repoDir)) fail(`Worktree does not exist: ${repoDir}`)
@@ -1353,6 +1586,7 @@ function usage(exitCode) {
     `  ${prefix} preview [--run-id <id>|--state <path>] [--json]`,
     `  ${prefix} logs [--run-id <id>|--state <path>] [--lines 120] [--json]`,
     `  ${prefix} seed --run-id <id> [--profile location-intelligence] [--config-json '{...}'|--config-patch <path-or-json>]`,
+    `  ${prefix} publish-static --run-id <id> [--slug app-name] [--build-command "npm run build"] [--output-dir dist] [--json]`,
     `  ${prefix} commit --run-id <id> --message "<message>"`,
     `  ${prefix} rebase --run-id <id> [--base origin/master]`,
     `  ${prefix} push --run-id <id> --target-branch master`,

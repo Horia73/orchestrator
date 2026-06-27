@@ -96,7 +96,7 @@ When the deliverable is HTML whose final destination is an email client or Gmail
 
 Use \`text/html\` artifacts for Orchestrator-native standalone pages, demos, dashboards, apps, simulations, or visual outputs the user will interact with inside this app. Use workspace file links for deliverables the user will inspect as files, open in a browser tab, paste, send, or import elsewhere.
 
-When the user asks for a complete website/web app/project rather than a self-contained demo — for example "make/build/create a site", "fa un site", "build a landing page", "make a dashboard", "make a game", or asks for a folder/repo/file structure, dependencies, Next.js/Vite, install/build/dev server, deployment, or a live full-page preview — do NOT satisfy it with a single \`text/html\` or \`application/vnd.ant.react\` artifact. Treat it as coding product work: activate \`project_dev\`, prepare a new/existing project run, delegate coder to create real project files, start the managed preview, and emit the \`application/vnd.ant.dev-preview\` artifact after the preview is healthy. In prose, include the preview's \`lanUrl\` and \`publicUrl\` when available; never give only a raw \`localhost\` URL for a generated web project.
+When the user asks for a complete website/web app/project rather than a self-contained demo — e.g. "make/build/create a site", "fa un site", "build a landing page", "make a dashboard/game", or asks for folders, dependencies, Next.js/Vite, a dev server, deployment, or full-page preview — do NOT satisfy it with one \`text/html\`/\`application/vnd.ant.react\` artifact. Treat it as coding product work: activate \`project_dev\`, prepare a project run, delegate coder, verify a real build, then for static apps the user should keep run \`project-run:run publish-static\` and return \`/published-apps/<slug>/\`. Do not put interactive apps under \`/files\`; it is for documents and blocks scripts. Include published \`lanUrl\`/\`publicUrl\` when available; never give only raw \`localhost\`. Temporary \`/dev-preview\` panels are for Orchestrator self-development unless explicitly requested for diagnostics.
 </artifact_vs_file_preview>
 
 <visual_explanation_artifacts>
@@ -393,6 +393,23 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     } else {
         lines.push('app_origin: unknown (if an integration runbook needs local API calls, infer the reachable Orchestrator URL from the request/environment or ask only for that URL)')
     }
+    const serviceManager = getEnvValue('ORCHESTRATOR_SERVICE_MANAGER') || process.env.ORCHESTRATOR_SERVICE_MANAGER || ''
+    const lanOrigin = cleanOrigin(
+        getEnvValue('ORCHESTRATOR_LAN_ORIGIN')
+        || getEnvValue('ORCHESTRATOR_HOST_LAN_ORIGIN')
+        || getEnvValue('LAN_ORIGIN')
+        || undefined
+    )
+    lines.push(`runtime_service_manager: ${serviceManager || 'unknown'}`)
+    if (lanOrigin) lines.push(`app_lan_origin: ${lanOrigin}`)
+    const hostLanIp = getEnvValue('ORCHESTRATOR_HOST_LAN_IP') || getEnvValue('LAN_IP')
+    if (hostLanIp && serviceManager.toLowerCase() === 'docker' && !lanOrigin) {
+        lines.push(`host_lan_ip_hint: ${hostLanIp} (Docker/reverse-proxy install: set ORCHESTRATOR_LAN_ORIGIN to the reachable Orchestrator origin before treating this as an app URL)`)
+    }
+    if (serviceManager.toLowerCase() === 'docker') {
+        lines.push('docker_runtime_topology: app=/app, source self-dev mount=/orchestrator-source, persistent state/workspace=/app/.orchestrator. Self-dev preview ports bind to container 127.0.0.1 and are user-facing only through /dev-preview/<run-id>/ on the Orchestrator origin. Standalone generated static apps persist under /published-apps/<slug>/ on the Orchestrator origin. Never return raw localhost ports as final URLs.')
+        lines.push('host_reverse_proxy_policy: host nginx/HTTPS should normally proxy only to Orchestrator. Static generated apps use project_dev publish-static + /published-apps/<slug>/; nginx/systemd/Docker host changes require explicit approval and are fallback deploy work.')
+    }
     lines.push(`host_os: ${os.type()} ${os.release()} (${process.platform}/${process.arch})`)
     lines.push(`host_arch: ${os.arch()}`)
     lines.push(`host_hostname: ${os.hostname()}`)
@@ -414,7 +431,7 @@ export function buildRuntimeContext(ctx: PromptContext): string {
     lines.push(`file_tools_root: ${runtimePaths.agentWorkspaceDir}`)
     lines.push(`runtime_state_dir: ${runtimePaths.workspaceDir}`)
     lines.push('filesystem_scope: relative file paths start in workspace_cwd. File tools reject paths outside that workspace unless a native CLI provider grants broader access; shell commands also start in workspace_cwd but may use host commands and absolute paths permitted by the runtime user.')
-    lines.push('library_outputs: save files meant for the user (documents, exports, generated media, downloaded sources) under the `files/` directory in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in the user-facing Library — files written elsewhere in workspace_cwd (scratch, intermediate, or working files) stay out of it. Use the workspace root and other paths for transient/working files; promote anything the user should keep or see into `files/`. For generated HTML files the user should review as HTML, surface a direct `/files/<path-inside-files>.html` link so it opens as a file/browser view rather than an in-chat preview.')
+    lines.push('library_outputs: save user-kept documents, exports, media, and downloaded sources under `files/` in workspace_cwd. Only `files/`, `browser-downloads/`, `gmail-attachments/`, and `artifacts/` surface in Library; scratch elsewhere stays hidden. Generated HTML files for review can use `/files/<path>.html`. Interactive apps/sites/games must not use `/files`; use project_dev plus `project-run:run publish-static` for persistent `/published-apps/<slug>/`.')
     lines.push('discovery_scope: file discovery tools may omit provider-private CLI metadata; shell command output is returned as produced by the command.')
     lines.push('workspace_files: these workspace files are intentionally accessible to every agent by exact path, relative to workspace_cwd (some are edited from dedicated Settings surfaces rather than the file editor):')
     for (const file of WORKSPACE_FILE_DEFINITIONS) {
