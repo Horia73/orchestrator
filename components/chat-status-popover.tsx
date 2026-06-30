@@ -46,6 +46,7 @@ interface ChatStatusResponse {
         available: boolean
         unavailableReason: string | null
     }
+    canViewCliQuotas?: boolean
     /** Estimated orchestrator system prompt size, in tokens. Null when unavailable. */
     systemPromptTokens?: number | null
 }
@@ -105,8 +106,9 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
     const activeCliId = isCliProvider(status.data?.chat.provider.id)
         ? status.data.chat.provider.id
         : null
+    const canViewCliQuotas = Boolean(status.data?.canViewCliQuotas)
     const quotas = useLazyCliUsage(
-        open && activeCliId !== null && Boolean(status.data?.chat.available),
+        open && canViewCliQuotas && activeCliId !== null && Boolean(status.data?.chat.available),
         activeCliId
     )
     const systemPromptTokens = status.data?.systemPromptTokens ?? null
@@ -197,7 +199,7 @@ export function ChatStatusPopover({ messages, draftValue, attachments, contextUs
                                 trailing={<ChevronRight className="size-4 text-foreground/45" />}
                             />
                             <ContextUsageDetails display={contextDisplay} />
-                            {activeCliId && <PlanUsageSection cliId={activeCliId} quotas={quotas} />}
+                            {activeCliId && canViewCliQuotas && <PlanUsageSection cliId={activeCliId} quotas={quotas} />}
                         </>
                     )}
                 </div>

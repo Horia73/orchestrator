@@ -1,6 +1,6 @@
 import assert from "node:assert/strict"
 
-import { parseClaudeUsageText } from "../lib/cli/usage"
+import { isClaudeApiUsageBillingText, parseClaudeUsageText } from "../lib/cli/usage"
 import { normalizeTimezone } from "../lib/timezone"
 
 assert.equal(normalizeTimezone("Europe/Buchrest"), "Europe/Bucharest")
@@ -31,5 +31,16 @@ assert.ok((parsed.weekly?.resetsAt ?? 0) > 0, "weekly reset should be positive")
 assert.equal(parsed.weeklySonnet?.usedPercent, 3)
 assert.ok(Number.isFinite(parsed.weeklySonnet?.resetsAt), "sonnet reset should parse")
 assert.ok((parsed.weeklySonnet?.resetsAt ?? 0) > 0, "sonnet reset should be positive")
+
+assert.equal(isClaudeApiUsageBillingText(`
+Claude Code v2.1.196
+Opus 4.8 (1M context) · API Usage Billing
+
+Usage Stats
+Session
+Total cost: $0.0000
+Total duration (API): 0s
+Usage: 0 input, 0 output, 0 cache read, 0 cache write
+`), true)
 
 console.log("cli usage smoke passed")

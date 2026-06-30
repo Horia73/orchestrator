@@ -73,7 +73,7 @@ function estimateSystemPromptTokens(origin: string, providerCaps: ProviderCaps):
 
 /** GET /api/chat/status - compact status payload for the chat input popover. */
 export async function GET(request: Request) {
-  return runWithRequestProfile(request, async () => {
+  return runWithRequestProfile(request, async (current) => {
         const origin = resolveRequestOrigin(request)
         const settings = resolveChatAgentSettings()
         const config = getConfig()
@@ -114,6 +114,7 @@ export async function GET(request: Request) {
                     ? `Model ${settings.model} is not available for ${providerDef?.name ?? settings.provider}.`
                     : readiness.unavailableReason,
             },
+            canViewCliQuotas: current.isAdmin,
             systemPromptTokens,
         }, {
             headers: { 'Cache-Control': 'no-store' },

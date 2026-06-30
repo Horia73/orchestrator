@@ -75,6 +75,8 @@ export type CliQuotaId = CliQuotaSnapshot['cliId']
 const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
 const CLAUDE_USAGE_HOST_BRIDGE_TIMEOUT_MS = 35_000
+const CLAUDE_API_BILLING_USAGE_ERROR =
+    'Claude Code is running in API Usage Billing mode, so the /usage panel only reports session cost/activity and does not expose subscription quota windows.'
 
 interface ClaudeUsageRaw {
     /** Cleaned-up plain text of the /usage panel. */
@@ -260,6 +262,10 @@ async function captureClaudeUsagePanel(): Promise<ClaudeUsageRaw | { error: stri
                     finish({ text: cleanedSoFar, raw: cleanedSoFar })
                     return
                 }
+                if (isClaudeApiUsageBillingText(cleanedSoFar) && idleMs > 1200) {
+                    finish({ error: CLAUDE_API_BILLING_USAGE_ERROR })
+                    return
+                }
             }
 
             if (elapsed > CLAUDE_USAGE_TIMEOUT_MS) {
@@ -359,6 +365,19 @@ function stripAnsi(s: string): string {
 function hasClaudeUsageQuota(text: string): boolean {
     const parsed = parseClaudeUsageText(text)
     return Boolean(parsed.fiveHour || parsed.weekly || parsed.weeklySonnet)
+}
+
+export function isClaudeApiUsageBillingText(text: string): boolean {
+    const norm = text.replace(/\s+/g, ' ').toLowerCase()
+    return norm.includes('api usage billing')
+        && norm.includes('usage stats')
+        && norm.includes('total cost')
+        && norm.includes('usage:')
+        && !hasClaudeUsageQuota(text)
+}
+
+function isClaudeApiUsageBillingError(error: string): boolean {
+    return error.includes(CLAUDE_API_BILLING_USAGE_ERROR)
 }
 
 /**
@@ -577,6 +596,15 @@ async function scrapeClaudeCodeQuota(): Promise<CliQuotaSnapshot> {
     }
 
     if (!captured || 'error' in captured) {
+        if (captured && isClaudeApiUsageBillingError(captured.error)) {
+            return {
+                cliId: 'claude-code',
+                available: false,
+                error: CLAUDE_API_BILLING_USAGE_ERROR,
+                source,
+                fetchedAt,
+            }
+        }
         const status = await getClaudeStatusForUsage()
         const statusError = claudeStatusError(status)
         if (statusError) {

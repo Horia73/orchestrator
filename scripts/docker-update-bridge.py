@@ -52,6 +52,10 @@ ROLLBACK_STATE_PATH = Path(
     os.environ.get("ORCHESTRATOR_ROLLBACK_STATE_FILE", str(LOG_DIR.parent / "rollback-state.json"))
 )
 CLAUDE_USAGE_TIMEOUT_SECONDS = float(os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_TIMEOUT_SECONDS", "30"))
+CLAUDE_API_BILLING_USAGE_ERROR = (
+    "Claude Code is running in API Usage Billing mode, so the /usage panel only "
+    "reports session cost/activity and does not expose subscription quota windows."
+)
 CLAUDE_USAGE_CWD = Path(
     os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_CWD", str(Path.home() / ".orchestrator" / "claude-usage-cwd"))
 ).expanduser().resolve()
@@ -381,6 +385,17 @@ def has_claude_usage_quota(value: str) -> bool:
     return re.search(section + r".{0,500}?" + used + r".{0,500}?" + reset, norm, re.IGNORECASE) is not None
 
 
+def is_claude_api_usage_billing(value: str) -> bool:
+    norm = re.sub(r"\s+", " ", value).lower()
+    return (
+        "api usage billing" in norm
+        and "usage stats" in norm
+        and "total cost" in norm
+        and "usage:" in norm
+        and not has_claude_usage_quota(value)
+    )
+
+
 def terminate_process(proc: subprocess.Popen) -> None:
     if proc.poll() is not None:
         return
@@ -473,6 +488,9 @@ def capture_claude_usage() -> dict:
 
             if phase == "wait-panel" and has_claude_usage_quota(cleaned) and idle > 1.2:
                 return {"ok": True, "text": cleaned, "raw": cleaned, "fetchedAt": int(time.time() * 1000)}
+
+            if phase == "wait-panel" and is_claude_api_usage_billing(cleaned) and idle > 1.2:
+                return {"ok": False, "error": CLAUDE_API_BILLING_USAGE_ERROR}
 
             if proc.poll() is not None:
                 if has_claude_usage_quota(cleaned):
