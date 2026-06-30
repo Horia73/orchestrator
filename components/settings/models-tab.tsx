@@ -325,7 +325,7 @@ export function ModelsTab() {
             Each agent uses the global default unless an override is set below.
           </p>
         </div>
-        <div className="flex flex-col gap-1.5 sm:items-end">
+        {data.canManageModelRegistry && <div className="flex flex-col gap-1.5 sm:items-end">
           <div className="flex flex-wrap items-center gap-2 sm:flex-nowrap sm:justify-end">
             <button
               onClick={handleRefresh}
@@ -372,10 +372,10 @@ export function ModelsTab() {
               </span>
             )}
           </div>
-        </div>
+        </div>}
       </div>
 
-      <ModelResearchCard />
+      {data.canManageModelRegistry && <ModelResearchCard />}
 
       <AgentSettingsLayout
         data={data}
@@ -398,12 +398,12 @@ export function ModelsTab() {
         onDropEnd={handleAgentDropEnd}
       />
 
-      <MemoryCard />
+      {data.canManageModelRegistry && <MemoryCard />}
 
-      <ModelRegistrySummary
+      {data.canManageModelRegistry && <ModelRegistrySummary
         providers={data.providers}
         providerStatus={data.providerStatus}
-      />
+      />}
     </div>
   )
 }

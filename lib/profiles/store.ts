@@ -114,6 +114,7 @@ export function getControlDb(): Database.Database {
   initializeControlSchema(db)
   ensureDefaultAdminProfile(db)
   migrateLegacyMemberProfileDefaults(db)
+  migrateMemberBasicSettingsAccess(db)
   return db
 }
 
@@ -646,6 +647,7 @@ function migrateLegacyMemberProfileDefaults(database: Database.Database): void {
 
     const permissions = normalizeProfilePermissions(raw, "member")
     permissions.surfaces.monitor = true
+    permissions.surfaces.settings = true
     permissions.tools.monitoring = true
     permissions.inheritAdminApiKeys = true
     permissions.allowedProviderApiKeys = ["*"]
@@ -683,6 +685,29 @@ function isLegacyMemberDefaultPermissionShape(
     allowedProviderApiKeys.length === 0 &&
     integrations.watchlist === "write"
   )
+}
+
+function migrateMemberBasicSettingsAccess(database: Database.Database): void {
+  const rows = database
+    .prepare(`SELECT * FROM profiles WHERE role = 'member'`)
+    .all() as ProfileRow[]
+  if (rows.length === 0) return
+
+  const update = database.prepare(
+    `UPDATE profiles SET permissions = ?, updatedAt = ? WHERE id = ?`
+  )
+  for (const row of rows) {
+    let raw: unknown
+    try {
+      raw = row.permissions ? JSON.parse(row.permissions) : null
+    } catch {
+      continue
+    }
+    const permissions = normalizeProfilePermissions(raw, "member")
+    if (permissions.surfaces.settings) continue
+    permissions.surfaces.settings = true
+    update.run(JSON.stringify(permissions), Date.now(), row.id)
+  }
 }
 
 function profileFromRow(row: ProfileRow): ProfileRecord {

@@ -19,7 +19,7 @@ import {
 } from "lucide-react"
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { SettingsProvider } from "@/components/settings/use-settings"
+import { SettingsProvider, useSettings } from "@/components/settings/use-settings"
 import { LogsTab } from "@/components/settings/logs-tab"
 import { UsageTab } from "@/components/settings/usage-tab"
 import { FilesTab } from "@/components/settings/files-tab"
@@ -85,8 +85,18 @@ export function SettingsView() {
 function SettingsViewInner() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { data } = useSettings()
   const tabsScrollRef = React.useRef<HTMLDivElement | null>(null)
   const tabButtonRefs = React.useRef<Partial<Record<TabId, HTMLButtonElement | null>>>({})
+  const allowedTabs = data ? data.allowedTabs : null
+  const allowedTabIds = React.useMemo(() => {
+    if (!allowedTabs) return null
+    return new Set(allowedTabs.filter(isTabId))
+  }, [allowedTabs])
+  const visibleTabs = React.useMemo(
+    () => (allowedTabIds ? TABS.filter((tab) => allowedTabIds.has(tab.id)) : []),
+    [allowedTabIds]
+  )
 
   React.useEffect(() => {
     const root = document.documentElement
@@ -118,6 +128,7 @@ function SettingsViewInner() {
   const handleTabChange = React.useCallback(
     (next: string) => {
       if (!isTabId(next)) return
+      if (allowedTabIds && !allowedTabIds.has(next)) return
       setActiveTab(next)
       rememberLastSettingsTab(next)
       const params = new URLSearchParams(searchParams.toString())
@@ -128,8 +139,22 @@ function SettingsViewInner() {
         scroll: false,
       })
     },
-    [router, searchParams]
+    [allowedTabIds, router, searchParams]
   )
+
+  React.useEffect(() => {
+    if (!allowedTabIds || visibleTabs.length === 0) return
+    if (allowedTabIds.has(activeTab)) return
+    const fallback = visibleTabs[0].id
+    setActiveTab(fallback)
+    const params = new URLSearchParams(searchParams.toString())
+    if (fallback === DEFAULT_TAB) params.delete("tab")
+    else params.set("tab", fallback)
+    const query = params.toString()
+    router.replace(query ? `/settings?${query}` : "/settings", {
+      scroll: false,
+    })
+  }, [activeTab, allowedTabIds, router, searchParams, visibleTabs])
 
   React.useEffect(() => {
     const scroller = tabsScrollRef.current
@@ -180,7 +205,7 @@ function SettingsViewInner() {
               className="-mx-3 overflow-x-auto scroll-px-3 px-3 [scrollbar-width:none] sm:mx-0 sm:px-0 md:overflow-visible [&::-webkit-scrollbar]:hidden"
             >
               <TabsList className="-mb-px h-auto w-max min-w-full gap-0 border-none md:w-auto md:min-w-0">
-                {TABS.map((tab) => (
+                {visibleTabs.map((tab) => (
                   <TabsTrigger
                     key={tab.id}
                     value={tab.id}
@@ -199,46 +224,52 @@ function SettingsViewInner() {
         </div>
       </div>
 
-      {activeTab === "files" ? (
+      {!allowedTabIds ? (
+        <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
+          <div className="mx-auto w-full max-w-6xl min-w-0 px-3 pt-4 pb-10 sm:px-6 sm:pt-5 sm:pb-12">
+            <div className="h-[180px] animate-pulse rounded-2xl border border-border/60 bg-muted/40" />
+          </div>
+        </div>
+      ) : activeTab === "files" && allowedTabIds.has("files") ? (
         <div className="mx-auto flex min-h-0 w-full max-w-6xl flex-1 overflow-hidden px-3 py-3 sm:px-6 sm:py-4">
           <Tabs
             value={activeTab}
             onValueChange={handleTabChange}
             className="min-h-0 w-full flex-1 gap-0"
           >
-            <TabsContent value="files" className="min-h-0 flex-1">
-              <FilesTab />
-            </TabsContent>
+              <TabsContent value="files" className="min-h-0 flex-1">
+                <FilesTab />
+              </TabsContent>
           </Tabs>
         </div>
       ) : (
         <div className="min-h-0 min-w-0 flex-1 overflow-x-hidden overflow-y-auto">
           <div className="mx-auto w-full max-w-6xl min-w-0 overflow-x-hidden px-3 pt-4 pb-10 sm:px-6 sm:pt-5 sm:pb-12">
             <Tabs value={activeTab} onValueChange={handleTabChange}>
-              <TabsContent value="models">
+              {allowedTabIds?.has("models") && <TabsContent value="models">
                 <ModelsTab />
-              </TabsContent>
-              <TabsContent value="profiles">
+              </TabsContent>}
+              {allowedTabIds?.has("profiles") && <TabsContent value="profiles">
                 <ProfilesTab />
-              </TabsContent>
-              <TabsContent value="auth">
+              </TabsContent>}
+              {allowedTabIds?.has("auth") && <TabsContent value="auth">
                 <AuthTab />
-              </TabsContent>
-              <TabsContent value="remote">
+              </TabsContent>}
+              {allowedTabIds?.has("remote") && <TabsContent value="remote">
                 <RemoteAccessTab />
-              </TabsContent>
-              <TabsContent value="notifications">
+              </TabsContent>}
+              {allowedTabIds?.has("notifications") && <TabsContent value="notifications">
                 <NotificationsTab />
-              </TabsContent>
-              <TabsContent value="logs">
+              </TabsContent>}
+              {allowedTabIds?.has("logs") && <TabsContent value="logs">
                 <LogsTab />
-              </TabsContent>
-              <TabsContent value="usage">
+              </TabsContent>}
+              {allowedTabIds?.has("usage") && <TabsContent value="usage">
                 <UsageTab />
-              </TabsContent>
-              <TabsContent value="updates">
+              </TabsContent>}
+              {allowedTabIds?.has("updates") && <TabsContent value="updates">
                 <UpdateTab />
-              </TabsContent>
+              </TabsContent>}
             </Tabs>
           </div>
         </div>

@@ -36,12 +36,14 @@ export function HomeAssistantCard({
     onSaveConfig,
     onUpdateActionMode,
     onDisconnect,
+    canManage,
 }: {
     entry: HomeAssistantIntegrationStatusEntry
     busy: BusyAction
     onSaveConfig: (input: HomeAssistantConfigInput) => Promise<boolean>
     onUpdateActionMode: (enabled: boolean) => Promise<boolean>
     onDisconnect: () => void
+    canManage: boolean
 }) {
     const connected = entry.connected && !entry.needsReconnect
     const badge = !entry.configured ? (
@@ -107,12 +109,12 @@ export function HomeAssistantCard({
 
                 {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
-                <HomeAssistantConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />
-                <HomeAssistantActionModePanel entry={entry} busy={busy} onUpdate={onUpdateActionMode} />
-                <HomeAssistantLocationSourcePanel entry={entry} />
+                {canManage && <HomeAssistantConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />}
+                {canManage && <HomeAssistantActionModePanel entry={entry} busy={busy} onUpdate={onUpdateActionMode} />}
+                {canManage && <HomeAssistantLocationSourcePanel entry={entry} />}
                 <HomeAssistantSetupGuide />
 
-                {entry.configured && (
+                {entry.configured && canManage && (
                     <div className="flex flex-wrap gap-2 pt-1">
                         <Button
                             size="sm"

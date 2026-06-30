@@ -34,7 +34,11 @@ import {
   updateConversationReadState,
   uploadChatAttachments,
 } from "./chat-store-api"
-import { chatReducer, type ChatState } from "./chat-store-reducer"
+import {
+  chatReducer,
+  createInitialChatState,
+  type ChatState,
+} from "./chat-store-reducer"
 import { publishLocalSubmitAnchor } from "@/lib/chat-local-submit-anchor"
 import {
   ChatFetchError,
@@ -55,7 +59,6 @@ import {
   readUnreadConversationIds,
   showChatCompletionNotification,
   sleep,
-  stoppedStreamState,
   unreadSetsEqual,
   writeUnreadConversationIds,
   type ActiveChatStream,
@@ -64,6 +67,7 @@ import {
   type StreamingReasoning,
 } from "./chat-store-utils"
 import { CHAT_VIEW_SAVE_STATE_EVENT } from "@/lib/chat-view-state"
+import { PROFILE_SESSION_CHANGED_EVENT } from "@/lib/profile-session-client"
 
 export interface SendMessageOptions {
   promptContext?: string
@@ -150,16 +154,11 @@ const HOME_SWITCH_TARGET = "__home__"
 
 export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const pathname = usePathname()
-  const [state, dispatch] = React.useReducer(chatReducer, {
-    conversations: [],
-    isLoading: true,
-    activeChatStreams: {},
-    conversationLoadState: {},
-    conversationLoadErrors: {},
-    conversationMessagePages: {},
-    activeConversationId: null,
-    ...stoppedStreamState,
-  })
+  const [state, dispatch] = React.useReducer(
+    chatReducer,
+    undefined,
+    () => createInitialChatState(true)
+  )
   const [unreadConversationIds, setUnreadConversationIds] = React.useState<
     Set<string>
   >(() => readUnreadConversationIds())
@@ -206,6 +205,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   const conversationLoadStateRef = React.useRef<
     Record<string, ConversationLoadState>
   >({})
+  const profileSessionGenerationRef = React.useRef(0)
   const initialMessageLoadsRef = React.useRef<Map<string, Promise<void>>>(
     new Map()
   )
@@ -601,8 +601,51 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => cleanupStream, [cleanupStream])
 
+  const resetChatSessionState = React.useCallback(
+    (isLoading = false) => {
+      profileSessionGenerationRef.current += 1
+      cleanupStream()
+      streamDoneRef.current = false
+      clientStreamMessageIdRef.current = null
+      streamPageWasHiddenRef.current = false
+      streamSnapshotRefreshAtRef.current = 0
+      activeConversationIdRef.current = null
+      conversationsRef.current = []
+      conversationMessagePagesRef.current = {}
+      activeChatStreamsRef.current = {}
+      conversationLoadStateRef.current = {}
+      initialMessageLoadsRef.current.clear()
+      messageDetailLoadsRef.current.clear()
+      summaryRefreshPromiseRef.current = null
+      try {
+        window.localStorage.removeItem("chat:active-id")
+      } catch {
+        // Storage can be unavailable in private modes.
+      }
+      const emptyUnread = new Set<string>()
+      unreadConversationIdsRef.current = emptyUnread
+      setUnreadConversationIds(emptyUnread)
+      writeUnreadConversationIds(emptyUnread)
+      dispatch({ type: "RESET_CHAT_STATE", isLoading })
+    },
+    [cleanupStream]
+  )
+
+  React.useEffect(() => {
+    const handleProfileChanged = () => resetChatSessionState(false)
+    window.addEventListener(PROFILE_SESSION_CHANGED_EVENT, handleProfileChanged)
+    return () => {
+      window.removeEventListener(
+        PROFILE_SESSION_CHANGED_EVENT,
+        handleProfileChanged
+      )
+    }
+  }, [resetChatSessionState])
+
   const refreshConversationSummaries = React.useCallback(async () => {
+    const generation = profileSessionGenerationRef.current
     const data = await fetchConversationSummaries()
+    if (profileSessionGenerationRef.current !== generation) return
     if (Array.isArray(data)) {
       dispatch({
         type: "INIT_CONVERSATIONS",
@@ -649,7 +692,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
   // even though the conversations would load fine on the next attempt.
   React.useEffect(() => {
     if (pathname?.startsWith("/profiles")) {
-      dispatch({ type: "INIT_CONVERSATIONS", conversations: [] })
+      resetChatSessionState(false)
       return
     }
     let cancelled = false
@@ -683,7 +726,7 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
     return () => {
       cancelled = true
     }
-  }, [pathname, refreshConversationSummaries])
+  }, [pathname, refreshConversationSummaries, resetChatSessionState])
 
   React.useEffect(() => {
     let sequence = 0

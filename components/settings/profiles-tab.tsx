@@ -210,8 +210,8 @@ const TOOL_META: Record<
     icon: Download,
   },
   models: {
-    label: "Models",
-    description: "Manage model configuration",
+    label: "Allow model changes",
+    description: "Let this profile choose its own agent models",
     icon: Cpu,
   },
   settings_files: {
@@ -1062,8 +1062,8 @@ export function ProfilesTab() {
                     <div className="mt-1 border-t border-border/50 pt-3">
                       <ToggleRow
                         icon={KeyRound}
-                        label="Inherit admin API keys"
-                        description="Use the owner's provider keys for model calls."
+                        label="Inherit all admin API keys"
+                        description="Use inherited env/API keys for models and integrations when this profile has access."
                         checked={selected.permissions.inheritAdminApiKeys}
                         onChange={(checked) =>
                           updateDraft((p) => {

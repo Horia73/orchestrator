@@ -10,7 +10,9 @@ import { getCurrentProfileFromCookies } from "@/lib/profiles/server"
 export default async function SettingsPage() {
     const current = await getCurrentProfileFromCookies()
     if (!current) redirect("/profiles?next=/settings")
-    if (!current.isAdmin) redirect("/")
+    if (!current.isAdmin && !current.profile.permissions.surfaces.settings) {
+        redirect("/")
+    }
 
     return (
         <>

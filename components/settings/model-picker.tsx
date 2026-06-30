@@ -136,6 +136,7 @@ export function ModelPicker({
   )
 
   if (!data) return null
+  const canManageRegistry = data.canManageModelRegistry
 
   // All models from providers that should be visible in Settings. API-backed
   // providers still require a configured key before they show up. CLI-backed
@@ -145,6 +146,7 @@ export function ModelPicker({
     .filter((m) => !HIDDEN_PROVIDERS.has(m.providerId))
     .filter((m) => isProviderVisibleInPicker(m.providerId, data))
     .filter((m) => !filterModel || filterModel(m))
+    .filter((m) => canManageRegistry || !m.model.archived)
 
   // Split archived from active. Archived only show in the normal picker when
   // the user expands that section, but search mode ranks every visible model
@@ -204,7 +206,7 @@ export function ModelPicker({
   const handleSelect = (key: string) => {
     const m = modelsByKey.get(key)
     if (!m) return
-    if (m.model.archived) {
+    if (m.model.archived && canManageRegistry) {
       void setArchived(m.providerId, m.modelId, false).catch(() => {
         /* useSettings already re-syncs from server on error */
       })
@@ -240,6 +242,7 @@ export function ModelPicker({
     m: FlatModel,
     e: React.MouseEvent | React.KeyboardEvent
   ) => {
+    if (!canManageRegistry) return
     e.stopPropagation()
     e.preventDefault()
     void setArchived(m.providerId, m.modelId, !m.model.archived).catch(() => {
@@ -419,6 +422,7 @@ export function ModelPicker({
                           onSelect={handleSelect}
                           onToggleFavorite={handleToggleFavorite}
                           onToggleArchive={handleToggleArchive}
+                          canToggleArchive={canManageRegistry}
                           showProviderName
                         />
                       ))}
@@ -461,6 +465,7 @@ export function ModelPicker({
                           onSelect={handleSelect}
                           onToggleFavorite={handleToggleFavorite}
                           onToggleArchive={handleToggleArchive}
+                          canToggleArchive={canManageRegistry}
                           reorderIndex={
                             favoriteModels.length > 1 ? idx : undefined
                           }
@@ -503,6 +508,7 @@ export function ModelPicker({
                           onSelect={handleSelect}
                           onToggleFavorite={handleToggleFavorite}
                           onToggleArchive={handleToggleArchive}
+                          canToggleArchive={canManageRegistry}
                         />
                       ))}
                       {models.length > PROVIDER_MODEL_PREVIEW_LIMIT && (
@@ -568,6 +574,7 @@ export function ModelPicker({
                             onSelect={handleSelect}
                             onToggleFavorite={handleToggleFavorite}
                             onToggleArchive={handleToggleArchive}
+                            canToggleArchive={canManageRegistry}
                           />
                         ))}
                       {hasMoreArchivedModels && (
@@ -673,6 +680,7 @@ function ModelRow({
   onSelect,
   onToggleFavorite,
   onToggleArchive,
+  canToggleArchive,
   reorderIndex,
   reorderTotal,
   onMove,
@@ -691,6 +699,7 @@ function ModelRow({
     m: FlatModel,
     e: React.MouseEvent | React.KeyboardEvent
   ) => void
+  canToggleArchive: boolean
   /** When defined, this row is in the Favorites group and shows up/down controls. */
   reorderIndex?: number
   reorderTotal?: number
@@ -842,7 +851,7 @@ function ModelRow({
         </button>
       )}
 
-      <button
+      {canToggleArchive && <button
         type="button"
         onClick={(e) => onToggleArchive(model, e)}
         onKeyDown={(e) => {
@@ -863,7 +872,7 @@ function ModelRow({
         ) : (
           <Archive className="size-3.5" />
         )}
-      </button>
+      </button>}
     </CommandItem>
   )
 }

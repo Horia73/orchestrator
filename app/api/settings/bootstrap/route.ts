@@ -3,7 +3,8 @@ import { getRuntimeConfig } from '@/lib/config'
 import { getEffectiveRegistry } from '@/lib/models/registry'
 import { getAllAgents } from '@/lib/ai'
 import { getProviderReadinessMap } from '@/lib/provider-readiness'
-import { runWithAdminCookieProfile } from "@/lib/profiles/server"
+import { runWithProfileContext } from "@/lib/profiles/context"
+import { getCurrentProfileFromCookies } from "@/lib/profiles/server"
 
 /**
  * Single round-trip bootstrap for the settings page.
@@ -11,7 +12,26 @@ import { runWithAdminCookieProfile } from "@/lib/profiles/server"
  * + per-provider API key status (so the UI can flag missing keys without round-trips).
  */
 export async function GET() {
-  return runWithAdminCookieProfile(async () => {
+  const current = await getCurrentProfileFromCookies()
+  if (!current) {
+    return NextResponse.json(
+      { error: "Profile required", code: "profile_required" },
+      { status: 401, headers: { "Cache-Control": "no-store" } }
+    )
+  }
+  if (!current.isAdmin && !current.profile.permissions.surfaces.settings) {
+    return NextResponse.json(
+      {
+        error: "Profile is not allowed to access Settings.",
+        code: "profile_settings_denied",
+      },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    )
+  }
+
+  return runWithProfileContext(
+    { profileId: current.profile.id, role: current.profile.role },
+    async () => {
         const config = getRuntimeConfig()
         const registry = getEffectiveRegistry()
 
@@ -31,6 +51,19 @@ export async function GET() {
         const providerStatus = await getProviderReadinessMap(registry)
 
         return NextResponse.json({
+            profileId: current.profile.id,
+            isAdmin: current.isAdmin,
+            permissions: current.profile.permissions,
+            allowedTabs: current.isAdmin
+                ? ["models", "auth", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"]
+                : [
+                    ...(current.profile.permissions.tools.models ? ["models"] : []),
+                    "auth",
+                    ...(current.profile.permissions.tools.settings_files ? ["files"] : []),
+                    "usage",
+                    "notifications",
+                ],
+            canManageModelRegistry: current.isAdmin,
             config,
             agents,
             providers: registry,

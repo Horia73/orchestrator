@@ -51,6 +51,7 @@ import { useChatStore } from "@/hooks/use-chat-store"
 import { useRuntimeConfig } from "@/hooks/use-runtime-config"
 import { useInboxUnread } from "@/hooks/use-inbox-unread"
 import {
+  invalidateCurrentProfileCache,
   profileInitials,
   useCurrentProfile,
 } from "@/components/profiles/use-profiles"
@@ -330,6 +331,7 @@ export function AppSidebar() {
   const inboxUnread = useInboxUnread()
   const {
     profile: currentProfile,
+    permissions: currentProfilePermissions,
     isAdmin,
     loading: profileLoading,
   } = useCurrentProfile()
@@ -371,7 +373,10 @@ export function AppSidebar() {
   const isFiltering = normalizedSearchQuery.length > 0
   const showArchiveView = archiveViewActive && !isFiltering
   const showConversationSection = !isCollapsed && !isCompactRouteNav
-  const showSettingsLink = isAdmin || (profileLoading && isOnSettings)
+  const showSettingsLink =
+    isAdmin ||
+    Boolean(currentProfilePermissions?.surfaces.settings) ||
+    (profileLoading && isOnSettings)
 
   const filteredConversations = React.useMemo(
     () =>
@@ -974,6 +979,7 @@ export function AppSidebar() {
     setProfileMenuOpen(false)
     profileTriggerRef.current?.blur()
     void fetch("/api/profiles/logout", { method: "POST" }).finally(() => {
+      invalidateCurrentProfileCache()
       router.replace("/profiles")
       router.refresh()
     })

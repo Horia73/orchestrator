@@ -7,6 +7,10 @@ import type {
   PublicProfile,
 } from "@/lib/profiles/server"
 import type { ProfilePermissions } from "@/lib/profiles/types"
+import {
+  PROFILE_SESSION_CHANGED_EVENT,
+  dispatchProfileSessionChanged,
+} from "@/lib/profile-session-client"
 
 export interface CurrentProfileResponse {
   profile: PublicProfile | null
@@ -22,6 +26,12 @@ export async function fetchCurrentProfile(): Promise<CurrentProfileResponse> {
 
 let currentProfileCache: CurrentProfileResponse | null = null
 let currentProfileRequest: Promise<CurrentProfileResponse> | null = null
+
+export function invalidateCurrentProfileCache(): void {
+  currentProfileCache = null
+  currentProfileRequest = null
+  dispatchProfileSessionChanged()
+}
 
 function loadCurrentProfile(): Promise<CurrentProfileResponse> {
   if (!currentProfileRequest) {
@@ -60,15 +70,31 @@ export function useCurrentProfile() {
 
   React.useEffect(() => {
     let cancelled = false
-    loadCurrentProfile()
-      .then((next) => {
-        if (!cancelled) setState(next)
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(false)
-      })
+    const load = () => {
+      setLoading(currentProfileCache === null)
+      loadCurrentProfile()
+        .then((next) => {
+          if (!cancelled) setState(next)
+        })
+        .finally(() => {
+          if (!cancelled) setLoading(false)
+        })
+    }
+
+    const handleProfileChanged = () => {
+      if (cancelled) return
+      setState({ profile: null, isAdmin: false })
+      load()
+    }
+
+    load()
+    window.addEventListener(PROFILE_SESSION_CHANGED_EVENT, handleProfileChanged)
     return () => {
       cancelled = true
+      window.removeEventListener(
+        PROFILE_SESSION_CHANGED_EVENT,
+        handleProfileChanged
+      )
     }
   }, [])
 

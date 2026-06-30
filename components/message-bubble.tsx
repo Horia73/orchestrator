@@ -1780,7 +1780,8 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
     const timeline = React.useMemo(() => buildInterleavedTimeline(reasoningGroups, contentSegments), [reasoningGroups, contentSegments])
     const activeReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
     const hasVisiblePayload = reasoning.length > 0 || content.trim().length > 0 || contentSegments.some(segment => segment.content.trim().length > 0)
-    const isStreamingTurn = streamingMode !== null || streamingStatus != null
+    const liveReasoningPhase =
+        streamingMode === "reasoning" ? activeReasoningPhase : null
     const {
         rootRef: selectionGutterRef,
         handlePointerDownCapture: handleSelectionGutterPointerDownCapture,
@@ -1800,8 +1801,8 @@ export function StreamingBubble({ reasoning, content, contentSegments, streaming
                     <ThoughtBlock
                         key={`stream-reasoning-${messageId ?? "pending"}-${item.phase}`}
                         reasoning={item.entries}
-                        isStreaming={activeReasoningPhase === item.phase && streamingMode === "reasoning"}
-                        isStreamingTurn={isStreamingTurn && activeReasoningPhase === item.phase}
+                        isStreaming={liveReasoningPhase === item.phase}
+                        isStreamingTurn={liveReasoningPhase === item.phase}
                         onArtifactClick={onArtifactClick}
                         onAgentOpen={onAgentOpen}
                         onAttachmentClick={onAttachmentClick}

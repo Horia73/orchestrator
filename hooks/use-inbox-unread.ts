@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import { useAppEvent } from "@/hooks/use-app-events"
+import { PROFILE_SESSION_CHANGED_EVENT } from "@/lib/profile-session-client"
 
 // Last count fetched this session, kept at module scope. AppSidebar (and thus
 // this hook) is mounted per-route, so without this seed the badge would reset
@@ -53,14 +54,24 @@ export function useInboxUnread(): number {
     const onUpdated = () => {
       void fetchUnread()
     }
+    const onProfileChanged = () => {
+      lastKnownUnread = 0
+      setUnread(0)
+      void fetchUnread()
+    }
     const onVisibility = () => {
       if (document.visibilityState === "visible") void fetchUnread()
     }
     window.addEventListener("orchestrator:inbox-updated", onUpdated)
+    window.addEventListener(PROFILE_SESSION_CHANGED_EVENT, onProfileChanged)
     document.addEventListener("visibilitychange", onVisibility)
 
     return () => {
       window.removeEventListener("orchestrator:inbox-updated", onUpdated)
+      window.removeEventListener(
+        PROFILE_SESSION_CHANGED_EVENT,
+        onProfileChanged
+      )
       document.removeEventListener("visibilitychange", onVisibility)
     }
   }, [fetchUnread])

@@ -6,7 +6,11 @@ import { LockKeyhole, Plus, UserRound } from "lucide-react"
 
 import { ViewFade } from "@/components/route-fade"
 import { useDocumentViewportLock } from "@/hooks/use-document-viewport-lock"
-import { profileInitials, fetchProfiles } from "./use-profiles"
+import {
+  invalidateCurrentProfileCache,
+  profileInitials,
+  fetchProfiles,
+} from "./use-profiles"
 import type { PublicProfile } from "@/lib/profiles/server"
 
 const COLORS = ["#2f6f73", "#7c3f58", "#556b2f", "#7b5d2a", "#385f8f", "#6f4d8f"]
@@ -96,6 +100,7 @@ export function ProfilePicker() {
         setError(typeof data.error === "string" ? data.error : "Could not select profile.")
         return
       }
+      invalidateCurrentProfileCache()
       router.replace(next)
       router.refresh()
     } finally {

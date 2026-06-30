@@ -13,6 +13,7 @@ import type {
 } from "@/lib/config"
 import type { AgentKind, AgentStatus, AgentTier } from "@/lib/ai/agents/types"
 import { useAppEvent } from "@/hooks/use-app-events"
+import { PROFILE_SESSION_CHANGED_EVENT } from "@/lib/profile-session-client"
 import {
   RESEARCH_EVENTS_STORAGE_KEY,
   capResearchEvents,
@@ -52,6 +53,11 @@ export interface ProviderStatus {
 }
 
 export interface SettingsBootstrap {
+  profileId: string
+  isAdmin: boolean
+  permissions: import("@/lib/profiles/types").ProfilePermissions
+  allowedTabs: string[]
+  canManageModelRegistry: boolean
   config: RuntimeConfig
   agents: AgentInfo[]
   providers: Record<string, ProviderDef>
@@ -184,16 +190,9 @@ async function fetchSettingsBootstrap(
   return (await res.json()) as SettingsBootstrap
 }
 
-// Last fetched bootstrap, kept at module scope. The provider is remounted per
-// Settings visit; seeding from here lets revisits render instantly (no
-// skeleton flash) while a silent refresh runs.
-let cachedBootstrap: SettingsBootstrap | null = null
-
 export function SettingsProvider({ children }: { children: React.ReactNode }) {
-  const [data, setData] = React.useState<SettingsBootstrap | null>(
-    () => cachedBootstrap
-  )
-  const [loading, setLoading] = React.useState(cachedBootstrap === null)
+  const [data, setData] = React.useState<SettingsBootstrap | null>(null)
+  const [loading, setLoading] = React.useState(true)
   const [error, setError] = React.useState<string | null>(null)
   const [refreshing, setRefreshing] = React.useState(false)
   const [researching, setResearching] = React.useState(false)
@@ -210,7 +209,6 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
     // Keep the same object reference when the payload is unchanged so the
     // context value (and every settings consumer) doesn't re-render on every
     // background refresh.
-    cachedBootstrap = json
     setData((prev) => (prev && deepEqual(prev, json) ? prev : json))
     setError(null)
     return json
@@ -232,6 +230,25 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   useAppEvent(["settings.changed", "config.updated"], refreshBootstrap)
 
   React.useEffect(() => {
+    const handleProfileChanged = () => {
+      setData(null)
+      setLoading(true)
+      void loadBootstrap()
+        .catch((err: unknown) => {
+          setError(err instanceof Error ? err.message : "Unknown error")
+        })
+        .finally(() => setLoading(false))
+    }
+    window.addEventListener(PROFILE_SESSION_CHANGED_EVENT, handleProfileChanged)
+    return () => {
+      window.removeEventListener(
+        PROFILE_SESSION_CHANGED_EVENT,
+        handleProfileChanged
+      )
+    }
+  }, [loadBootstrap])
+
+  React.useEffect(() => {
     if (typeof window === "undefined") return
     try {
       if (researchEvents.length === 0) {
@@ -249,6 +266,16 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
 
   React.useEffect(() => {
     if (!data) return
+    if (!data.canManageModelRegistry) {
+      if (researchEvents.length > 0 || currentRunIdRef.current !== null) {
+        setResearchEvents([])
+        currentRunIdRef.current = null
+        if (typeof window !== "undefined") {
+          window.localStorage.removeItem(RESEARCH_EVENTS_STORAGE_KEY)
+        }
+      }
+      return
+    }
     if (hasUsableModelProvider(data)) return
 
     if (researchStreamRef.current) {
@@ -794,6 +821,7 @@ export function SettingsProvider({ children }: { children: React.ReactNode }) {
   React.useEffect(() => {
     if (!data) return
     if (researchRestoredRef.current) return
+    if (!data.canManageModelRegistry) return
     if (!hasUsableModelProvider(data)) return
     researchRestoredRef.current = true
     let cancelled = false

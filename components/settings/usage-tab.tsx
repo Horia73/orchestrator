@@ -41,6 +41,7 @@ import {
 } from "@/lib/cli/quota-pace"
 import { useUsage } from "./use-usage"
 import { useCliUsage, type CliQuotaSnapshot, type CliQuotaWindow } from "./use-cli-usage"
+import { useSettings } from "./use-settings"
 
 const RANGE_OPTIONS: Array<{ value: UsageRange; label: string }> = [
     { value: "24h", label: "Last 24h" },
@@ -53,6 +54,7 @@ const RANGE_OPTIONS: Array<{ value: UsageRange; label: string }> = [
 export function UsageTab() {
     const [range, setRange] = React.useState<UsageRange>("30d")
     const { data, loading, error, refresh } = useUsage(range)
+    const { data: settings } = useSettings()
 
     return (
         <div className="flex w-full min-w-0 max-w-full flex-col gap-5 overflow-x-hidden">
@@ -102,7 +104,7 @@ export function UsageTab() {
 
             {data && data.totals.requests > 0 && <UsageContent data={data} />}
 
-            <CliQuotaSection />
+            {settings?.isAdmin && <CliQuotaSection />}
         </div>
     )
 }

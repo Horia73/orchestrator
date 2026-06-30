@@ -130,7 +130,7 @@ const MEMBER_SURFACE_DEFAULTS: Record<ProfileSurface, boolean> = {
   monitor: true,
   maps: true,
   workouts: true,
-  settings: false,
+  settings: true,
 }
 
 const MEMBER_TOOL_DEFAULTS: Record<ToolPermissionId, boolean> = {

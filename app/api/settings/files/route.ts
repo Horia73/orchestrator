@@ -2,10 +2,10 @@ import { NextResponse } from 'next/server'
 
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { ensureWorkspaceTemplates, listWorkspaceFiles } from '@/lib/settings/workspace-files'
-import { runWithAdminCookieProfile } from "@/lib/profiles/server"
+import { runWithRequestProfile } from "@/lib/profiles/server"
 
-export async function GET() {
-  return runWithAdminCookieProfile(async () => {
+export async function GET(request: Request) {
+  return runWithRequestProfile(request, async () => {
         try {
             ensureWorkspaceTemplates()
             return NextResponse.json(

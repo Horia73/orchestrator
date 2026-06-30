@@ -335,6 +335,7 @@ export function RemoteMcpCard({
   onStartOAuth,
   onDisconnect,
   onRemove,
+  canManage,
 }: {
   entry: RemoteMcpIntegrationStatusEntry
   busy: BusyAction
@@ -342,6 +343,7 @@ export function RemoteMcpCard({
   onStartOAuth: (serverId: string) => void
   onDisconnect: (serverId: string) => void
   onRemove: (serverId: string) => void
+  canManage: boolean
 }) {
   const [label, setLabel] = React.useState("")
   const [url, setUrl] = React.useState("")
@@ -395,62 +397,64 @@ export function RemoteMcpCard({
       </CardHeader>
       <CardContent>
         <div className="grid gap-4">
-          <form
-            onSubmit={submit}
-            className="grid gap-3 rounded-xl border border-border/70 bg-background/60 p-3"
-          >
-            <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_160px]">
-              <ConfigInput
-                label="Label"
-                value={label}
-                onChange={setLabel}
-                placeholder="Apollo, Linear, custom MCP"
-              />
-              <ConfigInput
-                label="MCP endpoint"
-                value={url}
-                onChange={setUrl}
-                placeholder="https://provider.example/mcp"
-              />
-              <label className="grid gap-1">
-                <span className="text-[11.5px] font-medium text-foreground/60">
-                  Auth
-                </span>
-                <Select
-                  value={authType}
-                  options={[
-                    { value: "oauth", label: "OAuth" },
-                    { value: "none", label: "No auth" },
-                  ]}
-                  disabled={isBusy}
-                  onValueChange={(value) =>
-                    setAuthType(value === "none" ? "none" : "oauth")
-                  }
+          {canManage && (
+            <form
+              onSubmit={submit}
+              className="grid gap-3 rounded-xl border border-border/70 bg-background/60 p-3"
+            >
+              <div className="grid gap-2 md:grid-cols-[minmax(0,0.8fr)_minmax(0,1.4fr)_160px]">
+                <ConfigInput
+                  label="Label"
+                  value={label}
+                  onChange={setLabel}
+                  placeholder="Apollo, Linear, custom MCP"
                 />
-              </label>
-            </div>
-            <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
-              <ConfigInput
-                label="Notes"
-                value={notes}
-                onChange={setNotes}
-                placeholder="Optional non-secret provider limits or intended use"
-              />
-              <Button
-                type="submit"
-                size="sm"
-                disabled={isBusy || !url.trim()}
-                className="md:mb-0.5"
-              >
-                {busy === "mcp-save" ? (
-                  <Loader2 className="size-3.5 animate-spin" />
-                ) : (
-                  <Save className="size-3.5" />
-                )}
-                Save server
-              </Button>
-            </div>
-          </form>
+                <ConfigInput
+                  label="MCP endpoint"
+                  value={url}
+                  onChange={setUrl}
+                  placeholder="https://provider.example/mcp"
+                />
+                <label className="grid gap-1">
+                  <span className="text-[11.5px] font-medium text-foreground/60">
+                    Auth
+                  </span>
+                  <Select
+                    value={authType}
+                    options={[
+                      { value: "oauth", label: "OAuth" },
+                      { value: "none", label: "No auth" },
+                    ]}
+                    disabled={isBusy}
+                    onValueChange={(value) =>
+                      setAuthType(value === "none" ? "none" : "oauth")
+                    }
+                  />
+                </label>
+              </div>
+              <div className="grid gap-2 md:grid-cols-[minmax(0,1fr)_auto] md:items-end">
+                <ConfigInput
+                  label="Notes"
+                  value={notes}
+                  onChange={setNotes}
+                  placeholder="Optional non-secret provider limits or intended use"
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  disabled={isBusy || !url.trim()}
+                  className="md:mb-0.5"
+                >
+                  {busy === "mcp-save" ? (
+                    <Loader2 className="size-3.5 animate-spin" />
+                  ) : (
+                    <Save className="size-3.5" />
+                  )}
+                  Save server
+                </Button>
+              </div>
+            </form>
+          )}
 
           <div className="grid gap-2">
             {entry.servers.length === 0 ? (
@@ -486,46 +490,48 @@ export function RemoteMcpCard({
                         {server.url}
                       </div>
                     </div>
-                    <div className="flex flex-wrap items-center gap-1.5">
-                      {server.authType === "oauth" && !server.connected && (
+                    {canManage && (
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        {server.authType === "oauth" && !server.connected && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isBusy}
+                            onClick={() => onStartOAuth(server.id)}
+                          >
+                            {busy === "mcp-connect" ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : (
+                              <LogIn className="size-3.5" />
+                            )}
+                            Connect
+                          </Button>
+                        )}
+                        {server.authType === "oauth" && server.connected && (
+                          <Button
+                            type="button"
+                            variant="outline"
+                            size="sm"
+                            disabled={isBusy}
+                            onClick={() => onDisconnect(server.id)}
+                          >
+                            <Unplug className="size-3.5" />
+                            Disconnect
+                          </Button>
+                        )}
                         <Button
                           type="button"
                           variant="outline"
                           size="sm"
                           disabled={isBusy}
-                          onClick={() => onStartOAuth(server.id)}
+                          onClick={() => onRemove(server.id)}
                         >
-                          {busy === "mcp-connect" ? (
-                            <Loader2 className="size-3.5 animate-spin" />
-                          ) : (
-                            <LogIn className="size-3.5" />
-                          )}
-                          Connect
+                          <Trash2 className="size-3.5" />
+                          Remove
                         </Button>
-                      )}
-                      {server.authType === "oauth" && server.connected && (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          size="sm"
-                          disabled={isBusy}
-                          onClick={() => onDisconnect(server.id)}
-                        >
-                          <Unplug className="size-3.5" />
-                          Disconnect
-                        </Button>
-                      )}
-                      <Button
-                        type="button"
-                        variant="outline"
-                        size="sm"
-                        disabled={isBusy}
-                        onClick={() => onRemove(server.id)}
-                      >
-                        <Trash2 className="size-3.5" />
-                        Remove
-                      </Button>
-                    </div>
+                      </div>
+                    )}
                   </div>
                   <div className="grid gap-1.5 text-[12.5px] md:grid-cols-3">
                     <StatusRow
@@ -586,11 +592,13 @@ function GoogleAccountSelector({
   selectedConnectionId,
   busy,
   onSelectConnection,
+  canManage,
 }: {
   connections: GoogleAccountConnectionStatusEntry[]
   selectedConnectionId: string
   busy: BusyAction
   onSelectConnection: (connectionId: string) => void
+  canManage: boolean
 }) {
   if (connections.length === 0) return null
 
@@ -632,7 +640,7 @@ function GoogleAccountSelector({
       <Select
         value={selectedConnectionId}
         options={options}
-        disabled={busy !== null || connections.length <= 1}
+        disabled={!canManage || busy !== null || connections.length <= 1}
         placeholder="Choose account"
         onValueChange={(connectionId) => {
           if (connectionId && connectionId !== selectedConnectionId) {
@@ -660,6 +668,7 @@ export function GmailCard({
   onDisconnect,
   onSaveConfig,
   onSelectConnection,
+  canManage,
 }: {
   entry: GmailIntegrationStatusEntry
   runtime?: RuntimeAccessInfo
@@ -668,6 +677,7 @@ export function GmailCard({
   onDisconnect: () => void
   onSaveConfig: (input: GmailConfigInput) => Promise<boolean>
   onSelectConnection: (connectionId: string) => void
+  canManage: boolean
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const badge = !entry.configured ? (
@@ -743,15 +753,17 @@ export function GmailCard({
           selectedConnectionId={entry.connection?.id ?? ""}
           busy={busy}
           onSelectConnection={onSelectConnection}
+          canManage={canManage}
         />
 
-        {!entry.configured && (
+        {!entry.configured && canManage && (
           <GmailConfigForm entry={entry} busy={busy} onSave={onSaveConfig} />
         )}
         <GmailSetupGuide redirectUri={entry.redirectUri} runtime={runtime} />
         {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
-        <div className="flex flex-wrap gap-2 pt-1">
+        {canManage && (
+          <div className="flex flex-wrap gap-2 pt-1">
           <Button
             size="sm"
             onClick={onConnect}
@@ -780,7 +792,8 @@ export function GmailCard({
               Disconnect
             </Button>
           )}
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -794,6 +807,7 @@ export function GoogleCalendarCard({
   onDisconnect,
   onSaveConfig,
   onSelectConnection,
+  canManage,
 }: {
   entry: GoogleCalendarIntegrationStatusEntry
   runtime?: RuntimeAccessInfo
@@ -802,6 +816,7 @@ export function GoogleCalendarCard({
   onDisconnect: () => void
   onSaveConfig: (input: GoogleCalendarConfigInput) => Promise<boolean>
   onSelectConnection: (connectionId: string) => void
+  canManage: boolean
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const badge = !entry.configured ? (
@@ -899,9 +914,10 @@ export function GoogleCalendarCard({
           selectedConnectionId={entry.connection?.id ?? ""}
           busy={busy}
           onSelectConnection={onSelectConnection}
+          canManage={canManage}
         />
 
-        {!entry.configured && (
+        {!entry.configured && canManage && (
           <GoogleWorkspaceConfigForm
             entry={entry}
             busy={busy}
@@ -914,7 +930,8 @@ export function GoogleCalendarCard({
         />
         {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
-        <div className="flex flex-wrap gap-2 pt-1">
+        {canManage && (
+          <div className="flex flex-wrap gap-2 pt-1">
           <Button
             size="sm"
             onClick={onConnect}
@@ -943,7 +960,8 @@ export function GoogleCalendarCard({
               Disconnect
             </Button>
           )}
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -957,6 +975,7 @@ export function GoogleWorkspaceCard({
   onDisconnect,
   onSaveConfig,
   onSelectConnection,
+  canManage,
 }: {
   entry: GoogleDriveIntegrationStatusEntry
   runtime?: RuntimeAccessInfo
@@ -965,6 +984,7 @@ export function GoogleWorkspaceCard({
   onDisconnect: () => void
   onSaveConfig: (input: GoogleDriveConfigInput) => Promise<boolean>
   onSelectConnection: (connectionId: string) => void
+  canManage: boolean
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const badge = !entry.configured ? (
@@ -1050,9 +1070,10 @@ export function GoogleWorkspaceCard({
           selectedConnectionId={entry.connection?.id ?? ""}
           busy={busy}
           onSelectConnection={onSelectConnection}
+          canManage={canManage}
         />
 
-        {!entry.configured && (
+        {!entry.configured && canManage && (
           <GoogleWorkspaceConfigForm
             entry={entry}
             busy={busy}
@@ -1065,7 +1086,8 @@ export function GoogleWorkspaceCard({
         />
         {entry.error && <InlineNotice tone="error" text={entry.error} />}
 
-        <div className="flex flex-wrap gap-2 pt-1">
+        {canManage && (
+          <div className="flex flex-wrap gap-2 pt-1">
           <Button
             size="sm"
             onClick={onConnect}
@@ -1094,7 +1116,8 @@ export function GoogleWorkspaceCard({
               Disconnect
             </Button>
           )}
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -1105,11 +1128,13 @@ export function WhatsAppCard({
   busy,
   onConnect,
   onDisconnect,
+  canManage,
 }: {
   entry: WhatsAppIntegrationStatusEntry
   busy: BusyAction
   onConnect: () => void
   onDisconnect: () => void
+  canManage: boolean
 }) {
   const connected = entry.connected && !entry.needsReconnect
   const providerLabel =
@@ -1260,7 +1285,8 @@ export function WhatsAppCard({
 
         <WhatsAppSetupGuide />
 
-        <div className="flex flex-wrap gap-2 pt-1">
+        {canManage && (
+          <div className="flex flex-wrap gap-2 pt-1">
           <Button
             size="sm"
             onClick={onConnect}
@@ -1289,7 +1315,8 @@ export function WhatsAppCard({
               Disconnect
             </Button>
           )}
-        </div>
+          </div>
+        )}
       </CardContent>
     </Card>
   )
@@ -1300,11 +1327,13 @@ export function MapsWeatherCard({
   weather,
   busy,
   onSaveConfig,
+  canManage,
 }: {
   maps: MapsIntegrationStatusEntry
   weather: WeatherIntegrationStatusEntry
   busy: BusyAction
   onSaveConfig: (input: GoogleMapsConfigInput) => Promise<boolean>
+  canManage: boolean
 }) {
   const mapsBadge = !maps.configured ? (
     <Badge tone="warn" icon={<AlertCircle className="size-3" />}>
@@ -1437,7 +1466,9 @@ export function MapsWeatherCard({
         </div>
 
         <SmartMapsOnboardingPanel maps={maps} />
-        <GoogleMapsKeyForm maps={maps} busy={busy} onSave={onSaveConfig} />
+        {canManage && (
+          <GoogleMapsKeyForm maps={maps} busy={busy} onSave={onSaveConfig} />
+        )}
         <MapsWeatherSetupGuide />
         {maps.error && (
           <InlineNotice tone="error" text={`Maps: ${maps.error}`} />

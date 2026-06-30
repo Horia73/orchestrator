@@ -51,7 +51,21 @@ export interface ChatState {
   streamingMessageId: string | null
 }
 
+export function createInitialChatState(isLoading = true): ChatState {
+  return {
+    conversations: [],
+    isLoading,
+    activeChatStreams: {},
+    conversationLoadState: {},
+    conversationLoadErrors: {},
+    conversationMessagePages: {},
+    activeConversationId: null,
+    ...stoppedStreamState,
+  }
+}
+
 export type ChatAction =
+  | { type: "RESET_CHAT_STATE"; isLoading?: boolean }
   | {
       type: "INIT_CONVERSATIONS"
       conversations: Conversation[]
@@ -254,6 +268,8 @@ function inferStreamingMode(
 
 export function chatReducer(state: ChatState, action: ChatAction): ChatState {
   switch (action.type) {
+    case "RESET_CHAT_STATE":
+      return createInitialChatState(action.isLoading ?? true)
     case "SET_ACTIVE_CHAT_STREAMS":
       return {
         ...state,

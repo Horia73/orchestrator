@@ -43,6 +43,14 @@ import type {
 import { Button } from "@/components/ui/button"
 import { CliAccountsSection } from "@/components/settings/cli-accounts"
 import {
+  useSettings,
+  type SettingsBootstrap,
+} from "@/components/settings/use-settings"
+import type {
+  IntegrationAccess,
+  IntegrationPermissionId,
+} from "@/lib/profiles/types"
+import {
   useIntegrationsStatus,
   type HomeAssistantIntegrationStatusEntry,
   type MapsIntegrationStatusEntry,
@@ -59,13 +67,23 @@ type OAuthMessage = {
 
 type GoogleConnectionProvider = "gmail" | "google_calendar" | "google_drive"
 
+const ACCESS_RANK: Record<IntegrationAccess, number> = {
+  none: 0,
+  read: 1,
+  write: 2,
+  setup: 3,
+}
+
 export function AuthTab() {
+  const { data } = useSettings()
   return (
     <div className="flex flex-col gap-6">
       <ConnectedServicesSection />
-      <div className="border-t border-border/60 pt-6">
-        <CliAccountsSection />
-      </div>
+      {data?.isAdmin && (
+        <div className="border-t border-border/60 pt-6">
+          <CliAccountsSection />
+        </div>
+      )}
     </div>
   )
 }
@@ -73,6 +91,7 @@ export function AuthTab() {
 function ConnectedServicesSection() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { data: settingsData } = useSettings()
   const { data, loading, error, refresh } = useIntegrationsStatus()
   const [busy, setBusy] = React.useState<BusyAction>(null)
   const [feedback, setFeedback] = React.useState<{
@@ -909,6 +928,22 @@ function ConnectedServicesSection() {
 
   const renderServiceCard = (serviceId: AuthServiceId) => {
     if (!data) return null
+    const canManageGmail = canSetupIntegration(settingsData, "gmail")
+    const canManageGoogleCalendar = canSetupIntegration(
+      settingsData,
+      "google_calendar"
+    )
+    const canManageGoogleDrive = canSetupIntegration(
+      settingsData,
+      "google_drive"
+    )
+    const canManageWhatsApp = canSetupIntegration(settingsData, "whatsapp")
+    const canManageHomeAssistant = canSetupIntegration(
+      settingsData,
+      "home_assistant"
+    )
+    const canManageMaps = canSetupIntegration(settingsData, "maps")
+    const canManageRemoteMcp = settingsData?.isAdmin === true
     switch (serviceId) {
       case "gmail":
         return (
@@ -922,6 +957,7 @@ function ConnectedServicesSection() {
             onSelectConnection={(connectionId) =>
               selectGoogleConnection("gmail", connectionId)
             }
+            canManage={canManageGmail}
           />
         )
       case "whatsapp":
@@ -931,6 +967,7 @@ function ConnectedServicesSection() {
             busy={busy}
             onConnect={connectWhatsApp}
             onDisconnect={disconnectWhatsApp}
+            canManage={canManageWhatsApp}
           />
         )
       case "googleCalendar":
@@ -945,6 +982,7 @@ function ConnectedServicesSection() {
             onSelectConnection={(connectionId) =>
               selectGoogleConnection("google_calendar", connectionId)
             }
+            canManage={canManageGoogleCalendar}
           />
         )
       case "googleDrive":
@@ -959,6 +997,7 @@ function ConnectedServicesSection() {
             onSelectConnection={(connectionId) =>
               selectGoogleConnection("google_drive", connectionId)
             }
+            canManage={canManageGoogleDrive}
           />
         )
       case "homeAssistant":
@@ -969,6 +1008,7 @@ function ConnectedServicesSection() {
             onSaveConfig={saveHomeAssistantConfig}
             onUpdateActionMode={updateHomeAssistantActionMode}
             onDisconnect={disconnectHomeAssistant}
+            canManage={canManageHomeAssistant}
           />
         )
       case "mapsWeather":
@@ -978,6 +1018,7 @@ function ConnectedServicesSection() {
             weather={data.weather}
             busy={busy}
             onSaveConfig={saveGoogleMapsConfig}
+            canManage={canManageMaps}
           />
         )
       case "locationIntelligence":
@@ -991,6 +1032,7 @@ function ConnectedServicesSection() {
             onStartOAuth={connectRemoteMcp}
             onDisconnect={disconnectRemoteMcp}
             onRemove={removeRemoteMcp}
+            canManage={canManageRemoteMcp}
           />
         )
     }
@@ -1087,6 +1129,18 @@ function ConnectedServicesSection() {
         </>
       ) : null}
     </section>
+  )
+}
+
+function canSetupIntegration(
+  settingsData: SettingsBootstrap | null,
+  integration: IntegrationPermissionId
+): boolean {
+  if (!settingsData) return false
+  if (settingsData.isAdmin) return true
+  return (
+    ACCESS_RANK[settingsData.permissions.integrations[integration] ?? "none"] >=
+    ACCESS_RANK.setup
   )
 }
 

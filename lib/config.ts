@@ -474,6 +474,11 @@ export function getConfig(): AppConfig {
   }
 }
 
+function getAdminConfig(): AppConfig {
+  const raw = readRawConfigForProfile(ADMIN_PROFILE_ID)
+  return normalizeAppConfigForProfile(raw ?? defaultConfigForProfile(ADMIN_PROFILE_ID), ADMIN_PROFILE_ID)
+}
+
 function normalizeAppConfig(parsed: Partial<AppConfig>): AppConfig {
   return normalizeAppConfigForProfile(parsed, getActiveProfileId())
 }
@@ -1234,7 +1239,7 @@ export interface EffectiveAgentSettings {
 export function getEffectiveAgentSettings(
   agentId: string
 ): EffectiveAgentSettings {
-  const config = getConfig()
+  const config = getConfigForEffectiveAgent()
   const override = config.agentOverrides[agentId]
   const registry = getEffectiveRegistry()
 
@@ -1283,14 +1288,16 @@ export function getEffectiveAgentSettings(
   return candidate
 }
 
+function getConfigForEffectiveAgent(): AppConfig {
+  const profileId = getActiveProfileId()
+  return shouldUseAdminModelSettings(profileId) ? getAdminConfig() : getConfig()
+}
+
 export function setAgentOverride(
   agentId: string,
   override: AgentOverride | null
 ): AppConfig {
-  if (agentId === "orchestrator") {
-    return setSharedOrchestratorOverride(override)
-  }
-  return setAgentOverrideForActiveProfile(agentId, override)
+  return setSharedAgentOverride(agentId, override)
 }
 
 function setAgentOverrideForActiveProfile(
@@ -1307,44 +1314,105 @@ function setAgentOverrideForActiveProfile(
   return updateConfig({ agentOverrides })
 }
 
-function setSharedOrchestratorOverride(
+function setSharedAgentOverride(
+  agentId: string,
   override: AgentOverride | null
 ): AppConfig {
   const activeProfileId = getActiveProfileId()
+  const activeProfile = getProfile(activeProfileId)
+  if (!isAdminProfileId(activeProfileId)) {
+    if (activeProfile?.permissions.tools.models) {
+      return setAgentOverrideForActiveProfile(agentId, override)
+    }
+    return getConfig()
+  }
+
   let activeConfig: AppConfig | null = null
 
   for (const profile of listProfiles({ includeDisabled: true })) {
+    if (
+      !isAdminProfileId(profile.id) &&
+      profile.permissions.tools.models
+    ) {
+      continue
+    }
     const updated = runWithProfileContext(
       { profileId: profile.id, role: profile.role },
-      () => setAgentOverrideForActiveProfile("orchestrator", override)
+      () => setAgentOverrideForActiveProfile(agentId, override)
     )
     if (profile.id === activeProfileId) activeConfig = updated
   }
 
-  return activeConfig ?? setAgentOverrideForActiveProfile("orchestrator", override)
+  return activeConfig ?? setAgentOverrideForActiveProfile(agentId, override)
+}
+
+function shouldUseAdminModelSettings(profileId: string): boolean {
+  if (isAdminProfileId(profileId)) return false
+  const profile = getProfile(profileId)
+  return profile?.permissions.tools.models !== true
 }
 
 export function setBrowserAgentModel(
   slot: BrowserAgentModelSlot,
   override: BrowserAgentModelSettings
 ): AppConfig {
+  return setSharedBrowserAgentConfig(
+    slot === "light" ? { light: override } : { pro: override }
+  )
+}
+
+function setBrowserAgentModelForActiveProfile(
+  patch: Partial<BrowserAgentSettings>
+): AppConfig {
   const current = getConfig()
   return updateConfig({
     browserAgent: {
       ...current.browserAgent,
-      [slot]: override,
+      ...patch,
     },
   })
 }
 
 export function setBrowserAgentProEnabled(proEnabled: boolean): AppConfig {
-  const current = getConfig()
-  return updateConfig({
-    browserAgent: {
-      ...current.browserAgent,
-      proEnabled,
-    },
-  })
+  return setSharedBrowserAgentConfig({ proEnabled })
+}
+
+function setSharedBrowserAgentConfig(
+  patch: Partial<BrowserAgentSettings>
+): AppConfig {
+  const activeProfileId = getActiveProfileId()
+  const activeProfile = getProfile(activeProfileId)
+  if (!isAdminProfileId(activeProfileId)) {
+    if (activeProfile?.permissions.tools.models) {
+      return setBrowserAgentModelForActiveProfile(patch)
+    }
+    return getConfig()
+  }
+
+  let activeConfig: AppConfig | null = null
+
+  for (const profile of listProfiles({ includeDisabled: true })) {
+    if (
+      !isAdminProfileId(profile.id) &&
+      profile.permissions.tools.models
+    ) {
+      continue
+    }
+    const updated = runWithProfileContext(
+      { profileId: profile.id, role: profile.role },
+      () => setBrowserAgentModelForActiveProfile(patch)
+    )
+    if (profile.id === activeProfileId) activeConfig = updated
+  }
+
+  return activeConfig ?? setBrowserAgentModelForActiveProfile(patch)
+}
+
+export function getEffectiveBrowserAgentSettings(): BrowserAgentSettings {
+  const profileId = getActiveProfileId()
+  return shouldUseAdminModelSettings(profileId)
+    ? getAdminConfig().browserAgent
+    : getConfig().browserAgent
 }
 
 export function setAgentOrder(agentOrder: string[]): AppConfig {

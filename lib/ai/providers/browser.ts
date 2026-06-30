@@ -15,7 +15,7 @@ import { DEFAULT_AGENT_CONFIG, type AgentConfig as BrowserRuntimeConfig, type Me
 import { browserSessionModeLabel, type BrowserSessionMode } from '@/lib/browser-agent-runtime/session-mode'
 import { redactBrowserAgentText } from '@/lib/browser-agent-runtime/redaction'
 import { codexAuthFileExists, prepareCodexRuntimeHome } from '@/lib/cli/codex-env'
-import { getApiKey, getConfig, type BrowserAgentModelSettings, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
+import { getApiKey, getEffectiveAgentSettings, getEffectiveBrowserAgentSettings, type BrowserAgentModelSettings, type ModelFeatureValue, type ThinkingLevel } from '@/lib/config'
 import { activeRuntimePaths } from '@/lib/runtime-paths'
 import { latestUserPromptWithPortableHistory } from './history'
 import { BROWSER_CAPABILITIES } from './browser-capabilities'
@@ -200,11 +200,11 @@ function ensureVisionCredentials(providers: VisionProvider[]) {
 }
 
 function buildBrowserRuntimeConfig(): BrowserRuntimeConfig {
-    const appConfig = getConfig()
-    const light = appConfig.browserAgent.light
-    const pro = appConfig.browserAgent.pro
-    const proEnabled = appConfig.browserAgent.proEnabled
-    const legacyBrowserOptions = appConfig.agentOverrides.browser_agent?.modelOptions
+    const browserAgentSettings = getEffectiveBrowserAgentSettings()
+    const light = browserAgentSettings.light
+    const pro = browserAgentSettings.pro
+    const proEnabled = browserAgentSettings.proEnabled
+    const legacyBrowserOptions = getEffectiveAgentSettings("browser_agent").modelOptions
     const liveView = parseBooleanEnv(process.env.BROWSER_AGENT_LIVE_VIEW, process.platform === 'linux')
 
     const lightProvider = visionProviderForSlot(light, 'light')

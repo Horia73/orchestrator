@@ -391,13 +391,26 @@ function currentProfileFromToken(
 function isAdminOnlyApiPath(pathname: string, method: string): boolean {
   const readOnly = method === "GET" || method === "HEAD"
   return (
-    pathname.startsWith("/api/settings") ||
-    (pathname.startsWith("/api/config") && !readOnly) ||
+    (pathname.startsWith("/api/settings") &&
+      pathname !== "/api/settings/bootstrap" &&
+      !pathname.startsWith("/api/settings/files")) ||
+    (pathname.startsWith("/api/config") &&
+      !readOnly &&
+      !isModelSettingsApiPath(pathname)) ||
     pathname.startsWith("/api/logs") ||
-    pathname.startsWith("/api/usage") ||
     pathname.startsWith("/api/update") ||
     pathname.startsWith("/api/models") ||
     pathname.startsWith("/api/cli")
+  )
+}
+
+function isModelSettingsApiPath(pathname: string): boolean {
+  return (
+    pathname.startsWith("/api/config/agent/") ||
+    pathname === "/api/config/agent-order" ||
+    pathname === "/api/config/favorites" ||
+    pathname === "/api/config/browser-agent" ||
+    pathname === "/api/config/browser-agent/pro-enabled"
   )
 }
 
@@ -414,6 +427,34 @@ function guardProfileApiPermission(
         error: "Profile is not allowed to access this surface.",
         code: "profile_surface_denied",
         surface,
+      },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    )
+  }
+
+  const readOnly = request.method === "GET" || request.method === "HEAD"
+  if (
+    !readOnly &&
+    isModelSettingsApiPath(pathname) &&
+    !current.profile.permissions.tools.models
+  ) {
+    return NextResponse.json(
+      {
+        error: "Profile is not allowed to change model settings.",
+        code: "profile_models_denied",
+      },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    )
+  }
+
+  if (
+    pathname.startsWith("/api/settings/files") &&
+    !current.profile.permissions.tools.settings_files
+  ) {
+    return NextResponse.json(
+      {
+        error: "Profile is not allowed to access settings files.",
+        code: "profile_settings_files_denied",
       },
       { status: 403, headers: { "Cache-Control": "no-store" } }
     )
@@ -442,6 +483,13 @@ function guardProfileApiPermission(
 }
 
 function surfaceForApiPath(pathname: string): ProfileSurface | null {
+  if (
+    pathname.startsWith("/api/settings") ||
+    pathname.startsWith("/api/usage") ||
+    pathname === "/api/integrations/status"
+  ) {
+    return "settings"
+  }
   if (pathname.startsWith("/api/watchlist")) return "watchlist"
   return null
 }
