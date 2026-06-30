@@ -17,6 +17,8 @@ export type CliId = 'claude-code' | 'codex'
 export interface CliStatus {
     /** True if the binary is on PATH. */
     installed: boolean
+    /** Human-readable output from `<bin> --version`, when the binary answers. */
+    version?: string
     /** True if the user is authenticated (subscription/cloud). */
     loggedIn: boolean
     /**

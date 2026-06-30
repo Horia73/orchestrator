@@ -53,7 +53,10 @@ interface ProbeResult {
     conclusive: boolean
 }
 
-type InstallProbe = 'yes' | 'no' | 'unknown'
+interface InstallProbe {
+    state: 'yes' | 'no' | 'unknown'
+    version?: string
+}
 
 /**
  * Return whether `bin` is reachable on PATH. We don't use `which`/`where`
@@ -61,16 +64,33 @@ type InstallProbe = 'yes' | 'no' | 'unknown'
  * cheap and uniform. `no` = spawn error (ENOENT → genuinely missing), `yes` =
  * it executed, `unknown` = it ran too slowly to answer (box under load).
  */
+function cleanVersionOutput(stdout: string, stderr: string): string | undefined {
+    const firstLine = `${stdout}\n${stderr}`
+        .split('\n')
+        .map(line => line.trim())
+        .find(Boolean)
+    return firstLine || undefined
+}
+
 async function probeInstalled(bin: string): Promise<InstallProbe> {
     return new Promise(resolve => {
         const resolved = resolveBin(bin)
         const proc = spawn(resolved, ['--version'], {
-            stdio: ['ignore', 'ignore', 'ignore'],
+            stdio: ['ignore', 'pipe', 'pipe'],
             env: augmentedEnv(),
         })
-        const timer = setTimeout(() => { proc.kill('SIGKILL'); resolve('unknown') }, VERSION_TIMEOUT_MS)
-        proc.on('error', () => { clearTimeout(timer); resolve('no') })
-        proc.on('exit', () => { clearTimeout(timer); resolve('yes') })
+        let stdout = ''
+        let stderr = ''
+        const timer = setTimeout(() => { proc.kill('SIGKILL'); resolve({ state: 'unknown' }) }, VERSION_TIMEOUT_MS)
+        proc.stdout.setEncoding('utf8')
+        proc.stderr.setEncoding('utf8')
+        proc.stdout.on('data', chunk => { stdout += chunk.toString() })
+        proc.stderr.on('data', chunk => { stderr += chunk.toString() })
+        proc.on('error', () => { clearTimeout(timer); resolve({ state: 'no' }) })
+        proc.on('exit', code => {
+            clearTimeout(timer)
+            resolve({ state: 'yes', version: code === 0 ? cleanVersionOutput(stdout, stderr) : undefined })
+        })
     })
 }
 
@@ -91,10 +111,10 @@ async function runStatus(id: CliId): Promise<ProbeResult> {
     const spec = CLI_SPECS[id]
 
     const install = await probeInstalled(spec.bin)
-    if (install === 'no') {
+    if (install.state === 'no') {
         return { status: { installed: false, loggedIn: false }, conclusive: true }
     }
-    if (install === 'unknown') {
+    if (install.state === 'unknown') {
         // The binary was too slow to even print its version — the status
         // subcommand will almost certainly time out too. Skip it and let the
         // resolver fall back to on-disk credentials / last-good.
@@ -112,7 +132,7 @@ async function runStatus(id: CliId): Promise<ProbeResult> {
         const timer = setTimeout(() => {
             proc.kill('SIGKILL')
             resolve({
-                status: { installed: true, loggedIn: false, detail: 'status check timed out', raw: stdout },
+                status: { installed: true, loggedIn: false, version: install.version, detail: 'status check timed out', raw: stdout },
                 conclusive: false,
             })
         }, STATUS_TIMEOUT_MS)
@@ -125,17 +145,21 @@ async function runStatus(id: CliId): Promise<ProbeResult> {
             clearTimeout(timer)
             // The install probe already confirmed the binary runs, so a spawn
             // error here is transient, not proof of logout.
-            resolve({ status: { installed: true, loggedIn: false, detail: err.message }, conclusive: false })
+            resolve({ status: { installed: true, loggedIn: false, version: install.version, detail: err.message }, conclusive: false })
         })
         proc.on('exit', code => {
             clearTimeout(timer)
             try {
-                resolve({ status: spec.parseStatus(stdout, stderr, code ?? 0), conclusive: true })
+                resolve({
+                    status: { ...spec.parseStatus(stdout, stderr, code ?? 0), version: install.version },
+                    conclusive: true,
+                })
             } catch (err) {
                 resolve({
                     status: {
                         installed: true,
                         loggedIn: false,
+                        version: install.version,
                         detail: err instanceof Error ? err.message : 'parse failed',
                         raw: stdout,
                     },
@@ -179,7 +203,7 @@ function resolveStatus(id: CliId, probe: ProbeResult): CliStatus {
         return prev.status
     }
     if (authFileExists(id)) {
-        return { installed: true, loggedIn: true }
+        return { installed: true, loggedIn: true, version: probe.status.version }
     }
     return probe.status
 }

@@ -1168,8 +1168,8 @@ export function AppSidebar() {
         {showConversationSection && (
           <>
             {/* Recents section */}
-            <SidebarGroup className="group/archive-section min-h-0 flex-1 py-0">
-              <SidebarGroupLabel className="justify-between text-[12px] tracking-wider text-foreground/50 uppercase">
+            <SidebarGroup className="group/archive-section min-h-0 flex-1 px-0 py-0">
+              <SidebarGroupLabel className="mx-2 justify-between text-[12px] tracking-wider text-foreground/50 uppercase">
                 <span>{conversationSectionLabel}</span>
                 {!isFiltering && (
                   <button
@@ -1205,7 +1205,7 @@ export function AppSidebar() {
                 onScroll={handleConversationScroll}
                 onWheel={handleConversationWheel}
                 onTouchMove={handleConversationTouchMove}
-                className="sidebar-conversation-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto [scrollbar-gutter:stable]"
+                className="sidebar-conversation-scroll min-h-0 flex-1 overflow-x-hidden overflow-y-auto px-2 [scrollbar-gutter:stable]"
               >
                 {conversationsLoading ? (
                   <SidebarMenu className="space-y-0.5 px-2">

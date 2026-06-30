@@ -28,6 +28,7 @@ import remarkGfm from "remark-gfm"
 
 import { cn } from "@/lib/utils"
 import { Button } from "@/components/ui/button"
+import { useCliStatus, type CliStatusEntry } from "@/components/settings/use-cli-status"
 
 interface ActiveRunInfo {
   conversationId: string
@@ -101,6 +102,7 @@ interface UpdateStatus {
 }
 
 const ACTIVE_PHASES = new Set<UpdatePhase>(["queued", "updating", "restarting"])
+const UPDATE_CLI_IDS = ["claude-code", "codex"] as const
 
 type FactoryResetScope = "chat" | "automations" | "memory" | "integrations" | "env"
 
@@ -168,6 +170,14 @@ function rollbackLabel(rollback: RollbackInfo | null | undefined) {
   const commit = rollback.commit ? rollback.commit.slice(0, 12) : null
   if (version && commit) return `${version} (${commit})`
   return version ?? commit ?? rollback.ref ?? rollback.image
+}
+
+function cliVersionLabel(entry: CliStatusEntry | undefined, loading: boolean, error: string | null) {
+  if (entry?.installed === false) return "Not installed"
+  if (entry?.version) return entry.version
+  if (loading) return "Checking..."
+  if (error) return "Unavailable"
+  return "Unknown"
 }
 
 function statusTone(status: UpdateStatus | null) {
@@ -325,6 +335,12 @@ export function UpdateTab() {
   const [cliBusy, setCliBusy] = React.useState<"update" | "restart" | null>(null)
   const [cliMessage, setCliMessage] = React.useState<{ tone: "success" | "error"; text: string } | null>(null)
   const backupRestoreInputRef = React.useRef<HTMLInputElement | null>(null)
+  const {
+    data: cliStatus,
+    loading: cliStatusLoading,
+    error: cliStatusError,
+    refresh: refreshCliStatus,
+  } = useCliStatus()
 
   const loadStatus = React.useCallback(async (refresh = false) => {
     const res = await fetch(`/api/update/status${refresh ? "?refresh=1" : ""}`, { cache: "no-store" })
@@ -402,6 +418,7 @@ export function UpdateTab() {
       if (!res.ok || !json?.ok) throw new Error(json?.error || `CLI update failed (${res.status})`)
       const versions = json.versions ? ` — ${json.versions.replace(/\n+/g, " · ")}` : ""
       setCliMessage({ tone: "success", text: `CLIs updated${versions}. Container is restarting — give it a moment.` })
+      void refreshCliStatus()
     } catch (err) {
       setCliMessage({ tone: "error", text: err instanceof Error ? err.message : "CLI update failed." })
     } finally {
@@ -748,6 +765,38 @@ export function UpdateTab() {
             title="CLI tools"
             description="Claude Code and Codex live in a mounted volume, so app updates never refresh them. Update them in place (this restarts the container), or restart the container on its own."
           >
+            <div className="grid gap-2">
+              {UPDATE_CLI_IDS.map((id) => {
+                const entry = cliStatus?.[id]
+                const installed = entry?.installed === true
+                return (
+                  <div
+                    key={id}
+                    className="flex min-w-0 items-center justify-between gap-3 rounded-lg border border-border/60 bg-background px-3 py-2"
+                  >
+                    <div className="flex min-w-0 items-center gap-2">
+                      <span
+                        className={cn(
+                          "size-2 shrink-0 rounded-full",
+                          installed ? "bg-emerald-500" : "bg-foreground/25"
+                        )}
+                      />
+                      <span className="min-w-0 truncate text-[12.5px] font-medium text-foreground/75">
+                        {entry?.name ?? (id === "claude-code" ? "Claude Code" : "Codex CLI")}
+                      </span>
+                    </div>
+                    <span className="min-w-0 truncate text-right font-mono text-[12px] text-foreground/65">
+                      {cliVersionLabel(entry, cliStatusLoading, cliStatusError)}
+                    </span>
+                  </div>
+                )
+              })}
+            </div>
+            {cliStatusError && (
+              <div className="min-w-0 break-words rounded-lg border border-amber-500/25 bg-amber-500/10 px-3 py-2 text-[12px] text-amber-800 dark:text-amber-300">
+                Version check failed: {cliStatusError}
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-2">
               <Button
                 className="flex-1 sm:flex-none"

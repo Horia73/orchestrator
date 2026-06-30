@@ -10,6 +10,7 @@ export interface CliStatusEntry {
     installDocsUrl?: string
     loginHint: string
     installed: boolean
+    version?: string
     loggedIn: boolean
     /** True when credentials exist but are expired/expiring — render as Reconnect. */
     needsReconnect?: boolean
