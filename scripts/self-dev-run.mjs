@@ -48,7 +48,7 @@ async function main() {
     case 'seed':
       return seedPreview(context)
     case 'publish-static':
-      return publishStatic(context)
+      return await publishStatic(context)
     case 'commit':
       return commitRun(context)
     case 'rebase':
@@ -318,7 +318,7 @@ async function seedPreview(context) {
   )
 }
 
-function publishStatic(context) {
+async function publishStatic(context) {
   if (isSelfRun(context)) fail('publish-static is for standalone project runs, not Orchestrator self-development.')
   assertRepoReady(context)
   assertExpectedBranch(context)
@@ -353,9 +353,11 @@ function publishStatic(context) {
     filter: (entry) => shouldCopyStaticPublishEntry(entry),
   })
 
+  const profileId = inferPublishProfileId(context, workspaceDir)
   const metadata = {
     slug,
     runId: context.state.runId,
+    profileId,
     sourceDir,
     repoDir: context.state.repoDir,
     buildCommand,
@@ -367,11 +369,18 @@ function publishStatic(context) {
   fs.rmSync(destDir, { recursive: true, force: true })
   fs.renameSync(tmpDir, destDir)
 
+  const tailscaleFunnel = await maybeEnablePublishedAppFunnel(context, {
+    slug,
+    profileId,
+  })
+
   const published = {
     ...metadata,
     path: destDir,
     publicUrl: buildPublicUrl(publishedBasePath),
     lanUrl: buildLanUrl(publishedBasePath),
+    tailscaleFunnelUrl: tailscaleFunnel.url,
+    tailscaleFunnel,
   }
   updateRunState(context, {
     status: 'published-static',
@@ -386,6 +395,7 @@ function publishStatic(context) {
       `URL: ${published.publicUrl || published.lanUrl || `${publishedBasePath}/`}`,
       published.lanUrl ? `LAN URL: ${published.lanUrl}` : 'LAN URL: unavailable; set ORCHESTRATOR_LAN_ORIGIN for Docker/reverse-proxy installs.',
       published.publicUrl ? `Public URL: ${published.publicUrl}` : 'Public URL: unavailable; set ORCHESTRATOR_PUBLIC_URL.',
+      published.tailscaleFunnelUrl ? `Tailscale Funnel URL: ${published.tailscaleFunnelUrl}` : `Tailscale Funnel URL: unavailable; ${tailscaleFunnel.error || 'host bridge or Tailscale is not ready.'}`,
     ].join('\n'),
   )
 }
@@ -745,6 +755,157 @@ function buildLanUrl(basePath) {
   const origin = lanOrigin()
   if (!origin) return null
   return new URL(`${basePath}/`, origin).toString()
+}
+
+async function maybeEnablePublishedAppFunnel(context, { slug, profileId }) {
+  const pathPrefix = `/published-apps/${slug}`
+  if (boolArg('no-funnel')) {
+    return {
+      status: 'disabled',
+      url: null,
+      path: pathPrefix,
+      error: 'disabled by --no-funnel.',
+    }
+  }
+
+  const endpoint = dockerBridgeEndpoint('remote-access/published-app-funnel')
+  if (!endpoint) {
+    return {
+      status: 'unavailable',
+      url: null,
+      path: pathPrefix,
+      error: 'host bridge is not configured.',
+    }
+  }
+
+  let response
+  let payload
+  try {
+    response = await fetch(endpoint.url, {
+      method: 'POST',
+      headers: {
+        Authorization: `Bearer ${endpoint.token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({ enable: true, slug }),
+    })
+    const text = await response.text()
+    try {
+      payload = text ? JSON.parse(text) : {}
+    } catch {
+      payload = { output: text }
+    }
+  } catch (error) {
+    return {
+      status: 'failed',
+      url: null,
+      path: pathPrefix,
+      error: error instanceof Error ? error.message : String(error),
+    }
+  }
+
+  const funnelUrl = typeof payload?.funnelUrl === 'string' && payload.funnelUrl
+    ? payload.funnelUrl
+    : null
+  if (!response.ok || payload?.ok !== true || !funnelUrl) {
+    return {
+      status: 'failed',
+      url: null,
+      path: pathPrefix,
+      error: typeof payload?.error === 'string'
+        ? payload.error
+        : `host bridge returned HTTP ${response.status}.`,
+      output: typeof payload?.output === 'string' ? payload.output : undefined,
+    }
+  }
+
+  upsertPublishedAppShare(context, {
+    slug,
+    profileId,
+    funnelPath: pathPrefix,
+    funnelUrl,
+  })
+
+  return {
+    status: 'enabled',
+    url: funnelUrl,
+    path: pathPrefix,
+    error: null,
+  }
+}
+
+function dockerBridgeEndpoint(segment) {
+  const baseUrl = process.env.ORCHESTRATOR_DOCKER_UPDATE_URL
+    || process.env.ORCHESTRATOR_HOST_UPDATE_URL
+  const token = process.env.ORCHESTRATOR_DOCKER_UPDATE_TOKEN
+    || process.env.ORCHESTRATOR_HOST_UPDATE_TOKEN
+  if (!baseUrl || !token) return null
+  try {
+    const parsed = new URL(baseUrl)
+    const segments = parsed.pathname.split('/').filter(Boolean)
+    if (segments.length > 0 && segments[segments.length - 1] === 'update') {
+      segments[segments.length - 1] = segment
+    } else {
+      segments.push(segment)
+    }
+    parsed.pathname = `/${segments.join('/')}`
+    return { url: parsed.toString(), token }
+  } catch {
+    return null
+  }
+}
+
+function inferPublishProfileId(context, workspaceDir) {
+  const configured = process.env.ORCHESTRATOR_PROFILE_ID
+    || process.env.ORCHESTRATOR_ACTIVE_PROFILE_ID
+  const normalized = normalizeProfileId(configured)
+  if (normalized) return normalized
+
+  const stateDir = resolveSourceStateDir(context)
+  const stateReal = ensureRealDir(stateDir)
+  const workspaceReal = ensureRealDir(workspaceDir)
+  const defaultProfileId = normalizeProfileId(process.env.ORCHESTRATOR_DEFAULT_PROFILE_ID) || 'admin_horia'
+
+  const adminWorkspace = path.join(stateReal, 'workspace')
+  if (path.resolve(workspaceReal) === path.resolve(adminWorkspace)) return defaultProfileId
+
+  const rel = path.relative(path.join(stateReal, 'profiles'), workspaceReal)
+  const parts = rel.split(path.sep)
+  if (parts.length === 2 && parts[1] === 'workspace') {
+    return normalizeProfileId(parts[0]) || defaultProfileId
+  }
+  return defaultProfileId
+}
+
+function normalizeProfileId(value) {
+  const clean = typeof value === 'string' ? value.trim().toLowerCase() : ''
+  return /^[a-z0-9][a-z0-9_-]{1,63}$/.test(clean) ? clean : null
+}
+
+function upsertPublishedAppShare(context, share) {
+  const statePath = path.join(resolveSourceStateDir(context), 'published-app-shares.json')
+  const current = readJson(statePath, { optional: true })
+  const state = current && typeof current === 'object' && current.version === 1
+    ? current
+    : { version: 1, shares: {} }
+  const shares = state.shares && typeof state.shares === 'object' ? state.shares : {}
+  const existing = shares[share.slug] && typeof shares[share.slug] === 'object' ? shares[share.slug] : {}
+  const now = new Date().toISOString()
+  shares[share.slug] = {
+    slug: share.slug,
+    profileId: share.profileId,
+    enabled: true,
+    access: 'tailscale-funnel',
+    funnelPath: share.funnelPath,
+    funnelUrl: share.funnelUrl,
+    createdAt: typeof existing.createdAt === 'string' ? existing.createdAt : now,
+    updatedAt: now,
+  }
+  writeJsonAtomic(statePath, {
+    version: 1,
+    updatedAt: now,
+    shares,
+  })
 }
 
 function publicOrigin() {
@@ -1586,7 +1747,7 @@ function usage(exitCode) {
     `  ${prefix} preview [--run-id <id>|--state <path>] [--json]`,
     `  ${prefix} logs [--run-id <id>|--state <path>] [--lines 120] [--json]`,
     `  ${prefix} seed --run-id <id> [--profile location-intelligence] [--config-json '{...}'|--config-patch <path-or-json>]`,
-    `  ${prefix} publish-static --run-id <id> [--slug app-name] [--build-command "npm run build"] [--output-dir dist] [--json]`,
+    `  ${prefix} publish-static --run-id <id> [--slug app-name] [--build-command "npm run build"] [--output-dir dist] [--no-funnel] [--json]`,
     `  ${prefix} commit --run-id <id> --message "<message>"`,
     `  ${prefix} rebase --run-id <id> [--base origin/master]`,
     `  ${prefix} push --run-id <id> --target-branch master`,

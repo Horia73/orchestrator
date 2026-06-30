@@ -8,7 +8,7 @@ export const remoteAccessStatusTool: ToolDef = {
   id: 'remote_access_status',
   name: 'remote_access_status',
   description:
-    'Report how Orchestrator is reachable: LAN URLs, whether a public HTTPS URL is configured, and Tailscale state (installed / signed-in, tailnet name, and whether the public /api/webhooks funnel is currently on). Read-only — use this before suggesting or making any remote-access change.',
+    'Report how Orchestrator is reachable: LAN URLs, whether a public HTTPS URL is configured, and Tailscale state (installed / signed-in, tailnet name, whether the public /api/webhooks funnel is currently on, and any published-app Funnel paths). Read-only — use this before suggesting or making any remote-access change.',
   input_schema: EMPTY_SCHEMA,
   tags: ['read', 'remote-access'],
 }

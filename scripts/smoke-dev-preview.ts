@@ -75,6 +75,7 @@ for (const needle of [
   "PUBLISHED_BASE_PATH",
   "/published-apps/<slug>",
   "lanUrl",
+  "tailscaleFunnelUrl",
 ]) {
   assert.ok(
     PROJECT_DEVELOPMENT_DOCTRINE.includes(needle),
@@ -103,6 +104,10 @@ assert.ok(
 assert.ok(
   APP_GUIDE_DOCTRINE.includes("/published-apps/<slug>/"),
   "app-guide should document durable published app URLs"
+)
+assert.ok(
+  APP_GUIDE_DOCTRINE.includes("tailscaleFunnelUrl"),
+  "app-guide should document Tailscale Funnel published app links"
 )
 
 console.log("smoke-dev-preview: OK")

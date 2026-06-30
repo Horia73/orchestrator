@@ -43,6 +43,10 @@ async function main(): Promise<void> {
         'MCP exec skips profile gate',
         isProfileExemptPath('/api/cli/mcp-exec') === true,
     )
+    check(
+        'published apps reach their route before profile gating',
+        isProfileExemptPath('/published-apps/smoke-static/assets/app.js') === true,
+    )
 
     const publicApiRequest = new Request('https://orchestrator.example.com/api/config', {
         headers: { host: 'orchestrator.example.com' },

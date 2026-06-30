@@ -70,7 +70,7 @@ Coder owns implementation and testing, but does not commit or push unless the or
 
 ## Default Web App Path
 
-Standalone project runs do not get a managed `/dev-preview` by default. For generated sites/apps that the user should keep, the normal path is: build/test in the isolated repo, publish static assets into the Orchestrator workspace, then return the stable `/published-apps/<slug>/` public/LAN URL. Do not return raw `localhost` URLs and do not put interactive apps under `files/`.
+Standalone project runs do not get a managed `/dev-preview` by default. For generated sites/apps that the user should keep, the normal path is: build/test in the isolated repo, publish static assets into the Orchestrator workspace, then return the stable `/published-apps/<slug>/` LAN URL and the Tailscale Funnel URL when the host bridge can create one. Do not return raw `localhost` URLs and do not put interactive apps under `files/`.
 
 The app must honour `PUBLISHED_BASE_PATH=/published-apps/<slug>` when it builds so root-absolute assets and client routes resolve from the published subpath.
 
@@ -82,7 +82,7 @@ For static web apps/sites/games/dashboards, publish the verified build through O
 npm run project-run:run -- publish-static --run-id <run-id> --slug <stable-app-slug> --json
 ```
 
-The command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, detects `dist/`, `out/`, or `build/`, copies it into the active profile workspace at `published-apps/<slug>/`, and returns stable public/LAN URLs served by Orchestrator at `/published-apps/<slug>/`. The files live in the mounted workspace, so they persist and are served again when the Orchestrator container restarts.
+The command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, detects `dist/`, `out/`, or `build/`, copies it into the active profile workspace at `published-apps/<slug>/`, returns stable public/LAN URLs served by Orchestrator at `/published-apps/<slug>/`, and by default asks the host bridge to create a Tailscale Funnel scoped only to `/published-apps/<slug>`. The JSON result includes `tailscaleFunnelUrl` when that succeeds, or `tailscaleFunnel.status`/`error` when the bridge or Tailscale is unavailable. The files live in the mounted workspace, so they persist and are served again when the Orchestrator container restarts.
 
 Published static apps run with script execution but without Orchestrator API/network permissions; if they need fetch/XHR/WebSocket, a backend, SSR, secrets, cron, custom Docker/nginx, or an external host, use an explicit deploy target instead.
 

@@ -2,8 +2,11 @@ import fs from 'fs'
 import path from 'path'
 import { Readable } from 'stream'
 
-import { runWithRequestProfile } from '@/lib/profiles/server'
-import { activeRuntimePaths } from '@/lib/runtime-paths'
+import { getPublishedAppShare } from '@/lib/published-apps/shares'
+import { runWithProfileContext } from '@/lib/profiles/context'
+import { getCurrentProfileFromRequest } from '@/lib/profiles/server'
+import { getProfile } from '@/lib/profiles/store'
+import { runtimePathsForProfile } from '@/lib/runtime-paths'
 
 export const dynamic = 'force-dynamic'
 export const runtime = 'nodejs'
@@ -66,32 +69,60 @@ async function servePublishedApp(
   const slug = params.slug
   if (!isValidSlug(slug)) return textResponse('Invalid published app slug.', 400)
 
-  return runWithRequestProfile(request, () => {
-    const root = path.join(activeRuntimePaths().agentWorkspaceDir, 'published-apps', slug)
-    const resolved = resolvePublishedFile(root, params.path ?? [])
-    if (!resolved) return textResponse('Published app not found.', 404)
+  const current = getCurrentProfileFromRequest(request)
+  if (current) {
+    return runWithProfileContext(
+      { profileId: current.profile.id, role: current.profile.role },
+      () => servePublishedAppFromProfile(current.profile.id, slug, params.path ?? [], headOnly, false),
+    )
+  }
 
-    const stat = fs.statSync(/* turbopackIgnore: true */ resolved.filePath)
-    const ext = path.extname(resolved.filePath).toLowerCase()
-    const headers = new Headers({
-      'Content-Type': contentType(ext),
-      'Content-Length': String(stat.size),
-      'Cache-Control': ext === '.html' || ext === '.htm' ? 'private, no-store' : 'private, max-age=300',
-      'X-Content-Type-Options': 'nosniff',
-      'X-Robots-Tag': 'noindex, nofollow',
-      'X-Orchestrator-Published-App': slug,
-    })
-    if (ext === '.html' || ext === '.htm') {
-      headers.set('Content-Security-Policy', publishedAppCsp())
-    }
+  const share = getPublishedAppShare(slug)
+  if (!share) {
+    return textResponse('Profile required.', 401)
+  }
+  const owner = getProfile(share.profileId)
+  if (!owner || owner.disabledAt) {
+    return textResponse('Published app not found.', 404)
+  }
 
-    const body = headOnly
-      ? null
-      : (Readable.toWeb(
-          fs.createReadStream(/* turbopackIgnore: true */ resolved.filePath)
-        ) as ReadableStream<Uint8Array>)
-    return new Response(body, { headers })
+  return runWithProfileContext({ profileId: owner.id, role: owner.role }, () => {
+    return servePublishedAppFromProfile(owner.id, slug, params.path ?? [], headOnly, true)
   })
+}
+
+function servePublishedAppFromProfile(
+  profileId: string,
+  slug: string,
+  requestedPath: string[],
+  headOnly: boolean,
+  publicShare: boolean,
+): Response {
+  const root = path.join(runtimePathsForProfile(profileId).agentWorkspaceDir, 'published-apps', slug)
+  const resolved = resolvePublishedFile(root, requestedPath)
+  if (!resolved) return textResponse('Published app not found.', 404)
+
+  const stat = fs.statSync(/* turbopackIgnore: true */ resolved.filePath)
+  const ext = path.extname(resolved.filePath).toLowerCase()
+  const headers = new Headers({
+    'Content-Type': contentType(ext),
+    'Content-Length': String(stat.size),
+    'Cache-Control': ext === '.html' || ext === '.htm' ? 'private, no-store' : 'private, max-age=300',
+    'X-Content-Type-Options': 'nosniff',
+    'X-Robots-Tag': 'noindex, nofollow',
+    'X-Orchestrator-Published-App': slug,
+  })
+  if (publicShare) headers.set('X-Orchestrator-Published-App-Share', 'tailscale-funnel')
+  if (ext === '.html' || ext === '.htm') {
+    headers.set('Content-Security-Policy', publishedAppCsp())
+  }
+
+  const body = headOnly
+    ? null
+    : (Readable.toWeb(
+        fs.createReadStream(/* turbopackIgnore: true */ resolved.filePath)
+      ) as ReadableStream<Uint8Array>)
+  return new Response(body, { headers })
 }
 
 function resolvePublishedFile(root: string, requestedSegments: string[]): { filePath: string } | null {

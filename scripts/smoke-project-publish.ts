@@ -49,6 +49,8 @@ try {
   assert.equal(result.published, true)
   assert.equal(result.slug, 'smoke-static')
   assert.equal(result.basePath, '/published-apps/smoke-static')
+  assert.equal(result.tailscaleFunnelUrl, null)
+  assert.equal(result.tailscaleFunnel.status, 'unavailable')
   assert.ok(result.path.endsWith(path.join('workspace', 'published-apps', 'smoke-static')))
 
   const indexPath = path.join(result.path, 'index.html')
@@ -67,7 +69,13 @@ try {
 function runNode(script: string, args: string[], opts: { cwd: string }) {
   const result = spawnSync(process.execPath, [script, ...args], {
     cwd: opts.cwd,
-    env: process.env,
+    env: {
+      ...process.env,
+      ORCHESTRATOR_DOCKER_UPDATE_URL: '',
+      ORCHESTRATOR_DOCKER_UPDATE_TOKEN: '',
+      ORCHESTRATOR_HOST_UPDATE_URL: '',
+      ORCHESTRATOR_HOST_UPDATE_TOKEN: '',
+    },
     encoding: 'utf-8',
     stdio: ['ignore', 'pipe', 'pipe'],
   })

@@ -841,6 +841,7 @@ def detect_remote_access() -> dict:
         "dnsName": None,
         "webhookFunnelEnabled": False,
         "funnelUrl": None,
+        "publishedAppFunnels": [],
     }
     status_raw = capture_optional(["tailscale", "status", "--json"])
     if status_raw:
@@ -864,6 +865,21 @@ def detect_remote_access() -> dict:
         ts["webhookFunnelEnabled"] = True
         if ts["dnsName"]:
             ts["funnelUrl"] = f"https://{ts['dnsName']}/api/webhooks"
+    published_slugs = sorted(set(re.findall(r"/published-apps/([a-z0-9][a-z0-9-]{0,79})(?=[/\s]|$)", serve_blob)))
+    if ts["dnsName"]:
+        ts["publishedAppFunnels"] = [
+            {
+                "slug": slug,
+                "path": f"/published-apps/{slug}",
+                "url": f"https://{ts['dnsName']}/published-apps/{slug}/",
+            }
+            for slug in published_slugs
+        ]
+    else:
+        ts["publishedAppFunnels"] = [
+            {"slug": slug, "path": f"/published-apps/{slug}", "url": None}
+            for slug in published_slugs
+        ]
     return {"ok": True, "tailscale": ts}
 
 
@@ -887,6 +903,47 @@ def set_webhook_funnel(enable: bool) -> dict:
         "exitCode": code,
         "output": (out or "").strip()[-1500:],
         "tailscale": detected.get("tailscale"),
+    }
+
+
+def set_published_app_funnel(slug: str, enable: bool) -> dict:
+    """Toggle a public Tailscale Funnel scoped to one published static app.
+
+    The funnel path is /published-apps/<slug> and points back to the same path
+    on the app's loopback port, so the rest of Orchestrator is not exposed.
+    """
+    clean_slug = (slug or "").strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9-]{0,79}", clean_slug):
+        return {"ok": False, "error": "Invalid published app slug.", "funnelUrl": None}
+    funnel_path = f"/published-apps/{clean_slug}"
+    target = f"http://127.0.0.1:{APP_PORT}{funnel_path}"
+    if enable:
+        code, out = run_capture(
+            ["tailscale", "funnel", "--bg", "--set-path", funnel_path, target],
+            timeout=45,
+        )
+    else:
+        code, out = run_capture(
+            ["tailscale", "funnel", "--set-path", funnel_path, "off"],
+            timeout=45,
+        )
+    detected = detect_remote_access()
+    ts = detected.get("tailscale") or {}
+    funnel_url = None
+    for item in ts.get("publishedAppFunnels") or []:
+        if item.get("slug") == clean_slug:
+            funnel_url = item.get("url")
+            break
+    if enable and not funnel_url and ts.get("dnsName"):
+        funnel_url = f"https://{ts['dnsName']}{funnel_path}/"
+    return {
+        "ok": code == 0 and (not enable or bool(funnel_url)),
+        "exitCode": code,
+        "output": (out or "").strip()[-1500:],
+        "slug": clean_slug,
+        "path": funnel_path,
+        "funnelUrl": funnel_url,
+        "tailscale": ts,
     }
 
 
@@ -1121,6 +1178,7 @@ class Handler(BaseHTTPRequestHandler):
             "/restart",
             "/rollback",
             "/remote-access/funnel",
+            "/remote-access/published-app-funnel",
             "/remote-access/install-tailscale",
             "/remote-access/https",
         }:
@@ -1141,6 +1199,19 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json(400, {"error": "Invalid JSON payload."})
                 return
             result = set_webhook_funnel(bool(body.get("enable")))
+            self.send_json(200 if result.get("ok") else 502, result)
+            return
+
+        if path == "/remote-access/published-app-funnel":
+            try:
+                length = min(int(self.headers.get("Content-Length", "0") or "0"), 65536)
+                raw = self.rfile.read(length) if length else b"{}"
+                body = json.loads(raw.decode("utf-8") or "{}")
+            except Exception:
+                self.send_json(400, {"error": "Invalid JSON payload."})
+                return
+            slug = str(body.get("slug") or "").strip()
+            result = set_published_app_funnel(slug, bool(body.get("enable")))
             self.send_json(200 if result.get("ok") else 502, result)
             return
 

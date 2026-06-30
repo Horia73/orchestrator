@@ -492,7 +492,7 @@ function buildInstructions(values) {
     `npm run project-run:run -- publish-static --run-id ${values.runId} --slug <stable-app-slug>`,
     '```',
     '',
-    'That command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, copies `dist/`, `out/`, or `build/` into `workspace/published-apps/<slug>/`, and returns stable Public/LAN URLs such as `/published-apps/<slug>/`. Do not put interactive apps under `/files/`: that file route deliberately blocks script execution. Published static apps run without Orchestrator API/network permissions; if the project requires fetch/XHR/WebSocket calls, a backend, SSR server, database, secrets, cron, or paid deployment, report that it is not a static publish and ask the orchestrator for an explicit deployment target/policy instead of editing nginx or host services on your own.',
+    'That command runs the build with `PUBLISHED_BASE_PATH=/published-apps/<slug>`, copies `dist/`, `out/`, or `build/` into `workspace/published-apps/<slug>/`, returns stable Public/LAN URLs such as `/published-apps/<slug>/`, and asks the host bridge to create a Tailscale Funnel scoped only to that same path. The final orchestrator response should include `lanUrl` and `tailscaleFunnelUrl` when present; if the Funnel URL is unavailable, it should report the returned status/error. Do not put interactive apps under `/files/`: that file route deliberately blocks script execution. Published static apps run without Orchestrator API/network permissions; if the project requires fetch/XHR/WebSocket calls, a backend, SSR server, database, secrets, cron, or paid deployment, report that it is not a static publish and ask the orchestrator for an explicit deployment target/policy instead of editing nginx or host services on your own.',
     '',
     '## Verification',
     '',
@@ -515,7 +515,7 @@ function buildInstructions(values) {
     '- files changed;',
     '- commands run;',
     '- public preview URL and LAN preview URL used, if any;',
-    '- static published URL if the orchestrator published the build;',
+    '- static published lanUrl and tailscaleFunnelUrl if the orchestrator published the build;',
     '- blockers or residual risks.',
     '',
   ].join('\n')
@@ -533,7 +533,7 @@ function buildCoderPrompt(values) {
     : [
       '- Managed preview: disabled for this standalone project run.',
       '- Durable user-facing target: /published-apps/<slug>/ via `project-run:run publish-static` after build/test verification.',
-      '- Static-published apps must honour PUBLISHED_BASE_PATH=/published-apps/<slug>. Do not use /files for interactive apps and do not report raw localhost links as the final result.',
+      '- Static-published apps must honour PUBLISHED_BASE_PATH=/published-apps/<slug>. The final publish returns lanUrl and, when Tailscale is ready, tailscaleFunnelUrl for the same path. Do not use /files for interactive apps and do not report raw localhost links as the final result.',
     ]
 
   return [
@@ -559,7 +559,7 @@ function buildCoderPrompt(values) {
     '',
     'You own implementation and testing. Inspect the repo yourself, choose the needed commands, and fix failures you introduce. Do not leave long-running dev servers behind. For production-ready static apps, make the build portable under PUBLISHED_BASE_PATH so the orchestrator can publish it at /published-apps/<slug>/ after checks pass. If this run has an explicit managed preview, use its public/LAN URL for visual checks; otherwise rely on build/test plus static publish for user review.',
     '',
-    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, the static published URL if published, any managed public/LAN preview URL if used, and blockers/risks.',
+    'Do not commit or push unless explicitly asked. When done, report files changed, checks run, published lanUrl/tailscaleFunnelUrl if published, any managed public/LAN preview URL if used, and blockers/risks.',
   ].filter(Boolean).join('\n')
 }
 

@@ -7,6 +7,7 @@ export interface TailscaleState {
   dnsName: string | null
   webhookFunnelEnabled: boolean
   funnelUrl: string | null
+  publishedAppFunnels: Array<{ slug: string; path: string; url: string | null }>
 }
 
 export interface RemoteAccessBridgeStatus {
@@ -57,6 +58,16 @@ function tailscaleFromPayload(payload: unknown): TailscaleState | null {
     dnsName: typeof r.dnsName === 'string' ? r.dnsName : null,
     webhookFunnelEnabled: r.webhookFunnelEnabled === true,
     funnelUrl: typeof r.funnelUrl === 'string' ? r.funnelUrl : null,
+    publishedAppFunnels: Array.isArray(r.publishedAppFunnels)
+      ? r.publishedAppFunnels.flatMap((item) => {
+          if (!item || typeof item !== 'object') return []
+          const v = item as Record<string, unknown>
+          const slug = typeof v.slug === 'string' ? v.slug : ''
+          const path = typeof v.path === 'string' ? v.path : ''
+          if (!slug || !path) return []
+          return [{ slug, path, url: typeof v.url === 'string' ? v.url : null }]
+        })
+      : [],
   }
 }
 

@@ -23,6 +23,7 @@ interface TailscaleState {
   dnsName: string | null
   webhookFunnelEnabled: boolean
   funnelUrl: string | null
+  publishedAppFunnels?: Array<{ slug: string; path: string; url: string | null }>
 }
 
 interface RemoteAccessStatus {

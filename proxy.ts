@@ -16,6 +16,7 @@ const PROFILE_EXEMPT_PATH_PREFIXES = [
   "/api/profiles",
   "/api/push/vapid-public-key",
   "/api/update/host-result",
+  "/published-apps",
   "/_next",
 ]
 

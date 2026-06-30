@@ -112,6 +112,7 @@ async function main() {
         activatedProjectDev.includes('PUBLISHED_BASE_PATH') &&
         activatedProjectDev.includes('publish-static') &&
         activatedProjectDev.includes('lanUrl') &&
+        activatedProjectDev.includes('tailscaleFunnelUrl') &&
         !activatedProjectDev.includes('application/vnd.ant.dev-preview') &&
         !activatedProjectDev.includes('live_preview_policy') &&
         !activatedProjectDev.includes('<self_update_policy>'))
