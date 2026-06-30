@@ -53,8 +53,9 @@ ROLLBACK_STATE_PATH = Path(
 )
 CLAUDE_USAGE_TIMEOUT_SECONDS = float(os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_TIMEOUT_SECONDS", "30"))
 CLAUDE_API_BILLING_USAGE_ERROR = (
-    "Claude Code is running in API Usage Billing mode, so the /usage panel only "
-    "reports session cost/activity and does not expose subscription quota windows."
+    "Claude /usage only reported session cost/activity and did not expose subscription "
+    "quota windows. This usually means Claude Code is using API Usage Billing or has no "
+    "plan quotas to show."
 )
 CLAUDE_USAGE_CWD = Path(
     os.environ.get("ORCHESTRATOR_CLAUDE_USAGE_CWD", str(Path.home() / ".orchestrator" / "claude-usage-cwd"))
@@ -388,8 +389,7 @@ def has_claude_usage_quota(value: str) -> bool:
 def is_claude_api_usage_billing(value: str) -> bool:
     norm = re.sub(r"\s+", " ", value).lower()
     return (
-        "api usage billing" in norm
-        and "usage stats" in norm
+        "usage stats" in norm
         and "total cost" in norm
         and "usage:" in norm
         and not has_claude_usage_quota(value)

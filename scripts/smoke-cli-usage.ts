@@ -43,4 +43,13 @@ Total duration (API): 0s
 Usage: 0 input, 0 output, 0 cache read, 0 cache write
 `), true)
 
+assert.equal(isClaudeApiUsageBillingText(`
+Usage Stats
+Session
+Total cost: $0.0000
+Total duration (API): 0s
+Usage: 0 input, 0 output, 0 cache read, 0 cache write
+Esc to cancel
+`), true)
+
 console.log("cli usage smoke passed")

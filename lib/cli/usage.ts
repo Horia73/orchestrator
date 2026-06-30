@@ -76,7 +76,7 @@ const CLAUDE_USAGE_TIMEOUT_MS = 30_000
 const CLAUDE_USAGE_RETRY_DELAY_MS = 500
 const CLAUDE_USAGE_HOST_BRIDGE_TIMEOUT_MS = 35_000
 const CLAUDE_API_BILLING_USAGE_ERROR =
-    'Claude Code is running in API Usage Billing mode, so the /usage panel only reports session cost/activity and does not expose subscription quota windows.'
+    'Claude /usage only reported session cost/activity and did not expose subscription quota windows. This usually means Claude Code is using API Usage Billing or has no plan quotas to show.'
 
 interface ClaudeUsageRaw {
     /** Cleaned-up plain text of the /usage panel. */
@@ -369,8 +369,7 @@ function hasClaudeUsageQuota(text: string): boolean {
 
 export function isClaudeApiUsageBillingText(text: string): boolean {
     const norm = text.replace(/\s+/g, ' ').toLowerCase()
-    return norm.includes('api usage billing')
-        && norm.includes('usage stats')
+    return norm.includes('usage stats')
         && norm.includes('total cost')
         && norm.includes('usage:')
         && !hasClaudeUsageQuota(text)
