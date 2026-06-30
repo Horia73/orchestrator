@@ -1145,7 +1145,7 @@ function getFirstEnvValue(
   }
 
   const filePaths = canUseSharedEnvSecret(names)
-    ? [activeRuntimePaths().workspaceEnvPath, ...PROJECT_ENV_PATHS]
+    ? sharedEnvFilePaths()
     : [activeRuntimePaths().workspaceEnvPath]
   for (const filePath of filePaths) {
     const values = readEnvFileValues(filePath, names)
@@ -1156,6 +1156,12 @@ function getFirstEnvValue(
   }
 
   return null
+}
+
+function sharedEnvFilePaths(): string[] {
+  const activePath = activeRuntimePaths().workspaceEnvPath
+  const adminPath = runtimePathsForProfile(ADMIN_PROFILE_ID).workspaceEnvPath
+  return uniqueStrings([activePath, adminPath, ...PROJECT_ENV_PATHS])
 }
 
 function canUseSharedEnvSecret(names: string[]): boolean {

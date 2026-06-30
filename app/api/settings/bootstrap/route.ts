@@ -59,11 +59,13 @@ export async function GET() {
                 : [
                     ...(current.profile.permissions.tools.models ? ["models"] : []),
                     "auth",
-                    ...(current.profile.permissions.tools.settings_files ? ["files"] : []),
+                    "files",
                     "usage",
                     "notifications",
                 ],
             canManageModelRegistry: current.isAdmin,
+            canManageSettingsFiles:
+                current.isAdmin || current.profile.permissions.tools.settings_files,
             config,
             agents,
             providers: registry,

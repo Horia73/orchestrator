@@ -62,6 +62,7 @@ export interface SettingsBootstrap {
   agents: AgentInfo[]
   providers: Record<string, ProviderDef>
   providerStatus: Record<string, ProviderStatus>
+  canManageSettingsFiles: boolean
 }
 
 export interface AgentOverrideInput {

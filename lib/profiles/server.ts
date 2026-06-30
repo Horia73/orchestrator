@@ -449,11 +449,12 @@ function guardProfileApiPermission(
 
   if (
     pathname.startsWith("/api/settings/files") &&
+    !readOnly &&
     !current.profile.permissions.tools.settings_files
   ) {
     return NextResponse.json(
       {
-        error: "Profile is not allowed to access settings files.",
+        error: "Profile is not allowed to change settings files.",
         code: "profile_settings_files_denied",
       },
       { status: 403, headers: { "Cache-Control": "no-store" } }

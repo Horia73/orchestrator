@@ -21,6 +21,7 @@ import {
 import { cn } from "@/lib/utils"
 import { EnvEditor } from "@/components/settings/files-env-editor"
 import { MarkdownRenderer } from "@/components/markdown-renderer"
+import { useSettings } from "@/components/settings/use-settings"
 
 type MarkdownView = "preview" | "edit"
 
@@ -38,6 +39,7 @@ interface WorkspaceFileSummary {
   surface: FileSurface
   dynamic?: "daily"
   dailyDate?: string
+  inherited?: boolean
   description: string
   readOnly?: boolean
   exists: boolean
@@ -85,6 +87,7 @@ interface FileGroup {
 }
 
 export function FilesTab() {
+  const { data } = useSettings()
   const [files, setFiles] = React.useState<WorkspaceFileSummary[]>([])
   const [selectedId, setSelectedId] = React.useState("")
   const [selectedFile, setSelectedFile] = React.useState<WorkspaceFilePayload | null>(null)
@@ -281,7 +284,14 @@ export function FilesTab() {
         )}
       >
         <div className="shrink-0 border-b border-border/60 px-4 py-3">
-          <h2 className="text-[14px] font-semibold text-foreground/85">Workspace files</h2>
+          <div className="flex items-center justify-between gap-2">
+            <h2 className="text-[14px] font-semibold text-foreground/85">Workspace files</h2>
+            {data && !data.canManageSettingsFiles && (
+              <span className="rounded-md bg-muted px-1.5 py-0.5 text-[10.5px] font-medium text-foreground/50">
+                Read-only
+              </span>
+            )}
+          </div>
           <p className="mt-0.5 truncate text-[12px] text-foreground/50">
             {workspaceRoot || "Workspace root"}
           </p>
@@ -355,6 +365,11 @@ export function FilesTab() {
                   {selectedFile?.label ?? "Select a file"}
                 </h2>
                 {selectedFile && <FileRoleBadge file={selectedFile} />}
+                {selectedFile?.inherited && (
+                  <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-foreground/55">
+                    Inherited
+                  </span>
+                )}
                 {selectedFile?.readOnly && (
                   <span className="inline-flex items-center gap-1 rounded-md bg-muted px-1.5 py-0.5 text-[11px] text-foreground/55">
                     <Lock className="size-3" />
@@ -1119,6 +1134,7 @@ function toSummary(file: WorkspaceFilePayload): WorkspaceFileSummary {
     surface: file.surface,
     description: file.description,
     readOnly: file.readOnly,
+    inherited: file.inherited,
     exists: file.exists,
     size: file.size,
     updatedAt: file.updatedAt,

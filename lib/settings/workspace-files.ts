@@ -4,7 +4,16 @@ import { createHash, randomUUID } from "crypto"
 import { z } from "zod"
 
 import { getConfig } from "@/lib/config"
-import { activeRuntimePaths } from "@/lib/runtime-paths"
+import {
+  activeRuntimePaths,
+  runtimePathsForProfile,
+} from "@/lib/runtime-paths"
+import {
+  getActiveProfileId,
+  isAdminProfileId,
+} from "@/lib/profiles/context"
+import { ADMIN_PROFILE_ID } from "@/lib/profiles/constants"
+import { getProfile } from "@/lib/profiles/store"
 import {
   AGENT_NEEDS_DEFAULT_CONTENT,
   AGENT_NEEDS_RELATIVE_PATH,
@@ -75,6 +84,7 @@ export interface WorkspaceFileSummary extends WorkspaceFileDefinition {
   size: number | null
   updatedAt: number | null
   dailyDate?: string
+  inherited?: boolean
 }
 
 export interface WorkspaceFilePayload extends WorkspaceFileSummary {
@@ -898,6 +908,7 @@ export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
 
   const summary = summarizeFile(def, dailyStamp)
   if (!shouldListFile(summary)) return null
+  const readSource = resolveDefinitionReadSource(def, dailyStamp)
   let content =
     def.dynamic === "daily"
       ? buildDailyMemoryTemplate(dailyStamp)
@@ -906,14 +917,17 @@ export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
 
   if (def.source === "virtual") {
     content = buildVirtualFileContent(def.id)
-  } else if (summary.exists) {
-    const absolutePath = resolveDefinitionPath(def, dailyStamp)
+  } else if (readSource?.exists) {
+    const absolutePath = readSource.absolutePath
     const stat = fs.statSync(/* turbopackIgnore: true */ absolutePath)
     if (stat.size > MAX_FILE_BYTES) {
       throw new Error(`File is too large to edit here (${stat.size} bytes).`)
     }
     content = fs.readFileSync(/* turbopackIgnore: true */ absolutePath, "utf-8")
-    if (def.id === "env-local") {
+    if (def.id === "env-local" && readSource.filterInheritedEnv) {
+      content = filterInheritedEnvContent(content)
+    }
+    if (def.id === "env-local" && !readSource.inherited) {
       const nextContent = mergeMissingEnvDefaults(
         content,
         def.defaultContent ?? ""
@@ -932,6 +946,9 @@ export function getWorkspaceFile(id: string): WorkspaceFilePayload | null {
 
   return {
     ...summary,
+    description: summary.inherited
+      ? `${summary.description} Inherited from the admin profile.`
+      : summary.description,
     content,
     ...(contentRedacted ? { contentRedacted } : {}),
   }
@@ -1056,7 +1073,8 @@ function summarizeFile(
     migrateLegacyApiModelsFile()
   }
 
-  const absolutePath = resolveDefinitionPath(def, dailyStamp)
+  const readSource = resolveDefinitionReadSource(def, dailyStamp)
+  const absolutePath = readSource?.absolutePath ?? resolveDefinitionPath(def, dailyStamp)
   let exists = false
   let size: number | null = null
   let updatedAt: number | null = null
@@ -1076,12 +1094,87 @@ function summarizeFile(
     {
       ...def,
       relativePath: effectiveRelativePath(def, dailyStamp),
+      readOnly:
+        def.readOnly ||
+        !canManageSettingsFilesForActiveProfile() ||
+        readSource?.inherited === true,
       exists,
       size,
       updatedAt,
+      ...(readSource?.inherited ? { inherited: true } : {}),
     },
     dailyStamp
   )
+}
+
+function canManageSettingsFilesForActiveProfile(): boolean {
+  const profileId = getActiveProfileId()
+  if (isAdminProfileId(profileId)) return true
+  return getProfile(profileId)?.permissions.tools.settings_files === true
+}
+
+function canInheritAdminEnvForActiveProfile(): boolean {
+  const profileId = getActiveProfileId()
+  if (isAdminProfileId(profileId)) return false
+  return getProfile(profileId)?.permissions.inheritAdminApiKeys === true
+}
+
+function resolveDefinitionReadSource(
+  def: WorkspaceFileDefinition,
+  dailyStamp?: string
+): {
+  absolutePath: string
+  exists: boolean
+  inherited: boolean
+  filterInheritedEnv: boolean
+} | null {
+  if (def.source === "virtual") return null
+  const activePath = resolveDefinitionPath(def, dailyStamp)
+  if (fs.existsSync(/* turbopackIgnore: true */ activePath)) {
+    return {
+      absolutePath: activePath,
+      exists: true,
+      inherited: false,
+      filterInheritedEnv: false,
+    }
+  }
+  if (def.id !== "env-local" || !canInheritAdminEnvForActiveProfile()) {
+    return {
+      absolutePath: activePath,
+      exists: false,
+      inherited: false,
+      filterInheritedEnv: false,
+    }
+  }
+
+  const adminPath = path.join(
+    /* turbopackIgnore: true */ runtimePathsForProfile(ADMIN_PROFILE_ID).workspaceDir,
+    def.relativePath
+  )
+  return {
+    absolutePath: adminPath,
+    exists: fs.existsSync(/* turbopackIgnore: true */ adminPath),
+    inherited: true,
+    filterInheritedEnv: true,
+  }
+}
+
+function filterInheritedEnvContent(content: string): string {
+  const allowed = allowedInheritedAdminEnvKeys()
+  if (allowed === null) return content
+  const lines = content.replace(/\r\n/g, "\n").split("\n").filter((line) => {
+    const parsed = parseEnvAssignment(line)
+    return Boolean(parsed && allowed.has(parsed.key))
+  })
+  return lines.length > 0 ? `${lines.join("\n")}\n` : ""
+}
+
+function allowedInheritedAdminEnvKeys(): Set<string> | null {
+  const profile = getProfile(getActiveProfileId())
+  if (!profile?.permissions.inheritAdminApiKeys) return new Set()
+  const allowed = profile.permissions.allowedProviderApiKeys
+  if (allowed.includes("*")) return null
+  return new Set(allowed)
 }
 
 function listDailyFileSummaries(

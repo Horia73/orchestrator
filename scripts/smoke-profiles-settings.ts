@@ -27,12 +27,18 @@ const {
 } = await import("@/lib/profiles/types")
 const {
   getConfig,
+  getEnvValue,
   getEffectiveBrowserAgentSettings,
   getEffectiveAgentSettings,
   setAgentOverride,
   setBrowserAgentModel,
   updateConfig,
 } = await import("@/lib/config")
+const { runtimePathsForProfile } = await import("@/lib/runtime-paths")
+const {
+  getWorkspaceFile,
+  listWorkspaceFiles,
+} = await import("@/lib/settings/workspace-files")
 
 const defaultPermissions = defaultMemberPermissions()
 check("member Settings surface defaults on", defaultPermissions.surfaces.settings === true)
@@ -42,6 +48,18 @@ check("member settings files default off", defaultPermissions.tools.settings_fil
 const normalMember = createProfile({
   name: "Normal Member",
   permissions: defaultPermissions,
+})
+
+const inheritedEnvMember = createProfile({
+  name: "Inherited Env",
+  permissions: defaultMemberPermissions(),
+})
+
+const isolatedEnvPermissions = defaultMemberPermissions()
+isolatedEnvPermissions.inheritAdminApiKeys = false
+const isolatedEnvMember = createProfile({
+  name: "Isolated Env",
+  permissions: isolatedEnvPermissions,
 })
 
 const selfServicePermissions = defaultMemberPermissions()
@@ -168,6 +186,58 @@ check(
   "admin does not overwrite self-service member browser agent model",
   selfServiceConfig.browserAgent.light.model === "gemini-3.1-pro-preview",
   selfServiceConfig.browserAgent.light
+)
+
+const originalResendApiKey = process.env.RESEND_API_KEY
+delete process.env.RESEND_API_KEY
+const adminEnvPath = runtimePathsForProfile(ADMIN_PROFILE_ID).workspaceEnvPath
+fs.mkdirSync(path.dirname(adminEnvPath), { recursive: true })
+fs.writeFileSync(
+  adminEnvPath,
+  "RESEND_API_KEY=admin-resend-smoke\nOPENAI_API_KEY=admin-openai-smoke\n",
+  "utf-8"
+)
+const inheritedEnvValue = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => getEnvValue("RESEND_API_KEY")
+)
+const isolatedEnvValue = await runWithProfileContext(
+  { profileId: isolatedEnvMember.id, role: "member" },
+  () => getEnvValue("RESEND_API_KEY")
+)
+const inheritedEnvSummary = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => listWorkspaceFiles().find((file) => file.id === "env-local")
+)
+const inheritedEnvFile = await runWithProfileContext(
+  { profileId: inheritedEnvMember.id, role: "member" },
+  () => getWorkspaceFile("env-local")
+)
+if (originalResendApiKey === undefined) delete process.env.RESEND_API_KEY
+else process.env.RESEND_API_KEY = originalResendApiKey
+
+check(
+  "member inherits admin workspace env API keys",
+  inheritedEnvValue === "admin-resend-smoke",
+  inheritedEnvValue
+)
+check(
+  "member without inherit does not read admin workspace env API keys",
+  isolatedEnvValue === null,
+  isolatedEnvValue
+)
+check(
+  "inherited env file is visible read-only",
+  inheritedEnvSummary?.exists === true &&
+    inheritedEnvSummary.readOnly === true &&
+    inheritedEnvSummary.inherited === true,
+  inheritedEnvSummary
+)
+check(
+  "inherited env file redacts inherited API keys",
+  inheritedEnvFile?.content.includes("RESEND_API_KEY=__ORCHESTRATOR_SECRET_SET__") === true &&
+    inheritedEnvFile.contentRedacted === true,
+  inheritedEnvFile
 )
 
 const normalEffective = await runWithProfileContext(
