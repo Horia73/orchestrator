@@ -10,6 +10,7 @@ import { TooltipProvider } from "@/components/ui/tooltip"
 import { NotificationPermissionPrompt } from "@/components/notification-permission-prompt"
 import { PreviewBasePathScript } from "@/components/preview-base-path-script"
 import { ActiveWorkoutFloatingButton } from "@/components/workout/active-workout-floating-button"
+import { TransientScrollbarController } from "@/components/transient-scrollbar-controller"
 
 const fontSans = Geist({
   subsets: ["latin"],
@@ -144,6 +145,7 @@ export default async function RootLayout({
     >
       <body>
         <PreviewBasePathScript />
+        <TransientScrollbarController />
         <ThemeProvider>
           <TooltipProvider>
             <ChatStoreProvider>

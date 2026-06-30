@@ -463,9 +463,36 @@ button:not(:disabled),
     background: transparent;
   }
 
+  html,
+  body,
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+  }
+
   ::-webkit-scrollbar-thumb {
-    background: color-mix(in oklch, var(--foreground) 50%, transparent);
+    background-color: transparent;
     border-radius: 6px;
+    transition: background-color 180ms ease;
+  }
+
+  ::-webkit-scrollbar-corner {
+    background: transparent;
+  }
+
+  html[data-orch-scrollbar-visible="true"],
+  body[data-orch-scrollbar-visible="true"],
+  [data-orch-scrollbar-visible="true"],
+  [data-scrollbar-visible="true"] {
+    scrollbar-color: color-mix(in oklch, var(--foreground) 36%, transparent)
+      transparent;
+  }
+
+  html[data-orch-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+  body[data-orch-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+  [data-orch-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+  [data-scrollbar-visible="true"]::-webkit-scrollbar-thumb {
+    background-color: color-mix(in oklch, var(--foreground) 36%, transparent);
   }
 
   .chat-scroll-container {
@@ -491,7 +518,7 @@ button:not(:disabled),
     .tool-call-scroll,
     .tool-call-scroll .xterm-viewport {
       scrollbar-width: thin;
-      scrollbar-color: color-mix(in oklch, var(--foreground) 36%, transparent) transparent;
+      scrollbar-color: transparent transparent;
       scrollbar-gutter: stable;
     }
 
@@ -503,8 +530,23 @@ button:not(:disabled),
 
     .tool-call-scroll::-webkit-scrollbar-thumb,
     .tool-call-scroll .xterm-viewport::-webkit-scrollbar-thumb {
-      background: color-mix(in oklch, var(--foreground) 36%, transparent);
+      background: transparent;
       border-radius: 6px;
+    }
+
+    .tool-call-scroll[data-orch-scrollbar-visible="true"],
+    .tool-call-scroll[data-scrollbar-visible="true"],
+    .tool-call-scroll .xterm-viewport[data-orch-scrollbar-visible="true"],
+    .tool-call-scroll .xterm-viewport[data-scrollbar-visible="true"] {
+      scrollbar-color: color-mix(in oklch, var(--foreground) 36%, transparent)
+        transparent;
+    }
+
+    .tool-call-scroll[data-orch-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+    .tool-call-scroll[data-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+    .tool-call-scroll .xterm-viewport[data-orch-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+    .tool-call-scroll .xterm-viewport[data-scrollbar-visible="true"]::-webkit-scrollbar-thumb {
+      background: color-mix(in oklch, var(--foreground) 36%, transparent);
     }
 
     .tool-call-scroll-x {
@@ -566,10 +608,12 @@ button:not(:disabled),
     background: transparent;
     transition: background-color 180ms ease;
   }
-  .library-scroll:hover {
+  .library-scroll[data-orch-scrollbar-visible="true"],
+  .library-scroll[data-scrollbar-visible="true"] {
     scrollbar-color: color-mix(in oklch, var(--foreground) 35%, transparent) transparent;
   }
-  .library-scroll:hover::-webkit-scrollbar-thumb {
+  .library-scroll[data-orch-scrollbar-visible="true"]::-webkit-scrollbar-thumb,
+  .library-scroll[data-scrollbar-visible="true"]::-webkit-scrollbar-thumb {
     background: color-mix(in oklch, var(--foreground) 35%, transparent);
   }
 
@@ -626,24 +670,17 @@ button:not(:disabled),
 
 }
 
-/* Kill the document-level scrollbar on the settings route, and hide
-   scrollbars within the settings content subtree. Scope the "hide every
-   descendant" part to `[data-orch-settings-content]` — NOT to
-   `html[data-orch-settings-page] *`, which would also override the
-   persistent sidebar's `scrollbar-gutter: stable` and reflow the
-   conversation list whenever you enter/leave settings. */
+/* Kill only the document-level scrollbar on the settings route. Internal
+   settings panes use the same transient scrollbar treatment as the rest of the
+   app, while the document itself stays locked to avoid an extra page gutter. */
 html[data-orch-settings-page="true"],
-html[data-orch-settings-page="true"] body,
-[data-orch-settings-content="true"],
-[data-orch-settings-content="true"] * {
+html[data-orch-settings-page="true"] body {
   scrollbar-width: none !important;
   scrollbar-gutter: auto !important;
 }
 
 html[data-orch-settings-page="true"]::-webkit-scrollbar,
-html[data-orch-settings-page="true"] body::-webkit-scrollbar,
-[data-orch-settings-content="true"]::-webkit-scrollbar,
-[data-orch-settings-content="true"] *::-webkit-scrollbar {
+html[data-orch-settings-page="true"] body::-webkit-scrollbar {
   width: 0 !important;
   height: 0 !important;
   display: none !important;

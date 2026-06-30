@@ -29,6 +29,7 @@ import { MapsTab } from "@/components/library/maps-tab"
 import { ArtifactsTab } from "@/components/library/artifacts-tab"
 import { PlacesTab } from "@/components/library/places-tab"
 import { prefetchAttachments } from "@/components/library/use-attachments"
+import { useCurrentProfile } from "@/components/profiles/use-profiles"
 
 /**
  * /library — single hub for all "things you've generated" across the app.
@@ -55,11 +56,13 @@ type TabKey =
   | "audio"
   | "files"
 
-const TAB_DEFS: Array<{
+type TabDefinition = {
   key: TabKey
   label: string
   icon: typeof Dumbbell
-}> = [
+}
+
+const TAB_DEFS: TabDefinition[] = [
   { key: "workouts", label: "Workouts", icon: Dumbbell },
   { key: "recipes", label: "Recipes", icon: ChefHat },
   { key: "maps", label: "Maps", icon: MapPinned },
@@ -87,6 +90,10 @@ function isTabKey(s: string | null): s is TabKey {
   return s !== null && (ALL_TAB_KEYS as string[]).includes(s)
 }
 
+function firstVisibleTab(tabs: ReadonlyArray<TabDefinition>): TabKey {
+  return tabs[0]?.key ?? "artifacts"
+}
+
 export default function LibraryPage() {
   return (
     <>
@@ -105,21 +112,46 @@ export default function LibraryPage() {
 function LibraryView() {
   const router = useRouter()
   const searchParams = useSearchParams()
+  const { permissions, isAdmin } = useCurrentProfile()
   const initialTab = searchParams ? searchParams.get("tab") : null
-  const [active, setActive] = React.useState<TabKey>(
-    isTabKey(initialTab) ? initialTab : "workouts"
+  const visibleTabs = React.useMemo(
+    () =>
+      TAB_DEFS.filter(
+        (tab) =>
+          tab.key !== "workouts" ||
+          isAdmin ||
+          permissions?.surfaces.workouts !== false
+      ),
+    [isAdmin, permissions]
   )
-  const [displayed, setDisplayed] = React.useState<TabKey>(
-    isTabKey(initialTab) ? initialTab : "workouts"
+  const visibleTabKeys = React.useMemo(
+    () => new Set<TabKey>(visibleTabs.map((tab) => tab.key)),
+    [visibleTabs]
   )
+  const fallbackTab = firstVisibleTab(visibleTabs)
+  const isVisibleTabKey = React.useCallback(
+    (value: string | null): value is TabKey =>
+      isTabKey(value) && visibleTabKeys.has(value),
+    [visibleTabKeys]
+  )
+  const initialVisibleTab = isVisibleTabKey(initialTab)
+    ? initialTab
+    : fallbackTab
+  const [active, setActive] = React.useState<TabKey>(initialVisibleTab)
+  const [displayed, setDisplayed] = React.useState<TabKey>(initialVisibleTab)
   const [contentVisible, setContentVisible] = React.useState(true)
   const [visitedTabs, setVisitedTabs] = React.useState<ReadonlySet<TabKey>>(
-    () => new Set([isTabKey(initialTab) ? initialTab : "workouts"])
+    () => new Set([initialVisibleTab])
   )
+  const activeForRender = isVisibleTabKey(active) ? active : fallbackTab
+  const displayedForRender = isVisibleTabKey(displayed)
+    ? displayed
+    : activeForRender
+  const workoutsVisible = visibleTabKeys.has("workouts")
 
   const handleChange = React.useCallback(
     (next: string) => {
-      if (!isTabKey(next)) return
+      if (!isVisibleTabKey(next)) return
       setActive(next)
       setVisitedTabs((current) => {
         if (current.has(next)) return current
@@ -131,35 +163,49 @@ function LibraryView() {
       params.set("tab", next)
       router.replace(`/library?${params.toString()}`, { scroll: false })
     },
-    [router]
+    [isVisibleTabKey, router]
   )
 
   React.useEffect(() => {
     const fromUrl = searchParams ? searchParams.get("tab") : null
-    if (isTabKey(fromUrl) && fromUrl !== active) {
-      setActive(fromUrl)
+    const next = isVisibleTabKey(fromUrl) ? fromUrl : fallbackTab
+
+    if (fromUrl !== null && isTabKey(fromUrl) && fromUrl !== next) {
+      const params = new URLSearchParams(window.location.search)
+      params.set("tab", next)
+      router.replace(`/library?${params.toString()}`, { scroll: false })
+    }
+
+    if (fromUrl !== null || !isVisibleTabKey(active)) {
+      if (next !== active) setActive(next)
       setVisitedTabs((current) => {
-        if (current.has(fromUrl)) return current
+        if (current.has(next)) return current
         const nextSet = new Set(current)
-        nextSet.add(fromUrl)
+        nextSet.add(next)
         return nextSet
       })
     }
-  }, [searchParams, active])
+  }, [searchParams, active, fallbackTab, isVisibleTabKey, router])
 
   React.useEffect(() => {
-    if (active === displayed) {
+    if (!isVisibleTabKey(displayed)) {
+      setDisplayed(activeForRender)
+      setContentVisible(true)
+      return
+    }
+
+    if (activeForRender === displayed) {
       setContentVisible(true)
       return
     }
 
     setContentVisible(false)
     const timer = window.setTimeout(() => {
-      setDisplayed(active)
+      setDisplayed(activeForRender)
     }, TAB_FADE_MS)
 
     return () => window.clearTimeout(timer)
-  }, [active, displayed])
+  }, [activeForRender, displayed, isVisibleTabKey])
 
   React.useEffect(() => {
     const timer = window.setTimeout(
@@ -170,10 +216,13 @@ function LibraryView() {
   }, [])
 
   const mountedTabs = React.useMemo(() => {
-    const next = new Set(visitedTabs)
-    next.add(active)
+    const next = new Set<TabKey>()
+    for (const tab of visitedTabs) {
+      if (visibleTabKeys.has(tab)) next.add(tab)
+    }
+    next.add(activeForRender)
     return next
-  }, [active, visitedTabs])
+  }, [activeForRender, visitedTabs, visibleTabKeys])
 
   return (
     <div className="library-scroll flex min-h-0 w-full max-w-none flex-1 flex-col gap-2 overflow-y-auto px-3 pt-[calc(0.75rem+env(safe-area-inset-top))] pb-[calc(0.75rem+env(safe-area-inset-bottom))] sm:p-4 lg:px-8">
@@ -186,18 +235,24 @@ function LibraryView() {
               Library
             </h1>
             <p className="text-[11.5px] leading-tight text-muted-foreground">
-              Tot ce ai generat — workouts, rețete, hărți — într-un singur loc.
+              {workoutsVisible
+                ? "Tot ce ai generat — workouts, rețete, hărți — într-un singur loc."
+                : "Tot ce ai generat — rețete, hărți, media și fișiere — într-un singur loc."}
             </p>
           </div>
         </div>
       </header>
 
-      <Tabs value={active} onValueChange={handleChange} className="min-w-0">
+      <Tabs
+        value={activeForRender}
+        onValueChange={handleChange}
+        className="min-w-0"
+      >
         <TabsList
           aria-label="Library sections"
           className="mb-0 grid h-auto w-full max-w-full grid-cols-3 items-stretch gap-1 overflow-visible pb-1 min-[380px]:grid-cols-4 sm:-mb-2 sm:inline-flex sm:h-10 sm:snap-x sm:snap-mandatory sm:justify-start sm:overflow-x-auto sm:overscroll-x-contain sm:pb-0 sm:[scroll-padding-inline:0.25rem] sm:[touch-action:pan-x]"
         >
-          {TAB_DEFS.map(({ key, label, icon: Icon }) => (
+          {visibleTabs.map(({ key, label, icon: Icon }) => (
             <TabsTrigger
               key={key}
               value={key}
@@ -219,7 +274,7 @@ function LibraryView() {
         >
           <LibraryTabPanel
             value="workouts"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("workouts")}
           >
             <WorkoutsHistory />
@@ -227,7 +282,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="recipes"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("recipes")}
           >
             <RecipesTab />
@@ -235,7 +290,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="maps"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("maps")}
           >
             <MapsTab />
@@ -243,7 +298,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="artifacts"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("artifacts")}
           >
             <ArtifactsTab />
@@ -251,7 +306,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="places"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("places")}
           >
             <PlacesTab />
@@ -259,7 +314,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="media"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("media")}
           >
             <AttachmentsTab
@@ -276,7 +331,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="audio"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("audio")}
           >
             <AttachmentsTab
@@ -293,7 +348,7 @@ function LibraryView() {
 
           <LibraryTabPanel
             value="files"
-            active={displayed}
+            active={displayedForRender}
             mounted={mountedTabs.has("files")}
           >
             <AttachmentsTab
