@@ -12,7 +12,7 @@ import {
   Download,
   Moon,
   Sun,
-  KeyRound,
+  Network,
   ArrowLeft,
   UsersRound,
   Globe,
@@ -24,13 +24,13 @@ import { LogsTab } from "@/components/settings/logs-tab"
 import { UsageTab } from "@/components/settings/usage-tab"
 import { FilesTab } from "@/components/settings/files-tab"
 import { UpdateTab } from "@/components/settings/update-tab"
-import { AuthTab } from "@/components/settings/auth-tab"
+import { AuthTab as IntegrationsTab } from "@/components/settings/auth-tab"
 import { ModelsTab } from "@/components/settings/models-tab"
 import { ProfilesTab } from "@/components/settings/profiles-tab"
 import { NotificationsTab } from "@/components/settings/notifications-tab"
 import { RemoteAccessTab } from "@/components/settings/remote-access-tab"
 
-const TAB_IDS = ["models", "auth", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"] as const
+const TAB_IDS = ["models", "integrations", "files", "remote", "logs", "usage", "notifications", "profiles", "updates"] as const
 type TabId = (typeof TAB_IDS)[number]
 
 const TABS: Array<{
@@ -39,7 +39,7 @@ const TABS: Array<{
   icon: React.ComponentType<{ className?: string }>
 }> = [
   { id: "models", label: "Models", icon: Cpu },
-  { id: "auth", label: "Auth", icon: KeyRound },
+  { id: "integrations", label: "Integrations", icon: Network },
   { id: "files", label: "Files", icon: FileText },
   { id: "remote", label: "Remote Access", icon: Globe },
   { id: "logs", label: "Logs", icon: Activity },
@@ -52,14 +52,21 @@ const TABS: Array<{
 const DEFAULT_TAB: TabId = "models"
 const LAST_SETTINGS_TAB_STORAGE_KEY = "orchestrator:settings:last-tab"
 function isTabId(value: string | null): value is TabId {
+  return normalizeTabId(value) !== null
+}
+
+function normalizeTabId(value: string | null): TabId | null {
+  if (value === "auth") return "integrations"
   return value !== null && (TAB_IDS as readonly string[]).includes(value)
+    ? (value as TabId)
+    : null
 }
 
 function readLastSettingsTab(): TabId | null {
   if (typeof window === "undefined") return null
   try {
     const value = window.localStorage.getItem(LAST_SETTINGS_TAB_STORAGE_KEY)
-    return isTabId(value) ? value : null
+    return normalizeTabId(value)
   } catch {
     return null
   }
@@ -91,7 +98,11 @@ function SettingsViewInner() {
   const allowedTabs = data ? data.allowedTabs : null
   const allowedTabIds = React.useMemo(() => {
     if (!allowedTabs) return null
-    return new Set(allowedTabs.filter(isTabId))
+    return new Set(
+      allowedTabs
+        .map((tab) => normalizeTabId(tab))
+        .filter((tab): tab is TabId => tab !== null)
+    )
   }, [allowedTabs])
   const visibleTabs = React.useMemo(
     () => (allowedTabIds ? TABS.filter((tab) => allowedTabIds.has(tab.id)) : []),
@@ -110,20 +121,26 @@ function SettingsViewInner() {
 
   const tabFromUrl = searchParams.get("tab")
   const [activeTab, setActiveTab] = React.useState<TabId>(
-    isTabId(tabFromUrl) ? tabFromUrl : DEFAULT_TAB
+    normalizeTabId(tabFromUrl) ?? DEFAULT_TAB
   )
 
   React.useEffect(() => {
-    const t = searchParams.get("tab")
-    if (isTabId(t)) {
+    const rawTab = searchParams.get("tab")
+    const t = normalizeTabId(rawTab)
+    if (t) {
       rememberLastSettingsTab(t)
       setActiveTab((current) => (current === t ? current : t))
+      if (rawTab !== t) {
+        const params = new URLSearchParams(searchParams.toString())
+        params.set("tab", t)
+        router.replace(`/settings?${params.toString()}`, { scroll: false })
+      }
       return
     }
     const remembered = readLastSettingsTab()
     if (remembered)
       setActiveTab((current) => (current === remembered ? current : remembered))
-  }, [searchParams])
+  }, [router, searchParams])
 
   const handleTabChange = React.useCallback(
     (next: string) => {
@@ -188,7 +205,7 @@ function SettingsViewInner() {
                   Settings
                 </h1>
                 <p className="mt-0 mb-2 text-[11.5px] text-foreground/55">
-                  Configure models, authentication, workspace files, activity,
+                  Configure models, integrations, workspace files, activity,
                   and usage.
                 </p>
               </div>
@@ -252,8 +269,8 @@ function SettingsViewInner() {
               {allowedTabIds?.has("profiles") && <TabsContent value="profiles">
                 <ProfilesTab />
               </TabsContent>}
-              {allowedTabIds?.has("auth") && <TabsContent value="auth">
-                <AuthTab />
+              {allowedTabIds?.has("integrations") && <TabsContent value="integrations">
+                <IntegrationsTab />
               </TabsContent>}
               {allowedTabIds?.has("remote") && <TabsContent value="remote">
                 <RemoteAccessTab />

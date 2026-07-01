@@ -42,6 +42,7 @@ import {
 import { publishLocalSubmitAnchor } from "@/lib/chat-local-submit-anchor"
 import {
   ChatFetchError,
+  INITIAL_MESSAGE_FULL_TAIL_SIZE,
   CLIENT_MAX_MESSAGE_PAGE_SIZE,
   INITIAL_MESSAGE_PAGE_SIZE,
   OLDER_MESSAGE_PAGE_SIZE,
@@ -772,7 +773,8 @@ export function ChatStoreProvider({ children }: { children: React.ReactNode }) {
             conversationId,
             INITIAL_MESSAGE_PAGE_SIZE,
             undefined,
-            "full"
+            "mixed",
+            INITIAL_MESSAGE_FULL_TAIL_SIZE
           )
           dispatch({
             type: "LOAD_MESSAGE_PAGE_SUCCESS",

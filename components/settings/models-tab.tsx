@@ -17,6 +17,7 @@ import { AgentCard } from "@/components/settings/agent-card"
 import { ModelRegistrySummary } from "@/components/settings/models-registry-summary"
 import { MemoryCard } from "@/components/settings/memory-card"
 import { ModelResearchCard } from "@/components/settings/model-research-card"
+import { CliAccountsSection } from "@/components/settings/cli-accounts"
 import {
   useSettings,
   type AgentInfo,
@@ -376,6 +377,8 @@ export function ModelsTab() {
       </div>
 
       {data.canManageModelRegistry && <ModelResearchCard />}
+
+      {data.canManageModelRegistry && <CliAccountsSection />}
 
       <AgentSettingsLayout
         data={data}

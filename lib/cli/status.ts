@@ -339,7 +339,7 @@ export async function getAllCliStatuses(options?: {
     force?: boolean
     ttlMs?: number
 }): Promise<Record<CliId, CliStatus>> {
-    // A forced refresh (Settings → Auth "Recheck", usage accounting) always
+    // A forced refresh (Settings → Models "Recheck", usage accounting) always
     // runs its own probe so it stays authoritative — it never piggybacks on an
     // in-flight non-forced run.
     if (options?.force) {

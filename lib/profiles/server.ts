@@ -393,7 +393,8 @@ function isAdminOnlyApiPath(pathname: string, method: string): boolean {
   return (
     (pathname.startsWith("/api/settings") &&
       pathname !== "/api/settings/bootstrap" &&
-      !pathname.startsWith("/api/settings/files")) ||
+      !pathname.startsWith("/api/settings/files") &&
+      !pathname.startsWith("/api/settings/skills")) ||
     (pathname.startsWith("/api/config") &&
       !readOnly &&
       !isModelSettingsApiPath(pathname)) ||
@@ -456,6 +457,20 @@ function guardProfileApiPermission(
       {
         error: "Profile is not allowed to change settings files.",
         code: "profile_settings_files_denied",
+      },
+      { status: 403, headers: { "Cache-Control": "no-store" } }
+    )
+  }
+
+  if (
+    pathname.startsWith("/api/settings/skills") &&
+    !readOnly &&
+    !current.profile.permissions.tools.skills
+  ) {
+    return NextResponse.json(
+      {
+        error: "Profile is not allowed to manage skills.",
+        code: "profile_skills_denied",
       },
       { status: 403, headers: { "Cache-Control": "no-store" } }
     )

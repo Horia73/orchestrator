@@ -194,7 +194,7 @@ function ensureVisionCredentials(providers: VisionProvider[]) {
     if (providers.includes('codex')) {
         prepareCodexRuntimeHome()
         if (!codexAuthFileExists()) {
-            throw new Error('Browser agent requires a logged-in Codex CLI because a configured vision slot uses Codex. Sign in via Settings → CLI auth or run `codex login`.')
+            throw new Error('Browser agent requires a logged-in Codex CLI because a configured vision slot uses Codex. Sign in via Settings → Models or run `codex login`.')
         }
     }
 }

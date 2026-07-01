@@ -1064,11 +1064,11 @@ async function gmailApi<T>(pathAndQuery: string, init: RequestInit = {}, retry =
 async function getValidTokenRecord(): Promise<{ token: GmailTokenRecord; tokenPath: string }> {
     const resolved = resolveGmailToken()
     const token = resolved.token
-    if (!token) throw new Error('Gmail is not connected. Connect it from Settings > Auth.')
+    if (!token) throw new Error('Gmail is not connected. Connect it from Settings > Integrations.')
     if (token.expiresAt > Date.now() + ACCESS_TOKEN_REFRESH_SKEW_MS) {
         return { token, tokenPath: resolved.tokenPath }
     }
-    if (!token.refreshToken) throw new Error('Gmail session expired. Reconnect Gmail from Settings > Auth.')
+    if (!token.refreshToken) throw new Error('Gmail session expired. Reconnect Gmail from Settings > Integrations.')
 
     const refreshed = await refreshGmailToken(
         token,

@@ -171,7 +171,7 @@ export interface ConversationMessagesPage {
   nextCursor: MessagePageCursor | null
 }
 
-type MessageHydrationMode = "full" | "slim"
+type MessageHydrationMode = "full" | "slim" | "mixed"
 
 function parseJsonField<T>(value: string | null): T | undefined {
   if (!value) return undefined
@@ -483,12 +483,13 @@ export function getConversationMessagesPage(
     limit?: number
     before?: MessagePageCursor | null
     hydration?: MessageHydrationMode
+    fullTail?: number
   } = {}
 ): ConversationMessagesPage {
   const limit = Math.max(1, Math.min(options.limit ?? 80, 200))
   const before = options.before
-  const hydrate =
-    options.hydration === "full" ? messageFromRow : slimMessageFromRow
+  const hydration = options.hydration ?? "slim"
+  const fullTail = Math.max(0, Math.min(options.fullTail ?? 0, limit))
   const conversationRow = db
     .prepare("SELECT messageCount FROM conversations WHERE id = ?")
     .get(id) as { messageCount: number | null } | undefined
@@ -520,9 +521,18 @@ export function getConversationMessagesPage(
 
   const pageRows = rows.slice(0, limit)
   const oldestRow = pageRows[pageRows.length - 1]
+  const chronologicalRows = pageRows.reverse()
+  const fullStartIndex =
+    hydration === "mixed"
+      ? Math.max(chronologicalRows.length - fullTail, 0)
+      : hydration === "full"
+        ? 0
+        : chronologicalRows.length
 
   return {
-    messages: pageRows.reverse().map(hydrate),
+    messages: chronologicalRows.map((row, index) =>
+      index >= fullStartIndex ? messageFromRow(row) : slimMessageFromRow(row)
+    ),
     total: conversationRow?.messageCount ?? 0,
     hasMore: rows.length > limit,
     nextCursor:

@@ -150,6 +150,7 @@ export function agentCallEntryFromStartEvent(
 }
 
 export const INITIAL_MESSAGE_PAGE_SIZE = 32
+export const INITIAL_MESSAGE_FULL_TAIL_SIZE = 8
 export const OLDER_MESSAGE_PAGE_SIZE = 64
 /** Server caps a message page at 200; use the max when paging toward a
  *  deep-link target so we reach it in as few round-trips as possible. */

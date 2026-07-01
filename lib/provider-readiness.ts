@@ -84,10 +84,10 @@ export async function getProviderReadiness(
             chatMessage: available
                 ? null
                 : !status?.installed
-                    ? `No model loaded. Install ${spec.name} from Settings > Auth, then log in before sending a chat message.`
+                    ? `No model loaded. Install ${spec.name} from Settings > Models, then log in before sending a chat message.`
                     : !status?.loggedIn
-                        ? `No model loaded. Log in to ${spec.name} from Settings > Auth before sending a chat message.`
-                        : `${spec.name} session expired. Open Settings > Auth and click Reconnect — or run \`claude setup-token\` for a long-lived token that won't expire on a headless server.`,
+                        ? `No model loaded. Log in to ${spec.name} from Settings > Models before sending a chat message.`
+                        : `${spec.name} session expired. Open Settings > Models and click Reconnect, or run \`claude setup-token\` for a long-lived token that won't expire on a headless server.`,
         }
     }
 
@@ -112,7 +112,7 @@ export async function getProviderReadiness(
                 apiKeyConfigured: false,
                 apiKeyMasked: null,
                 unavailableReason: `Missing ${LM_STUDIO_BASE_URL_ENV}.`,
-                chatMessage: `No model loaded. Add ${LM_STUDIO_BASE_URL_ENV} in Settings > Auth > LM Studio, then connect and try again.`,
+                chatMessage: `No model loaded. Add ${LM_STUDIO_BASE_URL_ENV} in Settings > Models > LM Studio, then connect and try again.`,
             }
         }
 
@@ -129,7 +129,7 @@ export async function getProviderReadiness(
                 : `LM Studio is offline at ${health.baseUrl}${health.error ? `: ${health.error}` : ''}`,
             chatMessage: available
                 ? null
-                : `LM Studio is configured but not reachable at ${health.baseUrl}. Start the LM Studio server, enable LAN access if needed, or reconnect it from Settings > Auth > LM Studio.`,
+                : `LM Studio is configured but not reachable at ${health.baseUrl}. Start the LM Studio server, enable LAN access if needed, or reconnect it from Settings > Models > LM Studio.`,
         }
     }
 

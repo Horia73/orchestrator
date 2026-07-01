@@ -55,6 +55,9 @@ const LIVE_CARD_UNIT = 230
 const LIVE_CARD_GAP = 8
 const LIVE_WINDOW_TARGET_DESKTOP = LIVE_CARD_UNIT * 2 + LIVE_CARD_GAP + 14 // ~2 cards
 const LIVE_WINDOW_TARGET_MOBILE = LIVE_CARD_UNIT + 14 // ~1 full card
+const WORKED_DETAILS_INITIAL_BUDGET = 10
+const WORKED_DETAILS_RENDER_CHUNK = 18
+const WORKED_DETAILS_CHUNK_DELAY_MS = 24
 
 function getThoughtTitle(content: string): string {
     const boldTitleRegex = /\*\*(.+?)\*\*/g
@@ -164,6 +167,39 @@ function buildInterleavedTimeline(
         if (c?.length) timeline.push({ type: "content", phase, content: c })
     }
     return timeline
+}
+
+function countTimelineRenderUnits(items: MessageTimelineItem[]): number {
+    let count = 0
+    for (const item of items) {
+        count += item.type === "reasoning" ? item.entries.length : 1
+    }
+    return count
+}
+
+function sliceTimelineByRenderBudget(
+    items: MessageTimelineItem[],
+    budget: number
+): MessageTimelineItem[] {
+    const sliced: MessageTimelineItem[] = []
+    let remaining = budget
+
+    for (const item of items) {
+        if (remaining <= 0) break
+        if (item.type === "content") {
+            sliced.push(item)
+            remaining -= 1
+            continue
+        }
+
+        const entries = item.entries.slice(0, remaining)
+        if (entries.length > 0) {
+            sliced.push({ ...item, entries })
+            remaining -= entries.length
+        }
+    }
+
+    return sliced
 }
 
 function hasLiveBrowserAgent(reasoning: ReasoningEntry[]): boolean {
@@ -738,13 +774,51 @@ function WorkedForBlock({
     // has been opened at least once. While collapsed the grid track is `0fr`,
     // so an empty body and a fully-rendered one occupy the same (zero) height;
     // skipping it avoids parsing every committed message's hidden reasoning
-    // markdown + tool views at conversation-open, which is the main cause of the
-    // multi-second open on mobile. Adjusting this during render (vs. an effect)
-    // keeps the body present in the same commit that opens it, so the expand
-    // animation and height stay intact. Stays mounted after the first open so
-    // the collapse animation has content and re-toggling is cheap.
+    // markdown + tool views at conversation-open. The first open also renders
+    // in chunks so a long tool trace does not monopolize WebView's main thread.
+    // Stays mounted after the first open so re-toggling is cheap.
+    const totalRenderUnits = React.useMemo(
+        () => countTimelineRenderUnits(items),
+        [items]
+    )
     const [bodyMounted, setBodyMounted] = React.useState(isOpen)
-    if (isOpen && !bodyMounted) setBodyMounted(true)
+    const [renderBudget, setRenderBudget] = React.useState(() =>
+        isOpen ? Math.min(WORKED_DETAILS_INITIAL_BUDGET, totalRenderUnits) : 0
+    )
+
+    React.useEffect(() => {
+        if (!isOpen || bodyMounted) return
+        const frame = window.requestAnimationFrame(() => {
+            setBodyMounted(true)
+            React.startTransition(() => {
+                setRenderBudget((current) =>
+                    Math.max(
+                        current,
+                        Math.min(WORKED_DETAILS_INITIAL_BUDGET, totalRenderUnits)
+                    )
+                )
+            })
+        })
+        return () => window.cancelAnimationFrame(frame)
+    }, [bodyMounted, isOpen, totalRenderUnits])
+
+    React.useEffect(() => {
+        if (!isOpen || !bodyMounted || renderBudget >= totalRenderUnits) return
+        const timer = window.setTimeout(() => {
+            React.startTransition(() => {
+                setRenderBudget((current) =>
+                    Math.min(totalRenderUnits, current + WORKED_DETAILS_RENDER_CHUNK)
+                )
+            })
+        }, WORKED_DETAILS_CHUNK_DELAY_MS)
+        return () => window.clearTimeout(timer)
+    }, [bodyMounted, isOpen, renderBudget, totalRenderUnits])
+
+    const visibleItems = React.useMemo(
+        () => sliceTimelineByRenderBudget(items, renderBudget),
+        [items, renderBudget]
+    )
+    const hasMoreDetails = renderBudget < totalRenderUnits
 
     const [isMounted, setIsMounted] = React.useState(false)
     React.useEffect(() => { setIsMounted(true) }, [])
@@ -754,10 +828,6 @@ function WorkedForBlock({
 
     // Duration is the source of truth; older rows (and providers that never
     // stamped it) fall back to the activity summary, then a bare "Worked".
-    const workEntries = React.useMemo(
-        () => items.flatMap((item) => (item.type === "reasoning" ? item.entries : [])),
-        [items]
-    )
     const statusLabel = status === "aborted"
         ? "Stopped"
         : status === "error"
@@ -765,11 +835,19 @@ function WorkedForBlock({
             : "Done"
     const durationLabel = durationMs != null ? formatWorkDuration(durationMs) : null
     const isTerminalProblem = status === "aborted" || status === "error"
+    const fallbackLabel = React.useMemo(() => {
+        if (durationLabel || isTerminalProblem) return ""
+        const workEntries: ReasoningEntry[] = []
+        for (const item of items) {
+            if (item.type === "reasoning") workEntries.push(...item.entries)
+        }
+        return buildSummary(workEntries, 0, "")
+    }, [durationLabel, isTerminalProblem, items])
     const label = isTerminalProblem
         ? durationLabel ? `${statusLabel} after ${durationLabel}` : statusLabel
         : durationLabel
             ? `Worked for ${durationLabel}`
-            : buildSummary(workEntries, 0, "") || "Worked"
+            : fallbackLabel || "Worked"
 
     return (
         <div className="flex w-full min-w-0 flex-col">
@@ -816,11 +894,15 @@ function WorkedForBlock({
                     )}
                 >
                     <div ref={scrollRef} className="tool-call-scroll mt-2 max-h-[70vh] overflow-y-auto overscroll-contain pr-1 [scrollbar-gutter:stable] [touch-action:pan-y]">
-                        {bodyMounted && (
+                        {!bodyMounted ? (
+                            <div className="flex items-center gap-2 py-2 pl-7 text-[13px] text-muted-foreground">
+                                <Loader2 className="size-3.5 animate-spin" />
+                            </div>
+                        ) : (
                         <div className="relative flex flex-col pb-2">
                             <div className="absolute left-[7.5px] top-[11px] bottom-[13px] w-[1.5px] bg-border/60" />
                             <div className="relative flex flex-col gap-2 pt-1 pb-[10px]">
-                                {items.map((item, index) =>
+                                {visibleItems.map((item, index) =>
                                     item.type === "reasoning" ? (
                                         <ReasoningEntryList
                                             key={`work-${item.phase}-${index}`}
@@ -845,18 +927,24 @@ function WorkedForBlock({
                                     )
                                 )}
                             </div>
-                            <div className="relative flex items-center gap-3 mb-0.5 bg-background w-max py-0.5 z-10">
-                                {status === "aborted" ? (
-                                    <CircleStop className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
-                                ) : status === "error" ? (
-                                    <CircleAlert className="size-4 shrink-0 rounded-full bg-background text-destructive" />
-                                ) : (
-                                    <CheckCircle2 className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
-                                )}
-                                <span className="text-[14px] font-medium tracking-tight text-foreground">
-                                    {statusLabel}
-                                </span>
-                            </div>
+                            {hasMoreDetails ? (
+                                <div className="relative z-10 flex items-center gap-2 py-1 pl-7 text-[13px] text-muted-foreground">
+                                    <Loader2 className="size-3.5 animate-spin" />
+                                </div>
+                            ) : (
+                                <div className="relative flex items-center gap-3 mb-0.5 bg-background w-max py-0.5 z-10">
+                                    {status === "aborted" ? (
+                                        <CircleStop className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
+                                    ) : status === "error" ? (
+                                        <CircleAlert className="size-4 shrink-0 rounded-full bg-background text-destructive" />
+                                    ) : (
+                                        <CheckCircle2 className="size-4 shrink-0 rounded-full bg-background text-muted-foreground" />
+                                    )}
+                                    <span className="text-[14px] font-medium tracking-tight text-foreground">
+                                        {statusLabel}
+                                    </span>
+                                </div>
+                            )}
                         </div>
                         )}
                     </div>
@@ -1357,21 +1445,35 @@ function TerminalMessageStatusLine({ status }: { status?: Message["status"] }) {
 function DeferredThoughtBlock({
     loading,
     thinkingDuration,
+    durationMs,
+    status,
     hasToolCalls,
     onOpen,
 }: {
     loading: boolean
     thinkingDuration?: number
+    durationMs?: number
+    status?: Message["status"]
     hasToolCalls: boolean
     onOpen: () => void
 }) {
     const seconds = Math.round(thinkingDuration ?? 0)
-    const title =
-        seconds > 0
-            ? `Thought for ${seconds}s`
-            : hasToolCalls
-                ? "Tools and thinking"
-                : "Thinking"
+    const durationLabel = durationMs != null ? formatWorkDuration(durationMs) : null
+    const statusLabel = status === "aborted"
+        ? "Stopped"
+        : status === "error"
+            ? "Failed"
+            : "Done"
+    const isTerminalProblem = status === "aborted" || status === "error"
+    const title = isTerminalProblem
+        ? (durationLabel ? `${statusLabel} after ${durationLabel}` : statusLabel)
+        : durationLabel
+            ? `Worked for ${durationLabel}`
+            : seconds > 0
+                ? `Thought for ${seconds}s`
+                : hasToolCalls
+                    ? "Tools and thinking"
+                    : "Thinking"
 
     return (
         <div className="relative z-10 w-full max-w-[760px]">
@@ -1379,7 +1481,12 @@ function DeferredThoughtBlock({
                 type="button"
                 onClick={onOpen}
                 disabled={loading}
-                className="group flex w-full items-center gap-2 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-left text-[13px] text-muted-foreground transition-colors hover:border-border hover:bg-muted/55 hover:text-foreground disabled:cursor-default disabled:opacity-70"
+                className={cn(
+                    "group flex w-full items-center gap-2 rounded-md border border-border/70 bg-muted/35 px-3 py-2 text-left text-[13px] transition-colors hover:border-border hover:bg-muted/55 disabled:cursor-default disabled:opacity-70",
+                    status === "error"
+                        ? "text-destructive hover:text-destructive"
+                        : "text-muted-foreground hover:text-foreground"
+                )}
                 aria-label="Open thinking and tool details"
             >
                 <ChevronDown className="size-4 shrink-0 -rotate-90 transition-transform group-hover:text-foreground" />
@@ -1540,6 +1647,21 @@ function MessageBubbleComponent({
         </div>
     )
 
+    const reasoningGroups = React.useMemo(
+        () => hasReasoning ? groupReasoningByPhase(message.reasoning!) : [],
+        [hasReasoning, message.reasoning]
+    )
+    const contentSegments = React.useMemo(
+        () => message.contentSegments ?? (
+            message.content.length > 0 ? [{ phase: 0, content: message.content }] : []
+        ),
+        [message.content, message.contentSegments]
+    )
+    const timeline = React.useMemo(
+        () => buildInterleavedTimeline(reasoningGroups, contentSegments),
+        [contentSegments, reasoningGroups]
+    )
+
     if (message.role === "user") {
         return (
             <div
@@ -1560,11 +1682,6 @@ function MessageBubbleComponent({
         )
     }
 
-    const reasoningGroups = hasReasoning ? groupReasoningByPhase(message.reasoning!) : []
-    const contentSegments = message.contentSegments ?? (
-        message.content.length > 0 ? [{ phase: 0, content: message.content }] : []
-    )
-    const timeline = buildInterleavedTimeline(reasoningGroups, contentSegments)
     const lastReasoningPhase = reasoningGroups.length > 0 ? reasoningGroups[reasoningGroups.length - 1].phase : null
     const lastContentPhase = contentSegments.length > 0 ? contentSegments[contentSegments.length - 1].phase : null
     const isInProgressReasoning = Boolean(
@@ -1639,6 +1756,8 @@ function MessageBubbleComponent({
                 <DeferredThoughtBlock
                     loading={detailLoading}
                     thinkingDuration={message.thinkingDuration}
+                    durationMs={message.durationMs}
+                    status={message.status}
                     hasToolCalls={Boolean(message.deferred?.toolCalls)}
                     onOpen={handleOpenDeferredDetails}
                 />

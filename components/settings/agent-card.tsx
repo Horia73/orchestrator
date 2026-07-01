@@ -706,12 +706,12 @@ function isAgentFallback(value: unknown): value is AgentFallback {
 function formatProviderUnavailable(status: ProviderStatus | undefined, apiKeyEnv: string): React.ReactNode {
   if (status?.authKind === "cli") {
     return status.cliInstalled === false
-      ? `${status.cliName ?? "CLI"} is not installed. Install it in Settings > Auth.`
-      : `${status.cliName ?? "CLI"} is not logged in. Log in from Settings > Auth.`
+      ? `${status.cliName ?? "CLI"} is not installed. Install it in Settings > Models.`
+      : `${status.cliName ?? "CLI"} is not logged in. Log in from Settings > Models.`
   }
   if (status?.authKind === "base-url") {
     if (status.unavailableReason) return status.unavailableReason
-    return `Configure ${apiKeyEnv} from Settings > Auth > LM Studio.`
+    return `Configure ${apiKeyEnv} from Settings > Models > LM Studio.`
   }
   if (status?.authKind === "api-key" || !apiKeyEnv.includes("NO_API_KEY")) {
     return (

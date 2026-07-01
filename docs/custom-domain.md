@@ -142,7 +142,7 @@ https://orchestrator.example.com/api/integrations/google/oauth/callback
 https://orchestrator.example.com/api/integrations/gmail/oauth/callback
 ```
 
-Then reconnect Google Workspace or Gmail from Settings -> Auth if their current credentials were created for a different origin.
+Then reconnect Google Workspace or Gmail from Settings -> Integrations if their current credentials were created for a different origin.
 
 ## Verify
 

@@ -1114,7 +1114,7 @@ async function homeAssistantWebSocketCommand(type: string, payload: Record<strin
 async function normalizeServiceCall(input: HomeAssistantServiceCallInput): Promise<NormalizedServiceCall> {
     const policy = getHomeAssistantActionPolicy()
     if (!policy.enabled) {
-        throw new Error('Home Assistant action mode is disabled. Enable it from Settings > Auth before calling services.')
+        throw new Error('Home Assistant action mode is disabled. Enable it from Settings > Integrations before calling services.')
     }
 
     const domain = cleanDomainFilter(input.domain)

@@ -41,11 +41,11 @@ import type {
   RemoteMcpConfigInput,
 } from "@/components/settings/auth-types"
 import { Button } from "@/components/ui/button"
-import { CliAccountsSection } from "@/components/settings/cli-accounts"
 import {
   useSettings,
   type SettingsBootstrap,
 } from "@/components/settings/use-settings"
+import { CustomSkillsCard } from "@/components/settings/custom-skills-card"
 import type {
   IntegrationAccess,
   IntegrationPermissionId,
@@ -75,15 +75,12 @@ const ACCESS_RANK: Record<IntegrationAccess, number> = {
 }
 
 export function AuthTab() {
-  const { data } = useSettings()
   return (
     <div className="flex flex-col gap-6">
       <ConnectedServicesSection />
-      {data?.isAdmin && (
-        <div className="border-t border-border/60 pt-6">
-          <CliAccountsSection />
-        </div>
-      )}
+      <div className="border-t border-border/60 pt-6">
+        <CustomSkillsCard />
+      </div>
     </div>
   )
 }
@@ -98,7 +95,8 @@ function ConnectedServicesSection() {
     tone: NoticeTone
     text: string
   } | null>(null)
-  const selectedServiceFromUrl = searchParams.get("auth")
+  const selectedServiceFromUrl =
+    searchParams.get("integration") ?? searchParams.get("auth")
   const [selectedServiceId, setSelectedServiceId] =
     React.useState<AuthServiceId>(
       isAuthServiceId(selectedServiceFromUrl)
@@ -113,7 +111,21 @@ function ConnectedServicesSection() {
         current === selectedServiceFromUrl ? current : selectedServiceFromUrl
       )
     }
-  }, [selectedServiceFromUrl])
+    const legacyService = searchParams.get("auth")
+    if (isAuthServiceId(legacyService)) {
+      const params = new URLSearchParams(searchParams.toString())
+      params.delete("auth")
+      if (legacyService === DEFAULT_AUTH_SERVICE_ID) {
+        params.delete("integration")
+      } else {
+        params.set("integration", legacyService)
+      }
+      const query = params.toString()
+      router.replace(query ? `/settings?${query}` : "/settings", {
+        scroll: false,
+      })
+    }
+  }, [router, searchParams, selectedServiceFromUrl])
 
   React.useEffect(() => {
     const handler = (event: MessageEvent<OAuthMessage>) => {
@@ -916,8 +928,9 @@ function ConnectedServicesSection() {
     (serviceId: AuthServiceId) => {
       setSelectedServiceId(serviceId)
       const params = new URLSearchParams(searchParams.toString())
-      if (serviceId === DEFAULT_AUTH_SERVICE_ID) params.delete("auth")
-      else params.set("auth", serviceId)
+      params.delete("auth")
+      if (serviceId === DEFAULT_AUTH_SERVICE_ID) params.delete("integration")
+      else params.set("integration", serviceId)
       const query = params.toString()
       router.replace(query ? `/settings?${query}` : "/settings", {
         scroll: false,
@@ -1043,11 +1056,10 @@ function ConnectedServicesSection() {
       <div className="flex flex-wrap items-baseline justify-between gap-3">
         <div>
           <h2 className="text-[15px] font-semibold text-foreground/85">
-            Connected services
+            Connected integrations
           </h2>
           <p className="mt-0.5 text-[12.5px] text-foreground/50">
-            OAuth accounts and external services available to Orchestrator and
-            Concierge.
+            External accounts, services, and endpoints available to Orchestrator.
           </p>
         </div>
         <Button

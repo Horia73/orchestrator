@@ -774,11 +774,11 @@ async function calendarApi<T>(pathAndQuery: string, init: RequestInit = {}, retr
 async function getValidCalendarToken(): Promise<{ token: GoogleOAuthTokenRecord; tokenPath: string }> {
     const resolved = resolveCalendarToken()
     const token = resolved.token
-    if (!token) throw new Error('Google Calendar is not connected. Connect it from Settings > Auth.')
+    if (!token) throw new Error('Google Calendar is not connected. Connect it from Settings > Integrations.')
     if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) {
         return { token, tokenPath: resolved.tokenPath }
     }
-    if (!token.refreshToken) throw new Error('Google Calendar session expired. Reconnect Google Calendar from Settings > Auth.')
+    if (!token.refreshToken) throw new Error('Google Calendar session expired. Reconnect Google Calendar from Settings > Integrations.')
     const refreshed = await refreshGoogleOAuthToken(
         token,
         getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_CALENDAR_PROVIDER),

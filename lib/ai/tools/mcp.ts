@@ -47,7 +47,7 @@ export const remoteMcpConfigureTool: ToolDef = {
             },
             label: {
                 type: 'string',
-                description: 'Short display name shown in Settings -> Auth.',
+                description: 'Short display name shown in Settings -> Integrations.',
             },
             url: {
                 type: 'string',

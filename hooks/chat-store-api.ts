@@ -111,16 +111,18 @@ export async function fetchConversationMessagePage(
   conversationId: string,
   limit: number,
   before?: string,
-  // The initial (visible) page loads "full" so reasoning/tool blocks render
-  // in their final layout on the first paint after a refresh — no deferred
-  // flags, no per-message detail fetch, no post-hydration reflow. Older
-  // history pages stay "slim" and hydrate per message on demand.
-  detail: "slim" | "full" = "slim"
+  // The initial visible page can use "mixed": only the newest tail hydrates
+  // heavy reasoning/tool payloads, while older rows stay slim and hydrate on
+  // explicit open. Older history pages stay "slim".
+  detail: "slim" | "full" | "mixed" = "slim",
+  fullTail = 0
 ): Promise<MessagePageResponse> {
   const beforeParam =
     before === undefined ? "" : `&before=${encodeURIComponent(before)}`
+  const fullTailParam =
+    detail === "mixed" ? `&fullTail=${encodeURIComponent(String(fullTail))}` : ""
   const res = await fetch(
-    `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&detail=${detail}${beforeParam}`,
+    `/api/conversations/${encodeURIComponent(conversationId)}/messages?limit=${limit}&detail=${detail}${fullTailParam}${beforeParam}`,
     { cache: "no-store" }
   )
   if (!res.ok) throw new Error(`HTTP ${res.status}`)

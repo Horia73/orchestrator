@@ -7,7 +7,12 @@ import {
   activeRuntimePaths,
 } from "@/lib/runtime-paths"
 
-import type { RuntimeSkill, RuntimeSkillScope, SkillFileRead } from "./types"
+import type {
+  RuntimeSkill,
+  RuntimeSkillScope,
+  SkillFileRead,
+  WritableSkillScope,
+} from "./types"
 
 const SKILL_FILE = "SKILL.md"
 const DEFAULT_MAX_READ_CHARS = 60_000
@@ -17,6 +22,19 @@ interface SkillRoot {
   scope: RuntimeSkillScope
   source: string
   dir: string
+}
+
+interface WritableSkillRoot {
+  scope: WritableSkillScope
+  source: string
+  dir: string
+}
+
+export interface CreateCustomSkillInput {
+  scope: WritableSkillScope
+  id?: string
+  name: string
+  description: string
 }
 
 export function skillRoots(): SkillRoot[] {
@@ -48,6 +66,16 @@ export function listSkills(): RuntimeSkill[] {
     }
   }
   return [...byId.values()].sort((a, b) => a.id.localeCompare(b.id))
+}
+
+export function listSkillEntries(): RuntimeSkill[] {
+  return skillRoots()
+    .flatMap((root) => scanSkillRoot(root))
+    .sort(
+      (a, b) =>
+        a.id.localeCompare(b.id) ||
+        skillScopeRank(a.scope) - skillScopeRank(b.scope)
+    )
 }
 
 export function searchSkills(query?: string, limit = 20): RuntimeSkill[] {
@@ -139,6 +167,93 @@ export function publicSkill(skill: RuntimeSkill) {
   }
 }
 
+export function writableSkillRoots(): WritableSkillRoot[] {
+  const runtime = activeRuntimePaths()
+  return [
+    {
+      scope: "profile",
+      source: "active profile",
+      dir: path.join(runtime.privateStateDir, "skills"),
+    },
+    {
+      scope: "global",
+      source: "orchestrator state",
+      dir: path.join(ORCHESTRATOR_STATE_DIR, "skills"),
+    },
+  ]
+}
+
+export function isWritableSkillScope(
+  value: string
+): value is WritableSkillScope {
+  return value === "profile" || value === "global"
+}
+
+export function normalizeSkillId(value: string): string {
+  const id = slugify(value)
+  if (!id) throw new Error("Skill id must contain at least one letter or number.")
+  if (id.length > 80) throw new Error("Skill id must be 80 characters or less.")
+  return id
+}
+
+export function createCustomSkill(input: CreateCustomSkillInput): RuntimeSkill {
+  const name = cleanSkillMetadataValue(input.name)
+  if (!name) throw new Error("Skill name is required.")
+  const description = cleanSkillMetadataValue(input.description)
+  if (!description) throw new Error("Skill description is required.")
+  const id = normalizeSkillId(input.id || name)
+  const root = getWritableSkillRoot(input.scope)
+  const skillDir = path.join(root.dir, id)
+  const skillFile = path.join(skillDir, SKILL_FILE)
+  if (
+    fs.existsSync(skillFile) ||
+    scanSkillRoot(root).some(
+      (entry) => entry.id === id || path.basename(entry.root) === id
+    )
+  ) {
+    throw new Error(`A ${input.scope} skill named "${id}" already exists.`)
+  }
+  fs.mkdirSync(skillDir, { recursive: true })
+  fs.writeFileSync(skillFile, customSkillTemplate(id, name, description), "utf8")
+  return readCustomSkill(input.scope, id)
+}
+
+export function readCustomSkill(
+  scope: WritableSkillScope,
+  id: string
+): RuntimeSkill {
+  const skill = findCustomSkill(scope, id)
+  if (!skill) {
+    throw new Error(`Custom skill "${normalizeSkillId(id)}" was not found.`)
+  }
+  return skill
+}
+
+export function writeCustomSkillFile(
+  scope: WritableSkillScope,
+  id: string,
+  content: string
+): RuntimeSkill {
+  const skill = readCustomSkill(scope, id)
+  const parsed = parseSkillMetadata(content)
+  const resolvedId = normalizeSkillId(parsed.id || parsed.name || skill.id)
+  if (resolvedId !== skill.id) {
+    throw new Error(
+      `SKILL.md frontmatter resolves to "${resolvedId}", but this skill is "${skill.id}".`
+    )
+  }
+  fs.writeFileSync(skill.skillFile, content, "utf8")
+  return readCustomSkill(scope, skill.id)
+}
+
+export function deleteCustomSkill(
+  scope: WritableSkillScope,
+  id: string
+): void {
+  const skill = readCustomSkill(scope, id)
+  fs.rmSync(skill.root, { recursive: true, force: true })
+}
+
 function scanSkillRoot(root: SkillRoot): RuntimeSkill[] {
   if (!fs.existsSync(root.dir)) return []
   return fs
@@ -169,6 +284,58 @@ function scanSkillRoot(root: SkillRoot): RuntimeSkill[] {
         return []
       }
     })
+}
+
+function getWritableSkillRoot(scope: WritableSkillScope): WritableSkillRoot {
+  const root = writableSkillRoots().find((candidate) => candidate.scope === scope)
+  if (!root) throw new Error(`Unsupported skill scope "${scope}".`)
+  return root
+}
+
+function findCustomSkill(
+  scope: WritableSkillScope,
+  id: string
+): RuntimeSkill | null {
+  const cleanId = normalizeSkillId(id)
+  const root = getWritableSkillRoot(scope)
+  return (
+    scanSkillRoot(root).find(
+      (entry) => entry.id === cleanId || path.basename(entry.root) === cleanId
+    ) ?? null
+  )
+}
+
+function skillScopeRank(scope: RuntimeSkillScope): number {
+  if (scope === "profile") return 0
+  if (scope === "global") return 1
+  return 2
+}
+
+function cleanSkillMetadataValue(value: string): string {
+  return value.replace(/\s+/g, " ").trim()
+}
+
+function customSkillTemplate(
+  id: string,
+  name: string,
+  description: string
+): string {
+  return `---
+id: ${id}
+name: ${name}
+description: ${description}
+---
+
+# ${name}
+
+Use this skill when ${description}
+
+## Instructions
+
+- Describe when the agent should use this skill.
+- Add the workflow steps, constraints, validation commands, and deliverable expectations.
+- Put reusable scripts, templates, or references next to this SKILL.md and link them here.
+`
 }
 
 function parseSkillMetadata(content: string): Record<string, string> {

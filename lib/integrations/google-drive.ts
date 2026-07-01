@@ -921,11 +921,11 @@ async function driveMultipart<T>(
 async function getValidDriveToken(): Promise<{ token: GoogleOAuthTokenRecord; tokenPath: string }> {
     const resolved = resolveDriveToken()
     const token = resolved.token
-    if (!token) throw new Error('Google Workspace is not connected. Connect it from Settings > Auth.')
+    if (!token) throw new Error('Google Workspace is not connected. Connect it from Settings > Integrations.')
     if (token.expiresAt > Date.now() + GOOGLE_ACCESS_TOKEN_REFRESH_SKEW_MS) {
         return { token, tokenPath: resolved.tokenPath }
     }
-    if (!token.refreshToken) throw new Error('Google Workspace session expired. Reconnect Google Workspace from Settings > Auth.')
+    if (!token.refreshToken) throw new Error('Google Workspace session expired. Reconnect Google Workspace from Settings > Integrations.')
     const refreshed = await refreshGoogleOAuthToken(
         token,
         getGoogleOAuthConfig(DEFAULT_ORIGIN, GOOGLE_DRIVE_PROVIDER),

@@ -748,7 +748,7 @@ function claudeStatusError(status: Awaited<ReturnType<typeof getClaudeStatusForU
     if (!status) return null
     if (!status.installed) return 'Claude Code CLI is not installed.'
     if (status.needsReconnect) {
-        return 'Claude Code session expired. Open Settings > Auth and click Reconnect, or run `claude setup-token`.'
+        return 'Claude Code session expired. Open Settings > Models and click Reconnect, or run `claude setup-token`.'
     }
     if (!status.loggedIn) {
         return status.detail

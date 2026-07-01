@@ -1305,7 +1305,7 @@ function HomeAssistantSharingPanel({
       {activeConnections.length === 0 ? (
         <div className="rounded-xl border border-border/60 bg-background/60 px-3.5 py-3 text-[12.5px] text-foreground/55">
           No Home Assistant connection records yet. Connect Home Assistant from
-          Auth first, then share it here.
+          Integrations first, then share it here.
         </div>
       ) : (
         <div className="grid gap-2">

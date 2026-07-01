@@ -1,4 +1,5 @@
 export type RuntimeSkillScope = "profile" | "global" | "bundled"
+export type WritableSkillScope = Exclude<RuntimeSkillScope, "bundled">
 
 export interface RuntimeSkill {
   id: string
@@ -18,4 +19,3 @@ export interface SkillFileRead {
   truncated: boolean
   size: number
 }
-

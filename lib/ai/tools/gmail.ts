@@ -40,7 +40,7 @@ const MAX_OUTGOING_TOTAL_ATTACHMENT_BYTES = 25 * 1024 * 1024
 export const gmailSearchTool: ToolDef = {
     id: 'GmailSearch',
     name: 'GmailSearch',
-    description: 'Searches the connected Gmail mailbox using Gmail query syntax and returns message metadata. Requires Gmail to be connected in Settings > Auth.',
+    description: 'Searches the connected Gmail mailbox using Gmail query syntax and returns message metadata. Requires Gmail to be connected in Settings > Integrations.',
     input_schema: {
         type: 'object',
         properties: {

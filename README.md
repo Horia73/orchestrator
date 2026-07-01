@@ -75,7 +75,7 @@ by hand to get started.
 
 <p align="center">
   <img src="docs/shot-settings.png" alt="Integration settings" width="85%"><br>
-  <sub>Connect services from Settings → Auth — no code, and tokens stay on your machine.</sub>
+  <sub>Connect services from Settings → Integrations — no code, and tokens stay on your machine.</sub>
 </p>
 
 ### Your workspace & memory

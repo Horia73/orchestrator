@@ -749,7 +749,7 @@ function PlacesEmptyState({
             Ask your assistant to set up Location Intelligence
           </Button>
           <Button asChild size="sm" variant="outline">
-            <a href="/settings?tab=auth&auth=locationIntelligence">
+            <a href="/settings?tab=integrations&integration=locationIntelligence">
               <MapPinned className="size-3.5" />
               View status
             </a>

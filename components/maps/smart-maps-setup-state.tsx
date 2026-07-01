@@ -47,7 +47,7 @@ export function SmartMapsSetupState({
             {!isLoading && (
               <div className="mt-4 flex flex-wrap gap-2">
                 <Button asChild size="sm">
-                  <a href="/settings?tab=auth">Open Maps setup</a>
+                  <a href="/settings?tab=integrations&integration=mapsWeather">Open Maps setup</a>
                 </Button>
                 {isError && (
                   <Button

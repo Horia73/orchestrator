@@ -9,12 +9,21 @@ import { runWithRequestProfile } from "@/lib/profiles/server"
 
 const DEFAULT_MESSAGE_PAGE_SIZE = 80
 const MAX_MESSAGE_PAGE_SIZE = 200
+const DEFAULT_FULL_TAIL_SIZE = 0
+const MAX_FULL_TAIL_SIZE = 40
 
 function parsePositiveInt(value: string | null, fallback: number): number {
   if (!value) return fallback
   const parsed = Number.parseInt(value, 10)
   if (!Number.isFinite(parsed) || parsed < 1) return fallback
   return Math.min(parsed, MAX_MESSAGE_PAGE_SIZE)
+}
+
+function parseBoundedInt(value: string | null, fallback: number, max: number): number {
+  if (!value) return fallback
+  const parsed = Number.parseInt(value, 10)
+  if (!Number.isFinite(parsed) || parsed < 0) return fallback
+  return Math.min(parsed, max)
 }
 
 function parseCursor(value: string | null): MessagePageCursor | null {
@@ -44,10 +53,18 @@ export async function GET(
         )
         const before = parseCursor(searchParams.get("before"))
         const detail = searchParams.get("detail")
+        const hydration =
+          detail === "full" || detail === "mixed" ? detail : "slim"
+        const fullTail = parseBoundedInt(
+          searchParams.get("fullTail"),
+          DEFAULT_FULL_TAIL_SIZE,
+          MAX_FULL_TAIL_SIZE
+        )
         const page = getConversationMessagesPage(id, {
           limit,
           before,
-          hydration: detail === "full" ? "full" : "slim",
+          hydration,
+          fullTail,
         })
 
         return NextResponse.json({
